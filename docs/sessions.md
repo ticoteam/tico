@@ -237,14 +237,15 @@ They were removed in 0.3.41. Per-task sessions do the same job: give the bot the
 
 ## Relationship turns
 
-A company uses one hidden Relationship Worker. Its owner places it on a computer
-with per-turn OS users and a harness that can run as one. Turns for a single
+A company uses one hidden Relationship Worker. Its owner assigns it to a computer
+with a ready harness. The worker needs no checkout. Turns for a single
 relationship wait in its `entity:<id>` lane. Other relationships can run at the
 same time within the computer's turn limit. Every turn starts a fresh provider
-session in a private scratch directory that is removed at the end.
+session in an attempt-specific scratch directory that is removed after the turn
+finishes.
 
-The turn can open tasks and memory pages belonging to its relationship, subject
-to the usual reader permissions. An intake wake can also grant the thread it
+The turn can open tasks and memory pages belonging to its relationship when the
+person who started it can read them. An intake wake can also grant the thread it
 came from. The server checks that thread's relationship, inbox and the waking
 person's current access. Suggested changes to shared memory or status stay in the
 run's answer for review.

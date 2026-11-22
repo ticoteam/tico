@@ -29,7 +29,6 @@ READ = re.compile(
     rf"/api/v2/(?:tasks/{ROW_ID}|pages/{FILE_ID}|threads/{ROW_ID}(?:/timeline)?"
     rf"|files/{FILE_ID}(?:/versions(?:/[0-9]+)?)?)"
 )
-LIFECYCLE = {"renew", "start-place", "started", "events", "inputs", "complete", "diagnostics"}
 
 
 @dataclass(frozen=True)
@@ -42,7 +41,7 @@ class Scope:
 
 
 def ensure_worker(c: Connection, owner_id: str) -> None:
-    """Create the company's hidden bot once. Its owner places it on an isolated computer."""
+    """Create the company's hidden bot once. Its owner assigns its computer."""
     if H.bot(c, BOT):
         return
     if H.resolve_bot(c, BOT):
@@ -154,11 +153,7 @@ def scope(c: Connection, attempt: str) -> Scope | None:
 
 def gate(c: Connection, auth: "Auth", who: "Identity", path: str, method: str) -> None:
     """Use existing object routes, with explicit opt-in for routes that can carry relationship data."""
-    attempt_path = f"/api/v2/attempts/{who.attempt_id}/"
-    if who.attempt_id and method == "POST" and path.startswith(attempt_path):
-        if path[len(attempt_path) :] in LIFECYCLE:
-            return
-    if method in ("GET", "HEAD") and READ.fullmatch(path) and claimable(c, auth, scope(c, who.attempt_id)):
+    if method in ("GET", "HEAD") and READ.fullmatch(path) and auth.relationship_scope(c, who):
         return
     raise Problem("forbidden", "This relationship run cannot use that route", 403)
 

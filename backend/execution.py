@@ -2501,10 +2501,9 @@ def _claim_refusal(
         return why, None
     if bot in held_bots and "maintaining" not in ignore_refusals:
         return "maintaining", None
-    if bot == relationship_runs.BOT and (
-        ready.get("relationship_lanes") is not True or ready.get("isolated") is not True
-    ):
-        return "not_isolated", None
+    relationship = bot == relationship_runs.BOT
+    if relationship and ready.get("relationship_lanes") is not True:
+        return "readiness_unknown", None
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -2518,7 +2517,7 @@ def _claim_refusal(
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
     # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    covers = model_subscriptions.covered_runtimes(c, runner, filled, loads)
+    covers = {} if relationship else model_subscriptions.covered_runtimes(c, runner, filled, loads)
     ready = model_subscriptions.covered(ready, covers)
     # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
     # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out). Read the same way
@@ -2543,7 +2542,7 @@ def _claim_refusal(
         if bot not in (ready.get("bots") or {}) and "readiness_unknown" not in ignore_refusals:
             return "readiness_unknown", None
         if "not_ready" not in ignore_refusals and (
-            check.get("repository_present") is not True
+            (not relationship and check.get("repository_present") is not True)
             or check.get("configuration_valid") is not True
             or ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed") is not True
         ):
@@ -3945,7 +3944,11 @@ class Execution:
                     'repository': runner_repository(c, self.store.settings, row['bot'], configs.get, app, homes),
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
-                    **model_subscriptions.assignment_fields(c, runner, config),
+                    **(
+                        model_subscriptions.assignment_fields(c, runner, config)
+                        if row["bot"] != relationship_runs.BOT
+                        else {}
+                    ),
                 }
             )
         return result
@@ -5212,7 +5215,7 @@ class Execution:
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
         voice_reply = False
-        subscribed = None
+        subscribed = [] if row["bot_id"] == relationship_runs.BOT else None
         if live_ref and call_sessions.is_voice(c, live_ref.get("meeting_id")):
             spec = call_sessions.model_spec(handed[1])
             if voice_call and spec and not call_sessions.accepts_runner(spec, caps):
@@ -5398,14 +5401,17 @@ class Execution:
             else c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?", (root_id,)).fetchone()
         )
         bot_who = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)
-        history = privacy.page(
-            c,
-            bot_who,
-            conv["id"],
-            limit=HISTORY_PAGE * 2,
-            since=epoch["updated_at"] if epoch else None,
-        )["messages"]
-        history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
+        if relationship:
+            history = [msg]
+        else:
+            history = privacy.page(
+                c,
+                bot_who,
+                conv["id"],
+                limit=HISTORY_PAGE * 2,
+                since=epoch["updated_at"] if epoch else None,
+            )["messages"]
+            history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         if card_slot.of(row):
             # The bot's own work waiting for its own run (the card's next turn, a comment) is not read in this one.
             waiting = card_slot.pending(c, row["bot_id"], [m["id"] for m in history])
@@ -5607,7 +5613,7 @@ class Execution:
             # Receipts outlive the lease and must retain the person whose rights admitted this request.
             c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
         mail_levels = {} if relationship else mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
-        subscriptions = [] if relationship else model_subscriptions.hand_out(c, aid, subscribed)
+        subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees

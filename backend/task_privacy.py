@@ -794,7 +794,7 @@ def chat_activity(
     return list(reversed(out)), None
 
 
-def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None, chat=None):
+def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None, chat=None, auth=None):
     """Paginate visible rows, so hidden rows cannot leak cursors or counts. `max_bytes` also ends the page once
     its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back."""
     snapshot(c)
@@ -869,7 +869,7 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
         from .files import readable_page_refs
 
         message["refs"] = H._json(stored["refs"], {}) or {}
-        message = readable_page_refs(c, None, who, message, task_id=task_id)
+        message = readable_page_refs(c, auth, who, message, task_id=task_id)
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:
@@ -1362,16 +1362,20 @@ def reply_pages_readable(c, actor, message, lookup=None):
 
 
 def page_content_readable(c, actor, payload):
-    from . import files, teammate_access
+    from . import files, relationship_runs, teammate_access
 
     if not files.page_references(payload, c):
         return True
     principals = actor if isinstance(actor, (tuple, list, set)) else [actor]
-    return all(
-        viewer is not None and not files.page_ref_denials(c, None, viewer, payload)
-        for principal in principals
-        if (viewer := teammate_access._viewer_for(c, principal)) is not None
-    )
+    for principal in principals:
+        viewer = teammate_access._viewer_for(c, principal)
+        if viewer is None:
+            continue
+        if isinstance(principal, H.RunPrincipal) and principal == relationship_runs.ACTOR:
+            viewer = replace(viewer, attempt_id=principal.attempt)
+        if files.page_ref_denials(c, None, viewer, payload):
+            return False
+    return True
 
 
 def content_readable(c, actor, payload, decoded=None):

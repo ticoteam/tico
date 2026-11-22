@@ -544,18 +544,21 @@ def denial(c, v, row):
     from .task_privacy import actor as principals
 
     index = sources(c)
-    if not index.conversation_readable(principals(v.who), row["id"]):
-        return _MISSING
     root = root_of(c, row)
     from . import relationship_runs
 
-    if v.actor == relationship_runs.ACTOR and v.who.attempt_id:
-        bound = v.auth.relationship_scope(c, v.who) if v.auth else relationship_runs.scope(c, v.who.attempt_id)
+    if v.actor == relationship_runs.ACTOR:
+        bound = v.auth.relationship_scope(c, v.who) if v.auth else None
         if not bound or not root:
             return _MISSING
         if root["id"] != bound.room:
-            sponsor = relationship_runs.source_viewer(c, v.auth, bound, root) if v.auth else None
+            task_id = row.get("task_id") or root.get("task_id")
+            if task_id and not relationship_runs.task_matches(c, bound, {"id": task_id}):
+                return _MISSING
+            sponsor = relationship_runs.source_viewer(c, v.auth, bound, root)
             return denial(c, Viewer(v.auth, sponsor), row) if sponsor else _MISSING
+    if not index.conversation_readable(principals(v.who), row["id"]):
+        return _MISSING
     if root.get("audience") not in AUDIENCES:
         return _legacy_denial(c, v, row, root, index)
     audience = audience_of(root)
@@ -833,7 +836,8 @@ def readable_before_deletion(c, v, message):
     tombstone shown, else the quiet hidden row. The per-message check, run on the row as it stands."""
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
-    if legacy_hidden(c, v, message):
+    v = _message_viewer(c, v, message)
+    if v is None or legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -848,6 +852,33 @@ def readable_before_deletion(c, v, message):
         return False
 
 
+def _message_viewer(c, v, message):
+    from . import relationship_runs, task_privacy
+
+    if v.actor != relationship_runs.ACTOR:
+        return v
+    bound = v.auth.relationship_scope(c, v.who) if v.auth else None
+    if not bound or not thread_readable(c, v, message["conversation_id"]):
+        return None
+    root = root_of(c, message["conversation_id"])
+    if not root:
+        return None
+    if root["id"] == bound.room:
+        return v
+    sponsor = relationship_runs.source_viewer(c, v.auth, bound, root)
+    if not sponsor:
+        return None
+    reader = Viewer(v.auth, sponsor)
+    if message.get("restricted") != 0:
+        try:
+            for tid in task_privacy.message_tasks(c, message, current=True):
+                if not relationship_runs.task_matches(c, bound, {"id": tid}) or not _task_readable(c, reader, tid):
+                    return None
+        except Problem:
+            return None
+    return reader
+
+
 def message_readable(c, v, message, *, thread_checked=False):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     message = dict(message)
@@ -855,7 +886,8 @@ def message_readable(c, v, message, *, thread_checked=False):
         return False
     if not thread_checked and not thread_readable(c, v, message["conversation_id"]):
         return False
-    if legacy_hidden(c, v, message):
+    v = _message_viewer(c, v, message)
+    if v is None or legacy_hidden(c, v, message):
         return False
     if message.get("restricted") == 0 and "restricted" in message:
         return True
@@ -1033,6 +1065,22 @@ def readable_sql(
     per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
+    from . import relationship_runs
+
+    if v.actor == relationship_runs.ACTOR:
+        bound = v.auth.relationship_scope(c, v.who) if v.auth else None
+        if not bound:
+            return "0"
+        root_id = f"COALESCE({x}root_id,{x}id)"
+        root_task = f"(SELECT rr.task_id FROM {t('conversations')} rr WHERE rr.id={root_id})"
+        task_id = f"COALESCE({x}task_id,{root_task})"
+        allowed = v.auth.task_sql(c, v.who)
+        out = (
+            f"{root_id} IN {_qlist([bound.room, bound.source] if bound.source else [bound.room])} "
+            f"AND {x}deleted_at IS NULL AND ({task_id} IS NULL OR "
+            f"{task_id} IN (SELECT id FROM {t('tasks')} WHERE ({allowed}) AND id IN ({tasks})))"
+        )
+        return f"({out}) AND {conversation(x + 'id')}" if conversation else out
     me = _q(v.actor)
     fence = f"({x}task_id IS NULL OR {x}task_id IN ({tasks}))"
     entity = only is None or "entity" in only
@@ -1172,7 +1220,7 @@ def readable_ids(c, v, ids):
         return set()
     from . import relationship_runs
 
-    if v.actor == relationship_runs.ACTOR and v.who.attempt_id:
+    if v.actor == relationship_runs.ACTOR:
         return {cid for cid in ids if thread_readable(c, v, cid)}
     out = set()
     for start in range(0, len(ids), 500):

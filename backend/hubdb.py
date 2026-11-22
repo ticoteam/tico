@@ -2416,8 +2416,12 @@ def task_private_readable(conn, actor, row):
         if actor == bot_actor(RELATIONSHIP_WORKER):
             from . import relationship_runs
 
-            if not relationship_runs.task_matches(conn, relationship_runs.scope(conn, actor.attempt), row):
-                return False
+            bound = relationship_runs.scope(conn, actor.attempt)
+            return bool(
+                bound
+                and relationship_runs.task_matches(conn, bound, row)
+                and task_private_readable(conn, bound.sponsor, row)
+            )
         actor = str(actor)
     if isinstance(actor, RunPrincipal):
         # One Assistant serves everyone (rooms.run_scope): in a person's own chat it reads exactly what they read, by

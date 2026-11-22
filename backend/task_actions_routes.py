@@ -329,7 +329,7 @@ def register_core(
                 # The agent Tico stopped that this task is the Needs-you item for, when the reader may release it
                 # (backend/bot_stops.py): the page puts its Release in place. Null on every other task.
                 "stopped_agent": bot_stops.stopped_on(c, auth, settings_admin, who, tid),
-                **privacy.page(c, who, row["conversation_id"], task_id=tid),
+                **privacy.page(c, who, row["conversation_id"], task_id=tid, auth=auth),
             }
 
     @app.get("/api/v2/tasks/{tid}/execution")
