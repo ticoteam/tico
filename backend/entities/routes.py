@@ -62,6 +62,20 @@ class ContactsUnmerge(Contract):
     drop: str
 
 
+class ContactsStatus(Contract):
+    ref: str
+    version: int = Field(ge=0)  # the status_version read with it (tico contacts get); a stale one is refused, 409
+    status: str = Field("", max_length=100)
+    next_step: str = Field("", max_length=500)
+    next_step_due: str = Field("", max_length=10)  # YYYY-MM-DD
+    flags: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ContactsOwner(Contract):
+    ref: str
+    owner: str = Field("", max_length=200)  # human:<id> or bot:<id or slug>; "" for none
+
+
 class ContactsNoteCreate(Contract):
     ref: str
     body: str
@@ -232,10 +246,16 @@ def install(
         after: str | None = None,
         limit: int | None = None,
         detail: bool = False,
+        owner: str | None = None,
+        sort: str = "name",
     ):
-        """A page of one type's entities you can see, by name, status or a link to us (customer_of). Page with `next`.
-        `detail` adds each row's organization, owner and the sources you can see it is known from (the Contacts list)."""
+        """A page of one type's entities you can see, by name, status, owner (`me`, human:<id> or bot:<id>) or a link to
+        us (customer_of). Page with `next`. `sort=next` orders by the next step's due date, soonest first and none last,
+        each row with its relationship status: what's next across your accounts is `owner=me&sort=next`. `detail` adds
+        each row's organization, owner and the sources you can see it is known from (the Contacts list)."""
         actor = caller(request)
+        if owner == "me":
+            owner = actor
         with read() as c:
             if not ES.type_exists(c, type_key) or type_key in ES.NOT_CONTACTS:
                 raise Problem("not_found", f"No contact type {type_key}; see tico contacts types", 404)
@@ -250,6 +270,8 @@ def install(
                     after=after,
                     limit=limit or 50,
                     detail=detail,
+                    owner=owner,
+                    sort=sort,
                 )
             except ValueError as error:
                 raise page_error(error) from None
@@ -447,6 +469,49 @@ def install(
         """Reverse the last merge of a dropped entity, named by its own id (a merged reference resolves to the kept one)."""
         actor = caller(request)
         return mutate(request, body, lambda c: {"unmerged": ES.unmerge(c, actor, body.drop)})
+
+    @app.post("/api/v2/entities/status")
+    def contacts_status(request: Request, body: ContactsStatus):
+        """A relationship's status, next step, its due date and flags, written together; each is replaced and an empty
+        one cleared. `version` is the status_version you read: when someone wrote it since, nothing changes and the
+        answer is 409 with the version it has now, to read and write again."""
+        actor = caller(request)
+
+        def work(c: sqlite3.Connection):
+            entity_id = ES.target(c, actor, body.ref)
+            written = ES.set_status(
+                c,
+                actor,
+                entity_id,
+                body.version,
+                status=body.status,
+                next_step=body.next_step,
+                next_step_due=body.next_step_due,
+                flags=body.flags,
+            )
+            if written is None:
+                now = ES.relationship(c, entity_id)["status_version"]
+                raise Problem(
+                    "status_changed",
+                    f"The status changed since you read it (version {now} now); read it again",
+                    409,
+                    extra={"status_version": now},
+                )
+            return {"entity": entity_id, **written}
+
+        return mutate(request, body, work)
+
+    @app.post("/api/v2/entities/owner")
+    def contacts_owner(request: Request, body: ContactsOwner):
+        """Name the teammate who owns an entity: a person (human:<id>) or a bot (bot:<id>), or "" for none."""
+        actor = caller(request)
+        owner = actor if body.owner == "me" else body.owner
+
+        def work(c: sqlite3.Connection):
+            entity_id = ES.target(c, actor, body.ref)
+            return {"entity": entity_id, "owner": ES.set_owner(c, actor, entity_id, owner)}
+
+        return mutate(request, body, work)
 
     @app.post("/api/v2/entities/notes")
     def contacts_note(request: Request, body: ContactsNoteCreate):

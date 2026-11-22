@@ -25,14 +25,20 @@ WRITERS_SQL = (
 
 def role_name(role: str) -> str:
     said = role.strip()
-    return said.lower() if said.lower() in ("writer", "related") else task_documents.canonical(said)
+    return said.lower() if said.lower() in ("writer", "related", "memory") else task_documents.canonical(said)
 
 
 def _target(target: str, role: str) -> tuple[str, str]:
     kind, sep, ident = target.partition(":")
-    if not sep or not ident or kind not in ("task", "bot", "human", "goal", "page"):
-        raise Problem("validation", "A link target is task:, bot:, human:, goal: or page: followed by its id", 422)
-    if role not in ("writer", "related") and kind != "task":
+    if not sep or not ident or kind not in ("task", "bot", "human", "goal", "page", "entity"):
+        raise Problem(
+            "validation", "A link target is task:, bot:, human:, goal:, page: or entity: followed by its id", 422
+        )
+    if role == "memory" and kind != "entity":
+        raise Problem("validation", "A memory page is an entity's: link it to entity:<id>", 422)
+    if kind == "entity" and role not in ("related", "memory"):
+        raise Problem("validation", "An entity's page is related or its memory", 422)
+    if role not in ("writer", "related", "memory") and kind != "task":
         raise Problem("validation", "Document roles require a task target", 422)
     if role == "writer" and kind not in ("bot", "human"):
         raise Problem("validation", "A writer is a bot or a person", 422)
@@ -42,6 +48,14 @@ def _target(target: str, role: str) -> tuple[str, str]:
 def link(c: Any, page_id: str, target: str, role: str, by: str) -> bool:
     role = role_name(role)
     _target(target, role)
+    if (
+        role == "memory"
+        and c.execute(
+            "SELECT 1 FROM page_links WHERE target=? AND role='memory' AND page_id<>?", (target, page_id)
+        ).fetchone()
+    ):
+        # One memory page per entity (page_links_memory): find it with the list's linked and role filters.
+        raise Problem("conflict", "This entity already has a memory page", 409)
     return (
         c.execute(
             "INSERT OR IGNORE INTO page_links(id,page_id,target,role,created_by,created_at) VALUES(?,?,?,?,?,?)",
@@ -209,6 +223,12 @@ def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]
             goal: Any = read_cache.one(c, "SELECT * FROM goals WHERE id=?", (ident,))
             if goal and cast(Callable[..., Any], goal_routes.readable_goals)(c, auth, who, [goal]):
                 return str(goal["title"])
+        if kind == "entity":
+            from .entities import store as ES
+
+            # The Contacts read rule, as the entity's own card reads it (a merged one is the one it went into).
+            if ES.visible_entity(c, str(who.actor), ident):
+                return ES.entity_names(c, [ident]).get(ident) or ident
         if kind == "page":
             from . import files
 

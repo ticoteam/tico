@@ -555,14 +555,17 @@ def pages_publish(api, args):
     return ambiguous_page(lambda: api.post("pages", body, key=_key(args)))
 
 
-_LINK_TARGET = _s("task:<id>, bot:<id>, human:<slug>, goal:<id> or page:<id>")
-_LINK_ROLE = _s("writer, related (the default) or a document name on a task: Spec, QA report, ...")
+_LINK_TARGET = _s("task:<id>, bot:<id>, human:<slug>, goal:<id>, page:<id> or entity:<id, email or domain>")
+_LINK_ROLE = _s(
+    "writer, related (the default), memory (an entity's one memory page) or a document name on a task: Spec, QA report"
+)
 
 
 @tool(
     "tico_page_link",
-    "Link a page to a task, bot, person, goal or another page with a role: writer, related, or on a task a document "
-    "name. A page may have many links. A link never widens who can read the page.",
+    "Link a page to a task, bot, person, goal, Contacts entity or another page with a role: writer, related, on a task "
+    "a document name, or on an entity memory (its one memory page: find it with tico_page_list linked=entity:<id> "
+    "role=memory; a second is refused, 409). A page may have many links. A link never widens who can read the page.",
     {"id": _s("Page id"), "target": _LINK_TARGET, "role": _LINK_ROLE},
     required=("id", "target"),
     writes=True,
@@ -700,13 +703,15 @@ def pages_publish_path(client, args):
     )
 
 
-# `tico page link|unlink ID --task ID|--bot ID|--person SLUG|--goal ID|--page ID`: one target flag, sent as the target.
+# `tico page link|unlink ID --task ID|--bot ID|--person SLUG|--goal ID|--page ID|--entity REF`: one target flag,
+# sent as the target.
 _TARGET_FLAGS = (
     Arg("task", local=True, help="a task: its id, short id or D-number"),
     Arg("bot", local=True, help="a bot: its id"),
     Arg("person", local=True, help="a person: their slug"),
     Arg("goal", local=True, help="a goal: its id"),
     Arg("page", local=True, help="another page: its file id"),
+    Arg("entity", local=True, help="a Contacts entity: its id, email or domain"),
 )
 
 
@@ -1049,10 +1054,10 @@ PAGE = (
     ),
     Command(
         "page link",
-        "link a page to a task, bot, person, goal or page; --as sets the role (default related)",
+        "link a page to a task, bot, person, goal, page or entity; --as sets the role (default related)",
         args=(Arg("role", "--as"), *_TARGET_FLAGS),
         omit=("target",),
-        one_of=(("task", "bot", "person", "goal", "page"),),
+        one_of=(("task", "bot", "person", "goal", "page", "entity"),),
         run=_link_run("tico_page_link"),
         example="tico page link file-1 --task T1 --as Spec",
     ),
@@ -1061,7 +1066,7 @@ PAGE = (
         "remove a link: the same target and --as role that linked the page",
         args=(Arg("role", "--as"), *_TARGET_FLAGS),
         omit=("target",),
-        one_of=(("task", "bot", "person", "goal", "page"),),
+        one_of=(("task", "bot", "person", "goal", "page", "entity"),),
         run=_link_run("tico_page_unlink"),
         example="tico page unlink file-1 --task T1 --as Spec",
     ),

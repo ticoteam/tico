@@ -517,6 +517,14 @@ class Pages:
                     other = self.rows(c, [ident]).get(ident)
                     if not other or not self.files.visible(c, who, other, {}):
                         raise Problem("not_found", "Page not found", 404)
+                elif kind == "entity":
+                    from .entities import store as ES
+
+                    # An id, email or domain, as the caller sees it; a merged one is the one it went into.
+                    found = ES.get(c, who.actor, ident)
+                    if len(found) != 1:
+                        raise Problem("not_found", "Entity not found", 404)
+                    selected = "entity:" + found[0]["id"]
             if remove:
                 changed = page_links.unlink(c, fid, selected, chosen_role, who.actor)
             else:
@@ -764,7 +772,12 @@ def install_pages(app, store, auth, files):
 
     @app.post(
         "/api/v2/pages/{fid}/links",
-        **api_v2("Pages", "linkPage", "Link a page to a task, bot, person, goal or page", PageShown),
+        **api_v2(
+            "Pages",
+            "linkPage",
+            "Link a page to a task, bot, person, goal, page or Contacts entity (role memory: its one memory page)",
+            PageShown,
+        ),
     )
     def link_page(request: Request, fid: str, body: PageLink):
         return pages.change_link(request, fid, body.target, body.role)
