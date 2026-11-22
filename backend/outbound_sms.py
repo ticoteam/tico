@@ -6,7 +6,7 @@ import re
 from collections.abc import Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple, cast
-from urllib.parse import urlencode
+from urllib.parse import urlsplit, urlencode
 
 from . import egress as _egress
 from . import outbound_http
@@ -36,12 +36,14 @@ TRANSPORT: Any = None  # tests stand in for the provider at the network edge
 
 def is_send_path(base_url: str, method: str, path: str) -> bool:
     """Whether this request can write to a provider's SMS send resources."""
-    base = base_url.rstrip("/")
+    # By host, not by spelling: the proxy forwards any case of the provider's host to the same provider.
+    host = (urlsplit(base_url).hostname or "").rstrip(".")
     path = re.sub(r"/+", "/", path).rstrip("/").lower()
-    if base == TS.SERVICES["twilio"]["base_url"]:
+    method = method.upper()
+    if host == urlsplit(str(TS.SERVICES["twilio"]["base_url"])).hostname:
         return method != "GET" and TWILIO_MESSAGES.match(path) is not None
     return (
-        base == TS.SERVICES["close-crm"]["base_url"]
+        host == urlsplit(str(TS.SERVICES["close-crm"]["base_url"])).hostname
         and method in {"POST", "PUT", "PATCH"}
         and CLOSE_SMS.match(path) is not None
     )

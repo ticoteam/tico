@@ -1009,3 +1009,12 @@ def test_rule_p_holds_on_every_key_change_and_a_read_holder_never_gets_or_sees_a
     assert made["service"] == "close" and made["base_url"] == "https://api.close.com"
     with api.app.state.store.read() as c:
         assert "billing" in api_tools.due(c)
+
+
+@pytest.mark.parametrize("base", ["https://API.Twilio.com", "https://api.twilio.com.", "https://Api.Twilio.Com/"])
+def test_an_sms_send_path_is_recognized_by_host_whatever_its_spelling(base):
+    from backend import outbound_sms
+
+    assert outbound_sms.is_send_path(base, "post", "/2010-04-01/Accounts/AC1/Messages.json")
+    assert outbound_sms.is_send_path("https://API.Close.com/", "PUT", "/api/v1/activity/sms/acti_1/")
+    assert not outbound_sms.is_send_path(base, "GET", "/2010-04-01/Accounts/AC1/Messages.json")
