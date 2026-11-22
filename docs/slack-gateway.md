@@ -209,6 +209,9 @@ org's rules and screening, and then has the gateway act:
 - `POST /api/v2/slack/posts` writes the post as a message in the bot's room plus a `slack_posts` row, which `deliver`
   sends with the bot's name and `(sent from <bot>)`. `deliver` asks Slack about the channel on every post
   (never from a cache) and cancels it in a Slack Connect channel; a rate-limited check leaves it for the next pass.
+- An outbound action on the `slack` channel (docs/outbound-actions.md) is queued the same way, its message carrying
+  the action's id; `deliver` (and `recover`, for a post left `sending`) settles that action in the write that records
+  the post.
 - `POST /api/v2/slack/dms` is the bot's message to the person in Tico, which `originate` copies into their Slack DM.
 
 With the gateway not connected, or not claiming a request within 8 seconds, each route answers 503 and says what to

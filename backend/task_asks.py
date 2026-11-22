@@ -111,6 +111,13 @@ def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") ->
     return growth_proposals.ok_given(conn, grant, ctx)
 
 
+def _outbound_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import outbound_actions
+
+    module: Any = outbound_actions  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
 def _rule_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
     from . import org_rules
 
@@ -208,6 +215,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "finance": _finance_ok,
     "growth": _growth_ok,
     "letter": _letter_ok,
+    "outbound": _outbound_ok,
     "proposal": _proposal_ok,
     "rule": _rule_ok,
     "support": _support_ok,
@@ -227,6 +235,7 @@ OWNED = (
     "finance",
     "growth",
     "rule",
+    "outbound",
 )
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
@@ -291,6 +300,7 @@ FILED_TITLES: dict[str, str] = {
     "publish": "Publish to the roadmap",
     "finance": "OK a Finance action",
     "growth": "Add to Growth",
+    "outbound": "Approve a send",
 }
 
 
