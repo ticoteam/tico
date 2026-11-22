@@ -7,6 +7,15 @@ import { queryClient } from '@/data';
 import type { CompanyRef, TicoDesktop } from '@/desktop';
 import { CallSide } from './CallSide';
 import { callQuery, transcriptQuery } from './queries';
+import type * as Session from './session';
+import type { CallState } from './session';
+
+// This window's own call, when a test sets it (left a moment ago); otherwise the real session's.
+const mine = vi.hoisted(() => ({ now: null as Partial<CallState> | null }));
+vi.mock('./session', async (orig) => {
+  const real = await orig<typeof Session>();
+  return { ...real, useCall: () => ({ ...real.useCall(), ...mine.now }) };
+});
 
 // The chat, faked: a few links of each kind, the in-app one moving through the router as real messages do.
 vi.mock('@/conversation', async () => {
@@ -42,6 +51,7 @@ beforeEach(() => {
   (window as { tico?: TicoDesktop }).tico = t;
 });
 afterEach(() => {
+  mine.now = null;
   delete (window as { tico?: TicoDesktop }).tico;
   vi.restoreAllMocks();
 });
@@ -123,6 +133,15 @@ describe('one conversation, not two side by side', () => {
     show(`/call/${ROOM}`, true);
     expect(await screen.findByText('Left')).toBeTruthy();
     expect(screen.getByRole('tab', { name: /People/ }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+  });
+
+  it('counts a call just left here as ended, as its page does, though the call still reads live', async () => {
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th-tico', meeting_id: 'mt9', participants: [], bots: ['b1'], state: 'live' } as unknown as Call);
+    queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [], event_id: 0 });
+    mine.now = { callId: ROOM, phase: 'ended' };
+    show(`/call/${ROOM}`, true);
+    await vi.waitFor(() => expect(screen.getByRole('tab', { name: /People/ }).getAttribute('aria-selected')).toBe('true'));
     expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
   });
 

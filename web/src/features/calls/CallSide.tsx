@@ -32,9 +32,12 @@ export function CallSide({ room, ticoBeside = false }: CallSideProps) {
   const ticoRoom = useQuery(ticoRoomQuery).data;
   // a call in Tico's own room has Tico's chat as its chat: with Tico's sheet open, it shows there and not here too
   const noChat = ticoBeside && !!call && !!ticoRoom && ticoRoom === call.thread_id;
-  // in its place: who is in it on an ended call, whose page already shows the transcript; what is said on a live one
-  const tab = noChat && picked === 'chat' ? (call?.state === 'ended' ? 'people' : 'transcript') : picked;
   const s = useCall();
+  // ended as the page reads it (CallPage): left here at once, or over when this window is not in it
+  const phase = s.callId === room ? s.phase : 'idle';
+  const ended = phase === 'ended' || (phase === 'idle' && call?.state === 'ended');
+  // in its place: who is in it on an ended call, whose page already shows the transcript; what is said on a live one
+  const tab = noChat && picked === 'chat' ? (ended ? 'people' : 'transcript') : picked;
   const live = s.callId === room && (s.phase === 'live' || s.phase === 'reconnecting');
   const inCall = call?.participants.filter((p) => p.in_call) ?? [];
   const small = useSmallWindow();

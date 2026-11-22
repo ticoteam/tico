@@ -64,7 +64,7 @@ import {
   type TrailPart,
 } from '@/shell';
 import { MenuLip, usePhoneCards } from '@/shell/phone';
-import { TicoSheet } from '@/tico';
+import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
 import { boardSearch, chatAddress, isFlowPath, leaveFlow, notePlace } from '@/lib';
@@ -346,10 +346,12 @@ function App() {
   );
 }
 
-/** A call's side, told whether Tico's sheet is open beside it: in Tico's own room the side then leaves its Chat tab
-    out, so one conversation never shows twice side by side. */
+/** A call's side, told whether Tico's chat shows beside it (Tico's sheet open, and Tico on: off, the sheet says so
+    instead): in Tico's own room the side then leaves its Chat tab out, so one conversation never shows twice. */
 function CallSideBeside({ room }: { room: string }) {
-  return <CallSide room={room} ticoBeside={useSheetOpen('tico')} />;
+  const open = useSheetOpen('tico');
+  const on = useTicoPower()?.available !== false;
+  return <CallSide room={room} ticoBeside={open && on} />;
 }
 
 /* ---------------------------------------------------------------- the trail */

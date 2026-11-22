@@ -35,7 +35,8 @@ const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
 // the router module only: the app's pages are not needed to know what it draws for a page that breaks
 vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
-vi.mock('@/tico/power', () => ({ useTicoPower: () => undefined }));
+const power = vi.hoisted(() => ({ now: undefined as { available: boolean } | undefined }));
+vi.mock('@/tico/power', () => ({ useTicoPower: () => power.now }));
 vi.mock('@/tico', async (orig) => ({
   ...(await orig<object>()),
    TicoSheet: () => <aside aria-label="Tico">Tico</aside> }));
@@ -73,7 +74,7 @@ vi.mock('@/features/start/routing', () => ({
 const call = vi.hoisted(() => ({ phase: 'idle' }));
 vi.mock('@/features/calls/exports', () => ({
   CallBar: () => <div>call bar</div>,
-  CallSide: () => null,
+  CallSide: ({ ticoBeside }: { ticoBeside?: boolean }) => <p>{ticoBeside ? 'Tico beside the call' : 'the call alone'}</p>,
   RingCard: () => null,
   StartCall: ({ open }: { open: boolean }) => (open ? <p>start call</p> : null),
 }));
@@ -315,6 +316,41 @@ describe('the root', () => {
     await vi.waitFor(() => expect(trail.textContent).toContain('Pricing review'));
     expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
     expect(within(trail).getAllByRole('link')[0]?.getAttribute('href')).toBe('/');
+  });
+
+  it('tells the call’s side when Tico’s chat shows beside it: Tico open and on, not folded, not off', async () => {
+    localStorage.clear();
+    show('/call/abc');
+    expect(await screen.findByText('the call alone')).toBeTruthy(); // Tico folds by default on a call
+    fireEvent.keyDown(document, { key: 'j', metaKey: true });
+    expect(await screen.findByText('Tico beside the call')).toBeTruthy();
+    cleanup();
+    power.now = { available: false };
+    try {
+      show('/call/abc');
+      await screen.findByText(/the call alone|Tico beside the call/);
+      expect(screen.queryByText('Tico beside the call')).toBeNull(); // open, but off: the sheet says so, not the chat
+    } finally {
+      power.now = undefined;
+      localStorage.clear();
+    }
+  });
+
+  it('on a phone, heads the call’s card with the trail back up', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    window.dispatchEvent(new Event('resize'));
+    try {
+      show('/call/abc');
+      expect(await screen.findByText('call page')).toBeTruthy();
+      await waitFor(() => expect(document.documentElement.dataset.layout).toBe('cards'));
+      const trail = document.querySelector('.ly-chat .shell-trail');
+      expect(trail).toBeTruthy();
+      expect(within(trail as HTMLElement).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
+      expect(within(trail as HTMLElement).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    }
   });
 });
 
