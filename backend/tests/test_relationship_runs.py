@@ -4,8 +4,10 @@ from backend import (
     bot_settings,
     execution,
     holds,
+    mailbox_access,
     model_subscriptions,
     models_preset,
+    outside_intake,
     relationship_runs as runs,
     threads,
 )
@@ -239,14 +241,33 @@ def test_relationship_page_links_and_pins_follow_the_bound_entity(api):
     assert [pin["place"] for pin in shown["pinned"]] == [f"task:{own}"]
 
 
-def test_relationship_source_threads_apply_scope_and_current_sponsor_access(api):
+def intake_source(c, mailbox, owner):
+    sender = "person@customer.example"
+    entity = entities.upsert(c, owner.actor, "person", match={"email": sender})["id"]
+    outside_intake.save_message(
+        c,
+        channel="gmail",
+        connection_id=mailbox,
+        owner_id=H.actor_id(owner.actor),
+        source_thread_id="support",
+        source_message_id="delivery",
+        sender=sender,
+        verified_id=sender,
+        title="Customer mail",
+        body="Customer asks about renewal",
+    )
+    source = c.execute("SELECT id FROM conversations WHERE entity_id=?", (entity,)).fetchone()[0]
+    return entity, source
+
+
+def test_relationship_source_threads_apply_scope(api):
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         owner = auth.owner_identity(c)
-        north, south = [
-            entities.upsert(c, owner.actor, "organization", name=name, match={})["id"] for name in ("North", "South")
-        ]
-        c.execute("UPDATE entity_sources SET visibility='company' WHERE entity_id=?", (north,))
+        mailbox = mailbox_access.ensure_mailbox(c, owner.email, person_id=H.actor_id(owner.actor))["id"]
+        north, source = intake_source(c, mailbox, owner)
+        south = entities.upsert(c, owner.actor, "organization", name="South", match={})["id"]
+        mailbox_access.grant(c, owner.actor, mailbox, "person", "cara", "read")
     own, other = [
         post(
             api,
@@ -265,7 +286,6 @@ def test_relationship_source_threads_apply_scope_and_current_sponsor_access(api)
     north_page, south_page = memory(api, north, "north.html"), memory(api, south, "south.html")
     _, _, foreign_run = setup_attempt(api)
     with store.transaction() as c:
-        source = threads.create(c, owner, audience="company", title="Source")["id"]
         unrelated = threads.create(c, owner, audience="company", title="Unrelated")["id"]
         message = threads.post(c, owner, source, "In scope", refs={"task": own})["id"]
         threads.post(c, owner, source, "Outside scope", refs={"task": other})
@@ -279,16 +299,6 @@ def test_relationship_source_threads_apply_scope_and_current_sponsor_access(api)
         threads.post(c, owner, source, "Foreign run output", refs={"turn_id": foreign_run["id"]})
         sub = threads.create(c, owner, parent_message_id=message)["id"]
         c.execute("UPDATE conversations SET task_id=? WHERE id=?", (other, sub))
-        # Outside intake supplies these columns. Model its stored thread without depending on its delivery path.
-        columns = {row["name"] for row in c.execute("PRAGMA table_info(conversations)")}
-        for name in ("entity_id", "connection_id"):
-            if name not in columns:
-                c.execute(f"ALTER TABLE conversations ADD COLUMN {name} TEXT")
-        c.execute(
-            "UPDATE conversations SET entity_id=?,connection_id='first-inbox',audience='entity',participants=? "
-            "WHERE id=?",
-            (north, json.dumps(["human:ana", "human:cara"]), source),
-        )
         runs.enqueue(c, auth, auth.identity_for_actor(c, "human:cara"), north, "Summarize source", thread_id=source)
     sponsor_timeline = api.get(f"/api/v2/threads/{source}/timeline", headers=headers("cara-test"))
     assert sponsor_timeline.status_code == 200
@@ -310,15 +320,48 @@ def test_relationship_source_threads_apply_scope_and_current_sponsor_access(api)
     with store.read_transaction() as c:
         expected = {source, attempt["conversation"]["id"]}
         assert threads.readable_ids(c, threads.Viewer(auth, identity), [*expected, sub, unrelated]) == expected
+
+
+def test_relationship_source_read_stops_when_the_sponsors_inbox_grant_is_revoked(api):
+    store, auth = api.app.state.store, api.app.state.auth
+    address = "support@acme.example"
     with store.transaction() as c:
-        c.execute("UPDATE conversations SET connection_id='new-inbox' WHERE id=?", (source,))
-    assert api.get(f"/api/v2/threads/{source}/timeline", headers=token).status_code == 200
+        sponsor = auth.identity_for_actor(c, "human:cara")
+        mailbox = mailbox_access.ensure_mailbox(c, address, person_id="cara")["id"]
+        entity, source = intake_source(c, mailbox, sponsor)
+        runs.enqueue(c, auth, sponsor, entity, "Summarize source", thread_id=source)
+        mailbox_access.grant(c, sponsor.actor, mailbox, "bot", runs.BOT, "read")
+        root = threads.thread_row(c, source)
+        threads._with_participants(c, root, [sponsor.actor, "human:ana", runs.ACTOR])
+
+    path = f"threads/{source}/timeline"
+    get(api, path, expected=404)
+    machine = worker(api)
+    heartbeat(api, machine)
+    attempt = claim(api, machine, runs.BOT)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "relationship-thread"}, token=machine["token"])
+    assert "Customer asks about renewal" in json.dumps(get(api, path, token=attempt["token"]))
+
+    # Personal ownership is implicit. Reconnect as a shared inbox so the sponsor's access is revocable.
     with store.transaction() as c:
-        c.execute("UPDATE conversations SET participants=? WHERE id=?", (json.dumps(["human:ana"]), source))
-    assert api.get(f"/api/v2/threads/{source}/timeline", headers=headers("cara-test")).status_code == 404
-    assert api.get(f"/api/v2/threads/{source}/timeline", headers=token).status_code in (403, 404)
+        mailbox_access.stop(c, sponsor.actor, mailbox)
+    shared = post(api, "mailboxes", {"address": address, "shared": True})["mailbox"]
+    assert (shared["id"], shared["kind"]) == (mailbox, "shared")
+    with store.transaction() as c:
+        grant = mailbox_access.grant(c, "human:ana", mailbox, "person", "cara", "read")
+    get(api, path, token=attempt["token"])
+    with store.transaction() as c:
+        mailbox_access.revoke(c, "human:ana", mailbox, grant["id"])
+
+    get(api, path, token="cara-test", expected=404)
+    get(api, path, token=attempt["token"], expected=403)
     with store.read_transaction() as c:
-        assert threads.readable_ids(c, threads.Viewer(auth, identity), [*expected, sub, unrelated]) == set()
+        active = threads.Viewer(auth, Identity(runs.ACTOR, "bot", attempt_id=attempt["id"]))
+        assert threads.readable_ids(c, active, [source]) == set()
+        assert mailbox_access.level(c, runs.ACTOR, address) == "read"
+        standing = threads.Viewer(auth, Identity(runs.ACTOR, "bot"))
+        assert not threads.readable(c, standing, source)
+        assert threads.readable_ids(c, standing, [source]) == set()
 
 
 def test_relationship_lane_head_in_claim_backoff_does_not_block_other_lanes(api):

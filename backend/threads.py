@@ -567,10 +567,10 @@ def denial(c, v, row):
         return _MISSING
     if audience == "task":
         return None
+    if audience == "entity":
+        return None if v.is_person and _entity_readable(c, v, root) else _MISSING
     if v.is_bot:
         return _bot_denial(c, v, row, root, audience)
-    if audience == "entity":
-        return None if _entity_readable(c, v, root) else _MISSING
     if not v.is_person:
         return _MISSING
     # A meeting's chat is read by whoever reads the meeting (live_privacy, checked above).
@@ -647,8 +647,6 @@ def _bot_denial(c, v, row, root, audience):
     agent (agent token) never gets company or team standing read: there only its participation counts."""
     from .auth import _own_ask_to_a_person
 
-    if audience == "entity":
-        return _MISSING
     if v.runner_turn and _bot_grant(c, v, row):
         return None
     if _bot_standing(c, v, root, audience) or _own_ask_to_a_person(v.who, row):

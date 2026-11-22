@@ -252,7 +252,8 @@ ordinary bot identity. The worker receives its own granted model keys.
 
 The wake names the relationship's readable memory page and up to 25 open tasks
 the person who started it can currently read, newest first. It counts any
-additional readable open tasks. An intake wake can also grant the thread it
-came from. The server checks that thread's relationship, inbox and the waking
-person's current access. Suggested changes to shared memory or status stay in the
-run's answer for review.
+additional readable open tasks. A wake can also name an outside thread from
+intake. The server checks the relationship and the sponsor's current access to
+both the entity and the source inbox on each read. Revoking the sponsor's inbox
+grant blocks further reads in an active run. Suggested changes to shared memory
+or status stay in the run's answer for review.
