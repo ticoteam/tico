@@ -33,11 +33,11 @@ admin turns it on. When every plan given to a computer for a tool is at its limi
 login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
 Gateway meanwhile. The line under the computer's plan picker says which: "on the Gateway" or "waiting".
 
-1. Open **Settings → Models** and click **Add subscription**.
+1. Open **Settings → Agents**, then click **Add** beside **Subscriptions and keys**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
-   online, Tico starts the company's cloud computer first and the sheet says **Starting your computer**.
+   online, Tico starts the company's cloud computer first when one is available.
 3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
-   code: paste it in the sheet (a pasted code is sent by itself). For ChatGPT, copy the code the sheet shows and enter it
+   code: paste it in the sheet and click **Send code**. For ChatGPT, copy the code the sheet shows and enter it
    on ChatGPT's page. The sheet closes once Tico has saved the result, and the list shows the new row.
 4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
 
@@ -52,10 +52,10 @@ A plan the person adds later joins on its own, and one given to someone else lea
 never part of a person's plans. The line under the picker says which plan is in use and why ("On Plan 2 · Plan 1 at its
 limit until Fri 09:00"); `tico subscription list` shows the same for agents.
 
-The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in. Change either
-under the row's **⋯ → Edit**. An API key is its own small form: the key and, if you like, a name. **Paste instead**,
-behind the sign-in, is the fallback when no computer can run it: the token from `claude setup-token`, or Codex's
-`auth.json` (pasted, or picked with **Choose auth.json**). **Reconnect** is the same sheet from step 2.
+The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in; change either
+under the row's **Edit** action. When a sign-in cannot run, **Paste instead** takes the token from
+`claude setup-token` or the contents of Codex's `auth.json`. Open a saved plan's row and click **Reconnect** to
+sign in again or paste a replacement. If running work would restart, Tico asks for confirmation.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
 session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
@@ -268,8 +268,8 @@ installed, the person's own first, and runs the sign-in there: `claude auth logi
 below) on a Linux computer that runs Tico's latest runner, else `claude setup-token`, or `codex login` in a folder of its
 own. That computer's own login stays as it was. The page shows the link and any code, never the result, which the
 computer sends straight to Tico and keeps no copy of. If it has to run on someone else's computer, the page says so before
-the sign-in, since the result passes through that computer; cancel and paste to avoid that. With no such computer
-online, a company with Tico Cloud computers has its shared one started (made first, if it never was) and kept on until
+the sign-in, since the result passes through that computer. **Paste instead** ends the sign-in before showing the paste form.
+With no such computer online, a company with Tico Cloud computers has its shared one started (made first, if it never was) and kept on until
 the sign-in ends; if none is up within five minutes, or the company has no cloud computers, the sheet says **No
 computer online** and offers **Add a computer** and **Paste instead**. A sign-in the command reports as failed saves nothing. If the sign-in cannot
 accept the code and asks to retry, Tico ends that attempt and offers **Try again**. Open the new link and use the code
@@ -277,11 +277,12 @@ from that page; a code from the previous attempt does not carry over.
 The computer's runner log records the sign-in ID, stages, elapsed time, command exit code and a safe failure category
 (code rejected, OAuth network error, or another OAuth error). It never records the authorization link, code, token or
 raw command output. A generic code rejection cannot say whether that code expired, was reused or was incomplete.
-Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. It belongs to the company. A plan's
-**Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names another active
-person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says so. Owners
-and admins add, edit, reconnect and remove them in **Settings > Models**. The person who added a plan or API key can
-also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
+Signing a saved subscription in again is **Reconnect**, and asks first when running tasks would restart. If work starts during an
+unconfirmed sign-in, Tico keeps the previous credential; reconnect again to confirm the restart. A subscription belongs to the
+company. A plan's **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names
+another active person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says
+so. Owners and admins add, edit, reconnect and remove them in **Settings > Agents**. The person who added a plan or API key
+can also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
 plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
 logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
 account email to its owner and admins, and only the agents each viewer can read.

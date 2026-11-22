@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -21,6 +21,7 @@ import {
   providersQuery,
   stoppedRunsQuery,
   subscriptionsQuery,
+  type Subscription,
 } from './queries';
 import { SettingsPage, hitHref } from './SettingsPage';
 
@@ -227,6 +228,219 @@ describe('Settings › Agents', () => {
     fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
     expect(await screen.findByTitle('Plan s1')).toBeTruthy();
     expect(screen.queryByText('2 keys')).toBeNull();
+  });
+
+  const claude = { kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true };
+
+  it('adds Claude from the kinds the server lists and offers a setup token when Connect is offline', async () => {
+    const catalog = {
+      kinds: [claude, { ...claude, kind: 'toString', label: 'Unknown plan' }],
+      subscriptions: [],
+    };
+    queryClient.setQueryData([...subscriptionsQuery.queryKey], catalog);
+    let save!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { save = resolve; });
+    serve((url, method) => {
+      if (method === 'GET') return url === '/api/v2/model-subscriptions' ? ok(catalog) : undefined;
+      if (url.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
+      return pending;
+    });
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    expect(screen.queryByRole('menuitem', { name: /Unknown plan/ })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Claude plan/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
+    expect(sent).toEqual([{ url: '/api/v2/model-subscriptions/connect', method: 'POST', body: { kind: 'claude_token' } }]);
+    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-test-token' } });
+    const submit = screen.getByRole<HTMLButtonElement>('button', { name: 'Connect' });
+    fireEvent.click(submit);
+    expect(submit.disabled).toBe(true);
+    fireEvent.click(submit);
+    await waitFor(() => expect(sent.at(-1)).toEqual({
+      url: '/api/v2/model-subscriptions',
+      method: 'POST',
+      body: { kind: 'claude_token', secret: 'sk-ant-test-token' },
+    }));
+    expect(sent).toHaveLength(2);
+    save(ok({ id: 'plan-1', name: 'Work plan' }));
+    expect(await screen.findByText('Work plan connected')).toBeTruthy();
+  });
+
+  const plan: Subscription = {
+    id: 'plan-1', kind: 'claude_login', label: 'Claude plan', name: 'Work plan',
+    in_use_on: [], computers: [], owner_id: 'human:p1', owner_name: 'Ana Test', added_by: 'human:p1', added_by_name: 'Ana Test',
+    status: 'needs_reconnect', status_at: null, status_detail: '', runtime: 'claude', preview: '', usage: null,
+    order: null, revision: 1, created_at: '', updated_at: '',
+  };
+  const restart = { status: 409, body: { error: { code: 'confirm_restart', detail: '2 running runs will stop and start again', running: 2 } } };
+
+  it('reconnects the selected plan only after confirming the restart', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    const url = '/api/v2/model-subscriptions/connect';
+    serve((path) => {
+      if (path !== url) return;
+      if ((sent.at(-1)?.body as { confirm?: boolean } | undefined)?.confirm) {
+        return ok({ id: 'login-1', runner_id: 'r1', state: 'waiting', url: 'https://example.test/sign-in' });
+      }
+      return restart;
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    expect(ask.textContent).toContain(restart.body.error.detail);
+    expect(sent).toEqual([{ url, method: 'POST', body: { subscription: plan.id } }]);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Reconnect' }));
+    expect(await screen.findByRole('link', { name: 'Open Claude' })).toBeTruthy();
+    expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { subscription: plan.id, confirm: true } });
+  });
+
+  it('pasting during Reconnect updates the same plan and waits for restart approval', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    const url = `/api/v2/model-subscriptions/${plan.id}`;
+    let save!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { save = resolve; });
+    serve((path, method) => {
+      if (path.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
+      if (path === url && method === 'POST') return sent.filter((s) => s.url === url).length > 1 ? pending : restart;
+      if (path === '/api/v2/model-subscriptions') return ok({ kinds: [], subscriptions: [plan] });
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
+    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reconnect' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { secret: 'sk-ant-replacement-token' } });
+    const approve = within(ask).getByRole<HTMLButtonElement>('button', { name: 'Reconnect' });
+    fireEvent.click(approve);
+    expect(approve.disabled).toBe(true);
+    fireEvent.click(approve);
+    await waitFor(() => expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { secret: 'sk-ant-replacement-token', confirm: true } }));
+    expect(sent.filter((s) => s.url === url)).toHaveLength(2);
+    save(ok(plan));
+    expect(await screen.findByText('Work plan connected')).toBeTruthy();
+  });
+
+  it.each(['offline', 'runner_version'])('carries restart approval into paste when sign-in returns %s', async (code) => {
+    const catalog = { kinds: [], subscriptions: [plan] };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    serve((url, method) => {
+      if (url.endsWith('/connect')) {
+        const approved = (sent.at(-1)?.body as { confirm?: boolean }).confirm;
+        return approved ? { status: 409, body: { error: { code, detail: 'No computer can sign in' } } } : restart;
+      }
+      if (method === 'POST') return ok(plan);
+      return ok(catalog);
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Reconnect' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
+    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({
+      url: `/api/v2/model-subscriptions/${plan.id}`, body: { secret: 'sk-ant-replacement-token', confirm: true },
+    }));
+  });
+
+  it('warns before opening sign-in on someone else’s computer and waits for cancellation before paste', async () => {
+    const catalog = { kinds: [], subscriptions: [plan] };
+    const login = { id: 'login-1', runner_id: 'r1', state: 'waiting', url: 'https://example.test/sign-in' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    let finishCancel!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { finishCancel = resolve; });
+    serve((url) => {
+      if (url.endsWith('/connect')) return ok({ ...login, computer: 'Acme Mac', not_yours: true });
+      if (url.endsWith('/cancel')) return sent.filter((s) => s.url === url).length === 1
+        ? pending : ok({ ...login, state: 'canceled' });
+      if (url.endsWith('/logins/login-1')) return ok(login);
+      if (url === '/api/v2/model-subscriptions') return ok(catalog);
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    expect(await screen.findByRole('link', { name: 'Open Claude' })).toBeTruthy();
+    expect(screen.getByRole('dialog', { description: /credential passes through someone else's computer.*Acme Mac/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Paste instead' }));
+    expect(screen.queryByLabelText('Setup token')).toBeNull();
+    finishCancel({ status: 409, body: { error: { code: 'state', detail: 'The sign-in is finishing' } } });
+    expect(await screen.findByText('The sign-in is finishing')).toBeTruthy();
+    expect(screen.queryByLabelText('Setup token')).toBeNull();
+    expect(sent.map(({ url }) => url)).toEqual(['/api/v2/model-subscriptions/connect', '/api/v2/computers/r1/logins/login-1/cancel']);
+    fireEvent.click(screen.getByRole('button', { name: 'Paste instead' }));
+    expect(await screen.findByLabelText('Setup token')).toBeTruthy();
+  });
+
+  it('waits for a start request that crosses the dialog deadline before allowing paste', async () => {
+    vi.useFakeTimers();
+    try {
+      queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+      let finishStart!: (reply: Reply) => void;
+      const pending = new Promise<Reply>((resolve) => { finishStart = resolve; });
+      serve((url) => {
+        if (url.endsWith('/connect')) return pending;
+        if (url.endsWith('/cancel')) return ok({ state: 'canceled' });
+      });
+      show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+      await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
+      expect(sent).toHaveLength(1);
+      expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
+      await act(async () => { finishStart(ok({ id: 'login-1', runner_id: 'r1', state: 'waiting' })); });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Paste instead' })); });
+      expect(sent.at(-1)?.url).toBe('/api/v2/computers/r1/logins/login-1/cancel');
+      expect(screen.getByLabelText('Setup token')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels a sign-in queued after the dialog was dismissed', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    let finishStart!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { finishStart = resolve; });
+    const connect = '/api/v2/model-subscriptions/connect';
+    const cancel = '/api/v2/computers/r1/logins/login-1/cancel';
+    serve((url) => {
+      if (url === connect) return pending;
+      if (url === cancel) return ok({ state: 'canceled' });
+    });
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    await waitFor(() => expect(sent.map(({ url }) => url)).toEqual([connect]));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Reconnect Claude plan' })).toBeNull();
+    await act(async () => { finishStart(ok({ id: 'login-1', runner_id: 'r1', state: 'requested' })); });
+    expect(sent.map(({ url }) => url)).toEqual([connect, cancel]);
+  });
+
+  it.each(['member', 'admin'])('shows Add and Reconnect according to the %s role', async (role) => {
+    queryClient.setQueryData(['me'], { id: 'human:p2', email: 'ben@example.test', role: 'person', slug: null });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [plan] });
+    serve((url) => url === '/api/v2/access'
+      ? role === 'admin' ? ok({ you: role }) : { status: 403, body: { error: { code: 'forbidden' } } }
+      : undefined);
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    expect(await screen.findByTitle(plan.name)).toBeTruthy();
+    if (role === 'admin') {
+      expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    } else {
+      expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+    }
+  });
+
+  it('does not offer a paste write when another sign-in is already in progress', async () => {
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    serve((url) => url.endsWith('/connect')
+      ? { status: 409, body: { error: { code: 'state', detail: 'Someone else is connecting' } } } : undefined);
+    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    expect(await screen.findByText('Someone else is connecting')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
   });
 
   it('a plan the provider refused for its billing says so, folded and in its row @s709', async () => {

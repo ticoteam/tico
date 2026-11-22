@@ -16,6 +16,7 @@ import {
   enrollComputer,
   labelComputer,
   refreshSubscription,
+  replaceSubscriptionSecret,
   removeComputer,
   removePerson,
   removeSubscription,
@@ -23,6 +24,7 @@ import {
   setCountPlanRuns,
   setGatewayFallback,
   setLimit,
+  SIGN_IN_KINDS,
   startSignIn,
   renamePerson,
   revokeToken,
@@ -433,16 +435,39 @@ const sub = (id: string) => ({ kind: 'subscription', id });
 
 export const connect = defineAction({
   id: 'settings.connect',
-  title: 'Connect Claude or Codex',
+  title: 'Connect a Claude or ChatGPT plan',
   kind: 'change',
-  input: z.strictObject({ kind: z.enum(['claude_login', 'codex_login'] as const) }),
+  input: z.union([
+    z.strictObject({ kind: z.enum(SIGN_IN_KINDS) }),
+    z.strictObject({ subscription: id('a subscription id'), confirm: z.optional(z.boolean()) }),
+  ]),
   // The sign-in opens the provider's page in the person's own browser, signed in as them.
   tico: false,
-  run: async (_ctx, { kind }) => {
-    return (await startSignIn(kind)) ?? null;
+  run: (_ctx, input) => startSignIn(input),
+  did: () => 'Sign-in started',
+  target: (input) => ('subscription' in input ? sub(input.subscription) : setting('subscriptions')),
+});
+
+const planSecret = z.string().check(z.minLength(1), z.maxLength(65536));
+
+export const pastePlan = defineAction({
+  id: 'settings.pastePlan',
+  title: 'Paste a plan credential',
+  kind: 'change',
+  input: z.union([
+    z.strictObject({ kind: z.enum(['claude_token', 'codex_login']), secret: planSecret }),
+    z.strictObject({ subscription: id('a subscription id'), secret: planSecret, confirm: z.optional(z.boolean()) }),
+  ]),
+  tico: false,
+  run: async (ctx, input) => {
+    const saved = 'subscription' in input
+      ? await replaceSubscriptionSecret(input.subscription, input.secret, input.confirm)
+      : await addSubscription(input.kind, input.secret);
+    void ctx.queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
+    return saved;
   },
-  did: ({ kind }) => (kind === 'codex_login' ? 'Codex sign-in started' : 'Claude sign-in started'),
-  target: () => setting('subscriptions'),
+  did: () => 'Plan connected',
+  target: (_input, out) => (out ? sub(out.id) : setting('subscriptions')),
 });
 
 export const signInCode = defineAction({

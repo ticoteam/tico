@@ -3,6 +3,8 @@ subscription, which the browser never holds (backend/model_subscriptions.py `con
 
 import json
 
+import pytest
+
 from backend import model_login as ML
 from backend import model_subscriptions as MS
 from backend.auth import Identity
@@ -136,6 +138,38 @@ def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_
     with api.app.state.store.read() as c:
         assert c.execute("SELECT revision FROM model_subscriptions WHERE id=?", (sid,)).fetchone()[0] == 2
         assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
+
+
+@pytest.mark.parametrize("approve_restart", [False, True])
+def test_reconnect_rechecks_runs_that_started_during_sign_in(api, approve_restart):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = computer(api, bot="ops")
+    sid = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN})["id"]
+    give(api, m, "claude", sid)
+    start = {"subscription": sid}
+    login = post(api, "model-subscriptions/connect", start)
+    post(api, "chat/ops", {"text": "Summarize the account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-one"}, m["token"])
+
+    if approve_restart:
+        assert post(api, "model-subscriptions/connect", start, expected=409)["error"]["code"] == "confirm_restart"
+        assert post(api, "model-subscriptions/connect", {**start, "confirm": True})["id"] == login["id"]
+
+    result = send(api, m, login, OTHER)
+    assert result["state"] == ("done" if approve_restart else "failed")
+    if not approve_restart:
+        seen = get(api, f"computers/{m['runner_id']}/logins/{login['id']}")
+        assert seen["message"] == (
+            "Work started during sign-in. Tico kept the previous credential. Reconnect again to confirm the restart."
+        )
+    saved = get(api, "model-subscriptions")["subscriptions"][0]
+    assert saved["preview"].endswith((OTHER if approve_restart else TOKEN)[-4:])
+    with api.app.state.store.read() as c:
+        stopped = c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (turn["id"],)).fetchone()[0]
+    assert bool(stopped) is approve_restart
 
 
 def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
