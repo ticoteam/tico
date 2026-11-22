@@ -19,7 +19,7 @@ import { RoutinePanel } from './RoutinePanel';
 import { RunsTab } from './RunsTab';
 import type { Hook, Routine, SystemJob } from './types';
 import { HookDialog, WebhookPanel } from './WebhookPanel';
-import { maintenanceWords, runnerOf, startsWords, triggerWords } from './words';
+import { endedWords, isOn, maintenanceWords, runnerOf, startsWords, triggerWords } from './words';
 import './routines.css';
 
 /* Routines (pages/3-company/rules.js routinesScreen, webhooksScreen): a List. Routines in sections by what starts
@@ -74,7 +74,7 @@ const SECTIONS: [string, string][] = [
 
 /** The filter's states (old automations-overview.ts AU_STATES): on, last run failed, on hold, off or paused. */
 const STATE_WORDS: Record<RoutineState, string> = { on: 'On', failed: 'Failed', hold: 'On hold', off: 'Off' };
-const stateOf = (r: Routine): RoutineState => (r.last_run?.status === 'failed' ? 'failed' : r.hold ? 'hold' : r.enabled === false || r.paused ? 'off' : 'on');
+const stateOf = (r: Routine): RoutineState => (r.last_run?.status === 'failed' ? 'failed' : r.hold ? 'hold' : isOn(r) ? 'on' : 'off');
 const has = (words: string, q: string | undefined) => !q || words.toLowerCase().includes(q.toLowerCase());
 
 function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: RoutineState }) {
@@ -162,7 +162,7 @@ function RoutinesTab({ panel, q, state }: { panel?: string; q?: string; state?: 
 }
 
 function RoutineRow({ r, href, selected, when }: { r: Routine; href: string; selected: boolean; when: string }) {
-  const off = r.enabled === false || !!r.paused;
+  const off = !isOn(r);
   const failed = r.last_run?.status === 'failed';
   const at = r.last_run?.started_at ?? r.last_run?.finished_at;
   const name = r.name || 'Routine';
@@ -175,6 +175,8 @@ function RoutineRow({ r, href, selected, when }: { r: Routine; href: string; sel
           <Word>Failed</Word>
         ) : r.hold ? (
           <Word icon="pause">On hold</Word>
+        ) : r.ended ? (
+          endedWords(r)
         ) : off ? (
           <span title="Paused">
             <Icon name="pause" />

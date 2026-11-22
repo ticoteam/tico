@@ -18,7 +18,7 @@ import { LISTENING } from './actions';
 import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
 import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords, runLink } from './words';
+import { agentWords, cap, endedWords, isOn, limitsWords, runLink } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its
@@ -43,7 +43,6 @@ export function ListeningPage({ search }: { search: ListeningSearch }) {
   return search.watch ? <WatchPage key={search.watch} id={search.watch} tab={search.tab} match={search.match} /> : <Watches q={search.q} />;
 }
 
-const isOn = (w: Routine) => w.enabled !== false && !w.paused;
 const sourceCount = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
 
 // ---------------------------------------------------------------- the watches
@@ -177,7 +176,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
       actions={
         <>
           <span className="rr-phone" data-phone>
-            <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+            <HeadSwitch label={w.ended ? endedWords(w) : on ? 'On' : 'Paused'} checked={on} disabled={tmp || !!w.ended} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
           </span>
           <Button variant="primary" onClick={() => setAdding(true)}>
             Add source

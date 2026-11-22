@@ -41,6 +41,7 @@ import {
   setJobSchedule,
   setMaintenance,
   setReach,
+  setRoutineEnd,
   setRoutineLimit,
   setRoutineOn,
   setWatchTrigger,
@@ -301,6 +302,20 @@ export const setLimit = defineAction({
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(setRoutineLimit(i.routine, i.per30m)),
   did: (i) => (i.per30m === null ? "Uses the agent's limit" : 'Limit set'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const setEnd = defineAction({
+  id: 'routines.setEnd',
+  title: 'Set when a routine ends',
+  kind: 'change',
+  input: z.strictObject({
+    routine: id,
+    endsAt: z.nullable(z.string().check(z.maxLength(40), z.regex(/(Z|[+-]\d{2}:\d{2})$/), z.describe('an ISO time with Z or an offset; null for never'))),
+  }),
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(setRoutineEnd(i.routine, i.endsAt)),
+  did: (i) => (i.endsAt === null ? 'Never ends' : 'End date set'),
   target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 

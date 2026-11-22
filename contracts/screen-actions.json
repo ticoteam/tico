@@ -6480,6 +6480,39 @@
       }
     },
     {
+      "id": "routines.setEnd",
+      "title": "Set when a routine ends",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "routine": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "endsAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "pattern": "(Z|[+-]\\d{2}:\\d{2})$",
+                "description": "an ISO time with Z or an offset; null for never"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "routine",
+          "endsAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "routines.setHeartbeat",
       "title": "Set how often Heartbeat checks",
       "kind": "change",
@@ -6967,6 +7000,25 @@
             "maxLength": 200
           }
         },
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "rules.make",
+      "title": "Make this a rule",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 2000
+          }
+        },
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       }
     },
@@ -9839,6 +9891,31 @@
           "task",
           "other",
           "kind"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "task.releaseAgent",
+      "title": "Release a stopped agent",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "agent": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "required": [
+          "task",
+          "agent"
         ],
         "additionalProperties": false
       }

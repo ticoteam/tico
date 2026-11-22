@@ -1,3 +1,4 @@
+import { fmtDate } from '@/lib';
 import type { ExactCheck, Hook, OrgRule, Routine, Run, StageRule, Trigger } from './types';
 
 /* Plain words for what the server stores: a schedule, a trigger, a stage rule's When / If / Then. Ported from the old
@@ -6,6 +7,18 @@ import type { ExactCheck, Hook, OrgRule, Routine, Run, StageRule, Trigger } from
 
 /** Who runs it: the agent that takes the turn, or the owner. */
 export const runnerOf = (r: Routine) => r.steps?.find((s) => s.type === 'bot_turn')?.bot ?? r.owner_id ?? null;
+
+/** On: not turned off, not paused by the run guard, and its end date not passed. */
+export const isOn = (r: Pick<Routine, 'enabled' | 'paused' | 'ended'>) => r.enabled !== false && !r.paused && !r.ended;
+
+/** The last day it runs: the day before its end time (an end set here is the midnight after the picked day). */
+export const lastDay = (endsAt: string) => new Date(new Date(endsAt).getTime() - 1);
+
+/** The midnight after `day` in the viewer's zone, as a UTC time: it runs through that day. */
+export const endAfter = (day: Date) => new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).toISOString();
+
+/** "Ended Nov 28". */
+export const endedWords = (r: Pick<Routine, 'ends_at'>) => `Ended ${r.ends_at ? fmtDate(lastDay(r.ends_at)) : ''}`.trim();
 
 /** The task or thread a run made: the first one a step names. */
 export function runLink(run: Pick<Run, 'steps'>): string | undefined {

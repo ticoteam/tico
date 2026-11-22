@@ -154,6 +154,16 @@ export function setRoutineLimit(id: string, per30m: number | null) {
   });
 }
 
+/** When it stops starting new runs: an ISO time, or null for never (PATCH ends_at). A later one restarts an ended one. */
+export function setRoutineEnd(id: string, endsAt: string | null) {
+  const change = (r: Routine): Routine => ({ ...r, ends_at: endsAt ?? undefined, ended: false });
+  return write<Routine>({
+    key: [routinesQuery.queryKey, routineQuery(id).queryKey],
+    optimistic: (cur: Routine[] | Routine | undefined) => (Array.isArray(cur) ? mapList(cur, id, change) : cur && change(cur)),
+    send: (idempotencyKey) => api.patch<Routine>(`/api/v2/automations/${enc(id)}`, { ends_at: endsAt }, { idempotencyKey }),
+  });
+}
+
 /** End the run guard's hold: `release` queues its held runs, oldest first; `drop` skips them. */
 export function endHold(id: string, action: 'release' | 'drop') {
   const change = (r: Routine): Routine => ({ ...r, hold: undefined });

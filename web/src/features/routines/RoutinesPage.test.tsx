@@ -10,6 +10,7 @@ import { validateListeningSearch, validateRoutinesSearch, validateRulesSearch } 
 import { deliveriesQuery, heartbeatQuery, hooksQuery, maintenanceQuery, maintenanceRunsQuery, routinesQuery, runsQuery, systemJobsQuery, templatesQuery, versionsQuery } from './queries';
 import { RoutinesPage } from './RoutinesPage';
 import type { Hook, Maintenance, Routine, StageRule, SystemJob } from './types';
+import { fmtDate } from '@/lib';
 import { cronWords, orgParts, runLink, stageParts } from './words';
 
 /* The Routines page: routines and one routine's panel, the built-in ones, runs, webhooks, the inbox board and
@@ -286,6 +287,23 @@ describe('One routine', () => {
     await waitFor(() => expect(sent).toHaveLength(1));
     expect(sent[0]).toMatchObject({ method: 'PATCH', body: { spend_cap: { per_30m: 2.5 } } });
     expect(await run('routines.setLimit', { routine: 'r1', per30m: 100 }, { via: 'tico' })).toMatchObject({ ok: false });
+  });
+
+  it('an ended routine reads Ended and its last day with the switch locked; Ends sets the midnight after a day, or Never', async () => {
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/r1') ? ok(routine({ ends_at: new Date(2026, 11, 1).toISOString() })) : nothing()));
+    const p = await openRoutine({ ended: true, ends_at: new Date(2026, 10, 29).toISOString() });
+    const ended = `Ended ${fmtDate(new Date(2026, 10, 28, 12))}`;
+    expect(screen.getByTitle('Morning numbers').className).toContain('is-off');
+    expect(within(screen.getByTitle('Morning numbers')).getByText(ended)).toBeTruthy();
+    fireEvent.click(within(p).getByRole('switch', { name: ended }));
+    expect(sent).toHaveLength(0);
+    fireEvent.click(within(p).getByRole('button', { name: /^Ends/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Monday, November 30' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ method: 'PATCH', body: { ends_at: new Date(2026, 11, 1).toISOString() } });
+    fireEvent.click(within(p).getByRole('button', { name: 'Never' }));
+    await waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent[1]).toMatchObject({ method: 'PATCH', body: { ends_at: null } });
   });
 
   it('runs it with sample input for its trigger, and says when the filters drop it', async () => {

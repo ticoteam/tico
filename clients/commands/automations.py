@@ -54,6 +54,11 @@ _AUTO_FIELDS = {
         "or red; optional), then: up to 10 actions (empty = ignore)}. `to` sends a "
         "thread there after the rule's own actions; null takes them away.",
     },
+    "ends_at": {
+        "type": ["string", "null"],
+        "description": "A future time with Z or an offset (2026-12-01T00:00:00Z): nothing new starts from then; "
+        "a later one or null starts an ended automation again, missed times skipped",
+    },
     "trigger": {
         "type": "object",
         "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; "
@@ -159,7 +164,8 @@ def automation_template(api, args):
     "false (true is refused with 403 confirm_required); unless it is a proposal, its person's card click turns "
     "it on, and a chooser without "
     "a mode defaults to Draft there. Any other caller sends `choose.mode` (draft or reply) with a chooser. "
-    "Use reply only when the person explicitly asks for replies and the inbox permits sending.",
+    "Use reply only when the person explicitly asks for replies and the inbox permits sending. `ends_at` "
+    "stops it starting new runs from that time.",
     {k: v for k, v in _AUTO_FIELDS.items()},
     required=("name", "owner", "trigger"),
     writes=True,
@@ -175,7 +181,7 @@ def automation_create(api, args):
     "must propose Message routine edits with tico_assistant_propose (PATCH "
     "/api/v2/automations/<id>); pausing with enabled:false is direct. A bot without edit rights "
     "gets `pending` (a proposal a person restores). Action args are named in `steps`. Then check "
-    "`problems`.",
+    "`problems`. An ended one (`ended`) turns back on only with a later `ends_at` or null.",
     {"id": _s("auto_..."), **_AUTO_FIELDS, "summary": _s("A few words on the change")},
     required=("id",),
     writes=True,

@@ -3,6 +3,7 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
@@ -18,7 +19,7 @@ import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRem
 import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
 import type { Routine, Trigger, Version } from './types';
-import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
+import { endAfter, endedWords, EVERY, eventWords, flowLines, isOn, lastDay, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -53,7 +54,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   if (versions) return <Versions routine={r} onDone={() => setVersions(false)} onClose={onClose} />;
   const board = routineBoard(r);
   if (board && item) return <BoardItemEditor key={`${item.part}:${item.at ?? ''}`} routine={r} board={board} it={item} onDone={() => setItem(null)} onClose={onClose} />;
-  const on = r.enabled !== false && !r.paused;
+  const on = isOn(r);
   const step = stepOf(r);
   const together = r.steps?.find((s) => s.type === 'find' && s.together === true);
   const tmp = r.id.startsWith('tmp:');
@@ -66,9 +67,9 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
       actions={
         <>
           <HeadSwitch
-            label={on ? 'On' : 'Paused'}
+            label={r.ended ? endedWords(r) : on ? 'On' : 'Paused'}
             checked={on}
-            disabled={r.can_pause === false || tmp}
+            disabled={r.can_pause === false || tmp || !!r.ended}
             onChange={(next) => void press(next ? 'routines.resume' : 'routines.pause', { routine: r.id })}
           />
           <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
@@ -94,6 +95,11 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
             <span>{r.spend_cap?.per_30m != null ? `${fmtMoney(r.spend_cap.per_30m, { cents: true })} each 30 minutes` : "Agent's limit"}</span>
             {r.can_edit && !tmp && !limiting && <Verb onClick={() => setLimiting(true)}>Change</Verb>}
           </LabelValue>
+          {!r.readonly && !r.builtin && !r.wakes && (
+            <LabelValue label="Ends">
+              <Ends routine={r} disabled={!r.can_edit || tmp} />
+            </LabelValue>
+          )}
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
         {r.created_by_id && <Made id={r.created_by_id} via={r.created_via} />}
@@ -342,6 +348,17 @@ function LimitEditor({ routine, onDone }: { routine: Routine; onDone: () => void
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Never, or the last day it runs: a picked day ends it at the midnight after, in the viewer's zone. */
+function Ends({ routine, disabled }: { routine: Routine; disabled: boolean }) {
+  const set = (endsAt: string | null) => void press('routines.setEnd', { routine: routine.id, endsAt });
+  return (
+    <>
+      <DatePick label="Ends" labelHidden withTime={false} placeholder="Never" value={routine.ends_at ? lastDay(routine.ends_at) : null} disabled={disabled} onValueChange={(day) => set(endAfter(day))} />
+      {routine.ends_at && !disabled && <Verb onClick={() => set(null)}>Never</Verb>}
+    </>
   );
 }
 
