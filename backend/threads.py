@@ -948,7 +948,13 @@ def entity_readers(c, who, auth=None):
 
 
 def entity_scope(c, v, root, inner=lambda name: name):
-    """The common entity and inbox gate for direct, SQL and batched thread reads."""
+    """The common entity and inbox gate for direct, SQL and batched thread reads: worked out once per reader, alias
+    and table naming per read snapshot (read_cache), since a page of thread reads asks it once per thread."""
+    key = ("entity_scope", v.who, v.is_person, root, inner("entity_sources"))
+    return read_cache.value(c, key, lambda: _entity_scope(c, v, root, inner))
+
+
+def _entity_scope(c, v, root, inner):
     from . import mailbox_access
     from .entities import visible
 
