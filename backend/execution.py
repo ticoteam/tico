@@ -3865,7 +3865,7 @@ class Execution:
         # The environment owner hosts any bot; every other operator hosts only their own.
         owner = self.auth.owner_id(c)
         rows = c.execute(
-            f"SELECT a.*,b.state,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state FROM assignments a "
+            f"SELECT a.*,b.state,b.slug,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state FROM assignments a "
             f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
             "WHERE a.runner_id=? ORDER BY a.bot",
             (who.runner_id,),
@@ -3906,6 +3906,13 @@ class Execution:
             if row['owner_id'] != runner['owner_id'] and runner['owner_id'] != owner and not takes:
                 continue
             stored = json.loads(row['config'])
+            # A runner accepts a checkout whose bot.yaml names the bot's id, its config's name or its named folder
+            # (runner-rs readiness.rs configuration_valid). A bot seeded from the catalog stores no name, and its
+            # template's bot.yaml names its slug (agent-ops, while its id stays botops): send the slug as the name, so
+            # its fresh checkout is ready on every runner already out there.
+            named = not stored.get('name') and bool(row['slug'])
+            if named:
+                stored = {**stored, 'name': row['slug']}
             config = runner_versions.wire_template(
                 providers.fill(company, follow(c, row['bot'], dict(stored), configs.get))
             )
@@ -3913,7 +3920,7 @@ class Execution:
             # the same template name.
             wired = runner_wire.assignment(row)
             sent = runner_versions.wire_template(stored)
-            if sent is not stored:
+            if named or sent is not stored:
                 wired["config_json"] = json.dumps(sent)
             result.append(
                 {

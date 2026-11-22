@@ -54,6 +54,30 @@ def test_its_assignment_names_the_old_template_in_config_and_config_json_alike(a
     assert row["config"]["template"] == json.loads(row["config_json"])["template"] == "botops"
 
 
+def test_a_fresh_agent_ops_checkout_from_its_template_is_the_config_its_runner_is_sent(api):
+    """A runner's readiness takes a bot.yaml only when its name is the bot's id, the config's name or its named folder
+    (runner-rs readiness.rs configuration_valid). A fresh install's seeded Agent Ops can store neither a name nor a
+    folder, and its catalog bot.yaml names its slug, not its id: its assignment sends that slug as the name, in config
+    and config_json alike, or the install shows it as "Configuration differs from server" and it never runs a turn."""
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','agent-ops','Agent Ops','active')")
+        c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('botops','ana')")
+        BS.write(c, "botops", {"runtime": "fake", "status": "active", "template": "agent-ops"})
+    machine = runner(api)
+    with api.app.state.store.read() as c:
+        placed = c.execute("SELECT generation FROM assignments WHERE bot='botops'").fetchone()
+    assign(api, machine, "botops", generation=placed["generation"] if placed else 0)
+    (row,) = [a for a in get(api, "runners/assignments", token=machine["token"]) if a["bot"] == H.FLEET_MAINTAINER]
+    checkout = yaml.safe_load((ROOT / "templates/catalog/agent-ops/bot.yaml").read_text())
+    assert checkout["name"] != H.FLEET_MAINTAINER  # its id alone would not match
+    assert row["config"]["name"] == json.loads(row["config_json"])["name"] == checkout["name"] == H.AGENT_OPS_SLUG
+    # A name the server stores is the one it sends.
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "botops", {"name": "botops"})
+    (row,) = [a for a in get(api, "runners/assignments", token=machine["token"]) if a["bot"] == H.FLEET_MAINTAINER]
+    assert row["config"]["name"] == json.loads(row["config_json"])["name"] == "botops"
+
+
 def test_an_old_company_file_reads_the_new_name_unless_a_person_chose_one():
     rows = [
         {"id": "ops", "template": "botops", "title": "BotOps", "department": "engineering"},
