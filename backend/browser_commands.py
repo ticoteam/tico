@@ -816,7 +816,7 @@ _OPEN_MARK = (
     "AND q.person_id=? AND EXISTS (SELECT 1 FROM json_each(m.refs, '$.shows') s WHERE s.value=?) LIMIT 1"
 )
 # What a browser ❓ says after the bot's own line.
-BROWSER_HELP = "The live browser opens from this question in Flow. Reply Done once you are through."
+BROWSER_HELP = "Open the browser below, finish there, then reply Done."
 
 
 def open_ask(

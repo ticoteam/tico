@@ -1642,3 +1642,40 @@ def test_names_made_before_bare_names_lose_the_doubled_last_four_on_the_next_pas
     with books.read() as c:
         assert c.execute("SELECT name FROM fin_money_accounts WHERE id=?", (mid,)).fetchone()[0] == name
         assert c.execute("SELECT name FROM fin_accounts WHERE id=?", (line,)).fetchone()[0] == "Reserve"
+
+
+def test_a_bank_row_ok_names_its_amount_who_and_day_so_two_read_apart(books):
+    """TIDY's walkthrough: five "Bot bookkeeping over $5,000" OKs each read "Post a feed row to 2390 Shareholder loans"
+    and "OK this in Finance?". What a row's action does now says its amount, who it was with and its day, and that is
+    the ask's own line (finance/store/tico.ok_line), so two rows to the same account read apart."""
+    from backend import ask_shape
+    from backend.finance.store import tico
+
+    fake = FakeMercury()
+    connect(books, fake)
+    for key in ("txn_bank_fee", "txn_deposit"):
+        fake.txns[str(MERCURY[key]["id"])] = dict(MERCURY[key])
+    sync_once(books, fake)
+    said = {}
+    with books.transaction() as c:
+        for provider in ("txn-dep", "txn-fee"):
+            fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (provider,)).fetchone()[0])
+            for ignore in (False, True):
+                body = {"feed_id": fid, "account_id": account(c, "6900"), **({"ignore": True} if ignore else {})}
+                tried = act(c, OWNER, "categorize", body, dry_run=True)
+                said[provider, ignore] = str(tried.impact["summary"])
+    assert said["txn-dep", False].startswith("Post the 500.00 USD bank row from Acme Customer on 2026-10-13 to 6900 ")
+    assert said["txn-fee", False].startswith("Post the 15.00 USD bank row to Mercury on 2026-10-12 to 6900 ")
+    assert said["txn-dep", True] == "Ignore the 500.00 USD bank row from Acme Customer on 2026-10-13"
+    line = tico.ok_line(said["txn-dep", False] + "; Bot bookkeeping over $5,000")
+    first, rest = line.split("\n", 1)
+    assert (
+        first.startswith("OK in Finance: Post the 500.00 USD bank row from Acme Customer on 2026-10-13")
+        and len(first) <= 140
+    )
+    assert rest == "It is done once you OK it." and ask_shape.line_refusal(line) is None
+    # A long one is cut at a word to an ask's first line; one an ask could not carry is the plain line.
+    long = tico.ok_line("Post " + "the very long payee name " * 10)
+    assert len(long.split("\n")[0]) <= 140 and long.split("\n")[0].endswith("\u2026")
+    assert tico.ok_line("Post to /var/data/feeds/x.csv") == tico.OK_LINE
+    assert tico.ok_line("") == tico.OK_LINE

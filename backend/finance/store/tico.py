@@ -177,11 +177,35 @@ def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: M
 OK_LINE = "OK this in Finance? It is done once you OK it."
 
 
+def ok_line(what: str) -> str:
+    """The ask's line: what the action does, in its plan's words, as a first line an ask may have (ask_shape: one short
+    line, cut at a word), then that the OK does it. OK_LINE when the words could not be an ask's (an id or a path in
+    them). Only the OK's parties read it (task_asks.PRIVATE_LINE is everyone else's); their Needs you row says it whole."""
+    from backend import ask_shape
+
+    what = " ".join(str(what or "").split()).rstrip(".")
+    if not what:
+        return OK_LINE
+    first = f"OK in Finance: {what}?"
+    if len(first) > ask_shape.LINE_MAX:
+        first = first[: ask_shape.LINE_MAX - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "\u2026"
+    line = f"{first}\nIt is done once you OK it."
+    return OK_LINE if ask_shape.line_refusal(line) else line
+
+
 def ok_ask(c: sqlite3.Connection, requester: str, person: str, title: str, subject: str, content: object) -> str:
     """Ask `person` (one person by name) for an OK bound to exactly `content`, on a task of its own titled `title`
-    (backend/task_asks.py). The OK's requirement id."""
+    (backend/task_asks.py), its line saying what the action does (`ok_line`). The OK's requirement id."""
     asked = _A.ask_ok(
-        c, requester, person, OK_LINE, shows=[subject], subject=subject, content=content, title=title[:200]
+        c,
+        requester,
+        person,
+        ok_line(title),
+        shows=[subject],
+        subject=subject,
+        content=content,
+        title=title[:200],
+        opening=OK_LINE,  # the task's chat reaches more than the OK's parties: what it does is the ask's line alone
     )
     return str(asked["requirement_id"])
 

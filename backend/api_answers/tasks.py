@@ -585,6 +585,15 @@ class TaskDetailChild(TypedDict):
 
 
 @answer
+class StoppedAgent(TypedDict):
+    """An agent Tico stopped (failed runs, or over its run budget) whose Needs-you item this task is."""
+
+    id: str
+    slug: str
+    name: str
+
+
+@answer
 class TaskDetail(TypedDict):
     task: TaskDetailTask
     events: list[TaskDetailEvent]
@@ -595,6 +604,8 @@ class TaskDetail(TypedDict):
     has_more: bool
     can_comment: NotRequired[bool]
     can_set_run_model: NotRequired[bool]
+    stopped_agent: NotRequired[StoppedAgent | None]
+    """The agent this task is the stop notice for, when the reader may release it (POST /api/v2/bots/{bot}/release)"""
     mover: NotRequired[bool]
     runs: NotRequired[list[TaskRun]]
     run_model: NotRequired[TaskRunChoice | None]

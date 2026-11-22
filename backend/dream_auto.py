@@ -30,6 +30,7 @@ queue the same occurrence twice; an open dream stops a second one of one bot any
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 from . import dream
@@ -44,6 +45,18 @@ LOG = logging.getLogger("tico.dream_auto")
 MIN_GAP_HOURS = 48  # between dreams of any kind; a bot's first must be this old
 MAX_PER_RUN = 3  # the default "Most bots per run" (backend/maintenance_steps/dream.py)
 MIN_NEED = 10  # turns, plus corrections weighed below, since the last dream
+STALE_HOURS = 72  # an open auto dream with no turn this long (queued, reopened or last run) is closed (close_stale)
+STALE_NOTE = (
+    "Closed by Tico: this dream got no turn for three days. Nobody waits on it; the next Maintenance pass queues "
+    "another when the agent needs one."
+)
+# Open auto dreams with no turn since a time: queued and last changed before it (a reopen is a change), with no run
+# under way and none started since. Their `dream.auto` event names them (events_action_ts); attempts_task finds runs.
+_STALE_SQL = (
+    "SELECT t.id FROM events e JOIN tasks t ON t.id = e.target WHERE e.action = 'dream.auto' AND e.created_at < ?1 "
+    "AND t.status = 'open' AND t.updated_at < ?1 AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.task_id = t.id "
+    "AND (a.state IN ('leased', 'running') OR a.created_at >= ?1))"
+)
 CORRECTION_WEIGHT = 5  # one person's correction counts as this many turns
 WAIT_HOURS = 48  # how long a queued dream waits for a warm window before it is skipped
 WAKE_CLASS = "dream"  # the held job's class, as wake_presets labels it from refs.release_kind
@@ -185,6 +198,19 @@ def _words(queued, held, over, not_due, limit):
         parts.append(f"{over} due past the {limit} this run")
     parts.append(f"{not_due} not due")
     return "; ".join(parts)
+
+
+def close_stale(c: Any, at: datetime) -> list[str]:
+    """Close every open auto dream that has had no turn for STALE_HOURS before `at` (a datetime): never run, or its last
+    run that long ago, and not changed (reopened) since; one the release policy did not end (its job was never held,
+    or it was woken again), or that ran without finishing. Nobody waits on it, so it never goes to a person or a
+    manager (never_stuck._OPEN, stage_rule_timers); the never-stuck pass calls this, whether or not the Dream step is
+    on. Returns the tasks closed."""
+    closed: list[str] = []
+    for (task_id,) in c.execute(_STALE_SQL, (stamp(at - timedelta(hours=STALE_HOURS)),)).fetchall():
+        if H.attempt(c, H.task_close, H.TICO_ACTOR, task_id, STALE_NOTE) is not None:
+            closed.append(task_id)
+    return closed
 
 
 def run(store, auth, at, limit=MAX_PER_RUN, report=None):

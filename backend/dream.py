@@ -30,7 +30,7 @@ from .views import human_only
 from .api_contract import api_v2
 
 LABEL = "dream"
-TITLE = "Dream"
+TITLE = "Tidy {name}'s instructions and memory"  # a dream's title names its bot, so a list tells one from the next
 RECENT_HOURS = 24  # a finished dream is still shown for this long
 SINCE_DAYS = 14  # a first dream reads this far back
 MAX_TEXT = 4000  # the question and the summary, as the panel shows them
@@ -331,7 +331,9 @@ def start(c, who, owner, task_create, reason=None, wake_refs=None):
 
     # The steps are Tico's, not the person's: they reach the bot in its run (task_wakes), never as the chat's first
     # message.
-    body = M.TaskCreate(title=TITLE, owner=owner, labels=[LABEL])
+    bot = H.bot(c, H.actor_id(owner)) or {}
+    title = TITLE.format(name=bot.get("display_name") or H.actor_id(owner))
+    body = M.TaskCreate(title=title, owner=owner, labels=[LABEL])
     made = task_create(c, who, body, lint=False, wake_refs={**(wake_refs or {}), task_wakes.INSTRUCTIONS: text})
     task = made.get("task") if isinstance(made, dict) else None
     if not task:

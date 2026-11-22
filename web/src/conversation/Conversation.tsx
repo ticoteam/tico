@@ -64,6 +64,8 @@ export interface ConversationProps {
   below?: (m: ChatMessage) => ReactNode;
   /** false: the person may read but not write here (an archived, closed or meeting thread): no box. */
   canPost?: boolean;
+  /** The box's own words in place of "Message …": a person's own task, which they write on, not to themself. */
+  compose?: string;
   /** Not the thread's own messages, drawn among them by time (a team's updates, through `card`): no reply, no rating. */
   extra?: ChatMessage[];
   /** This thread as the shell's `?chat=` (a second chat's own address): a page a message links to opens beside it.
@@ -178,7 +180,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -421,7 +423,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} label={compose} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

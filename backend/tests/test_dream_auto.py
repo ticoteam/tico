@@ -187,7 +187,8 @@ def test_memory_commits_reported_with_no_run_are_not_corrections_and_the_dream_i
     started = run(api)
     assert started == [verdict(api, "ops", now()).name]
     [row] = dream_rows(api, "ops")
-    assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"] and row["title"] == "Dream"
+    assert row["requester_id"] == "human:ben" and H.task_labels(row) == ["dream"]
+    assert row["title"].startswith("Tidy ") and row["title"].endswith("'s instructions and memory")
     with api.app.state.store.read() as c:
         first_line, _, _ = task_wakes.instructions(c, row["id"]).partition("\n")
         assert first_line.startswith("Auto dream: 0 turns and 2 corrections from people since ")
@@ -671,3 +672,50 @@ def test_a_thumbs_down_given_before_the_last_dream_does_not_count_again_when_edi
     with api.app.state.store.read() as c:
         assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=2))) == (0, 0), "given before: not a new correction"
         assert DA.work(c, "ops", DA.stamp(now() - timedelta(days=6))) == (0, 1), "given after: one correction"
+
+
+def test_an_auto_dream_never_waits_on_a_person_and_one_that_never_ran_is_closed(api):
+    """Tico Team's walkthrough: an auto dream titled "Dream" waited days for a turn; the Quiet bot tasks rule told the
+    General Manager, who asked Chris "keep it queued, or close it?". Nobody waits on an auto dream: the never-stuck
+    pass and Quiet bot tasks pass it over, and the next pass closes one with no run under way STALE_HOURS on."""
+    from backend import never_stuck, stage_rule_timers
+    from backend import stage_rules as SR
+
+    worked(api, "ops", 10)
+    aged(api)
+    assert run(api)
+    [row] = dream_rows(api, "ops")
+    plain = post(api, "tasks", {"owner": "ops", "title": "Review the launch note", "body": "Please review it."})
+    plain_id = (plain.get("task") or plain)["id"]
+    with api.app.state.store.transaction() as c:
+        assert row["id"] not in {r[0] for r in c.execute(never_stuck._OPEN)}
+        assert plain_id in {r[0] for r in c.execute(never_stuck._OPEN)}  # a plain task of the bot's is still watched
+        quiet = SR.get(c, SR.QUIET_BOT_TASKS)
+        assert stage_rule_timers._quiet_on_auto_dream(c, quiet, row["id"])
+        assert not stage_rule_timers._quiet_on_auto_dream(c, quiet, plain_id)
+        # A tell queued before this change still never reaches the manager: it settles as dropped.
+        c.execute(
+            "INSERT INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
+            (quiet["id"], row["id"], "m1", "pending", "bot:chief", H.now()),
+        )
+        assert stage_rule_timers._wake_manager(c, "bot:chief", H.now()) is False
+        assert c.execute("SELECT outcome FROM stage_rule_marks WHERE mark='m1'").fetchone()[0] == "dropped"
+    with api.app.state.store.transaction() as c:
+        assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS - 1)) == []
+        later = now() + timedelta(hours=DA.STALE_HOURS + 1)
+        # One with a turn inside the window is kept: a run started then, or a reopen (any change to the task).
+        recent = DA.stamp(now() + timedelta(hours=2))
+        c.execute(
+            "UPDATE attempts SET task_id=?, created_at=? WHERE id=(SELECT id FROM attempts LIMIT 1)",
+            (row["id"], recent),
+        )
+        assert c.execute("SELECT count(*) FROM attempts WHERE task_id=?", (row["id"],)).fetchone()[0] == 1
+        assert DA.close_stale(c, later) == []
+        c.execute("UPDATE attempts SET task_id=NULL WHERE task_id=?", (row["id"],))
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (recent, row["id"]))
+        assert DA.close_stale(c, later) == []
+        c.execute("UPDATE tasks SET updated_at=? WHERE id=?", (row["updated_at"], row["id"]))
+        # The never-stuck pass closes it, whether or not the Dream step runs.
+        never_stuck.check(c, DA.stamp(now() + timedelta(hours=DA.STALE_HOURS + 1)))
+        assert H.task(c, row["id"])["status"] == "closed"
+        assert H.task(c, plain_id)["status"] == "open"

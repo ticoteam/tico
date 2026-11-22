@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
-import { decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
+import { asksInChat, decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -35,6 +35,18 @@ describe('the open task', () => {
     expect(defaultTab(tabsOf(asking))).toBe('plan');
     expect(defaultTab(tabsOf(task({ documents: [doc('f1', 'Spec')] })))).toBe('spec');
     expect(defaultTab(tabsOf(task()))).toBe('details');
+  });
+
+  it('on a phone, opens a ❓ for the person in its chat, where its box answers the agent; a page that waits still leads', () => {
+    const turn = { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true } as TaskData['turn'];
+    const asked = task({ conversation_id: 'c7', documents: [doc('f1', 'Spec')], turn });
+    expect(asksInChat(asked, 'human:me')).toBe(true);
+    expect(asksInChat(asked, 'human:ana')).toBe(false);
+    expect(asksInChat({ ...asked, turn: { ...turn!, requirement_id: 'r9' } }, 'human:me')).toBe(false);
+    expect(defaultTab(tabsOf(asked), true)).toBe('chat');
+    expect(defaultTab(tabsOf(asked))).toBe('spec');
+    const page = task({ conversation_id: 'c7', turn, documents: [doc('f1', 'Spec'), doc('f2', 'Plan')], to_leave: [req('r1', { page: { file_id: 'f2' } } as Partial<TaskRequirement>)] });
+    expect(defaultTab(tabsOf(page), true)).toBe('plan');
   });
 
   it('opens on the file the ask is about, not a review page it also shows @approvals', () => {

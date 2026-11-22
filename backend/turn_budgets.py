@@ -175,9 +175,9 @@ def _hold(c, settings, bot, window, runs, budget, now):
         settings,
         bot,
         f"{name} stopped: {runs} runs in the last {window}",
-        f"{_sentence(name, runs, window)}\n\nIts budget is {budget} runs per {window}. Check its last runs in Runs. "
-        f"Then release {name} (Settings > Bots > {name}, or `tico bot release {bot}`) or raise its budget "
-        f"(`tico bot budget {bot} --{window} N`). Everything queued for it is kept and starts after the release.",
+        f"{_sentence(name, runs, window)}\n\nIts budget is {budget} runs per {window}. If those runs were needed, "
+        f"press Release here, or raise its budget on {name}'s page. Everything queued for it is kept and starts after "
+        f"the release.",
     )
     holds.put(
         c,
@@ -353,6 +353,16 @@ def set_team(c, actor, body):
 
 
 # ---------------------------------------------------------------------------------------------------- the routes
+def check_release(c, auth, settings_admin, who, bot):
+    """Raise unless `who` may release `bot` (POST /api/v2/bots/{bot}/release): they see it, and manage it or are Agent
+    Ops. The task page asks the same (bot_stops.stopped_on) before it offers Release."""
+    auth.domain(who)
+    if not H.bot(c, bot):
+        raise Problem("not_found", "Bot not found", 404)
+    auth.require_see(c, who, bot)
+    settings_admin._manager(c, who, bot, agent_ops=True)
+
+
 def install(app, store, auth, mutate, settings_admin):
     from fastapi import Request
 
@@ -419,8 +429,7 @@ def install(app, store, auth, mutate, settings_admin):
         def work(c):
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-            seeing(c, who, bot)
-            settings_admin._manager(c, who, bot, agent_ops=True)
+            check_release(c, auth, settings_admin, who, bot)
             from . import bot_stops
 
             return {"bot": bot, "released": bot_stops.release(c, who.actor, bot)}

@@ -13,6 +13,7 @@ import { askOf, changesAskedOf, decisionName, decisionOf, effectOf, emailOf, fai
 import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
+import { StoppedDecision } from './Stopped';
 import { followSend } from './sending';
 import { addressesOf, answerKey, decisionShownQuery, emailSendQuery, sendStateQuery, type AnswerKey, type BoundRule, type TaskData } from './queries';
 import { Facts, LabelValue } from '@/kit/LabelValue';
@@ -47,9 +48,14 @@ export function Decision({ t, flow, dock = false, onAsking, email, requirement }
   if (live && held && !held.sending) setHeld(null);
   const r = held?.sending ? held.r : (live ?? held?.r);
   const asked = r ? null : changesAskedOf(t, me, email);
-  // A rule's review asks no OK: what it held waits on the person in the same box (Held.tsx). An email tab shows only
-  // that email's own decision.
-  if (!r && !asked) return isRuleReview(t) && typeof email !== 'string' ? <HeldDecision t={t} flow={flow} dock={dock} /> : null;
+  // A rule's review asks no OK: what it held waits on the person in the same box (Held.tsx), as a stopped agent's notice
+  // waits on its Release (Stopped.tsx). An email tab shows only that email's own decision.
+  if (!r && !asked) {
+    if (typeof email === 'string') return null;
+    if (isRuleReview(t)) return <HeldDecision t={t} flow={flow} dock={dock} />;
+    // Only while the notice is open: Tico's own release closes it, and the stream says so before the task is read again.
+    return t.stopped_agent && t.status === 'open' ? <StoppedDecision t={t} flow={flow} dock={dock} /> : null;
+  }
   const box = r ? (
     <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (

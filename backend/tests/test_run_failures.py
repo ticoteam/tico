@@ -309,3 +309,31 @@ def test_raising_the_team_budget_lets_go_a_bot_that_follows_it(api, monkeypatch)
     assert post(api, "settings/turn-budgets", {"turns_per_hour": 50})["released"] == ["ops"]
     ready(api, machine, ["ops"])
     assert claim(api, machine) and get(api, "bots/ops/budget")["held"] is None
+
+
+def test_a_stopped_agents_notice_names_it_and_offers_release_in_place(api, monkeypatch):
+    """TIDY's walkthrough: a stopped agent's Needs-you task said "Settings > Bots > … or `tico bot release <uuid>`" and
+    had no Release. Now its words name the agent with no id or command, and the task read names the stopped agent to
+    whoever may release it, so the page puts Release in place; nobody else is told."""
+    machine = setup(api, monkeypatch)
+    hold_bot(api, machine, monkeypatch)
+    with api.app.state.store.read() as c:
+        task = c.execute("SELECT * FROM tasks WHERE title LIKE '%failed runs in a row'").fetchone()
+        bot_id = H.bot(c, "ops")["id"]
+    assert task["owner_id"] == "human:ana", task["owner_id"]  # its words stay hers to read, in its chat
+    with api.app.state.store.read() as c:
+        said = " ".join(
+            r[0] or ""
+            for r in c.execute("SELECT body FROM messages WHERE conversation_id=?", (task["conversation_id"],))
+        )
+    assert "press Release here" in said and "tico bot" not in said and "Settings >" not in said, said
+    page = get(api, f"tasks/{task['id']}")
+    assert page["stopped_agent"] == {"id": bot_id, "slug": "ops", "name": page["stopped_agent"]["name"]}, page
+    assert get(api, f"tasks/{task['id']}", token="cara-test").get("stopped_agent") is None  # may not release it
+    other = post(api, "tasks", {"owner": "ops", "title": "Something else", "body": "Not a notice."})
+    assert get(api, f"tasks/{other['task']['id']}")["stopped_agent"] is None
+    # The Release the page puts in place is the bot's release: the notice closes with it.
+    assert post(api, f"bots/{bot_id}/release", {})["released"]["run_hold"] is True
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT status FROM tasks WHERE id=?", (task["id"],)).fetchone()["status"] == "closed"
+    assert get(api, f"tasks/{task['id']}")["stopped_agent"] is None

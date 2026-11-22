@@ -152,10 +152,17 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
 /** A document the server keeps as a page (its pages read answers for it); a Markdown file is a plain file. */
 export const isPage = (doc: TaskDocument): boolean => doc.kind !== 'markdown';
 
-/** With no tab in the address: what waits on the person, else the first page, else Details (never the chat). */
-export function defaultTab(tabs: TaskTab[]): string {
-  return (tabs.find((x) => x.mark === 'ask') ?? tabs.find((x) => !x.chat))?.slug ?? DETAILS;
+/** With no tab in the address: what waits on the person, else, when `chat` (a phone, with a ❓ for the person in the
+    task's chat: asksInChat), the chat, where they answer it; else the first page, else Details. */
+export function defaultTab(tabs: TaskTab[], chat = false): string {
+  const open = tabs.find((x) => x.mark === 'ask') ?? (chat ? tabs.find((x) => x.chat) : undefined) ?? tabs.find((x) => !x.chat);
+  return open?.slug ?? DETAILS;
 }
+
+/** Whether it is `me`'s turn on the task for a ❓ an agent put to them in its chat (the turn's requirement is a question
+    mark, `qmark:<id>`): they answer it there, in the chat's own message box. */
+export const asksInChat = (t: Pick<TaskData, 'conversation_id' | 'turn'>, me: string | undefined): boolean =>
+  !!me && !!t.conversation_id && t.turn?.state === 'person' && t.turn.who === me && !!t.turn.requirement_id?.startsWith('qmark:');
 
 /** An email's OK task, as the server titles it ("Send: <subject> → <first recipient> +n", backend/email_sending.py
     send_title): the subject without "Send:" and its "Re:"/"Fwd:", and who it goes to. Null for any other title. */

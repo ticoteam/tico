@@ -20,7 +20,7 @@ import json
 import logging
 
 from . import holds, run_diagnostics, run_failures, turn_budgets
-from .store import H
+from .store import H, Problem
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +35,31 @@ CLAIM_ITEM_SQL = (
 
 def name_of(c, bot):
     return (H.bot(c, bot) or {}).get("display_name") or bot
+
+
+# The bot a Needs-you item a hold filed is about: an open failed-runs or budget hold on the bot, or a claim hold on
+# one of its runs, whose item is this task. Each of these `release` lets go.
+STOPPED_ON_SQL = (
+    "SELECT coalesce(bot_id, holdable_id) FROM holds WHERE released_at IS NULL "
+    "AND ((kind IN ('failing','runaway') AND holdable_type='bot') OR (kind='claim_error' AND holdable_type='job')) "
+    "AND upkeep_task_id=? LIMIT 1"
+)
+
+
+def stopped_on(c, auth, settings_admin, who, task_id):
+    """The stopped bot a task is the Needs-you item for, {id, slug, name}, when `who` may release it (the check
+    POST /api/v2/bots/{bot}/release makes, turn_budgets.check_release); else None. The task page puts its Release in
+    place."""
+    row = c.execute(STOPPED_ON_SQL, (task_id,)).fetchone()
+    if not row:
+        return None
+    bot = str(row[0])
+    try:
+        turn_budgets.check_release(c, auth, settings_admin, who, bot)
+    except Problem:
+        return None
+    found = H.bot(c, bot) or {}
+    return {"id": bot, "slug": found.get("slug") or bot, "name": name_of(c, bot)}
 
 
 def raise_item(c, settings, bot, title, body):
@@ -150,8 +175,7 @@ def _claim_item(c, settings, bot):
         f"Tico could not start a queued run for {name}: an error happened while its claim prepared it. The run is "
         "held, and Tico retries it on its own: the wait starts at a minute and doubles with each failed try, up to "
         "50 minutes, so it starts once the cause is fixed. The server log has the traceback, and Health names the "
-        f"held runs. To retry them now, fix the cause and release {name} (tico bot release {bot}); a run that fails "
-        "again is held again.",
+        "held runs. To retry them now, fix the cause and press Release here; a run that fails again is held again.",
     )
 
 

@@ -26,7 +26,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { FlowTop, MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
+import { askOf, asksInChat, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -121,6 +121,9 @@ const decoded = (part: string): string => {
     where the email is on screen). */
 const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?.wait ? null : { email: x?.email ?? null });
 
+/** On the person's own task the box is theirs to write on: never "Message <their own name>". */
+const ownTask = (t: Pick<TaskData, 'owner_id'>, me: string | undefined): string | undefined => (me && t.owner_id === me ? 'Add a note' : undefined);
+
 function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: string; flow: boolean }) {
   const navigate = useNavigate();
   // The ask a card opened it for (`?ask=`): its tab, at the version it pinned, and its Approve.
@@ -136,7 +139,14 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
+  // On a phone, a ❓ for the person in the task's chat opens the chat, where its message box answers the agent asking:
+  // whose it is needs who the person is, so a phone picks once that is known.
+  const meRead = useQuery(meQuery);
+  const me = meRead.data?.id;
+  const phone = useCards();
+  const chatFirst = phone && asksInChat(t, me);
+  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError)) && !(phone && meRead.isPending))
+    setFirst(defaultTab(tabs, chatFirst));
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;
@@ -191,7 +201,6 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
-  const me = useQuery(meQuery).data?.id;
   const owner = useActor(t.owner_id);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
@@ -280,6 +289,7 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
         variant="page"
         title={owner?.name}
         actor={t.owner_id ?? undefined}
+        compose={ownTask(t, me)}
         foot={
           <>
             <TaskStatus t={t} />
@@ -341,6 +351,7 @@ export interface TaskChatProps {
 export function TaskChat({ task, flow = false }: TaskChatProps) {
   const { t } = useTask(task);
   const owner = useActor(t?.owner_id);
+  const me = useQuery(meQuery).data?.id;
   const [asking, setAsking] = useState(false);
   const decision = t && <ChatDecision key={t.id} t={t} flow={flow} onAsking={setAsking} />;
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
@@ -386,6 +397,7 @@ export function TaskChat({ task, flow = false }: TaskChatProps) {
           variant="task"
           title={name}
           actor={t.owner_id ?? undefined}
+          compose={ownTask(t, me)}
           foot={
             <>
               <TaskStatus t={t} />

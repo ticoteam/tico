@@ -692,6 +692,7 @@ def ask_ok(
     matter: str | None = None,
     why: str = "Asked again",
     renew: bool = False,
+    opening: str | None = None,
 ) -> Row:
     """Ask `person` (always a person by name) to OK `content` before `subject` is done. The OK goes on `task_id`, the
     task the work belongs to; with none, a task is filed in General first, asked for by `by`: owned by `by` when that is
@@ -699,7 +700,9 @@ def ask_ok(
     was working, when its title may go there. The same subject asked again with the same content is the same ask; with
     other content, a new one is made and then the old one withdrawn with `why` (for a GENERIC subject, only the same
     asker's on the same task), so the task never moves on between the two; `renew` asks anew even for the same content
-    (its old ask is no longer good: whom it waits on may not approve it now). Returns {task_id, requirement_id}."""
+    (its old ask is no longer good: whom it waits on may not approve it now). `opening` is a filed task's first message
+    when it must say less than `line`: the task's chat reaches its readers, who may be more than the OK's parties, and
+    only the ask's own line is kept to its parties. Returns {task_id, requirement_id}."""
     H = _h()
     subject = str(subject or "").strip()
     if not kind_of(subject) or ":" not in subject:
@@ -758,7 +761,7 @@ def ask_ok(
             conn,
             filer,
             (f"{named} · {about}"[:300] if about else named) or (title or line).strip(),
-            line.strip(),
+            (opening or line).strip(),
             owner,
             lint=False,
             # A task filed for an OK is private to its parties: the subject it previews is never wider than they are.

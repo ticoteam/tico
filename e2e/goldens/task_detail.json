@@ -248,6 +248,7 @@
     "parent": null,
     "run_model": null,
     "runs": [],
+    "stopped_agent": null,
     "task": {
       "acceptance_criteria": [],
       "assignee_id": "bot:ops",
