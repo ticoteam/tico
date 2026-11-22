@@ -563,16 +563,25 @@ CONNECTION_TABLES = ("task_links", "item_metadata", "entity_external_refs")
 
 
 def referenced(conn, tid):
-    """Whether an outside reference still names `tid` as its connection. A deleted tool's id is then never given to a
-    new tool, so a new connection never inherits the old one's items and records (`PROJ-7` of another site). A file
-    from before the columns has none."""
+    """Whether an outside reference still names `tid` as its connection, a restorable deleted task's link included. A
+    deleted tool's id is then never given to a new tool, so a new connection never inherits the old one's items and
+    records (`PROJ-7` of another site). A file from before the columns has none."""
     for table in CONNECTION_TABLES:
         try:
             if conn.execute(f"SELECT 1 FROM {table} WHERE connection_id=? LIMIT 1", (tid,)).fetchone():
                 return True
         except sqlite3.OperationalError:
             continue
-    return False
+    try:  # a deleted task's links come back with it (backend/task_delete.py keeps them in task_trash.rows)
+        return bool(
+            conn.execute(
+                "SELECT 1 FROM task_trash t, json_each(t.rows, '$.rows.task_links') l WHERE t.purged_at IS NULL "
+                "AND json_valid(t.rows) AND json_extract(l.value, '$.connection_id')=? LIMIT 1",
+                (tid,),
+            ).fetchone()
+        )
+    except sqlite3.OperationalError:
+        return False
 
 
 def insert_tool(conn, service, name, delivery, created_by, created_at, updated_at=None, tid=None, first=None):

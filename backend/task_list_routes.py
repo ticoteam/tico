@@ -337,13 +337,14 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         from . import item_sources as IS
 
         try:
-            item = IS.parse_ref(c, ref)
+            item = IS.parse_ref(c, ref, lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id))
         except ValueError as error:
             raise Problem("link", str(error), 422) from None
         api_tools.check_connection(c, who, auth, item[3])
+        # Item first: the item's few links by task_links_item_key, then only their tasks.
         return (
-            "EXISTS (SELECT 1 FROM task_links l WHERE l.task_id=tasks.id AND l.source=? AND l.item_type=? "
-            "AND l.item_key=? AND l.connection_id=?)",
+            "tasks.id IN (SELECT task_id FROM task_links WHERE source=? AND item_type=? AND item_key=? "
+            "AND connection_id=?)",
             item,
         )
 

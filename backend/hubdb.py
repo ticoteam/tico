@@ -3461,7 +3461,18 @@ def worktree_heads(detail):
 
 @private_task_write
 def task_link(
-    conn, actor, task_id, url, title=None, kind=None, mover=None, wake_once=None, release_repo="", connection_id=""
+    conn,
+    actor,
+    task_id,
+    url,
+    title=None,
+    kind=None,
+    mover=None,
+    wake_once=None,
+    release_repo="",
+    connection_id="",
+    visible=None,
+    item=None,
 ):
     """Attach a link to a task.
 
@@ -3472,8 +3483,10 @@ def task_link(
     A link to an item of a source (backend/item_sources) is stored typed: its source, item type and key. A GitHub PR is
     one in the connected App's organization; any other source's item is typed whatever the link's kind, with the
     connection (a `tools` row) it came through: `connection_id`, or for a site source (Jira) the one serving the link's
-    site (item_sources.outside_item). A task holds one typed row per item; linking it again by any URL answers that row.
-    The caller checks that its reader may see the connection (api_tools.check_connection)."""
+    site (item_sources.outside_item) among the tools `visible` admits (a reader's: api_tools.connection_visible; None
+    admits every tool). A task holds one typed row per item; linking it again by any URL answers that row. The caller
+    checks that its reader may see a named connection (api_tools.check_connection). `item` is a stored link's (source,
+    item type, key, connection), copied as it is (a merge); with `item` given as False the link is a plain one."""
     _writer(conn, actor, task_id=task_id)
     row = task(conn, task_id)
     if not row:
@@ -3498,10 +3511,13 @@ def task_link(
 
     # Another source's item (GitHub's PR is typed below, only in the App's organization): (source, type, key,
     # connection). A site source's item (Jira's) takes the connection serving its site, or stays a plain link.
-    try:
-        outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"))
-    except ValueError as error:
-        refuse(conn, actor, "connection", str(error))
+    if item is not None:
+        outside = tuple(item) if item else None
+    else:
+        try:
+            outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"), visible)
+        except ValueError as error:
+            refuse(conn, actor, "connection", str(error))
     if connection_id and not outside:
         refuse(conn, actor, "connection", "a connection names where an outside item came from: link a Jira issue")
     if wake_once is not None and (kind != "pr" or not app):
@@ -3526,12 +3542,11 @@ def task_link(
         # its site had a connection) becomes that item's row.
         scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
         have = _one(conn, f"SELECT * FROM task_links WHERE task_id=? AND {scoped}", (task_id, *outside))
-        bare = (
-            None
-            if have
-            else _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=? AND source IS NULL", (task_id, url))
-        )
-        if bare:
+        bare = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=? AND source IS NULL", (task_id, url))
+        if bare and have:
+            # The plain row of this URL is the item's typed row now: one row per item, findable by `?link=`.
+            conn.execute("DELETE FROM task_links WHERE id=?", (bare["id"],))
+        elif bare:
             conn.execute(
                 "UPDATE task_links SET source=?,item_type=?,item_key=?,connection_id=?,updated_at=? WHERE id=?",
                 (*outside, now(), bare["id"]),

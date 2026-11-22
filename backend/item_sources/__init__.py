@@ -9,7 +9,8 @@ keys are unique only within one site, like Jira's), and the functions that read,
 
 An item is (connection, source, item type, key): the connection is the `tools` row it came through, '' for none (every
 GitHub item: the company's one GitHub App), so two connections holding the same key are two items. A site source's item
-always has the connection that serves its site (`outside_item`): one whose base URL or sites name that host.
+always has the connection that serves its site (`outside_item`): one whose base URL and sites name that one host and no
+other, so one connection never stands for two sites' keys.
 """
 
 import json
@@ -102,8 +103,12 @@ def _host(text: str) -> str:
     return text.split("/")[0]
 
 
-def serving(conn: sqlite3.Connection, host: str) -> list[str]:
-    """The ids of the tools whose base URL or sites are on `host` exactly, sorted."""
+Visible = Callable[[str], bool]  # whether the caller may see a tool, by id (api_tools.connection_visible)
+
+
+def serving(conn: sqlite3.Connection, host: str, visible: Visible | None = None) -> list[str]:
+    """The ids of the tools bound to `host` alone (their base URL and every site on it, and on no other host) that
+    `visible` admits (None: every tool), sorted. A tool on several hosts serves none: its keys could be either site's."""
     found: list[str] = []
     for tool_id, base_url, sites in conn.execute("SELECT id, base_url, sites FROM tools ORDER BY id").fetchall():
         try:
@@ -111,24 +116,30 @@ def serving(conn: sqlite3.Connection, host: str) -> list[str]:
         except ValueError:
             listed = []
         names = [str(site) for site in listed] if isinstance(listed, list) else []  # pyright: ignore[reportUnknownVariableType]
-        if host in {_host(str(base_url or "")), *(_host(name) for name in names)}:
+        hosts = {_host(str(base_url or "")), *(_host(name) for name in names)} - {""}
+        if hosts == {host} and (visible is None or visible(str(tool_id))):
             found.append(str(tool_id))
     return found
 
 
 def outside_item(
-    conn: sqlite3.Connection, url: str, connection_id: str = "", sources: tuple[str, ...] = SOURCES
+    conn: sqlite3.Connection,
+    url: str,
+    connection_id: str = "",
+    sources: tuple[str, ...] = SOURCES,
+    visible: Visible | None = None,
 ) -> tuple[str, str, str, str] | None:
     """(source, item type, key, connection) of the item a link's URL is, among `sources`, or None when it is none's
-    item. A site source's item takes the connection that serves its site: `connection_id` when given (ValueError when it
-    serves another site), else the one tool on that host (ValueError for several; None for none, a plain link)."""
+    item. A site source's item takes the connection that serves its site among the tools `visible` admits (a hidden
+    one is as if absent): `connection_id` when given (ValueError when it serves another site), else the one tool on
+    that host (ValueError for several; None for none, a plain link)."""
     found = match_link(url, sources)
     if not found:
         return None
     host = site_of(found[0], url)
     if host is None:
         return (*found, connection_id)
-    tools = serving(conn, host)
+    tools = serving(conn, host, visible)
     if connection_id:
         if connection_id not in tools:
             raise ValueError(f"That connection is not the one for {host}")
@@ -138,12 +149,13 @@ def outside_item(
     return (*found, tools[0]) if tools else None
 
 
-def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
+def parse_ref(conn: sqlite3.Connection, text: str, visible: Visible | None = None) -> tuple[str, str, str, str]:
     """(source, item type, key, connection) of an outside item named as `<source>:<type>:<key>[@<connection>]`, or as a
-    link's URL (its site's connection, `outside_item`). ValueError, saying what is wrong, for anything else."""
+    link's URL (its site's connection among the tools `visible` admits, `outside_item`). ValueError, saying what is
+    wrong without naming a tool, for anything else."""
     text = text.strip()
     if text.startswith(("http://", "https://")):
-        item = outside_item(conn, text)
+        item = outside_item(conn, text, visible=visible)
         if not item:
             raise ValueError(f"{text} is not a link to an item of a connected source")
         return item

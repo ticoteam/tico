@@ -862,8 +862,10 @@ def external_ref(
     have = _one(c, f"SELECT * FROM entity_external_refs WHERE {where}", key)
     now = H.now()
     if have is None:
-        # Erased records are suppressed by (system, type, id), as erase hashed them, whatever the connection.
-        if is_suppressed(c, "external", "\x1f".join((system, kind, external))):
+        # Erased records are suppressed by (system, type, id, connection); one erased before records had connections
+        # was hashed by (system, type, id) and stays suppressed on every connection.
+        legacy = "\x1f".join((system, kind, external))
+        if is_suppressed(c, "external", f"{legacy}\x1f{connection_id}") or is_suppressed(c, "external", legacy):
             _refuse(c, actor, "suppressed", "That was erased at its owner's request; it is not created again")
         c.execute(
             "INSERT INTO entity_external_refs (id, entity_id, connection_id, system, external_type, external_id, url, "
@@ -1549,10 +1551,11 @@ def _suppress_identifiers(c: sqlite3.Connection, ids: list[str], reason: str) ->
             params,
         )
     ]
+    # A record is one connection's (system, type, id, connection): erasing it suppresses it on that connection only.
     pairs += [
         ("external", "\x1f".join(str(part) for part in row))
         for row in c.execute(
-            "SELECT system, external_type, external_id FROM entity_external_refs "
+            "SELECT system, external_type, external_id, connection_id FROM entity_external_refs "
             "WHERE entity_id IN (SELECT value FROM json_each(:ids))",
             params,
         )
@@ -2083,6 +2086,11 @@ def self_summary(c: sqlite3.Connection, who: str) -> dict[str, Any] | None:
         "operates_in": places,
         "obligations": [],
     }
+
+
+def visible_entity(c: sqlite3.Connection, who: str, entity_id: str) -> bool:
+    """Whether `who` sees the entity `entity_id` names: an erased one is gone, a hidden one is not seen."""
+    return _one(c, "SELECT 1 FROM entities WHERE id = ?", (entity_id,)) is not None and V.visible(c, who, entity_id)
 
 
 def card(c: sqlite3.Connection, who: str, entity_id: str) -> dict[str, Any] | None:

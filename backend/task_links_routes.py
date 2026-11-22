@@ -107,6 +107,7 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                     wake_once=body.wake_once,
                     release_repo=settings.release_repo,
                     connection_id=body.connection_id or "",
+                    visible=lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id),
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)

@@ -265,7 +265,8 @@ def contacts_note(api, args):
     "tico_contacts_record",
     "Record that an entity is a record in another system (a CRM account, a Jira customer): system, record type and id, "
     "with the connection (tool id) it came through. Saving the same record again updates it, never a second copy; one "
-    "already on another entity is refused, naming it. status gone takes it off the card.",
+    "already on another entity, or erased at its owner's request, is refused. status gone takes it off the card. "
+    "The answer is the record's id and its entity's.",
     {
         "ref": CONTACTS_REF,
         "system": _s("The other system, like jira or hubspot"),

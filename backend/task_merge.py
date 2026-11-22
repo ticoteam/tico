@@ -460,7 +460,11 @@ def merge(
             link.get("title"),
             kind=link["kind"],
             mover=mover,
-            connection_id=link.get("connection_id") or "",
+            # A's stored link as it is: an outside item keeps its connection whatever the tools say now, a plain link
+            # stays plain.
+            item=(link["source"], link["item_type"], link["item_key"], link["connection_id"])
+            if link["source"]
+            else False,
         )
     # A's open subtasks go under B before A closes, so the close finds none to close.
     moved: list[str] = []

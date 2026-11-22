@@ -1833,6 +1833,16 @@ def connect(
             for table, cols_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
                 if table in tables:
                     masks[table] = {**masks.get(table, {}), **cols_masked}
+        if "task_links" in tables:
+            from .api_tools import connection_visible
+
+            # A link's connection (a tool) shows as the tools' rule says; one the caller may not see reads NULL.
+            shown = [tid for (tid,) in c.execute("SELECT id FROM tools") if connection_visible(c, who, auth, tid)]
+            masks["task_links"] = {
+                **masks.get("task_links", {}),
+                "connection_id": "CASE WHEN source.connection_id = '' OR source.connection_id IN "
+                f"{qlist(shown)} THEN source.connection_id ELSE NULL END",
+            }
         # Discover every inner view and privacy UDF referenced by the selected predicates and masks.
         sql_fragments = [pred for pred, _ in tables.values()]
         if readable is not None:

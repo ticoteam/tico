@@ -482,10 +482,6 @@ def install(
         actor = caller(request)
         who = request.state.identity
 
-        def still_visible(c: sqlite3.Connection) -> None:
-            if not ES.get(c, actor, body.ref):
-                raise Problem("not_found", f"No entity {body.ref} that you can see", 404)
-
         def work(c: sqlite3.Connection):
             from backend import api_tools
 
@@ -505,7 +501,13 @@ def install(
             )
             return {"id": row["id"], "entity": entity_id}
 
-        return mutate(request, body, work, check=still_visible)
+        result = mutate(request, body, work)
+        # A retry answers the saved receipt: it is shown only while its entity, by the id it holds, is one the caller
+        # still sees.
+        with read() as c:
+            if not ES.visible_entity(c, actor, str(result["entity"])):
+                raise Problem("not_found", f"No entity {body.ref} that you can see", 404)
+        return result
 
 
 __all__ = ["install"]

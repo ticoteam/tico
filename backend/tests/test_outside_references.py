@@ -13,6 +13,7 @@ import pytest
 
 from backend import api_tools
 from backend import hubdb as H
+from backend import mailbox_access as MA
 from backend import item_metadata as IM
 from backend import migrations
 from backend import tool_services as TS
@@ -31,13 +32,16 @@ SITES = {"tool_a": "https://acme.atlassian.net", "tool_b": "https://beta.atlassi
 NOBODY = '{"people": [], "teams": [], "bots": []}'  # an Only listed tool that lists nobody: only its owner sees it
 
 
-def _tools(api, *ids, audience=None):
+BEN_ONLY = '{"people": ["ben"], "teams": [], "bots": []}'
+
+
+def _tools(api, *ids, audience=None, sites=None):
     with api.app.state.store.transaction() as c:
         for tid in ids:
             c.execute(
                 "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
-                "updated_at,audience) VALUES(?,?,'Jira',?,'bearer','','proxy','human:ana',?,?,?)",
-                (tid, tid, SITES.get(tid, "https://acme.atlassian.net"), H.now(), H.now(), audience),
+                "updated_at,audience,sites) VALUES(?,?,'Jira',?,'bearer','','proxy','human:ana',?,?,?,?)",
+                (tid, tid, SITES.get(tid, "https://acme.atlassian.net"), H.now(), H.now(), audience, sites),
             )
 
 
@@ -259,6 +263,108 @@ def test_a_link_retried_from_before_connections_existed_replays(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE idempotency SET request_hash=? WHERE key='link-1'", (digest(encode(legacy)),))
     assert post(api, f"tasks/{task}/links", body, key="link-1")["links"][0]["url"] == body["url"]
+
+
+def test_a_connection_on_two_sites_resolves_no_jira_link(api):
+    _tools(api, "tool_a", sites='["https://beta.atlassian.net"]')
+    task = _task(api, "Two sites, one tool")
+    _link(api, task, ACME)
+    _link(api, task, BETA)
+    assert [r["source"] for r in _rows(api, task)] == [None, None]
+    assert _found(api, ACME) == "link"
+
+
+def test_reattaching_both_plain_urls_of_an_item_leaves_one_row(api):
+    task = _task(api, "Before the site was connected")
+    board = "https://acme.atlassian.net/jira/software/projects/PROJ/boards/1?selectedIssue=PROJ-7"
+    _link(api, task, ACME)
+    _link(api, task, board)
+    _tools(api, "tool_a")
+    _link(api, task, ACME)
+    _link(api, task, board)
+    assert [(r["url"], r["source"]) for r in _rows(api, task)] == [(ACME, "jira")]
+
+
+def test_a_trashed_tasks_link_keeps_its_connection_id_reserved(api):
+    _tools(api, "tool_a")
+    task = _task(api, "Deleted with its link")
+    _link(api, task, ACME)
+    post(api, f"tasks/{task}/delete", {})
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM task_links WHERE task_id=?", (task,)).fetchone()[0] == 0
+        c.execute("DELETE FROM tools WHERE id='tool_a'")
+        assert api_tools._unique_id(c, "tool_a") != "tool_a"
+
+
+def test_a_record_retry_is_shown_only_while_its_saved_entity_is_seen(api):
+    with api.app.state.store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ana@acme.example", person_id="ana", created_by="human:ana")
+        jane = ES.upsert(c, "human:ana", "person", match={"email": "jane@example.test"}, name="Jane")["id"]
+        ES.external_ref(c, "human:ana", jane, "legacy", "contact", "shared-1")
+    record = {"ref": "shared-1", "system": "jira", "external_type": "customer", "external_id": "9"}
+    assert post(api, "entities/external-refs", record, token="ben-test", key="ben-ref")["entity"] == jane
+    with api.app.state.store.transaction() as c:
+        ES.add_source(c, "human:ana", jane, "mailbox", box["id"], visibility="restricted")  # ben no longer sees Jane
+        kim = ES.upsert(c, "human:ana", "person", match={"email": "kim@example.test"}, name="Kim")["id"]
+        ES.external_ref(c, "human:ana", kim, "other", "contact", "shared-1")  # the alias now names Kim for ben
+    retry = api.post("/api/v2/entities/external-refs", json=record, headers=headers("ben-test", "ben-ref"))
+    assert retry.status_code == 404 and jane not in retry.text
+
+
+def test_erasing_a_record_suppresses_it_on_its_connection_only(api):
+    _tools(api, "tool_a", "tool_b")
+    with api.app.state.store.transaction() as c:
+        jane = ES.upsert(c, "human:ana", "person", match={"email": "jane@example.test"}, name="Jane")["id"]
+        kim = ES.upsert(c, "human:ana", "person", match={"email": "kim@example.test"}, name="Kim")["id"]
+    record = {"system": "jira", "external_type": "customer", "external_id": "42"}
+    post(api, "entities/external-refs", {**record, "ref": jane, "connection_id": "tool_a"})
+    with api.app.state.store.transaction() as c:
+        ER.erase(c, "human:ana", jane, "request")
+    refused = post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_a"}, expected=422)
+    assert refused["error"]["code"] == "suppressed"
+    post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_b"})
+
+
+def test_a_hidden_tool_is_never_inferred_and_a_replay_shows_the_connection_as_it_is_now(api):
+    _tools(api, "tool_a", audience=NOBODY)
+    task = post(api, "tasks", {"owner": "ben", "title": "Ben's ticket", "body": "Please."}, token="ben-test")["id"]
+    _link(api, task, ACME, token="ben-test")  # the only connection for acme is hidden from ben: a plain link
+    assert _row(api, task, ACME)["source"] is None
+    hidden = _found(api, ACME, token="ben-test")
+    r = api.get("/api/v2/tasks", params={"link": ACME}, headers=headers("ben-test"))
+    assert hidden == "link" and "tool_a" not in r.text
+
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET audience=? WHERE id='tool_a'", (BEN_ONLY,))
+    other = post(api, "tasks", {"owner": "ben", "title": "Another", "body": "Please."}, token="ben-test")["id"]
+    first = post(api, f"tasks/{other}/links", {"url": BETA.replace("beta", "acme")}, token="ben-test", key="k1")
+    assert first["links"][0]["connection_id"] == "tool_a"
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tools SET audience=? WHERE id='tool_a'", (NOBODY,))
+    again = post(api, f"tasks/{other}/links", {"url": BETA.replace("beta", "acme")}, token="ben-test", key="k1")
+    assert again["links"][0]["connection_id"] is None
+    read = api.post(
+        "/api/v2/sql",
+        json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
+        headers=headers("ben-test"),
+    )
+    assert read.status_code == 200 and read.json()["rows"] == [[None]]
+    shown = api.post(
+        "/api/v2/sql",
+        json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
+        headers=headers("ana-test"),
+    )
+    assert shown.json()["rows"] == [["tool_a"]]
+
+
+def test_a_merge_copies_a_stored_outside_link_after_its_tool_is_gone(api):
+    _tools(api, "tool_a")
+    dup, kept = _task(api, "Duplicate escalation"), _task(api, "Escalation")
+    _link(api, dup, ACME)
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM tools WHERE id='tool_a'")
+    post(api, f"tasks/{dup}/merge", {"into": kept})
+    assert [(r["url"], r["source"], r["connection_id"]) for r in _rows(api, kept)] == [(ACME, "jira", "tool_a")]
 
 
 def test_the_record_write_is_in_the_contract(api):
