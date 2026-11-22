@@ -955,7 +955,12 @@ pub async fn preflight(
             .cloned()
             .unwrap_or(json!("unknown"));
         let mut problems: Vec<String> = vec![];
-        let repo_problem = crate::repo_safety::outside_installation(&path).err();
+        let needs_repo = bot != crate::sessions::RELATIONSHIP_WORKER;
+        let repo_problem = if needs_repo {
+            crate::repo_safety::outside_installation(&path).err()
+        } else {
+            None
+        };
         if let Some(problem) = &repo_problem {
             problems.push(problem.clone());
         }
@@ -972,8 +977,9 @@ pub async fn preflight(
                 &computer,
             ));
         }
-        let repository_present = repo_problem.is_none() && crate::instructions::present(&path);
-        if !repository_present && repo_problem.is_none() {
+        let repository_present =
+            needs_repo && repo_problem.is_none() && crate::instructions::present(&path);
+        if needs_repo && !repository_present && repo_problem.is_none() {
             problems.push(
                 crate::product_files::problem(&bot)
                     .or_else(|| crate::fetchrepo::problem(&bot))
@@ -1418,6 +1424,31 @@ mod tests {
 
     fn map(v: Value) -> Map<String, Value> {
         v.as_object().cloned().unwrap()
+    }
+
+    #[tokio::test]
+    async fn relationship_worker_is_ready_without_a_checkout() {
+        let projects = std::env::temp_dir().join(uuid::Uuid::new_v4().to_string());
+        let config = Config {
+            path: projects.join("runner.json"),
+            data: map(json!({"projects_dir": projects})),
+        };
+        let assignments = [
+            json!({"bot": crate::sessions::RELATIONSHIP_WORKER, "config": {"runtime": "claude"}}),
+            json!({"bot": "ordinary-bot", "config": {"runtime": "claude"}}),
+        ];
+        let checks = preflight(
+            &config,
+            &SignIn::new(&projects),
+            &assignments,
+            &map(json!({"claude": {"installed": true, "authenticated": "ready"}})),
+            true,
+        )
+        .await;
+        assert_eq!(checks[0]["repository_present"], false);
+        assert_eq!(checks[0]["ready"], true);
+        assert_eq!(checks[1]["repository_present"], false);
+        assert_eq!(checks[1]["ready"], false);
     }
 
     #[test]

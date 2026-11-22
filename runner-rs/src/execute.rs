@@ -2471,11 +2471,7 @@ impl Runner {
             // runs it as `bot`). Harnesses whose sign-in files are 0600 in the bot's home run as `bot`; with them a
             // turn can still enter every bot's checkout, as can the runner's own git (SECURITY.md).
             let own_user = |r: &str, h: &str| crate::harness_tools::caps(r, h).isolated_user;
-            let isolated = own_user(&runtime, &text_of(&config["harness"]));
-            if relationship && (!isolated || !crate::turn_users::available()) {
-                drove.retryable = false;
-                return Err(Fail::runtime("Relationship turns require a harness with a private turn user (not_isolated)"));
-            }
+            let isolated = !relationship && own_user(&runtime, &text_of(&config["harness"]));
             if crate::hosts::pi::is_gateway(model.as_deref()) || (isolated && crate::turn_users::available()) {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
@@ -2489,12 +2485,6 @@ impl Runner {
                     let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
-            }
-            if relationship {
-                let user = vault.turn_user.as_ref()
-                    .ok_or_else(|| Fail::runtime("Relationship turn has no private user (not_isolated)"))?;
-                p.private_scratch(user).map_err(Fail::runtime)?;
-                execution_path = p.main_path.clone();
             }
             // A hub that sends the retired meeting lane still scopes GitHub tokens to that turn.
             let own = if p.disposable && !personal_claim { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
@@ -2582,7 +2572,14 @@ impl Runner {
                 return Err(Fail::runtime(why));
             }
             base_env = Some(env.clone());
-            let turn_identity = vault.for_model(&mut env, model.as_deref(), own_user(&runtime, &text_of(&config["harness"]))).map_err(Fail::runtime)?;
+            let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
+            if relationship {
+                // The model's normal identity can use the directory. The attempt owns its lifetime.
+                if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
+                    std::os::unix::fs::lchown(&execution_path, Some(uid), Some(gid))
+                        .map_err(|e| Fail::runtime(format!("cannot hand over relationship scratch directory: {e}")))?;
+                }
+            }
             let pairs: Vec<(String, String)> = env.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             // Always a masker, even with no secrets yet: a website login typed mid-turn (browser/) is added to it.
             redactor = Some(redact::for_turn(&pairs, &vault.values).unwrap_or_else(|| Arc::new(Redactor::new(&[]))));
@@ -2769,12 +2766,14 @@ impl Runner {
             let own = tx.clone();
             // Every turn's checkouts get their own groups, so a leased turn of another bot cannot enter them; a leased
             // turn is given exactly these (crate::checkout_groups).
-            let paths = p.granted_paths();
-            let gids = crate::checkout_groups::gate(paths.clone()).await;
-            if let Some((uid, _)) = turn_identity.filter(|_| !relationship) {
-                crate::checkout_groups::grant(uid, &gids);
-                self.turn_git(&mut vault, &mut env, &paths, !personal_claim)?;
-                crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+            if !relationship {
+                let paths = p.granted_paths();
+                let gids = crate::checkout_groups::gate(paths.clone()).await;
+                if let Some((uid, _)) = turn_identity {
+                    crate::checkout_groups::grant(uid, &gids);
+                    self.turn_git(&mut vault, &mut env, &paths, !personal_claim)?;
+                    crate::turn_users::share_workspace(paths).await.map_err(Fail::runtime)?;
+                }
             }
             if personal_claim {
                 crate::gitcred::without_credentials(&mut env);
@@ -8964,7 +8963,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn relationship_turns_take_distinct_lanes_sessions_and_scratch() {
         let (runner, dir) = runner_at("http://127.0.0.1:1", "relationship-scratch");
-        let bot = "relationship-worker";
+        let bot = crate::sessions::RELATIONSHIP_WORKER;
         let mut checkout = None;
         let lost = AtomicBool::new(false);
         let mut paths = Vec::new();
@@ -8978,13 +8977,31 @@ for line in sys.stdin:
             assert!(!place.has_checkout());
             checkout.get_or_insert_with(|| runner.lanes.checkout(bot).try_lock_owned().unwrap());
             let path = place.execution_path.clone();
-            assert!(path.is_dir());
+            assert_eq!(
+                path,
+                runner
+                    .state
+                    .directory
+                    .join("tmp/relationship-runs")
+                    .join(id)
+            );
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
             assert!(!path.join("result").exists());
             std::fs::write(path.join("result"), id).unwrap();
             paths.push(path);
             places.push(place);
         }
         assert_ne!(paths[0], paths[1]);
+        drop(places.remove(0));
+        assert!(!paths[0].exists());
+        assert_eq!(
+            std::fs::read_to_string(paths[1].join("result")).unwrap(),
+            "second"
+        );
         drop(places);
         assert!(paths.iter().all(|path| !path.exists()));
         std::fs::remove_dir_all(dir).ok();

@@ -1649,19 +1649,26 @@ pub struct Place {
     pub personal: bool,
     /// The turn is a person's: it goes first for the checkout and never waits for its worktree.
     person: bool,
-    // Fields drop in this order: the copy goes while the lane and the checkout are still held.
+    // Disposable files go while the lane and the checkout are still held.
     _copy: Option<PersonalCopy>,
+    _scratch: Option<TurnScratch>,
     _lane: OwnedMutexGuard<()>,
     checkout: Option<OwnedMutexGuard<()>>,
-    _scratch: Option<TurnScratch>,
 }
 
 /// Outside every checkout and scan root; all outcomes, including a canceled future, discard the turn's files.
 pub(crate) struct TurnScratch(pub PathBuf);
 
 impl TurnScratch {
-    fn new(path: PathBuf) -> Result<Self, String> {
+    fn relationship(root: &Path, attempt: &str) -> Result<Self, String> {
         use std::os::unix::fs::DirBuilderExt;
+        if !slug_ok(attempt) {
+            return Err("invalid relationship attempt id".into());
+        }
+        let path = root.join(attempt);
+        crate::repo_safety::outside_installation(&path)?;
+        std::fs::create_dir_all(root)
+            .map_err(|e| format!("cannot create runner scratch root: {e}"))?;
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&path)
@@ -1709,6 +1716,8 @@ pub fn relationship_claim(attempt: &Value) -> bool {
         .as_str()
         .is_some_and(|lane| lane.starts_with("entity:"))
 }
+
+pub const RELATIONSHIP_WORKER: &str = "relationship-worker";
 
 /// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
 /// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
@@ -1799,17 +1808,6 @@ impl Drop for PersonalCopy {
 }
 
 impl Place {
-    pub fn private_scratch(&mut self, user: &crate::turn_users::Lease) -> Result<(), String> {
-        let scratch = TurnScratch::new(user.dir.join("workspace"))?;
-        let (uid, gid) = user.identity();
-        std::os::unix::fs::lchown(&scratch.0, Some(uid), Some(gid))
-            .map_err(|e| format!("cannot hand over relationship scratch directory: {e}"))?;
-        self.main_path = scratch.0.clone();
-        self.execution_path = scratch.0.clone();
-        self._scratch = Some(scratch);
-        Ok(())
-    }
-
     /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's
     /// checkout and the task's set-up worktrees; a person's own chat its PersonalCopy alone, never the shared checkout.
     pub fn granted_paths(&self) -> Vec<PathBuf> {
@@ -1880,10 +1878,15 @@ impl Runner {
         let scratch = if make_page {
             Some(TurnScratch::make_page(&text_of(&attempt["id"]))?)
         } else if relationship {
-            Some(TurnScratch::new(std::env::temp_dir().join(format!(
-                "tico-relationship-{}",
-                uuid::Uuid::new_v4().simple()
-            )))?)
+            let temp = if crate::isolation::enabled() {
+                crate::isolation::turn_dir()
+            } else {
+                self.state.directory.join("tmp")
+            };
+            Some(TurnScratch::relationship(
+                &temp.join("relationship-runs"),
+                &text_of(&attempt["id"]),
+            )?)
         } else {
             None
         };
@@ -1919,9 +1922,9 @@ impl Runner {
             personal,
             person,
             _copy: None,
+            _scratch: scratch,
             _lane: lane_guard,
             checkout,
-            _scratch: scratch,
         })
     }
 
