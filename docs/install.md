@@ -307,10 +307,8 @@ half way, running the command again resumes it.
 2. **Domain and DNS.** It looks up which nameservers the internet actually uses for your domain and names the provider
    (Route 53, Cloudflare, Netlify/NS1, Vercel, Google, GoDaddy, Namecheap, ...). With Cloudflare and a token (or Route 53
    and AWS credentials) it offers to create the record; anywhere else it prints the exact record and where to add it. Then
-   it asks the domain's own nameservers until they have the record (public resolvers asked earlier would cache "no such
-   name" for minutes), or, when those do not answer, waits until most public resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9)
-   agree, asking again after a timeout. Only then does it start Caddy, because a certificate requested before DNS is
-   live fails without a visible error. It suggests this server's public IPv4 address; confirm it.
+   it polls public resolvers (8.8.8.8, 1.1.1.1, 9.9.9.9) and only starts Caddy once most of them agree (one that times
+   out is asked again), because a certificate requested before DNS is live fails without a visible error. It suggests this server's public IPv4 address; confirm it.
 3. **Sign-in.** Google or Microsoft (OIDC), or Cloudflare Access. It opens the right console page, prints the redirect
    URI to paste (`https://<domain>/auth/callback`, character for character), and asks for the client ID and secret
    (hidden). Optionally limit sign-in to one email domain.

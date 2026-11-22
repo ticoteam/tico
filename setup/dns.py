@@ -9,7 +9,7 @@ import socket
 import struct
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol, Sequence
+from typing import Callable, Protocol
 
 A, NS, CNAME, AAAA = 1, 2, 5, 28
 PUBLIC_RESOLVERS = (("Google", "8.8.8.8"), ("Cloudflare", "1.1.1.1"), ("Quad9", "9.9.9.9"))
@@ -217,12 +217,14 @@ def manual_instructions(records: list[Record], zone: Zone) -> list[str]:
 
 def _matches(domain: str, records: list[Record], res: Resolver) -> bool:
     """Whether res answers as planned. Raises OSError when it does not answer."""
-    v4, v6 = res.query(domain, A), res.query(domain, AAAA)
     if records[0].type == "CNAME":  # a proxied tunnel name resolves to Cloudflare's addresses
-        return bool(v4 or v6) or any("cfargotunnel.com" in t for t in res.query(domain, CNAME))
+        if res.query(domain, A) or res.query(domain, AAAA):
+            return True
+        return any("cfargotunnel.com" in t for t in res.query(domain, CNAME))
     want4 = {r.value for r in records if r.type == "A"}
     want6 = {r.value for r in records if r.type == "AAAA"}
-    return (not want4 or want4 <= set(v4)) and (not want6 or want6 <= set(v6))
+    # Only the planned types: an AAAA lookup that times out never fails an A-only record.
+    return (not want4 or want4 <= set(res.query(domain, A))) and (not want6 or want6 <= set(res.query(domain, AAAA)))
 
 
 def resolves_to(domain: str, records: list[Record], res: Resolver) -> bool:
@@ -260,19 +262,6 @@ def agreed(seen: dict[str, bool | None]) -> bool:
     return sum(v is True for v in seen.values()) * 2 > len(seen)
 
 
-def authoritative_resolvers(
-    zone: Zone | None, resolve_host: Callable[[str], str] = socket.gethostbyname
-) -> list[tuple[str, Resolver]]:
-    """Two of the zone's own nameservers: they answer from the zone itself, and asking them caches nothing anywhere."""
-    out: list[tuple[str, Resolver]] = []
-    for ns in zone.nameservers[:2] if zone else ():
-        try:
-            out.append((ns, WireResolver(resolve_host(ns))))
-        except OSError:
-            continue
-    return out
-
-
 def wait_until_live(
     domain: str,
     records: list[Record],
@@ -283,25 +272,15 @@ def wait_until_live(
     say: Callable[[str], None] = print,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
-    authoritative: Sequence[tuple[str, Resolver]] = (),
 ) -> bool:
-    """True once the zone's own nameservers answer as planned or, when none of them answers, once most public
-    resolvers agree. Certificates fail if we start before this. Public resolvers are not asked while the nameservers
-    say the record is not there yet: they would cache that answer for minutes after it is added."""
+    """True once most public resolvers agree. Certificates fail if we start before this."""
     start = clock()
     while True:
-        auth = answers(domain, records, list(authoritative), sleep=sleep)
-        if any(v is True for v in auth.values()) and not any(v is False for v in auth.values()):
-            say(f"  {domain} resolves correctly on its nameservers ({', '.join(k for k, v in auth.items() if v)}).")
+        seen = answers(domain, records, resolvers, sleep=sleep, tries=1)  # the loop itself asks again
+        if agreed(seen):
+            say(f"  {domain} resolves correctly on {', '.join(k for k, v in seen.items() if v)}.")
             return True
-        if any(v is not None for v in auth.values()):
-            waiting = "its nameservers"
-        else:
-            seen = answers(domain, records, resolvers, sleep=sleep)
-            if agreed(seen):
-                say(f"  {domain} resolves correctly on {', '.join(k for k, v in seen.items() if v)}.")
-                return True
-            waiting = ", ".join(k for k, v in seen.items() if not v)
+        waiting = ", ".join(k for k, v in seen.items() if not v)
         if clock() - start >= timeout:
             say(
                 f"  Still not resolving on {waiting} after {int(timeout // 60)} min. Records can take longer at some "

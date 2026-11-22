@@ -45,7 +45,6 @@ class Deps:
 
     resolver: dnsmod.Resolver = field(default_factory=lambda: dnsmod.WireResolver("1.1.1.1"))
     public_resolvers: Callable[[], list] = dnsmod.default_resolvers
-    authoritative_resolvers: Callable[[dnsmod.Zone | None], list] = dnsmod.authoritative_resolvers
     cloudflare: Callable[[str], Cloudflare] = Cloudflare
     aws_clients: Callable[[str, str], tuple] = awsmod.make_clients
     aws_s3: Callable[[str, str], object] = awsmod.make_s3
@@ -741,13 +740,7 @@ def ensure_dns(
         return True
     io.say("  Waiting for public DNS ...")
     return dnsmod.wait_until_live(
-        s.dns(),
-        records,
-        deps.public_resolvers(),
-        timeout=timeout,
-        say=io.say,
-        sleep=deps.sleep,
-        authoritative=deps.authoritative_resolvers(zone),
+        s.dns(), records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep
     )
 
 
@@ -1341,19 +1334,12 @@ def _aws(
     runner = remote.SSMShell(ssm, iid, deps.sleep)
     if s.front_door == "caddy" and not args.skip_dns_wait:
         io.say("\nWaiting for public DNS (the server holds back Caddy until this is true) ...")
-        auth = deps.authoritative_resolvers(zone)  # the zone of s.dns()
         if s.dns_name and not dnsmod.wait_until_live(
-            s.dns(), records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep, authoritative=auth
+            s.dns(), records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep
         ):
             return None
         if not dnsmod.wait_until_live(
-            s.domain,
-            records,
-            deps.public_resolvers(),
-            timeout=timeout,
-            say=io.say,
-            sleep=deps.sleep,
-            authoritative=[] if s.dns_name else auth,
+            s.domain, records, deps.public_resolvers(), timeout=timeout, say=io.say, sleep=deps.sleep
         ):
             if s.dns_name:
                 return None
@@ -1664,6 +1650,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         resolvers=deps.public_resolvers(),
         shell=runner,
         runner_host=s.runner(),
+        sleep=deps.sleep,
     )
     show(io, checks)
     ok = all(c.ok for c in checks)

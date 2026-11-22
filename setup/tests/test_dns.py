@@ -64,38 +64,21 @@ def test_a_resolver_that_times_out_is_asked_again_and_one_stale_answer_does_not_
     assert not verify.check_dns("t.example.com", REC, lone, sleep=lambda s: None).ok
 
 
-def test_the_wait_asks_public_resolvers_only_once_the_zone_has_the_record():
-    public = Flaky(LIVE)
-    ns = Flaky()  # the record is not there yet
-    rounds = iter(range(100))
-
-    def sleep(seconds):
-        if seconds == 10 and next(rounds) == 2:
-            ns.inner.records.update(LIVE)  # the person adds it
-
+def test_the_wait_passes_once_most_public_resolvers_agree():
     said = []
+    resolvers = [("Google", Flaky(LIVE)), ("Cloudflare", Flaky(STALE)), ("Quad9", Flaky(LIVE, fails=1))]
+    rounds = []
     live = dns.wait_until_live(
-        "t.example.com",
-        REC,
-        [("Google", public)],
-        timeout=600,
-        say=said.append,
-        sleep=sleep,
-        clock=lambda: 0.0,
-        authoritative=[("ns-1.awsdns-01.org", ns)],
+        "t.example.com", REC, resolvers, timeout=600, say=said.append, sleep=rounds.append, clock=lambda: 0.0
     )
-    assert live and public.asked == 0 and "its nameservers" in said[-1]
+    assert live and rounds == [10] and said[-1] == "  t.example.com resolves correctly on Google, Quad9."
 
 
-def test_unreachable_nameservers_fall_back_to_most_public_resolvers():
-    said = []
-    live = dns.wait_until_live(
-        "t.example.com",
-        REC,
-        [("Google", Flaky(LIVE)), ("Cloudflare", Flaky(STALE)), ("Quad9", Flaky(LIVE))],
-        timeout=0,
-        say=said.append,
-        sleep=lambda s: None,
-        authoritative=[("ns1", Flaky(fails=99))],
-    )
-    assert live and said == ["  t.example.com resolves correctly on Google, Quad9."]
+def test_an_a_record_never_asks_for_aaaa():
+    class NoAAAA(FakeResolver):
+        def query(self, name, rtype):
+            if rtype == dns.AAAA:
+                raise TimeoutError("timed out")
+            return super().query(name, rtype)
+
+    assert dns.resolves_to("t.example.com", REC, NoAAAA(LIVE))
