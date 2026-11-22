@@ -54,6 +54,7 @@ UPGRADE_TESTS = (
     "backend/tests/test_schema_baseline.py",  # the upgraded floor matches a new database
     "backend/tests/test_upgrade.py",  # foreign and empty files, and the journey's seeded rows
     "backend/tests/test_upgrade_boot.py",  # the floor through create_app and backend.boot
+    "backend/tests/test_company_update_in_place.py",  # pending migrations give one schema in either order
 )
 # Guard tests check a repository-wide invariant through a path the map cannot follow, so a change that can break one
 # names it directly, and it runs in a light plan too (level 0, like UPGRADE_TESTS). On Nov 13 main went red

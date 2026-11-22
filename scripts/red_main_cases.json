@@ -3937,5 +3937,51 @@
     ],
     "fix_pr": 4683,
     "pin_glob": ".github/workflows/*.yml"
+  },
+  {
+    "fix_pr": 4947,
+    "breaking_prs": [
+      "pr 4943 (merge b20e97d84; ticoteam/chris/outside-links | tip: Outside references: links and item metadata carry their connection)"
+    ],
+    "failing_tests": [
+      "backend/tests/test_company_update_in_place.py::test_the_pending_migrations_apply_in_any_order[v0.6.0]"
+    ],
+    "changed_files": [
+      "backend/api_answers/contacts.py",
+      "backend/api_answers/tasks.py",
+      "backend/api_tools.py",
+      "backend/entities/routes.py",
+      "backend/entities/store.py",
+      "backend/hubdb.py",
+      "backend/item_metadata.py",
+      "backend/item_sources/__init__.py",
+      "backend/item_sources/github.py",
+      "backend/item_sources/jira.py",
+      "backend/migrations/20261122001352_outside_references.py",
+      "backend/models.py",
+      "backend/openapi_v2.py",
+      "backend/task_actions_routes.py",
+      "backend/task_links_routes.py",
+      "backend/task_list_routes.py",
+      "backend/task_merge.py",
+      "backend/task_pages.py",
+      "backend/tests/test_outside_references.py",
+      "backend/tests/test_task_reads.py",
+      "backend/tool_services.py",
+      "backend/website_tools.py",
+      "clients/commands/contacts.py",
+      "clients/commands/task_work.py",
+      "clients/commands/tasks.py",
+      "docs/api.md",
+      "docs/dev/pipelines-v3.md",
+      "e2e/mcp/expected-refusals/tico_contacts_record.json",
+      "runner-rs/src/hosts/hub_paths.rs"
+    ],
+    "cause": "dynamic_ref",
+    "confidence": "high",
+    "evidence": "outside_references added tools.record_owner while mcp_tools, add_everyone_reads_to_tools and tool_auth_templates were still pending on the v0.6.0 floor, so the column order depended on which ran first. The any-order test reads every migration through migrations.files(), which the dependency map cannot follow, and UPGRADE_TESTS did not list it: the light PR plan cut it at depth. v0.6.201's release validation (run 44977958435) failed it; #4947 added a compensating migration. Reproduced at b20e97d84: the test fails.",
+    "suggested_fix": "pin",
+    "pin_glob": "backend/migrations/*.py",
+    "hub_file": null
   }
 ]

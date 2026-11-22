@@ -511,6 +511,33 @@ def seed_plan_name_collision(c):
     return name
 
 
+def order_differences(first, second):
+    """Each object the two orders left different, and the migration shape that makes them agree."""
+    objects = [{(r["type"], r["name"]): r["sql"] for r in schema(p)} for p in (first, second)]
+    found = []
+    for kind, name in sorted(objects[0].keys() | objects[1].keys()):
+        if objects[0].get((kind, name)) == objects[1].get((kind, name)):
+            continue
+        if (kind, name) not in objects[0] or (kind, name) not in objects[1]:
+            only = "oldest first" if (kind, name) in objects[0] else "newest first"
+            found.append(
+                f"{kind} {name} exists only when run {only}: the migration that changes it returned early before the "
+                "one that creates it ran. Make it create what it needs itself (20261113214650_github_pr_diff_commits)"
+            )
+        elif kind == "table":
+            orders = [[c["name"] for c in rows(p, f"PRAGMA table_info('{name}')")] for p in (first, second)]
+            found.append(
+                f"table {name}: oldest first gives columns {orders[0]}, newest first gives {orders[1]}. Add every "
+                f"pending column of {name} in one order in a new migration "
+                "(20261122030528_tools_columns_in_one_order)"
+            )
+        else:
+            found.append(
+                f"{kind} {name}: oldest first {objects[0][kind, name]!r}, newest first {objects[1][kind, name]!r}"
+            )
+    return found
+
+
 def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatch):
     """Migrations merge in any order and an install may be anywhere between two releases, so the files this company
     has not run must give the same database whichever runs first (CLAUDE.md, Conventions)."""
@@ -535,7 +562,7 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
     retry_at = "2026-11-21T15:00:00.000000Z"
     cutover_at = "2026-11-22T15:00:00.000000Z"
     monkeypatch.setattr(H, "now", lambda: cutover_at)
-    results = []
+    results, paths = [], []
     for name, order in (("oldest first", pending), ("newest first", pending[::-1])):
         path = tmp_path / (name.replace(" ", "-") + ".db")
         shutil.copy(company.db, path)
@@ -598,10 +625,12 @@ def test_the_pending_migrations_apply_in_any_order(company, tmp_path, monkeypatc
                         assert json.loads(found["metadata"])["_tico"]["sent_text"] == "Release update"
                     if prior in ("canceled", "sent", "failed"):
                         assert not found["payload"]
-        results.append((schema(path), seen(path)))
-    assert results[0][0] == results[1][0], "The schema depends on the order the pending migrations ran in"
-    assert not changes(results[0][1], results[1][1])
-    assert not changes(migrated(company.before), results[0][1]), "The pending migrations changed the company"
+        results.append(seen(path))
+        paths.append(path)
+    found = order_differences(*paths)
+    assert not found, "The schema depends on the order the pending migrations ran in:\n  " + "\n  ".join(found)
+    assert not changes(results[0], results[1])
+    assert not changes(migrated(company.before), results[0]), "The pending migrations changed the company"
 
 
 def test_email_cutover_keeps_operation_receipts_bound_to_the_original_request(company, tmp_path):
