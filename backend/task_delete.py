@@ -462,6 +462,18 @@ def _without_gone_records(c, table, row):
     return {**row, **dict.fromkeys(gone)} if gone else row
 
 
+def _primary_free(c, table, row):
+    """A deleted task's primary link to an outside item comes back as a plain typed link when another task was filed for
+    that item meanwhile (backend/item_intake.py): one task holds an item's primary link, and the link is kept."""
+    if table != "task_links" or not row.get("is_primary") or not row.get("source"):
+        return row
+    taken = c.execute(
+        "SELECT 1 FROM task_links WHERE is_primary=1 AND source=? AND item_type=? AND item_key=? AND connection_id=?",
+        (row["source"], row.get("item_type"), row.get("item_key"), row.get("connection_id") or ""),
+    ).fetchone()
+    return {**row, "is_primary": 0} if taken else row
+
+
 def _try_insert(c, table, row, skipped):
     """Bookkeeping that something newer has taken (a service key's mapping, a Slack thread, a deleted label) is left
     out rather than failing the restore, and so is a row of a table a migration has dropped; the report counts both."""
@@ -565,7 +577,7 @@ def restore_tasks(c, ids, actor=None):
         for table, found in snap["rows"].items():
             if table not in CORE and table != "task_relations":
                 for row in found:
-                    _try_insert(c, table, _without_gone_records(c, table, row), skipped)
+                    _try_insert(c, table, _primary_free(c, table, _without_gone_records(c, table, row)), skipped)
     for e, snap in snapshots:
         tid = e["task_id"]
         for row in snap["rows"].get("task_relations", []):

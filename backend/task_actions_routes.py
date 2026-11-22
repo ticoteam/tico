@@ -33,7 +33,7 @@ from . import (
     task_followers_routes,
 )
 from .api_contract import ASK_REFUSED
-from .api_answers.tasks import TaskDetail, TaskResult, TaskRunModelResult
+from .api_answers.tasks import ItemIntakeResult, TaskDetail, TaskResult, TaskRunModelResult
 
 from . import models as M
 from .api_contract import api_v2
@@ -907,6 +907,52 @@ def register_core(
                 receipt=handoff_receipt(request.state.identity),
             ),
         )
+
+    @app.post(
+        "/api/v2/inbound/items",
+        **api_v2(
+            "Tasks",
+            "intakeItem",
+            "An outside item ready for work (a Jira issue): finds the task whose primary link is that item, reopening it "
+            "when it is closed, or files one with that link, in one write; a stale event changes nothing. The caller "
+            "must be allowed to use the item's connection (docs/dev/pipelines-v3.md, Intake)",
+            ItemIntakeResult,
+        ),
+    )
+    def intake_item(request: Request, body: M.ItemIntake):
+        """Not POST /api/v2/inbound/tasks: that route takes only a service key, keyed by (key, the system's own id), and
+        a service key may use no tool. An intake keys on the outside item and its caller must hold the connection."""
+        from . import item_intake
+
+        who = request.state.identity
+        cap_before_preflight(request, who, body.owner)
+
+        def work(c):
+            def create():
+                # The item is what makes it one task: two items' tasks may share a title and an owner.
+                made = task_create(
+                    c,
+                    who,
+                    M.TaskCreate(title=body.title, body=body.body, owner=body.owner, pipeline=body.pipeline),
+                    same=lambda _c, _task_id: False,
+                )
+                return made["task"]["id"]
+
+            done = item_intake.intake(
+                c,
+                who.actor,
+                (body.source, body.item_type, body.key, body.connection_id),
+                title=body.title,
+                updated_at=body.updated_at,
+                create=create,
+                see=lambda row: auth.task(c, who, row["id"]),
+                stage=body.stage,
+            )
+            row = H.task(c, done["task_id"]) if done["task_id"] else None
+            view = task_view(row, c, visible_sql=auth.task_sql(c, who), who=who) if row else None
+            return {"task": view, "created": done["created"], "resumed": done["resumed"], "stale": done["stale"]}
+
+        return mutate(request, body, work)
 
     def handoff_receipt(who):
         """Who reads back a task the person's own Assistant turn filed (privacy.as_the_person): the person, when it is

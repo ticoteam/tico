@@ -116,6 +116,29 @@ def save(
     return True
 
 
+def note(
+    conn: "sqlite3.Connection", source: str, item_type: str, key: str, fields: Row, connection_id: str = ""
+) -> None:
+    """Keep `fields` Tico itself knows of an item (not the source's word: when an intake last saw it change) beside its
+    saved metadata, and ask for a full read on the next pass. An item with no metadata yet gets a row at version 0 that
+    was never read, so the first read replaces it (the source keeps these fields when it merges)."""
+    H = _h()
+    now = H.now()
+    old = get(conn, source, item_type, key, connection_id)
+    if old:
+        conn.execute(
+            "UPDATE item_metadata SET fields=?, due_at=CASE WHEN final_at IS NULL THEN ? ELSE due_at END, "
+            "updated_at=? WHERE id=?",
+            (json.dumps({**old["fields"], **fields}), now, now, old["id"]),
+        )
+        return
+    conn.execute(
+        "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, fields, metadata_version, due_at, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,0,?,?,?)",
+        (H.new_id(), source, item_type, key, connection_id, json.dumps(fields), now, now, now),
+    )
+
+
 def mark_due(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> None:
     """Ask for a full read of an item on the next pass, whatever its age (it is not final)."""
     conn.execute(

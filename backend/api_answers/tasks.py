@@ -716,6 +716,17 @@ class InboundTaskResult(TypedDict):
 
 
 @answer
+class ItemIntakeResult(TypedDict):
+    """POST /api/v2/inbound/items: the task whose primary link is the item (None when a stale event found none), and
+    whether this call filed it, reopened it, or changed nothing because the event was stale."""
+
+    task: Task | None
+    created: bool
+    resumed: bool
+    stale: bool
+
+
+@answer
 class TaskDocumentVersion(TypedDict):
     n: int
     by: str

@@ -467,6 +467,16 @@ def merge(
             if link["source"]
             else False,
         )
+    # An item A was filed for (its primary link) is B's now: its next intake finds B, never the merged-away A
+    # (backend/item_intake.py). B holds a row for each of A's items by now: its own, or the one just copied.
+    scoped = "source=? AND item_type=? AND item_key=? AND connection_id=?"
+    for item in conn.execute(
+        "SELECT source, item_type, item_key, connection_id FROM task_links WHERE task_id=? AND is_primary=1 "
+        "AND source IS NOT NULL",
+        (a["id"],),
+    ).fetchall():
+        conn.execute(f"UPDATE task_links SET is_primary=0 WHERE task_id=? AND {scoped}", (a["id"], *item))
+        conn.execute(f"UPDATE task_links SET is_primary=1 WHERE task_id=? AND {scoped}", (b["id"], *item))
     # A's open subtasks go under B before A closes, so the close finds none to close.
     moved: list[str] = []
     for child in _open_children(conn, a["id"]):

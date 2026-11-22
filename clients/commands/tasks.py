@@ -1518,4 +1518,10 @@ TASK = (
         example="tico task link T1 https://github.com/acme/app/pull/12 --title 'Fix PR'",
         run=_link,
     ),
+    Command(
+        "task intake",
+        "an outside item is ready: find the task filed for it, or file one linked to it",
+        args=(Arg("connection_id", flag="--connection", metavar="TOOL_ID"),),
+        example="tico task intake jira issue PROJ-12 --connection tool_jira --title 'Fix the export' --owner builder",
+    ),
 )

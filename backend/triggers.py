@@ -3,7 +3,8 @@
 A trigger is a named address. Anything that can send an HTTP POST (a payment service, a form,
 a deploy, a script) posts to it, and every automation on that webhook runs with the request's body
 (backend/automations.py `on_webhook`). Rules (backend/rules.py) see the same call as `webhook.received`.
-The trigger itself does nothing else: no model wakes unless an automation or a rule listens.
+The trigger itself does nothing else: no model wakes unless an automation or a rule listens. A Jira issue event also
+marks the issue it names to be read again through its connection (backend/item_sources/jira.py `webhook`).
 
 The address carries its own secret, so a sender needs no Tico account: `POST
 /api/v2/hooks/<id>/<secret>`, or `POST /api/v2/hooks/<id>` with `Authorization: Bearer <secret>`.
@@ -694,7 +695,11 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
             },
         )
     from . import automations
+    from .item_sources import jira
 
+    # A Jira issue event names an issue: each copy a task links on a connection serving its site is read again
+    # through that connection on the next pass (backend/item_sources/jira.py `webhook`); the payload is not trusted.
+    results = results + jira.webhook(c, payload)
     # An automation on the webhook (a routine on `webhook._tico` included) runs on every call it hears.
     results = results + automations.on_webhook(c, trigger_id, found["name"], type_, delivery, payload, shown)
     return fired, results
