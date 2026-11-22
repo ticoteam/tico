@@ -76,7 +76,8 @@ def install(app, store, auth, create_task, public_url=""):
         # task's body (backend/task_text_keys.py), before the task is made.
         task_text_keys.refuse_text(store, str(request.state.identity.actor), "", {"body": text})
         links = [href] if public_url else []
-        create = M.TaskCreate(
+        # POST /api/v2/tasks takes a TaskFile; a message's task names no outside item.
+        create = M.TaskFile(
             title=body.title.strip(), body=text, owner=body.owner, private=True if keep_private else None, links=links
         )
         try:
