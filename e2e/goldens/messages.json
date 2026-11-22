@@ -9,8 +9,10 @@
       "audience": null,
       "audience_group_id": null,
       "closed_at": null,
+      "connection_id": "",
       "created_at": "<time>",
       "deleted_at": null,
+      "entity_id": null,
       "id": "<conversation>",
       "kind": "chat",
       "last_message_at": "<time>",
@@ -43,9 +45,12 @@
       {
         "answered_by_id": null,
         "body": "Plan the launch.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": "<time>",
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -74,6 +79,7 @@
           "link": null,
           "name": "Ana"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -81,9 +87,12 @@
       {
         "answered_by_id": null,
         "body": "Add the budget.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -107,6 +116,7 @@
           "link": null,
           "name": "Ana"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -114,9 +124,12 @@
       {
         "answered_by_id": null,
         "body": "Third note.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -140,6 +153,7 @@
           "link": null,
           "name": "Ana"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -147,9 +161,12 @@
       {
         "answered_by_id": null,
         "body": "Started task: Check the vendor list",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -182,6 +199,7 @@
           "link": null,
           "name": "Task update"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -189,9 +207,12 @@
       {
         "answered_by_id": null,
         "body": "Write the plan",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -215,6 +236,7 @@
           "link": null,
           "name": "Ana"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -225,9 +247,12 @@
           "<chat_message>"
         ],
         "body": "Drafted the launch plan.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<conversation>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -266,6 +291,7 @@
           "link": null,
           "name": "ops"
         },
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null

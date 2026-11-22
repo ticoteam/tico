@@ -25,10 +25,13 @@
       {
         "answered_by_id": null,
         "body": "Please draft it.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<id1>",
         "created_at": "<time>",
         "deleted_at": null,
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -61,6 +64,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 6,
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
@@ -213,9 +217,12 @@
       {
         "answered_by_id": null,
         "body": "Please draft it.",
+        "channel": null,
+        "connection_id": "",
         "conversation_id": "<id1>",
         "created_at": "<time>",
         "delivered_at": null,
+        "direction": null,
         "edited_at": null,
         "expires_at": null,
         "hidden_at": null,
@@ -238,6 +245,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 6,
+        "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
         "wake_key": null
