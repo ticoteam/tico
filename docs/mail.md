@@ -37,7 +37,8 @@ bounces. When Gmail reports a DMARC pass or an aligned DKIM pass, Tico looks for
 the exact From address. For a match, it saves the thread and a bounded copy of the body before advancing the Gmail
 cursor. Other senders go to a private triage task for the inbox owner with a link to Gmail, due in 24 hours.
 The task flags an unverified sender. An authenticated sender without an exact match can get a domain suggestion.
-People need access to both the contact and the inbox to read the thread. Matched arrivals are logged in history.
+People need access to both the contact and the inbox to read the thread. Matched arrivals are logged in history,
+which also checks access to the source of each recorded activity.
 Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
 

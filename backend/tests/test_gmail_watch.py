@@ -475,6 +475,75 @@ def test_execution_review_redacts_outside_subthread_but_keeps_recovery_controls(
     assert result["readable"] and result["request"] and result["output"]
 
 
+def test_history_checks_external_source_and_subthread_root_before_pagination(watched):
+    api, _, _ = watched
+    store = api.app.state.store
+    mailbox = box_row(api)["id"]
+    with store.transaction() as c:
+        root = ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})["id"]
+        thread = threads._insert_thread(
+            c,
+            "ext:gmail:person@customer.example",
+            title="Private",
+            audience="entity",
+            entity_id=root,
+            connection_id=mailbox,
+        )
+        c.execute(
+            "INSERT INTO tools(id,name,created_by,created_at,updated_at) "
+            "VALUES('source-tool','Outside source','human:ana',?,?)",
+            (H.now(), H.now()),
+        )
+        c.execute(
+            "INSERT INTO credentials(id,name,kind,tool_id,created_at,updated_at,updated_by) "
+            "VALUES('source-key','Source key','api_key','source-tool',?,?,'human:ana')",
+            (H.now(), H.now()),
+        )
+        source = ES.external_ref(c, "human:ana", root, "close", "activity", "case-1", connection_id="source-tool")
+        c.execute(
+            "INSERT INTO entity_external_refs(id,entity_id,connection_id,system,external_type,external_id) "
+            "VALUES('gmail-ref',?,?,'gmail','message','mail-1')",
+            (root, mailbox),
+        )
+        parent = H._write_message(
+            c,
+            "ext:gmail:person@customer.example",
+            None,
+            "Private email",
+            thread,
+            "say",
+            {},
+            None,
+            None,
+            outside=("gmail", mailbox, "mail-1"),
+        )
+    reply = post(api, f"threads/{thread['id']}/messages", {"text": "Internal note", "parent_message_id": parent["id"]})
+    with store.transaction() as c:
+        c.executemany(
+            "INSERT INTO entity_activities(id,entity_id,kind,occurred_at,subject_type,subject_id,external_ref) "
+            "VALUES(?,?,'email',?,?,?,?)",
+            (
+                ("child", root, "2028-01-02", "thread", reply["thread_id"], "gmail-ref"),
+                ("external", root, "2028-01-03", None, None, source["id"]),
+                ("visible", root, "2028-01-01", None, None, None),
+            ),
+        )
+    path = f"entities/activity?ref={root}&limit=1"
+    assert [row["id"] for row in get(api, path, token="ben-test")["rows"]] == ["visible"]
+    first = get(api, path)
+    assert [row["id"] for row in first["rows"]] == ["child"]
+    assert [row["id"] for row in get(api, f"{path}&after={first['next']}")["rows"]] == ["visible"]
+    with store.transaction() as c:
+        c.execute(
+            "INSERT INTO credential_grants(id,credential_id,subject,granted_by,created_at,access_level) "
+            "VALUES('ben-source','source-key','human:ben','human:ana',?,'read')",
+            (H.now(),),
+        )
+    first = get(api, path, token="ben-test")
+    assert [row["id"] for row in first["rows"]] == ["external"]
+    assert [row["id"] for row in get(api, f"{path}&after={first['next']}", token="ben-test")["rows"]] == ["visible"]
+
+
 def test_gmail_down_leaves_the_history_id_and_says_why_then_catches_up(watched):
     api, gmail, aid = watched
     check(api, T0)

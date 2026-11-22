@@ -431,7 +431,7 @@ def install(
         **api_v2(
             "Contacts",
             "getEntityActivity",
-            "List an entity's visible outside conversations and activities, newest first. Pass next as after",
+            "List an entity's outside conversations and activities whose sources you can read, newest first. Pass next as after",
             ContactsActivityHistory,
         ),
     )
@@ -453,7 +453,13 @@ def install(
             thread_scope = threads.entity_scope(c, viewer, "th")  # pyright: ignore[reportUnknownMemberType]
             try:
                 return ES.activity_history(
-                    c, entity_id, thread_scope=thread_scope, task_scope=task_scope, after=after, limit=limit
+                    c,
+                    entity_id,
+                    readers=principals,
+                    thread_scope=thread_scope,
+                    task_scope=task_scope,
+                    after=after,
+                    limit=limit,
                 )
             except ValueError as error:
                 raise page_error(error) from None

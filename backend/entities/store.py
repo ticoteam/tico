@@ -2504,10 +2504,18 @@ def _sender_match(c: sqlite3.Connection, actor: str, checks: list[tuple[str, str
 
 
 def activity_history(
-    c: sqlite3.Connection, entity_id: str, *, thread_scope: str, task_scope: str, after: str | None, limit: int
+    c: sqlite3.Connection,
+    entity_id: str,
+    *,
+    readers: tuple[str, ...],
+    thread_scope: str,
+    task_scope: str,
+    after: str | None,
+    limit: int,
 ) -> dict[str, Any]:
     """Page the visible relationship history over a single ordering for conversations and activities."""
-    args: list[object] = [entity_id, entity_id]
+    boxes, tools = V.activity_connections(c, readers)
+    args: list[object] = [entity_id, entity_id, json.dumps(sorted(boxes)), json.dumps(sorted(tools))]
     limit = _limit(limit)
     cursor = ""
     if after:
@@ -2517,7 +2525,6 @@ def activity_history(
             raise ValueError("the cursor is not one this list returned")
         cursor = "WHERE (occurred_at, type, id) < (?, ?, ?)"
         args.extend(marker)
-    # An activity with provenance needs a reader check for that source. Threads and tasks have one here.
     rows = _rows(
         c,
         "WITH outside AS (SELECT th.id, coalesce(th.last_message_at, th.created_at) AS occurred_at, "
@@ -2527,10 +2534,15 @@ def activity_history(
         "SELECT id, 'thread' AS type, 'conversation' AS kind, occurred_at, summary, NULL AS subject_id FROM outside "
         "UNION ALL "
         "SELECT a.id, 'activity', a.kind, a.occurred_at, substr(a.summary, 1, 1000), a.subject_id "
-        "FROM entity_activities a WHERE a.entity_id=? AND coalesce(a.external_ref, '') = '' AND ("
+        "FROM entity_activities a WHERE a.entity_id=? AND (coalesce(a.external_ref, '') = '' OR EXISTS ("
+        "SELECT 1 FROM entity_external_refs x WHERE x.id=a.external_ref AND x.entity_id=a.entity_id "
+        "AND CASE WHEN x.system='gmail' THEN "
+        "x.connection_id IN (SELECT value FROM json_each(?)) "
+        "ELSE x.connection_id IN (SELECT value FROM json_each(?)) END)) AND ("
         "(coalesce(a.subject_type, '') = '' AND coalesce(a.subject_id, '') = '') OR "
         f"(a.subject_type='task' AND EXISTS (SELECT 1 FROM tasks WHERE tasks.id=a.subject_id AND ({task_scope}))) OR "
-        "(a.subject_type='thread' AND a.subject_id IN (SELECT id FROM outside))) "
+        "(a.subject_type='thread' AND EXISTS (SELECT 1 FROM conversations child WHERE child.id=a.subject_id "
+        "AND child.deleted_at IS NULL AND coalesce(child.root_id,child.id) IN (SELECT id FROM outside)))) "
         f") SELECT * FROM history {cursor} ORDER BY occurred_at DESC, type DESC, id DESC LIMIT ?",
         [*args, limit + 1],
     )

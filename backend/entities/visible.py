@@ -155,6 +155,33 @@ def visible(c: sqlite3.Connection, who: str | Reader, entity_id: str) -> bool:
     return c.execute(f"SELECT 1 FROM entities e WHERE e.id = ? AND {cl}", [entity_id, *params]).fetchone() is not None
 
 
+def activity_connections(c: sqlite3.Connection, actors: tuple[str, ...]) -> tuple[set[str], set[str]]:
+    """The mailbox and tool connections each effective reader of an activity can use."""
+    from backend import credentials
+
+    read_grants = cast("Callable[[sqlite3.Connection, str], frozenset[str]]", credentials.granted)  # pyright: ignore[reportUnknownMemberType]
+
+    boxes: list[set[str]] = []
+    tools: list[set[str]] = []
+    for actor in actors:
+        boxes.append({str(box["id"]) for box in _mailbox_rows(c, actor) if box["id"]})
+        keys = read_grants(c, actor)
+        tools.append(
+            {
+                str(row[0])
+                for row in c.execute(
+                    "SELECT DISTINCT t.id FROM tools t JOIN credentials k ON k.tool_id=t.id "
+                    "WHERE k.holder=? OR k.id IN (SELECT value FROM json_each(?))",
+                    (actor, json.dumps(sorted(keys))),
+                )
+            }
+        )
+    return (
+        boxes[0].intersection(*boxes[1:]) if boxes else set(),
+        tools[0].intersection(*tools[1:]) if tools else set(),
+    )
+
+
 def note_visible(r: Reader, note: Mapping[str, Any]) -> bool:
     """A note shows to everyone who reads its entity when its audience is company; a `me` note to its author."""
     return r.system or note.get("audience") == "company" or (bool(r.key) and note.get("author_key") == r.key)
