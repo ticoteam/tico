@@ -376,17 +376,17 @@ def record(
     return hold
 
 
-def clear(c, runner_id, profile, runtime):
+def clear(
+    c, runner_id, profile, runtime, how="probe_passed", note="The plan works again, so Tico released the agents on it."
+):
     """A turn worked on the login: it is no longer held (kept as history). A plan refused for its billing closes its
-    owner's Needs-you item."""
+    owner's Needs-you item with `note`."""
     item = get(c, runner_id, profile, runtime).get("item")
-    holds.release(
-        c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.TICO_ACTOR, how="probe_passed"
-    )
+    holds.release(c, holds.LOGIN_LIMIT, "login", _login(runner_id, profile, runtime), actor=H.TICO_ACTOR, how=how)
     if item:
         from . import bot_stops
 
-        bot_stops.close_item(c, item, "The plan works again, so Tico released the agents on it.")
+        bot_stops.close_item(c, item, note)
 
 
 def try_now(c, runner_id, profile, runtime, now=None):
@@ -552,6 +552,9 @@ def turn_steps(c, attempt_id, runtime, result):
         steps[0][2] = True
     if limited:
         steps[-1][2] = True
+        said = str(field(result, "text") or "")
+        if not steps[-1][1] and payment(said):
+            steps[-1][1] = said  # a runner that named the billing refusal only in the turn's summary
     return steps
 
 
@@ -816,8 +819,6 @@ def after_turn(
                     c, runner_id, login, rt, hit, None, attempt_id, bot, error=notice or "", until=until, named=True
                 )
             else:
-                if last and not notice and payment(field(body, "text")):
-                    notice = field(body, "text")  # a runner that said it only in the turn's summary
                 reset = reset_from_text(notice, hit) or (body.limit_resets_at if last else None)
                 hold = record(c, runner_id, login, rt, hit, reset, attempt_id, bot, error=notice or "")
                 if given and payment(notice) and not hold.get("item"):

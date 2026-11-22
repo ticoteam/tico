@@ -1847,7 +1847,7 @@ def remove(c, settings, who, sid, confirm=False):
     runtime = (KINDS.get(sub["kind"]) or {}).get("runtime", "")
     if runtime and login_holds.get(c, "", login_holds.subscription_login(sid), runtime):
         # Its hold goes with it, and a payment item it filed closes: nothing can run on it to clear them.
-        login_holds.clear(c, "", login_holds.subscription_login(sid), runtime)
+        login_holds.clear(c, "", login_holds.subscription_login(sid), runtime, how="moot", note="The plan was removed.")
 
     claude_login.drop(c, sid)
     if sub["credential_id"]:

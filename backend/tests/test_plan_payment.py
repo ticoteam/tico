@@ -137,6 +137,7 @@ def test_a_refusal_said_only_in_the_turns_summary_is_still_the_plans_payment(api
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, "", login_holds.subscription_login(sid), "claude")
         assert login_holds.payment(hold["error"]) and run_failures.get(c, "ops") == {}
+        assert H.status(c, "ops")["focus"].startswith("The Claude plan brooke@acme.example can't be used")
     assert len(items(api)) == 1
 
 

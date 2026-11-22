@@ -809,7 +809,7 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
         schedule.update(
             failures=0, read_at=now, next_at=H.shift(now, seconds=USAGE_EVERY + random.randint(0, USAGE_JITTER))
         )
-        if not superseded:
+        if not superseded and request.get("state") == "requested":  # a new read, not a replayed answer
             from . import login_holds
 
             LH: Any = login_holds
