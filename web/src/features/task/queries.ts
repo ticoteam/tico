@@ -256,6 +256,14 @@ export interface BoundRule {
   exact_check: { kind: 'allow_list'; action: string; field: string; values: string[] } | { kind: 'max_usd'; action: string; field: string; max_usd: number } | null;
 }
 
+/** An outbound action's OK as it was asked (backend/outbound_actions.py `content`): the frozen action, exactly. */
+export interface BoundAction {
+  channel: string;
+  operation: string;
+  destination: string;
+  payload: Record<string, unknown>;
+}
+
 /** What the decision binds Approve to (plan/approvals.html): the hash of exactly what was shown. An OK's own preview
     (GET /api/v2/oks/{rid}) gives it, or an email's (GET /api/v2/email/sends/{sid}, which the Email tab reads too).
     A stage's own OK has no grant (404): `hash` is null and Approve answers with the page version. `complete` is false
@@ -265,7 +273,7 @@ export interface BoundRule {
 export const decisionShownQuery = (task: string, rid: string, version: number, send?: string | null) =>
   queryOptions({
     queryKey: [...keys.tasks.detail(task), 'shown', rid, version, send ?? null] as const,
-    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule }> => {
+    queryFn: async ({ signal }): Promise<{ hash: string | null; complete: boolean; rule?: BoundRule; action?: BoundAction }> => {
       const shown = await api.get<OkPreview>(`/api/v2/oks/${enc(rid)}`, { signal }).catch((e: unknown) => {
         if (e instanceof ApiError && e.status === 404) return null;
         throw e;
@@ -280,6 +288,20 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
         const rule = shown.content as BoundRule | null;
         const whole = !!rule && typeof rule.text === 'string' && !!rule.who && !!rule.with && Array.isArray(rule.where) && !!rule.if_broken && 'reviewer' in rule && 'exact_check' in rule;
         return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { rule }) };
+      }
+      // An outbound action's OK binds the frozen action: Approve waits until its channel, operation, destination and
+      // payload are all there to show.
+      if (shown.subject.startsWith('outbound:')) {
+        const action = shown.content as BoundAction | null;
+        const whole =
+          !!action &&
+          typeof action.channel === 'string' &&
+          typeof action.operation === 'string' &&
+          typeof action.destination === 'string' &&
+          !!action.payload &&
+          typeof action.payload === 'object' &&
+          !Array.isArray(action.payload);
+        return { hash: whole ? shown.shown_hash : null, complete: whole, ...(whole && { action }) };
       }
       if (!shown.subject.startsWith('email_send:')) return { hash: shown.shown_hash, complete: true };
       const mail = await queryClient.fetchQuery({ ...emailSendQuery(task, shown.subject.slice(11)), staleTime: 0 });
