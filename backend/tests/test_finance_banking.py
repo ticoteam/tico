@@ -1648,6 +1648,7 @@ def test_a_bank_row_ok_names_its_amount_who_and_day_so_two_read_apart(books):
     """TIDY's walkthrough: five "Bot bookkeeping over $5,000" OKs each read "Post a feed row to 2390 Shareholder loans"
     and "OK this in Finance?". What a row's action does now says its amount, who it was with and its day, and that is
     the ask's own line (finance/store/tico.ok_line), so two rows to the same account read apart."""
+    from backend import ask_shape
     from backend.finance.store import tico
 
     fake = FakeMercury()
@@ -1667,7 +1668,14 @@ def test_a_bank_row_ok_names_its_amount_who_and_day_so_two_read_apart(books):
     assert said["txn-fee", False].startswith("Post the 15.00 USD bank row to Mercury on 2026-10-12 to 6900 ")
     assert said["txn-dep", True] == "Ignore the 500.00 USD bank row from Acme Customer on 2026-10-13"
     line = tico.ok_line(said["txn-dep", False] + "; Bot bookkeeping over $5,000")
-    assert line.startswith("OK in Finance: Post the 500.00 USD bank row from Acme Customer") and line.endswith(
-        "It is done once you OK it."
+    first, rest = line.split("\n", 1)
+    assert (
+        first.startswith("OK in Finance: Post the 500.00 USD bank row from Acme Customer on 2026-10-13")
+        and len(first) <= 140
     )
+    assert rest == "It is done once you OK it." and ask_shape.line_refusal(line) is None
+    # A long one is cut at a word to an ask's first line; one an ask could not carry is the plain line.
+    long = tico.ok_line("Post " + "the very long payee name " * 10)
+    assert len(long.split("\n")[0]) <= 140 and long.split("\n")[0].endswith("\u2026")
+    assert tico.ok_line("Post to /var/data/feeds/x.csv") == tico.OK_LINE
     assert tico.ok_line("") == tico.OK_LINE

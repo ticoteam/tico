@@ -176,11 +176,13 @@ export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
   change(id, { owner_id: owner }, (idem) => post(`${taskPath(id)}/owner`, { owner, ...(setAnyway && { set_anyway: true }) }, idem));
 
 /** Release the agent Tico stopped that this task is the notice for (POST /api/v2/bots/{bot}/release): its queued work
-    starts again, and the server closes this task. The Release leaves the page at once and comes back if refused. */
-export const releaseAgent = (id: string, bot: string) =>
-  change(id, { stopped_agent: null }, (idem) =>
-    api.post<unknown>(`/api/v2/bots/${enc(bot)}/release`, {}, { idempotencyKey: idem }).then(() => readTask(id).then((task) => ({ task }) as unknown as TaskResult)),
-  );
+    starts again, and the server closes this task. The card stays, busy, until the answer; the task is read again after. */
+export async function releaseAgent(id: string, bot: string): Promise<unknown> {
+  const done = await api.post<unknown>(`/api/v2/bots/${enc(bot)}/release`, {}, { idempotencyKey: crypto.randomUUID() });
+  void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(id) });
+  void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+  return done;
+}
 
 export const markDone = (id: string) => change(id, { status: 'done' }, (idem) => post(`${taskPath(id)}/done`, {}, idem));
 

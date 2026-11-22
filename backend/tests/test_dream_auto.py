@@ -677,21 +677,29 @@ def test_a_thumbs_down_given_before_the_last_dream_does_not_count_again_when_edi
 def test_an_auto_dream_never_waits_on_a_person_and_one_that_never_ran_is_closed(api):
     """Tico Team's walkthrough: an auto dream titled "Dream" waited days for a turn; the Quiet bot tasks rule told the
     General Manager, who asked Chris "keep it queued, or close it?". Nobody waits on an auto dream: the never-stuck
-    pass and the timer rules pass it over, and the next pass closes one with no run under way STALE_HOURS on."""
+    pass and Quiet bot tasks pass it over, and the next pass closes one with no run under way STALE_HOURS on."""
     from backend import never_stuck, stage_rule_timers
+    from backend import stage_rules as SR
 
     worked(api, "ops", 10)
     aged(api)
     assert run(api)
     [row] = dream_rows(api, "ops")
-    with api.app.state.store.read() as c:
-        assert row["id"] not in {r[0] for r in c.execute(never_stuck._OPEN)}
-        assert row["id"] not in {r["id"] for r in c.execute(stage_rule_timers._TASKS)}
-        # A plain task of the bot's in the same stage is still watched.
     plain = post(api, "tasks", {"owner": "ops", "title": "Review the launch note", "body": "Please review it."})
     plain_id = (plain.get("task") or plain)["id"]
-    with api.app.state.store.read() as c:
-        assert plain_id in {r[0] for r in c.execute(never_stuck._OPEN)}
+    with api.app.state.store.transaction() as c:
+        assert row["id"] not in {r[0] for r in c.execute(never_stuck._OPEN)}
+        assert plain_id in {r[0] for r in c.execute(never_stuck._OPEN)}  # a plain task of the bot's is still watched
+        quiet = SR.get(c, SR.QUIET_BOT_TASKS)
+        assert stage_rule_timers._quiet_on_auto_dream(c, quiet, row["id"])
+        assert not stage_rule_timers._quiet_on_auto_dream(c, quiet, plain_id)
+        # A tell queued before this change still never reaches the manager: it settles as dropped.
+        c.execute(
+            "INSERT INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
+            (quiet["id"], row["id"], "m1", "pending", "bot:chief", H.now()),
+        )
+        assert stage_rule_timers._wake_manager(c, "bot:chief", H.now()) is False
+        assert c.execute("SELECT outcome FROM stage_rule_marks WHERE mark='m1'").fetchone()[0] == "dropped"
     with api.app.state.store.transaction() as c:
         assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS - 1)) == []
         assert DA.close_stale(c, now() + timedelta(hours=DA.STALE_HOURS + 1)) == [row["id"]]

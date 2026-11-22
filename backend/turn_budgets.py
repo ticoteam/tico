@@ -353,6 +353,16 @@ def set_team(c, actor, body):
 
 
 # ---------------------------------------------------------------------------------------------------- the routes
+def check_release(c, auth, settings_admin, who, bot):
+    """Raise unless `who` may release `bot` (POST /api/v2/bots/{bot}/release): they see it, and manage it or are Agent
+    Ops. The task page asks the same (bot_stops.stopped_on) before it offers Release."""
+    auth.domain(who)
+    if not H.bot(c, bot):
+        raise Problem("not_found", "Bot not found", 404)
+    auth.require_see(c, who, bot)
+    settings_admin._manager(c, who, bot, agent_ops=True)
+
+
 def install(app, store, auth, mutate, settings_admin):
     from fastapi import Request
 
@@ -419,8 +429,7 @@ def install(app, store, auth, mutate, settings_admin):
         def work(c):
             nonlocal bot
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-            seeing(c, who, bot)
-            settings_admin._manager(c, who, bot, agent_ops=True)
+            check_release(c, auth, settings_admin, who, bot)
             from . import bot_stops
 
             return {"bot": bot, "released": bot_stops.release(c, who.actor, bot)}

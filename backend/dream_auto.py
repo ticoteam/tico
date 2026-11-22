@@ -202,7 +202,7 @@ def _words(queued, held, over, not_due, limit):
 def close_stale(c, at):
     """Close every open auto dream queued STALE_HOURS before `at` that has no run under way: one the release policy
     did not end (its job was never held, or it was woken again). Nobody waits on it, so it never goes to a person or a
-    manager (dream.NOT_AUTO). Returns the tasks closed."""
+    manager (never_stuck._OPEN, stage_rule_timers). Returns the tasks closed."""
     closed = []
     for (task_id,) in c.execute(_STALE_SQL, (stamp(at - timedelta(hours=STALE_HOURS)),)).fetchall():
         if H.attempt(c, H.task_close, H.TICO_ACTOR, task_id, STALE_NOTE) is not None:

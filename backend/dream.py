@@ -38,10 +38,6 @@ DOING_TEXT = 200  # the one line the bot keeps in the task note while it dreams
 ENDED = "('done','closed')"  # a finished dream's status, as SQL
 MARK = "dream.start"  # the event dream_start writes on the task; its actor is the task's requester
 AUTO_MARK = "dream.auto"  # the event an auto dream's start writes; its actor is the system (H.TICO_ACTOR)
-# Not an auto dream, as SQL over a task alias `{t}` (format it): an index probe on events_action_target. Nobody waits on
-# an auto dream, so the never-stuck pass and the Quiet bot tasks rule pass it over; the auto pass closes one that never
-# got its turn (dream_auto.close_stale).
-NOT_AUTO = "NOT EXISTS(SELECT 1 FROM events e WHERE e.action='" + AUTO_MARK + "' AND e.target={t}.id)"
 # The marker as SQL over `tasks`: an index probe on events_task_origin (actor, action, target) per candidate row.
 MARKED = (
     f"EXISTS(SELECT 1 FROM events e WHERE e.target=tasks.id AND ((e.actor=tasks.requester_id AND e.action='{MARK}') "

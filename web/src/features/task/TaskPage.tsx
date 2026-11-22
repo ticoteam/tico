@@ -139,10 +139,14 @@ function TaskView({ t, tab, file, flow }: { t: TaskData; tab?: string; file?: st
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  // On a phone, a ❓ for the person in the task's chat opens the chat, where its message box answers the agent asking.
-  const me = useQuery(meQuery).data?.id;
-  const chatFirst = useCards() && asksInChat(t, me);
-  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs, chatFirst));
+  // On a phone, a ❓ for the person in the task's chat opens the chat, where its message box answers the agent asking:
+  // whose it is needs who the person is, so a phone picks once that is known.
+  const meRead = useQuery(meQuery);
+  const me = meRead.data?.id;
+  const phone = useCards();
+  const chatFirst = phone && asksInChat(t, me);
+  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError)) && !(phone && meRead.isPending))
+    setFirst(defaultTab(tabs, chatFirst));
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;

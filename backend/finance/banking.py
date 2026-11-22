@@ -1797,11 +1797,16 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     )
 
 
+ROW_WHO_MAX = 40  # who a bank row was with, as an OK names it
+
+
 def _row_words(ctx: Ctx, row: Any) -> str:
     """A bank row as an OK names it, so a person tells one from the next: its amount, who it was with and its date
     ("the 6,000.00 USD bank row from Acme on 2026-11-20")."""
     amount = int(row["amount"])
-    who = str(row["counterparty"] or row["description"] or "").strip()
+    who = " ".join(str(row["counterparty"] or row["description"] or "").split())
+    if len(who) > ROW_WHO_MAX:  # so the day and the account still fit an ask's first line
+        who = who[: ROW_WHO_MAX - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "\u2026"
     with_whom = f" {'to' if amount < 0 else 'from'} {who}" if who else ""
     return f"the {abs(amount) / 100:,.2f} {ctx.book.base_currency} bank row{with_whom} on {row['txn_date']}"
 

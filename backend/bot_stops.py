@@ -20,7 +20,7 @@ import json
 import logging
 
 from . import holds, run_diagnostics, run_failures, turn_budgets
-from .store import H
+from .store import H, Problem
 
 log = logging.getLogger(__name__)
 
@@ -46,14 +46,17 @@ STOPPED_ON_SQL = (
 )
 
 
-def stopped_on(c, auth, who, task_id):
-    """The stopped bot a task is the Needs-you item for, {id, slug, name}, when `who` may release it (as
-    POST /api/v2/bots/{bot}/release checks); else None. The task page puts its Release in place."""
+def stopped_on(c, auth, settings_admin, who, task_id):
+    """The stopped bot a task is the Needs-you item for, {id, slug, name}, when `who` may release it (the check
+    POST /api/v2/bots/{bot}/release makes, turn_budgets.check_release); else None. The task page puts its Release in
+    place."""
     row = c.execute(STOPPED_ON_SQL, (task_id,)).fetchone()
     if not row:
         return None
     bot = str(row[0])
-    if not (auth.operator(c, who, bot) or auth.bot_manager(c, who, bot)):
+    try:
+        turn_budgets.check_release(c, auth, settings_admin, who, bot)
+    except Problem:
         return None
     found = H.bot(c, bot) or {}
     return {"id": bot, "slug": found.get("slug") or bot, "name": name_of(c, bot)}

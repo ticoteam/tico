@@ -925,3 +925,22 @@ def test_the_audit_of_an_ok_reads_only_to_its_parties_whoever_reads_its_task(api
             assert json.loads(event["detail"])["task"] == tid, event
             assert not task_privacy.event_readable(c, "human:cara", event), event
             assert task_privacy.event_readable(c, "human:ben", event), event
+
+
+def test_a_finance_oks_line_says_what_it_does_and_its_tasks_chat_says_no_more_than_before(api):
+    """The walkthrough's five Finance OKs read only "OK this in Finance?". The ask's own line now says what the action
+    does (only its parties read that line); the filed task's opening message, which reaches every reader of the task,
+    stays the plain line."""
+    from backend.finance.store import tico
+
+    as_bot(api)
+    content = {"source": "finance", "action_id": "fa9", "kind": "payment_send", "what": "Pay 540.00 USD to Acme"}
+    with api.app.state.store.transaction() as c:
+        rid = tico.ok_ask(c, "bot:ops", "human:ana", "Pay 540.00 USD to Acme", "finance:fa9", content)
+        line = c.execute("SELECT line FROM requirements WHERE id=?", (rid,)).fetchone()[0]
+        task = H.task(c, K.task_of(c, rid))
+        said = [
+            r[0] for r in c.execute("SELECT body FROM messages WHERE conversation_id=?", (task["conversation_id"],))
+        ]
+    assert line.startswith("OK in Finance: Pay 540.00 USD to Acme?"), line
+    assert said and not any("Acme" in (b or "") for b in said), said

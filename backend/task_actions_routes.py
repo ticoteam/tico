@@ -315,7 +315,7 @@ def register_core(
                 and task_run_models.may_set(c, auth, who, H.actor_id(row["owner_id"])),
                 # The agent Tico stopped that this task is the Needs-you item for, when the reader may release it
                 # (backend/bot_stops.py): the page puts its Release in place. Null on every other task.
-                "stopped_agent": bot_stops.stopped_on(c, auth, who, tid),
+                "stopped_agent": bot_stops.stopped_on(c, auth, settings_admin, who, tid),
                 **privacy.page(c, who, row["conversation_id"], task_id=tid),
             }
 

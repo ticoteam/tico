@@ -84,10 +84,19 @@ _TASKS = (
     "WHERE t.pipeline_id IS NOT NULL AND t.status = 'open' AND s.kind = 'work' AND s.by_hand = 0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
     # Blocked by a task it depends on: nobody's turn, so no timer; its end sets last_change_at (task_depends.release).
-    f"AND NOT {task_depends.BLOCKED % 't'} "
-    # Nobody waits on an auto dream: its release policy and the auto pass end it, never a manager (dream.NOT_AUTO).
-    "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.action='dream.auto' AND e.target=t.id)"
+    f"AND NOT {task_depends.BLOCKED % 't'}"
 )
+# An auto dream (backend/dream_auto.py): nobody waits on it, so Quiet bot tasks never tells a manager about one; its
+# release policy and the auto pass end it (an index probe on events_action_target).
+_AUTO_DREAM = "SELECT 1 FROM events WHERE action='dream.auto' AND target=? LIMIT 1"
+
+
+def _quiet_on_auto_dream(conn: Any, rule: Row, task_id: str) -> bool:
+    """Whether this is the built-in Quiet bot tasks rule on an auto dream, which it passes over."""
+    quiet = _mod("stage_rules").QUIET_BOT_TASKS
+    return (
+        quiet in (rule.get("id"), rule.get("builtin")) and conn.execute(_AUTO_DREAM, (task_id,)).fetchone() is not None
+    )
 
 
 def rules(conn: Any) -> list[Row]:
@@ -162,6 +171,8 @@ def _due(conn: Any, rule: Row, task: Row, started: str, at: str) -> bool:
 
 
 def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> None:
+    if _quiet_on_auto_dream(conn, rule, task["id"]):
+        return
     started = _started(conn, rule, task)
     if not started or not _due(conn, rule, task, started, at):
         return
@@ -339,7 +350,13 @@ def _wake_manager(conn: Any, manager: str, at: str) -> bool:
         key = (str(rule_id), str(task_id), str(mark))
         row: Row | None = H.task(conn, task_id)
         rule: Row | None = SR.get(conn, rule_id)
-        if not row or not rule or row.get("status") != "open" or not H.task_private_readable(conn, manager, row):
+        if (
+            not row
+            or not rule
+            or row.get("status") != "open"
+            or not H.task_private_readable(conn, manager, row)
+            or _quiet_on_auto_dream(conn, rule, str(task_id))
+        ):
             outcome[key] = "dropped"
         elif late_told_at:
             outcome[key] = "late"  # Late listed it while it waited for this wake: the manager has it already
