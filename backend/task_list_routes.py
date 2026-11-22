@@ -63,6 +63,7 @@ LIST_FILTERS = frozenset(
         "after",
         "counts",
         "exact",
+        "link",
     }
 )
 # `on_behalf_of`, read by the Agent Ops middleware (above).
@@ -95,6 +96,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "every page (the rows a reader may not read are never counted). Not with changed_after",
                 "exact": "true: an owner or requester that names nobody answers 422, never the list without that "
                 "filter (a client asking for one person's tasks must not get every task)",
+                "link": "<source>:<type>:<key>[@<connection_id>] (jira:issue:PROJ-12@tool_1, github:pr:acme/app#7) or "
+                "the item's URL: only the tasks linking that outside item through that connection (none: '')",
             },
         ),
     )
@@ -133,6 +136,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         after: str | None = None,
         counts: str | None = None,
         exact: bool = False,
+        link: str | None = None,
     ):
         """Tasks this reader may read. `pipeline` and `stage` (ids) keep a pipeline's or a stage's tasks;
         `waiting_on` (a person or a bot) keeps the open tasks with a wait on them (waiting_on.py: a person's or a
@@ -141,7 +145,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         `late` are the Tasks page's search and filters, with its meaning (backend/task_match.py). Every page answers
         `next_after` when there is more: pass it back as `after` for the next page (a keyset page, which a task added
         or removed meanwhile does not shift); `next_offset` stays for offset paging. `counts=stage` adds how many tasks
-        the filters select in each stage, all pages together, so a board shows a stage's count with one page loaded."""
+        the filters select in each stage, all pages together, so a board shows a stage's count with one page loaded.
+        `link` keeps the tasks that link one outside item (backend/item_sources `parse_ref`), through its connection."""
         from . import task_match
         from . import task_reads as reads
         from . import teammate_access
@@ -193,6 +198,9 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             if waiting_on is not None:
                 waits_on = waited_on(c, waiting_on, visible_sql, narrow)
                 filters["ids"] = [t for t in filters["ids"] if t in waits_on] if "ids" in filters else sorted(waits_on)
+            if link is not None:
+                linking = linked_to(c, link)
+                filters["ids"] = [t for t in filters["ids"] if t in linking] if "ids" in filters else sorted(linking)
             hidden = frozenset(teammate_access.Known(c, who, auth).people if (owners or requesters or turn) else ())
             match = task_match.parse(
                 H.now(), search, owners, stages, requesters, labels, turn, due, late, hidden=hidden
@@ -320,6 +328,18 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def linked_to(c, ref):
+        """The ids of the tasks that link the outside item `ref` names (any reader's: the list's visibility narrows
+        them). 422 `link` for a reference that names no source's item."""
+        from . import item_metadata as IM
+        from . import item_sources as IS
+
+        try:
+            source, item_type, key, connection_id = IS.parse_ref(ref)
+        except ValueError as error:
+            raise Problem("link", str(error), 422) from None
+        return set(IM.linking(c, source, item_type, key, connection_id))
 
     def keyset_token(key):
         return base64.urlsafe_b64encode(json.dumps(key, separators=(",", ":")).encode()).decode().rstrip("=")

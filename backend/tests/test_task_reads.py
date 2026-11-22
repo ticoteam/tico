@@ -382,6 +382,7 @@ def test_every_filter_the_list_takes_still_answers(api):
         "after": base64.urlsafe_b64encode(json.dumps([0, 1, "", ""]).encode()).decode().rstrip("="),  # a queue key
         "counts": "stage",
         "exact": "true",
+        "link": "jira:issue:PROJ-1",
         "on_behalf_of": "default",
     }
     assert set(values) == task_list_routes.LIST_FILTERS | {"on_behalf_of"}
