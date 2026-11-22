@@ -1662,7 +1662,7 @@ def drain(store, auth, limit=20, budget=None):
     first in the next pass."""
     import time
 
-    from . import drains, gmail_live, google_tokens
+    from . import drains, gmail_live, google_tokens, task_engine
 
     if store.settings.rehearsal or store.settings.demo:
         return 0
@@ -1734,12 +1734,14 @@ def drain(store, auth, limit=20, budget=None):
             if receipt_id:
                 provider_timestamp_ms = gmail_live.sent_timestamp_ms(mailbox, token, message, thread_id)
                 if provider_timestamp_ms is not None:
-                    with store.transaction() as c:
-                        c.execute(
+                    with store.transaction(notify=True) as c:
+                        receipt = c.execute(
                             "UPDATE messages SET refs=json_set(refs,'$.provider_timestamp_ms',?) "
-                            "WHERE id=? AND deleted_at IS NULL",
+                            "WHERE id=? AND deleted_at IS NULL RETURNING conversation_id, seq",
                             (provider_timestamp_ms, receipt_id),
-                        )
+                        ).fetchone()
+                        if receipt:
+                            task_engine.customer_receipt_timestamped(c, receipt["conversation_id"], receipt["seq"])
             sent += status == "sent"
     return sent
 

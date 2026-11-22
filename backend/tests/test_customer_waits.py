@@ -9,7 +9,7 @@ from backend.item_sources import github
 from backend.store import H, digest, encode
 from backend.task_rule_gate import TaskRules
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import post
+from backend.tests.helpers.api import headers, post
 from backend.tests.helpers.automation_api import as_bot
 from backend.tests.helpers.email_sending import BOX, CONTACT, autonomous, dispatch, inbox, queue  # noqa: F401
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
@@ -257,6 +257,12 @@ def _gmail_wait(thread, provider_id):
     }
 
 
+def _confirm_gmail_reply(fake_gmail, sent_ms):
+    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
+    confirmed = fake_gmail.add(BOX, "sent-reply", thread="thread", sender=BOX, to=[CONTACT], labels=("SENT",))
+    confirmed["internalDate"] = str(sent_ms)
+
+
 def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
     autonomous(inbox)
     store = inbox.app.state.store
@@ -265,16 +271,19 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
     with store.transaction() as conn:
         box = mailbox_access.row_by_address(conn, BOX)
         other_box = mailbox_access.ensure_mailbox(conn, "cara@acme.example", person_id="cara", created_by="human:cara")
-        ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
+        entity = ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
         assert _arrive_gmail(conn, box, "inbound", sent_ms - 1000)
         assert _arrive_gmail(conn, other_box, "inbound", sent_ms - 1000)
         thread = conn.execute("SELECT id FROM conversations WHERE connection_id=?", (box["id"],)).fetchone()[0]
         X.bot(conn, "builder")
-        task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
+        task = H.task_create(conn, X.ANA, "Follow up", "", OWNER, entity_id=entity["id"], lint=False)
+        unrelated = H.task_create(conn, X.ANA, "Track the account", "", X.ANA, entity_id=entity["id"], lint=False)
+        other_entity = ES.upsert(conn, X.ANA, "person", match={"email": "other@vendor.example"})
+        other_task = H.task_create(
+            conn, X.ANA, "Follow up elsewhere", "", OWNER, entity_id=other_entity["id"], lint=False
+        )
 
-    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
-    confirmed = fake_gmail.add(BOX, "sent-reply", thread="thread", sender=BOX, to=[CONTACT], labels=("SENT",))
-    confirmed["internalDate"] = str(sent_ms)
+    _confirm_gmail_reply(fake_gmail, sent_ms)
     queued = queue(inbox, reply_to_id="inbound", thread_id="thread")
     [sent_mime] = dispatch(inbox)
     assert b"Thanks for the update." in sent_mime
@@ -296,8 +305,22 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
 
     with store.transaction() as conn:
         assert _arrive_gmail(conn, box, "older-before-wait", sent_ms - 1)
-    parked = post(inbox, f"tasks/{task['id']}/snooze", _gmail_wait(thread, sent["source_message_id"]))
+    bot_token = as_bot(inbox, "builder")
+    for path in (f"threads/{thread}", f"messages/{sent['id']}"):
+        assert inbox.get(f"/api/v2/{path}", headers=headers(bot_token)).status_code == 404
+    wait = {**_gmail_wait(thread, sent["source_message_id"]), "version": task["version"]}
+    path = f"tasks/{task['id']}/snooze"
+    post(inbox, path, wait, token="cara-test", expected=404)
+    missing = post(inbox, path, {**wait, "wait_thread_id": "missing"}, token=bot_token, expected=404)
+    for bad in ({**wait, "wait_provider_reply_id": "inbound"}, {**wait, "wait_sender": "ext:gmail:unknown"}):
+        assert post(inbox, path, bad, token=bot_token, expected=404) == missing
+    for refused_task in (unrelated, other_task):
+        assert post(inbox, f"tasks/{refused_task['id']}/snooze", wait, token=bot_token, expected=404) == missing
+    parked = post(inbox, path, wait, token=bot_token)
     assert parked["snooze"]["waiting_for_reply"]
+    assert not parked["snooze"].keys() & {"wait_thread_id", "wait_sender", "wait_after_seq"}
+    assert all(value not in H._dump(parked) for value in (thread, sent["id"], sent["source_message_id"], sent["body"]))
+    assert inbox.get(f"/api/v2/threads/{thread}", headers=headers(bot_token)).status_code == 404
     with store.transaction() as conn:
         assert _arrive_gmail(conn, other_box, "second", sent_ms + 1)
         assert _arrive_gmail(conn, box, "older-after-wait", sent_ms - 1)
@@ -327,7 +350,7 @@ def test_real_gmail_send_anchors_a_wait_that_intake_wakes(inbox, fake_gmail):
 
 
 @pytest.mark.parametrize("reply_offset", [0, 1], ids=["tie", "newer"])
-def test_gmail_reply_saved_before_outbound_receipt_uses_provider_order(inbox, fake_gmail, monkeypatch, reply_offset):
+def test_gmail_timestamp_rechecks_a_wait_parked_during_lookup(inbox, fake_gmail, monkeypatch, reply_offset):
     autonomous(inbox)
     store = inbox.app.state.store
     sent_ms = 1_783_368_401_125
@@ -335,13 +358,14 @@ def test_gmail_reply_saved_before_outbound_receipt_uses_provider_order(inbox, fa
         box = mailbox_access.row_by_address(conn, BOX)
         ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
         assert _arrive_gmail(conn, box, "inbound", sent_ms - 1000)
-        task = X.new_task(conn, X.ANA, "Follow up")
+        X.bot(conn, "builder")
+        task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
+        next_task = X.new_task(conn, X.ANA, "Check the same reply")
         thread = outside_intake.conversation_id("gmail", box["id"], "thread")
     queue(inbox, reply_to_id="inbound", thread_id="thread")
 
-    fake_gmail.send_answer = (200, {"id": "sent-reply", "threadId": "thread"})
-    confirmed = fake_gmail.add(BOX, "sent-reply", thread="thread", sender=BOX, to=[CONTACT], labels=("SENT",))
-    confirmed["internalDate"] = str(sent_ms)
+    _confirm_gmail_reply(fake_gmail, sent_ms)
+    wait = _gmail_wait(thread, "sent-reply")
 
     def confirmed_send(*args, **kwargs):
         result = fake_gmail.send(*args, **kwargs)
@@ -351,13 +375,25 @@ def test_gmail_reply_saved_before_outbound_receipt_uses_provider_order(inbox, fa
         return result
 
     monkeypatch.setattr(gmail_live, "send_call", confirmed_send)
-    assert len(dispatch(inbox)) == 1
 
-    path, wait = f"tasks/{task['id']}/snooze", _gmail_wait(thread, "sent-reply")
+    sent_timestamp = gmail_live.sent_timestamp_ms
+
+    def lookup_timestamp(*args):
+        parked = post(inbox, f"tasks/{task['id']}/snooze", wait)
+        assert parked["snooze"]["waiting_for_reply"]
+        with store.read() as conn:
+            assert not task_wakes.queued(conn, task["id"], OWNER)
+        return sent_timestamp(*args)
+
+    monkeypatch.setattr(gmail_live, "sent_timestamp_ms", lookup_timestamp)
+    assert len(dispatch(inbox)) == 1
+    with store.read() as conn:
+        assert bool(E.task(conn, task["id"])["snooze"]) == (reply_offset == 0)
+        assert bool(task_wakes.queued(conn, task["id"], OWNER)) == (reply_offset > 0)
+
+    path = f"tasks/{next_task['id']}/snooze"
     if reply_offset:
         assert post(inbox, path, wait, expected=409)["error"] == "task_customer_replied"
-        with store.read() as conn:
-            assert E.task(conn, task["id"])["snooze"] is None
     else:
         assert post(inbox, path, wait)["snooze"]["waiting_for_reply"]
 
@@ -377,30 +413,38 @@ def test_reply_without_a_matching_wait_only_probes_the_wait_index(c):
     assert any("snoozes_wait_thread" in row[3] for row in plan)
 
 
-def test_bot_wait_defaults_its_reason_and_only_people_can_end_it_early(api, time_machine):
+def test_bot_wait_defaults_its_reason_and_only_people_can_end_it_early(inbox, fake_gmail, time_machine):
     time_machine.move_to(datetime(2030, 1, 7, tzinfo=timezone.utc), tick=False)
-    store = api.app.state.store
+    autonomous(inbox)
+    store = inbox.app.state.store
+    sent_ms = 1_894_060_801_000
     with store.transaction() as conn:
         X.bot(conn, "builder")
-        task = X.new_task(conn, X.ANA, "Follow up", assignee=OWNER)
-        thread = _thread(conn, participants=(X.ANA, OWNER, CUSTOMER))
-        sent = _message(conn, thread, OWNER)
-    bot_token = as_bot(api, "builder")
+        box = mailbox_access.row_by_address(conn, BOX)
+        entity = ES.upsert(conn, X.ANA, "person", match={"email": CONTACT})
+        assert _arrive_gmail(conn, box, "inbound", sent_ms - 1000)
+        thread = outside_intake.conversation_id("gmail", box["id"], "thread")
+        task = H.task_create(conn, X.ANA, "Follow up", "", OWNER, entity_id=entity["id"], lint=False)
+    _confirm_gmail_reply(fake_gmail, sent_ms)
+    queue(inbox, reply_to_id="inbound", thread_id="thread")
+    assert len(dispatch(inbox)) == 1
+
+    bot_token = as_bot(inbox, "builder")
     path = f"tasks/{task['id']}"
-    wait = {"wait_thread_id": thread, "wait_sender": CUSTOMER, "wait_after_seq": sent["seq"]}
+    wait = _gmail_wait(thread, "sent-reply")
     later = {**wait, "until": H.shift(H.now(), days=31)}
-    denied = post(api, path + "/snooze", {**later, "version": task["version"]}, token=bot_token, expected=422)
+    denied = post(inbox, path + "/snooze", {**later, "version": task["version"]}, token=bot_token, expected=422)
     assert denied["error"] == "task_customer_wait_date"
     within_limit = {**wait, "until": H.shift(H.now(), days=30), "version": task["version"]}
-    parked = post(api, path + "/snooze", within_limit, token=bot_token)
+    parked = post(inbox, path + "/snooze", within_limit, token=bot_token)
     assert parked["snooze"]["why"] == "Waiting for a customer reply"
 
-    denied = post(api, path + "/unsnooze", {}, token=bot_token, expected=409)
+    denied = post(inbox, path + "/unsnooze", {}, token=bot_token, expected=409)
     assert denied["error"] == "task_customer_wait"
     with store.transaction() as conn:
         assert E.unsnooze(conn, task["id"], X.ANA, consequence="answer")["snooze"]
-    assert post(api, path + "/unsnooze", {})["snooze"] is None
-    assert post(api, path + "/snooze", later)["snooze"]["waiting_for_reply"]
+    assert post(inbox, path + "/unsnooze", {})["snooze"] is None
+    assert post(inbox, path + "/snooze", later)["snooze"]["waiting_for_reply"]
 
 
 def test_ordinary_snooze_replays_a_receipt_from_before_wait_fields(api):

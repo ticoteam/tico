@@ -548,9 +548,11 @@ change), but the note is handed on, so the next stage and the person who OKs QA 
 - To wait for a customer, use `tico task snooze` with `--wait-thread-id`, `--wait-sender`, `--wait-after-seq`
   and `--until`. Choose a root outside thread, an outside participant, and an outbound message in that thread.
   Gmail sends through Tico add a receipt when Gmail confirms the outside thread and the mailbox feeds the Directory.
-  Use the receipt's global sequence or `--wait-provider-reply-id` with its saved Gmail message ID. Bots must choose
-  a fallback within 30 days. A reply from that sender on the same root thread and connection ends the wait if its
-  Gmail timestamp is later than the send's. If either timestamp is missing, Tico compares local message sequences.
+  Use the receipt's global sequence or `--wait-provider-reply-id` with its saved Gmail message ID. A bot that can
+  work the task can set the wait on a thread for the same Directory entity without inbox read access.
+  Bots must choose a fallback within 30 days.
+  A reply from that sender on the same root thread and connection ends the wait if its Gmail timestamp is later
+  than the send's. If the timestamps match or either is missing, Tico compares local message sequences.
   Tico resets the visit's tries to zero and wakes the bot whose turn it is. If a matching reply is already saved,
   the snooze is refused. Customer waits are exempt from the bot snooze count and stage snooze rules.
   A person can end the wait early with Unsnooze or Run now. A move to another open

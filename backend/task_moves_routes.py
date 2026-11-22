@@ -706,25 +706,50 @@ def register(
         return ask_ingest.judged(store, [ingest] if ingest else [], lambda: work(request, tid, body, call))
 
     # ------------------------------------------------------------------ set aside, hand back
-    def customer_wait(c: Any, who: Any, body: M.TaskSnooze) -> tuple[str, str, int] | None:
+    def customer_wait(c: Any, who: Any, task_id: str, body: M.TaskSnooze) -> tuple[str, str, int] | None:
         if not body.wait_thread_id or not body.wait_sender:
             return None
-        thread = auth.conversation(c, who, body.wait_thread_id)
-        anchor = task_engine.customer_wait_anchor(
-            c, thread, body.wait_sender, body.wait_after_seq, body.wait_provider_reply_id
-        )
         missing = Problem("not_found", "Outbound message not found in that thread", 404)
+        bot = H.is_bot(who.actor)
+        if bot:
+            task = H.task(c, task_id)
+            if not task or not H.task_can_work(c, who.actor, task):
+                raise missing
+            try:
+                H._writer(c, who.actor, task_id=task_id)
+            except H.Refused:
+                raise missing from None
+            # A receipt can park work for the same relationship without granting inbox access.
+            thread = H.conversation(c, body.wait_thread_id)
+            if (
+                not thread
+                or thread["audience"] != "entity"
+                or not thread["entity_id"]
+                or thread["entity_id"] != task.get("entity_id")
+            ):
+                raise missing
+        else:
+            thread = auth.conversation(c, who, body.wait_thread_id)
+        try:
+            anchor = task_engine.customer_wait_anchor(
+                c, thread, body.wait_sender, body.wait_after_seq, body.wait_provider_reply_id
+            )
+        except Problem:
+            if bot:
+                raise missing from None
+            raise
         if not anchor:
             raise missing
-        try:
-            thread_api.require_message_read(c, auth, who, anchor)
-        except Problem:
-            raise missing from None
+        if not bot:
+            try:
+                thread_api.require_message_read(c, auth, who, H.message(c, anchor["id"]))
+            except Problem:
+                raise missing from None
         return body.wait_thread_id, body.wait_sender, int(anchor["seq"])
 
     def snooze_call(c: Any, who: Any, task_id: str, body: M.TaskSnooze, gate: Any, params: Any, ingest: Any) -> Any:
         setup_live.refuse_snooze_once_live(c, task_id)  # a seat's setup task waits for its go-live, not after it
-        wait = customer_wait(c, who, body)
+        wait = customer_wait(c, who, task_id, body)
         why, version = carry(c, who, task_id, gate, body.why, body.version)
         until = parse_until(body.until)
         done = H.task_snooze(
@@ -736,7 +761,7 @@ def register(
         c: Any, who: Any, task_id: str, body: M.TaskSnooze, params: Any, verdict: Any, replaying: bool
     ) -> bool:
         if not replaying and org_rule_check.holds(verdict):
-            customer_wait(c, who, body)  # a hold can save the request for replay before snooze_call runs
+            customer_wait(c, who, task_id, body)  # a hold can save the request for replay before snooze_call runs
         return False
 
     says("task_snooze", M.TaskSnooze, lambda body: [("Why", body.why)], snooze_call, first=snooze_first)

@@ -2300,7 +2300,7 @@ def _restore_stage(conn: "sqlite3.Connection", by: str, row: Row, work: Sequence
 def customer_wait_anchor(
     conn: "sqlite3.Connection", thread: Row, sender: str, seq: int | None, provider_reply_id: str | None
 ) -> Row | None:
-    """Find the saved outbound message whose global sequence anchors this wait."""
+    """Find the id and global sequence of the saved outbound receipt that can anchor this wait."""
     from .store import Problem
 
     H = _h()
@@ -2309,24 +2309,13 @@ def customer_wait_anchor(
         raise Problem("task_customer_wait_thread", "Choose a root outside thread on a customer connection", 422)
     if not sender.startswith("ext:") or sender not in (thread.get("participants") or []):
         raise Problem("task_customer_wait_sender", "Choose an outside participant of that thread", 422)
-    if provider_reply_id:
-        anchor: Row | None = H._one(
-            conn,
-            "SELECT * FROM messages WHERE connection_id=? AND source_message_id=?",
-            (connection, provider_reply_id),
-        )
-    else:
-        anchor = H._one(conn, "SELECT * FROM messages WHERE seq=?", (seq,))
-    if (
-        not anchor
-        or not anchor.get("seq")
-        or anchor.get("deleted_at")
-        or anchor.get("direction") != "outbound"
-        or anchor.get("connection_id") != connection
-        or anchor["conversation_id"] != thread["id"]
-    ):
-        return None
-    return H.message_view(conn, anchor)
+    key = "source_message_id" if provider_reply_id else "seq"
+    return H._one(
+        conn,
+        f"SELECT id, seq FROM messages WHERE {key}=? AND connection_id=? AND conversation_id=? "
+        "AND direction='outbound' AND deleted_at IS NULL AND seq>0",
+        (provider_reply_id or seq, connection, thread["id"]),
+    )
 
 
 # Gmail time accounts for delayed intake. Use local sequence when the timestamps match or one is missing.
@@ -2376,9 +2365,23 @@ def customer_replied(conn: "sqlite3.Connection", reply: Row, thread: Row) -> Non
         (reply["seq"], thread["id"], sender),
     ).fetchall()
     for task_id, snooze_id in waiting:
-        row = task(conn, str(task_id))
-        if not row or row["status"] != "open" or _part(row, "snooze").get("id") != snooze_id:
-            continue
+        _resume_customer_wait(conn, task_id, snooze_id)
+
+
+def customer_receipt_timestamped(conn: "sqlite3.Connection", thread_id: str, seq: int) -> None:
+    """A newly saved provider timestamp can put an already saved reply after this receipt."""
+    waiting = conn.execute(
+        "SELECT task_id, id, wait_sender FROM snoozes WHERE wait_thread_id=? AND ended_at IS NULL AND wait_after_seq=?",
+        (thread_id, seq),
+    ).fetchall()
+    for task_id, snooze_id, sender in waiting:
+        if _customer_already_replied(conn, thread_id, sender, seq):
+            _resume_customer_wait(conn, task_id, snooze_id)
+
+
+def _resume_customer_wait(conn: "sqlite3.Connection", task_id: str, snooze_id: str) -> None:
+    row = task(conn, task_id)
+    if row and row["status"] == "open" and _part(row, "snooze").get("id") == snooze_id:
         _resume_snooze(conn, row, SYSTEM, "A customer replied", "customer_reply")
 
 
