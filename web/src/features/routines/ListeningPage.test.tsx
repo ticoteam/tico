@@ -1,9 +1,10 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { queryClient } from '@/data';
+import { fmtDate } from '@/lib';
 import { ListeningPage } from './ListeningPage';
 import { validateListeningSearch } from './load';
 import { watchesQuery, watchQuery } from './queries';
@@ -186,6 +187,50 @@ describe('One watch', () => {
     const sources = (sent[1]!.body as { trigger: { sources: unknown[] } }).trigger.sources;
     expect(sources[1]).toMatchObject({ kind: 'github', site: 'github', target: 'acme/widgets', follow: 'releases' });
     expect((await run('listening.addSource', { watch: 'w1', kind: 'push', site: 'Support form' }, { via: 'tico' })).ok).toBe(false);
+  });
+
+  it('an ended watch says so on its row and page, and Edit saves a later end with its other edits', async () => {
+    const endsAt = new Date(2026, 10, 29).toISOString();
+    const ended = `Ended ${fmtDate(new Date(2026, 10, 28, 12))}`;
+    const sent = record((url, method) => (method === 'PATCH' && url.endsWith('/automations/w1') ? ok(watch({ ends_at: new Date(2026, 11, 1).toISOString() })) : nothing()));
+    queryClient.setQueryData(watchesQuery.queryKey, [watch({ ended: true, ends_at: endsAt })]);
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch({ ended: true, ends_at: endsAt }));
+    const router = show('/company/listening');
+    expect(within(await screen.findByTitle('Mentions of us')).getByText(ended)).toBeTruthy();
+    await router.navigate({ to: '/company/listening', search: { watch: 'w1', tab: 'sources' } });
+    await screen.findByRole('region', { name: 'Sources' });
+    expect(screen.getAllByText(ended).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit watch' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /^Ends/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Monday, November 30' }));
+    expect(sent).toHaveLength(0); // kept in the dialog until Save, so Cancel drops it
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ method: 'PATCH', body: { name: 'Mentions of us', ends_at: new Date(2026, 11, 1).toISOString() } });
+    await waitFor(() => expect(queryClient.getQueryData<Routine>(watchQuery('w1').queryKey)?.ends_at).toBe(new Date(2026, 11, 1).toISOString()));
+  });
+
+  it('a name-only Save leaves an end date that arrived while Edit was open; the end is never Tico’s', async () => {
+    const ends = new Date(2026, 11, 1).toISOString();
+    let refreshed = false;
+    const sent = record((url) => (url.endsWith('/automations/w1') ? ok(watch(refreshed ? { ends_at: ends } : {})) : nothing()));
+    queryClient.setQueryData(watchQuery('w1').queryKey, watch());
+    show('/company/listening?watch=w1&tab=sources');
+    await screen.findByRole('region', { name: 'Sources' });
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit watch' });
+    refreshed = true; // someone else set an end while the dialog is open
+    await act(() => queryClient.refetchQueries({ queryKey: watchQuery('w1').queryKey }));
+    expect(queryClient.getQueryData<Routine>(watchQuery('w1').queryKey)?.ends_at).toBe(ends);
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Name' }), { target: { value: 'Brand mentions' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]!.body).not.toHaveProperty('ends_at');
+    expect((await run('listening.update', { watch: 'w1', endsAt: null }, { via: 'tico' })).ok).toBe(false);
+    expect((await run('listening.edit', { watch: 'w1', endsAt: null }, { via: 'tico' })).ok).toBe(false);
   });
 
   it('with no matches says so in the page, and one that failed has Try again @s540', async () => {

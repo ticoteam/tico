@@ -2,8 +2,10 @@
 Every change here is made through the real route, cited to the person's own message the way their Assistant's turn does."""
 
 import json
+from datetime import datetime, timezone
 
 import pytest
+import time_machine
 
 from backend import hubdb as H
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
@@ -251,3 +253,27 @@ def test_five_changes_page_two_at_a_time_with_no_gaps_and_no_early_end(api):
     assert all(p["next"] for p in pages[:-1]) and pages[-1]["next"] is None
     ids = [c["id"] for p in pages for c in p["changes"] if c["object"] in mine]
     assert len(ids) == len(set(ids)) == 5
+
+
+def test_undoing_an_automation_change_that_would_leave_it_ended_is_refused(api):
+    with time_machine.travel(datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc), tick=False):
+        task = {"id": "t", "type": "action", "do": "create_task", "args": {"title": "Check"}}
+        aid = make(api, "ben-test", owner="person:ben", steps=[task], ends_at="2026-11-03T00:00:00Z")["id"]
+        with api.app.state.store.transaction() as c:
+            now = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
+            c.execute(
+                "INSERT INTO audit_log (id, created_at, actor, object, before, after, via) VALUES (?,?,?,?,?,?,?)",
+                (
+                    H.new_id(),
+                    H.now(),
+                    "human:ben",
+                    f"automation:{aid}",
+                    json.dumps(dict(now, name="Earlier")),
+                    json.dumps(now),
+                    "assistant",
+                ),
+            )
+    with time_machine.travel(datetime(2026, 11, 4, 8, 0, tzinfo=timezone.utc), tick=False):
+        [change] = changes_for(api, f"automation:{aid}")
+        assert "set a later one" in json.dumps(restore(api, change["id"], expected=422))
+        assert get(api, f"automations/{aid}", "ben-test")["name"] == "Morning check"

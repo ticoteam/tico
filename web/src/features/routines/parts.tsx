@@ -4,6 +4,7 @@ import { refusal, run } from '@/actions';
 import { useActor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
+import { DatePick } from '@/kit/DatePick';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
 import { SettledSearch } from '@/kit/Field';
@@ -15,6 +16,7 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
 import { VirtualList } from '@/kit/VirtualList';
+import { endAfter, lastDay } from './words';
 
 /* The pieces Routines, Rules and Listening share, ported from pages/3-company/rules.js: a word, a quiet verb, the rule
    row and its marks, a face for any owner id, and the press that says why a refusal happened. */
@@ -48,6 +50,17 @@ export const Verb = ({ children, onClick, target }: { children: string; onClick:
     {children}
   </button>
 );
+
+/** When a routine or watch ends (`value`, its ends_at): Never, or the last day it runs. A picked day ends it at the
+    midnight after, in the viewer's zone. */
+export function Ends({ value, onChange, disabled = false }: { value: string | null | undefined; onChange: (endsAt: string | null) => void; disabled?: boolean }) {
+  return (
+    <>
+      <DatePick label="Ends" labelHidden withTime={false} placeholder="Never" value={value ? lastDay(value) : null} disabled={disabled} onValueChange={(day) => onChange(endAfter(day))} />
+      {value && !disabled && <Verb onClick={() => onChange(null)}>Never</Verb>}
+    </>
+  );
+}
 
 /** A switch whose words only a screen reader hears (a panel or page head). */
 export const HeadSwitch = ({ label, checked, onChange, disabled }: { label: string; checked: boolean; onChange: (on: boolean) => void; disabled?: boolean }) => (

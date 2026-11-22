@@ -79,6 +79,8 @@ SCHEMAS.update(
                     "items": obj({"rule": "s", "step": "s", "why": "s"}),
                 },
                 "paused": {"type": "boolean", "description": "Off because an earlier run guard paused it"},
+                "ends_at": {"type": "string", "description": "When it stops starting new runs (UTC)"},
+                "ended": {"type": "boolean", "description": "On, but its end time has passed: nothing new starts"},
                 "hold": {
                     **obj(
                         {

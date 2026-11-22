@@ -1,8 +1,10 @@
 """Inbox routines from chat stay off until the person's card click; the reviewed plan is what runs."""
 
 import copy
+from datetime import datetime, timezone
 
 import pytest
+import time_machine
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
 from backend.tests.helpers.assistant import assistant_turn
@@ -223,3 +225,18 @@ def test_bulk_card_freezes_and_describes_message_edits_too(api):
     assert "ana@acme.example" in text and "Read later" in text and "Draft" in text
     assert confirm(api, card)["action"]["status"] == "done"
     assert get(api, "automations/" + saved["id"])["enabled"] is True
+
+
+def test_a_card_clears_an_end_date_and_none_is_made_for_a_routine_that_stays_ended(api):
+    with time_machine.travel(datetime(2026, 11, 2, 8, 0, tzinfo=timezone.utc), tick=False):
+        saved = post(api, "automations", {**flow("draft"), "ends_at": "2026-11-02T08:00:30Z"})
+        path = "/api/v2/automations/" + saved["id"]
+        token = turn(api, "Keep it running, then rename it")
+        card = propose(api, token, {"ends_at": None}, path, "PATCH")["action"]
+        assert "ends_at" in card["body"] and card["body"]["ends_at"] is None
+        assert confirm(api, card)["action"]["status"] == "done"
+        assert "ends_at" not in get(api, "automations/" + saved["id"])
+        api.patch(path, json={"ends_at": "2026-11-02T08:00:30Z"}, headers=headers())
+    with time_machine.travel(datetime(2026, 11, 2, 8, 1, tzinfo=timezone.utc), tick=False):
+        refused = propose(api, token, {"name": "Renamed"}, path, "PATCH", expected=422)
+        assert "set a later one" in refused["error"]["detail"]

@@ -14,11 +14,11 @@ import { fmtDate, fmtMoney } from '@/lib';
 import { SidePanel } from '@/pagekinds';
 import { BoardItemEditor, BoardView, type ItemRef } from './BoardEditor';
 import { routineBoard, takesTemplate } from './board';
-import { Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
-import { routineQuery, routinesQuery, runsQuery, versionsQuery } from './queries';
+import { Ends, Face, HeadSwitch, PanelRead, press, pressOut, RemoveItem, useConfirmRemove, useName, Verb, Word } from './parts';
+import { routineQuery, routinesQuery, runsQuery, useEndRefresh, versionsQuery } from './queries';
 import { ApplyTemplate } from './Templates';
 import type { Routine, Trigger, Version } from './types';
-import { EVERY, eventWords, flowLines, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
+import { endedWords, EVERY, eventWords, flowLines, isOn, lineDiff, parseSchedule, runLink, runWords, scheduleCron, timeChoices, triggerWords, WEEKDAYS, type Every } from './words';
 
 /* One routine, as a panel (rules.js routinePanel): its facts, the instruction, the last runs and Run now. Edit turns
    the panel into the editor; `routine:new` opens the editor empty. "⋯" also holds a test run with sample input and its
@@ -42,6 +42,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   const [item, setItem] = useState<ItemRef | null>(null);
   const [applying, setApplying] = useState(false);
   const remove = useConfirmRemove();
+  useEndRefresh(r);
   if (!r) {
     return (
       <SidePanel className="rr" title="Routine" onClose={onClose}>
@@ -53,7 +54,7 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
   if (versions) return <Versions routine={r} onDone={() => setVersions(false)} onClose={onClose} />;
   const board = routineBoard(r);
   if (board && item) return <BoardItemEditor key={`${item.part}:${item.at ?? ''}`} routine={r} board={board} it={item} onDone={() => setItem(null)} onClose={onClose} />;
-  const on = r.enabled !== false && !r.paused;
+  const on = isOn(r);
   const step = stepOf(r);
   const together = r.steps?.find((s) => s.type === 'find' && s.together === true);
   const tmp = r.id.startsWith('tmp:');
@@ -66,9 +67,9 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
       actions={
         <>
           <HeadSwitch
-            label={on ? 'On' : 'Paused'}
+            label={r.ended ? endedWords(r) : on ? 'On' : 'Paused'}
             checked={on}
-            disabled={r.can_pause === false || tmp}
+            disabled={r.can_pause === false || tmp || !!r.ended}
             onChange={(next) => void press(next ? 'routines.resume' : 'routines.pause', { routine: r.id })}
           />
           <Menu trigger={<IconButton icon="more" label="More" quiet disabled={tmp} />}>
@@ -94,6 +95,11 @@ function RoutineView({ id, onClose }: { id: string; onClose: () => void }) {
             <span>{r.spend_cap?.per_30m != null ? `${fmtMoney(r.spend_cap.per_30m, { cents: true })} each 30 minutes` : "Agent's limit"}</span>
             {r.can_edit && !tmp && !limiting && <Verb onClick={() => setLimiting(true)}>Change</Verb>}
           </LabelValue>
+          {!r.readonly && !r.builtin && !r.wakes && (
+            <LabelValue label="Ends">
+              <Ends value={r.ends_at} disabled={!r.can_edit || tmp} onChange={(endsAt) => void press('routines.setEnd', { routine: r.id, endsAt })} />
+            </LabelValue>
+          )}
           {r.updated_at && <LabelValue label="Changed">{fmtDate(r.updated_at)}</LabelValue>}
         </Facts>
         {r.created_by_id && <Made id={r.created_by_id} via={r.created_via} />}

@@ -97,6 +97,7 @@ REPEATABLE_MAIL = ("archive", "label", "leave")
 SERVER_MAIL = "server:workspace-mail"
 AGENT_OPS = "bot:botops"  # builds automations for whoever asks it, with that asker's rights (backend/agent_ops_act.py)
 VERSIONED = ("trigger", "steps", "batch", "destinations")  # what the automation does; a change here is a new version
+ENDED = "Its end date has passed: set a later one or clear it"
 # The automations a write in this context comes from: their own actions never start them again.
 CHAIN = contextvars.ContextVar("automation_chain", default=())
 
@@ -167,6 +168,9 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None, flow=None):
     if flow["trigger"]["type"] == "listening" and (heard := listening.summary(c, row, flow)) is not None:
         out["listening"] = heard
         out["next_run"] = heard["next_send_at"]
+    if F.ended(flow, H.now()):
+        out["ended"] = True
+        out["next_run"] = None
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute(
@@ -269,15 +273,19 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     # scheduler runs even when its first pass comes after it.
     at = datetime.fromisoformat(now.replace("Z", "+00:00"))
     due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
+    # Back on from past its end date: the times it missed while ended are skipped, a due run that opened then too.
+    revived = flow["enabled"] and F.ended(before or {}, now) and not F.ended(flow, now)
     if flow["trigger"]["type"] == "due":
-        due = _due_text(D.start(flow["trigger"], at))
+        due = _due_text(_due_after(flow["trigger"], at) if revived else D.start(flow["trigger"], at))
     if flow["trigger"]["type"] == "listening":
         due = _iso(listening.next_send(flow["trigger"], at))  # its next send time, as a schedule's next run
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
-        # schedule, or one turned back on, starts from the next time after now.
-        again = (before or {}).get("trigger") != flow["trigger"] or (
-            flow["enabled"] and not (before or {}).get("enabled")
+        # schedule, or one turned back on or no longer ended, starts from the next time after now.
+        again = (
+            (before or {}).get("trigger") != flow["trigger"]
+            or (flow["enabled"] and not (before or {}).get("enabled"))
+            or revived
         )
         c.execute(
             "UPDATE automations SET name=?,owner_id=?,group_id=?,trigger_type=?,enabled=?,builtin=?,flow=?,version=?,"
@@ -570,6 +578,11 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
         raise Problem("invalid", str(exc), 422)
     flow = _bot_ids(c, flow)
     _chooser_fits(flow)
+    if end := flow.get("ends_at"):
+        if flow["builtin"] or flow.get("readonly") or flow.get("wakes"):
+            raise Problem("invalid", "ends_at: a built-in or What wakes automation has no end date", 422)
+        if end != (saved or {}).get("ends_at") and end <= H.now():
+            raise Problem("invalid", "ends_at: is a time in the future", 422)
     if flow["trigger"]["type"] == "due":
         # Stored on the flow, so a later change to the company's zone does not move the routine.
         flow["trigger"] = {"open_days": D.DEFAULT_OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
@@ -1645,16 +1658,16 @@ def turn_source(c):
     }
 
 
-def fire(c, kind, payload, ref="", match=None, access=None, only=None):
+def fire(c, kind, payload, ref="", match=None, access=None, only=None, now=None):
     """Queue a run of every enabled automation on a `kind` trigger (or the one `only`) that `match(trigger)` takes,
     that may read what arrived (`access(row)`, its owner's rights now) and whose trigger filters hold; one dropped
     counts toward its day. Returns the queued run ids. Never raises: an automation problem must not undo the write
-    that triggered it."""
+    that triggered it. `now` is the time its end dates are read at, when the caller already decided on one."""
     try:
         chain = CHAIN.get() or _turn_chain(c)
         if len(chain) >= MAX_CHAIN:
             return []
-        queued = []
+        queued, now = [], now or H.now()
         for row in c.execute(
             "SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type=? "
             + ("AND id=? " if only else "")
@@ -1665,7 +1678,7 @@ def fire(c, kind, payload, ref="", match=None, access=None, only=None):
             if row["id"] in chain:
                 continue
             flow = flow_of(row)
-            if flow.get("readonly"):  # a built-in that shows work Tico runs itself
+            if flow.get("readonly") or F.ended(flow, now):  # a built-in that shows work Tico runs itself, or ended
                 continue
             trigger = flow["trigger"]
             if match and not match(trigger):
@@ -3301,7 +3314,10 @@ def tick(store, at=None, drain=True):
         for row in c.execute(
             "SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type='schedule'"
         ).fetchall():
-            trigger = flow_of(row)["trigger"]
+            flow = flow_of(row)
+            if F.ended(flow, now):  # passed over, its next time kept: a later end date restarts it from now
+                continue
+            trigger = flow["trigger"]
             zone = trigger.get("tz") or "UTC"
             if not row["next_due_at"]:
                 due = next_due(trigger["cron"], at, zone)
@@ -3334,7 +3350,8 @@ def tick(store, at=None, drain=True):
         for row in c.execute(
             "SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 AND trigger_type='due'"
         ).fetchall():
-            _due_pass(c, row, at)
+            if not F.ended(flow_of(row), now):
+                _due_pass(c, row, at)
         c.execute(
             f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?", (now,)
         )
@@ -3412,6 +3429,14 @@ def tick(store, at=None, drain=True):
                 },
             )
     return hub.drain() if hub and drain else 0
+
+
+def _due_after(trigger, at):
+    """The first due day whose run starts after `at`, or None when none is left."""
+    day, zone, open_days = D.start(trigger, at), D.zone_of(trigger), D.open_days_of(trigger)
+    while day and D.fire_at(day, open_days, zone) <= at:
+        day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
+    return day
 
 
 def _due_day(value):
@@ -3697,6 +3722,7 @@ class AutomationIn(Contract):
     trigger: dict
     steps: list = Field(default_factory=list)
     destinations: list | None = None
+    ends_at: str | None = Field(default=None, max_length=40)  # ISO-8601 with Z or an offset; nothing new starts then
 
 
 class AutomationPatch(Contract):
@@ -3710,6 +3736,7 @@ class AutomationPatch(Contract):
     trigger: dict | None = None
     steps: list | None = None
     destinations: list | None = None  # null takes them away
+    ends_at: str | None = Field(default=None, max_length=40)  # a later one restarts an ended automation; null clears it
     summary: str | None = Field(default=None, max_length=200)  # a few words on a new version or proposal
 
 
@@ -4107,8 +4134,8 @@ def install(app, store, auth, mutate):
             before = flow_of(row)
             changes = body.model_dump(exclude_unset=True)
             summary = changes.pop("summary", None)
-            # A null spend cap or routine settings takes them away.
-            cleared = [k for k in ("spend_cap", "release") if k in changes and changes[k] is None]
+            # A null spend cap, routine settings or end date takes them away.
+            cleared = [k for k in ("spend_cap", "release", "ends_at") if k in changes and changes[k] is None]
             for key in cleared:
                 changes.pop(key)
             before_cap = {k: v for k, v in before.items() if k not in cleared}
@@ -4176,6 +4203,8 @@ def install(app, store, auth, mutate):
                 return {"id": aid, "pending": n, "can_edit": False}
             _require(c, who, before, "change this automation")
             _require(c, who, flow, "give this automation to " + flow["owner"])
+            if changes.get("enabled") is True and F.ended(flow, H.now()):
+                raise Problem("ended", ENDED, 422)
             warning = None
             if before.get("builtin") and changes.get("enabled") is False:
                 if who.role != "owner":
@@ -4441,6 +4470,8 @@ def install(app, store, auth, mutate):
                 aid=aid,
             )
             _require(c, who, flow, "restore this version")
+            if F.ended(flow, H.now()):  # extend or clear the end date first
+                raise Problem("ended", ENDED, 422)
             # A draft's row already holds the steps its pending version turns on, so nothing of it counts as kept.
             blocked = _stamp_blocked(c, auth, who, flow, before if _approved(c, row) else None)
             if blocked:

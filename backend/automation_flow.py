@@ -7,6 +7,7 @@ of earlier steps and, after a `find`, the item).
 
 import re
 import re._parser as _sre
+from datetime import datetime, timezone
 
 from clients import judge as J
 from backend import templating
@@ -712,7 +713,31 @@ def check(flow):
     }
     if out.get("destinations") is None:
         out.pop("destinations", None)
+    if out.get("ends_at") is None:
+        out.pop("ends_at", None)
+    else:
+        out["ends_at"] = end_time(out["ends_at"])
     return out
+
+
+def end_time(value):
+    """`ends_at` as stored: a time given with Z or an offset, in UTC to the microsecond (hubdb.now's form), so it
+    compares with the clock as text."""
+    try:
+        at = datetime.fromisoformat(value) if isinstance(value, str) else None
+        utc = at.astimezone(timezone.utc) if at and at.tzinfo else None
+    except (ValueError, OverflowError):  # OverflowError: an offset that moves it past year 9999
+        utc = None
+    if utc is None:
+        raise Invalid("ends_at: is a time with Z or an offset, such as 2026-12-01T08:00:00Z")
+    return utc.strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
+def ended(flow, now):
+    """On, with its end time (`ends_at`) at or before `now` (hubdb.now's form): nothing new starts, and what already
+    started finishes. One that is off is just off."""
+    end = (flow or {}).get("ends_at")
+    return bool(end) and flow.get("enabled") is not False and end <= now
 
 
 # ---------------------------------------------------------------------------------------------------- conditions
@@ -1070,6 +1095,8 @@ Do not ask about anything a sensible default answers.
   may not change it: it was saved as a proposal a person turns on.
 - Pause, resume, run, restore a version, discard a proposal, delete: `tico automation update <id> --file -` with
   `{"enabled": false}`, `tico automation run|restore|discard|delete`, only when asked.
+- End date: `"ends_at": "2026-12-01T00:00:00Z"` (a future time with Z or an offset) starts nothing new from then;
+  a later one or `null` starts it again from its next time, and the times missed meanwhile are skipped.
 
 ## Never
 - Use an inbox, Slack channel, bot or group the asker could not use. When the hub refuses, say so in one sentence and

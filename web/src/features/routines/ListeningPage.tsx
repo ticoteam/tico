@@ -5,6 +5,7 @@ import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
+import { LabelValue } from '@/kit/LabelValue';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
@@ -15,10 +16,10 @@ import { MenuItem } from '@/kit/Menu';
 import { fmtDate } from '@/lib';
 import { List, PageMore, Record as RecordPage, Section, type PageTab } from '@/pagekinds';
 import { LISTENING } from './actions';
-import { Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
-import { matchesQuery, runsQuery, sourcesQuery, watchesQuery, watchQuery } from './queries';
+import { Ends, Face, Find, HeadSwitch, press, pressOut, RemoveItem, Rows, RuleRow, useConfirmRemove, Verb, Word } from './parts';
+import { matchesQuery, runsQuery, sourcesQuery, useEndRefresh, watchesQuery, watchQuery } from './queries';
 import type { ListenSource, Match, Routine, WatchSource } from './types';
-import { agentWords, cap, limitsWords, runLink } from './words';
+import { agentWords, cap, endedWords, isOn, limitsWords, runLink } from './words';
 import './routines.css';
 
 /* Listening (rules.js listeningScreen, watchScreen): the watches as a List; one watch as a Record with two tabs, its
@@ -43,7 +44,6 @@ export function ListeningPage({ search }: { search: ListeningSearch }) {
   return search.watch ? <WatchPage key={search.watch} id={search.watch} tab={search.tab} match={search.match} /> : <Watches q={search.q} />;
 }
 
-const isOn = (w: Routine) => w.enabled !== false && !w.paused;
 const sourceCount = (n: number) => `${n} ${n === 1 ? 'source' : 'sources'}`;
 
 // ---------------------------------------------------------------- the watches
@@ -96,6 +96,8 @@ function WatchRow({ w }: { w: Routine }) {
       <span className="row-fig">
         {on ? (
           limitsWords(w.trigger.limits)
+        ) : w.ended ? (
+          endedWords(w)
         ) : (
           <span className="row-state" title="Paused">
             <Icon name="pause" />
@@ -152,6 +154,7 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState(false);
   const remove = useConfirmRemove();
+  useEndRefresh(w);
   const tabs: readonly PageTab[] = [
     { label: 'Matches', to: LISTENING, search: { watch: id, tab: '' }, target: `tab:matches:${id}` },
     { label: 'Sources', to: LISTENING, search: { watch: id, tab: 'sources' }, target: `tab:sources:${id}` },
@@ -176,8 +179,9 @@ function WatchPage({ id, tab, match }: { id: string; tab?: 'sources'; match?: st
       empty={{ title: 'No matches yet' }}
       actions={
         <>
+          {w.ended && <span className="row-state">{endedWords(w)}</span>}
           <span className="rr-phone" data-phone>
-            <HeadSwitch label={on ? 'On' : 'Paused'} checked={on} disabled={tmp} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
+            <HeadSwitch label={w.ended ? endedWords(w) : on ? 'On' : 'Paused'} checked={on} disabled={tmp || !!w.ended} onChange={(next) => void press(next ? 'listening.resume' : 'listening.pause', { watch: id })} />
           </span>
           <Button variant="primary" onClick={() => setAdding(true)}>
             Add source
@@ -413,16 +417,19 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
   const t = w.trigger;
   const [name, setName] = useState(w.name ?? '');
   const [rules, setRules] = useState<KeepRule[]>((t.rules ?? []).map((r) => ({ do: r.do === 'drop' ? 'drop' : 'keep', tag: r.tag ?? '', text: r.text })));
+  // the end date in this dialog: sent only once the person changed it here
+  const [endsAt, setEndsAt] = useState<{ value: string | null } | null>(null);
   const [busy, setBusy] = useState(false);
   const ready = !!name.trim() && rules.every((r) => r.text.trim() && (r.do === 'drop' || r.tag.trim()));
   const setRule = (i: number, patch: Partial<KeepRule>) => setRules(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const save = async () => {
     if (!ready) return;
     setBusy(true);
-    const ok = await press('listening.update', {
+    const ok = await press('listening.edit', {
       watch: w.id,
       name: name.trim(),
       rules: rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag.trim(), text: r.text.trim() })),
+      ...(endsAt ? { endsAt: endsAt.value } : {}),
     });
     setBusy(false);
     if (ok) onClose();
@@ -445,6 +452,9 @@ function WatchSettings({ w, onClose }: { w: Routine; onClose: () => void }) {
     >
       <div className="rr-form">
         <Field label="Name" value={name} onValueChange={setName} />
+        <LabelValue label="Ends">
+          <Ends value={endsAt ? endsAt.value : w.ends_at} onChange={(value) => setEndsAt({ value })} />
+        </LabelValue>
         <fieldset className="rr-list">
           <legend>
             Rules

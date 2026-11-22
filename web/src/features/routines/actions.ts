@@ -41,6 +41,7 @@ import {
   setJobSchedule,
   setMaintenance,
   setReach,
+  setRoutineEnd,
   setRoutineLimit,
   setRoutineOn,
   setWatchTrigger,
@@ -301,6 +302,22 @@ export const setLimit = defineAction({
   can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
   run: (_ctx, i) => said(setRoutineLimit(i.routine, i.per30m)),
   did: (i) => (i.per30m === null ? "Uses the agent's limit" : 'Limit set'),
+  target: (i) => ({ kind: 'routine', id: i.routine }),
+});
+
+export const setEnd = defineAction({
+  id: 'routines.setEnd',
+  title: 'Set when a routine ends',
+  kind: 'change',
+  input: z.strictObject({
+    routine: id,
+    endsAt: z.nullable(z.string().check(z.maxLength(40), z.regex(/(Z|[+-]\d{2}:\d{2})$/), z.describe('an ISO time with Z or an offset; null for never'))),
+  }),
+  // A later end turns an ended routine back on, an inbox one included, which only its person's own confirmation may.
+  tico: false,
+  can: (ctx, i) => cached(ctx, i.routine)?.can_edit !== false,
+  run: (_ctx, i) => said(setRoutineEnd(i.routine, i.endsAt)),
+  did: (i) => (i.endsAt === null ? 'Never ends' : 'End date set'),
   target: (i) => ({ kind: 'routine', id: i.routine }),
 });
 
@@ -1175,28 +1192,45 @@ export const addSource = defineAction({
 
 const TAG = /^[a-z0-9][a-z0-9-]{0,23}$/;
 
+const watchEdit = {
+  watch: id,
+  name: z.optional(name),
+  // keep (with a tag) or drop what a sentence describes
+  rules: z.optional(z.array(z.strictObject({ do: z.enum(['keep', 'drop'] as const), tag: z.optional(z.string().check(z.maxLength(24))), text: z.string().check(z.minLength(1), z.maxLength(300)) })).check(z.maxLength(20))),
+};
+
+const saveWatch = (ctx: Ctx, i: { watch: string; name?: string; rules?: { do: 'keep' | 'drop'; tag?: string; text: string }[]; endsAt?: string | null }) => {
+  const w = watchOf(ctx, i.watch);
+  if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });
+  const tags = (i.rules ?? []).filter((r) => r.do === 'keep').map((r) => r.tag?.trim() ?? '');
+  if (tags.some((t) => !TAG.test(t))) throw badSource('A tag is lowercase letters, numbers and dashes');
+  if (new Set(tags).size !== tags.length) throw badSource('Each tag is used once');
+  const trigger: Trigger = {
+    ...w.trigger,
+    ...(i.rules ? { rules: i.rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag?.trim() ?? '', text: r.text.trim() })) } : {}),
+  };
+  return said(setWatchTrigger(w, trigger, i.name?.trim(), i.endsAt)).then(() => undefined);
+};
+
 export const updateWatch = defineAction({
   id: 'listening.update',
   title: 'Rename a listening watch, or change what it keeps',
   kind: 'change',
-  input: z.strictObject({
-    watch: id,
-    name: z.optional(name),
-    // keep (with a tag) or drop what a sentence describes
-    rules: z.optional(z.array(z.strictObject({ do: z.enum(['keep', 'drop'] as const), tag: z.optional(z.string().check(z.maxLength(24))), text: z.string().check(z.minLength(1), z.maxLength(300)) })).check(z.maxLength(20))),
-  }),
-  run: (ctx, i) => {
-    const w = watchOf(ctx, i.watch);
-    if (!w) throw Object.assign(new Error('That watch is not loaded'), { code: 'not_found: That watch is not loaded' });
-    const tags = (i.rules ?? []).filter((r) => r.do === 'keep').map((r) => r.tag?.trim() ?? '');
-    if (tags.some((t) => !TAG.test(t))) throw badSource('A tag is lowercase letters, numbers and dashes');
-    if (new Set(tags).size !== tags.length) throw badSource('Each tag is used once');
-    const trigger: Trigger = {
-      ...w.trigger,
-      ...(i.rules ? { rules: i.rules.map((r) => (r.do === 'drop' ? { do: 'drop', text: r.text.trim() } : { do: 'keep', tag: r.tag?.trim() ?? '', text: r.text.trim() })) } : {}),
-    };
-    return said(setWatchTrigger(w, trigger, i.name?.trim())).then(() => undefined);
-  },
+  input: z.strictObject(watchEdit),
+  run: saveWatch,
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'watch', id: i.watch }),
+});
+
+/** The Edit dialog's save: listening.update with the end date too. A later end turns an ended watch back on: the
+    person's own press. */
+export const editWatch = defineAction({
+  id: 'listening.edit',
+  title: "Change a listening watch's name, rules and end",
+  kind: 'change',
+  input: z.strictObject({ ...watchEdit, endsAt: z.optional(z.nullable(z.string().check(z.maxLength(40), z.regex(/(Z|[+-]\d{2}:\d{2})$/)))) }),
+  tico: false,
+  run: saveWatch,
   did: () => 'Saved',
   target: (i) => ({ kind: 'watch', id: i.watch }),
 });

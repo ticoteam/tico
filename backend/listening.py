@@ -131,6 +131,22 @@ def _iso(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+def _ended(row, now):
+    """A listening row (its `flow`) whose end date has passed while it is on: it reads, scores and sends nothing. Read
+    against the later of `now` (a pass's start) and the clock, since the end may come while a pass runs."""
+    return F.ended(json.loads(row["flow"]), max(now, H.now()))
+
+
+def _taking(c, aid, now, ending=True):
+    """The listening is on and not deleted and, with `ending`, not past its end: what a new read, call or send needs.
+    A call already made keeps its answer past the end, so its save leaves `ending` out."""
+    found = c.execute(
+        "SELECT flow FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1 AND trigger_type='listening'",
+        (aid,),
+    ).fetchone()
+    return bool(found) and not (ending and _ended(found, now))
+
+
 def _has_tables(c):
     return H._has_table(c, "listening_sources") and H._has_table(c, "automations")
 
@@ -346,7 +362,7 @@ def summary(c, row, flow, now=None):
     return {
         "dot": "filled" if filled else "hollow",
         "last_sent_at": last,
-        "next_send_at": row["next_due_at"] if flow.get("enabled") else None,
+        "next_send_at": row["next_due_at"] if flow.get("enabled") and not F.ended(flow, now) else None,
         "waiting": counts.get("kept", 0),
         "unscored": counts.get("new", 0),
         "sources": sources,
@@ -359,10 +375,14 @@ def worst(c):
     if not _has_tables(c):
         return None
     now = H.now()
-    rows = c.execute(
-        "SELECT s.* FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
-        "WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL AND a.enabled=1 AND a.trigger_type='listening'"
-    ).fetchall()
+    rows = [
+        row
+        for row in c.execute(
+            "SELECT s.*, a.flow FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
+            "WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL AND a.enabled=1 AND a.trigger_type='listening'"
+        ).fetchall()
+        if not _ended(row, now)
+    ]
     if not rows:
         return None
     states = set()
@@ -378,24 +398,26 @@ def trouble(c):
     """Each source of a listening that is on whose last read did not go well, for the health check."""
     if not _has_tables(c):
         return []
+    now = H.now()
     rows = c.execute(
-        "SELECT s.*, a.name FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
+        "SELECT s.*, a.name, a.flow FROM listening_sources s JOIN automations a ON a.id=s.automation_id "
         "WHERE s.deleted_at IS NULL AND a.deleted_at IS NULL AND a.enabled=1 AND a.trigger_type='listening' "
         "AND s.status IN ('blocked','error','rate_limited') ORDER BY a.name, s.created_at"
     ).fetchall()
-    return [dict(r) for r in rows]
+    return [{k: r[k] for k in r.keys() if k != "flow"} for r in rows if not _ended(r, now)]
 
 
 def stalled(c):
     """The names of the listenings that are on with posts waiting unscored: decisions are off, or a cap is reached."""
     if not _has_tables(c):
         return []
+    now = H.now()
     rows = c.execute(
-        "SELECT DISTINCT a.name FROM listening_items i JOIN automations a ON a.id=i.automation_id "
+        "SELECT DISTINCT a.name, a.flow FROM listening_items i JOIN automations a ON a.id=i.automation_id "
         "WHERE i.status='new' AND i.created_at<? AND a.deleted_at IS NULL AND a.enabled=1 ORDER BY a.name",
-        (H.shift(H.now(), minutes=-STALLED_MINUTES),),
+        (H.shift(now, minutes=-STALLED_MINUTES),),
     ).fetchall()
-    return [r[0] for r in rows]
+    return list(dict.fromkeys(r["name"] for r in rows if not _ended(r, now)))
 
 
 # ----------------------------------------------------------------------------- save
@@ -416,9 +438,9 @@ def save(c, source, status, items, now=None, error=""):
     listening is off."""
     if status not in READ_STATUSES:
         raise Problem("validation", f"status is one of {', '.join(READ_STATUSES)}", 422)
-    if not source["enabled"]:
-        raise Problem("listening_off", "This listening is off", 409)
     now = now or H.now()
+    if not source["enabled"] or _ended(source, now):
+        raise Problem("listening_off", "This listening is off", 409)
     c.execute(
         "UPDATE listening_sources SET status=?,last_read_at=?,last_ok_at=CASE WHEN ?='ok' THEN ? ELSE last_ok_at END,"
         "last_error=?,updated_at=? WHERE id=?",
@@ -502,6 +524,9 @@ def read_pages(store, aid, now, left=None):
     for row in due:
         if left and not left():  # the pass's time is used up: the page is still due at the next
             return
+        with store.read() as c:
+            if not _taking(c, aid, now):  # turned off or ended while the last page was read
+                return
         result = reader(row["target"])
         items, text = [], None
         if result.get("status") == "ok":
@@ -554,6 +579,9 @@ def read_github(store, aid, flow, now, left=None, github=None):
     for row in due:
         if left and not left():  # the pass's time is used up: the source is still due at the next
             return
+        with store.read() as c:
+            if not _taking(c, aid, now):  # turned off or ended while the last source was read
+                return
         repo = LG.repo_of(row["target"]) or ""
         result = LG.read(
             row["target"], follows.get(row["key"], "prs"), row["snapshot"], now, LG.token_for(github, repo)
@@ -761,15 +789,6 @@ def score(store, row, flow, now, primary=None, left=None):
             return other["id"]
         return None
 
-    def on(c):
-        return bool(
-            c.execute(
-                "SELECT 1 FROM automations WHERE id=? AND deleted_at IS NULL AND enabled=1 "
-                "AND trigger_type='listening'",
-                (aid,),
-            ).fetchone()
-        )
-
     def release(items):
         with store.transaction() as c:
             for item in items:
@@ -788,7 +807,7 @@ def score(store, row, flow, now, primary=None, left=None):
         for run in DG.packs(pairs, GROUP):
             # Before each paid call: time left, the listening still on, the cap not reached by what this pass spent.
             with store.read() as c:
-                go = on(c) and not _capped(c, aid, flow, now)
+                go = _taking(c, aid, now) and not _capped(c, aid, flow, now)
             if not go or (left and not left()):
                 release([waiting[n][1] for n in range(run[0], len(waiting))] + ordered[rest:])
                 out["cut"] = True
@@ -800,8 +819,9 @@ def score(store, row, flow, now, primary=None, left=None):
             with store.transaction() as c:
                 for call in calls:
                     H.event(c, H.TICO_ACTOR, "judge.call", label, DG.audit_row(call, label, automation=aid))
-                # Turned off or deleted while the call ran: no result is written, the posts stay `new`.
-                still = on(c)
+                # Turned off or deleted while the call ran: no result is written, the posts stay `new`. One that ended
+                # meanwhile keeps the answer: the call started before the end.
+                still = _taking(c, aid, now, ending=False)
                 for n, reply in zip(run, replies, strict=True):
                     item = waiting[n][1]
                     if isinstance(reply, BaseException):  # one post's failure is that post's; the pass goes on
@@ -838,7 +858,7 @@ def score(store, row, flow, now, primary=None, left=None):
             continue
         if not rules:
             with store.transaction() as c:
-                if still := on(c):
+                if still := _taking(c, aid, now):
                     _decided(c, item["id"], now, "kept", "", 1.0, 0.0, claimed=now)
             if not still:
                 release(ordered[place:])
@@ -950,6 +970,10 @@ def send(store, aid, at, now):
             return None
         row = dict(row)
         flow = A.flow_of(row)
+        # One decision on the clock for the cursor and the run: ended, its send time is kept for a later end date.
+        clock = max(now, H.now())
+        if F.ended(flow, clock):
+            return None
         trigger = flow["trigger"]
         after = _iso(next_send(trigger, at))
         if not row["next_due_at"]:
@@ -975,7 +999,7 @@ def send(store, aid, at, now):
             "SELECT count(*) FROM listening_items WHERE automation_id=? AND status='kept'", (aid,)
         ).fetchone()[0]
         payload = payload_of(c, row, flow, items, at, now, kept - len(items))
-        queued = A.fire(c, "listening", payload, f"listening:{aid}:{row['next_due_at']}", only=aid)
+        queued = A.fire(c, "listening", payload, f"listening:{aid}:{row['next_due_at']}", only=aid, now=clock)
         if not queued:
             return None
         rid = queued[0]
@@ -1073,7 +1097,7 @@ def run_pass(store, at=None, primary=None, github=None):
     for row in rows:
         if not left():
             break
-        if not row["enabled"]:  # off: nothing is read or scored
+        if not row["enabled"] or _ended(row, now):  # off or ended: nothing is read or scored
             continue
         try:
             flow = json.loads(row["flow"])
@@ -1240,7 +1264,8 @@ def install(app, store, auth, mutate):
             out = [
                 {**source_view(r, now), "automation": r["name"]}
                 for r in rows
-                if who.role in ("owner", "bot") or A.may_see(c, who, json.loads(r["flow"]))
+                if (who.role in ("owner", "bot") or A.may_see(c, who, json.loads(r["flow"])))
+                and not (due and _ended(r, now))
             ]
         return {"sources": out[: max(1, min(int(limit), LIST_MAX))]}
 
