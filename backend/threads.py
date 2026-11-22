@@ -975,6 +975,17 @@ def _entity_readable(c, v, root):
     return c.execute(f"SELECT 1 FROM conversations er WHERE er.id=? AND ({scope})", (root["id"],)).fetchone()
 
 
+def outside_audit_gate(kind, ident, inboxes, inner=lambda name: name):
+    """Thread and message audit entries inherit the source inbox of the root, including after deletion."""
+    rooms, messages = inner("conversations"), inner("messages")
+    return (
+        f"NOT EXISTS (SELECT 1 FROM {rooms} t JOIN {rooms} root ON root.id=coalesce(t.root_id,t.id) "
+        f"WHERE t.id=CASE {kind} WHEN 'thread' THEN {ident} WHEN 'message' THEN "
+        f"(SELECT conversation_id FROM {messages} WHERE id={ident}) END "
+        f"AND root.audience='entity' AND root.connection_id NOT IN {inboxes})"
+    )
+
+
 def readable_sql(
     c,
     v,

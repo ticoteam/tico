@@ -398,6 +398,19 @@ def levels_for(c, who, min_level="read"):
     return {box["address"]: box["level"] for box in mailboxes_for(c, who, min_level)}
 
 
+def intake_readers(who):
+    """Saved intake requires inbox access for the person and any delegated actor."""
+    if who.role not in ("owner", "human"):
+        return ()
+    delegate = getattr(who, "task_actor", "")
+    return (who.actor, delegate) if delegate else (who.actor,)
+
+
+def readable_intake_inboxes(c, who):
+    inboxes = [{box["id"] for box in mailboxes_for(c, reader) if box["id"]} for reader in intake_readers(who)]
+    return set.intersection(*inboxes) if inboxes else set()
+
+
 # What each mail action an automation queues needs of its owner (backend/automation_actions.py MAIL_ACTIONS).
 ACTION_NEEDS = {
     "archive": "organize",

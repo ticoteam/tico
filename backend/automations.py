@@ -482,13 +482,11 @@ def may_pause(c, who, flow, can_edit=None):
 def _intake_inbox(c, who, aid):
     from . import mailbox_access
 
-    if who.role not in ("owner", "human"):
+    readers = mailbox_access.intake_readers(who)
+    if not readers:
         return None
     box = mailbox_access.row_by_id(c, aid.removeprefix(INTAKE_AUTOMATION))
-    if not box or mailbox_access.level(c, who.actor, box["address"]) == "none":
-        return None
-    delegate = getattr(who, "task_actor", "")
-    if delegate and mailbox_access.level(c, delegate, box["address"]) == "none":
+    if not box or any(mailbox_access.level(c, reader, box["address"]) == "none" for reader in readers):
         return None
     return box
 
@@ -498,12 +496,16 @@ def _may_end_intake_hold(c, who, aid):
     return bool(box and box["person_id"] == H.actor_id(who.actor))
 
 
-def readable_intake_ids(c, who):
+def readable_intake_ids(c, who, *, inboxes=None):
     """The inbox gate for audit readers that filter runs or hold changes by automation id."""
+    from . import mailbox_access
+
+    if inboxes is None:
+        inboxes = mailbox_access.readable_intake_inboxes(c, who)
     return {
         aid
         for (aid,) in c.execute("SELECT id FROM automations WHERE id GLOB ?", (INTAKE_AUTOMATION + "*",))
-        if _intake_inbox(c, who, aid) is not None
+        if aid.removeprefix(INTAKE_AUTOMATION) in inboxes
     }
 
 

@@ -57,13 +57,21 @@ def rows(c, obj=None, actor=None, limit=LIMIT, before=None, versions=False, who=
             sql += f" AND {column}=?"
             args.append(value)
     if who is not None:
+        from . import mailbox_access, threads
         from .automations import INTAKE_AUTOMATION, readable_intake_ids
 
+        inboxes = mailbox_access.readable_intake_inboxes(c, who)
         sql += " AND (object NOT GLOB ? OR object IN (SELECT value FROM json_each(?)))"
         args += [
             "automation:" + INTAKE_AUTOMATION + "*",
-            json.dumps(["automation:" + aid for aid in readable_intake_ids(c, who)]),
+            json.dumps(["automation:" + aid for aid in readable_intake_ids(c, who, inboxes=inboxes)]),
         ]
+        sql += " AND " + threads.outside_audit_gate(
+            "substr(audit_log.object,1,instr(audit_log.object,':')-1)",
+            "substr(audit_log.object,instr(audit_log.object,':')+1)",
+            "(SELECT value FROM json_each(?))",
+        )
+        args.append(json.dumps(sorted(inboxes)))
     if before:
         at, _, row_id = before.partition("|")
         sql += " AND (created_at<? OR (created_at=? AND id<?))"
@@ -90,13 +98,13 @@ def install(app, store, auth):
             "Team",
             "listAudit",
             "Who changed caps, spend, groups and automations, newest first (owner: company; others: their own). "
-            "Conversation intake also requires inbox access.",
+            "Conversation intake and outside thread changes also require inbox access.",
             "AuditPage",
         ),
     )
     def audit_view(request: Request, object: str | None = None, limit: int = LIMIT, before: str | None = None):
         """Who changed what. The owner reads company changes; anyone else reads only their own changes.
-        Intake changes also require access to the inbox."""
+        Intake and outside thread changes also require access to the inbox."""
         who = request.state.identity
         auth.domain(who)
         from .org_rules import redact_audit
