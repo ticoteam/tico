@@ -242,8 +242,8 @@ That gives three kinds of stage, and no others:
    OKs it. The page is HTML: the attach refuses a version that is not (Markdown or plain text) with what to do instead,
    and a person's OK view draws a non-HTML page attached before that as Markdown.
 4. **An item.** Something a source keeps, read through one of the source's conditions. A source is a Python module
-   under `backend/item_sources/`; GitHub is the only one with conditions (Jira's issues are links only so far, see
-   "Outside items" below). Its item is a PR and its conditions are:
+   under `backend/item_sources/`; GitHub is the only one with conditions (Jira's issues are linked and their state read,
+   with no conditions yet, see "Outside items" below). Its item is a PR and its conditions are:
    - **PR open.** At least one PR is linked, and none was closed without merging.
    - **Checks pass.** Every linked PR is green at its newest commit: no check failed, none is running, and at least
      one ran and passed. Tico's own check runs are ignored.
@@ -1173,6 +1173,37 @@ systems are `entity_external_refs`, one per (system, type, id, connection), writ
 the caller still sees that entity, a record on another entity is refused without naming it, and a record erased at its
 owner's request is not written again on its connection, '' being its own (one erased before connections, on any).
 
+**A Jira issue's state** is read through its own connection: `GET <base URL>/rest/api/3/issue/<key>` with the key of
+someone allowed to use the tool (`api_tools.key_for`): the owner of the task holding the issue's primary link, then the
+owners of the other tasks linking it, then whoever linked it. The key never leaves the read. `item_metadata.fields`
+holds `state` (open, or closed when Jira's status category is done), `status`, `category`, `summary`, `updated` (Jira's
+stamp) and `connection_id`; an issue is never final, since issues reopen. Push first: a Jira webhook to any trigger
+(`jira:issue_*` with `issue.key` and `issue.self`) marks each linked copy of the issue on a connection serving that site
+due, and the heartbeat's item metadata step reads it within a minute; the payload names the issue and is not trusted for
+its state. The backstop reads an issue an open task links when its metadata is missing or an hour old, at most 50 a pass.
+A read nobody may make, or that Jira refuses, keeps the metadata as it was with `read_error` and is tried again after 5
+minutes.
+
+#### Intake
+
+`POST /api/v2/inbound/items` (`tico task intake jira issue PROJ-12 --connection <tool id> --title ... --owner ...`,
+MCP `tico_task_intake`): an outside item is ready for work. In one write it finds the task whose primary link is that
+item, or files one (the caller's ordinary create, with its checks and defaults; the item, not the title, makes it one
+task) linked to the item as its primary link; the partial unique index `task_links_primary_item` makes a second primary
+task impossible, so two intakes at once give one task. A task found closed or done is reopened by Tico: ready after a
+withdrawal resumes the same task, whoever closed it. The caller must be allowed to use the connection. `updated_at` is
+when the item last changed outside as the event saw it: one older than what the last read saw (`fields.updated`), or no
+newer than the last intake acted on (`fields.intake_updated`), answers `stale: true` and changes nothing, so a late or
+repeated ready never reopens a settled task. `POST /api/v2/inbound/tasks` (service keys) keeps its own contract: it
+cannot carry tool access and keys on the caller's own id, not an outside item.
+
+**Closed outside.** When a read sees a primary link's item turn closed, the task's owner is asked once to settle the
+task or keep it: a person by a ❓ on the task's chat from the task's bot (else the bot that filed it, else Agent Ops),
+a bot by Tico's instructions on the task, which wake it. The item turning open again takes the ❓ back
+(`cleared_reason` withdrawn). A secondary link closing asks nobody: its state shows on the link. A merge moves an item's
+primary link to the kept task; a deleted task restored after another task was filed for its item gets its link back as
+a secondary one.
+
 ### Modules
 
 - `task_engine.py`: `move()` and the guard. Also the only writer of snoozes and of requirements added to a task.
@@ -1182,7 +1213,8 @@ owner's request is not written again on its connection, '' being its own (one er
 - `never_stuck.py`: the check, the ladder, Late, filling open slots.
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
-- `item_sources/jira.py`: Jira issue links (no reads yet).
+- `item_sources/jira.py`: Jira issue links, their state read through each issue's connection, and the Jira webhook.
+- `item_intake.py`: create-or-find intake by an item's primary link, and the owner's ask when that item closes outside.
 - `item_metadata.py`: the saved metadata of every source's items, per connection, and what waits on it.
 - `source_actions.py`: a source's actions on entering a stage (act), their undo, and the retries.
 - `stage_effects.py`: file a linked task, queue and dequeue PRs, undo.
