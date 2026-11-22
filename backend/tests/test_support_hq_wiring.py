@@ -502,3 +502,13 @@ def test_unverified_intake_hands_off_and_releases_claim_without_app(outside_arri
     with store.read() as c:
         row = c.execute("SELECT status,claim_token FROM automation_runs WHERE id=?", (run_id,)).fetchone()
         assert tuple(row) == ("ok", None)
+
+
+def test_a_canceled_help_draft_can_be_queued_again(api, flow):
+    _, _, token, _, intake, _ = flow
+    task = intake()
+    first = queue_answer(api, task, token)
+    post(api, f"outbound-actions/{first['id']}/cancel", {})
+    again = queue_answer(api, task, token)
+    assert again["id"] != first["id"] and again["state"] == "waiting_approval"
+    assert queue_answer(api, task, token)["id"] == again["id"]  # the live one still dedupes

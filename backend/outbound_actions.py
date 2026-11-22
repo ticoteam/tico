@@ -423,6 +423,16 @@ def enqueue(
         destination = destination.strip()
         payload = {**payload, "body": support_hq.reply_body(payload.get("body"))}
         key = support_hq.reply_key(destination, payload["body"])
+        # A draft that ended without sending (failed or canceled) may be queued again under its next key.
+        base, tries = key, 1
+        while (
+            tries < 20
+            and c.execute(
+                "SELECT 1 FROM outbound_actions WHERE occurrence_key=? AND state IN ('failed','canceled')", (key,)
+            ).fetchone()
+        ):
+            tries += 1
+            key = f"{base}:{tries}"
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
     if found:
         if channel == support_hq.CHANNEL and found["task_id"] != task_id:
