@@ -34,6 +34,13 @@ from . import (
     task_followers_routes,
 )
 from .api_contract import ASK_REFUSED
+
+
+class ClaimGone(Exception):
+    """A find-or-create whose ask-ingest judgment was skipped because a task held its item finds the item free at the
+    write: the write is rolled back and the route judges the filing before trying again."""
+
+
 from .api_answers.tasks import TaskDetail, TaskResult, TaskRunModelResult
 
 from . import models as M
@@ -478,7 +485,7 @@ def register_core(
         level = auth.bot_accesses(c, them, [H.actor_id(bot)]).get(H.actor_id(bot))
         return not level or bool(level["read"])
 
-    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None):
+    def task_create(c, who, body, lint=True, ingest=None, same=None, rule=None, wake_refs=None, judged=True):
         """`POST /api/v2/tasks`: the task is made and put in the first stage of its pipeline (H.task_create). A task
         for a bot wakes it; `wake_refs` go on that wake (an auto dream's release policy, backend/dream_auto.py)."""
         source = who
@@ -496,6 +503,10 @@ def register_core(
                 raise Problem("primary_link", str(error), 422) from None
             found = held_by if held_by and _readable_task(c, who, held_by) else None
             hidden = bool(held_by) and not found
+            if not held_by and not judged:
+                # Ask ingest was skipped because a task held the item; it no longer does, so this is a filing after all:
+                # nothing is written, and the route judges it and tries again (`create_task`).
+                raise ClaimGone()
             same = lambda _c, _task_id: False  # another item's task with this title is other work
         else:
             hidden = False
@@ -941,17 +952,27 @@ def register_core(
         )
         # A retry of a create sent before `primary_link` existed hashed the body without it.
         legacy = body.model_dump(exclude={"primary_link"}) if body.primary_link is None else None
-        return ask_ingest.judged(
-            store,
-            ingest,
-            lambda: mutate(
-                request,
-                body,
-                lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc),
-                receipt=handoff_receipt(request.state.identity),
-                retry_body=lambda _c, _result: legacy,
-            ),
-        )
+
+        def attempt(ingest, judged):
+            return ask_ingest.judged(
+                store,
+                ingest,
+                lambda: mutate(
+                    request,
+                    body,
+                    lambda c: task_create(c, request.state.identity, body, ingest=ingest, rule=rc, judged=judged),
+                    receipt=handoff_receipt(request.state.identity),
+                    retry_body=lambda _c, _result: legacy,
+                ),
+            )
+
+        try:
+            return attempt(ingest, not held)
+        except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
+            judged = ask_ingest.preflight(
+                store, app.state.judge, request.state.identity, body.owner, body.title, body.body
+            )
+            return attempt(judged, True)
 
     def _held_item(c, who, primary_link):
         """`readable` when a task the caller may read already holds the primary link a create names, `hidden` when one

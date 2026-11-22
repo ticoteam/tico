@@ -473,7 +473,7 @@ def task_dry_run(c, auth, who, body):
 
         dup = (
             None
-            if unassigned
+            if unassigned or getattr(body, "primary_link", None)  # the item, not the title, makes it one task
             else H._one(
                 c,
                 "SELECT id FROM tasks WHERE requester_id=? AND owner_id=? AND title=? AND status='open'",

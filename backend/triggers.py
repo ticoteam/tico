@@ -861,6 +861,12 @@ def receive(
             secret,
             "rate_limited",
         )
+    if found["connection_id"]:
+        # A trigger bound to a Jira connection keeps and hands on only the event's name and the issue's key: the rest of
+        # Jira's payload (summaries, people) is the connection's, read through it, never kept for the trigger's readers.
+        from .item_sources import jira
+
+        body = jira.slim(body)
     type_ = P.type_of(type_spec(found), headers, body)
     c.execute("INSERT INTO trigger_seen(trigger_id,delivery,seen_at) VALUES(?,?,?)", (trigger_id, delivery, at))
     c.execute(

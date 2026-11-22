@@ -335,15 +335,18 @@ def test_marked_issues_are_read_before_stale_ones_and_a_bad_answer_is_retried_al
     assert "no status" in _meta(api, "PROJ-21", acme)["read_error"]
 
 
-def test_a_read_that_runs_past_its_deadline_fails_alone(api, jira, monkeypatch):
-    import time
-
+def test_a_read_still_out_at_its_deadline_fails_alone(api, jira, monkeypatch):
     acme = jira.tools["acme.atlassian.net"]
     jira.set("acme.atlassian.net", "PROJ-31", "To Do", "new", "2026-11-21T10:00:00.000+0000")
     _create(api, f"jira:issue:PROJ-31@{acme}")
-    monkeypatch.setattr(JS, "TIMEOUT_S", 0.2)
-    jira.during = lambda: time.sleep(0.5)
-    assert _refresh(api) == 0
+    stuck, waited = threading.Event(), []
+    jira.during = lambda: stuck.wait(30)  # Jira never answers (a lookup, connect or TLS that hangs)
+    monkeypatch.setattr(JS, "_wait", lambda worker, seconds: waited.append(seconds))  # the deadline passes at once
+    try:
+        assert _refresh(api) == 0
+    finally:
+        stuck.set()
+    assert waited == [JS.TIMEOUT_S]
     assert "timed out" in _meta(api, "PROJ-31", acme)["read_error"]
 
 
@@ -377,3 +380,56 @@ def test_a_retry_from_before_the_new_fields_keeps_its_answer(api, jira):
     with api.app.state.store.transaction() as c:  # what the server before this change stored for that key
         c.execute("UPDATE idempotency SET request_hash=? WHERE key='old-create'", (digest(encode(legacy)),))
     assert _id(post(api, "tasks", body, key="old-create")) == _id(first)
+
+
+def test_a_claim_gone_before_the_write_is_judged_before_it_is_filed(api, jira, monkeypatch):
+    from backend import ask_ingest
+    from backend import item_sources as IS
+
+    acme = jira.tools["acme.atlassian.net"]
+    real, calls, judged = IS.lookup, [], []
+
+    def lookup(c, text):
+        calls.append(text)
+        primary, held_by = real(c, text)
+        return (primary, "a-task-gone-by-the-write") if len(calls) == 1 else (primary, held_by)
+
+    monkeypatch.setattr(IS, "lookup", lookup)
+    preflight = ask_ingest.preflight
+    monkeypatch.setattr(ask_ingest, "preflight", lambda *a, **k: judged.append(a) or preflight(*a, **k))
+    made = _create(api, f"jira:issue:PROJ-61@{acme}")
+    assert "found" not in made and len(judged) == 1  # skipped while held, judged once it was not
+    assert [link["is_primary"] for link in _links(api, "PROJ-61")] == [1]
+
+
+def test_only_a_tool_on_one_jira_site_is_an_integration(api, jira):
+    other = post(api, "api-tools", {"name": "Records", "base_url": "https://records.example.com"})["id"]
+    body = {"name": "Read", "value": "records-synthetic-0011223344", "access_level": "read"}
+    post(api, f"api-tools/{other}/keys", body)
+    _patch_tool(api, other, {"record_owner": "outside"})
+    assert _create(api, f"jira:issue:PROJ-51@{other}", expected=422)["error"]["code"] == "primary_link"
+    made = post(api, "triggers", {"name": "Records"})["trigger"]
+    assert post(api, f"triggers/{made['id']}", {"connection_id": other}, expected=422)["error"]["code"] == "trigger"
+    with api.app.state.store.read() as c:
+        assert JS.integrations(c) == set(jira.tools.values())
+
+
+def test_marked_issues_go_first_across_connections(api, jira):
+    acme, beta = jira.tools["acme.atlassian.net"], jira.tools["beta.atlassian.net"]
+    _create(api, f"jira:issue:PROJ-71@{acme}", title="A")
+    _create(api, f"jira:issue:PROJ-72@{beta}", title="B")
+    with api.app.state.store.transaction() as c:  # acme's never read; beta's marked by a webhook
+        JS.webhook(c, beta, {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-72"}})
+    with api.app.state.store.read() as c:
+        assert [key for key, _, _ in JS.due_reads(c, "2026-11-22T00:00:00Z")] == ["PROJ-72", "PROJ-71"]
+
+
+def test_a_jira_bound_trigger_keeps_only_the_event_and_the_issue_key(api, jira):
+    acme = jira.tools["acme.atlassian.net"]
+    made = post(api, "triggers", {"name": "Jira"})["trigger"]
+    post(api, f"triggers/{made['id']}", {"connection_id": acme})
+    event = {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-81", "fields": {"summary": "Secret plan"}}}
+    hook(api, made["url"], body=json.dumps(event).encode(), headers={"Idempotency-Key": "k1"})
+    with api.app.state.store.read() as c:
+        kept = c.execute("SELECT body FROM trigger_bodies WHERE trigger_id=?", (made["id"],)).fetchone()[0]
+    assert json.loads(kept) == {"webhookEvent": "jira:issue_updated", "issue": {"key": "PROJ-81"}}

@@ -32,6 +32,7 @@ error.
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
@@ -93,18 +94,30 @@ def site(url: str) -> str | None:
     return (urlsplit(url.strip()).hostname or "").lower() or None
 
 
+SITE = re.compile(r"^[a-z0-9-]+\.atlassian\.net$")  # a Jira Cloud site, as ISSUE_URL reads one
+
+
+def jira_site(base_url: object, sites: object) -> str | None:
+    """The one Jira Cloud site a tool is on: its base URL and every site on one `<site>.atlassian.net` host, else None.
+    The one endpoint check behind a typed reference (`item_url`), a trigger's binding and the background reads
+    (`integrations`)."""
+    on = hosts(base_url, sites)
+    host = next(iter(on)) if len(on) == 1 else ""
+    return host if SITE.match(host) else None
+
+
 def item_url(conn: "sqlite3.Connection", item_type: str, key: str, connection_id: str) -> str:
-    """The issue's page on the one site its connection serves (item_sources.serving): what an intake links. ValueError,
-    saying why, when the connection is no tool or is on more than one host."""
+    """The issue's page on its connection's Jira site (`jira_site`): what a primary link names. ValueError, saying why,
+    when the connection is no tool or is not on one Jira site."""
     if item_type != ISSUE:
         raise ValueError(f"Jira has no item type {item_type}")
     tool = conn.execute("SELECT base_url, sites FROM tools WHERE id=?", (connection_id,)).fetchone()
     if tool is None:
         raise ValueError(f"No connection {connection_id}: a connection is a tool's id")
-    on = hosts(tool[0], tool[1])
-    if len(on) != 1:
-        raise ValueError(f"{connection_id} is not on one Jira site: its base URL and sites must name a single host")
-    return f"https://{next(iter(on))}/browse/{key}"
+    host = jira_site(tool[0], tool[1])
+    if host is None:
+        raise ValueError(f"{connection_id} is not on one Jira site (https://<site>.atlassian.net)")
+    return f"https://{host}/browse/{key}"
 
 
 def ref(key: str, connection_id: str) -> str:
@@ -144,6 +157,24 @@ def webhook(conn: "sqlite3.Connection", connection_id: str, payload: object) -> 
     return 1
 
 
+def slim(body: bytes) -> bytes:
+    """What a trigger bound to a Jira connection keeps of a call (backend/triggers.py): `webhookEvent` and `issue.key`
+    when they are text, as JSON, else `{}`."""
+    try:
+        payload: object = json.loads(body)
+    except (ValueError, RecursionError):
+        payload = None
+    data = cast("dict[str, object]", payload) if isinstance(payload, dict) else {}
+    issue = data.get("issue")
+    key = cast("dict[str, object]", issue).get("key") if isinstance(issue, dict) else None
+    event = data.get("webhookEvent")
+    kept: Row = {
+        **({"webhookEvent": event} if isinstance(event, str) else {}),
+        **({"issue": {"key": key}} if isinstance(key, str) else {}),
+    }
+    return json.dumps(kept).encode()
+
+
 # ----------------------------------------------------------------------------- the pass: reads through the connection
 
 # A record integration Tico reads in the background: an API tool for everyone that an administrator marked as holding
@@ -156,24 +187,29 @@ INTEGRATION = (
 SHARED_KEY = "k.ciphertext IS NOT NULL AND k.kind <> 'login' AND COALESCE(k.holder, '') = ''"
 
 
+def integrations(conn: "sqlite3.Connection") -> set[str]:
+    """The ids of the record integrations on one Jira site (`jira_site`) with a shared key: the tools Tico reads issues
+    through, and a trigger may be bound to (backend/triggers.py)."""
+    return {
+        str(tool_id)
+        for tool_id, base_url, sites in conn.execute(
+            f"SELECT DISTINCT tl.id, tl.base_url, tl.sites FROM tools tl JOIN credentials k ON k.tool_id = tl.id "
+            f"WHERE {INTEGRATION} AND {SHARED_KEY}"
+        ).fetchall()
+        if jira_site(base_url, sites)
+    }
+
+
 def integration(conn: "sqlite3.Connection", connection_id: str) -> bool:
-    """Whether a tool is a record integration with a shared key: one Tico reads issues through, and a trigger may be
-    bound to (backend/triggers.py)."""
-    return (
-        conn.execute(
-            f"SELECT 1 FROM tools tl JOIN credentials k ON k.tool_id = tl.id WHERE tl.id=? AND {INTEGRATION} "
-            f"AND {SHARED_KEY} LIMIT 1",
-            (connection_id,),
-        ).fetchone()
-        is not None
-    )
+    """Whether a tool is one of `integrations`."""
+    return connection_id in integrations(conn)
 
 
 def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CONNECTION) -> list[tuple[str, str, str]]:
     """(key, connection, due mark) of each issue to read now, at most `per_connection` of each record integration
     (`integration`): one an open task links whose metadata is missing, never read, marked due or older than REREAD_S,
-    unless a read of it failed within RETRY_S. Marked ones first, then the longest unread. The due mark ('' for none) is
-    what the read began under."""
+    unless a read of it failed within RETRY_S. Marked ones first, across connections, then the longest unread. The due
+    mark ('' for none) is what the read began under."""
     H = _h()
     cutoff, retry = H.shift(now, seconds=-REREAD_S), H.shift(now, seconds=-RETRY_S)
     found = conn.execute(
@@ -181,14 +217,14 @@ def due_reads(conn: "sqlite3.Connection", now: str, per_connection: int = PER_CO
         "COALESCE(MAX(m.due_at), '') AS due, ROW_NUMBER() OVER (PARTITION BY l.connection_id "
         "ORDER BY MAX(m.due_at) IS NULL, MIN(COALESCE(m.read_at, '')), MIN(l.item_key)) AS n FROM task_links l "
         "JOIN tasks t ON t.id = l.task_id AND t.status = 'open' "
-        f"JOIN tools tl ON tl.id = l.connection_id AND {INTEGRATION} "
+        "JOIN json_each(?) i ON i.value = l.connection_id "
         "LEFT JOIN item_metadata m ON m.source = l.source AND m.item_type = l.item_type AND m.item_key = l.item_key "
         "AND m.connection_id = l.connection_id "
         "WHERE l.source=? AND l.item_type=? AND l.connection_id <> '' "
         "AND (m.refused_at IS NULL OR m.refused_at < ?) "
         "AND (m.id IS NULL OR m.read_at IS NULL OR m.read_at < ? OR m.due_at IS NOT NULL) "
-        "GROUP BY l.item_key, l.connection_id) WHERE n <= ? ORDER BY n, connection_id",
-        (SOURCE, ISSUE, retry, cutoff, per_connection),
+        "GROUP BY l.item_key, l.connection_id) WHERE n <= ? ORDER BY due = '', n, connection_id",
+        (json.dumps(sorted(integrations(conn))), SOURCE, ISSUE, retry, cutoff, per_connection),
     ).fetchall()
     return [(str(key), str(connection_id), str(due)) for key, connection_id, due in found]
 
@@ -210,6 +246,8 @@ def request(
     tool = conn.execute("SELECT * FROM tools tl WHERE tl.id=?", (connection_id,)).fetchone()
     if tool is None:
         raise Unreadable("The connection is gone")
+    if not integration(conn, connection_id):
+        raise Unreadable(f"{tool['name']} is not a record integration on one Jira site with a shared company key")
     base = str(tool["base_url"] or "").rstrip("/")
     if not base.startswith("https://"):
         raise Unreadable(f"{tool['name']} has no https API address")
@@ -235,49 +273,59 @@ def request(
 
 
 def send(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int, object]:
-    """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
-    all of it (the name's lookup, connecting, the answer) within TIMEOUT_S, as egress.post bounds its calls: (status,
-    the JSON answer or None). Raises when the call could not be made in time."""
-    import threading
+    """One GET (`_get`) with one deadline over all of it, the name's lookup, connecting, TLS and the answer: it runs on
+    a thread of its own, and at TIMEOUT_S the caller stops waiting (`_wait`) and its answer, if one ever comes, is
+    dropped. (status, the JSON answer or None); raises when the call failed or ran out of time."""
+    answers: list[tuple[int, object]] = []
+    errors: list[BaseException] = []
 
+    def run() -> None:
+        try:
+            answers.append(_get(url, headers, params))
+        except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
+            errors.append(error)
+
+    worker = threading.Thread(target=run, name="jira-read", daemon=True)
+    worker.start()
+    _wait(worker, TIMEOUT_S)
+    if answers:
+        return answers[0]
+    if errors:
+        raise errors[0]
+    raise TimeoutError(f"Jira took longer than {TIMEOUT_S:g} seconds to answer")
+
+
+def _wait(worker: threading.Thread, seconds: float) -> None:
+    """Wait for a read's thread at most `seconds` (tests stand in for the clock here)."""
+    worker.join(seconds)
+
+
+def _get(url: str, headers: dict[str, str], params: dict[str, str]) -> tuple[int, object]:
+    """One GET to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
+    at most MAX_BODY read."""
     import httpx
 
     from .. import egress as _egress
 
     egress: Any = _egress
     parts = egress.check(url)
-    ends = time.monotonic() + TIMEOUT_S
     address = egress.address_for(parts, budget=TIMEOUT_S)
     pinned = httpx.URL(url, params=params or None).copy_with(host=address)
     host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
-    late = f"Jira took longer than {TIMEOUT_S:g} seconds to answer"
     with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
-        # Closing the client from the timer ends a read blocked on a socket; the checks below catch the rest.
-        timer = threading.Timer(max(ends - time.monotonic(), 0.001), client.close)
-        timer.daemon = True
-        timer.start()
-        try:
-            with client.stream(
-                "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
-            ) as response:
-                body = b""
-                for chunk in response.iter_bytes():
-                    body += chunk
-                    if len(body) > MAX_BODY or time.monotonic() > ends:
-                        break
-                if time.monotonic() > ends:
-                    raise TimeoutError(late)
-                try:
-                    answer: object = json.loads(body)
-                except ValueError:
-                    answer = None
-                return response.status_code, answer
-        except Exception as exc:
-            if time.monotonic() > ends and not isinstance(exc, TimeoutError):
-                raise TimeoutError(late) from exc
-            raise
-        finally:
-            timer.cancel()
+        with client.stream(
+            "GET", pinned, headers={**headers, "Host": host}, extensions={"sni_hostname": parts.hostname}
+        ) as response:
+            body = b""
+            for chunk in response.iter_bytes():
+                body += chunk
+                if len(body) > MAX_BODY:
+                    break
+            try:
+                answer: object = json.loads(body)
+            except ValueError:
+                answer = None
+            return response.status_code, answer
 
 
 def fields_of(answer: object, connection_id: str) -> Row | None:

@@ -1173,8 +1173,9 @@ systems are `entity_external_refs`, one per (system, type, id, connection), writ
 the caller still sees that entity, a record on another entity is refused without naming it, and a record erased at its
 owner's request is not written again on its connection, '' being its own (one erased before connections, on any).
 
-**A Jira issue's state** is read in the background only through a record integration: an API tool for everyone that
-an administrator marked as holding records (`record_owner` outside or tico; `tico tool edit <id> --record-owner
+**A Jira issue's state** is read in the background only through a record integration: an API tool for everyone on one
+Jira Cloud site (`<site>.atlassian.net`, the same check a typed `jira:issue:KEY@<tool id>` reference and a trigger's
+binding make) that an administrator marked as holding records (`record_owner` outside or tico; `tico tool edit <id> --record-owner
 outside`), not one a bot keeps for itself, with a shared company API key (no sign-in, no holder). Tico sends
 `GET <base URL>/rest/api/3/issue/<key>?fields=status,updated` with that key; nothing else is read without someone
 asking, and no one's own access is borrowed. `item_metadata.fields` holds `state` (open, or closed when Jira's status
@@ -1183,10 +1184,10 @@ task API returns the link rows only. An issue is never final, since issues reope
 integration (`tico trigger update <id> --connection-id <tool id>`; only a record integration can be bound, deleting the
 tool unbinds it, and a deleted trigger made again starts unbound) takes Jira's webhook, and a `jira:issue_*` event
 marks that connection's linked copy of the issue due, writing a due row for an issue not read yet; the payload only
-names the issue, one that does not read as an issue event is ignored, and the delivery's answer and log say nothing
-about it. The heartbeat's own `jira_items` step, after the merge queue's, reads marked issues first, then those
-missing or an hour old, at most 10 per connection and 30 seconds of reading a pass, each request within 10 seconds end
-to end. A read clears the due mark only when it is the mark the read began under, so a webhook that lands mid-read is
+names the issue, one that does not read as an issue event is ignored, the trigger keeps and hands on only the event's
+name and the issue's key (not Jira's full payload), and the delivery's answer and log say nothing about it. The heartbeat's own `jira_items` step, after the merge queue's, reads marked issues first (across connections), then those
+missing or an hour old, at most 10 per connection and 30 seconds of reading a pass; each request has one 10-second
+deadline over the lookup, connecting, TLS and the answer (it runs on a thread of its own and is dropped at the deadline). A read clears the due mark only when it is the mark the read began under, so a webhook that lands mid-read is
 read next pass. A read Jira refuses, or whose answer is not an issue's, keeps the metadata as it was with
 `read_error` and is tried again after 5 minutes. An issue moved to another project gets a new key: a task filed for the
 old key keeps it, and one filed for the new key shows as a duplicate to merge.
