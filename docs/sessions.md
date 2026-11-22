@@ -206,7 +206,8 @@ It marks them `stalled` in the run list and Health, with their last event and ti
 the attempt or change its lease. Fresh activity clears it.
 
 The runner also keeps up to 200 lines / 64 KiB of scrubbed harness stderr per attempt for seven days,
-even with provider stream capture off. `tico run export <attempt> --fixture` adds `stderr.log` when present,
+even with provider stream capture off. Runs that touched an outside conversation are excluded from capture export.
+`tico run export <attempt> --fixture` adds `stderr.log` when present,
 and works with stderr alone when no provider stream exists. Its access rules remain the same as raw stream
 exports. The MCP summary reports the stderr byte count and end reason without returning the log text.
 For each tool call that failed (a non-zero exit, an error or a timeout), the runner also keeps what it ran (its

@@ -7,11 +7,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import time_machine
 
-from backend import automations, drains, gmail_watch, google_workspace, outside_intake
+from backend import automations, drains, gmail_watch, google_workspace, outside_intake, threads
 from backend import mailbox_access as MA
 from backend.entities import store as ES
 from backend.store import H
-from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.api import get, headers, post, setup_attempt  # noqa: F401
+from backend.tests.helpers.execution_review import interrupted
 from backend.tests.helpers.fake_gmail import fake_gmail  # noqa: F401
 
 BOX = "ana@acme.example"
@@ -407,6 +408,71 @@ def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watc
     with store.transaction() as c:
         MA.revoke(c, "human:ana", mailbox, grant["id"])
     assert api.get(f"/api/v2/threads/{child}/timeline", headers=headers("ben-test")).status_code == 404
+
+
+def test_bot_standing_grants_cannot_read_outside_threads_or_export_related_runs(watched):
+    api, _, _ = watched
+    store = api.app.state.store
+    _, chat, attempt = setup_attempt(api)
+    aid, token = attempt["id"], attempt["token"]
+    mailbox = box_row(api)["id"]
+    with store.transaction() as c:
+        entity = ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})["id"]
+        root = threads._insert_thread(
+            c,
+            "ext:gmail:person@customer.example",
+            title="Private",
+            audience="entity",
+            entity_id=entity,
+            connection_id=mailbox,
+        )["id"]
+        MA.grant(c, "human:ana", mailbox, "bot", "ops", "read")
+        c.execute(
+            "INSERT INTO attempt_captures(attempt_id,bot,provider,frames,bytes,created_at) "
+            "VALUES(?,'ops','claude','{}',2,?)",
+            (aid, H.now()),
+        )
+    assert get(api, f"attempts/{aid}/capture")["run"]["id"] == aid
+    with store.transaction() as c:
+        c.execute("INSERT INTO attempt_conversations VALUES(?,?)", (aid, root))
+        from backend.auth import Identity
+
+        viewer = threads.viewer(None, Identity("bot:ops", "bot", attempt_id=aid))
+        assert not threads.readable(c, viewer, root)
+        assert threads.readable_ids(c, viewer, [root, chat["conversation_id"]]) == {chat["conversation_id"]}
+        sql = threads.readable_sql(c, viewer, "t")
+        assert c.execute(f"SELECT 1 FROM conversations t WHERE t.id=? AND ({sql})", (root,)).fetchone() is None
+    get(api, f"threads/{root}/timeline", token=token, expected=404)
+    get(api, f"attempts/{aid}/capture", expected=404)
+    post(api, f"threads/{chat['conversation_id']}/members", {"actor": "ext:gmail:unknown@other.example"}, expected=404)
+
+
+def test_execution_review_redacts_outside_subthread_but_keeps_recovery_controls(api):
+    store = api.app.state.store
+    _, message, attempt = interrupted(api)
+    with store.transaction() as c:
+        box = MA.ensure_mailbox(c, "ben@acme.example", person_id="ben", created_by="human:ben")
+        entity = ES.upsert(c, "human:ben", "person", match={"email": "person@customer.example"})["id"]
+        root = threads._insert_thread(
+            c,
+            "ext:gmail:person@customer.example",
+            title="Private",
+            audience="entity",
+            entity_id=entity,
+            connection_id=box["id"],
+        )["id"]
+        c.execute(
+            "UPDATE conversations SET root_id=?,parent_id=?,participants='[]' WHERE id=?",
+            (root, root, message["conversation_id"]),
+        )
+    result = get(api, "bots/ops/execution-review")["jobs"][0]
+    assert result["id"] == attempt["job_id"]
+    assert not result["readable"] and result["request"] == "" and result["output"] == result["tools"] == []
+    assert result["stopped"] and result["reason"]
+    with store.transaction() as c:
+        MA.grant(c, "human:ben", box["id"], "person", "ana", "read")
+    result = get(api, "bots/ops/execution-review")["jobs"][0]
+    assert result["readable"] and result["request"] and result["output"]
 
 
 def test_gmail_down_leaves_the_history_id_and_says_why_then_catches_up(watched):
