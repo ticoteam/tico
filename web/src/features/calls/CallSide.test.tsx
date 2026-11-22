@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useParams } from '@tanstack/react-router';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '@/api/schema';
 import { queryClient } from '@/data';
@@ -58,7 +58,8 @@ afterEach(() => {
 
 function show(at: string, ticoBeside = false) {
   const root = createRootRoute({ component: () => <Outlet /> });
-  const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <CallSide room={ROOM} ticoBeside={ticoBeside} /> });
+  const At = () => <CallSide room={useParams({ strict: false }).room ?? ROOM} ticoBeside={ticoBeside} />;
+  const page = createRoute({ getParentRoute: () => root, path: '/call/$room', component: At });
   const tasks = createRoute({ getParentRoute: () => root, path: '/tasks', component: () => <h1>Tasks</h1> });
   const router = createRouter({ routeTree: root.addChildren([page, tasks]), history: createMemoryHistory({ initialEntries: [at] }) });
   render(
@@ -121,7 +122,7 @@ describe('one conversation, not two side by side', () => {
     expect(document.querySelector('[data-variant]')).toBeNull();
   });
 
-  it('on an ended call, whose page shows the transcript, opens on who was in it instead', async () => {
+  it('on an ended call, whose page shows the transcript, opens on who was in it instead; its agents have left too', async () => {
     queryClient.setQueryData(callQuery(ROOM).queryKey, {
       id: ROOM,
       thread_id: 'th-tico',
@@ -131,9 +132,22 @@ describe('one conversation, not two side by side', () => {
       state: 'ended',
     } as unknown as Call);
     show(`/call/${ROOM}`, true);
-    expect(await screen.findByText('Left')).toBeTruthy();
+    expect(await screen.findAllByText('Left')).toHaveLength(2);
+    expect(screen.queryByText('In the call')).toBeNull();
     expect(screen.getByRole('tab', { name: /People/ }).getAttribute('aria-selected')).toBe('true');
     expect(screen.queryByRole('tab', { name: 'Chat' })).toBeNull();
+  });
+
+  it('starts another call opened beside it on that call’s own first tab, not the tab picked on the last', async () => {
+    const other = 'r2';
+    queryClient.setQueryData(callQuery(ROOM).queryKey, { id: ROOM, thread_id: 'th1', meeting_id: 'mt9', participants: [], bots: [], state: 'live' } as unknown as Call);
+    queryClient.setQueryData(callQuery(other).queryKey, { id: other, thread_id: 'th1', meeting_id: 'mt9', participants: [], bots: [], state: 'live' } as unknown as Call);
+    queryClient.setQueryData(transcriptQuery('mt9').queryKey, { chunks: [], event_id: 0 });
+    const router = show(`/call/${ROOM}`);
+    fireEvent.click(await screen.findByRole('tab', { name: 'Transcript' }));
+    expect(screen.getByRole('tab', { name: 'Transcript' }).getAttribute('aria-selected')).toBe('true');
+    await act(() => router.navigate({ to: '/call/$room', params: { room: other } }));
+    await vi.waitFor(() => expect(screen.getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true'));
   });
 
   it('counts a call just left here as ended, as its page does, though the call still reads live', async () => {

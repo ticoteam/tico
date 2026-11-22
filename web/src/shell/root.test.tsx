@@ -350,40 +350,30 @@ describe('the root', () => {
     }
   });
 
-  it('on a phone, heads the call’s card with the trail back up', async () => {
+  it('on a phone, heads the call’s card with the trail back up, whose Calendar goes to the calendar the call was opened from', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     window.dispatchEvent(new Event('resize'));
+    // the window's own history: the call's card is a step on it (shell/phone PhoneCards), which a step back would only lower
+    let router: ReturnType<typeof show> | undefined;
     try {
-      show('/call/abc');
-      expect(await screen.findByText('call page')).toBeTruthy();
-      await waitFor(() => expect(document.documentElement.dataset.layout).toBe('cards'));
-      const trail = document.querySelector('.ly-chat .shell-trail');
-      expect(trail).toBeTruthy();
-      expect(within(trail as HTMLElement).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
-      expect(within(trail as HTMLElement).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
-    } finally {
-      Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
-      window.dispatchEvent(new Event('resize'));
-    }
-  });
-
-  it('on a phone, the call card’s Calendar goes to the calendar, also when the call was opened from it', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
-    window.dispatchEvent(new Event('resize'));
-    try {
-      const router = show('/calendar', true);
+      router = show('/calendar', true);
       expect((await screen.findAllByText('Calendar page')).length).toBeGreaterThan(0);
-      await act(() => router.navigate({ to: '/call/$room', params: { room: 'abc' } }));
+      const at = router;
+      await act(() => at.navigate({ to: '/call/$room', params: { room: 'abc' } }));
       expect((await screen.findAllByText('call page')).length).toBeGreaterThan(0);
+      await waitFor(() => expect(document.documentElement.dataset.layout).toBe('cards'));
       const trail = await waitFor(() => {
         const t = document.querySelector<HTMLElement>('.ly-chat .shell-trail');
         if (!t) throw new Error('no trail on the call card');
         return t;
       });
+      expect(within(trail).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
+      expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
       fireEvent.click(within(trail).getByRole('link', { name: 'Calendar' }));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/calendar'));
+      await waitFor(() => expect(at.state.location.pathname).toBe('/calendar'));
     } finally {
       cleanup();
+      router?.history.destroy();
       window.history.replaceState(null, '', '/');
       Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
       window.dispatchEvent(new Event('resize'));

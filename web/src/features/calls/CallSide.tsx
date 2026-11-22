@@ -28,6 +28,12 @@ export interface CallSideProps {
 /** Beside the call: its chat, what has been said, and who is in it. The shell puts it in the side sheet on a desk. */
 export function CallSide({ room, ticoBeside = false }: CallSideProps) {
   const [picked, setTab] = useState<Tab>('chat');
+  // another call opened here starts on its own first tab, not the one picked on the last
+  const [shown, setShown] = useState(room);
+  if (shown !== room) {
+    setShown(room);
+    setTab('chat');
+  }
   const call = useQuery(callQuery(room)).data;
   const ticoRoom = useQuery(ticoRoomQuery).data;
   // a call in Tico's own room has Tico's chat as its chat: with Tico's sheet open, it shows there and not here too
@@ -63,7 +69,7 @@ export function CallSide({ room, ticoBeside = false }: CallSideProps) {
             <Person key={p.actor} actor={p.actor} inCall={p.in_call} />
           ))}
           {(call?.bots ?? []).map((b) => (
-            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall out={live ? { room, bot: b } : undefined} />
+            <Person key={b} actor={b.startsWith('bot:') ? b : `bot:${b}`} inCall={!ended} out={live ? { room, bot: b } : undefined} />
           ))}
         </div>
       )}
