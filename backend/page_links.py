@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from functools import cache
 from typing import Any, cast
 
-from . import names, read_cache, task_documents, task_reads
+from . import names, read_cache, relationship_runs, task_documents, task_reads
 from .store import H, Problem
 
 LINKS_SQL = "SELECT * FROM page_links WHERE page_id=? ORDER BY created_at,id"
@@ -217,6 +217,14 @@ def _target_name(c: Any, auth: Any, who: Any, target: str, known: dict[str, str]
     """The name of a link target the viewer may see."""
     kind, _, ident = target.partition(":")
     try:
+        if who.actor == relationship_runs.ACTOR:
+            if kind == "goal":
+                return None
+            if kind == "bot":
+                bound = auth.relationship_scope(c, who)
+                if not bound:
+                    return None
+                who = auth.identity_for_actor(c, bound.sponsor)
         if kind == "task":
             task = auth.task(c, who, ident)
             return (f"D-{task['number']} " if task.get("number") else "") + str(task["title"])
@@ -273,9 +281,18 @@ def _entities(c: Any, auth: Any, who: Any, targets: Iterable[str]) -> dict[str, 
     from .entities import store as ES
     from .entities import visible as V
 
-    actor = entity_reader(c, auth, who)
+    if who.actor == relationship_runs.ACTOR:
+        bound = auth.relationship_scope(c, who)
+        if not bound or bound.entity not in ids:
+            return {}
+        ids = {str(bound.entity)}
+        actor = str(bound.sponsor)
+        primed: set[str] = set()
+    else:
+        actor = entity_reader(c, auth, who)
+        primed = read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True)
     seen = read_cache.value(c, ("page_link_entities", actor), _no_names, shared=True)
-    missing = (ids | read_cache.value(c, ("page_link_entity_targets",), _no_ids, shared=True)) - seen.keys()
+    missing = (ids | primed) - seen.keys()
     if missing:
         found: dict[str, str] = {}
         if actor is not None:

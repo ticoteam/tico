@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 import re
 from sqlite3 import Connection
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Callable, cast
 
 from clients import sessions
 
@@ -36,7 +36,6 @@ class Scope:
     entity: str
     room: str
     source: str
-    connection: str
     sponsor: str
 
 
@@ -85,7 +84,6 @@ def enqueue(c: Connection, auth: "Auth", who: "Identity", entity_id: str, prompt
                 REF: {
                     "entity": entity_id,
                     "source": source.get("id", ""),
-                    "connection": source.get("connection_id") or "",
                     "sponsor": who.actor,
                 }
             },
@@ -108,12 +106,12 @@ def queued_scope(bot: str, message: dict[str, Any] | None, room: dict[str, Any] 
     if not isinstance(ref, dict):
         return None
     stored = cast(dict[str, Any], ref)
-    entity, source, connection, sponsor = (stored.get(key) for key in ("entity", "source", "connection", "sponsor"))
+    entity, source, sponsor = (stored.get(key) for key in ("entity", "source", "sponsor"))
     if not isinstance(entity, str) or not entity or not isinstance(sponsor, str) or not sponsor:
         return None
-    if not isinstance(source, str) or not isinstance(connection, str):
+    if not isinstance(source, str):
         return None
-    return Scope(entity, room["id"], source, connection, sponsor)
+    return Scope(entity, room["id"], source, sponsor)
 
 
 def claimable(c: Connection, auth: "Auth", bound: Scope | None) -> bool:
@@ -192,11 +190,42 @@ def source_viewer(c: Connection, auth: "Auth", bound: Scope, root: dict[str, Any
         root["id"] != bound.source
         or root.get("entity_id") != bound.entity
         or root.get("audience") != "entity"
-        or (root.get("connection_id") or "") != bound.connection
-        or root.get("deleted_at")
+        or (root.get("root_id") or root["id"]) != root["id"]
     ):
         return None
     try:
         return auth.identity_for_actor(c, bound.sponsor)
     except Problem:
         return None
+
+
+def wake_context(c: Connection, auth: "Auth", who: "Identity", bound: Scope) -> str:
+    """Project current access into the claimed wake so it can open its records by id."""
+    from . import files
+
+    page = c.execute(
+        "SELECT f.* FROM page_links l JOIN bot_files f ON f.id=l.page_id "
+        "WHERE l.target=? AND l.role='memory' AND l.target LIKE 'entity:%' AND f.state<>'deleted'",
+        (sessions.entity_lane(bound.entity),),
+    ).fetchone()
+    context: list[str] = []
+    file_visible = cast(Callable[..., bool], files.file_visible)
+    if page and file_visible(c, auth, who, page, {}):
+        context.append(f"Memory page {page['id']}.")
+
+    ids: list[str] = []
+    task = cast(Callable[..., object], auth.task)
+    for row in c.execute(
+        "SELECT id FROM tasks WHERE entity_id=? AND status='open' ORDER BY created_at,id",
+        (bound.entity,),
+    ):
+        try:
+            task(c, who, row["id"], tags=False)
+        except Problem as exc:
+            if exc.status not in (403, 404):
+                raise
+            continue
+        ids.append(str(row["id"]))
+    if ids:
+        context.append("Open tasks " + ", ".join(ids) + ".")
+    return " ".join(context)

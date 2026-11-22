@@ -1,10 +1,10 @@
 import json
 
-from backend import model_subscriptions, relationship_runs as runs, threads
+from backend import holds, model_subscriptions, relationship_runs as runs, threads
 from backend.auth import Identity
 from backend.entities import store as entities
 from backend.store import H
-from backend.tests.helpers.api import assign, claim, headers, post, runner
+from backend.tests.helpers.api import assign, claim, headers, post, runner, setup_attempt
 from clients.sessions import entity_lane
 
 
@@ -149,13 +149,47 @@ def test_relationship_reads_use_current_sponsor_grants_and_strip_other_page_refs
         assert api.get(f"/api/v2/{path}", headers=token).status_code == 404
 
 
-def test_relationship_source_threads_apply_scope_and_sponsor_in_python_and_sql(api):
+def test_relationship_page_links_and_pins_follow_the_bound_entity(api):
     store, auth = api.app.state.store, api.app.state.auth
     with store.transaction() as c:
         owner = auth.owner_identity(c)
         north, south = [
             entities.upsert(c, owner.actor, "organization", name=name, match={})["id"] for name in ("North", "South")
         ]
+        runs.enqueue(c, auth, owner, north, "Summarize")
+    page = memory(api, north, "north.html")
+    post(api, f"pages/{page}/links", {"target": entity_lane(south), "role": "related"})
+    with store.transaction() as c:
+        c.execute(
+            "UPDATE entity_sources SET source_type='note_me',source_id=?,visibility='restricted' WHERE entity_id=?",
+            (owner.actor, north),
+        )
+    own, other = [
+        post(api, "tasks", {"title": name, "body": "Review", "owner": "ana", "entity": entity})["id"]
+        for name, entity in (("North task", north), ("South task", south))
+    ]
+    for place in ("dashboard", f"task:{own}", f"task:{other}"):
+        post(api, "pins", {"place": place, "item": f"page:{page}"})
+    machine = worker(api)
+    heartbeat(api, machine)
+    attempt = claim(api, machine, runs.BOT)
+    response = api.get(f"/api/v2/pages/{page}", headers=headers(attempt["token"]))
+    assert response.status_code == 200
+    shown = response.json()
+    assert [link["target"] for link in shown["page"]["links"] if link["target"].startswith("entity:")] == [
+        entity_lane(north)
+    ]
+    assert [pin["place"] for pin in shown["pinned"]] == [f"task:{own}"]
+
+
+def test_relationship_source_threads_apply_scope_and_current_sponsor_access(api):
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        north, south = [
+            entities.upsert(c, owner.actor, "organization", name=name, match={})["id"] for name in ("North", "South")
+        ]
+        c.execute("UPDATE entity_sources SET visibility='company' WHERE entity_id=?", (north,))
     own, other = [
         post(
             api,
@@ -165,36 +199,125 @@ def test_relationship_source_threads_apply_scope_and_sponsor_in_python_and_sql(a
                 "body": "Review the renewal terms.",
                 "owner": "ana",
                 "private": True,
+                "readers": ["cara"],
                 "entity": entity,
             },
         )["id"]
         for title, entity in (("North renewal", north), ("South renewal", south))
     ]
+    north_page, south_page = memory(api, north, "north.html"), memory(api, south, "south.html")
+    _, _, foreign_run = setup_attempt(api)
     with store.transaction() as c:
         source = threads.create(c, owner, audience="company", title="Source")["id"]
         unrelated = threads.create(c, owner, audience="company", title="Unrelated")["id"]
         message = threads.post(c, owner, source, "In scope", refs={"task": own})["id"]
         threads.post(c, owner, source, "Outside scope", refs={"task": other})
+        threads.post(c, owner, source, "Current page", refs={"target": north_page})
+        foreign = threads.post(c, owner, source, "Foreign page", refs={"target": south_page})["id"]
+        threads.post(c, owner, source, "Foreign reply", in_reply_to=foreign)
+        c.execute(
+            "UPDATE messages SET refs=? WHERE id=?",
+            (json.dumps({"target": south_page}), foreign_run["message"]["id"]),
+        )
+        threads.post(c, owner, source, "Foreign run output", refs={"turn_id": foreign_run["id"]})
         sub = threads.create(c, owner, parent_message_id=message)["id"]
         c.execute("UPDATE conversations SET task_id=? WHERE id=?", (other, sub))
         # Outside intake supplies these columns. Model its stored thread without depending on its delivery path.
-        if not any(row["name"] == "entity_id" for row in c.execute("PRAGMA table_info(conversations)")):
-            c.execute("ALTER TABLE conversations ADD COLUMN entity_id TEXT")
-        c.execute("UPDATE conversations SET entity_id=?,audience='entity' WHERE id=?", (north, source))
-        runs.enqueue(c, auth, owner, north, "Summarize source", thread_id=source)
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(conversations)")}
+        for name in ("entity_id", "connection_id"):
+            if name not in columns:
+                c.execute(f"ALTER TABLE conversations ADD COLUMN {name} TEXT")
+        c.execute(
+            "UPDATE conversations SET entity_id=?,connection_id='first-inbox',audience='entity',participants=? "
+            "WHERE id=?",
+            (north, json.dumps(["human:ana", "human:cara"]), source),
+        )
+        runs.enqueue(c, auth, auth.identity_for_actor(c, "human:cara"), north, "Summarize source", thread_id=source)
+    sponsor_timeline = api.get(f"/api/v2/threads/{source}/timeline", headers=headers("cara-test"))
+    assert sponsor_timeline.status_code == 200
+    hidden = ("Foreign page", "Foreign reply", "Foreign run output")
+    assert all(body in sponsor_timeline.text for body in hidden)
     machine = worker(api)
     heartbeat(api, machine)
     attempt = claim(api, machine, runs.BOT)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "relationship-thread"}, token=machine["token"])
     token = headers(attempt["token"])
     timeline = api.get(f"/api/v2/threads/{source}/timeline", headers=token)
     assert timeline.status_code == 200
     assert "In scope" in timeline.text and "Outside scope" not in timeline.text
+    assert "Current page" in timeline.text
+    assert all(body not in timeline.text for body in hidden)
     for tid in (sub, unrelated):
         assert api.get(f"/api/v2/threads/{tid}", headers=token).status_code == 404
+    identity = Identity(runs.ACTOR, "bot", attempt_id=attempt["id"])
     with store.read_transaction() as c:
-        view = threads.Viewer(auth, Identity(runs.ACTOR, "bot", attempt_id=attempt["id"]))
         expected = {source, attempt["conversation"]["id"]}
-        assert threads.readable_ids(c, view, [*expected, sub, unrelated]) == expected
-        assert {r["id"] for r in c.execute("SELECT id FROM conversations WHERE " + threads.readable_sql(c, view))} == (
-            expected
+        assert threads.readable_ids(c, threads.Viewer(auth, identity), [*expected, sub, unrelated]) == expected
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET connection_id='new-inbox' WHERE id=?", (source,))
+    assert api.get(f"/api/v2/threads/{source}/timeline", headers=token).status_code == 200
+    with store.transaction() as c:
+        c.execute("UPDATE conversations SET participants=? WHERE id=?", (json.dumps(["human:ana"]), source))
+    assert api.get(f"/api/v2/threads/{source}/timeline", headers=headers("cara-test")).status_code == 404
+    assert api.get(f"/api/v2/threads/{source}/timeline", headers=token).status_code in (403, 404)
+    with store.read_transaction() as c:
+        assert threads.readable_ids(c, threads.Viewer(auth, identity), [*expected, sub, unrelated]) == set()
+
+
+def test_relationship_lane_head_in_claim_backoff_does_not_block_other_lanes(api):
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        north, south = [
+            entities.upsert(c, owner.actor, "organization", name=name, match={})["id"] for name in ("North", "South")
+        ]
+        first = runs.enqueue(c, auth, owner, north, "First north turn")
+        runs.enqueue(c, auth, owner, north, "Second north turn")
+        separate = runs.enqueue(c, auth, owner, south, "South turn")
+    machine = worker(api)
+    heartbeat(api, machine)
+    with store.transaction() as c:
+        job = c.execute("SELECT id FROM jobs WHERE message_id=?", (first,)).fetchone()["id"]
+        hold = holds.put(
+            c,
+            holds.CLAIM_ERROR,
+            "job",
+            job,
+            actor=H.TICO_ACTOR,
+            bot_id=runs.BOT,
+            until_at=H.shift(H.now(), seconds=300),
         )
+    message = claim(api, machine, runs.BOT)["message"]
+    assert message["id"] == separate, message["body"]
+    assert claim(api, machine, runs.BOT) is None
+    with store.transaction() as c:
+        c.execute("UPDATE holds SET until_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), hold["id"]))
+    assert claim(api, machine, runs.BOT)["message"]["id"] == first
+
+
+def test_relationship_wake_names_only_records_the_sponsor_can_open_at_claim(api):
+    store, auth = api.app.state.store, api.app.state.auth
+    with store.transaction() as c:
+        owner = auth.owner_identity(c)
+        north, south = [
+            entities.upsert(c, owner.actor, "organization", name=name, match={})["id"] for name in ("North", "South")
+        ]
+        c.execute("UPDATE entity_sources SET visibility='company' WHERE entity_id=?", (north,))
+        runs.enqueue(c, auth, auth.identity_for_actor(c, "human:cara"), north, "Find the open work")
+    page, other_page = memory(api, north, "north.html"), memory(api, south, "south.html")
+    open_id, revoked, closed, other = [
+        post(
+            api,
+            "tasks",
+            {"title": name, "body": "Review", "owner": "ana", "entity": entity, "private": True, "readers": ["cara"]},
+        )["id"]
+        for name, entity in (("Open", north), ("Revoked", north), ("Closed", north), ("Other", south))
+    ]
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET readers='[]' WHERE id=?", (revoked,))
+    post(api, f"tasks/{closed}/move", {"to": "closed", "why": "Already handled."})
+    machine = worker(api)
+    heartbeat(api, machine)
+    body = claim(api, machine, runs.BOT)["message"]["body"]
+    assert page in body and open_id in body
+    assert all(ident not in body for ident in (other_page, revoked, closed, other))

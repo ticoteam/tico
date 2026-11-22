@@ -2751,6 +2751,19 @@ def scoped_sql():
     )
 
 
+def relationship_queue_head_sql():
+    """A held or interrupted relationship wake still precedes the rest of its lane."""
+    entity = f"$.{relationship_runs.REF}.entity"
+    return (
+        f"(j.bot_id<>'{relationship_runs.BOT}' OR NOT EXISTS("
+        "SELECT 1 FROM jobs older JOIN messages om ON om.id=older.message_id "
+        "WHERE older.bot_id=j.bot_id AND older.state IN ('queued','leased','running','input','uncertain') "
+        "AND (older.created_at,om.seq)<(j.created_at,m.seq) "
+        "AND om.sender_id=m.sender_id AND om.recipient_id=m.recipient_id "
+        f"AND json_extract(om.refs,'{entity}')=json_extract(m.refs,'{entity}')))"
+    )
+
+
 def claim_scope(c, bot):
     """The one task `bot`'s claims are limited to, or None (scoped_sql)."""
     row = c.execute("SELECT claim_task FROM bot_control WHERE bot=?", (bot,)).fetchone()
@@ -4686,7 +4699,7 @@ class Execution:
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
             f"WHERE j.state='queued' AND j.held=0 AND j.bot_id IN ({marks}) AND a.runner_id=? "
             f"AND {lifecycle.claim_message_sql()} "
-            f"AND {unfenced_sql()} AND {scoped_sql()} "
+            f"AND {unfenced_sql()} AND {scoped_sql()} AND {relationship_queue_head_sql()} "
             # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
             f"AND NOT {claude_login.PARKED_SQL} "
             + ("AND j.id=? " if job_id is not None else "")
@@ -5402,6 +5415,8 @@ class Execution:
         )
         bot_who = Identity("bot:" + row["bot_id"], "bot", attempt_id=aid)
         if relationship:
+            if context := relationship_runs.wake_context(c, self.auth, bot_who, relationship):
+                msg = {**msg, "body": msg["body"] + "\n\n" + context}
             history = [msg]
         else:
             history = privacy.page(

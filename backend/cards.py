@@ -682,10 +682,12 @@ PLACE_WORDS = {"dashboard": "Dashboard"}
 
 def pinned_places(ctx, fid):
     """Where a page is pinned, as the places the reader may open: [{place, label}], the Dashboard first."""
-    from . import names
+    from . import names, relationship_runs
 
     out = []
     for (place,) in ctx.c.execute("SELECT DISTINCT place FROM pins WHERE item=? ORDER BY place", ("page:" + fid,)):
+        if ctx.who.actor == relationship_runs.ACTOR and not place.startswith("task:"):
+            continue
         try:
             kind, ident = parse(ctx, place)
         except Problem:

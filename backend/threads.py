@@ -870,6 +870,14 @@ def _message_viewer(c, v, message):
         return None
     reader = Viewer(v.auth, sponsor)
     if message.get("restricted") != 0:
+        principal = task_privacy.actor(v.who)
+        refs = H._json(message.get("refs"), {}) or {}
+        if (
+            not task_privacy.page_message_readable(c, principal, refs)
+            or not task_privacy.reply_pages_readable(c, principal, message)
+            or not task_privacy.run_pages_readable(c, principal, refs)
+        ):
+            return None
         try:
             for tid in task_privacy.message_tasks(c, message, current=True):
                 if not relationship_runs.task_matches(c, bound, {"id": tid}) or not _task_readable(c, reader, tid):
@@ -1065,22 +1073,6 @@ def readable_sql(
     per_row = per_row and plain and alias in ("r", "s")  # never rd or rt, which its own subqueries name
     t = inner or (lambda name: name)
     x = (alias + ".") if alias else ""
-    from . import relationship_runs
-
-    if v.actor == relationship_runs.ACTOR:
-        bound = v.auth.relationship_scope(c, v.who) if v.auth else None
-        if not bound:
-            return "0"
-        root_id = f"COALESCE({x}root_id,{x}id)"
-        root_task = f"(SELECT rr.task_id FROM {t('conversations')} rr WHERE rr.id={root_id})"
-        task_id = f"COALESCE({x}task_id,{root_task})"
-        allowed = v.auth.task_sql(c, v.who)
-        out = (
-            f"{root_id} IN {_qlist([bound.room, bound.source] if bound.source else [bound.room])} "
-            f"AND {x}deleted_at IS NULL AND ({task_id} IS NULL OR "
-            f"{task_id} IN (SELECT id FROM {t('tasks')} WHERE ({allowed}) AND id IN ({tasks})))"
-        )
-        return f"({out}) AND {conversation(x + 'id')}" if conversation else out
     me = _q(v.actor)
     fence = f"({x}task_id IS NULL OR {x}task_id IN ({tasks}))"
     entity = only is None or "entity" in only
