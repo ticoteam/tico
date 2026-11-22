@@ -5,6 +5,7 @@ enqueue and again at dispatch, and one OK from the person asked.
 A fake `webhook` adapter stands in for a provider (Jira's own is tested in test_outbound_jira.py)."""
 
 import json
+from dataclasses import replace
 
 import pytest
 
@@ -233,6 +234,26 @@ def test_the_person_asked_sees_the_action_and_one_ok_survives_a_safe_retry(api, 
     listed = get(api, "outbound-actions")["items"]
     assert [(i["id"], i["state"]) for i in listed] == [(row["id"], "done")]
     assert "payload" not in listed[0] and "metadata" not in listed[0] and listed[0]["approval_task_id"]
+
+
+def test_approval_and_owner_asks_use_the_adapters_labels(store, fake, monkeypatch):
+    adapter = replace(
+        OA.ADAPTERS["webhook"],
+        reconcile=None,
+        approval_prompt="Approve this partner delivery?",
+        action_label=lambda destination: f"delivery to {destination}",
+        provider_name="Acme Delivery",
+    )
+    monkeypatch.setitem(OA.ADAPTERS, "webhook", adapter)
+    row, approval_id = approved_by_ben(store)
+    fake.answers = [RuntimeError("connection reset")]
+    assert OA.attempt(store, OA.claim(store)) == "unknown"
+    owner_ask = OA.asked(row_of(store, row["id"]))["ask"]
+    with store.read() as c:
+        approval = c.execute("SELECT line FROM requirements WHERE id=?", (approval_id,)).fetchone()[0]
+        check = c.execute("SELECT line FROM requirements WHERE id=?", (owner_ask,)).fetchone()[0]
+    assert approval == adapter.approval_prompt
+    assert adapter.provider_name in check and adapter.action_label(row["destination"]) in check
 
 
 def test_a_used_ok_whose_giver_left_does_not_carry_a_retry_and_its_task_closes(store, fake):

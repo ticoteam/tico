@@ -139,7 +139,8 @@ def _matches(
                 raise ScopeError("the company (self) is not set up")
             found |= set(S.linked_to(c, me, term[1]))
         else:
-            found |= set(S.linked_to(c, term[2], term[1]))
+            target = S.follow_merges(c, [term[2]])[0] if follow_merges else term[2]
+            found |= set(S.linked_to(c, target, term[1]))
     return (set(S.follow_merges(c, found)) if follow_merges else found) & set(reached)
 
 
@@ -168,6 +169,8 @@ def _judge(
             if me is None:
                 raise ScopeError("the company (self) is not set up")
             key, target = parse_condition(row["applies_when"])
+            if channel == "sms":
+                target = S.follow_merges(c, [target])[0]
             if target not in S.linked_from(c, me, key):
                 return "skip", None, ""
     except ScopeError as exc:

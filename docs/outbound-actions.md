@@ -142,16 +142,19 @@ Use `operation: "send"`, an E.164 phone number as the destination and the provid
 
 | Channel | Payload | Tools connection |
 |---|---|---|
-| `sms` | `{"from":"+12025550100","body":"Your appointment is ready."}` | Twilio at `https://api.twilio.com`. Use the Twilio template with an Account SID and Auth Token or API key pair, or a Basic password key with the Account SID as its username. |
+| `sms` | `{"from":"+12025550100","body":"Your appointment is ready."}` | Twilio at `https://api.twilio.com`. Use the Twilio template with an Account SID and Auth Token or API key pair, or a Basic password key with the Account SID as its username. Grouped templates can keep the Account SID as a credential. |
 | `close_sms` | `{"from":"+12025550100","body":"Your appointment is ready."}`. Add `lead_id` to link the SMS to a Close lead. | Close CRM at `https://api.close.com` with a Basic user API key. The sender must be an internal Close number. |
 
 Both connections must be Everyone API tools marked as record integrations by an administrator. The bot needs
-Read and write on each shared key used, checked at enqueue and again before the call. The Twilio account is
-frozen in the approval preview. Both channels are external and default to Ask first. A Contacts block on
-`channel:sms` applies to both, including when the recipient has been merged into another contact.
+Read and write on each shared key used. The Tools proxy refuses direct SMS creates on these connections. The Twilio
+account is frozen in the approval preview. Both channels are external and default to Ask first. A Contacts block on
+`channel:sms` applies to both. The destination is matched by canonical number against Contacts phone fields and phone
+identifiers. Rules follow merges of contacts and rule targets. The sender checks the Contacts block again in the
+transaction that authorizes the exact credential it will use.
 
 Twilio creates a Message. Close creates an SMS activity with status `outbox`. The receipt's `provider_id` records
-provider acceptance. A documented 429 requeues using Retry-After or a one-minute fallback. These endpoints
+provider acceptance. A 429 requeues using Retry-After (capped at one day) or a one-minute fallback. A vault outage
+before dispatch also requeues. These endpoints
 have no documented lookup by a client reference. A lost or unreadable answer goes to the owner with the action
 still unknown, with no automatic resend. [Twilio Messages API](https://www.twilio.com/docs/messaging/api/message-resource)
 [Close SMS API](https://developer.close.com/api/resources/activities/sms/create)
@@ -168,5 +171,6 @@ Register an `Adapter(channel, prepare, dispatch, reconcile=None)`:
   failed, or None when its record cannot tell.
 - `defaults`, optional: the channel's own choice per audience when the company set none.
 - `freeze(c, connection_id, destination)`, optional: fields frozen into the payload at enqueue (what an OK shows).
+- `approval_prompt`, `action_label(destination)` and `provider_name`, optional: text for approval and owner asks.
 
 Import the module at the end of `backend/outbound_actions.py`, so it registers whenever the gate is loaded.

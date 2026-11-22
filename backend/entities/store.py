@@ -215,15 +215,19 @@ def _visible_rows(c: sqlite3.Connection, r: V.Reader, ids: Sequence[str]) -> lis
 
 
 def follow_merges(c: sqlite3.Connection, ids: Iterable[str]) -> list[str]:
-    """Each id, or the entity it was merged into (a merged row answers with the kept one, up to five merges)."""
+    """Each id, or the last kept entity in its merge chain."""
     out: list[str] = []
     for entity_id in ids:
         current = entity_id
-        for _ in range(5):
+        seen: set[str] = set()
+        while current not in seen:
+            seen.add(current)
             row = _one(c, "SELECT status, merged_into_id FROM entities WHERE id = ?", (current,))
             if not row or row["status"] != "merged" or not row["merged_into_id"]:
                 break
             current = row["merged_into_id"]
+        else:
+            raise ValueError("An entity's merge chain contains a cycle")
         out.append(current)
     return list(dict.fromkeys(out))
 
@@ -1036,16 +1040,16 @@ def walk(c: sqlite3.Connection, starts: Sequence[str], depth: int = WALK_DEPTH) 
 
 NAME_CONTACT = "name:"  # a contact that is only a name (a letter's addressee), as `contact_entities` reads it
 PHONE_CONTACT = re.compile(r"\+[0-9]{7,15}")  # an E.164 number once its formatting is stripped
-PHONE_SQL = "replace(replace(replace(replace(replace(normalized_value, ' ', ''), '-', ''), '(', ''), ')', ''), '.', '')"
 
 
 def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[str]:
     """The entities a contact points at. An email address: a person or organization that has it as an email identifier,
     and the organization whose primary domain is its domain. A phone number (+ and digits, formatting ignored): one
-    that has it as a phone identifier. `name:<name>` (a letter's addressee, which has no other identity): every entity
-    with that name, so a name two entities share reaches both and a rule on either holds the send. Otherwise names are
-    never matched."""
+    that has it as a phone identifier or phone field. `name:<name>` (a letter's addressee, which has no other identity):
+    every entity with that name, so a name two entities share reaches both and a rule on either holds the send.
+    Otherwise names are never matched."""
     ids: list[str] = []
+    phones: set[str] = set()
     for address in addresses:
         text = address.strip().lower()
         if text.startswith(NAME_CONTACT):
@@ -1062,12 +1066,7 @@ def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[st
             continue
         phone = _normal_identifier("phone", text)
         if "@" not in text and PHONE_CONTACT.fullmatch(phone):
-            ids += [
-                str(r["entity_id"])
-                for r in _rows(
-                    c, f"SELECT entity_id FROM entity_identifiers WHERE kind = 'phone' AND {PHONE_SQL} = ?", (phone,)
-                )
-            ]
+            phones.add(phone)
             continue
         if not text:
             continue
@@ -1088,6 +1087,16 @@ def contact_entities(c: sqlite3.Connection, addresses: Sequence[str]) -> list[st
                     (domain,),
                 )
             ]
+    if phones:
+        ids.extend(
+            str(entity_id)
+            for entity_id, value in c.execute(
+                "SELECT entity_id, normalized_value FROM entity_identifiers WHERE kind = 'phone' "
+                "UNION ALL SELECT v.entity_id, v.text_value FROM entity_values v "
+                "JOIN entity_attributes a ON a.id = v.entity_attribute_id WHERE a.value_type = 'phone'"
+            )
+            if _normal_identifier("phone", value) in phones
+        )
     return sorted(set(ids))
 
 

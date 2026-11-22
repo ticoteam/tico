@@ -28,7 +28,6 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import timezone
-from functools import partial
 from typing import Any, Callable, NamedTuple, cast
 
 from fastapi import Request
@@ -138,6 +137,9 @@ class Adapter:
     reconcile: Callable[..., "Settled | None"] | None = None
     defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
     freeze: Callable[..., dict[str, Any]] | None = None
+    approval_prompt: str = ""
+    action_label: Callable[[str], str] | None = None
+    provider_name: str = ""
 
 
 ADAPTERS: dict[str, Adapter] = {}  # each channel's sender, registered at the end of this module
@@ -312,6 +314,8 @@ def request_approval(c: Any, row: Any, *, renew: bool = False) -> bool:
     ask (an ask that is refused is undone and the next person tried). The same content asked again is the same ask,
     unless `renew`: the old OK no longer lets it go (whoever gave it left), so a new one is asked. False when nobody
     may be asked."""
+    adapter = ADAPTERS.get(row["channel"])
+    prompt = adapter.approval_prompt if adapter else ""
     for person in _people_for(c, row["actor"]):
         c.execute("SAVEPOINT outbound_ask")
         try:
@@ -319,9 +323,7 @@ def request_approval(c: Any, row: Any, *, renew: bool = False) -> bool:
                 c,
                 _asker(row),
                 person,
-                "May I send this text message?"
-                if row["channel"] in outbound_sms.SERVICES
-                else f"Send this {row['channel']} {row['operation']}?",
+                prompt or f"Send this {row['channel']} {row['operation']}?",
                 shows=[SUBJECT + row["id"]],
                 subject=SUBJECT + row["id"],
                 content=content(row),
@@ -557,11 +559,13 @@ def ask_owner(c: Any, row: Any) -> None:
 
     task = H.task(c, row["task_id"]) if row["task_id"] else None
     people = owner_asks.people_for(c, task, row["actor"])
-    what = f"{row['channel']} {row['operation']} on {row['destination']}"[:200]
-    provider = row["channel"]
-    if provider in outbound_sms.SERVICES:
-        what = f"text to {row['destination']}"
-        provider = "Twilio" if provider == "sms" else "Close"
+    adapter = ADAPTERS.get(row["channel"])
+    what = (
+        adapter.action_label(row["destination"])
+        if adapter and adapter.action_label
+        else f"{row['channel']} {row['operation']} on {row['destination']}"
+    )[:200]
+    provider = (adapter.provider_name if adapter else "") or row["channel"]
     made = owner_asks.ask(
         c,
         None,
@@ -1267,12 +1271,4 @@ register(
     )
 )
 
-for _channel in outbound_sms.SERVICES:
-    register(
-        Adapter(
-            _channel,
-            partial(outbound_sms.prepare, channel=_channel),
-            outbound_sms.dispatch,
-            freeze=outbound_sms.freeze if _channel == "sms" else None,
-        )
-    )
+outbound_sms.register_adapters()

@@ -520,9 +520,13 @@ def test_rules_and_documents_link_once_each(api):
     assert post(api, f"risks/{RISK}/unlink", covers)["link"] is None
     post(api, f"risks/{RISK}/unlink", covers, expected=404)
     assert get(api, "risks/" + RISK)["coverage"] == []
-    # Erasing a document drops its links.
+    # A linked document follows a merge, then erasing the kept document drops its links.
+    kept = entity(api, "document", "Acme insurance policy", {"name": "Acme insurance policy"})
     with api.app.state.store.transaction() as c:
-        ES.erase_rows(c, ANA, policy, "request")
+        ES.merge(c, ANA, kept, policy)
+    assert [s["id"] for s in get(api, "risks/" + RISK)["sources"]] == [kept]
+    with api.app.state.store.transaction() as c:
+        ES.erase_rows(c, ANA, kept, "request")
     assert get(api, "risks/" + RISK)["sources"] == []
 
 

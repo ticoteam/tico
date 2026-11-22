@@ -521,9 +521,9 @@ def list_risks(auth: Any, c: Any, who: Any, task: str | None = None) -> Row:
 
 
 def _current(c: Any, ids: Any) -> dict[str, str]:
-    """{stored id: the id it answers as now}: a merged record answers as the one it was merged into (ES._follow), whose
+    """{stored id: the id it answers as now}: a merged record answers as the one it was merged into, whose
     sources say who may see it; the merged row itself has none left, and a record with none shows to everyone."""
-    return {ident: ES._follow(c, [ident])[0] for ident in dict.fromkeys(ids)}  # pyright: ignore[reportPrivateUsage]
+    return {ident: ES.follow_merges(c, [ident])[0] for ident in dict.fromkeys(ids)}
 
 
 def _entity(c: Any, actor: str, ident: str, field: str) -> str:

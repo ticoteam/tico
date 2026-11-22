@@ -3,6 +3,7 @@
 import base64
 import ipaddress
 import json
+from dataclasses import replace
 from urllib.parse import parse_qs
 
 import httpx
@@ -10,7 +11,6 @@ import pytest
 
 from backend import egress, outbound_actions as OA, outbound_sms as SMS, task_asks
 from backend.auth import Identity
-from backend.entities import store as contacts
 from backend.store import H
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post
@@ -27,6 +27,11 @@ BODY = " Hello 👋\n"
 LEAD = "lead_synthetic123"
 
 
+class InterruptedBody(httpx.SyncByteStream):
+    def __iter__(self):
+        raise httpx.ReadError("reset after the response headers")
+
+
 class FakeSMS:
     def __init__(self, channel, tool):
         self.channel = channel
@@ -34,8 +39,10 @@ class FakeSMS:
         self.requests = []
         self.accepted = 0
         self.next_status = 201
+        self.retry_after = "180"
         self.lose = False
         self.bad_receipt = False
+        self.body = BODY
         self.lead = LEAD
         self.auth = f"{ACCOUNT}:{TOKEN}" if channel == "sms" else f"{TOKEN}:"
         self.provider_id = SMS_ID if channel == "sms" else ACTIVITY_ID
@@ -50,7 +57,7 @@ class FakeSMS:
             assert request.headers["host"] == "api.twilio.com"
             assert request.url.path == f"/2010-04-01/Accounts/{ACCOUNT}/Messages.json"
             assert request.headers["content-type"] == "application/x-www-form-urlencoded"
-            assert parse_qs(request.content.decode()) == {"From": [FROM], "To": [TO], "Body": [BODY]}
+            assert parse_qs(request.content.decode()) == {"From": [FROM], "To": [TO], "Body": [self.body]}
             key = "sid"
         else:
             assert request.headers["host"] == "api.close.com"
@@ -61,29 +68,41 @@ class FakeSMS:
                 **({"lead_id": self.lead} if self.lead else {}),
                 "local_phone": FROM,
                 "remote_phone": TO,
-                "text": BODY,
+                "text": self.body,
             }
             key = "id"
         if self.next_status != 201:
             status, self.next_status = self.next_status, 201
-            return httpx.Response(status, headers={"Retry-After": "180"})
+            if status == 429:
+                return httpx.Response(status, headers={"Retry-After": self.retry_after}, stream=InterruptedBody())
+            return httpx.Response(status)
         self.accepted += 1
         if self.lose:
             raise httpx.ReadError("reset after acceptance")
-        return httpx.Response(201, json={} if self.bad_receipt else {key: self.provider_id})
+        record = {} if self.bad_receipt else {"body": self.body, key: self.provider_id}
+        return httpx.Response(201, content=json.dumps(record).encode())
 
 
-def _make(api, monkeypatch, channel, *, template=False):
+def _make(api, monkeypatch, channel, *, template=False, grouped=False):
     setup(api)
     vendor = post(api, "api-tools", {"name": "Twilio" if channel == "sms" else "Close CRM"})
     tool = vendor["id"]
     fake = FakeSMS(channel, tool)
     if template:
+        sid = "" if grouped else f"TWILIO_ACCOUNT_SID={ACCOUNT}\n"
         post(
             api,
             f"api-tools/{tool}/paste",
-            {"text": f"TWILIO_ACCOUNT_SID={ACCOUNT}\nTWILIO_API_KEY={API_KEY}\nTWILIO_API_SECRET={API_SECRET}"},
+            {
+                "text": f"{sid}TWILIO_API_KEY={API_KEY}\nTWILIO_API_SECRET={API_SECRET}",
+            },
         )
+        if grouped:
+            post(
+                api,
+                f"api-tools/{tool}/keys",
+                {"name": "Account SID", "env": "TWILIO_ACCOUNT_SID", "value": ACCOUNT},
+            )
         fake.auth = f"{API_KEY}:{API_SECRET}"
     else:
         post(
@@ -119,7 +138,7 @@ def store(api):
 
 
 def _action(vendor, key):
-    payload = {"from": FROM, "body": BODY}
+    payload = {"from": FROM, "body": vendor.body}
     if vendor.channel == "close_sms" and vendor.lead:
         payload["lead_id"] = vendor.lead
     return {
@@ -202,16 +221,21 @@ def test_an_unproven_answer_asks_the_owner_and_never_resends(api, store, vendor,
     assert len(vendor.requests) == vendor.accepted == 1
 
 
-def test_rate_limit_waits_and_uses_the_same_ok(api, store, vendor):
+@pytest.mark.parametrize(("retry_after", "wait"), [("180", 180), ("1e100", 86_400)])
+def test_rate_limit_headers_requeue_with_the_same_ok_even_if_the_body_cannot_be_read(
+    api, store, vendor, retry_after, wait
+):
     row = _queue(store, vendor)
     _approve(api, row["id"])
     vendor.next_status = 429
+    vendor.retry_after = retry_after
     start = H.now()
     assert _attempt(store) == "requeued"
     after = _row(store, row["id"])
     assert after["state"] == "queued" and after["provider_attempted_at"] is None
-    assert after["next_attempt_at"] >= H.shift(start, seconds=180)
-    assert OA.claim(store, H.shift(start, seconds=179)) is None
+    assert after["next_attempt_at"] >= H.shift(start, seconds=wait)
+    assert after["next_attempt_at"] <= H.shift(H.now(), seconds=wait)
+    assert OA.claim(store, H.shift(start, seconds=wait - 1)) is None
     assert _attempt(store, after["next_attempt_at"]) == "done"
     with store.read() as c:
         assert task_asks.standing(c, row["approval_id"]) == task_asks.USED
@@ -230,39 +254,56 @@ def test_a_provider_refusal_is_final(api, store, vendor):
     assert len(vendor.requests) == 1 and vendor.accepted == 0
 
 
-def test_opt_out_blocks_existing_approval_and_new_actions(api, store, vendor):
-    row = _queue(store, vendor)
-    _approve(api, row["id"])
-    _policy(api, vendor)
+def _opt_out(api, store):
+    post(
+        api,
+        "entities/types/person/attributes",
+        {"key": "mobile", "name": "Mobile", "description": "The person's mobile number.", "value_type": "phone"},
+    )
+    contact = post(
+        api,
+        "entities",
+        {"type": "person", "match": {"name": "Acme Contact"}, "values": {"mobile": "+1 (202) 555‑0101"}},
+    )
     with store.transaction() as c:
         now = H.now()
-        c.execute(
-            "INSERT INTO entities(id,type,name,name_key,created_by,created_at,updated_at) "
-            "VALUES('person/acme','person','Acme','acme','human:ana',?,?)",
-            (now, now),
-        )
-        c.execute(
-            "INSERT INTO entity_identifiers(entity_id,kind,value,normalized_value,primary_identifier,derived) "
-            "VALUES('person/acme','phone','+1 (202) 555-0101','+1 (202) 555-0101',0,0)"
-        )
         c.execute(
             "INSERT INTO org_rules(id,kind,text,who,with_scope,if_broken,status,suggested_by,created_at,"
             "updated_at,toward_scope) VALUES('sms-opt-out','external','Opted out of SMS',"
             "'{\"everyone\":true}','{}','block','active','human:ana',?,?,?)",
-            (now, now, json.dumps(["entity:person/acme", "channel:sms"])),
+            (now, now, json.dumps([f"entity:{contact['id']}", "channel:sms"])),
         )
+    return contact["id"]
+
+
+def test_opt_out_blocks_existing_approval_and_new_actions(api, store, vendor):
+    row = _queue(store, vendor)
+    _approve(api, row["id"])
+    _policy(api, vendor)
+    contact = _opt_out(api, store)
     new = _queue(store, vendor, "after-opt-out")
     assert new["state"] == "blocked" and "Opted out" in new["last_error"]
-    with store.transaction() as c:
-        c.execute(
-            "INSERT INTO entities(id,type,name,name_key,created_by,created_at,updated_at) "
-            "VALUES('person/acme-kept','person','Acme','acme','human:ana',?,?)",
-            (now, now),
-        )
-        contacts.merge(c, "human:ana", "person/acme-kept", "person/acme")
+    kept = post(api, "entities", {"type": "person", "match": {"name": "Kept Contact"}})["id"]
+    post(api, "entities/merge", {"keep": kept, "drop": contact})
     assert _attempt(store) == "blocked"
     after = _row(store, row["id"])
     assert after["provider_attempted_at"] is None and "Opted out" in after["last_error"]
+    assert vendor.requests == []
+
+
+def test_opt_out_committed_after_the_permit_stops_dispatch(api, store, vendor, monkeypatch):
+    row = _queue(store, vendor)
+    _approve(api, row["id"])
+    adapter = OA.ADAPTERS[vendor.channel]
+
+    def dispatch_after_opt_out(store, permitted):
+        assert permitted["provider_attempted_at"]
+        _opt_out(api, store)
+        return adapter.dispatch(store, permitted)
+
+    monkeypatch.setitem(OA.ADAPTERS, vendor.channel, replace(adapter, dispatch=dispatch_after_opt_out))
+    assert _attempt(store) == "failed"
+    assert "Opted out" in _row(store, row["id"])["last_error"]
     assert vendor.requests == []
 
 
@@ -311,3 +352,36 @@ def test_twilio_template_uses_its_shared_key_pair_and_freezes_the_account(api, s
         c.execute("UPDATE tool_settings SET value=? WHERE tool_id=?", ("AC" + "9" * 32, vendor.tool))
     assert _attempt(store) == "blocked"
     assert _row(store, row["id"])["provider_attempted_at"] is None and len(vendor.requests) == 1
+
+
+def test_twilio_grouped_account_sid_in_credentials_is_frozen_and_used(api, store, monkeypatch):
+    vendor = _make(api, monkeypatch, "sms", template=True, grouped=True)
+    row = _queue(store, vendor)
+    assert _approve(api, row["id"])["account_sid"] == ACCOUNT
+    assert _attempt(store) == "done" and vendor.accepted == 1
+
+
+def test_vault_unavailable_at_dispatch_requeues_the_frozen_text(api, store, monkeypatch):
+    vendor = _make(api, monkeypatch, "sms", template=True, grouped=True)
+    row = _queue(store, vendor)
+    _approve(api, row["id"])
+
+    def unavailable(c, credential):
+        raise OA.Problem("vault_unavailable", "synthetic vault error", 503)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(api.app.state.vault.cipher, "decrypt", unavailable)
+        assert _attempt(store) == "requeued"
+    after = _row(store, row["id"])
+    assert after["provider_attempted_at"] is None and after["payload"] == row["payload"]
+    assert "synthetic vault error" not in after["last_error"] and vendor.requests == []
+    assert _attempt(store, after["next_attempt_at"]) == "done" and vendor.accepted == 1
+
+
+def test_twilio_accepts_a_receipt_echoing_the_largest_text(api, store, monkeypatch):
+    vendor = _make(api, monkeypatch, "sms")
+    vendor.body = "👋" * 1_600
+    _policy(api, vendor)
+    row = _queue(store, vendor)
+    assert _attempt(store) == "done"
+    assert json.loads(_row(store, row["id"])["receipt"]) == {"provider_id": SMS_ID}

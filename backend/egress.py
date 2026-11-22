@@ -14,6 +14,7 @@ import re
 import socket
 import threading
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
@@ -139,9 +140,19 @@ def address_for(parts, allow_http=False, budget=None):
     return str(addresses[0])
 
 
-def post(url, body, headers, *, allow_http=False, transport=None, response_bytes: int = HEAD_BYTES):
+def post(
+    url,
+    body,
+    headers,
+    *,
+    allow_http=False,
+    transport=None,
+    response_bytes: int = HEAD_BYTES,
+    headers_only_statuses: Collection[int] = (),
+):
     """POST `body` (bytes) with `headers`; the Answer, or Blocked / httpx.HTTPError. `transport` stands in for the
-    network in tests; the address is checked and pinned either way. `response_bytes` bounds the answer kept."""
+    network in tests; the address is checked and pinned either way. `response_bytes` bounds the answer kept.
+    `headers_only_statuses` identifies answers the caller can act on without reading the body."""
     parts = check(url, allow_http)
     ends = time.monotonic() + DEADLINE
     address = address_for(parts, allow_http, budget=DEADLINE)
@@ -159,12 +170,14 @@ def post(url, body, headers, *, allow_http=False, transport=None, response_bytes
                 "POST", pinned, content=body, headers=sent, extensions={"sni_hostname": parts.hostname}
             ) as response:
                 head = b""
-                for chunk in response.iter_bytes():
-                    head += chunk[: response_bytes - len(head)]
-                    if len(head) >= response_bytes or time.monotonic() > ends:
-                        break
-                if time.monotonic() > ends:
-                    raise Blocked(late)
+                limit = max(0, response_bytes)
+                if limit and response.status_code not in headers_only_statuses:
+                    for chunk in response.iter_bytes():
+                        head += chunk[: limit - len(head)]
+                        if len(head) >= limit or time.monotonic() > ends:
+                            break
+                    if time.monotonic() > ends:
+                        raise Blocked(late)
                 return Answer(
                     response.status_code,
                     {k.lower(): v for k, v in response.headers.items()},
