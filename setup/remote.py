@@ -397,18 +397,7 @@ def bootstrap_script(
         L += [f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml"]
     if env_param:
         name, region = env_param
-        L += [
-            f"cat > {d}/pull-env.sh <<'EOS'",
-            "#!/bin/sh",
-            "set -eu",
-            "umask 077",
-            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
-            f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env",
-            *plan_copy_lines(),
-            "EOS",
-            f"chmod 700 {d}/pull-env.sh",
-            f"{d}/pull-env.sh",
-        ]
+        L += [*pull_env_install_lines(name, region), f"{d}/pull-env.sh"]
     else:
         L += ["umask 077", f"echo {env_b64} | base64 -d > {d}/.env"]
     L += [f"chmod 600 {d}/.env"]
@@ -457,7 +446,41 @@ def finish_boot_guard_lines() -> list[str]:
     ]
 
 
-def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
+# Keys every server .env has (Settings.to_env); a stored parameter read back without them is not the server's settings.
+ENV_REQUIRED_KEYS = ("TICO_DOMAIN", "TICO_AUTH_PROXY")
+
+
+def pull_env_install_lines(name: str, region: str) -> list[str]:
+    """Write pull-env.sh: read the stored parameter into .env, then copy the starter plan. It replaces .env only with
+    a file that has the server's settings: an empty or partial read keeps the old .env and fails loudly, so a re-run
+    never leaves the server restart-looping on an empty .env."""
+    d, q = contract.REMOTE_DIR, shlex.quote
+    new = f"{d}/.env.new"
+    check = " && ".join(f"grep -q '^{k}=' {new}" for k in ENV_REQUIRED_KEYS)
+    return [
+        f"cat > {d}/pull-env.sh <<'EOS'",
+        "#!/bin/sh",
+        "set -eu",
+        "umask 077",
+        f"rm -f {new}",
+        # Through a pipe: the snap aws-cli (Ubuntu) can write nothing when its stdout is a file.
+        f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
+        f"--query Parameter.Value --output text | cat > {new}",
+        f"if ! {{ {check}; }}; then",
+        f"  rm -f {new}",
+        f'  echo "tico-setup: FAILED: the settings read from {name} are empty or incomplete; kept the old .env" >&2',
+        "  exit 7",
+        "fi",
+        f"mv {new} {d}/.env",
+        *plan_copy_lines(),
+        "EOS",
+        f"chmod 700 {d}/pull-env.sh",
+    ]
+
+
+def rerun_script(
+    *, compose: bytes | None, compose_url: str, plan: bool, env_param: tuple[str, str] | None = None
+) -> str:
     """A re-run on an existing AWS server, by SSM: refresh the env and restart, or finish a first boot that stopped. With
     the plan bucket it first installs this release's compose.yaml, the folder it mounts and the copy step (a server set up
     before them has none), pulls this release's image, and checks that the running app reads the plan: setup deletes
@@ -472,6 +495,8 @@ def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
             else f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml.new",
             f"mv {d}/compose.yaml.new {d}/compose.yaml",
         ]
+    if env_param:  # this release's pull-env.sh: the one from the server's first boot may predate the .env check
+        L += pull_env_install_lines(*env_param)
     L += [f"{d}/pull-env.sh"]
     if plan:
         L += plan_copy_lines()

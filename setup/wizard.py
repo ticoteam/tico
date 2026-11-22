@@ -1373,9 +1373,10 @@ def _aws(
                 "or --compose-ref with a full commit SHA."
             )
             return None
-        res = runner.run(
-            f"sh -c {shlex.quote(remote.rerun_script(compose=compose, compose_url=url, plan=bool(plan_s3)))}"
+        rerun = remote.rerun_script(
+            compose=compose, compose_url=url, plan=bool(plan_s3), env_param=(d.param_name, s.aws_region)
         )
+        res = runner.run(f"sh -c {shlex.quote(rerun)}")
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None

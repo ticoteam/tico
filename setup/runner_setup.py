@@ -77,7 +77,7 @@ def bootstrap_script(
     if env_param:
         name, region = env_param
         L += [
-            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption --query Parameter.Value --output text > {d}/join.env"
+            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption --query Parameter.Value --output text | cat > {d}/join.env"
         ]
     else:
         L += [f"echo {env_b64} | base64 -d > {d}/join.env"]
