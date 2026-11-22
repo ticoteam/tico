@@ -3907,10 +3907,13 @@ class Execution:
                 continue
             stored = json.loads(row['config'])
             # A runner accepts a checkout whose bot.yaml names the bot's id, its config's name or its named folder
-            # (runner-rs readiness.rs configuration_valid). A bot seeded from the catalog stores no name, and its
-            # template's bot.yaml names its slug (agent-ops, while its id stays botops): send the slug as the name, so
-            # its fresh checkout is ready on every runner already out there.
-            named = not stored.get('name') and bool(row['slug'])
+            # (runner-rs readiness.rs configuration_valid). A bot seeded from the catalog stores no name, or its id as
+            # its name (a fresh v0.6.200 install stores name botops), and its template's bot.yaml names its slug
+            # (agent-ops, while its id stays botops): send the slug as the name, so its fresh checkout is ready on every
+            # runner already out there. A bot.yaml naming the id still matches, as the runner also accepts the id.
+            named = (
+                stored.get('name') in (None, '', row['bot']) and bool(row['slug']) and row['slug'] != stored.get('name')
+            )
             if named:
                 stored = {**stored, 'name': row['slug']}
             config = runner_versions.wire_template(

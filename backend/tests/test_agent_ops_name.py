@@ -71,11 +71,16 @@ def test_a_fresh_agent_ops_checkout_from_its_template_is_the_config_its_runner_i
     checkout = yaml.safe_load((ROOT / "templates/catalog/agent-ops/bot.yaml").read_text())
     assert checkout["name"] != H.FLEET_MAINTAINER  # its id alone would not match
     assert row["config"]["name"] == json.loads(row["config_json"])["name"] == checkout["name"] == H.AGENT_OPS_SLUG
-    # A name the server stores is the one it sends.
+    # A fresh v0.6.200 install stores its id as its name: that is no name of its own, so the slug goes out too.
     with api.app.state.store.transaction() as c:
         BS.update(c, "botops", {"name": "botops"})
     (row,) = [a for a in get(api, "runners/assignments", token=machine["token"]) if a["bot"] == H.FLEET_MAINTAINER]
-    assert row["config"]["name"] == json.loads(row["config_json"])["name"] == "botops"
+    assert row["config"]["name"] == json.loads(row["config_json"])["name"] == checkout["name"]
+    # Any other name the server stores is the one it sends.
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "botops", {"name": "ops-desk"})
+    (row,) = [a for a in get(api, "runners/assignments", token=machine["token"]) if a["bot"] == H.FLEET_MAINTAINER]
+    assert row["config"]["name"] == json.loads(row["config_json"])["name"] == "ops-desk"
 
 
 def test_an_old_company_file_reads_the_new_name_unless_a_person_chose_one():
