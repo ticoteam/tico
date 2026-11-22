@@ -1573,6 +1573,7 @@ class StructuredReadiness(Contract):
     disk_cleanup: DiskCleanupReadiness | None = None
     # Bots run as their own user here (runner-rs/src/isolation.rs), so a Tico model may run (backend/models_preset.py).
     isolated: bool | None = None
+    relationship_lanes: bool | None = None
     # Not isolated, but a Tico cloud machine: one company's trust group, whose Tico models run on the runner's relay
     # alone (runner-rs/src/cloud_machine.rs). Sent only once the config answer says `readiness_trust`.
     trust: Literal["cloud_machine"] | None = None

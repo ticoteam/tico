@@ -497,6 +497,13 @@ pub fn server_takes_browser() -> bool {
     SERVER_BROWSER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+static SERVER_RELATIONSHIP_LANES: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_takes_relationship_lanes() -> bool {
+    SERVER_RELATIONSHIP_LANES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The server said the config changed and no answer has been kept since: the fallback models are read again at once.
 static CONFIG_STALE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -533,6 +540,10 @@ pub fn remember(config: &Value) {
     );
     SERVER_BROWSER.store(
         config["readiness_browser"] == true,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    SERVER_RELATIONSHIP_LANES.store(
+        config["readiness_relationship_lanes"] == true,
         std::sync::atomic::Ordering::Relaxed,
     );
     let rows = config["fallback_models"]

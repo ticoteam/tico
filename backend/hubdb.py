@@ -2413,7 +2413,12 @@ def task_private_readable(conn, actor, row):
     row = dict(row)
     nobody = False
     if isinstance(actor, RunPrincipal) and actor != assistant_actor(conn):
-        actor = str(actor)  # another bot's run reads as that bot
+        if actor == bot_actor(RELATIONSHIP_WORKER):
+            from . import relationship_runs
+
+            if not relationship_runs.task_matches(conn, relationship_runs.scope(conn, actor.attempt), row):
+                return False
+        actor = str(actor)
     if isinstance(actor, RunPrincipal):
         # One Assistant serves everyone (rooms.run_scope): in a person's own chat it reads exactly what they read, by
         # their own rule (page copies included); a routine turn reads its own task and no other private one; a run whose
@@ -2842,6 +2847,7 @@ RULES_OWNER = "rules-owner"
 DESIGN_OWNER = "design-owner"
 # The built-in Tools Owner's slug: it owns the Tools page, its chat and its key cards (backend/page_owners.py).
 TOOLS_OWNER = "tools-owner"
+RELATIONSHIP_WORKER = "relationship-worker"
 # Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
 # slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
 # person creates gets a UUIDv7 id (new_bot_id).

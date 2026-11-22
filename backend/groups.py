@@ -43,6 +43,7 @@ SYSTEM_BOTS = (
     "updates-owner",
     "automations-owner",
     H.TOOLS_OWNER,
+    H.RELATIONSHIP_WORKER,
 )
 # The General Manager's team, the built-in bots: Tico's own. Its id and name are the same for every company.
 BUILT_IN = "built-in"

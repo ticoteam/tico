@@ -733,6 +733,9 @@ impl Runner {
         if crate::fallback::server_takes_browser() {
             readiness_doc["browser"] = crate::browser::readiness();
         }
+        if crate::fallback::server_takes_relationship_lanes() && crate::turn_users::available() {
+            readiness_doc["relationship_lanes"] = json!(true);
+        }
         if full {
             // A low workspace volume starts the safe clean-up in the background; its last run is reported.
             let keep = vec![

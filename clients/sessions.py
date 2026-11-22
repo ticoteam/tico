@@ -81,9 +81,15 @@ def adopted_key(key):
     return None
 
 
-def lane(config, bot, task_id, conversation_id, root_id=None, audience_class=None):
+def entity_lane(entity_id: str) -> str:
+    return "entity:" + entity_id
+
+
+def lane(config, bot, task_id, conversation_id, root_id=None, audience_class=None, *, entity_id=None):
     """A task-keyed turn has its own session, so it runs in its own lane beside the bot's other
     tasks; everything else shares the main lane. A private task on `session: bot` keeps its own session but stays in
     the main lane, in the bot's one checkout (the server passes no `task_private` here)."""
+    if entity_id:
+        return entity_lane(entity_id)
     key = session_key(config, bot, task_id, conversation_id, root_id, audience_class)
     return key if key.startswith("task:") else MAIN_LANE

@@ -446,7 +446,7 @@ class Auth:
         except Problem:
             return ""
 
-    def owner_identity(self, c):
+    def owner_identity(self, c: Any) -> Identity:
         pid = self.owner_id(c)
         if not pid:
             raise Problem(
@@ -770,6 +770,10 @@ class Auth:
                     "human:" + row["id"], "owner" if email == self.owner_email else "human", email=email, via_proxy=True
                 )
             validate_identity(c, who)
+            from . import relationship_runs
+
+            if who.actor == relationship_runs.ACTOR:
+                relationship_runs.gate(c, self, who, path, method)
             if who.support:
                 from . import support_access
 
@@ -867,6 +871,7 @@ class Auth:
             "updates-owner",
             "automations-owner",
             H.TOOLS_OWNER,
+            H.RELATIONSHIP_WORKER,
         )
 
     def bot_manager(self, c, who, slug, operator=None, config: Any = False):
@@ -1137,6 +1142,14 @@ class Auth:
         denied = counsel.denied_page_copies(c, self.run_viewer(c, who), self)
         if denied:
             audience += " AND id NOT IN " + A.qlist(sorted(denied))
+        from . import relationship_runs
+
+        if who.actor == relationship_runs.ACTOR:
+            bound = self.relationship_scope(c, who)
+            if not bound:
+                return "0"
+            sponsor = self.task_sql(c, self.identity_for_actor(c, bound.sponsor))
+            return f"({audience}) AND ({sponsor}) AND ({relationship_runs.task_sql(c, bound)})"
         return audience
 
     def operator(self, c, who, bot):
@@ -1178,7 +1191,7 @@ class Auth:
             who.role == "human" and (who.support == "app" or who.email.lower() in self.bot_admins)
         )
 
-    def identity_for_actor(self, c, actor):
+    def identity_for_actor(self, c: Any, actor: str) -> Identity:
         """Rebuild a human identity for deferred work without elevating its permissions."""
         human = H.human(c, H.actor_id(actor)) if str(actor).startswith("human:") else None
         if not human or standing(c, human["id"]):
@@ -1343,7 +1356,7 @@ class Auth:
                 pass
         self.conversation(c, who, message["conversation_id"])
 
-    def conversation(self, c, who, conversation_id, *, write=False):
+    def conversation(self, c: Any, who: Identity, conversation_id: str, *, write: bool = False) -> dict[str, Any]:
         """The conversation (thread) row, when `who` reads it; else 404, since an unreadable thread is never
         confirmed to exist. Who reads is C1 in backend/threads.py."""
         self.domain(who)
@@ -1394,10 +1407,23 @@ class Auth:
             via=who.via,
         )
 
+    def relationship_scope(self, c, who):
+        from . import relationship_runs
+
+        if who.actor == relationship_runs.ACTOR:
+            bound = relationship_runs.scope(c, who.attempt_id)
+            if relationship_runs.claimable(c, self, bound):
+                return bound
+        return None
+
     def run_viewer(self, c, who):
         """Whom a lease of the shared Assistant reads as, in either form (its own run, or a person's own chat as them):
         the person whose own chat it is (rooms.run_scope), by their own rights; nobody (NOBODY: reads nothing, never the
         Assistant itself) when that person is gone. Anyone else reads as themselves."""
+        from . import relationship_runs
+
+        if who.actor == relationship_runs.ACTOR:
+            return who if self.relationship_scope(c, who) else NOBODY
         if not (who.attempt_id and H.assistant_actor(c) in (who.actor, who.task_actor)):
             return who
         kind, person = rooms.run_scope(c, who.attempt_id)
@@ -1425,7 +1451,13 @@ class Auth:
             and not counsel.page_copy_readable(c, copied, self.run_viewer(c, who), self)
         ):
             raise Problem("not_found", "Task not found", 404)
-        from . import task_privacy
+        from . import relationship_runs, task_privacy
+
+        if who.actor == relationship_runs.ACTOR:
+            bound = self.relationship_scope(c, who)
+            if not bound or not relationship_runs.task_matches(c, bound, row):
+                raise Problem("not_found", "Task not found", 404)
+            self.task_row(c, self.identity_for_actor(c, bound.sponsor), row)
 
         # As the request reads (task_privacy.actor): a lease of the shared Assistant, in either form, as its run's person.
         principals = task_privacy.actor(who)

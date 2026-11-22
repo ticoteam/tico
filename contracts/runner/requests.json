@@ -2702,6 +2702,18 @@
      "title": "Recent Errors",
      "type": "array"
     },
+    "relationship_lanes": {
+     "anyOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Relationship Lanes"
+    },
     "runtimes": {
      "additionalProperties": {
       "$ref": "#/$defs/RuntimeReadiness"

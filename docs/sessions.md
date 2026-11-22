@@ -233,3 +233,18 @@ Only if it cannot be found on this computer or the host refuses it twice. The ne
 
 **Where did temporary assignments go?**
 They were removed in 0.3.41. Per-task sessions do the same job: give the bot the task, and it gets its own session.
+
+
+## Relationship turns
+
+A company uses one hidden Relationship Worker. Its owner places it on a computer
+with per-turn OS users and a harness that can run as one. Turns for a single
+relationship wait in its `entity:<id>` lane. Other relationships can run at the
+same time within the computer's turn limit. Every turn starts a fresh provider
+session in a private scratch directory that is removed at the end.
+
+The turn can open tasks and memory pages belonging to its relationship, subject
+to the usual reader permissions. An intake wake can also grant the thread it
+came from. The server checks that thread's relationship, inbox and the waking
+person's current access. Suggested changes to shared memory or status stay in the
+run's answer for review.

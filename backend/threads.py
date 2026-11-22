@@ -547,6 +547,15 @@ def denial(c, v, row):
     if not index.conversation_readable(principals(v.who), row["id"]):
         return _MISSING
     root = root_of(c, row)
+    from . import relationship_runs
+
+    if v.actor == relationship_runs.ACTOR and v.who.attempt_id:
+        bound = v.auth.relationship_scope(c, v.who) if v.auth else relationship_runs.scope(c, v.who.attempt_id)
+        if not bound or not root:
+            return _MISSING
+        if root["id"] != bound.room:
+            sponsor = relationship_runs.source_viewer(c, v.auth, bound, root) if v.auth else None
+            return denial(c, Viewer(v.auth, sponsor), row) if sponsor else _MISSING
     if root.get("audience") not in AUDIENCES:
         return _legacy_denial(c, v, row, root, index)
     audience = audience_of(root)
@@ -1161,6 +1170,10 @@ def readable_ids(c, v, ids):
     ids = [i for i in dict.fromkeys(ids) if i]
     if not ids:
         return set()
+    from . import relationship_runs
+
+    if v.actor == relationship_runs.ACTOR and v.who.attempt_id:
+        return {cid for cid in ids if thread_readable(c, v, cid)}
     out = set()
     for start in range(0, len(ids), 500):
         part = ids[start : start + 500]

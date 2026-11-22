@@ -420,6 +420,18 @@ def file_visible(c, auth, who, row, cache):
     # A page's own audience and its pins are read as the request sees (auth.run_viewer: a run of the shared Assistant in
     # a person's own chat as that person); its task, below, by the run's principal.
     reader = auth.run_viewer(c, who)
+    from . import relationship_runs
+
+    if who.actor == relationship_runs.ACTOR:
+        bound = auth.relationship_scope(c, reader)
+        if not bound or not relationship_runs.page_matches(c, bound, row):
+            return False
+        try:
+            sponsor = auth.identity_for_actor(c, bound.sponsor)
+        except Problem:
+            return False
+        if not file_visible(c, auth, sponsor, row, {}):
+            return False
     if not page_audience_visible(c, auth, reader, row, cache):
         return False
     if asked_to_read(c, who, row["id"], cache=cache, auth=auth):
@@ -434,7 +446,12 @@ def file_visible(c, auth, who, row, cache):
             c, privacy.actor(who), version["attempt_id"], memo=cache
         ):
             return False
-    if who.role == "bot" and H.actor_id(who.actor) != row["bot_id"] and not row["scope"].startswith("task:"):
+    if (
+        who.role == "bot"
+        and who.actor != relationship_runs.ACTOR
+        and H.actor_id(who.actor) != row["bot_id"]
+        and not row["scope"].startswith("task:")
+    ):
         return False
     # A bot-wide file is its bot's: one cache serves files of many bots (a task's latest pages).
     key = ("bot", row["bot_id"]) if row["scope"] == "bot" else row["scope"]

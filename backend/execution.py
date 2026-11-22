@@ -37,6 +37,7 @@ from . import (
 )
 from . import runner_online
 from . import task_privacy as privacy
+from . import relationship_runs
 from . import task_text_keys
 from . import task_reads
 from . import (
@@ -357,11 +358,13 @@ def job_lane(c, bot, config, message, conversation):
     """The lane a queued message would run in (clients/sessions.py). `config` is the bot's followed config, the one
     its runner keys sessions on. A subtask's turn runs in its session root's lane, so it and its parent's turns take
     turns in one session."""
+    bound = relationship_runs.queued_scope(bot, message, conversation)
     return sessions.lane(
         config,
         bot,
         session_task_id(c, bot, config, work_task_id(message, conversation)),
         conversation["id"] if conversation else None,
+        entity_id=bound.entity if bound else None,
     )
 
 
@@ -2498,6 +2501,10 @@ def _claim_refusal(
         return why, None
     if bot in held_bots and "maintaining" not in ignore_refusals:
         return "maintaining", None
+    if bot == relationship_runs.BOT and (
+        ready.get("relationship_lanes") is not True or ready.get("isolated") is not True
+    ):
+        return "not_isolated", None
     try:
         config = json.loads(config_json)
     except (ValueError, TypeError):
@@ -5244,6 +5251,11 @@ class Execution:
                 c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
                 return {"attempt": None, "dropped": True}
         lane = job_lane(c, row["bot_id"], followed, msg, conv)
+        relationship = relationship_runs.queued_scope(row["bot_id"], msg, conv)
+        if row["bot_id"] == relationship_runs.BOT and not relationship_runs.claimable(c, self.auth, relationship):
+            c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (row["id"],))
+            H.event(c, H.TICO_ACTOR, "job.suppress", row["id"], {"reason": "relationship_unreadable"})
+            return {"attempt": None, "dropped": True}
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
         woke, source = run_triggers.of_message(msg)
@@ -5367,6 +5379,8 @@ class Execution:
         # A stateless bot (the Rules Owner): its runner starts each task fresh, reads and keeps no memory (hubdb.stateless).
         if H.stateless(followed):
             config = {**config, "stateless": True}
+        if relationship:
+            config = {**config, "stateless": True, "fallback": {"off": True}}
         gateway_connection.hand_out(c, aid, config)
         # The room's recent page. The runner forwards only what arrived since the bot last
         # answered; the bot reads further back itself with `tico conversation show` when it wants to. The
@@ -5534,7 +5548,7 @@ class Execution:
         # Quiet notes ride along with whatever woke the bot: every note waiting for this bot, each with when it was
         # sent, so the run can tell yesterday's from this morning's.
         notes = []
-        if getattr(body, "next_run", False) and not check and not scope and not making_page and not voice_call:
+        if getattr(body, "next_run", False) and not (check or scope or making_page or voice_call or relationship):
             from . import bot_to_bot
             from . import threads
 
@@ -5567,7 +5581,7 @@ class Execution:
 
         deferred = (
             ""
-            if making_page or voice_call
+            if making_page or voice_call or relationship
             else delivery.summary(
                 delivery.carried(
                     c,
@@ -5592,8 +5606,8 @@ class Execution:
         if making_page:
             # Receipts outlive the lease and must retain the person whose rights admitted this request.
             c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
-        mail_levels = mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
-        subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
+        mail_levels = {} if relationship else mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
+        subscriptions = [] if relationship else model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context, worktrees
@@ -5603,7 +5617,7 @@ class Execution:
         if making_page:
             history = [msg]
         chat_goal = current(c, conv["id"])
-        if chat_goal and (making_page or chat_goal["bot"] != row["bot_id"]):
+        if chat_goal and (making_page or relationship or chat_goal["bot"] != row["bot_id"]):
             # Another bot's turn in the room (the requester answering) works without the owner's goal.
             chat_goal = None
         # Runner wire names (backend/runner_wire.py): the stored text beside the decoded values, as runners read them.
@@ -5649,12 +5663,15 @@ class Execution:
                     "job_id": row["id"],
                     "bot": row["bot_id"],
                     "lane": lane,
-                    "credential_vault": bool(subscriptions)
-                    or c.execute(
-                        "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
-                        ("bot:" + row["bot_id"],),
-                    ).fetchone()
-                    is not None,
+                    "credential_vault": not relationship
+                    and (
+                        bool(subscriptions)
+                        or c.execute(
+                            "SELECT 1 FROM credential_grants WHERE subject=? AND revoked_at IS NULL LIMIT 1",
+                            ("bot:" + row["bot_id"],),
+                        ).fetchone()
+                        is not None
+                    ),
                     # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
                     # reads from credential-runtime (backend/model_subscriptions.py).
                     **({"subscriptions": subscriptions} if subscriptions else {}),
@@ -5685,12 +5702,12 @@ class Execution:
                     ),
                     "task": wire_task,
                     **({"github_repository": github_repository} if github_repository else {}),
-                    **({"continue_thread": continue_thread} if continue_thread else {}),
+                    **({"continue_thread": continue_thread} if continue_thread and not relationship else {}),
                     # A job the release policy let go to continue the bot's latest session (runner-rs forks it).
                     **({"fork_thread": fork_thread} if fork_thread else {}),
                     # A job the release policy let go to run in a session of its own (session `fresh`).
                     **({"fresh_session": True} if fresh_session else {}),
-                    **({"source_continuation": source} if source else {}),
+                    **({"source_continuation": source} if source and not relationship else {}),
                     # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                     "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
                     "history": history,
@@ -5698,10 +5715,10 @@ class Execution:
                     # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
                     # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
                     # `strategy`, the team's live strategy, which every turn carries (backend/strategy.py).
-                    "learned": learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
+                    "learned": {} if relationship else learned.for_turn(c, self.store.settings, conv, row["bot_id"]),
                     # What changed in Finance for whoever this turn is for: the person in their own Assistant turn, else the
                     # bot (backend/finance/brief.py). Standing lines in the prompt, so a resumed thread gets them when they change.
-                    "finance": finance_brief.for_turn(c, (acting or bot_who).actor),
+                    "finance": None if relationship else finance_brief.for_turn(c, (acting or bot_who).actor),
                     "task_context": task_context.for_turn(c, self.auth, acting or bot_who, make_page_task or task),
                     **({"make_page": {"task": runner_wire.task(make_page_task)}} if making_page else {}),
                     # place "updates": the recent updates that person may read and open, read now as them
@@ -6527,7 +6544,7 @@ class Execution:
             or not self.current_owner(c, who, attempt)
         ):
             return None
-        if attempt["state"] != "running":
+        if attempt["state"] != "running" or attempt["bot_id"] == relationship_runs.BOT:
             return {"messages": []}
         # A comment its author took back mid-turn (H.task_comment_delete) still started the turn: read its row,
         # whose words are already gone, so the turn keeps polling. Its follow-ups are read the normal way below.
