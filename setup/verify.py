@@ -26,12 +26,10 @@ class Check:
     hint: str = ""
 
 
-def check_dns(domain: str, records, resolvers, sleep: Callable[[float], None] = time.sleep) -> Check:
-    seen = dnsmod.answers(domain, records, resolvers, sleep=sleep)
-    bad = [label for label, ok in seen.items() if not ok]
-    if dnsmod.agreed(seen):
-        lagging = f" (not yet on {', '.join(bad)})" if bad else ""
-        return Check("DNS", True, f"{domain} resolves correctly on public resolvers{lagging}")
+def check_dns(domain: str, records, resolvers) -> Check:
+    bad = [label for label, r in resolvers if not dnsmod.resolves_to(domain, records, r)]
+    if not bad:
+        return Check("DNS", True, f"{domain} resolves correctly on public resolvers")
     return Check(
         "DNS",
         False,
@@ -278,7 +276,7 @@ def run_all(
 ) -> list[Check]:
     """`wait_https` seconds of retrying the HTTPS checks: right after `docker compose up` Caddy has no certificate yet.
     `issuer` is the provider's address for `--auth oidc`, where the sign-in must redirect."""
-    dns_check = check_dns(domain, records, resolvers, sleep)
+    dns_check = check_dns(domain, records, resolvers)
     https = _https_checks(domain, provider, client_id, front_door, issuer)
     waited, delay = 0.0, 3.0
     while wait_https and not all(c.ok for c in https) and waited < wait_https:
@@ -293,8 +291,6 @@ def run_all(
         waited += delay
         delay = min(delay + 3, 15)
         https = _https_checks(domain, provider, client_id, front_door, issuer)
-    if waited and not dns_check.ok:  # DNS may have gone live while HTTPS was waited for
-        dns_check = check_dns(domain, records, resolvers, sleep)
     out = [dns_check, *https]
     if runner_host:
         out.append(check_runner_host(runner_host))

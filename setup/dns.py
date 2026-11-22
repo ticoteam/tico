@@ -39,9 +39,6 @@ class WireResolver:
                 t.sendall(struct.pack(">H", len(q)) + q)
                 n = struct.unpack(">H", _read(t, 2))[0]
                 data = _read(t, n)
-        rcode = struct.unpack(">H", data[2:4])[0] & 0x000F
-        if rcode not in (0, 3):  # SERVFAIL, REFUSED, ...: no answer, unlike "no such name" (3)
-            raise OSError(f"{self.server} answered rcode {rcode}")
         return _parse_answers(data, rtype)
 
 
@@ -160,11 +157,9 @@ class Zone:
 
 
 def detect_zone(domain: str, resolver: Resolver) -> Zone | None:
-    """Walk up from the domain to the first name that has its own NS records: that is where records live. A name below
-    the registered domain starts at its parent: asking public resolvers about the name before its record exists would
-    have them cache "no such name" for the DNS wait."""
+    """Walk up from the domain to the first name that has its own NS records: that is where records live."""
     labels = domain.lower().rstrip(".").split(".")
-    for i in range(0 if len(labels) <= 2 else 1, len(labels) - 1):
+    for i in range(len(labels) - 1):
         cand = ".".join(labels[i:])
         try:
             ns = resolver.query(cand, NS)
@@ -217,54 +212,26 @@ def manual_instructions(records: list[Record], zone: Zone) -> list[str]:
     return lines
 
 
-def _matches(domain: str, records: list[Record], res: Resolver) -> bool:
-    """Whether res answers as planned. Raises OSError when it does not answer."""
-    if records[0].type == "CNAME":  # a proxied tunnel name resolves to Cloudflare's addresses
-        try:
-            if res.query(domain, A) or res.query(domain, AAAA):
-                return True
-        except OSError:
-            pass  # the CNAME itself still tells
-        return any("cfargotunnel.com" in t for t in res.query(domain, CNAME))
-    want4 = {r.value for r in records if r.type == "A"}
-    want6 = {r.value for r in records if r.type == "AAAA"}
-    # Only the planned types: an AAAA lookup that times out never fails an A-only record.
-    return (not want4 or want4 <= set(res.query(domain, A))) and (not want6 or want6 <= set(res.query(domain, AAAA)))
+def _addrs(res: Resolver, name: str) -> tuple[list[str], list[str]]:
+    try:
+        return res.query(name, A), res.query(name, AAAA)
+    except OSError:
+        return [], []
 
 
 def resolves_to(domain: str, records: list[Record], res: Resolver) -> bool:
-    try:
-        return _matches(domain, records, res)
-    except OSError:
-        return False
-
-
-def answers(
-    domain: str,
-    records: list[Record],
-    resolvers: list[tuple[str, Resolver]],
-    *,
-    sleep: Callable[[float], None] = time.sleep,
-    tries: int = 3,
-) -> dict[str, bool | None]:
-    """Each resolver's answer: True as planned, False not (yet), None no answer. One that times out is asked again,
-    after 1 s then 2 s."""
-    out: dict[str, bool | None] = {}
-    for label, res in resolvers:
-        out[label] = None
-        for i in range(tries):
-            try:
-                out[label] = _matches(domain, records, res)
-                break
-            except OSError:
-                if i + 1 < tries:
-                    sleep(2**i)
-    return out
-
-
-def agreed(seen: dict[str, bool | None]) -> bool:
-    """Most resolvers answer as planned: one that times out or holds a stale answer does not fail it."""
-    return sum(v is True for v in seen.values()) * 2 > len(seen)
+    rec = records[0]
+    if rec.type == "CNAME":
+        v4, v6 = _addrs(res, domain)  # a proxied tunnel name resolves to Cloudflare's addresses
+        try:
+            target = res.query(domain, CNAME)
+        except OSError:
+            target = []
+        return any("cfargotunnel.com" in t for t in target) or bool(v4 or v6)
+    v4, v6 = _addrs(res, domain)
+    want4 = {r.value for r in records if r.type == "A"}
+    want6 = {r.value for r in records if r.type == "AAAA"}
+    return (not want4 or want4 <= set(v4)) and (not want6 or want6 <= set(v6))
 
 
 def wait_until_live(
@@ -278,21 +245,21 @@ def wait_until_live(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.monotonic,
 ) -> bool:
-    """True once most public resolvers agree. Certificates fail if we start before this."""
+    """True once every public resolver agrees. Certificates fail if we start before this."""
     start = clock()
     while True:
-        seen = answers(domain, records, resolvers, sleep=sleep, tries=1)  # the loop itself asks again
-        if agreed(seen):
-            say(f"  {domain} resolves correctly on {', '.join(k for k, v in seen.items() if v)}.")
+        seen = {label: resolves_to(domain, records, r) for label, r in resolvers}
+        if all(seen.values()):
+            say(f"  {domain} resolves correctly on {', '.join(seen)}.")
             return True
-        waiting = ", ".join(k for k, v in seen.items() if not v)
         if clock() - start >= timeout:
+            waiting = ", ".join(k for k, v in seen.items() if not v)
             say(
                 f"  Still not resolving on {waiting} after {int(timeout // 60)} min. Records can take longer at some "
                 "providers; check they are in the provider named above, then re-run the setup wizard (it resumes)."
             )
             return False
-        say(f"  waiting for DNS ({int(clock() - start)}s): not yet on {waiting}")
+        say(f"  waiting for DNS ({int(clock() - start)}s): not yet on {', '.join(k for k, v in seen.items() if not v)}")
         sleep(interval)
 
 
