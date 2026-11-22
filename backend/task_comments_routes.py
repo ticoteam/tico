@@ -405,9 +405,7 @@ def register(
         with store.read() as c:
             task_id = auth.resolve_task(c, request.state.identity, tid)
             auth.task(c, request.state.identity, task_id)
-            from . import api_tools
-
-            return {"links": H.task_links(c, task_id, api_tools.connections_seen(c, request.state.identity, auth))}
+            return {"links": H.task_links(c, task_id)}
 
     def readers_answer(c, who, task_id):
         row = H.task(c, task_id)

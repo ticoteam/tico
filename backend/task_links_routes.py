@@ -93,9 +93,6 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
             if body.remove:
                 H.task_unlink(c, who.actor, task_id, body.remove, mover=mover(c, who))
             elif body.url:
-                from . import api_tools
-
-                api_tools.check_connection(c, who, auth, body.connection_id)
                 H.task_link(
                     c,
                     who.actor,
@@ -107,13 +104,10 @@ def register(app, auth, mover, mutate, person_only, settings, store, task_view):
                     wake_once=body.wake_once,
                     release_repo=settings.release_repo,
                     connection_id=body.connection_id or "",
-                    visible=lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id),
                 )
             else:
                 raise Problem("kind", "Send a url to add or remove with a link id", 422)
-            from . import api_tools
-
-            return {"links": H.task_links(c, task_id, api_tools.connections_seen(c, who, auth))}
+            return {"links": H.task_links(c, task_id)}
 
         # A retry of a link sent before `connection_id` existed hashed the body without it.
         legacy = body.model_dump(exclude={"connection_id"}) if body.connection_id is None else None

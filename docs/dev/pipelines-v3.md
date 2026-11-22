@@ -1152,25 +1152,22 @@ An item outside Tico is (connection, source, item type, key). The connection is 
 (`tools.record_owner` says whether that tool or Tico owns its records), '' for none: every GitHub item, the company's one
 GitHub App. A link to a registered source's item is stored typed on `task_links` (`source`, `item_type`, `item_key`,
 `connection_id`): a GitHub PR when it is in the App's organization; a Jira issue
-(`https://<site>.atlassian.net/browse/PROJ-12`, key `PROJ-12`) with the connection serving its site: the one tool, among
-those the caller may see, whose base URL and sites are on that host and no other (a tool on several hosts serves none). A link that names a connection for another site is refused, so is one on a site two
-connections serve unless it names one, and a link on a site none serves stays a plain link. A task holds one typed row
-per item, whatever URL names it; a plain link to the same URL becomes that row, or goes, once the site has a connection.
-A merge copies a stored link as it is, connection included.
-`item_metadata` rows, metadata reads, the task lookups and the due reads all key on the connection, so two Jira sites'
+(`https://<site>.atlassian.net/browse/PROJ-12`, key `PROJ-12`) with the connection serving its site: the one tool whose
+base URL and sites are on that host and no other (a tool on several hosts serves none). A link that names a connection
+for another site is refused, so is one on a site two connections serve unless it names one, and a link on a site none
+serves stays a plain link. A task holds one typed row per item, whatever URL names it; a plain link to the same URL
+becomes that row, or goes, once the site has a connection. `item_metadata` rows, metadata reads, the task lookups and the due reads all key on the connection, so two Jira sites'
 `PROJ-12` never read, wake or move each other's tasks. At most one task holds an item's primary link
 (`task_links.is_primary`, the task an intake made for it). `GET /api/v2/tasks?link=jira:issue:PROJ-12@<tool id>` (or the
 item's URL; `tico task list --link`) finds the tasks that link one item; a Jira item always names its connection.
 
-A connection id is a tool's id under the tools' one visibility rule (`api_tools.visible`): one the caller may not see is
-answered as one that does not exist. A task link's connection is stored, never shown in an answer; to a reader who may
-not see the tool the link reads as a plain one (no source, item type or key), in task answers and `POST /api/v2/sql`
-alike, and a Contacts record shows its connection as null. Once outside references name a tool its base URL and hosts
-stay as they are (409 `connection_sites`): another endpoint is a new tool. A task links a URL through one connection
-only; a task created with a link whose site two connections serve keeps it plain.
-A deleted tool's id is never given to a new tool while an outside reference, a deleted task's restorable link included,
-still names it. A source registers in `backend/item_sources/__init__.py` with
-`match_link(url)` and, optionally, `match_key(item_type, text)` and `site(url)`. A Contacts entity's records in other
+A connection id is a tool's name, not a secret: links, records and SQL show it to anyone who reads them; using the
+tool (calling it with its key) needs access to it. Once outside references name a tool its base URL (scheme and host in
+any case, path as written) and hosts stay as they are (409 `connection_sites`): another endpoint is a new tool. A
+deleted tool's id is never given to a new tool while an outside reference, a deleted task's restorable link included,
+still names it. A task links a URL through one connection only; a task created with a link whose site two connections
+serve keeps it plain; a merge keeps the kept task's link to a URL both tasks have and copies the rest as stored, connection
+included. A source registers in `backend/item_sources/__init__.py` with `match_link(url)` and, optionally, `match_key(item_type, text)` and `site(url)`. A Contacts entity's records in other
 systems are `entity_external_refs`, one per (system, type, id, connection), written by
 `POST /api/v2/entities/external-refs` (`tico contacts record`): the answer holds ids only and a retry shows it only while
 the caller still sees that entity, a record on another entity is refused without naming it, and a record erased at its

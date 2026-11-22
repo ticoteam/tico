@@ -103,9 +103,6 @@ def _host(text: str) -> str:
     return text.split("/")[0]
 
 
-Visible = Callable[[str], bool]  # whether the caller may see a tool, by id (api_tools.connection_visible)
-
-
 def hosts(base_url: object, sites: object) -> set[str]:
     """The hosts a tool is on: its base URL's and each of its sites' (`sites` as stored, JSON)."""
     try:
@@ -116,13 +113,12 @@ def hosts(base_url: object, sites: object) -> set[str]:
     return {_host(str(base_url or "")), *(_host(name) for name in names)} - {""}
 
 
-def serving(conn: sqlite3.Connection, host: str, visible: Visible | None = None) -> list[str]:
-    """The ids of the tools bound to `host` alone (their base URL and every site on it, and on no other host) that
-    `visible` admits (None: every tool), sorted. A tool on several hosts serves none: its keys could be either site's.
+def serving(conn: sqlite3.Connection, host: str) -> list[str]:
+    """The ids of the tools bound to `host` alone (their base URL and every site on it, and on no other host), sorted. A tool on several hosts serves none: its keys could be either site's.
     A tool's hosts stay as they are once outside references name it (api_tools.keep_sites)."""
     found: list[str] = []
     for tool_id, base_url, sites in conn.execute("SELECT id, base_url, sites FROM tools ORDER BY id").fetchall():
-        if hosts(base_url, sites) == {host} and (visible is None or visible(str(tool_id))):
+        if hosts(base_url, sites) == {host}:
             found.append(str(tool_id))
     return found
 
@@ -132,19 +128,17 @@ def outside_item(
     url: str,
     connection_id: str = "",
     sources: tuple[str, ...] = SOURCES,
-    visible: Visible | None = None,
 ) -> tuple[str, str, str, str] | None:
     """(source, item type, key, connection) of the item a link's URL is, among `sources`, or None when it is none's
-    item. A site source's item takes the connection that serves its site among the tools `visible` admits (a hidden
-    one is as if absent): `connection_id` when given (ValueError when it serves another site), else the one tool on
-    that host (ValueError for several; None for none, a plain link)."""
+    item. A site source's item takes the connection that serves its site: `connection_id` when given (ValueError when
+    it serves another site), else the one tool on that host (ValueError for several; None for none, a plain link)."""
     found = match_link(url, sources)
     if not found:
         return None
     host = site_of(found[0], url)
     if host is None:
         return (*found, connection_id)
-    tools = serving(conn, host, visible)
+    tools = serving(conn, host)
     if connection_id:
         if connection_id not in tools:
             raise ValueError(f"That connection is not the one for {host}")
@@ -154,13 +148,12 @@ def outside_item(
     return (*found, tools[0]) if tools else None
 
 
-def parse_ref(conn: sqlite3.Connection, text: str, visible: Visible | None = None) -> tuple[str, str, str, str]:
+def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     """(source, item type, key, connection) of an outside item named as `<source>:<type>:<key>[@<connection>]`, or as a
-    link's URL (its site's connection among the tools `visible` admits, `outside_item`). ValueError, saying what is
-    wrong without naming a tool, for anything else."""
+    link's URL (its site's connection, `outside_item`). ValueError, saying what is wrong, for anything else."""
     text = text.strip()
     if text.startswith(("http://", "https://")):
-        item = outside_item(conn, text, visible=visible)
+        item = outside_item(conn, text)
         if not item:
             raise ValueError(f"{text} is not a link to an item of a connected source")
         return item

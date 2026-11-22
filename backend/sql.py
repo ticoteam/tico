@@ -1833,34 +1833,6 @@ def connect(
             for table, cols_masked in teammate_masks(unseen, q(who.actor), inner, names, bots).items():
                 if table in tables:
                     masks[table] = {**masks.get(table, {}), **cols_masked}
-        if "task_links" in tables:
-            from .api_tools import visible as tool_visible
-
-            # A link's connection (a tool) shows as the tools' rule says; one the caller may not see reads NULL. The
-            # tool rows are read once and judged as they are.
-            admins = getattr(auth.settings, "credential_admins", ())
-            tools_read = c.execute("SELECT * FROM tools")
-            names = [d[0] for d in tools_read.description]
-            shown = [
-                tool["id"]
-                for tool in (dict(zip(names, found, strict=True)) for found in tools_read.fetchall())
-                if tool_visible(c, who, tool, admins, auth)
-            ]
-            # The link's item too: through a hidden tool it reads as a plain link.
-            seen = f"source.connection_id = '' OR source.connection_id IN {qlist(shown)}"
-            masks["task_links"] = {
-                **masks.get("task_links", {}),
-                **{
-                    column: f"CASE WHEN {seen} THEN source.{column} ELSE {hidden} END"
-                    for column, hidden in (
-                        ("connection_id", "NULL"),
-                        ("source", "NULL"),
-                        ("item_type", "NULL"),
-                        ("item_key", "NULL"),
-                        ("is_primary", "0"),
-                    )
-                },
-            }
         # Discover every inner view and privacy UDF referenced by the selected predicates and masks.
         sql_fragments = [pred for pred, _ in tables.values()]
         if readable is not None:

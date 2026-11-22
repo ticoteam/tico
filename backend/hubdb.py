@@ -3471,7 +3471,6 @@ def task_link(
     wake_once=None,
     release_repo="",
     connection_id="",
-    visible=None,
     item=None,
     plain_when_unsure=False,
 ):
@@ -3484,9 +3483,8 @@ def task_link(
     A link to an item of a source (backend/item_sources) is stored typed: its source, item type and key. A GitHub PR is
     one in the connected App's organization; any other source's item is typed whatever the link's kind, with the
     connection (a `tools` row) it came through: `connection_id`, or for a site source (Jira) the one serving the link's
-    site (item_sources.outside_item) among the tools `visible` admits (a reader's: api_tools.connection_visible; None
-    admits every tool). A task holds one typed row per item; linking it again by any URL answers that row. The caller
-    checks that its reader may see a named connection (api_tools.check_connection). `item` is a stored link's (source,
+    site (item_sources.outside_item). A connection id is a tool's name, not a secret; using the tool needs access. A
+    task holds one typed row per item; linking it again by any URL answers that row. `item` is a stored link's (source,
     item type, key, connection), copied as it is (a merge); with `item` given as False the link is a plain one.
     `plain_when_unsure` keeps a link whose connection cannot be chosen (two serve its site) plain instead of refusing
     it (a task created with links, which cannot name one). A URL a task links through one connection is not linked
@@ -3519,7 +3517,7 @@ def task_link(
         outside = tuple(item) if item else None
     else:
         try:
-            outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"), visible)
+            outside = IS.outside_item(conn, url, connection_id, tuple(s for s in IS.SOURCES if s != "github"))
         except ValueError as error:
             if not plain_when_unsure or connection_id:
                 refuse(conn, actor, "connection", str(error))
@@ -3551,7 +3549,7 @@ def task_link(
         bare = _one(conn, "SELECT * FROM task_links WHERE task_id=? AND url=? AND source IS NULL", (task_id, url))
         other = (
             None
-            if have
+            if have or item is not None
             else _one(conn, "SELECT 1 FROM task_links WHERE task_id=? AND url=? AND source IS NOT NULL", (task_id, url))
         )
         if other:
@@ -4129,26 +4127,15 @@ def _private_followups(conn, task_id):
     conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
 
 
-def task_links(conn, task_id, shown=None):
-    """A task's links as the API shows them. A link's connection (the tool an outside item came through) is stored and
-    read by Tico, never shown: a tool's id is the tools' visibility rule's to show. A link through a connection
-    `shown` does not admit (a reader's, api_tools.connections_seen; None admits every one) reads as a plain link."""
+def task_links(conn, task_id):
     from .worktrees import statuses
 
     return [
-        _as_shown(_with_thread(link), shown)
+        _with_thread(link)
         for link in statuses(
             conn, conn.execute("SELECT * FROM task_links WHERE task_id=? ORDER BY created_at", (task_id,))
         )
     ]
-
-
-def _as_shown(link, shown):
-    out = dict(link)
-    connection = out.pop("connection_id", "")
-    if connection and shown is not None and not shown(connection):
-        out.update(source=None, item_type=None, item_key=None, is_primary=0)
-    return out
 
 
 def bot_reads_task(conn, bot, row):

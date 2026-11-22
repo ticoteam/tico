@@ -1,8 +1,8 @@
 """Outside references (docs/dev/pipelines-v3.md "Outside items"): an item outside Tico is (connection, source, item type,
 key). A Jira issue link is typed with the connection serving its site while a GitHub PR link is typed exactly as before;
 two connections holding the same key never read, find or wake each other's tasks; a task holds one typed row per item;
-one task at most holds an item's primary link; a connection id never says a hidden tool exists and is never given to a
-new tool; a Contacts record in another system is saved once per connection, names no hidden entity and honors erasure;
+one task at most holds an item's primary link; a connection id (a tool's name, not a secret) is never given to a new
+tool and its endpoint stays put; a Contacts record in another system is saved once per connection, names no hidden entity and honors erasure;
 and the migration keeps the records an install already has."""
 
 import shutil
@@ -29,16 +29,15 @@ ACME = "https://acme.atlassian.net/browse/proj-7"
 BETA = "https://beta.atlassian.net/browse/PROJ-7"
 PR = "https://github.com/ticoteam/tico/pull/12"
 SITES = {"tool_a": "https://acme.atlassian.net", "tool_b": "https://beta.atlassian.net"}
-NOBODY = '{"people": [], "teams": [], "bots": []}'  # an Only listed tool that lists nobody: only its owner sees it
 
 
-def _tools(api, *ids, audience=None, sites=None):
+def _tools(api, *ids, sites=None):
     with api.app.state.store.transaction() as c:
         for tid in ids:
             c.execute(
                 "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
-                "updated_at,audience,sites) VALUES(?,?,'Jira',?,'bearer','','proxy','human:ana',?,?,?,?)",
-                (tid, tid, SITES.get(tid, "https://acme.atlassian.net"), H.now(), H.now(), audience, sites),
+                "updated_at,sites) VALUES(?,?,'Jira',?,'bearer','','proxy','human:ana',?,?,?)",
+                (tid, tid, SITES.get(tid, "https://acme.atlassian.net"), H.now(), H.now(), sites),
             )
 
 
@@ -187,26 +186,6 @@ def test_one_task_at_most_holds_the_primary_link_to_an_item_of_one_connection(ap
             c.execute(primary, (tasks[2],))
 
 
-def test_a_hidden_tool_is_answered_as_no_connection_and_never_shown(api):
-    _tools(api, "tool_a", audience=NOBODY)
-    task = post(api, "tasks", {"owner": "ben", "title": "Ben's ticket", "body": "Please."}, token="ben-test")["id"]
-    hidden = _link(api, task, ACME, 422, token="ben-test", connection_id="tool_a")["error"]
-    missing = _link(api, task, ACME, 422, token="ben-test", connection_id="tool_zz")["error"]
-    assert (hidden["code"], hidden["detail"].replace("tool_a", "X")) == (
-        missing["code"],
-        missing["detail"].replace("tool_zz", "X"),
-    )
-    _link(api, task, ACME)  # ana sees the tool; the link is typed with it, stored, never shown
-    assert _row(api, task, ACME)["connection_id"] == "tool_a"
-    for token, source in (("ben-test", None), ("ana-test", "jira")):
-        links = get(api, f"tasks/{task}/links", token=token)["links"]
-        assert links and all("connection_id" not in link for link in links)
-        detail = get(api, f"tasks/{task}", token=token)["task"]["links"]
-        # Through a tool ben may not see, the link reads to him as a plain one.
-        assert [(link["source"], link["item_key"]) for link in links + detail] == [(source, source and "PROJ-7")] * 2
-    assert _found(api, "jira:issue:PROJ-7@tool_a", token="ben-test") == "connection"
-
-
 def test_a_deleted_tools_id_is_never_given_to_a_new_tool_while_references_name_it(api):
     _tools(api, "tool_a")
     _link(api, _task(api, "Old site"), ACME)
@@ -326,40 +305,6 @@ def test_erasing_a_record_suppresses_it_on_its_connection_only(api):
     post(api, "entities/external-refs", {**record, "ref": kim, "connection_id": "tool_b"})
 
 
-def test_a_hidden_tool_is_never_inferred_nor_read_back(api):
-    _tools(api, "tool_a", audience=NOBODY)
-    task = post(api, "tasks", {"owner": "ben", "title": "Ben's ticket", "body": "Please."}, token="ben-test")["id"]
-    _link(api, task, ACME, token="ben-test")  # the only connection for acme is hidden from ben: a plain link
-    assert _row(api, task, ACME)["source"] is None
-    made = post(
-        api,
-        "tasks",
-        {"owner": "ben", "title": "Filed", "body": "Please.", "links": [BETA.replace("beta", "acme")]},
-        token="ben-test",
-    )["id"]
-    assert [r["source"] for r in _rows(api, made)] == [None]  # nor when a task is created with it
-    hidden = _found(api, ACME, token="ben-test")
-    r = api.get("/api/v2/tasks", params={"link": ACME}, headers=headers("ben-test"))
-    assert hidden == "link" and "tool_a" not in r.text
-
-    other = post(api, "tasks", {"owner": "ben", "title": "Another", "body": "Please."}, token="ben-test")["id"]
-    _link(api, other, ACME)  # ana sees it: typed with tool_a
-    read = api.post(
-        "/api/v2/sql",
-        json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
-        headers=headers("ben-test"),
-    )
-    assert read.status_code == 200 and read.json()["rows"] == [[None]]
-    item = "SELECT source, item_type, item_key FROM task_links WHERE task_id='%s'" % other
-    assert api.post("/api/v2/sql", json={"sql": item}, headers=headers("ben-test")).json()["rows"] == [[None] * 3]
-    shown = api.post(
-        "/api/v2/sql",
-        json={"sql": "SELECT connection_id FROM task_links WHERE task_id='%s'" % other},
-        headers=headers("ana-test"),
-    )
-    assert shown.json()["rows"] == [["tool_a"]]
-
-
 def test_a_referenced_tool_keeps_its_site(api):
     _tools(api, "tool_a")
     task = _task(api, "Acme escalation")
@@ -401,6 +346,32 @@ def test_a_url_is_linked_to_a_task_through_one_connection_only(api):
     _link(api, task, ACME, connection_id="tool_a")
     assert _link(api, task, ACME, 422, connection_id="tool_c")["error"]["code"] == "connection"
     assert [r["connection_id"] for r in _rows(api, task)] == ["tool_a"]
+
+
+def test_a_referenced_tools_endpoint_path_keeps_its_case(api):
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO tools(id,name,service,base_url,auth_scheme,check_path,delivery,created_by,created_at,"
+            "updated_at) VALUES('crm','crm','','https://crm.example.com/Acme','bearer','','proxy','human:ana',?,?)",
+            (H.now(), H.now()),
+        )
+        org = ES.upsert(c, "human:ana", "organization", match={"domain": "acme.example"}, name="Acme")["id"]
+    post(
+        api,
+        "entities/external-refs",
+        {"ref": org, "system": "crm", "external_type": "customer", "external_id": "42", "connection_id": "crm"},
+    )
+    moved = api.patch("/api/v2/api-tools/crm", json={"base_url": "https://crm.example.com/acme"}, headers=headers())
+    assert moved.status_code == 409 and moved.json()["error"]["code"] == "connection_sites"
+
+
+def test_a_merge_keeps_the_kept_tasks_link_to_a_url_both_have(api):
+    _tools(api, "tool_a", "tool_c")  # both on acme.atlassian.net
+    dup, kept = _task(api, "Duplicate ask"), _task(api, "Ask")
+    _link(api, dup, ACME, connection_id="tool_a")
+    _link(api, kept, ACME, connection_id="tool_c")
+    post(api, f"tasks/{dup}/merge", {"into": kept})
+    assert [(r["url"], r["connection_id"]) for r in _rows(api, kept)] == [(ACME, "tool_c")]
 
 
 def test_a_merge_copies_a_stored_outside_link_after_its_tool_is_gone(api):

@@ -268,9 +268,6 @@ def install(
             body = ES.card(c, actor, found[0]["id"])
             if body is not None:
                 with_document_files(c, request, body)
-                from backend import api_tools
-
-                api_tools.shown_connections(c, request.state.identity, auth, body.get("refs") or [])  # pyright: ignore[reportUnknownMemberType]
         if body is None:
             raise Problem("not_found", f"No entity {ref} that you can see", 404)
         trace(request, found[0]["id"])
@@ -469,7 +466,7 @@ def install(
             "Contacts",
             "recordEntityExternalRef",
             "Record that an entity is a record in another system (a CRM account, a Jira customer): system, record type "
-            "and id, through a connection (the id of a tool you can see; empty for none). Saving the same record again "
+            "and id, through a connection (a tool's id; empty for none). Saving the same record again "
             "updates its url, revision and status; one already on another entity, or erased at its owner's request, is "
             "refused. status gone keeps the pointer off the card. The answer names the record and its entity by id only",
             ContactsRecordResult,
@@ -480,13 +477,9 @@ def install(
         retry is answered with, holds only the record's and the entity's ids, and a retry checks the entity is still
         one the caller sees."""
         actor = caller(request)
-        who = request.state.identity
 
         def work(c: sqlite3.Connection):
-            from backend import api_tools
-
             entity_id = ES.target(c, actor, body.ref)
-            api_tools.check_connection(c, who, auth, body.connection_id)  # pyright: ignore[reportUnknownMemberType]
             row = ES.external_ref(
                 c,
                 actor,

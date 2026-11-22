@@ -206,7 +206,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             if match.sql:
                 filters["match"] = match.sql
             if link is not None:
-                filters["match"] = [*filters.get("match", ()), linked_to(c, who, link)]
+                filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
             if after is not None:
                 if changed_after is not None or offset:
                     raise Problem("after", "after is a page's start: not with changed_after or offset", 422)
@@ -329,18 +329,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             brief_rows(rows)
             return result
 
-    def linked_to(c, who, ref):
+    def linked_to(c, ref):
         """The list's `link` filter: a WHERE fragment, with its arguments, keeping the tasks that link the outside item
-        `ref` names. 422 `link` for a reference that names no source's item, and `connection` for a connection the
-        reader may not see (answered as one that does not exist)."""
-        from . import api_tools
+        `ref` names. 422 `link` for a reference that names no source's item."""
         from . import item_sources as IS
 
         try:
-            item = IS.parse_ref(c, ref, lambda tool_id: api_tools.connection_visible(c, who, auth, tool_id))
+            item = IS.parse_ref(c, ref)
         except ValueError as error:
             raise Problem("link", str(error), 422) from None
-        api_tools.check_connection(c, who, auth, item[3])
         # Item first: the item's few links by task_links_item_key, then only their tasks.
         return (
             "tasks.id IN (SELECT task_id FROM task_links WHERE source=? AND item_type=? AND item_key=? "
@@ -672,9 +669,7 @@ def readers(auth):
                 "SELECT b.* FROM blobs b JOIN task_assets a ON a.blob_id=b.id WHERE a.task_id=?", (row["id"],)
             )
         ]
-        from . import api_tools
-
-        value["links"] = H.task_links(c, row["id"], api_tools.connections_seen(c, who, auth) if who else None)
+        value["links"] = H.task_links(c, row["id"])
         value["children_summary"] = H.children_summary(c, row["id"], visible_sql)
         value["pr_state"] = H.pr_state(value["links"])
         counts = c.execute(

@@ -1369,12 +1369,15 @@ def _former(c, tid):
 
 def keep_sites(c, tool, base_url, sites):
     """409 `connection_sites` when a change would move a tool that outside references name (TS.referenced) to another
-    endpoint (its base URL, normalized) or other hosts: its items' keys (Jira's `PROJ-7`, a CRM's customer 42) are its
-    old endpoint's, so another one is a new tool."""
+    endpoint (its base URL, scheme and host in any case, its path as written) or other hosts: its items' keys (Jira's
+    `PROJ-7`, a CRM's customer 42) are its old endpoint's, so another one is a new tool."""
+    from urllib.parse import urlsplit
+
     from . import item_sources as IS
 
     def endpoint(url):
-        return str(url or "").strip().rstrip("/").lower()
+        parts = urlsplit(str(url or "").strip())
+        return (parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query)
 
     before = IS.hosts(_field(tool, "base_url"), _field(tool, "sites"))
     moved = endpoint(base_url) != endpoint(_field(tool, "base_url")) or IS.hosts(base_url, sites) != before
@@ -1385,44 +1388,6 @@ def keep_sites(c, tool, base_url, sites):
             "another site",
             409,
         )
-
-
-def connections_seen(c, who, auth):
-    """`connection_visible` for one reader, each tool judged once: what a read of task links is shown with
-    (H.task_links `shown`)."""
-    seen = {}
-
-    def shown(tool_id):
-        if tool_id not in seen:
-            seen[tool_id] = connection_visible(c, who, auth, tool_id)
-        return seen[tool_id]
-
-    return shown
-
-
-def connection_visible(c, who, auth, tool_id):
-    """Whether `who` may know the connection (a tool) `tool_id` exists: the tools' one rule (`visible`)."""
-    return bool(tool_id) and bool(visible(c, who, tool_id, getattr(auth.settings, "credential_admins", ()), auth))
-
-
-def check_connection(c, who, auth, tool_id):
-    """422 `connection` when `tool_id` (not empty) names no tool `who` may see: a hidden one answers as one that does
-    not exist, so a connection id never says a hidden tool is there."""
-    if tool_id and not connection_visible(c, who, auth, tool_id):
-        raise Problem("connection", f"No connection {tool_id}: a connection is the id of a tool you can see", 422)
-
-
-def shown_connections(c, who, auth, rows):
-    """`rows` (task links, Contacts records) with each `connection_id` `who` may not see blanked to None."""
-    seen = {}
-    for row in rows:
-        tool_id = row.get("connection_id")
-        if tool_id:
-            if tool_id not in seen:
-                seen[tool_id] = connection_visible(c, who, auth, tool_id)
-            if not seen[tool_id]:
-                row["connection_id"] = None
-    return rows
 
 
 def _clean(fields):

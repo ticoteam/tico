@@ -298,10 +298,11 @@ def _relations(conn: Any, a: Row, b: Row) -> list[tuple[str, str, str]]:
 
 
 def _links(conn: Any, a: Row, b: Row) -> list[Row]:
-    """A's links B lacks: by URL and connection, and a typed one (an outside item) by its item, which B holds once."""
+    """A's links B lacks: by URL (B's link to it, with its connection, is kept), and a typed one (an outside item) by
+    its item, which B holds once."""
     columns = "url, connection_id, source, item_type, item_key"
     have = [tuple(row) for row in conn.execute(f"SELECT {columns} FROM task_links WHERE task_id=?", (b["id"],))]
-    urls = {row[:2] for row in have}
+    urls = {row[0] for row in have}
     items = {row[1:] for row in have if row[2] is not None}
     return [
         dict(row)
@@ -310,7 +311,7 @@ def _links(conn: Any, a: Row, b: Row) -> list[Row]:
             "AND kind NOT IN ('pr','session','worktree') ORDER BY created_at",
             (a["id"],),
         )
-        if (row["url"], row["connection_id"]) not in urls
+        if row["url"] not in urls
         and (
             row["source"] is None
             or (row["connection_id"], row["source"], row["item_type"], row["item_key"]) not in items
