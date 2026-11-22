@@ -7,7 +7,7 @@ import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQ
 
 // What the routes, the shell and other features use before a teammate's page loads: the address check, the reads and
 // a teammate's address. No components here: the first load imports this file, and a page comes through exports.ts.
-export { agentsQuery, groupsQuery, computersQuery, teammateAccessQuery, type AgentRow } from './queries';
+export { agentsQuery, groupsQuery, computersQuery, teammateAccessQuery, type AgentRow, type Computer } from './queries';
 export { teamSlug, whoHref, modelName, effortLabel } from './model';
 
 export interface TeamSearch {

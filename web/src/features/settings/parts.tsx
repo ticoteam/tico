@@ -1,9 +1,11 @@
+import { useQuery } from '@tanstack/react-query';
 import { useSyncExternalStore, type ReactNode } from 'react';
 import { refusal, run } from '@/actions';
-import { useDirectory, type Actor, type Directory } from '@/data';
+import { meQuery, useDirectory, type Actor, type Directory } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
 import { Switch } from '@/kit/Switch';
 import { toast } from '@/kit/Toast';
+import { accessQuery } from './queries';
 
 /* The small parts every section shares, ported from pages/8-settings/settings.js: a line (label left, its control
    right), a switch line, a quiet verb, a mark and a word, a thin meter. Each control saves at once: no Save. */
@@ -33,6 +35,13 @@ const everyoneOf = (d: Directory) => d.actors.map(face);
 const agentsOf = (d: Directory) => d.actors.filter((a) => a.kind === 'agent').map(face);
 const NO_FACES: Record<string, Face> = {};
 const NONE: Face[] = [];
+
+/** Owners and admins change company-wide settings; a member's read of the roster is refused (403). */
+export function useAdmin(): boolean {
+  const me = useQuery(meQuery);
+  const access = useQuery({ ...accessQuery, retry: false });
+  return me.data?.role === 'owner' || access.data?.you === 'owner' || access.data?.you === 'admin';
+}
 
 /** Everyone, by each id form the directory answers, without status lines: an agent's status event does not redraw
     the reader. Empty until the directory is read. */

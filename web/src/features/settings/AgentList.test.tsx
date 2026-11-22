@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation, useSearch } from '@tanstack/react-router';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -28,14 +28,18 @@ import { SettingsPage, hitHref } from './SettingsPage';
 vi.mock('@/search', () => ({ SearchDialog: () => null }));
 vi.mock('@/tico/dot', () => ({ Dot: () => null, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
+// Vitest skips CSS imports, so read the stylesheet for the cards layout test.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url;
+
 type Reply = { status: number; body: unknown };
 let sent: { url: string; method: string; body: unknown }[] = [];
-/** Anything `reply` leaves (undefined) answers 200 with {}. */
+/** Anything `reply` leaves (undefined) answers 200 with {} or the default idle view. */
 function serve(reply: (url: string, method: string) => Reply | Promise<Reply> | undefined = () => undefined) {
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET';
     if (method !== 'GET') sent.push({ url: String(url), method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : init?.body });
-    const r = (await reply(String(url), method)) ?? ok({});
+    const r = (await reply(String(url), method)) ?? ok(url === '/api/v2/sleep' ? { sleep: { hosted: false } } : {});
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }
@@ -477,8 +481,8 @@ describe('Settings › Agents', () => {
 });
 
 const MACHINES = [
-  { id: 'r1', label: 'Shared One', online: true, platform: 'linux', version: '0.0.9', screen_available: true, screen: 'view', bots: ['a1'] },
-  { id: 'r2', label: 'Spare Two', online: false },
+  { id: 'r1', label: 'Shared One', cloud_machine: { shared: true }, online: true, platform: 'linux', version: '0.0.9', screen_available: true, screen: 'view', bots: ['a1'], gateway_fallback: false },
+  { id: 'r2', label: 'Spare Two', online: false, gateway_fallback: false },
 ];
 /** A small server: the computers and agents read back as written (a write re-reads its list). */
 const byComputer = () => {
@@ -548,11 +552,22 @@ describe('Settings › Agents › a computer', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/revoke', method: 'POST' }));
   });
 
-  it('Settings › Computers opens the same panel @s1075', async () => {
-    byComputer();
+  it('Settings › Computers opens the same panel with its Gateway setting on the first read @s1075', async () => {
+    let reads = 0;
+    serve((url) => {
+      if (url === '/api/v2/operations') {
+        reads++;
+        return ok({ computers: [{ ...MACHINES[0], gateway_fallback: true }] });
+      }
+      return undefined;
+    });
     show(<SettingsPage section="computers" open="r1" />, '/settings/computers?open=r1');
     const panel = await screen.findByRole('complementary', { name: 'Shared One' });
-    expect(within(panel).getByRole('switch', { name: 'Fall back to Tico Gateway' })).toBeTruthy();
+    expect(within(panel).getByText('Cloud shared')).toBeTruthy();
+    const gateway = within(panel).getByRole('switch', { name: 'Fall back to Tico Gateway', checked: true });
+    expect(reads).toBe(1);
+    fireEvent.click(gateway);
+    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/computers/r1/gateway-fallback', body: { on: false } }));
   });
 });
 
@@ -560,11 +575,12 @@ describe('Settings › Computers', () => {
   it('lists each active computer once with its reported kind, state, version and agent count @s1075', async () => {
     const computers = [
       { id: 'r1', label: 'Shared One', cloud_machine: { shared: true }, online: true, version: '0.0.9', bots: ['a1', 'b2'] },
-      { id: 'r2', label: 'Build Cloud', cloud_machine: { shared: false }, online: true, restarting: '2026-11-22T20:00:00Z', version: '0.0.8', bots: ['c3'] },
+      { id: 'r2', label: 'Build Cloud', cloud_machine: { shared: false }, online: true, restarting: '2026-11-22T20:00:00Z', version: '0.0.8', bots: ['d4'] },
       { id: 'r3', label: 'Studio', online: false, version: '0.0.7', bots: [] },
       { id: 'r4', label: 'Revoked', online: false, revoked_at: '2026-11-22T20:00:00Z' },
     ];
     queryClient.setQueryData(['directory'], { actors: [], byId: {} });
+    queryClient.setQueryData(agentsQuery.queryKey, [...ROWS, { id: 'd4', slug: 'delta' }]);
     serve((url) => {
       if (url === '/api/v2/operations') return ok({ computers });
       if (url === '/api/v2/sleep') return ok({ sleep: { hosted: true, hours: 0 } });
@@ -596,13 +612,119 @@ describe('Settings › Computers', () => {
     const router = show(<Page />, '/settings/computers');
     const row = await screen.findByRole('link', { name: /^Spare Two/ });
     expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(row.getAttribute('data-target')).toBe('computer:r2');
     fireEvent.click(row);
     const panel = await screen.findByRole('complementary', { name: 'Spare Two' });
     expect(router.state.location.search).toEqual({ open: 'computer:r2' });
     expect(row.getAttribute('aria-expanded')).toBe('true');
+    expect(within(panel).getByText('Spare Two').getAttribute('data-target')).toBe('computer:r2');
     fireEvent.click(within(panel).getByRole('button', { name: 'Close' }));
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Spare Two' })).toBeNull());
     expect(row.getAttribute('aria-expanded')).toBe('false');
+    expect(row.getAttribute('data-target')).toBe('computer:r2');
+  });
+
+  it('wraps the computer row in cards mode even when the list is wide', async () => {
+    vi.stubGlobal('innerWidth', 640);
+    document.documentElement.dataset.layout = 'cards';
+    const style = document.createElement('style');
+    style.textContent = fs.readFileSync(new URL('./settings.css', here), 'utf8');
+    document.head.append(style);
+    try {
+      byComputer();
+      show(<SettingsPage section="computers" />, '/settings/computers');
+      const row = await screen.findByRole('link', { name: /^Shared One/ });
+      expect(getComputedStyle(within(row).getByText('Online')).gridRow).toBe('1');
+      expect(getComputedStyle(within(row).getByText('Shared One')).gridColumn).toBe('1 / 3');
+    } finally {
+      style.remove();
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
+  it('refreshes both counts after a move while the computers list is closed', async () => {
+    function Page() {
+      const path = useLocation({ select: (where) => where.pathname });
+      return path === '/settings/computers' ? <SettingsPage section="computers" /> : <span>Agent settings</span>;
+    }
+    let moved = false;
+    const agents = [{ ...ROWS[0]!, machine: { runner_id: 'r1', generation: 7 } }, ROWS[1]!];
+    queryClient.setQueryData(teamComputers.queryKey, [
+      { ...MACHINES[0]!, bots: ['a1', 'b2'] },
+      { ...MACHINES[1]!, bots: [] },
+    ]);
+    queryClient.setQueryData(agentsQuery.queryKey, agents);
+    serve((url, method) => {
+      if (url === '/api/v2/bots/alpha/transitions' && method === 'POST') {
+        moved = true;
+        return ok({ id: 'tr1' });
+      }
+      if (url === '/api/v2/operations') {
+        return ok({
+          computers: [
+            { ...MACHINES[0], bots: moved ? ['b2'] : ['a1', 'b2'] },
+            { ...MACHINES[1], bots: moved ? ['a1'] : [] },
+          ],
+        });
+      }
+      if (url === '/api/employees') return ok(moved ? [{ ...agents[0], machine: { runner_id: 'r2', generation: 8 } }, agents[1]] : agents);
+      return undefined;
+    });
+    const router = show(<Page />, '/team/alpha');
+    await screen.findByText('Agent settings');
+    expect(await run('agents.move', { slug: 'alpha', computer: 'r2' }, { via: 'click' })).toMatchObject({ ok: true });
+    await router.navigate({ to: '/settings/$section', params: { section: 'computers' } });
+    const from = await screen.findByRole('link', { name: /^Shared One/ });
+    const to = screen.getByRole('link', { name: /^Spare Two/ });
+    expect(await within(from).findByText('1 agent')).toBeTruthy();
+    expect(await within(to).findByText('1 agent')).toBeTruthy();
+  });
+
+  it('counts only the assigned agents the operator can see in the roster', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:p1', role: 'person' });
+    queryClient.setQueryData(teamComputers.queryKey, [
+      { ...MACHINES[0]!, owner_id: 'p1', may_manage: true, bots: ['a1', 'hidden'] },
+    ]);
+    // A see-only agent has no machine in the roster.
+    queryClient.setQueryData(agentsQuery.queryKey, [{ id: 'a1', slug: 'alpha', display_name: 'Alpha Agent' }]);
+    serve((url) => url === '/api/v2/access' ? { status: 403, body: { detail: 'Admins only' } } : undefined);
+    show(<SettingsPage section="computers" open="r1" />, '/settings/computers?open=r1');
+    expect(within(await screen.findByRole('link', { name: /^Shared One/ })).getByText('1 agent')).toBeTruthy();
+    const panel = screen.getByRole('complementary', { name: 'Shared One' });
+    expect(within(panel).getAllByRole('link')).toHaveLength(1);
+    expect(within(panel).getByRole('link', { name: /Alpha Agent/ })).toBeTruthy();
+  });
+
+  it('an operator can restart or remove their empty computer but cannot rename it or change Gateway fallback', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:p1', role: 'person' });
+    queryClient.setQueryData(teamComputers.queryKey, [{ ...MACHINES[1]!, owner_id: 'p1', may_manage: true, bots: [] }]);
+    serve((url) => url === '/api/v2/access' ? { status: 403, body: { detail: 'Admins only' } } : undefined);
+    show(<SettingsPage section="computers" open="r2" />, '/settings/computers?open=r2');
+    const panel = within(await screen.findByRole('complementary', { name: 'Spare Two' }));
+    expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Restart' }).disabled).toBe(false);
+    expect(panel.getByRole<HTMLButtonElement>('button', { name: 'Remove' }).disabled).toBe(false);
+    expect(panel.queryByRole('button', { name: 'Rename' })).toBeNull();
+    expect(panel.getByRole('switch', { name: 'Fall back to Tico Gateway' }).getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('hides the last computer and its panel while removal is pending, and restores both if refused', async () => {
+    let finish!: (reply: Reply) => void;
+    const removal = new Promise<Reply>((resolve) => { finish = resolve; });
+    queryClient.setQueryData(teamComputers.queryKey, [MACHINES[1]!]);
+    serve((url, method) => url === '/api/v2/computers/r2/revoke' && method === 'POST' ? removal : undefined);
+    show(<SettingsPage section="computers" open="r2" />, '/settings/computers?open=r2');
+    const panel = await screen.findByRole('complementary', { name: 'Spare Two' });
+    fireEvent.click(within(panel).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+    try {
+      expect(await screen.findByText('No computers yet')).toBeTruthy();
+      expect(screen.queryByRole('link', { name: /^Spare Two/ })).toBeNull();
+      expect(screen.queryByRole('complementary', { name: 'Spare Two' })).toBeNull();
+    } finally {
+      finish({ status: 403, body: { detail: 'Removal refused' } });
+    }
+    expect(await screen.findByRole('link', { name: /^Spare Two/ })).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Spare Two' })).toBeTruthy();
   });
 
   it('a stopped hosted server starts for an owner, says why when held with a link to Tico support, and Tico cannot start it @s704', async () => {

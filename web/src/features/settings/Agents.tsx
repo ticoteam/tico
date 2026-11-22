@@ -23,7 +23,7 @@ import { editSubscriptionName } from './actions';
 import { ComputerList } from './ComputerList';
 import { GatewayLines } from './Gateway';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
-import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useVisible } from './parts';
+import { Foot, Line, Meter, SwitchLine, Verb, Word, act, usd, useAdmin, useVisible } from './parts';
 import {
   LIVE_SIGN_IN,
   SIGN_IN_KINDS,
@@ -606,13 +606,6 @@ export function AddComputer() {
       </Dialog>
     </>
   );
-}
-
-/** Owners and admins change company-wide settings; a member's read of the roster is refused (403). */
-function useAdmin(): boolean {
-  const me = useQuery(meQuery);
-  const access = useQuery({ ...accessQuery, retry: false });
-  return me.data?.role === 'owner' || access.data?.you === 'owner' || access.data?.you === 'admin';
 }
 
 const HOSTED_KINDS: Record<string, string> = { tico: 'Tico server', bot_computer: 'Agent computer' };
