@@ -548,6 +548,8 @@ def register_core(
             same = lambda _c, _task_id: False  # another item's task with this title is other work
         else:
             hidden = False
+        if close_read and (not primary or close_read.item != primary[0] or not close_items.current(c, close_read)):
+            close_read = None
         parent_id = auth.resolve_task(c, who, body.parent) if body.parent else None
         others = [(auth.resolve_task(c, who, r.task), r.kind) for r in body.relations]
         from .shared_bots import route
@@ -574,6 +576,9 @@ def register_core(
             person = routed_to
             if not person or not task_requirements.active_person(c, person):
                 raise Problem("route", "The person routing picked can no longer take it: send it again", 409)
+            if primary and primary[0][0] == close_items.SOURCE and not body.entity:
+                if person != routing.choose(c, work, routing.now())[0]:
+                    raise Problem("route", "The Close task's routing changed: send it again", 409)
             body, unassigned, routed_entity = body.model_copy(update={"owner": person}), False, work.entity_id
         if unassigned:
             from . import stage_pick
@@ -929,6 +934,8 @@ def register_core(
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
+        if close_read:
+            close_items.save(c, close_read)
         note = " ".join(
             filter(
                 None,
@@ -992,30 +999,44 @@ def register_core(
         # A routed create's person is picked first (a saved retry's answer comes back without one), so the cap, reach
         # and the org rule check below are for them.
         saved = saved_retry(request, who)
-        close_read = prefetch_close(body) if not saved and body.route else None
-        routed_to = None if saved else routed_preview(who, body, close_read)
-        cap_before_preflight(request, who, routed_to or body.owner, body.parent, body.primary_link, body.request_id)
-        rc = (
-            None
-            if saved and getattr(body, "route", False)
-            else rule_check(
+
+        def check_for(person):
+            owner = person or body.owner
+            cap_before_preflight(request, who, owner, body.parent, body.primary_link, body.request_id)
+            if saved and body.route:
+                return None
+            result = rule_check(
                 who,
                 "task_create",
                 rule_create_text(body),
                 lambda c: [
-                    rule_target(c, who, routed_to or body.owner),
+                    rule_target(c, who, owner),
                     *(org_rule_check.company(c) if rule_public(body) else []),
                 ],
             )
-        )
-        if getattr(body, "route", False) and org_rule_check.holds(rc):
-            raise Problem("route", ROUTED_HELD, 422)
+            if body.route and org_rule_check.holds(result):
+                raise Problem("route", ROUTED_HELD, 422)
+            return result
+
+        routed_to = None if saved else routed_preview(who, body)
+        rc = check_for(routed_to)
+
+        def lookup_close():
+            nonlocal routed_to, rc
+            # A routed preview also checks whether the task can be routed at all, including its privacy.
+            read = prefetch_close(body) if not body.route or routed_to else None
+            if body.route and read and read.fields:
+                person = routed_preview(who, body, read)
+                if person != routed_to:
+                    rc = check_for(person)
+                    routed_to = person
+            return read
+
         # A write the rule check holds, a saved retry, or a create whose item a task already holds (nothing is filed)
         # skips ask ingest's call.
         with store.read() as c:
             held = bool(body.primary_link) and _held_item(c, who, body.primary_link) is not None
-        if not (saved or held or body.route or org_rule_check.holds(rc)):
-            close_read = prefetch_close(body)
+        close_read = None if saved or held or org_rule_check.holds(rc) else lookup_close()
         ingest = (
             None
             if org_rule_check.holds(rc) or saved_retry(request, who) or held
@@ -1051,15 +1072,17 @@ def register_core(
         try:
             return attempt(ingest, not held or org_rule_check.holds(rc))  # a held create is never judged
         except ClaimGone:  # the task holding the item went before the write: judge the filing, then file it
-            if not body.route:
-                close_read = prefetch_close(body)
+            if body.route:
+                routed_to = routed_preview(who, body)
+                rc = check_for(routed_to)
+            close_read = lookup_close()
             judged = ask_ingest.preflight(
                 store, app.state.judge, request.state.identity, body.owner, body.title, body.body
             )
             return attempt(judged, True)
 
     def prefetch_close(body):
-        if body.entity or not body.primary_link or body.primary_status:
+        if body.entity or not body.primary_link or body.primary_status or body.private is True or body.live_meeting_id:
             return None
         ref = body.primary_link.strip()
         if not (ref.startswith("close:") or close_items.match_link(ref)):
@@ -1094,6 +1117,8 @@ def register_core(
                     item = IS.primary_of(c, body.primary_link)[0] if body.primary_link else None
                 except ValueError:
                     return None
+                if close_read and (item != close_read.item or not close_items.current(c, close_read)):
+                    close_read = None
                 return routing.person_for_create(
                     c, who, body, parent_id, actual_bot, *routed_inputs(c, who, body, parent_id, item, close_read)
                 )

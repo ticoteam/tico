@@ -35,14 +35,20 @@ same record integrations with a shared read and write key (`connect` with `write
 import json
 import logging
 import re
-import threading
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NamedTuple, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlsplit
 
 from ..tool_services import RECORD_INTEGRATION, SHARED_KEY
 from . import Condition, Item, hosts
+from . import http
+from .http import MAX_BODY as MAX_BODY
+from .http import MAX_IN_FLIGHT as MAX_IN_FLIGHT
+from .http import TIMEOUT_S as TIMEOUT_S
+from .http import Busy as Busy
+from .http import Reply as Reply
+from .http import wait_for as _wait
 
 if TYPE_CHECKING:
     import sqlite3
@@ -58,11 +64,7 @@ REREAD_S = 300  # an issue an open task links is read again when its metadata is
 RETRY_S = 300  # a read Jira refused, or that could not be made, is tried again after this
 PER_CONNECTION = 10  # reads of one connection's issues in one pass
 PASS_BUDGET_S = 30.0  # no read starts after a pass has spent this long reading
-TIMEOUT_S = 10.0
-MAX_IN_FLIGHT = 2  # reads out at once, a timed-out one counted until its thread ends
-_in_flight = [0]
-_in_flight_lock = threading.Lock()
-MAX_BODY = 512 * 1024
+HTTP = http.Pool(NAME)
 FIELDS = "status,updated"
 CATEGORIES = ("new", "indeterminate", "done")  # Jira's status categories
 TRANSPORT: Any = None  # tests: an httpx.MockTransport at the network edge
@@ -234,23 +236,8 @@ def request(
     return f"{base}/rest/api/3/issue/{quote(key)}", headers, {**params, "fields": FIELDS}
 
 
-class Busy(Exception):
-    """MAX_IN_FLIGHT reads are still out (one that timed out stays counted until its thread ends): no read starts."""
-
-
 def busy() -> bool:
-    with _in_flight_lock:
-        return _in_flight[0] >= MAX_IN_FLIGHT
-
-
-class Reply(NamedTuple):
-    """Jira's answer to one call: its status, the JSON answer (None when it is not JSON or was cut off), the seconds its
-    Retry-After asks for, and whether the answer was longer than MAX_BODY (`cut`: its body is then None)."""
-
-    status: int
-    body: object
-    retry_after: float | None = None
-    cut: bool = False
+    return HTTP.busy(MAX_IN_FLIGHT)
 
 
 def send(url: str, headers: dict[str, str], params: dict[str, str], seconds: float = TIMEOUT_S) -> tuple[int, object]:
@@ -268,59 +255,14 @@ def call(
     body: object = None,
     most: int | None = None,
 ) -> Reply:
-    """One call (`_call`; a write sends `body` as JSON, and `most` bytes of the answer are read, MAX_BODY by default)
-    with one deadline, `seconds` (at most TIMEOUT_S), over all of
-    it: the name's lookup, connecting, TLS and the answer. It runs on a thread of its own that ends itself at the
-    deadline (`_call` closes its client), and the caller stops waiting then too (`_wait`); the thread counts against
-    MAX_IN_FLIGHT until it ends. Raises when the call failed or ran out of time, Busy (before anything is sent) when
-    MAX_IN_FLIGHT calls are out."""
-    wait = min(seconds, TIMEOUT_S)
-    ends = time.monotonic() + wait
-    answers: list[Reply] = []
-    errors: list[BaseException] = []
-
-    def run() -> None:
-        try:
-            answers.append(_call(method, url, headers, params, ends, body, most))
-        except BaseException as error:  # noqa: BLE001 - handed to the caller, which raises it
-            errors.append(error)
-        finally:
-            with _in_flight_lock:
-                _in_flight[0] -= 1
-
-    with _in_flight_lock:
-        if _in_flight[0] >= MAX_IN_FLIGHT:
-            raise Busy()
-        _in_flight[0] += 1
-    worker = threading.Thread(target=run, name=f"jira-{method.lower()}", daemon=True)
-    worker.start()
-    _wait(worker, wait)
-    if answers:
-        return answers[0]
-    if errors:
-        raise errors[0]
-    raise TimeoutError(f"Jira took longer than {wait:g} seconds to answer")
-
-
-def _wait(worker: threading.Thread, seconds: float) -> None:
-    """Wait for a call's thread at most `seconds` (tests stand in for the clock here)."""
-    worker.join(seconds)
-
-
-def _retry_after(value: str | None) -> float | None:
-    """Retry-After in seconds (a number of seconds or an HTTP date), None when absent or unreadable."""
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        from email.utils import parsedate_to_datetime
-
-        return max(0.0, parsedate_to_datetime(value).timestamp() - time.time())
-    except (TypeError, ValueError):
-        return None
+    """One bounded Jira call. Writes send JSON and can override the response size cap."""
+    return HTTP.call(
+        method,
+        seconds,
+        lambda ends: _call(method, url, headers, params, ends, body, most),
+        limit=MAX_IN_FLIGHT,
+        wait_for_reply=_wait,
+    )
 
 
 def _call(
@@ -332,52 +274,9 @@ def _call(
     body: object = None,
     most: int | None = None,
 ) -> Reply:
-    """One call to a public https address, pinned to the IP it resolved to, no redirects, no proxy from the environment,
-    at most `most` bytes (MAX_BODY) read, all of it before `ends` (time.monotonic): as egress.post bounds its calls, a timer closes the
-    client at the deadline, which ends a read blocked on a socket, and the answer stops being read past it."""
-    import httpx
-
-    from .. import egress as _egress
-
-    egress: Any = _egress
-    late = TimeoutError("Jira took too long to answer")
-    limit = MAX_BODY if most is None else most
-    parts = egress.check(url)
-    address = egress.address_for(parts, budget=max(ends - time.monotonic(), 0.001))
-    pinned = httpx.URL(url, params=params or None).copy_with(host=address)
-    host = str(parts.hostname) + (f":{parts.port}" if parts.port else "")
-    sent = {**headers, "Host": host}
-    content = None
-    if body is not None:
-        content = json.dumps(body).encode()
-        sent["Content-Type"] = "application/json"
-    with httpx.Client(timeout=TIMEOUT_S, follow_redirects=False, trust_env=False, transport=TRANSPORT) as client:
-        timer = threading.Timer(max(ends - time.monotonic(), 0.001), client.close)
-        timer.daemon = True
-        timer.start()
-        try:
-            with client.stream(
-                method, pinned, headers=sent, content=content, extensions={"sni_hostname": parts.hostname}
-            ) as response:
-                got = b""
-                for chunk in response.iter_bytes():
-                    got += chunk
-                    if len(got) > limit or time.monotonic() > ends:
-                        break
-                if time.monotonic() > ends:
-                    raise late
-                cut = len(got) > limit
-                try:
-                    answer: object = None if cut else json.loads(got)
-                except ValueError:
-                    answer = None
-                return Reply(response.status_code, answer, _retry_after(response.headers.get("retry-after")), cut)
-        except Exception as error:
-            if time.monotonic() > ends and error is not late:
-                raise late from error
-            raise
-        finally:
-            timer.cancel()
+    return http.request(
+        NAME, method, url, headers, params, ends, body, MAX_BODY if most is None else most, transport=TRANSPORT
+    )
 
 
 def fields_of(answer: object, connection_id: str) -> Row | None:
@@ -409,12 +308,14 @@ def save_issue(
     return IM.save_read(conn, (SOURCE, ISSUE, key, connection_id), fields, version, due_seen)
 
 
-def failed(conn: "sqlite3.Connection", key: str, connection_id: str, why: str) -> None:
+def failed(conn: "sqlite3.Connection", key: str, connection_id: str, why: str, version: int) -> bool:
     """Keep the most recent good read, and wait before trying again."""
     from .. import item_metadata as IM
 
-    IM.failed_read(conn, (SOURCE, ISSUE, key, connection_id), why)
-    LOG.info("Reading %s failed: %s", ref(key, connection_id), why)
+    saved = IM.failed_read(conn, (SOURCE, ISSUE, key, connection_id), why, version)
+    if saved:
+        LOG.info("Reading %s failed: %s", ref(key, connection_id), why)
+    return saved
 
 
 def _refused(status: int) -> str:
@@ -448,15 +349,15 @@ def refresh(
         left = PASS_BUDGET_S - (clock() - started)
         if left <= 0 or busy():  # out of time, or reads still out: the rest wait for the next pass
             break
+        version = version_now()
         try:
             with store.transaction() as conn:
                 url, headers, params = request(conn, vault, key, connection_id)
         except Exception as exc:  # noqa: BLE001 - one issue that cannot be read leaves the others to their reads
             why = str(exc) if isinstance(exc, Unreadable) else "The connection's key could not be read"
             with store.transaction() as conn:
-                failed(conn, key, connection_id, why)
+                failed(conn, key, connection_id, why, version)
             continue
-        version = version_now()
         left = PASS_BUDGET_S - (clock() - started)  # again, just before it is sent: preparing it took time
         if left <= 0:
             break
@@ -467,15 +368,13 @@ def refresh(
         except Exception as exc:  # noqa: BLE001 - Jira down or the address refused: the metadata waits for a retry
             why = "Jira could not be reached" + (" (timed out)" if "Timeout" in type(exc).__name__ else "")
             with store.transaction() as conn:
-                failed(conn, key, connection_id, why)
+                failed(conn, key, connection_id, why, version)
             continue
         fields = fields_of(answer, connection_id) if 200 <= status < 300 else None
         with store.transaction() as conn:
             if fields is None:
-                failed(
-                    conn, key, connection_id, "Jira's answer has no status" if 200 <= status < 300 else _refused(status)
-                )
-                if status == 404:
+                why = "Jira's answer has no status" if 200 <= status < 300 else _refused(status)
+                if failed(conn, key, connection_id, why, version) and status == 404:
                     RC.watch(conn, key, connection_id, gone=True)
             elif save_issue(conn, key, connection_id, fields, version, due_seen):
                 changed += 1

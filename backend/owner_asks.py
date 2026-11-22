@@ -102,11 +102,17 @@ def ask(
 
 
 def withdraw(
-    conn: "sqlite3.Connection", requirement_id: str, why: str, own_task: str | None, *, advance: bool = True
+    conn: "sqlite3.Connection",
+    requirement_id: str,
+    why: str,
+    own_task: str | None,
+    *,
+    advance: bool = True,
+    raise_on_failure: bool = False,
 ) -> None:
     """Take back an ask (one already answered or past is left as it is); `advance` False when another ask is about to
     take its place. When it is on a task other than `own_task`, the task `ask` filed for it alone, that task is closed
-    too."""
+    too. Raise on failure when the caller must roll back its own write if the ask stays."""
     if not requirement_id:
         return
     H, E = _h(), _engine()
@@ -122,7 +128,10 @@ def withdraw(
         row: Row | None = H.task(conn, task_id)
         if task_id != own_task and row and row.get("status") == "open":
             E.move(conn, task_id, E.CLOSED, H.TICO_ACTOR, why)
-    except Exception as exc:  # noqa: BLE001 - the ask stays; whoever it names can still answer it
+    except Exception as exc:
         conn.execute("ROLLBACK TO owner_withdraw")
+        if raise_on_failure:
+            raise
         LOG.warning("Taking back ask %s failed: %s", requirement_id, exc)
-    conn.execute("RELEASE owner_withdraw")
+    finally:
+        conn.execute("RELEASE owner_withdraw")

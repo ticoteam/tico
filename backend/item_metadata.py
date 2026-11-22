@@ -135,21 +135,26 @@ def save_read(
     return True
 
 
-def failed_read(conn: "sqlite3.Connection", item: tuple[str, str, str, str], why: str) -> None:
-    """Keep the last good metadata and record a failure so the source can wait until its next retry."""
+def failed_read(
+    conn: "sqlite3.Connection",
+    item: tuple[str, str, str, str],
+    why: str,
+    version: int,
+    *,
+    refused_at: str | None = None,
+) -> bool:
+    """Keep the last good fields and record a failure unless a newer read has already been saved."""
     H = _h()
     now = H.now()
     found = conn.execute(
-        "UPDATE item_metadata SET read_error=?, refused_at=?, updated_at=? WHERE source=? AND item_type=? "
-        "AND item_key=? AND connection_id=?",
-        (why[:300], now, now, *item),
+        "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, metadata_version, "
+        "read_error, refused_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(source, item_type, item_key, connection_id) DO UPDATE SET "
+        "metadata_version=excluded.metadata_version, read_error=excluded.read_error, refused_at=excluded.refused_at, "
+        "updated_at=excluded.updated_at WHERE item_metadata.metadata_version <= excluded.metadata_version",
+        (H.new_id(), *item, version, why[:300], refused_at or now, now, now),
     )
-    if found.rowcount == 0:
-        conn.execute(
-            "INSERT INTO item_metadata (id, source, item_type, item_key, connection_id, fields, metadata_version, "
-            "read_error, refused_at, created_at, updated_at) VALUES (?,?,?,?,?,'{}',0,?,?,?,?)",
-            (H.new_id(), *item, why[:300], now, now, now),
-        )
+    return found.rowcount > 0
 
 
 def mark_due(conn: "sqlite3.Connection", source: str, item_type: str, key: str, connection_id: str = "") -> None:

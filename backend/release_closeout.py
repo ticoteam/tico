@@ -356,8 +356,16 @@ def _ask_outside(
 
 
 def watch_close(conn: "sqlite3.Connection", item: tuple[str, str, str, str], status: str) -> None:
-    """Only a primary Close opportunity can ask its task's owner to settle, once per closure."""
+    """Only a primary Close opportunity can ask its task's owner to settle, once per standing."""
     _guarded(conn, item[2], lambda: _watch_close(conn, item, status))
+
+
+def unlink_close(conn: "sqlite3.Connection", link: Row) -> None:
+    """Take back a Close link's ask when its task no longer tracks that opportunity."""
+    from . import owner_asks
+
+    asked = str(_detail(link).get("ask") or "")
+    owner_asks.withdraw(conn, asked, "The Close opportunity was unlinked", str(link["task_id"]), raise_on_failure=True)
 
 
 def _watch_close(conn: "sqlite3.Connection", item: tuple[str, str, str, str], status: str) -> None:
@@ -375,5 +383,6 @@ def _watch_close(conn: "sqlite3.Connection", item: tuple[str, str, str, str], st
         _withdraw_outside(conn, task_id, link, detail, f"{key} is active again in Close")
     else:
         task: Row = _h().task(conn, task_id)
-        line = f"{key} was {status} in Close: keep working on it, or close this task to settle it?"
-        _ask_outside(conn, task, link, detail, "closed", line, "Asked again: Close changed")
+        standing = "is no longer visible" if status == "gone" else f"was {status}"
+        line = f"{key} {standing} in Close: keep working on it, or close this task to settle it?"
+        _ask_outside(conn, task, link, detail, status, line, "Asked again: Close changed")

@@ -2470,7 +2470,14 @@ def verified_sender(
 
 
 def verified_external_ref(
-    c: sqlite3.Connection, actor: str, system: str, connection_id: str, external_type: str, provider_id: str
+    c: sqlite3.Connection,
+    actor: str,
+    system: str,
+    connection_id: str,
+    external_type: str,
+    provider_id: str,
+    *,
+    company_only: bool = False,
 ) -> str | None:
     """Resolve a provider-verified record on its connection to a visible, current entity."""
     if not provider_id:
@@ -2483,7 +2490,8 @@ def verified_external_ref(
     )
     if row is None:
         return None
-    found = _visible_rows(c, V.reader(c, actor), follow_merges(c, [row["entity_id"]]))
+    reader = V.Reader(actor, "", system=False, sensitive=False, grants={}) if company_only else V.reader(c, actor)
+    found = _visible_rows(c, reader, follow_merges(c, [row["entity_id"]]))
     return str(found[0]["id"]) if found else None
 
 

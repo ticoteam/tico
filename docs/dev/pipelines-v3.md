@@ -1203,14 +1203,17 @@ or whose answer is not an issue's, keeps the metadata as it was with `read_error
 issue moved to another project gets a new key: a task filed for the old key keeps it, and one filed for the new key
 shows as a duplicate to merge.
 
-**A Close opportunity** uses the same record integration and shared-key rules. Configure a Close CRM API
+**A Close opportunity** uses a record integration with a shared Read key. Configure a Close CRM API
 tool at `https://api.close.com` with Close's Basic authentication and mark it as holding records. One hostname
 serves every Close account, so use `close:opportunity:oppo_X@<tool id>` for a primary link or pick the tool when
-attaching a secondary URL if there is more than one record integration. With a single integration, the URL
-`https://api.close.com/api/v1/opportunity/oppo_X/` identifies the item by itself.
+attaching a secondary URL if there is more than one record integration. Use a typed reference to look up tasks
+when more than one tool serves the Close host. With a single tool, looking up the URL
+`https://api.close.com/api/v1/opportunity/oppo_X/` still works after its key is removed.
 
 The heartbeat's `close_items` step reads opportunities linked by open tasks every five minutes, with the
-same per-connection pass cap and request deadline as Jira. The saved fields include the status label and type,
+same per-connection pass cap and request deadline as Jira and its own in-flight limit. A 429 pauses reads on
+that connection for at least five minutes or a longer Retry-After, including lookups during task creation.
+The saved fields include the status label and type,
 value in cents with its currency and period, and lead id. Won and lost map to `state: closed`. Active maps to
 `state: open`. The opportunity stays eligible for rereads so it can reopen.
 [Retrieve an opportunity](https://developer.close.com/api/resources/opportunities/get)
@@ -1235,9 +1238,9 @@ standing: a new standing replaces the ask. That is how the owner hears of it; no
 the issue back in Jira does: active again takes the ask back (the same task moves on) and runs a pending close-out.
 Secondary links are informational.
 
-A primary Close opportunity that is won or lost uses the same people-only owner ask. One ask covers the
-closure and Tico withdraws it if the opportunity becomes active again. The owner decides whether to settle
-the Tico task. A failed read keeps the last known state and asks nothing new.
+A primary Close opportunity that is won, lost, or returns 404 uses the same people-only owner ask. A change
+between those standings replaces the ask. Tico withdraws it if the opportunity becomes active again or the link
+is removed. The owner decides whether to settle the Tico task. Failed reads keep the last known fields.
 
 #### Intake
 
@@ -1256,9 +1259,10 @@ give one task. The dry run (`POST /api/v2/tasks/dry-run`) checks only the primar
 primary link to the kept task (with the exact connection-scoped row); a deleted task restored after another task was
 filed for its item gets its link back as a secondary one.
 
-A new Close task defaults to the visible Contacts entity recorded as `system=close`, `external_type=lead`,
-and the opportunity's lead id on the same connection. The caller can supply `entity` explicitly. An ordinary
-create makes a bounded lookup when the connection has lead mappings and the opportunity has yet to be read.
+A new Close task defaults to the company-visible Contacts entity recorded as `system=close`, `external_type=lead`,
+and the opportunity's lead id on the same connection, from a successful read in the past five minutes. The
+caller can supply any entity they can read through `entity`. A create can look up a missing or stale read when
+the connection has lead mappings. Tico saves that read when it files the task.
 
 #### Routing
 

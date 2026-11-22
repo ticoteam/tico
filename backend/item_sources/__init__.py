@@ -132,6 +132,8 @@ def outside_item(
     url: str,
     connection_id: str = "",
     sources: tuple[str, ...] = SOURCES,
+    *,
+    for_lookup: bool = False,
 ) -> tuple[str, str, str, str] | None:
     """(source, item type, key, connection) of the item a link's URL is, among `sources`, or None when it is none's
     item. A site source's item takes the connection that serves its site: `connection_id` when given (ValueError when
@@ -142,7 +144,7 @@ def outside_item(
     host = site_of(found[0], url)
     if host is None:
         return (*found, connection_id)
-    if found[0] == "close":
+    if found[0] == "close" and not for_lookup:
         from . import close
 
         tools = sorted(close.integrations(conn))
@@ -162,7 +164,8 @@ def parse_ref(conn: sqlite3.Connection, text: str) -> tuple[str, str, str, str]:
     link's URL (its site's connection, `outside_item`). ValueError, saying what is wrong, for anything else."""
     text = text.strip()
     if text.startswith(("http://", "https://")):
-        item = outside_item(conn, text)
+        # Looking up an existing link uses the tool's host even after its key is removed.
+        item = outside_item(conn, text, for_lookup=True)
         if not item:
             raise ValueError(f"{text} is not a link to an item of a connected source")
         return item

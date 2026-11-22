@@ -3947,6 +3947,10 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
         event(conn, actor, 'task.unlink', task_id, {'url': have['url'], 'cleanup': True})
         return have
     conn.execute("DELETE FROM task_links WHERE id=?", (link_id,))
+    if have.get("is_primary") and have.get("source") == "close":
+        from . import release_closeout
+
+        release_closeout.unlink_close(conn, have)
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
     _task_event(conn, task_id, actor, "link", have["url"], None, "removed")
     event(conn, actor, "task.unlink", task_id, {"url": have["url"]})

@@ -14,7 +14,7 @@ from backend import mailbox_access as MA
 from backend.entities import store as ES
 from backend.item_sources import close as CS
 from backend.item_sources import jira as JS
-from backend.tests.helpers.api import get, post
+from backend.tests.helpers.api import get, post, put
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.jira_intake import PUBLIC, _patch_tool
 from backend.tests.helpers.mcp import call
@@ -29,7 +29,9 @@ class FakeClose:
         self.api = api
         self.keys = {}
         self.deals = {}
+        self.replies = {}
         self.seen = []
+        self.during = None
 
     def connect(self, name, *, record=True, level="read"):
         tool = post(self.api, "api-tools", {"name": name, "service": "close-crm"})["id"]
@@ -59,6 +61,10 @@ class FakeClose:
         key = request.url.path.split("/")[-2]
         assert request.url.path == f"/api/v1/opportunity/{key}/"
         self.seen.append((tool, key))
+        if self.during:
+            self.during()
+        if (tool, key) in self.replies:
+            return self.replies[tool, key]
         fields = self.deals.get((tool, key))
         return httpx.Response(200 if fields else 404, json=fields)
 
@@ -68,7 +74,7 @@ def close(api, monkeypatch):
     setup(api)
     fake = FakeClose(api)
     monkeypatch.setattr(egress, "resolve", lambda host: [ipaddress.ip_address(PUBLIC)])
-    monkeypatch.setattr(JS, "TRANSPORT", httpx.MockTransport(fake))
+    monkeypatch.setattr(CS, "TRANSPORT", httpx.MockTransport(fake))
     return fake
 
 
@@ -123,7 +129,7 @@ def _record(api, tool, name, *, restricted=False):
     return entity
 
 
-def test_close_url_files_and_finds_a_typed_task_and_reads_metadata_every_five_minutes(api, close):
+def test_close_url_files_and_finds_a_typed_task_without_borrowing_jira_slots(api, close, monkeypatch):
     tool = close.connect("Close Acme")
     close.set(tool)
     task = _create(api, CS.url_of(DEAL))["id"]
@@ -138,6 +144,7 @@ def test_close_url_files_and_finds_a_typed_task_and_reads_metadata_every_five_mi
         True,
     )
     assert [row["id"] for row in get(api, f"tasks?link={quote(_ref(tool))}")["tasks"]] == [task]
+    monkeypatch.setattr(JS, "MAX_IN_FLIGHT", 0)
     assert _refresh(api) == 1
     saved = _meta(api, tool)
     assert saved["fields"] == {
@@ -153,6 +160,9 @@ def test_close_url_files_and_finds_a_typed_task_and_reads_metadata_every_five_mi
     assert _refresh(api, H.shift(saved["read_at"], seconds=299)) == 0
     assert _refresh(api, H.shift(saved["read_at"], seconds=301)) == 1
     assert close.seen == [(tool, DEAL)] * 2
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE credentials SET ciphertext=NULL WHERE tool_id=?", (tool,))
+    assert [row["id"] for row in get(api, f"tasks?link={quote(CS.url_of(DEAL))}")["tasks"]] == [task]
 
 
 def test_same_ids_on_two_close_connections_use_their_own_key_status_value_and_entity(api, close):
@@ -165,22 +175,57 @@ def test_same_ids_on_two_close_connections_use_their_own_key_status_value_and_en
     assert first["id"] != second["id"]
     assert (first["entity_id"], second["entity_id"]) == (a, b)
     assert close.seen == [(acme, DEAL), (beta, DEAL)]  # lead looked up on the first creates
-    assert _refresh(api) == 2
+    assert _refresh(api) == 0
     assert (_meta(api, acme)["fields"]["value"], _meta(api, beta)["fields"]["value"]) == (50000, 12000)
     assert _asks(api, first["id"]) == [] and _asks(api, second["id"]) == [("human:ben", "people_only", 0)]
 
 
-def test_close_needs_a_record_integration_and_unreadable_leads_do_not_set_entity(api, close):
-    tool = close.connect("Close Acme", record=False)
-    close.set(tool)
-    assert _create(api, _ref(tool), expected=422)["error"]["code"] == "primary_link"
+def test_close_needs_a_record_integration_with_a_shared_read_key(api, close):
+    unlisted = close.connect("Close Unlisted", record=False)
+    write = close.connect("Close Write", level="read_write")
+    personal = close.connect("Close Personal")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE credentials SET holder='human:ana' WHERE tool_id=?", (personal,))
+    for tool in (unlisted, write, personal):
+        close.set(tool)
+        assert _create(api, _ref(tool), expected=422)["error"]["code"] == "primary_link"
+    assert _refresh(api) == 0
     assert close.seen == []
-    _patch_tool(api, tool, {"record_owner": "outside"})
+
+
+def test_a_company_task_never_inherits_a_restricted_lead_even_when_the_filer_can_see_it(api, close):
+    tool = close.connect("Close Acme")
     private = _record(api, tool, "Private", restricted=True)
+    close.set(tool)
     assert not _create(api, _ref(tool), owner="cara", token="cara-test")["entity_id"]
     second = "oppo_two"
     close.set(tool, second)
-    assert _create(api, _ref(tool, second))["entity_id"] == private
+    with api.app.state.store.transaction() as c:
+        ES.set_owner(c, "human:ana", private, "human:ben")
+        c.execute("UPDATE humans SET availability='on' WHERE id='ben'")
+    routed = _create(api, _ref(tool, second), owner=None, route=True)
+    assert not routed["entity_id"] and routed["owner_id"] == "human:ana"
+    assert _create(api, _ref(tool, "oppo_explicit"), entity=private)["entity_id"] == private
+
+
+def test_routed_close_task_checks_privacy_rules_and_caps_before_fetching_and_routes_the_live_lead(ruled, close):
+    api, _ = ruled
+    tool = close.connect("Close Acme")
+    entity = _record(api, tool, "Acme")
+    close.set(tool)
+    with api.app.state.store.transaction() as c:
+        ES.set_owner(c, "human:ana", entity, "human:ben")
+        c.execute("UPDATE humans SET availability='on' WHERE id='ben'")
+    color_rule(api)
+    _create(api, _ref(tool), owner=None, route=True, private=True, expected=422)
+    _create(api, _ref(tool), owner=None, route=True, token="ops-test", body="Our favorite color is gold.", expected=422)
+    put(api, "task-caps", {"sender": "bot:ops", "receiver": "person:ana", "per_day": 0})
+    capped = _create(api, _ref(tool), owner=None, route=True, token="ops-test", expected=409)
+    assert capped["error"] == "task_cap"
+    assert close.seen == []
+    made = _create(api, _ref(tool), owner=None, route=True)
+    assert (made["entity_id"], made["owner_id"]) == (entity, "human:ben")
+    assert close.seen == [(tool, DEAL)] and _refresh(api) == 0
 
 
 def test_a_held_create_matches_the_close_lead_when_the_owner_releases_it(ruled, close):
@@ -197,7 +242,7 @@ def test_a_held_create_matches_the_close_lead_when_the_owner_releases_it(ruled, 
     assert close.seen == [(tool, DEAL)]
 
 
-def test_a_won_primary_deal_asks_once_then_withdraws_on_reopen(api, close):
+def test_a_primary_deal_asks_per_standing_and_withdraws_on_reopen_or_unlink(api, close):
     tool = close.connect("Close Acme")
     close.set(tool)
     task = _create(api, _ref(tool))["id"]
@@ -212,9 +257,97 @@ def test_a_won_primary_deal_asks_once_then_withdraws_on_reopen(api, close):
     assert _asks(api, secondary) == []
     assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
     assert _asks(api, task) == [("human:ben", "people_only", 0)]
-    close.set(tool)
-    assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
-    assert _asks(api, task) == [("human:ben", "people_only", 1)]
     close.set(tool, status="lost")
     assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
     assert _asks(api, task) == [("human:ben", "people_only", 1), ("human:ben", "people_only", 0)]
+    del close.deals[tool, DEAL]
+    assert _refresh(api, H.shift(H.now(), minutes=6)) == 0
+    assert _meta(api, tool)["read_error"] == "Close answered 404"
+    assert _asks(api, task) == [("human:ben", "people_only", 1)] * 2 + [("human:ben", "people_only", 0)]
+    close.set(tool)
+    assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
+    assert _asks(api, task) == [("human:ben", "people_only", 1)] * 3
+    close.set(tool, status="won")
+    assert _refresh(api, H.shift(H.now(), minutes=6)) == 1
+    [link] = get(api, f"tasks/{task}/links")["links"]
+    post(api, f"tasks/{task}/links", {"remove": link["id"]}, token="ben-test")
+    assert _asks(api, task) == [("human:ben", "people_only", 1)] * 4
+    assert _asks(api, secondary) == []
+
+
+def test_a_response_from_a_rotated_close_key_is_discarded(api, close):
+    tool = close.connect("Close Acme")
+    first = _create(api, _ref(tool))["id"]
+    _record(api, tool, "Acme")
+    other = "oppo_two"
+    close.set(tool, status="won")
+    close.set(tool, other, status="lost")
+
+    def rotate():
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE credentials SET revision=revision+1 WHERE tool_id=?", (tool,))
+
+    close.during = rotate
+    second = _create(api, _ref(tool, other))
+    assert not second["entity_id"] and _meta(api, tool, other) is None and _asks(api, second["id"]) == []
+    assert _refresh(api) == 0
+    assert _meta(api, tool) is None and _asks(api, first) == []
+
+
+def test_429_pauses_one_close_connection_including_create_lookups(api, close, time_machine):
+    time_machine.move_to("2026-11-22T00:00:00Z", tick=False)
+    acme, beta = close.connect("Close Acme"), close.connect("Close Beta")
+    _create(api, _ref(acme))
+    _create(api, _ref(acme, "oppo_two"))
+    _create(api, _ref(beta))
+    close.set(beta)
+    close.replies[acme, DEAL] = httpx.Response(429, headers={"Retry-After": "600"})
+    assert _refresh(api) == 1
+    assert set(close.seen) == {(acme, DEAL), (beta, DEAL)}
+    assert _meta(api, acme)["read_error"] == "Close answered 429"
+    _record(api, acme, "Acme")
+    close.set(acme, "oppo_three")
+    time_machine.move_to("2026-11-22T00:06:00Z", tick=False)
+    assert _refresh(api) == 1 and all(key == DEAL for _, key in close.seen)
+    assert not _create(api, _ref(acme, "oppo_three"))["entity_id"]
+    assert (acme, "oppo_three") not in close.seen
+    del close.replies[acme, DEAL]
+    close.set(acme)
+    time_machine.move_to("2026-11-22T00:10:01Z", tick=False)
+    assert _refresh(api) == 2
+    assert (acme, "oppo_three") in close.seen
+
+
+def test_stale_or_failed_reads_are_not_inherited_and_create_respects_item_backoff(api, close, time_machine):
+    time_machine.move_to("2026-11-22T00:00:00Z", tick=False)
+    tool = close.connect("Close Acme")
+    _record(api, tool, "Acme")
+    close.set(tool)
+    close.set(tool, "oppo_two")
+    secondary = _create(api, None)["id"]
+    for key in (DEAL, "oppo_two"):
+        post(api, f"tasks/{secondary}/links", {"url": CS.url_of(key)})
+    assert _refresh(api) == 2
+    time_machine.move_to("2026-11-22T00:06:00Z", tick=False)
+    del close.deals[tool, DEAL]
+    del close.deals[tool, "oppo_two"]
+    close.replies[tool, "oppo_two"] = httpx.Response(503)
+    failed = _create(api, _ref(tool, "oppo_two"))
+    assert not failed["entity_id"] and close.seen.count((tool, "oppo_two")) == 2
+    assert _refresh(api) == 0
+    assert not _create(api, _ref(tool))["entity_id"]
+    assert close.seen.count((tool, DEAL)) == 2
+
+
+def test_never_attempted_deals_go_before_previously_failed_deals(api, close, monkeypatch, time_machine):
+    time_machine.move_to("2026-11-22T00:00:00Z", tick=False)
+    monkeypatch.setattr(CS, "PER_CONNECTION", 1)
+    tool = close.connect("Close Acme")
+    _create(api, _ref(tool))
+    assert _refresh(api) == 0
+    assert close.seen == [(tool, DEAL)]
+    close.set(tool, "oppo_two")
+    _create(api, _ref(tool, "oppo_two"))
+    time_machine.move_to("2026-11-22T00:06:00Z", tick=False)
+    assert _refresh(api) == 1
+    assert close.seen[-1] == (tool, "oppo_two")

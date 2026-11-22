@@ -258,6 +258,27 @@ def test_a_read_past_its_deadline_ends_itself(api, jira):
         JS._call("GET", "https://acme.atlassian.net/rest/api/3/issue/PROJ-33", {}, {}, time.monotonic() - 1)
 
 
+def test_a_late_jira_404_cannot_mark_a_newer_success_failed_or_ask_the_owner(api, jira):
+    from backend.item_sources.github import version_now
+
+    acme = jira.tools["acme.atlassian.net"]
+    key = "PROJ-34"
+    task = _id(_create(api, f"jira:issue:{key}@{acme}"))
+    fields = {"state": "open", "status": "In Progress", "category": "indeterminate", "connection_id": acme}
+
+    def newer_read():
+        with api.app.state.store.transaction() as c:
+            assert JS.save_issue(c, key, acme, fields, version_now())
+
+    jira.during = newer_read
+    assert _refresh(api) == 0  # the request ends with a 404 after the success was saved
+    saved = _meta(api, key, acme)
+    assert saved["fields"] == fields and saved["read_error"] is None and saved["refused_at"] is None
+    with api.app.state.store.read() as c:
+        detail = c.execute("SELECT detail FROM task_links WHERE task_id=? AND is_primary=1", (task,)).fetchone()[0]
+    assert json.loads(detail or "{}").get("ask") is None
+
+
 def test_a_claim_on_a_task_the_caller_cannot_read_is_refused_without_naming_it(api, jira):
     acme = jira.tools["acme.atlassian.net"]
     private = _id(_create(api, f"jira:issue:PROJ-41@{acme}", private=True))
