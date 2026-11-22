@@ -146,8 +146,9 @@ Use `operation: "send"`, an E.164 phone number as the destination and the provid
 | `close_sms` | `{"from":"+12025550100","body":"Your appointment is ready."}`. Add `lead_id` to link the SMS to a Close lead. | Close CRM at `https://api.close.com` with a Basic user API key. The sender must be an internal Close number. |
 
 Both connections must be Everyone API tools marked as record integrations by an administrator. The bot needs
-Read and write on each shared key used. The Tools proxy refuses non-GET requests to Twilio's Messages and legacy
-SMS/Messages resources, and POST, PUT and PATCH to Close's SMS activities, including draft updates. The Twilio
+Read and write on each shared key used. Such a connection is reserved for the queue: through the Tools proxy it only
+reads (GET and HEAD); every other request, MCP calls included, is refused, so use another connection for other writes
+to Twilio or Close. The Twilio
 account is frozen in the approval preview. Both channels are external and default to Ask first. A Contacts block on
 `channel:sms` applies to both. The destination is matched by canonical number against Contacts phone fields and phone
 identifiers. Rules follow merges of contacts and rule targets. The sender checks policy again in the transaction
