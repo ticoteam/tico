@@ -129,10 +129,11 @@ def until_sent(mid):
         if state.get("state") not in ("queued", "ready", "sending", "rate_limited"):
             break
         _sleep(1)
-    if state.get("state") in ("failed", "canceled", "uncertain"):
+    if state.get("state") in ("failed", "canceled", "blocked", "uncertain"):
         why = f"{state['state']}: {state.get('error') or 'no reason given'}"
-        kind = Refused if state["state"] == "canceled" else Failure
-        raise kind(f"Slack did not get message {mid} ({why}).", "It is still in Tico; the bot's room shows it.")
+        kind = Refused if state["state"] in ("canceled", "blocked") else Failure
+        outcome = "Tico could not confirm delivery of" if state["state"] == "uncertain" else "Slack did not get"
+        raise kind(f"{outcome} message {mid} ({why}).", "It is still in Tico; the bot's room shows it.")
     return state
 
 

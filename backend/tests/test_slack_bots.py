@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import anyio
 import pytest
 
+from backend import outbound_actions as OA, outbound_slack as OS
 from backend import hubdb as H
 from backend import org_rule_check as OR
 from backend import screening
@@ -449,13 +450,13 @@ def test_a_post_goes_into_the_outbox_and_the_bots_room(slack):
     mid = made["message_id"]
     assert (made["state"], made["channel"], made["name"]) == ("ready", GENERAL, "general")
     with slack.store.read() as c:
-        row = c.execute("SELECT * FROM slack_posts WHERE message_id=?", (mid,)).fetchone()
+        row = c.execute(f"SELECT * FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()
         message = H.message(c, mid)
-    assert (row["channel"], row["bot"], row["text"], row["state"]) == (GENERAL, "ops", "Release is out", "ready")
+    assert (row["channel"], row["bot"], row["text"], row["state"]) == (GENERAL, "ops", "Release is out", "queued")
     assert message["sender_id"] == "bot:ops" and message["refs"]["slack_post"]["channel"] == GENERAL
     assert call(slack, "GET", "slack/posts/" + mid).json()["state"] == "ready"
     with slack.store.transaction() as c:
-        c.execute("UPDATE slack_posts SET state='sent',slack_ts='1700000009.000100' WHERE message_id=?", (mid,))
+        OA.settle(c, OA.get(c, mid), "done", receipt={"ts": "1700000009.000100"})
     sent = call(slack, "GET", "slack/posts/" + mid).json()
     assert sent["permalink"] == "https://acme.slack.com/archives/C0000000001/p1700000009000100"
     call(slack, "GET", "slack/posts/nope", 404)
@@ -465,9 +466,73 @@ def test_a_post_goes_into_the_outbox_and_the_bots_room(slack):
         slack, "POST", "slack/posts", json={"channel": GENERAL, "text": "In thread", "thread_ts": "1700000002.000100"}
     ).json()
     with slack.store.read() as c:
-        assert c.execute("SELECT thread_ts FROM slack_posts WHERE message_id=?", (threaded["message_id"],)).fetchone()[
-            0
-        ]
+        assert json.loads(OA.get(c, threaded["message_id"])["metadata"])["thread_ts"] == "1700000002.000100"
+
+
+def test_confirming_a_slack_post_records_the_timestamp_and_its_permalink(slack):
+    made = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Confirmed words"}).json()
+    mid = made["message_id"]
+    with slack.store.transaction() as c:
+        OA.settle(c, OA.get(c, mid), "unknown")
+    path = f"/api/v2/outbound-actions/{mid}/confirm-sent"
+    bad = slack.api.post(path, json={"slack_ts": "https://acme.slack.com/"}, headers=headers())
+    assert bad.status_code == 422
+    key = headers()
+    response = slack.api.post(path, json={"slack_ts": "1700000009.000100"}, headers=key)
+    assert response.status_code == 200
+    assert slack.api.post(path, json={"slack_ts": "1700000009.000100"}, headers=key).status_code == 200
+    with slack.store.read() as c:
+        row = OA.get(c, mid)
+        assert json.loads(row["receipt"]) == {"ts": "1700000009.000100", "confirmed_by": "human:ana"}
+        assert (
+            c.execute(f"SELECT text FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()["text"]
+            == "Confirmed words"
+        )
+    sent = call(slack, "GET", f"slack/posts/{mid}").json()
+    assert sent["state"] == "sent" and sent["permalink"].endswith("/p1700000009000100")
+
+
+def test_outbound_slack_list_uses_message_access_before_paging(slack):
+    older = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Visible"}).json()["message_id"]
+    newer = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "Withdrawn"}).json()["message_id"]
+    with slack.store.transaction() as c:
+        c.execute("UPDATE outbound_actions SET created_at='9999-01-01' WHERE id=?", (newer,))
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), newer))
+    listed = call(slack, "GET", "outbound-actions?channel=slack&limit=1").json()
+    assert [item["id"] for item in listed["items"]] == [older]
+    assert listed["next_cursor"] is None
+    call(slack, "GET", f"outbound-actions/{newer}", 404)
+    call(slack, "GET", f"outbound-actions/{older}")
+
+
+def test_an_unexpected_slack_enqueue_conflict_is_logged_and_refused(slack, caplog):
+    from backend.store import Problem
+
+    made = call(slack, "POST", "slack/posts", json={"channel": "#general", "text": "First"}).json()
+    mid = made["message_id"]
+    with slack.store.transaction() as c:
+        with pytest.raises(Problem, match="conflicts"):
+            OS.queue(c, H.message(c, mid), "ops", GENERAL, "", "Unexpected second post")
+    assert mid in caplog.text and "conflict" in caplog.text
+
+
+def test_generic_outbound_cannot_bypass_slack_post_gates(slack):
+    for channel, key in (("slack", "unbound-post"), ("jira", "slack:reserved")):
+        call(
+            slack,
+            "POST",
+            "outbound-actions",
+            422,
+            json={
+                "channel": channel,
+                "destination": GENERAL,
+                "operation": "post",
+                "occurrence_key": key,
+                "payload": {"text": "Hello"},
+            },
+        )
+    with slack.store.read() as c:
+        assert not c.execute("SELECT 1 FROM outbound_actions").fetchone()
 
 
 def test_post_gates_list_posting_off_unknown_id_length_and_post_verb(slack):
@@ -649,7 +714,7 @@ def test_a_held_post_replays_as_the_bot_while_its_channel_is_still_listed(slack)
         done = SB.replay_post(
             c, None, {"author": "bot:ops"}, {"channel": GENERAL, "thread_ts": "", "text": "Held words"}, None
         )
-        assert c.execute("SELECT bot,text FROM slack_posts WHERE message_id=?", (done["message_id"],)).fetchone()[
+        assert c.execute(f"SELECT bot,text FROM ({OS.POSTS}) WHERE message_id=?", (done["message_id"],)).fetchone()[
             :
         ] == (
             "ops",
@@ -661,34 +726,62 @@ def test_a_held_post_replays_as_the_bot_while_its_channel_is_still_listed(slack)
 
 
 # ----------------------------------------------------------------------------- the gateway's side
-def test_the_gateway_cancels_a_bots_post_to_a_slack_connect_channel_and_sends_the_rest(gateway):
+@pytest.fixture
+def post_gateway(gateway, monkeypatch):
+    from backend import slack_channels as SC
+    from backend.auth import Identity
+
+    monkeypatch.setattr(SB, "slack_entry", lambda *_: {"can": ["post"]})
+    with gateway.store.transaction() as c:
+        SC.add(c, gateway.settings, Identity("human:ana", "owner"), MARKETING, name="marketing")
+    return gateway
+
+
+def test_the_gateway_holds_a_bots_post_to_a_slack_connect_channel_and_sends_the_rest(post_gateway, monkeypatch):
+    gateway = post_gateway
     store = gateway.store
+    rings = []
+    monkeypatch.setattr(OS, "ring", rings.append)
     with store.transaction() as c:
         outside = SB.queue_post(c, "cmo", {"id": "C0EXT", "name": "partners"}, "", "To partners")
         inside = SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", "To marketing")
+        assert not rings
+    assert len(rings) == 2
+    gateway.clock.advance(1)
     gateway.deliver()
-    states = {r["message_id"]: r for r in rows(store, "SELECT message_id,state,error FROM slack_posts")}
-    assert states[outside["message_id"]]["state"] == "canceled"
+    states = {r["message_id"]: r for r in rows(store, f"SELECT message_id,state,error FROM ({OS.POSTS})")}
+    assert states[outside["message_id"]]["state"] == "blocked"
     assert "Slack Connect" in states[outside["message_id"]]["error"]
-    assert states[inside["message_id"]]["state"] == "sent"
+    assert states[inside["message_id"]]["state"] == "done"
+    with store.read() as c:
+        outbound = OA.get(c, inside["message_id"])
+        assert outbound["occurrence_key"] == OS.POST_PREFIX + inside["message_id"]
+        assert outbound["audience"] == "internal" and not outbound["approval_id"]
+        assert outbound["attempts"] == 1
     assert [p["channel"] for p in gateway.slack.posts] == [MARKETING]
 
 
-def test_slack_connect_is_asked_on_every_post_so_a_channel_shared_since_is_refused(gateway, monkeypatch):
+def test_slack_connect_is_asked_on_every_post_so_a_channel_shared_since_is_refused(post_gateway, monkeypatch):
     """Codex P2-2: a channel that starts being shared outside the workspace is refused at the very next post, and a
     rate-limited check leaves the post for the next pass instead of canceling it."""
+    gateway = post_gateway
     from backend import slack_gateway as G
 
     store = gateway.store
     with store.transaction() as c:
         first = SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", "Before")
+    gateway.clock.advance(1)
     gateway.deliver()
-    monkeypatch.setitem(CHANNELS, MARKETING, {**CHANNELS[MARKETING], "is_ext_shared": True})
     with store.transaction() as c:
         second = SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", "After")
+    monkeypatch.setitem(CHANNELS, MARKETING, {**CHANNELS[MARKETING], "is_ext_shared": True})
+    gateway.clock.advance(1)
     gateway.deliver()
-    states = {r["message_id"]: r["state"] for r in rows(store, "SELECT message_id,state FROM slack_posts")}
-    assert (states[first["message_id"]], states[second["message_id"]]) == ("sent", "canceled")
+    states = {r["message_id"]: r["state"] for r in rows(store, f"SELECT message_id,state FROM ({OS.POSTS})")}
+    with store.read() as c:
+        held = OA.get(c, second["message_id"])
+        assert held["audience"] == "external" and held["provider_attempted_at"] is None
+    assert (states[first["message_id"]], states[second["message_id"]]) == ("done", "blocked")
     assert [p["text"].split("\n")[0] for p in gateway.slack.posts] == ["Before"]
 
     def limited(channel):
@@ -697,23 +790,31 @@ def test_slack_connect_is_asked_on_every_post_so_a_channel_shared_since_is_refus
     monkeypatch.setattr(gateway.slack, "conversations_info", limited)
     with store.transaction() as c:
         third = SB.queue_post(c, "cmo", {"id": "C0SOMEWHERE", "name": "somewhere"}, "", "Later")
+    gateway.clock.advance(1)
     gateway.deliver()
-    assert rows(store, "SELECT state FROM slack_posts WHERE message_id=?", third["message_id"])[0]["state"] == "ready"
+    assert (
+        rows(store, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", third["message_id"])[0]["state"] == "queued"
+    )
 
 
-def test_a_bots_post_reaches_slack_whole(gateway):
+def test_a_bots_post_reaches_slack_whole(post_gateway):
     """Codex P2-4: a bot's post is never cut by the renderer (an org rule warning can make it longer than the route's
     limit); a mirrored reply still is, with its link to Tico."""
+    gateway = post_gateway
     from backend import slack_gateway as G
 
     text = "Warning line\n" + "y" * G.POST_CHARS
     with gateway.store.transaction() as c:
         SB.queue_post(c, "cmo", {"id": MARKETING, "name": "marketing"}, "", text)
+    gateway.clock.advance(1)
     gateway.deliver()
     assert gateway.slack.posts[-1]["text"].startswith(text + "\n\n(sent from")
 
 
-def test_the_gateway_skips_a_post_when_slack_cannot_be_asked_and_gives_a_reason_when_it_refuses(gateway, monkeypatch):
+def test_the_gateway_skips_a_post_when_slack_cannot_be_asked_and_gives_a_reason_when_it_refuses(
+    post_gateway, monkeypatch
+):
+    gateway = post_gateway
     from backend import slack_gateway as G
 
     store = gateway.store
@@ -724,13 +825,17 @@ def test_the_gateway_skips_a_post_when_slack_cannot_be_asked_and_gives_a_reason_
         raise G.SlackUnreachable("down")
 
     monkeypatch.setattr(gateway.slack, "conversations_info", unreachable)
+    gateway.clock.advance(1)
     gateway.deliver()
-    assert rows(store, "SELECT state FROM slack_posts WHERE message_id=?", queued["message_id"])[0]["state"] == "ready"
+    assert (
+        rows(store, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", queued["message_id"])[0]["state"] == "queued"
+    )
     monkeypatch.undo()
+    gateway.clock.advance(G.RATE_LIMIT_DEFAULT)
+    gateway.clock.advance(1)
     gateway.deliver()
-    row = rows(store, "SELECT state,error FROM slack_posts WHERE message_id=?", queued["message_id"])[0]
-    assert row["state"] == "canceled" and "channel_not_found" in row["error"]
-    assert gateway.outside_workspace({"channel": "D0AAAAAAA", "message_id": "x"}) == ""
+    row = rows(store, f"SELECT state,error FROM ({OS.POSTS}) WHERE message_id=?", queued["message_id"])[0]
+    assert row["state"] == "blocked" and "channel_not_found" in row["error"]
     assert envelope  # the helper module's names stay imported for its fixtures
 
 

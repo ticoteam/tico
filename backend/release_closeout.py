@@ -11,8 +11,8 @@ DONE_STATUS and one comment naming the release (tag and link). Each has an occur
 release tag holding its merges, destination and operation), so a replay, a second move or a resume adds nothing, and
 one failing or unknown never repeats the other; a close-out whose newest tag is older than one already announced for
 the task (a PR removed) queues nothing, and a release of newer work closes out again. Only a task with exactly one
-primary Jira link closes out (more after a merge: `closeout.skipped`, and its owner is asked once). No Slack reply
-yet: it comes back when Slack sends move into the outbound gate, where org rules and privacy apply to every send.
+primary Jira link closes out (more after a merge: `closeout.skipped`, and its owner is asked once). The task's oldest
+linked Slack message in the configured workspace also gets a reply, as its bot, through the outbound gate.
 
 Both writes carry `closeout: true`, the issue's Ready and the Done target in their frozen payload: the sender reads
 the issue right before the write and, while it is withdrawn, gone or closed in another Done status, waits an hour and
@@ -35,10 +35,11 @@ active again takes the ask back and runs a pending close-out. Secondary Jira lin
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote
 
 if TYPE_CHECKING:
     import sqlite3
@@ -47,6 +48,7 @@ Row = dict[str, Any]
 LOG = logging.getLogger(__name__)
 DONE_STATUS = "Done"  # Jira's default Done status; the transition goes to the status of this name
 KEY_PREFIX = "closeout:"
+SLACK_LINK = re.compile(r"/archives/([CG][A-Z0-9]{6,})/p(\d{10})(\d{6})(?:\?(\S*))?$")
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)  # an unreadable time sorts first
 LINES = {
     "withdrawn": "{key} left Ready in Jira ({status}): keep working on it, or close this task?",
@@ -121,6 +123,16 @@ def standing(link: Row) -> str:
     return str(_detail(link).get("standing") or "active")
 
 
+def jira_target(link: Row) -> Row:
+    """The primary issue and standing required by both release dispatch paths."""
+    return {
+        "connection_id": link["connection_id"],
+        "destination": link["item_key"],
+        "ready": _detail(link).get("ready"),
+        "done": DONE_STATUS,
+    }
+
+
 def remember_ready(conn: "sqlite3.Connection", task_id: str, status: str) -> None:
     """Intake (POST /api/v2/tasks `primary_status`): the status the issue was filed in is its Ready."""
     link = primary(conn, task_id)
@@ -132,7 +144,7 @@ def closed_out(conn: "sqlite3.Connection", task_id: str) -> bool:
     """Whether the close-out queued anything for the task (its Jira writes), by the occurrence key's unique index."""
     return (
         conn.execute(
-            "SELECT 1 FROM outbound_actions WHERE occurrence_key >= ? AND occurrence_key < ? LIMIT 1",
+            "SELECT 1 FROM outbound_actions WHERE occurrence_key >= ? AND occurrence_key < ? AND channel='jira' LIMIT 1",
             (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};"),
         ).fetchone()
         is not None
@@ -140,11 +152,12 @@ def closed_out(conn: "sqlite3.Connection", task_id: str) -> bool:
 
 
 def unfinished(conn: "sqlite3.Connection", task_id: str) -> bool:
-    """Whether a close-out Jira write of the task has not ended yet (the Jira pass keeps reading its issue)."""
+    """Whether Jira needs to keep reading the issue for a close-out effect still in progress."""
     return (
         conn.execute(
             "SELECT 1 FROM outbound_actions WHERE occurrence_key >= ? AND occurrence_key < ? "
-            "AND state NOT IN ('done', 'failed', 'canceled') LIMIT 1",
+            "AND ((channel='jira' AND state NOT IN ('done', 'failed', 'canceled')) "
+            "OR (channel='slack' AND state IN ('queued', 'attempting'))) LIMIT 1",
             (f"{KEY_PREFIX}{task_id}:", f"{KEY_PREFIX}{task_id};"),
         ).fetchone()
         is not None
@@ -260,7 +273,63 @@ def close_out(conn: "sqlite3.Connection", task_id: str, visit_id: str, links: li
             conn.execute("ROLLBACK TO closeout")
             _skipped(conn, task_id, f"jira {operation}", exc)
         conn.execute("RELEASE closeout")
+    conn.execute("SAVEPOINT closeout_slack")
+    try:
+        made += _slack_reply(conn, task_id, f"{base}:slack", text)
+    except Exception as exc:  # noqa: BLE001 - a refused reply leaves the Jira effects in place
+        conn.execute("ROLLBACK TO closeout_slack")
+        _skipped(conn, task_id, "slack reply", exc)
+    conn.execute("RELEASE closeout_slack")
     return made
+
+
+def slack_thread(conn: "sqlite3.Connection", task_id: str, workspace: str) -> tuple[str, str] | None:
+    """The oldest linked Slack message in this workspace and the root timestamp of its thread."""
+    from .outbound_slack import TS_RE
+
+    if not workspace:
+        return None
+    prefix = workspace.rstrip("/")
+    for (url,) in conn.execute(
+        "SELECT url FROM task_links WHERE task_id=? AND url LIKE 'https://%.slack.com/archives/%' "
+        "ORDER BY created_at, rowid",
+        (task_id,),
+    ):
+        found = SLACK_LINK.fullmatch(str(url).removeprefix(prefix))
+        if found:
+            thread = (parse_qs(found[4] or "").get("thread_ts") or [""])[0]
+            return found[1], thread if re.fullmatch(TS_RE, thread) else f"{found[2]}.{found[3]}"
+    return None
+
+
+def slack_actor(conn: "sqlite3.Connection", task_id: str) -> str:
+    H = _h()
+    task: Row = H.task(conn, task_id) or {}
+    return next((str(a) for a in (task.get("owner_id"), task.get("requester_id")) if H.is_bot(a)), "")
+
+
+def _slack_reply(conn: "sqlite3.Connection", task_id: str, key: str, text: str) -> int:
+    from . import slack_bots as SB
+
+    H = _h()
+    task: Row = H.task(conn, task_id) or {}
+    if H.task_private(conn, task):
+        return 0
+    saved = conn.execute("SELECT value FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
+    thread = slack_thread(conn, task_id, json.loads(saved[0]) if saved else "")
+    if thread is None:
+        return 0
+    actor = slack_actor(conn, task_id)
+    bot = str(H.actor_id(actor)) if actor else ""
+    bot_row: Row = (H.bot(conn, bot) or {}) if bot else {}
+    if bot_row.get("state") != "active":
+        return 0
+    SB.need(conn, bot, SB.slack_entry(conn, None, bot), "post")
+    SB.not_onboarding(conn, bot)
+    entry = SB.postable(conn, None, thread[0])
+    return int(
+        SB.queue_post(conn, bot, entry, thread[1], SB.check_text(text), task_id=task_id, occurrence_key=key)["created"]
+    )
 
 
 def _skipped(conn: "sqlite3.Connection", task_id: str, what: str, why: object) -> None:

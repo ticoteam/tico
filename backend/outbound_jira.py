@@ -282,6 +282,22 @@ def paused(fields: dict[str, Any], raw: dict[str, Any]) -> str:
     return "The issue was withdrawn in Jira: waiting until it is back in Ready" if state == "withdrawn" else ""
 
 
+def closeout_read(store: Any, target: dict[str, Any]) -> Any:
+    """The same live status read and withdrawal test used by the Jira sender, using its read connection."""
+    OA = _oa()
+    try:
+        reason = paused(_fields(_connect(store, target, write=False), target), target)
+        if not reason:
+            return None
+    except _Answer as exc:
+        return OA.SafeRejection(
+            exc.reply.retry_after or PAUSED_S, "Waiting for the release issue in Jira", counted=False
+        )
+    except Exception:  # noqa: BLE001 - a read that cannot confirm Jira's status must never allow a post
+        reason = "Waiting for the release issue in Jira"
+    return OA.SafeRejection(PAUSED_S, reason, counted=False)
+
+
 def _found(
     on: Connection, row: Any, payload: dict[str, str], fields: dict[str, Any] | None = None
 ) -> dict[str, Any] | None:

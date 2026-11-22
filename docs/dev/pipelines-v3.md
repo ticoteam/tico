@@ -1231,8 +1231,9 @@ close-out Jira write has not ended; the sender itself holds a write whose issue 
 time, until it is back; the issue closed in another Done status than Tico's own target asks the owner even then). A
 task with more than one primary Jira link (after a merge) closes none out, and its owner is
 asked once; a merge also drops the saved Ready of the link it moves, which then never pauses (merges of tasks filed
-for Jira issues are rare). The close-out sends no Slack reply until Slack sends move into the outbound gate. After each
-answered read, a non-active standing asks the task's owner (a person; else its bot's manager, then the company's
+for Jira issues are rare). A public task with an eligible bot gets one release reply in its oldest linked Slack thread
+in the configured workspace. The outbound gate rechecks the task's privacy and posting permissions before the reply.
+After each answered read, a non-active standing asks the task's owner (a person; else its bot's manager, then the company's
 default person; only someone who can read the task) a people-only OK on the task (backend/owner_asks.py), one per
 standing: a new standing replaces the ask. That is how the owner hears of it; no answer unfreezes anything. Putting
 the issue back in Jira does: active again takes the ask back (the same task moves on) and runs a pending close-out.

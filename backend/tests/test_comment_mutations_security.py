@@ -5,6 +5,7 @@ import pytest
 from backend.store import H, message_page
 from backend.tests.helpers.api import as_member, headers, restrict
 from backend.tests.helpers.tasks_board import api, get, post  # noqa: F401
+from backend import outbound_slack as OS
 from backend import bot_settings as BS
 
 
@@ -76,10 +77,10 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
         elif handoff == "job":
             c.execute("UPDATE jobs SET state='completed' WHERE message_id=?", (said["id"],))
         elif handoff == "slack":
+            OS.queue(c, H.message(c, said["id"]), "ops", "Dexample", "", said["body"])
             c.execute(
-                "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at) "
-                "VALUES(?,'Dexample','','ops',?,'ready',?,?)",
-                (said["id"], said["body"], H.now(), H.now()),
+                "UPDATE outbound_actions SET last_error='ratelimited',next_attempt_at=? WHERE id=?",
+                (H.shift(H.now(), hours=1), said["id"]),
             )
         elif handoff == "context":
             H.turn_start(c, "bot:ops", "ops")
@@ -93,8 +94,33 @@ def test_already_handed_comments_change_current_record_without_recalling_copies(
     with api.app.state.store.read() as c:
         assert H.message(c, said['id']) is None
         if handoff == 'slack':
-            row = c.execute('SELECT text,state FROM slack_posts WHERE message_id=?', (said['id'],)).fetchone()
-            assert row['text'] == '' and row['state'] == 'canceled'
+            row = c.execute("SELECT payload,state FROM outbound_actions WHERE id=?", (said["id"],)).fetchone()
+            assert row['payload'] == '' and row['state'] == 'canceled'
+
+
+@pytest.mark.parametrize("redaction", ["delete", "secret"])
+def test_a_comment_edit_keeps_the_text_sent_to_slack_until_redaction(api, redaction):
+    from backend import outbound_actions as OA
+
+    task = post(api, "tasks", {"owner": "ops", "title": "Review the report", "body": "Please review."})
+    task_id = task["id"]
+    said = post(api, f"tasks/{task_id}/comments", {"text": "Original Slack words"})["comment"]
+    mid = said["id"]
+    with api.app.state.store.transaction() as c:
+        OS.queue(c, H.message(c, mid), "ops", "CEXAMPLE", "", said["body"])
+        OA.settle(c, OA.get(c, mid), "done", receipt={"ts": "1700000009.000100"})
+    post(api, f"tasks/{task_id}/comments/{mid}", {"text": "A different version with Slack words"})
+    with api.app.state.store.read() as c:
+        row = c.execute(f"SELECT text FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()
+        assert row["text"] == "Original Slack words"
+    if redaction == "delete":
+        post(api, f"tasks/{task_id}/comments/{mid}/delete", {})
+    else:
+        assert post(api, f"messages/{mid}/redact", {"span": "Slack words"})["redacted"] == 1
+    with api.app.state.store.read() as c:
+        row = c.execute(f"SELECT text,slack_ts FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()
+        assert tuple(row) == ("", "1700000009.000100")
+        assert "Original Slack words" not in OA.get(c, mid)["metadata"]
 
 
 def test_bot_authorship_is_checked_in_the_domain(api):

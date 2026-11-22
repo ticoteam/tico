@@ -9,10 +9,12 @@ import json
 import logging
 import sqlite3
 import threading
+from importlib import import_module
 from types import SimpleNamespace
 
 import pytest
 
+from backend import outbound_actions as OA, outbound_slack as OS
 from backend import hubdb as H
 from backend import slack_gateway as G
 from backend import slack_requests as SR
@@ -317,40 +319,264 @@ def test_a_post_is_attempted_once_and_a_crash_between_send_and_record_is_uncerta
     mid = routed_reply(gateway, hub)
     slack.failures.append(G.SlackUnreachable("Slack chat.postMessage: TimeoutError"))
     gateway.tick()
-    post = rows(hub, "SELECT state,attempts,error FROM slack_posts")[0]
-    assert post["state"] == "uncertain" and post["attempts"] == 1 and "TimeoutError" in post["error"]
+    with hub.read() as c:
+        post = OA.get(c, mid)
+        assert post["state"] == "unknown" and post["attempts"] == 1 and post["provider_attempted_at"]
+        assert post["audience"] == "internal"
     gateway.tick()
-    assert rows(hub, "SELECT attempts FROM slack_posts")[0]["attempts"] == 1 and slack.posts == []
-    # An operator confirmed the reply is not in Slack and set it back to ready: one more attempt.
+    assert not slack.posts
     with hub.transaction() as c:
-        c.execute("UPDATE slack_posts SET state='ready' WHERE message_id=?", (mid,))
+        assert OA.get(c, mid)["attempts"] == 1
+        limited = H.say(
+            c,
+            "bot:legal",
+            "human:ana",
+            "Another reply.",
+            conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"],
+        )["id"]
     slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=5))
     gateway.tick()
-    post = rows(hub, "SELECT state,attempts,next_attempt_at FROM slack_posts")[0]
-    assert post["state"] == "rate_limited" and post["attempts"] == 2 and post["next_attempt_at"] > clock()
+    with hub.read() as c:
+        post = OA.get(c, limited)
+        assert post["state"] == "queued" and post["last_error"] == "ratelimited" and not post["provider_attempted_at"]
+        assert post["attempts"] == 1 and post["next_attempt_at"] == H.shift(clock(), seconds=5)
     gateway.tick()
-    assert rows(hub, "SELECT attempts FROM slack_posts")[0]["attempts"] == 2, "not before Retry-After"
-    clock.advance(6)
+    assert not slack.posts, "not before Retry-After"
+    clock.advance(5)
     gateway.tick()
-    assert rows(hub, "SELECT state,attempts,slack_ts FROM slack_posts")[0] == {
-        "state": "sent",
-        "attempts": 3,
-        "slack_ts": "1700000001.000100",
-    }
-    # A definite refusal is failed, not retried.
+    with hub.read() as c:
+        post = OA.get(c, limited)
+        assert post["state"] == "done" and post["attempts"] == 2 and post["payload"] == ""
+        assert json.loads(post["receipt"]) == {"ts": "1700000001.000100"}
     with hub.transaction() as c:
-        H.say(
+        failed = H.say(
             c,
             "bot:legal",
             "human:ana",
             "One more thing.",
             conversation_id=rows(hub, "SELECT conversation_id FROM slack_threads")[0]["conversation_id"],
-        )
+        )["id"]
     slack.failures.append(G.SlackError("chat.postMessage", "channel_not_found"))
     gateway.tick()
-    assert [p["state"] for p in rows(hub, "SELECT state FROM slack_posts ORDER BY created_at")] == ["sent", "failed"]
+    with hub.read() as c:
+        assert OA.get(c, failed)["state"] == "failed"
     gateway.tick()
     assert len(slack.posts) == 1
+
+
+def copy_legacy_post(gateway, hub, state):
+    mid = routed_reply(gateway, hub)
+    thread = _thread_of_reply(hub, mid)
+    migration = import_module("backend.migrations.20261122144410_slack_outbound")
+    with hub.transaction() as c:
+        post = c.execute(
+            "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,attempts,created_at,updated_at) "
+            "VALUES(?,?,?,'legal','Frozen legacy reply',?,?,?,?) RETURNING *",
+            (
+                mid,
+                thread["channel"],
+                thread["thread_ts"],
+                state,
+                int(state == "sending"),
+                gateway.clock(),
+                gateway.clock(),
+            ),
+        ).fetchone()
+        migration._copy(c, dict(post), H.shift(gateway.clock(), minutes=2))
+    return mid
+
+
+@pytest.mark.parametrize("prior", ["ready", "sending"])
+def test_tick_adopts_an_old_gateway_post_sent_during_cutover(gateway, hub, prior):
+    mid = copy_legacy_post(gateway, hub, prior)
+    expected = "queued" if prior == "ready" else "unknown"
+    assert gateway.tick()["posts"] == []
+    with hub.read() as c:
+        assert OA.get(c, mid)["state"] == expected
+
+    gateway.clock.advance(60)
+    ts = "1700000050.000100"
+    with hub.transaction() as c:
+        c.execute(
+            "UPDATE slack_posts SET state='sent',slack_ts=?,attempts=1,updated_at=? WHERE message_id=?",
+            (ts, gateway.clock(), mid),
+        )
+    assert gateway.tick()["posts"] == []
+    with hub.read() as c:
+        post = OA.get(c, mid)
+        assert post["state"] == "done" and post["attempts"] == 1 and not post["provider_attempted_at"]
+        assert not post["payload"] and json.loads(post["receipt"]) == {"ts": ts}
+        assert json.loads(post["metadata"])["_tico"]["sent_text"] == "Frozen legacy reply"
+    gateway.clock.advance(61)
+    assert gateway.tick()["posts"] == [] and not gateway.slack.posts
+
+
+@pytest.mark.parametrize(
+    ("legacy_state", "state"), [("sent", "done"), ("uncertain", "unknown"), ("sending", "unknown")]
+)
+def test_permit_reads_the_legacy_post_after_the_tick_started(gateway, hub, monkeypatch, legacy_state, state):
+    mid = copy_legacy_post(gateway, hub, "ready")
+    evidence = gateway.post_evidence
+    ts = "1700000050.000100" if legacy_state == "sent" else None
+
+    def finish_old_post(channel):
+        with hub.transaction() as c:
+            c.execute(
+                "UPDATE slack_posts SET state=?,slack_ts=?,attempts=1,updated_at=? WHERE message_id=?",
+                (legacy_state, ts, gateway.clock(), mid),
+            )
+        return evidence(channel)
+
+    monkeypatch.setattr(gateway, "post_evidence", finish_old_post)
+    gateway.clock.advance(119)
+    assert gateway.tick()["posts"] == []
+    gateway.clock.advance(1)
+    assert gateway.tick()["posts"] == [{"message_id": mid, "state": "sent" if ts else "uncertain", "slack_ts": ts}]
+    with hub.read() as c:
+        post = OA.get(c, mid)
+        assert post["state"] == state and post["attempts"] == 1 and not post["provider_attempted_at"]
+    gateway.clock.advance(OA.STALE + 1)
+    assert gateway.tick()["posts"] == [] and not gateway.slack.posts
+
+
+def test_cutover_keeps_a_later_retry_after_from_the_old_gateway(gateway, hub):
+    mid = copy_legacy_post(gateway, hub, "ready")
+    retry_at = H.shift(gateway.clock(), seconds=180)
+    gateway.clock.advance(60)
+    with hub.transaction() as c:
+        c.execute(
+            "UPDATE slack_posts SET state='rate_limited',attempts=1,next_attempt_at=?,updated_at=? WHERE message_id=?",
+            (retry_at, gateway.clock(), mid),
+        )
+    assert gateway.tick()["posts"] == []
+    gateway.clock.advance(119)
+    assert gateway.tick()["posts"] == [] and not gateway.slack.posts
+    gateway.clock.advance(1)
+    assert gateway.tick()["posts"] == [{"message_id": mid, "state": "sent", "slack_ts": "1700000001.000100"}]
+    with hub.read() as c:
+        assert OA.get(c, mid)["attempts"] == 2
+
+
+@pytest.mark.filterwarnings("ignore:.*backend.slack_gateway.*found in sys.modules:RuntimeWarning")
+def test_module_entrypoint_requeues_a_slack_429(gateway, hub, monkeypatch):
+    import runpy
+    import sys
+
+    import httpx
+
+    from backend import outbound_http
+
+    monkeypatch.setattr(sys, "argv", ["slack_gateway"])
+    monkeypatch.setattr(Settings, "from_env", lambda: SimpleNamespace(slack_gateway_enabled=False))
+    exited = []
+    monkeypatch.setattr(sys, "exit", exited.append)
+    production = runpy.run_module("backend.slack_gateway", run_name="__main__")
+    assert exited == [0]
+    mid = routed_reply(gateway, hub)
+    gateway.mirror()
+    real_client = production["SlackAPI"]("synthetic", "synthetic")
+    monkeypatch.setattr(gateway.slack, "post_message", real_client.post_message)
+    monkeypatch.setattr(
+        outbound_http, "send", lambda *_a, **_kw: outbound_http.Reply(429, httpx.Headers({"Retry-After": "17"}), b"")
+    )
+    assert gateway.deliver() == [{"message_id": mid, "state": "rate_limited", "slack_ts": None}]
+    with hub.read() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "queued" and row["attempts"] == 1 and row["provider_attempted_at"] is None
+        assert row["next_attempt_at"] == H.shift(gateway.clock(), seconds=17)
+
+
+@pytest.mark.parametrize("code", ["internal_error", "fatal_error", "unknown_error"])
+def test_slack_errors_that_may_have_posted_stay_unknown(gateway, hub, code):
+    mid = routed_reply(gateway, hub)
+    gateway.mirror()
+    gateway.slack.failures.append(G.SlackError("chat.postMessage", code))
+    assert gateway.deliver() == [{"message_id": mid, "state": "uncertain", "slack_ts": None}]
+    gateway.clock.advance(OA.STALE + 1)
+    assert gateway.deliver() == []
+    with hub.read() as c:
+        row = OA.get(c, mid)
+        assert row["state"] == "unknown" and row["provider_attempted_at"] and row["attempts"] == 1
+
+
+def test_routing_context_and_sent_history_keep_the_sent_text_until_redaction(gateway, hub):
+    mid = routed_reply(gateway, hub, "What Slack saw.")
+    gateway.mirror()
+    [sent] = gateway.deliver()
+    [thread] = rows(hub, "SELECT * FROM slack_threads")
+    with hub.transaction() as c:
+        c.execute("UPDATE messages SET body=? WHERE id=?", ("A later local edit", mid))
+        row = c.execute(f"SELECT text FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()
+        assert row["text"] == "What Slack saw."
+        lines = gateway.exchanges(c, thread["channel"], thread["thread_ts"])
+        assert next(line["text"] for line in lines if line["ts"] == sent["slack_ts"]) == "What Slack saw."
+        OS.withdraw(c, mid)
+        assert "What Slack saw." not in OA.get(c, mid)["metadata"]
+        assert c.execute(f"SELECT text FROM ({OS.POSTS}) WHERE message_id=?", (mid,)).fetchone()["text"] == ""
+
+
+def test_inbound_and_shutdown_ring_the_gateway_and_a_wait_drains_the_burst(gateway, monkeypatch):
+    from collections import deque
+
+    datagrams = deque()
+    rings = []
+
+    def ring(path):
+        rings.append(path)
+        datagrams.append(b"1")
+
+    def recv(_):
+        if not datagrams:
+            raise BlockingIOError
+        return datagrams.popleft()
+
+    monkeypatch.setattr(OS, "ring", ring)
+    bell = SimpleNamespace(recv=recv, settimeout=lambda _: None, setblocking=lambda _: None)
+    assert gateway.receive(envelope("<@U0BUS6WA4SY> Legal?")) == "queued"
+    assert rings == [gateway.settings.db_path]
+    for _ in range(3):
+        gateway.notify()
+    gateway.wait(bell)
+    assert not datagrams
+    gateway.request_stop()
+    assert gateway.stop.is_set() and datagrams.pop() == b"1"
+
+
+def test_a_bell_socket_error_does_not_stop_the_gateway(gateway):
+    def broken(_):
+        gateway.wake.set()
+        raise OSError("bell failed")
+
+    gateway.wait(SimpleNamespace(recv=broken, settimeout=lambda _: None))
+    assert not gateway.wake.is_set()
+
+
+def test_gateway_recovery_cannot_reclaim_other_channels_or_send_under_a_lost_claim(gateway, hub, monkeypatch):
+    mid = routed_reply(gateway, hub)
+    gateway.mirror()
+    now = gateway.clock()
+    with hub.transaction() as c:
+        c.execute(
+            "INSERT INTO outbound_actions(id,channel,audience,operation,destination,occurrence_key,state,claimed_at,"
+            "claim_token,send_after,next_attempt_at,created_at,updated_at) "
+            "VALUES('jira-claim','jira','external','comment','ACME-3','jira-comment','attempting',?,'token',?,?,?,?)",
+            (now, now, now, now, now),
+        )
+    assert OA.claim(hub, now) is None
+    claimed = OA.claim(hub, now, slack=True)
+    assert claimed.id == mid
+    slack_rings, worker_rings = [], []
+    monkeypatch.setattr(OS, "ring", slack_rings.append)
+    monkeypatch.setattr(OA, "ring", lambda: worker_rings.append(True))
+    gateway.clock.advance(OA.STALE + 1)
+    assert gateway.recover() == 1
+    assert slack_rings == [hub.settings.db_path] and not worker_rings
+    with hub.read() as c:
+        assert OA.get(c, "jira-claim")["claim_token"] == "token"
+    assert OA.attempt(hub, claimed, gateway=gateway, evidence=(None, None)) == "lost"
+    assert not gateway.slack.posts
+    gateway.deliver()
+    assert len(gateway.slack.posts) == 1
 
 
 # ----------------------------------------------------------------------------- the review's cases
@@ -504,8 +730,8 @@ def test_a_muted_bot_stays_in_tico_unless_the_person_is_talking_to_it_in_slack(g
         )["id"]
     gateway.originate()
     gateway.mirror()
-    posts = {r["message_id"]: r["state"] for r in rows(hub, "SELECT * FROM slack_posts")}
-    assert posts == {answer: "ready", later: "ready", muted: "canceled", other: "ready"}
+    posts = {r["message_id"]: r["state"] for r in rows(hub, f"SELECT * FROM ({OS.POSTS})")}
+    assert posts == {answer: "queued", later: "queued", muted: "canceled", other: "queued"}
 
 
 def test_routing_counts_against_the_senders_daily_cap_and_over_it_the_assistant_gets_the_message(gateway, hub):
@@ -722,7 +948,7 @@ def test_a_bot_post_is_shaped_from_its_message_its_task_and_its_visuals(gateway,
     task, and the footer names the task."""
     task, reply = task_reply(hub, False, [visual()], title="Q4 numbers")
     with hub.read() as c:
-        shaped = gateway.rendered(c, {"message_id": reply, "bot": "legal", "text": "Here is the quarter."})
+        shaped, _ = gateway.rendered(c, {"bot": "legal", "text": "Here is the quarter."}, H.message(c, reply))
     base = gateway.settings.public_url
     assert shaped["username"] == "Legal"
     assert shaped["text"] == (
@@ -741,7 +967,7 @@ def test_a_private_task_reply_with_a_visual_never_reaches_slack(gateway, hub):
     gateway.mirror()
     gateway.deliver()
     assert gateway.slack.posts == []
-    assert all(r["state"] == "canceled" for r in rows(hub, "SELECT * FROM slack_posts WHERE message_id=?", reply))
+    assert all(r["state"] == "canceled" for r in rows(hub, f"SELECT * FROM ({OS.POSTS}) WHERE message_id=?", reply))
 
 
 def test_a_slack_thread_reply_links_to_its_own_room_not_the_bots_usual_chat(gateway, hub):
@@ -851,11 +1077,7 @@ def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gate
     slack, clock = gateway.slack, gateway.clock
 
     def queue(mid):
-        c.execute(
-            "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-            "VALUES(?,?,'','legal',?,'ready',?,?,'human:ben')",
-            (mid, "D0U2", "copy", clock(), clock()),
-        )
+        OS.queue(c, H.message(c, mid), "legal", "D0U2", "", "copy", recipient="human:ben", now=clock())
 
     with hub.transaction() as c:
         tid = threads.create(c, "human:ana", title="Pricing", audience="members", members=["human:ben"])["id"]
@@ -869,13 +1091,13 @@ def test_a_queued_slack_copy_to_someone_removed_from_the_thread_is_not_sent(gate
         queue(after)
     slack.failures.append(G.SlackError("chat.postMessage", "ratelimited", retry_after=1))
     gateway.deliver()
-    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "rate_limited"
+    assert rows(hub, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", after)[0]["state"] == "queued"
     with hub.transaction() as c:
         threads.remove_member(c, "human:ana", tid, "human:ben")
     clock.advance(5)
     gateway.deliver()
     assert len(slack.posts) == 1, "no copy reaches a Slack user who left the thread"
-    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", after)[0]["state"] == "canceled"
+    assert rows(hub, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", after)[0]["state"] == "canceled"
 
 
 def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
@@ -902,7 +1124,7 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
     gateway.mirror()
     gateway.deliver()
     assert not any(post["channel"] == "D0CARA" for post in gateway.slack.posts)
-    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", dm_copy)  # queued for no one else's DM
+    assert not rows(hub, f"SELECT 1 FROM ({OS.POSTS}) WHERE message_id=?", dm_copy)  # queued for no one else's DM
 
     with hub.transaction() as c:
         channel_tid = threads.create(c, "human:ana", title="Shared", audience="members", members=["human:ben"])["id"]
@@ -914,7 +1136,7 @@ def test_a_copy_to_ben_never_reuses_another_members_slack_dm(gateway, hub):
         shared = threads.post(c, "bot:legal", channel_tid, "Team, the draft.", kind="say", to_actor="human:ben")["id"]
     gateway.mirror()
     gateway.deliver()
-    assert rows(hub, "SELECT channel FROM slack_posts WHERE message_id=?", shared)[0]["channel"] == MARKETING
+    assert rows(hub, f"SELECT channel FROM ({OS.POSTS}) WHERE message_id=?", shared)[0]["channel"] == MARKETING
     assert any(post["channel"] == MARKETING for post in gateway.slack.posts)
 
 
@@ -934,9 +1156,9 @@ def test_a_copy_to_a_member_of_a_native_dm_with_no_inbound_yet_is_delivered_and_
     gateway.originate()
     gateway.mirror()
     gateway.deliver()
-    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", to_ben)[0]["state"] == "sent"
+    assert rows(hub, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", to_ben)[0]["state"] == "done"
     assert any(post["channel"] == "D0U2" and "Ben, the draft." in post["text"] for post in gateway.slack.posts)
-    assert not rows(hub, "SELECT 1 FROM slack_posts WHERE message_id=?", to_cara)
+    assert not rows(hub, f"SELECT 1 FROM ({OS.POSTS}) WHERE message_id=?", to_cara)
     assert not any("Cara, the draft." in post["text"] for post in gateway.slack.posts)
 
 
@@ -964,7 +1186,7 @@ def test_a_bot_message_to_ben_never_goes_through_caras_dm_after_she_leaves_the_t
     ben_posts = [post for post in gateway.slack.posts if "Ben, the second draft." in post["text"]]
     assert [post["channel"] for post in ben_posts] == ["D0U2"]
     assert not any(post["channel"] == "D0UC" and "second draft" in post["text"] for post in gateway.slack.posts)
-    assert rows(hub, "SELECT state FROM slack_posts WHERE message_id=?", ben_msg)[0]["state"] == "sent"
+    assert rows(hub, f"SELECT state FROM ({OS.POSTS}) WHERE message_id=?", ben_msg)[0]["state"] == "done"
 
 
 def test_a_dm_mapping_from_before_the_column_takes_only_a_person_its_verified_messages_name(hub):
@@ -1227,7 +1449,7 @@ def test_start_up_waiting_only_covers_busy_errors_and_stops_when_asked():
     stopping = threading.Event()
 
     def broken():
-        raise sqlite3.OperationalError("no such table: slack_posts")
+        raise sqlite3.OperationalError("no such table: outbound_actions")
 
     with pytest.raises(sqlite3.OperationalError):
         G._when_free(stopping, "x", broken)

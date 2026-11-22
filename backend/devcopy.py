@@ -874,7 +874,7 @@ def prune(c, days, keep_automations=False):
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
     # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
     # Finance's emptied tables are in this set too, though Finance deletes them (in its scrub, below).
-    gone_all = set(gone) | set(finance.DEV_COPY_EMPTIED)
+    gone_all = set(gone) | set(finance.DEV_COPY_EMPTIED) | {"slack_posts"}  # pre-cutover task trash
     if "task_trash" in present:
         for task_id, raw in c.execute("SELECT task_id,rows FROM task_trash").fetchall():
             snapshot = json.loads(raw or "{}")

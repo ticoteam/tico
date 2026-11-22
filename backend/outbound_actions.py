@@ -2,7 +2,8 @@
 """The outbound gate: one queue for every send and outside write (docs/outbound-actions.md).
 
 A row is one action on one channel: where it goes, its frozen `payload` (wiped once the row ends) and the caller's
-`metadata` (kept, never read by the server, except its `_tico` key: the server's own notes, `asked`). `enqueue` is the one way in, idempotent on `occurrence_key`. A channel
+`metadata`. Tico reserves `_tico` for its own records, including owner asks and the redaction-aware Slack history.
+`enqueue` is idempotent on `occurrence_key`. A channel
 sends only through its registered adapter: Jira (backend/outbound_jira.py) is the first.
 
 - **Policy.** `decide` runs at enqueue and again before every attempt: a floor that only tightens (the company's Never
@@ -33,7 +34,7 @@ from typing import Any, Callable, Literal, NamedTuple, cast
 from fastapi import Request
 from pydantic import Field
 
-from . import background
+from . import background, outbound_slack
 from . import outbox as _O
 from . import task_asks
 from .api_contract import api_v2
@@ -140,7 +141,7 @@ class Adapter:
     `on_sent(c, row, receipt)` records a confirmed send in the action's settlement transaction."""
 
     channel: str
-    prepare: Callable[..., tuple[str, str]]
+    prepare: Callable[..., tuple[str, str]] | None  # None when a separate gateway supplies the permit check
     dispatch: Callable[..., Any]
     reconcile: Callable[..., "Settled | None"] | None = None
     defaults: dict[str, str] = field(default_factory=lambda: dict[str, str]())
@@ -186,7 +187,16 @@ def company_policy(c: Any) -> dict[str, str]:
     if not isinstance(stored, dict):
         return {}
     settings = cast(dict[str, Any], stored)
-    return {k: str(v) for k, v in settings.items() if v in CHOICES}
+    return {
+        k: (
+            "never"
+            if k.startswith(outbound_slack.PREFIX)
+            and v not in outbound_slack.POLICY_CHOICES.get(k.split(":", 1)[1], ())
+            else str(v)
+        )
+        for k, v in settings.items()
+        if v in CHOICES
+    }
 
 
 def bot_stopped(c: Any, actor: str) -> str:
@@ -366,7 +376,7 @@ def ring() -> None:
     BELL.ring()
 
 
-def _after_commit(c: Any, fn: Callable[[], object]) -> None:
+def after_commit(c: Any, fn: Callable[[], object]) -> None:
     hooks = getattr(c, "after_commit", None)
     if hooks is None:
         fn()
@@ -434,6 +444,8 @@ def enqueue(
             tries += 1
             key = f"{base}:{tries}"
     found = c.execute("SELECT * FROM outbound_actions WHERE occurrence_key=?", (key,)).fetchone()
+    if key.startswith(outbound_slack.PREFIX) and (not found or found["channel"] == "slack"):
+        raise Problem("validation", "Slack occurrence keys are reserved", 422)
     if found:
         if channel == support_hq.CHANNEL and found["task_id"] != task_id:
             raise Problem("conflict", "This Help reply belongs to another task", 409)
@@ -442,6 +454,8 @@ def enqueue(
     if adapter is None:
         known = ", ".join(sorted(ADAPTERS)) or "none yet"
         raise Problem("validation", f"Tico has no sender for {channel!r} (it sends: {known})", 422)
+    if adapter.prepare is None:
+        raise Problem("validation", "Queue Slack posts through /api/v2/slack/posts", 422)
     after = _when(send_after)
     stopped = bot_stopped(c, actor)
     if stopped:
@@ -495,7 +509,7 @@ def enqueue(
             settle(c, made, "blocked", error=NOBODY_TO_ASK)
         made = get(c, made["id"]) or made
     elif state == "queued":
-        _after_commit(c, ring)
+        after_commit(c, ring)
     H.event(c, actor or H.TICO_ACTOR, "outbound.queued", made["id"], {"channel": channel, "state": made["state"]})
     return made, True
 
@@ -512,7 +526,7 @@ def ok_given(c: Any, grant: Any, ctx: Any = None) -> None:
         "UPDATE outbound_actions SET state='queued',next_attempt_at=?,updated_at=? WHERE id=? AND state='waiting_approval'",
         (max(now, row["send_after"]), now, row["id"]),
     )
-    _after_commit(c, ring)
+    after_commit(c, ring)
 
 
 def may_ok(c: Any, person: str, grant: Any) -> str | None:
@@ -563,6 +577,27 @@ def settle(
         token=token,
     ):
         return False
+    if row["channel"] == "slack" and state == "done":
+        H.event(
+            c,
+            row["actor"],
+            "slack.post",
+            row["id"],
+            {
+                "state": "sent",
+                "channel": row["destination"],
+                "thread_ts": _load(row["metadata"], {}).get("thread_ts") or "",
+                "error": "",
+            },
+        )
+        payload = content(row)["payload"]
+        sent_text = payload.get("sent_text", payload.get("text"))
+        if sent_text:
+            c.execute(
+                "UPDATE outbound_actions SET metadata=json_set(metadata,'$._tico.sent_text',?) "
+                "WHERE id=? AND NOT coalesce(json_extract(metadata,'$.redacted'), 0)",
+                (sent_text, row["id"]),
+            )
     rid, why = row["approval_id"], error or f"It was not sent ({state})"
     if state == "unknown":
         rid = ""  # its OK's task stays open until the outcome is known
@@ -667,28 +702,35 @@ def vault() -> Any:
 class Claimed(NamedTuple):
     id: str
     token: str
+    row: dict[str, Any] | None = None
 
 
-def recover(store: Any, now: str | None = None) -> int:
+def recover(store: Any, now: str | None = None, *, slack: bool = False) -> int:
     """Rows whose worker never answered (a crash, a restart): one never attempted goes back to `queued`; one attempted
     is `unknown`, first, in the same transaction, so it is never sent again on its own."""
     now = now or H.now()
     before = H.shift(now, seconds=-STALE)
+    scope = _scope(slack)
     with store.read() as c:  # an idle queue takes no write lock
         if not c.execute(
-            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='attempting' AND claimed_at<?)", (before,)
+            f"SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE {scope} AND state='attempting' AND claimed_at<?)",
+            (before,),
         ).fetchone()[0]:
             return 0
     with store.transaction() as c:
         stale = c.execute(
-            "SELECT * FROM outbound_actions WHERE state='attempting' AND claimed_at<? AND provider_attempted_at IS NOT NULL",
+            f"SELECT * FROM outbound_actions WHERE {scope} AND state='attempting' AND claimed_at<? "
+            "AND provider_attempted_at IS NOT NULL",
             (before,),
         ).fetchall()
         for row in stale:
             settle(c, dict(row), "unknown", error="The worker stopped after the provider may have had it")
-        back = O.reclaim_stale(c, TABLE, before=before, now=now)
+        back = O.reclaim_stale(c, TABLE, before=before, now=now, where=scope)
     if back:
-        ring()
+        if slack:
+            outbound_slack.ring(store.settings.db_path)
+        else:
+            ring()
     return back + len(stale)
 
 
@@ -721,25 +763,34 @@ def reconcile_pass(store: Any, limit: int = 100) -> int:
     return len(rows)
 
 
-def claim(store: Any, now: str | None = None) -> Claimed | None:
+def _scope(slack: bool) -> str:
+    # The Socket Mode gateway holds the Slack token in its own process.
+    return "channel='slack'" if slack else "channel<>'slack'"
+
+
+def claim(store: Any, now: str | None = None, *, slack: bool = False) -> Claimed | None:
     """The next due row (past its retry time and its hold), now `attempting` under a fresh claim token, or None."""
     now = now or H.now()
+    scope = _scope(slack)
     with store.read() as c:  # an idle queue takes no write lock
         if not c.execute(
-            "SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE state='queued' AND next_attempt_at<=? AND send_after<=?)",
+            f"SELECT EXISTS(SELECT 1 FROM outbound_actions WHERE {scope} AND state='queued' "
+            "AND next_attempt_at<=? AND send_after<=?)",
             (now, now),
         ).fetchone()[0]:
             return None
     with store.transaction() as c:
+        fields = "id,destination,occurrence_key,actor,task_id" if slack else "id"
         rows = c.execute(
-            "SELECT id FROM outbound_actions WHERE state='queued' AND next_attempt_at<=? AND send_after<=? "
+            f"SELECT {fields} FROM outbound_actions WHERE {scope} AND state='queued' "
+            "AND next_attempt_at<=? AND send_after<=? "
             "ORDER BY next_attempt_at LIMIT 20",
             (now, now),
         ).fetchall()
         for r in rows:
             token = O.new_token()
             if O.claim(c, TABLE, r["id"], now, token):
-                return Claimed(r["id"], token)
+                return Claimed(r["id"], token, dict(r) if slack else None)
     return None
 
 
@@ -747,7 +798,7 @@ def next_due(store: Any) -> float | None:
     """Seconds until the next queued row may go (0 when one may now), or None when none is queued."""
     with store.read() as c:
         at = c.execute(
-            "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued'"
+            "SELECT min(max(next_attempt_at, send_after)) FROM outbound_actions WHERE state='queued' AND channel<>'slack'"
         ).fetchone()[0]
     when = H.parse_ts(at) if at else None
     return None if when is None else max(0.0, when.timestamp() - time.time())
@@ -797,7 +848,23 @@ def recheck_dispatch_policy(c: Any, row: Any, audience: str) -> DispatchStopped 
     return result if isinstance(result, DispatchStopped) else None
 
 
-def _permit(store: Any, claimed: Claimed) -> dict[str, Any] | str:
+class GatewayCheck(NamedTuple):
+    audience: str
+    fields: dict[str, Any]
+    state: str = ""
+    error: str = ""
+    retry_after: float = 0
+
+
+class AttemptResult(NamedTuple):
+    state: str
+    receipt: dict[str, Any] | None = None
+    error: str = ""
+
+
+def _permit(
+    store: Any, claimed: Claimed, gateway: Any = None, evidence: Any = None
+) -> dict[str, Any] | str | AttemptResult:
     """Everything before the provider call, in one durable transaction: the policy and the adapter's checks again
     (the audience derived anew), then the fenced write, which needs this claim and an empty `provider_attempted_at`,
     with the OK used in that same write. The row to dispatch, or what happened instead."""
@@ -810,23 +877,51 @@ def _permit(store: Any, claimed: Claimed) -> dict[str, Any] | str:
         if not found:
             return "lost"  # the claim lapsed, or this claim already made its attempt: nothing is called
         row = dict(found)
+        if gateway is not None and row["channel"] == "slack":
+            if adopted := outbound_slack.adopt_legacy(c, row):
+                return adopted
         adapter = ADAPTERS.get(row["channel"])
+        fields: dict[str, Any] = {}
         try:
             if adapter is None:
                 raise Problem("validation", f"Tico has no sender for {row['channel']!r}", 422)
+            if (adapter.prepare is None) != (gateway is not None):
+                return "lost"
             stopped = bot_stopped(c, row["actor"])
             if stopped:
                 raise Problem("bot_inactive", stopped, 409)
-            audience, _ = adapter.prepare(
-                c,
-                store.settings,
-                row["actor"],
-                row["destination"],
-                content(row)["payload"],
-                operation=row["operation"],
-                connection_id=row["connection_id"],
-                task_id=row["task_id"],
-            )
+            if adapter.prepare is None:
+                assert gateway is not None
+                check: GatewayCheck = gateway.check_post(c, row, evidence)
+                audience, fields = check.audience, check.fields
+                if check.state:
+                    c.execute("UPDATE outbound_actions SET audience=? WHERE id=?", (audience, row["id"]))
+                    if check.state == "queued":
+                        O.finish(
+                            c,
+                            TABLE,
+                            row["id"],
+                            "queued",
+                            attempts=row["attempts"],
+                            error=check.error,
+                            due_at=H.shift(gateway.clock(), seconds=check.retry_after),
+                            extra={"updated_at": gateway.clock()},
+                            token=claimed.token,
+                        )
+                        return "requeued"
+                    settle(c, row, check.state, error=check.error, token=claimed.token)
+                    return check.state
+            else:
+                audience, _ = adapter.prepare(
+                    c,
+                    store.settings,
+                    row["actor"],
+                    row["destination"],
+                    content(row)["payload"],
+                    operation=row["operation"],
+                    connection_id=row["connection_id"],
+                    task_id=row["task_id"],
+                )
         except Problem as exc:
             refused: Any = exc  # Problem is not typed
             settle(c, row, "blocked", error=str(refused.detail), token=claimed.token)
@@ -836,44 +931,61 @@ def _permit(store: Any, claimed: Claimed) -> dict[str, Any] | str:
         if isinstance(approval, DispatchStopped):
             return approval.state
         now = H.now()
+        snapshot = ",payload=json_set(payload,'$.sent_text',?)" if "_slack_text" in fields else ""
+        text_args = (fields.pop("_slack_text"),) if snapshot else ()
         fenced = c.execute(
-            "UPDATE outbound_actions SET provider_attempted_at=?,attempts=attempts+1,updated_at=? "
-            "WHERE id=? AND state='attempting' AND claim_token=? AND provider_attempted_at IS NULL",
-            (now, now, row["id"], claimed.token),
-        ).rowcount
+            f"UPDATE outbound_actions SET provider_attempted_at=?,attempts=attempts+1,updated_at=?{snapshot} "
+            "WHERE id=? AND state='attempting' AND claim_token=? AND provider_attempted_at IS NULL RETURNING *",
+            (now, now, *text_args, row["id"], claimed.token),
+        ).fetchone()
         if not fenced:
             return "lost"
         if approval == "use":
             task_asks.use(c, row["approval_id"], SUBJECT + row["id"], content(row), _asker(row))
-        return get(c, row["id"]) or row
+        return {**dict(fenced), **fields}
 
 
-def attempt(store: Any, claimed: Claimed) -> str:
-    """The permit (`_permit`), then the one adapter call, then its answer recorded under the same claim. Returns
-    what happened (for logs and tests)."""
-    row = _permit(store, claimed)
-    if isinstance(row, str):
+def attempt(store: Any, claimed: Claimed, *, gateway: Any = None, evidence: Any = None) -> str:
+    """Run one attempt and return its state."""
+    return attempt_result(store, claimed, gateway=gateway, evidence=evidence).state
+
+
+def attempt_result(store: Any, claimed: Claimed, *, gateway: Any = None, evidence: Any = None) -> AttemptResult:
+    """The durable permit, one provider call, and the outcome recorded under the same claim."""
+    row = _permit(store, claimed, gateway, evidence)
+    if isinstance(row, AttemptResult):
         return row
+    if isinstance(row, str):
+        return AttemptResult(row)
     try:
-        answer = ADAPTERS[row["channel"]].dispatch(store, row)
+        answer = ADAPTERS[row["channel"]].dispatch(gateway if gateway is not None else store, row)
     except Refused as exc:
+        error = str(exc)[:300]
         with store.transaction() as c:
-            if not settle(c, row, "failed", error=str(exc)[:300], token=claimed.token):
-                return "failed" if late_answer(c, row, "failed", error=str(exc)[:300]) else "lost"
-        return "failed"
+            recorded = settle(c, row, "failed", error=error, token=claimed.token) or late_answer(
+                c, row, "failed", error=error
+            )
+        return AttemptResult("failed" if recorded else "lost")
     except Exception as exc:  # noqa: BLE001  (the provider may have acted: unknown, never tried again on its own)
         with store.transaction() as c:
-            settle(c, row, "unknown", error=f"{type(exc).__name__}: {exc}"[:300], token=claimed.token)
-        return "unknown"
+            error = type(exc).__name__ if gateway is not None else f"{type(exc).__name__}: {exc}"
+            settle(c, row, "unknown", error=error[:300], token=claimed.token)
+        return AttemptResult("unknown")
     if isinstance(answer, DispatchStopped):
-        return answer.state
+        return AttemptResult(answer.state)
     with store.transaction() as c:
         if isinstance(answer, SafeRejection):
+            if row["channel"] == "slack":
+                current = get(c, row["id"])
+                if current and current["claim_token"] == claimed.token and not content(current)["payload"].get("text"):
+                    settle(c, current, "canceled", error="The message was withdrawn", token=claimed.token)
+                    return AttemptResult("canceled")
             if answer.counted and row["attempts"] >= MAX_SAFE_RETRIES:
                 error = f"{answer.error} after {row['attempts']} attempts"
-                if settle(c, row, "failed", error=error, token=claimed.token):
-                    return "failed"
-                return "failed" if late_answer(c, row, "failed", error=error) else "lost"
+                recorded = settle(c, row, "failed", error=error, token=claimed.token) or late_answer(
+                    c, row, "failed", error=error
+                )
+                return AttemptResult("failed" if recorded else "lost")
             # One write: back in line, the attempt marker cleared, the provider's wait kept.
             if not O.finish(
                 c,
@@ -882,17 +994,21 @@ def attempt(store: Any, claimed: Claimed) -> str:
                 "queued",
                 attempts=row["attempts"] if answer.counted else max(0, int(row["attempts"]) - 1),
                 error=answer.error,
-                due_at=H.shift(H.now(), seconds=max(0.0, float(answer.retry_after))),
+                due_at=H.shift(
+                    gateway.clock() if gateway is not None else H.now(), seconds=max(0.0, float(answer.retry_after))
+                ),
                 extra={"provider_attempted_at": None, "updated_at": H.now()},
                 token=claimed.token,
             ):
-                # The claim was cleared (the row went unknown): the provider did nothing, and nothing retries an
-                # unknown row, so the refusal ends it.
-                return "failed" if late_answer(c, row, "failed", error=answer.error) else "lost"
-            return "requeued"
-        if not settle(c, row, "done", receipt=dict(answer or {}), token=claimed.token):
-            return "done" if late_answer(c, row, "done", receipt=dict(answer or {})) else "lost"
-    return "done"
+                # The claim went unknown. The provider did nothing, and nothing retries an unknown row.
+                recorded = late_answer(c, row, "failed", error=answer.error)
+                return AttemptResult("failed" if recorded else "lost")
+            return AttemptResult("requeued", error=answer.error)
+        receipt = dict(answer or {})
+        recorded = settle(c, row, "done", receipt=receipt, token=claimed.token) or late_answer(
+            c, row, "done", receipt=receipt
+        )
+    return AttemptResult("done", receipt) if recorded else AttemptResult("lost")
 
 
 def late_answer(c: Any, row: Any, state: str, *, receipt: dict[str, Any] | None = None, error: str = "") -> bool:
@@ -991,6 +1107,10 @@ class OutboundApprove(Contract):
     shown_hash: str = Field(min_length=1, max_length=200)
 
 
+class OutboundConfirm(Contract):
+    slack_ts: str | None = Field(default=None, pattern=outbound_slack.TS_RE, max_length=19)
+
+
 class OutboundPolicyUpdate(Contract):
     settings: dict[str, str | None]
     """{"<channel>:<audience>": "on_their_own" | "ask_first" | "never" | null (back to the default)}"""
@@ -1030,6 +1150,20 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     def visible(c: Any, who: Any, row: Any) -> bool:
         """Whoever queued it, the owner or an admin, the parties to its OK (task_asks.party: the person asked), and the
         person asked about its unknown outcome."""
+        if row["channel"] == "slack":
+            if row["actor"] != who.actor and not admin(who):
+                return False
+            from . import thread_api
+
+            message = H.message(c, row["id"])
+            if not message:
+                return False
+            try:
+                reader: Any = thread_api
+                reader.require_message_read(c, auth, who, message)
+            except Problem:
+                return False
+            return True
         if row["actor"] == who.actor or admin(who):
             return True
         ask = asked(row).get("ask")
@@ -1088,8 +1222,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             if channel not in ADAPTERS or audience not in AUDIENCES:
                 known = ", ".join(sorted(ADAPTERS)) or "none yet"
                 raise Problem("validation", f"{key!r} is not <channel>:<audience> (channels: {known})", 422)
-            if value is not None and value not in CHOICES:
-                raise Problem("validation", f"{value!r} is not one of {', '.join(CHOICES)}", 422)
+            choices = outbound_slack.POLICY_CHOICES[audience] if channel == "slack" else CHOICES
+            if value is not None and value not in choices:
+                raise Problem("validation", f"{key!r} accepts {', '.join(choices)} or null", 422)
 
         def work(c: Any) -> Any:
             stored = company_policy(c)
@@ -1123,6 +1258,10 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             raise Problem("forbidden", "A bot queues outbound actions; a person sends or approves them in Tico", 403)
 
         def work(c: Any) -> Any:
+            if body.channel == "slack":
+                raise Problem(
+                    "validation", "Use the Slack routes for Slack posts and a caller-owned occurrence key", 422
+                )
             task_id = None
             if body.task_id:
                 task_id = auth.resolve_task(c, who, body.task_id)
@@ -1174,7 +1313,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             )
         )
         with store.read() as c:
-            sql, args = f"SELECT {fields} FROM outbound_actions WHERE 1=1", list[Any]()
+            sql, args = f"SELECT {fields} FROM outbound_actions WHERE 1", list[Any]()
             if not admin(who):
                 sql += " AND actor=?"
                 args.append(who.actor)
@@ -1185,14 +1324,20 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
                 sql += " AND channel=?"
                 args.append(channel)
             if cursor:
-                at = c.execute(
-                    "SELECT created_at FROM outbound_actions WHERE id=? AND (?=1 OR actor=?)",
-                    (cursor, int(admin(who)), who.actor),
-                ).fetchone()
-                if at:
+                at = get(c, cursor)
+                if (
+                    at
+                    and (admin(who) or at["actor"] == who.actor)
+                    and (at["channel"] != "slack" or visible(c, who, at))
+                ):
                     sql += " AND (created_at<? OR (created_at=? AND id<?))"
-                    args += [at[0], at[0], cursor]
-            rows = c.execute(sql + " ORDER BY created_at DESC, id DESC LIMIT ?", (*args, cap + 1)).fetchall()
+                    args += [at["created_at"], at["created_at"], cursor]
+            rows: list[Any] = []
+            for r in c.execute(sql + " ORDER BY created_at DESC, id DESC", args):
+                if r["channel"] != "slack" or visible(c, who, r):
+                    rows.append(r)
+                    if len(rows) > cap:
+                        break
             tasks = approval_tasks(c, [r["approval_id"] for r in rows[:cap]])
             items: list[dict[str, Any]] = []
             spent = 0
@@ -1275,7 +1420,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         def work(c: Any) -> Any:
             row = get(c, oid)
-            if not row or not (row["actor"] == who.actor or admin(who)):
+            if not row or not (row["actor"] == who.actor or admin(who)) or not visible(c, who, row):
                 raise Problem("not_found", "No such outbound action", 404)
             if row["state"] == "canceled":
                 return {"action": public(c, row), "created": False}
@@ -1303,8 +1448,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             OutboundActionResult,
         ),
     )
-    def confirm_sent(request: Request, oid: str) -> Any:
+    def confirm_sent(request: Request, oid: str, body: OutboundConfirm | None = None) -> Any:
         who = request.state.identity
+        slack_ts = body.slack_ts if body else None
         # A person as themselves (their own token too), never Agent Ops, the Assistant or a run acting for them.
         if who.role not in ("owner", "human") or who.via or who.task_actor or getattr(who, "support", None):
             raise Problem("forbidden", "Only a person, as themselves, confirms it went", 403)
@@ -1313,11 +1459,16 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             row = one(c, who, oid)
             if row["state"] != "unknown":
                 raise Problem("state", f"This action is {row['state']}, not unknown", 409)
-            settle(c, row, "done", receipt={"confirmed_by": who.actor})
+            if slack_ts is not None and row["channel"] != "slack":
+                raise Problem("validation", "A Slack message timestamp is only valid for a Slack action", 422)
+            receipt = {"confirmed_by": who.actor}
+            if slack_ts is not None:
+                receipt["ts"] = slack_ts
+            settle(c, row, "done", receipt=receipt)
             H.event(c, who.actor, "outbound.confirmed_sent", oid, {})
             return {"action": public(c, get(c, oid)), "created": False}
 
-        return mutate(request, Empty(), work, durable=True)
+        return mutate(request, body if slack_ts else Empty(), work, durable=True)
 
 
 # The channels that ship. Each module imports this one only inside its functions, so either may be imported first.
@@ -1346,3 +1497,5 @@ register(
         on_sent=support_hq.on_sent,
     )
 )
+
+register(Adapter(outbound_slack.CHANNEL, None, outbound_slack.dispatch, defaults=outbound_slack.DEFAULTS))

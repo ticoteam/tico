@@ -4552,14 +4552,12 @@ def is_comment(msg):
     )
 
 
-def _withdraw_queued_comment_copies(conn, message_id):
-    """Stop unsent copies and drop local outbound text; already delivered copies remain elsewhere."""
-    if _has_table(conn, 'slack_posts'):
-        conn.execute(
-            "UPDATE slack_posts SET text='',state=CASE WHEN state IN ('ready','retry') "
-            "THEN 'canceled' ELSE state END,updated_at=? WHERE message_id=?",
-            (now(), message_id),
-        )
+def _withdraw_queued_comment_copies(conn, message_id, *, redact=True):
+    """Stop stale copies. Redaction also clears the local text of an earlier delivery."""
+    if _has_table(conn, "outbound_actions"):
+        from . import outbound_slack
+
+        outbound_slack.withdraw(conn, message_id, redact=redact)
 
 
 def _refresh_comment_replies(conn, msg):
@@ -4648,7 +4646,7 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
     conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (ts, task_id))
     event(conn, actor, "message.edited", message_id, {"task": task_id})
     edited = message(conn, message_id)
-    _withdraw_queued_comment_copies(conn, message_id)
+    _withdraw_queued_comment_copies(conn, message_id, redact=False)
     _refresh_comment_replies(conn, edited)
     return edited
 

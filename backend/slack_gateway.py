@@ -72,10 +72,13 @@ from . import org_rule_check as OR
 from . import screening
 from . import slack_app
 from . import slack_channels as SC
+from . import outbound_actions as OA
+from . import outbound_slack as OS
 from . import slack_errors as SE
 from . import slack_unfurl as SU
 from .config import Settings, slack_credentials
 from clients import judge as J
+from .slack_errors import RATE_LIMIT_DEFAULT, SlackError, SlackUnreachable
 from .store import Store
 from .views import entries, roster
 
@@ -99,8 +102,6 @@ RETRY_SECONDS = 60  # an event the decision model could not answer waits this lo
 ROUTE_GIVE_UP_SECONDS = 600  # unanswered this long, a message is failed and the human told, never retried again
 # One HTTP attempt per try (`judge`), so a message costs at most ROUTE_GIVE_UP_SECONDS / RETRY_SECONDS + 1 attempts
 # per question batch, and one `judge.call` against the sender's daily cap however many tries it took.
-RATE_LIMIT_DEFAULT = 30  # seconds, when Slack's Retry-After is unreadable
-MAX_POST_ATTEMPTS = 10  # rate-limit retries before a post is given up as failed
 MAX_BOTS = 60
 # Scopes and events the manifest carries for the gateway. Missing ones are reported at start-up,
 # never guessed around: the reinstall is a person's step (connectors/README.md).
@@ -123,18 +124,6 @@ USER_RE = MENTION_RE
 CHAN_RE = re.compile(r"<#([A-Z0-9]+)(?:\|([^>]*))?>")
 LINK_RE = re.compile(r"<((?:https?|mailto):[^|>]+)(?:\|([^>]*))?>")
 BANG_RE = re.compile(r"<!(here|channel|everyone)(?:\|[^>]*)?>")
-
-
-class SlackError(Exception):
-    """Slack answered, and said no. `code` is its error; `retry_after` is set for a rate limit."""
-
-    def __init__(self, method, code, retry_after=None):
-        super().__init__(f"Slack {method}: {code}")
-        self.method, self.code, self.retry_after = method, code, retry_after
-
-
-class SlackUnreachable(Exception):
-    """No answer, or an unreadable one: after a post this is `uncertain`, never a retry."""
 
 
 # ----------------------------------------------------------------------------- the Slack side
@@ -169,7 +158,7 @@ class SlackAPI:
         if status == 429:
             try:
                 wait = int(float(outbound_http.header(hdrs, "retry-after") or RATE_LIMIT_DEFAULT))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 wait = RATE_LIMIT_DEFAULT
             raise SlackError(method, "ratelimited", retry_after=max(1, wait))
         if status >= 500:
@@ -648,6 +637,7 @@ class Gateway:
         self._customize_warned = False
         self._names_retry = ""  # the time before which the list is not checked for channels named without an id
         self.pin_workspace = False  # tokens the owner pasted into Tico define the workspace
+        self._legacy_posts_after = ""
         self.heartbeat = None  # called every loop turn; the process uses it for health
         self._auth = None  # who may write to which bot (backend/bot_access.py)
         self.last_model, self.last_usage, self.last_calls = "", [], 0  # the last `ask`'s model, usage and calls
@@ -718,17 +708,9 @@ class Gateway:
 
     def recover(self):
         """A post that was mid-flight when the process died is uncertain, not retried."""
-        with self.store.transaction() as c:
-            rows = c.execute("SELECT message_id FROM slack_posts WHERE state='sending'").fetchall()
-            for row in rows:
-                c.execute(
-                    "UPDATE slack_posts SET state='uncertain',error=?,updated_at=? WHERE message_id=?",
-                    ("gateway restarted while sending", self.clock(), row["message_id"]),
-                )
-        if rows:
-            LOG.warning("%d post(s) were mid-flight at the last stop and are now uncertain", len(rows))
+        count = OA.recover(self.store, self.clock(), slack=True)
         self.bridge.recover()
-        return len(rows)
+        return count
 
     # ------------------------------------------------------------------ ingress
     def receive(self, payload):
@@ -759,8 +741,8 @@ class Gateway:
         names = self.names_for(event["text"])  # before the transaction: a cache miss asks Slack
         with self.store.transaction() as c:
             outcome = self.persist(c, event, names)
-        if outcome == "queued":
-            self.wake.set()
+        if outcome in ("queued", "stored"):
+            self.notify()
         return outcome
 
     def names_for(self, text):
@@ -1083,11 +1065,12 @@ class Gateway:
                 }
             )
         for r in c.execute(
-            "SELECT slack_ts,bot,text FROM slack_posts WHERE channel=? AND (?='' OR thread_ts=?) "
-            "AND state='sent' ORDER BY created_at DESC LIMIT ?",
+            f"SELECT message_id,slack_ts,bot,text FROM ({OS.POSTS}) WHERE channel=? AND (?='' OR thread_ts=?) "
+            "AND state='done' AND slack_ts IS NOT NULL ORDER BY created_at DESC LIMIT ?",
             (channel, thread_ts, thread_ts, EXCHANGES),
         ):
-            rows.append({"ts": r["slack_ts"] or "", "from": "bot:" + r["bot"], "text": r["text"][:1000], "to": []})
+            if privacy.public_message(c, H.message(c, r["message_id"])):
+                rows.append({"ts": r["slack_ts"], "from": "bot:" + r["bot"], "text": r["text"][:1000], "to": []})
         rows.sort(key=lambda x: float(x["ts"] or 0))
         return rows[-EXCHANGES:]
 
@@ -1742,12 +1725,7 @@ class Gateway:
 
     def keep_in_tico(self, c, row, bot, channel="", thread_ts=""):
         """Mark a message handled without posting it, so the next pass does not pick it up again."""
-        now = self.clock()
-        c.execute(
-            "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,error,created_at,updated_at) "
-            "VALUES(?,?,?,?,'','canceled','Kept in Tico by their Slack settings',?,?)",
-            (row["id"], channel, thread_ts, bot, now, now),
-        )
+        OS.queue(c, row, bot, channel, thread_ts, "", error="Kept in Tico by their Slack settings", now=self.clock())
 
     def originate(self):
         """A bot message to a person with no Slack mapping yet: open (or reuse) their Tico DM.
@@ -1762,7 +1740,7 @@ class Gateway:
                     "SELECT m.id,m.body,m.conversation_id,m.sender_id,m.recipient_id,m.created_at FROM messages m "
                     "WHERE m.kind IN ('say','notice') AND m.sender_id LIKE 'bot:%' "
                     "AND m.recipient_id LIKE 'human:%' AND m.deleted_at IS NULL "
-                    "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) "
+                    "AND NOT EXISTS (SELECT 1 FROM outbound_actions a WHERE a.id=m.id AND a.channel='slack') "
                     "AND NOT EXISTS (SELECT 1 FROM slack_threads t WHERE t.conversation_id=m.conversation_id "
                     "AND (t.channel NOT LIKE 'D%' OR t.recipient_actor=m.recipient_id)) "
                     "ORDER BY m.created_at LIMIT 20"
@@ -1798,11 +1776,7 @@ class Gateway:
                         "recipient_actor) VALUES(?,?,?,?,?,?,?)",
                         (channel, "", bot, row["conversation_id"], now, now, row["recipient_id"]),
                     )
-                    c.execute(
-                        "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,"
-                        "recipient_actor) VALUES(?,?,?,?,?,'ready',?,?,?)",
-                        (row["id"], channel, "", bot, row["body"], now, now, row["recipient_id"]),
-                    )
+                    OS.queue(c, row, bot, channel, "", row["body"], recipient=row["recipient_id"], now=now)
                     opened += 1
                     continue
             try:
@@ -1828,11 +1802,7 @@ class Gateway:
                     "recipient_actor) VALUES(?,?,?,?,?,?,?)",
                     (channel, "", bot, row["conversation_id"], now, now, row["recipient_id"]),
                 )
-                c.execute(
-                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,"
-                    "recipient_actor) VALUES(?,?,?,?,?,'ready',?,?,?)",
-                    (row["id"], channel, "", bot, row["body"], now, now, row["recipient_id"]),
-                )
+                OS.queue(c, row, bot, channel, "", row["body"], recipient=row["recipient_id"], now=now)
                 opened += 1
         return opened
 
@@ -1844,7 +1814,7 @@ class Gateway:
                 "JOIN slack_threads t ON t.conversation_id=m.conversation_id AND m.sender_id='bot:'||t.bot "
                 "WHERE m.created_at>t.created_at AND m.kind IN ('say','notice') AND m.recipient_id LIKE 'human:%' "
                 "AND m.deleted_at IS NULL "
-                "AND NOT EXISTS (SELECT 1 FROM slack_posts p WHERE p.message_id=m.id) ORDER BY m.created_at LIMIT 50"
+                "AND NOT EXISTS (SELECT 1 FROM outbound_actions a WHERE a.id=m.id AND a.channel='slack') ORDER BY m.created_at LIMIT 50"
             ).fetchall()
             people = roster(c) if rows else None
             seen = set()
@@ -1881,11 +1851,15 @@ class Gateway:
                         (r["channel"], r["thread_ts"]),
                     ).fetchone()
                 reply_ts = str(where["reply_ts"] if where else r["thread_ts"] or "")
-                now = self.clock()
-                c.execute(
-                    "INSERT OR IGNORE INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-                    "VALUES(?,?,?,?,?,'ready',?,?,?)",
-                    (r["id"], r["channel"], reply_ts, r["bot"], r["body"], now, now, r["recipient_id"]),
+                OS.queue(
+                    c,
+                    r,
+                    r["bot"],
+                    r["channel"],
+                    reply_ts,
+                    r["body"],
+                    recipient=r["recipient_id"],
+                    now=self.clock(),
                 )
         return len(rows)
 
@@ -1908,9 +1882,8 @@ class Gateway:
             return True
         return bool(mapped["recipient_actor"]) and mapped["recipient_actor"] == person
 
-    def rendered(self, c, post):
-        """What Slack shows: the reply, then the footer that names the bot even where customize is not honoured."""
-        message = H.message(c, post["message_id"]) or {}
+    def rendered(self, c, post, message):
+        """The Slack request body and the message text it carries, before Slack formatting and the footer."""
         conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
         about = H.message_task_id(message, conv)
         line = visuals.elsewhere(self.settings.public_url, message, about)
@@ -1938,7 +1911,7 @@ class Gateway:
             "username": name,
             "icon_emoji": str(config.get("slack_icon") or "") or None,
             "icon_url": str(config.get("slack_icon_url") or "") or None,
-        }
+        }, text
 
     def copy_bound(self, post, message):
         """A DM copy is sent only to the person it was queued for. A DM copy with no recorded person is not sent."""
@@ -1958,127 +1931,173 @@ class Gateway:
         viewer = threads.actor_viewer(c, to)
         return viewer is not None and threads.readable(c, viewer, message)
 
-    def outside_workspace(self, post):
-        """Why a bot's own post (backend/slack_bots.py) may not go to its channel, "" when it may, None when Slack could
-        not be asked now (unreachable, or rate limited: the next pass asks again). A channel shared outside the
-        workspace (Slack Connect) is refused whatever the channel list says. Slack is asked on every post, never from a
-        cache, since sharing can start at any time. Other posts (replies, automations) are not asked about."""
-        if str(post["channel"] or "").startswith("D"):
-            return ""
-        with self.store.read() as c:
-            refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
-        if "slack_post" not in refs:
-            return ""
+    def post_evidence(self, channel):
+        """Ask Slack about this exact destination immediately before the permit. No database write lock over I/O."""
         try:
-            outside = is_external(self.slack.conversations_info(post["channel"]))
+            info = self.slack.conversations_info(channel)
+            if (
+                not self.bot_user_id
+                or info.get("id") != channel
+                or (info.get("context_team_id") and info["context_team_id"] != self.team_id)
+            ):
+                return OA.GatewayCheck("external", {}, "blocked", "Slack could not identify the channel")
+            if is_external(info) or info.get("is_mpim"):
+                return OA.GatewayCheck(
+                    "external", {}, "blocked", "Slack Connect channel: bots never post outside the workspace"
+                )
+            if channel.startswith("D") or info.get("is_im"):
+                if not info.get("user"):
+                    return OA.GatewayCheck("external", {}, "blocked", "Slack could not identify the DM recipient")
+                person = self.slack.users_info(info["user"])
+                if person.get("id") != info["user"]:
+                    return OA.GatewayCheck("external", {}, "blocked", "Slack could not identify the DM recipient")
+                return person
+            if info.get("is_ext_shared") is not False:
+                return OA.GatewayCheck("external", {}, "blocked", "Slack did not confirm an internal channel")
         except SlackError as exc:
             if exc.code == "ratelimited":
-                return None
-            return f"Slack could not say whether the channel is shared outside the workspace ({exc.code})"
+                return OA.GatewayCheck(
+                    "external", {}, "queued", "Slack audience check rate limited", exc.retry_after or RATE_LIMIT_DEFAULT
+                )
+            return OA.GatewayCheck("external", {}, "blocked", f"Slack could not verify the audience ({exc.code})")
         except SlackUnreachable:
-            return None
-        return "Slack Connect channel: bots never post outside the workspace" if outside else ""
+            return OA.GatewayCheck(
+                "external", {}, "queued", "Slack could not be reached to verify the audience", RATE_LIMIT_DEFAULT
+            )
+        return None  # Slack verified a channel inside the gateway's workspace
+
+    def check_post(self, c, row, prepared):
+        """Run the local guards in the same write as the attempt permit."""
+        from . import automation_actions
+
+        evidence, rule = prepared
+        message = H.message(c, row["id"])
+        text = str(OA.content(row)["payload"].get("text") or "")
+        if (
+            not text
+            or not privacy.public_message(c, message)
+            or (row["task_id"] and H.task_private(c, H.task(c, row["task_id"])))
+        ):
+            return OA.GatewayCheck("external", {}, "canceled", "The message was withdrawn or is private")
+        metadata = json.loads(row["metadata"])
+        post = {
+            "message_id": row["id"],
+            "bot": row["actor"].removeprefix("bot:") if H.is_bot(row["actor"]) else "",
+            "channel": row["destination"],
+            "thread_ts": metadata.get("thread_ts") or "",
+            "recipient_actor": metadata.get("recipient_actor"),
+            "text": text,
+        }
+        if not self.copy_bound(post, message) or not self.recipient_reads(c, message):
+            return OA.GatewayCheck("external", {}, "canceled", "Recipient no longer reads this thread")
+        if automation_actions.slack_held(c, post, message):
+            return OA.GatewayCheck("external", {}, "canceled", "send_off")
+        if isinstance(evidence, OA.GatewayCheck):
+            return evidence
+        if evidence is not None:
+            person, _, _ = self.check_user(c, evidence)
+            if not person or H.human_actor(person["id"]) != post["recipient_actor"]:
+                return OA.GatewayCheck("external", {}, "blocked", "Slack DM recipient no longer matches")
+        if (message.get("refs") or {}).get("slack_post"):
+            from . import slack_bots
+
+            bot = post["bot"]
+            slack_bots.need(c, bot, slack_bots.slack_entry(c, self.settings, bot), "post")
+            slack_bots.postable(c, self.settings, post["channel"])
+        closeout = {}
+        if row["occurrence_key"].startswith(OA.RESERVED):
+            from . import release_closeout
+
+            links = release_closeout.primaries(c, row["task_id"])
+            if len(links) != 1:
+                return OA.GatewayCheck(
+                    "internal", {}, "canceled", "The task no longer has exactly one primary Jira link"
+                )
+            if release_closeout.slack_thread(c, row["task_id"], self.team_url) != (post["channel"], post["thread_ts"]):
+                return OA.GatewayCheck("external", {}, "canceled", "The task's Slack thread changed")
+            if release_closeout.slack_actor(c, row["task_id"]) != row["actor"]:
+                return OA.GatewayCheck("internal", {}, "canceled", "The task's bot changed")
+            people = sorted(set(OR.company(c)) - {row["actor"]})
+            verdict, reviewed_people, warning = rule if rule is not None else (None, people, "")
+            if people != reviewed_people:
+                return OA.GatewayCheck("internal", {}, "queued", "Org rule audience changed", 1)
+            verdict = OR.apply(c, verdict, text, {"closeout_id": row["id"], "text": text}, audience_now=people)
+            if verdict and verdict.get("moved"):
+                return OA.GatewayCheck("internal", {}, "queued", "Org rule audience changed", 1)
+            if verdict and verdict.get("held"):
+                return OA.GatewayCheck("internal", {}, "blocked", "Org rules held the release reply")
+            post["text"] = OR.warned_text(verdict, OR.warned_text({"warn": warning}, text))
+            closeout = {"_closeout_jira": release_closeout.jira_target(links[0])}
+        body, sent_text = self.rendered(c, post, message)
+        if not self.customize:
+            if not self._customize_warned:
+                LOG.warning(
+                    "Posting without %s: replies show as %s with the footer only",
+                    CUSTOMIZE_SCOPE,
+                    self.settings.assistant_name,
+                )
+                self._customize_warned = True
+            body = {**body, "username": None, "icon_emoji": None, "icon_url": None}
+        return OA.GatewayCheck(
+            "internal", {"_slack_thread": post["thread_ts"], "_slack_body": body, "_slack_text": sent_text, **closeout}
+        )
+
+    def closeout_rule(self, row, token):
+        with self.store.read() as c:
+            live = c.execute(
+                "SELECT payload,metadata FROM outbound_actions WHERE id=? AND claim_token=? AND payload<>''",
+                (row["id"], token),
+            ).fetchone()
+            text = str(json.loads(live["payload"]).get("text") or "") if live else ""
+            if (
+                not text
+                or not privacy.public_message(c, H.message(c, row["id"]))
+                or H.task_private(c, H.task(c, row["task_id"]))
+            ):
+                return None
+            people = sorted(set(OR.company(c)) - {row["actor"]})
+            review = json.loads(live["metadata"]).get("_tico", {}).get("slack_rule_review", {})
+            if review.get("people") != people:
+                review = {}
+        verdict = OR.check_as(
+            self.store,
+            self.judge,
+            row["actor"],
+            row["actor"],
+            "",
+            "slack_post",
+            text,
+            people,
+            context={"slack_channel": row["destination"]},
+            skip={tuple(pair) for pair in review.get("rules", ())},
+        )
+        return verdict, people, review.get("warning", "")
 
     def deliver(self):
-        """Post what is ready, one attempt each. A crash between send and record is uncertain."""
-        now = self.clock()
-        with self.store.read() as c:
-            due = [
-                dict(r)
-                for r in c.execute(
-                    "SELECT * FROM slack_posts WHERE state='ready' OR (state='rate_limited' AND next_attempt_at<=?) "
-                    "ORDER BY created_at LIMIT 20",
-                    (now,),
-                )
-            ]
+        """Claim and send only Slack actions. Unanswered provider attempts never automatically send again."""
+        self._legacy_posts_after = OS.adopt_pass(self.store, self._legacy_posts_after)
+        OA.recover(self.store, self.clock(), slack=True)
         results = []
-        for post in due:
-            if not post["bot"] and not self.settings.slack_gateway_enabled:
-                continue
-            outside = self.outside_workspace(post)
-            if outside is None:
-                continue  # Slack could not be asked: the next pass tries again
-            with self.store.transaction() as c:
-                if outside:
-                    c.execute(
-                        "UPDATE slack_posts SET state='canceled',error=?,updated_at=? "
-                        "WHERE message_id=? AND state IN ('ready','rate_limited')",
-                        (outside, self.clock(), post["message_id"]),
-                    )
-                    continue
-                message = H.message(c, post["message_id"])
-                if not privacy.public_message(c, message):
-                    c.execute(
-                        "UPDATE slack_posts SET state='canceled',text='',error='Task privacy prevents delivery',updated_at=? "
-                        "WHERE message_id=? AND state IN ('ready','rate_limited')",
-                        (self.clock(), post["message_id"]),
-                    )
-                    continue
-                if not self.copy_bound(post, message) or not self.recipient_reads(c, message):
-                    c.execute(
-                        "UPDATE slack_posts SET state='canceled',text='',error='Recipient no longer reads this thread',"
-                        "updated_at=? WHERE message_id=? AND state IN ('ready','rate_limited')",
-                        (self.clock(), post["message_id"]),
-                    )
-                    continue
-                from . import automation_actions
-
-                if automation_actions.slack_held(c, post):  # its inbox's send switch went off since it was queued
-                    continue
-                shaped = self.rendered(c, post)
-                claimed = c.execute(
-                    "UPDATE slack_posts SET state='sending',attempts=attempts+1,updated_at=? "
-                    "WHERE message_id=? AND state IN ('ready','rate_limited')",
-                    (self.clock(), post["message_id"]),
-                ).rowcount
+        for _ in range(20):
+            if self.stop.is_set():
+                break
+            claimed = OA.claim(self.store, self.clock(), slack=True)
             if not claimed:
-                continue
-            body = shaped
-            if not self.customize:
-                if not self._customize_warned:
-                    LOG.warning(
-                        "Posting without %s: replies show as %s with the footer only",
-                        CUSTOMIZE_SCOPE,
-                        self.settings.assistant_name,
-                    )
-                    self._customize_warned = True
-                body = {**body, "username": None, "icon_emoji": None, "icon_url": None}
-            state, slack_ts, error, next_attempt = "sent", None, None, None
-            try:
-                answer = self.slack.post_message(
-                    post["channel"],
-                    post["thread_ts"] or None,
-                    body["text"],
-                    username=body["username"],
-                    icon_emoji=body["icon_emoji"],
-                    icon_url=body["icon_url"],
+                break
+            row = claimed.row
+            assert row is not None
+            rule = self.closeout_rule(row, claimed.token) if row["occurrence_key"].startswith(OA.RESERVED) else None
+            evidence = self.post_evidence(row["destination"])
+            outcome = OA.attempt_result(self.store, claimed, gateway=self, evidence=(evidence, rule))
+            if outcome.state != "lost":
+                state = "queued" if outcome.state == "requeued" else outcome.state
+                results.append(
+                    {
+                        "message_id": claimed.id,
+                        "state": OS.status({"state": state, "error": outcome.error}),
+                        "slack_ts": (outcome.receipt or {}).get("ts"),
+                    }
                 )
-                slack_ts = str(answer.get("ts") or "")
-            except SlackError as exc:
-                if exc.code == "ratelimited" and post["attempts"] + 1 < MAX_POST_ATTEMPTS:
-                    state, error = "rate_limited", exc.code
-                    next_attempt = H.shift(self.clock(), seconds=exc.retry_after or RATE_LIMIT_DEFAULT)
-                elif exc.code == "ratelimited":
-                    state, error = "failed", f"ratelimited after {post['attempts'] + 1} attempts"
-                else:
-                    state, error = "failed", exc.code
-            except Exception as exc:  # unreachable, unreadable, or anything unexpected
-                state, error = "uncertain", SE.describe(exc)
-            with self.store.transaction() as c:
-                c.execute(
-                    "UPDATE slack_posts SET state=?,slack_ts=?,error=?,next_attempt_at=?,updated_at=? WHERE message_id=?",
-                    (state, slack_ts, error, next_attempt, self.clock(), post["message_id"]),
-                )
-                H.event(
-                    c,
-                    "bot:" + post["bot"] if post["bot"] else H.TICO_ACTOR,
-                    "slack.post",
-                    post["message_id"],
-                    {"state": state, "channel": post["channel"], "thread_ts": post["thread_ts"], "error": error},
-                )
-            if state != "sent":
-                LOG.warning("Post %s for %s is %s: %s", post["message_id"], post["bot"], state, error)
-            results.append({"message_id": post["message_id"], "state": state, "slack_ts": slack_ts})
         return results
 
     # ------------------------------------------------------------------ the channel list
@@ -2131,24 +2150,54 @@ class Gateway:
             threads = {"error": type(exc).__name__}
         return {"events": out, "posts": posts, "threads": threads}
 
+    def notify(self):
+        self.wake.set()
+        OS.ring(self.settings.db_path)
+
+    def request_stop(self):
+        self.stop.set()
+        self.notify()
+
+    def wait(self, bell):
+        if self.stop.is_set():
+            return
+        if bell is None and self.wake.is_set():
+            self.wake.clear()
+            return
+        if bell is None:
+            self.wake.wait(TICK_SECONDS)
+        else:
+            try:
+                bell.settimeout(0 if self.wake.is_set() else TICK_SECONDS)
+                bell.recv(1)
+                bell.setblocking(False)
+                while True:
+                    bell.recv(1)
+            except (BlockingIOError, TimeoutError):
+                pass
+            except OSError:
+                # Fall back to the local event if the socket fails.
+                self.wake.wait(TICK_SECONDS)
+        self.wake.clear()
+
     def run(self):
         from . import slack_requests
 
         # Bots' history reads and file downloads (backend/slack_bots.py) are answered on their own thread: a tick can
         # wait on the decision model, and a bot's read must not.
         background.start("slack-requests", slack_requests.serve_forever, self)
-        while not self.stop.is_set():
-            try:
-                self.tick()
-            except Exception as exc:
-                LOG.error("Gateway tick failed: %s", SE.describe(exc))
-            if self.heartbeat:
+        with OS.listener(self.settings.db_path) as bell:
+            while not self.stop.is_set():
                 try:
-                    self.heartbeat()
+                    self.tick()
                 except Exception as exc:
-                    LOG.error("Gateway heartbeat failed: %s", SE.describe(exc))
-            self.wake.wait(TICK_SECONDS)
-            self.wake.clear()
+                    LOG.error("Gateway tick failed: %s", SE.describe(exc))
+                if self.heartbeat:
+                    try:
+                        self.heartbeat()
+                    except Exception as exc:
+                        LOG.error("Gateway heartbeat failed: %s", SE.describe(exc))
+                self.wait(bell)
 
 
 class _Fallback(Exception):
@@ -2319,7 +2368,7 @@ def main(argv=None, make_slack=None):
             _when_free(stopping, "Slack pin", slack_app.pin, store, verified["team_id"], verified["app_id"])
         _when_free(stopping, "Slack recover", gateway.recover)
         try:
-            gateway.slack.connect(lambda payload: gateway.receive(payload))
+            gateway.slack.connect(gateway.receive)
         except Exception as exc:
             # A Slack connection error can echo a message, so the class alone is logged.
             LOG.error("Socket Mode did not connect: %s", type(exc).__name__)
@@ -2361,7 +2410,7 @@ def main(argv=None, make_slack=None):
                 gateway.stop.set()
 
         gateway.heartbeat = heartbeat
-        background.start("slack-stopper", lambda: (stopping.wait(), gateway.stop.set(), gateway.wake.set()))
+        background.start("slack-stopper", lambda gateway=gateway: (stopping.wait(), gateway.request_stop()))
         try:
             gateway.run()
         finally:

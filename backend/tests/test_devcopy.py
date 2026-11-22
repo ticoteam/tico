@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from backend.migrations import renames_data
+from backend import outbound_slack as OS
 from backend import devcopy
 from backend.auth import Identity
 from backend.config import Settings
@@ -85,6 +86,7 @@ def source_db(tmp_path, booted):
                 (mid, "Request " + mid, at),
             )
             enqueue_stored(c, mid)
+        OS.queue(c, H.message(c, "new"), "sales", "C0ACME", "", "A pending Slack post")
         c.execute("UPDATE jobs SET state='completed' WHERE id IN ('ran','ran-long-ago')")
         # A run in progress, a finished run in the window, and a finished run from long ago.
         for aid, job, state, at, finished in (
@@ -133,7 +135,7 @@ def test_a_dev_copy_keeps_history_empties_what_acts_and_refuses_runners(tmp_path
     dest = tmp_path / "copy" / "hub.sqlite"
     removed, loose = devcopy.build(source, dest, days=30)
     devcopy.write_environment(dest, 8879, "morgan@acme.example")
-    assert removed["schedules"] == 1  # scheduled actions never enter the copy
+    assert removed["outbound_actions"] == 1 and removed["schedules"] == 1  # scheduled actions never enter the copy
     assert source.read_bytes() == before  # the source is only read
     assert loose == [] and removed["attempts"] == 2 and removed["attempt_events"] == 2 and removed["messages"] == 2
     assert removed['alert_preferences'] == 1 and removed['personal_alerts'] == 3

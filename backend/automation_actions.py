@@ -6,7 +6,7 @@ for an ordinary refusal; it answers {"ok": False, "detail": ...} and the run rec
 
 Mail actions are queued in `automation_mail_actions`, and the server carries each out for any mailbox it holds a
 credential for (backend/automations.py `drain_workspace_mail`, backend/mail_actions.py). The step waits until the
-result comes back. On a Slack message, send_reply posts in the thread (the `slack_posts` outbox) and draft_reply
+result comes back. On a Slack message, send_reply posts in the thread (the outbound queue) and draft_reply
 leaves the draft with the owner as a task.
 
 `send_reply` honors the inbox's send switch (`automation_inboxes`, on unless set off): off saves a draft and logs
@@ -278,20 +278,16 @@ def _slack(c, auto, run_id, do, args, message):
             None,
             None,
         )
-        now = H.now()
-        c.execute(
-            "INSERT INTO slack_posts(message_id,channel,thread_ts,bot,text,state,created_at,updated_at,recipient_actor) "
-            "VALUES(?,?,?,?,?,'ready',?,?,?)",
-            (
-                msg["id"],
-                message.get("channel"),
-                message.get("thread_ts") or message.get("ts"),
-                bot,
-                text,
-                now,
-                now,
-                msg.get("recipient_id"),
-            ),
+        from . import outbound_slack
+
+        outbound_slack.queue(
+            c,
+            msg,
+            bot,
+            message.get("channel"),
+            message.get("thread_ts") or message.get("ts"),
+            text,
+            recipient=msg.get("recipient_id"),
         )
         return {"ok": True, "detail": "posted", "message": msg["id"]}
     if do in ("send_reply", "draft_reply"):
@@ -302,18 +298,14 @@ def _slack(c, auto, run_id, do, args, message):
     return {"ok": True, "detail": "nothing to do in Slack"}
 
 
-def slack_held(c, post):
-    """An automation's Slack reply whose inbox's send switch went off after it was queued (`slack_posts` row `post`):
+def slack_held(c, post, message):
+    """An automation's Slack reply whose inbox's send switch went off after it was queued (outbound action `post`):
     not posted but canceled, and the owner gets the draft as a task, as with the switch off when it was queued.
     Returns whether it was held."""
-    refs = (H.message(c, post["message_id"]) or {}).get("refs") or {}
+    refs = message.get("refs") or {}
     inbox = refs.get("automation_inbox")
     if not inbox or send_on(c, inbox):
         return False
-    c.execute(
-        "UPDATE slack_posts SET state='canceled',error='send_off',updated_at=? WHERE message_id=?",
-        (H.now(), post["message_id"]),
-    )
     row = c.execute("SELECT id, flow FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
     if row:
         auto, run_id = {"id": row["id"], "flow": json.loads(row["flow"])}, refs.get("automation_run")

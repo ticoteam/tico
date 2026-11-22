@@ -156,12 +156,30 @@ def test_mail_actions_queue_for_the_mailboxs_computer(api):
 
 def test_slack_send_reply_posts_in_the_thread_and_off_leaves_a_draft_task(api):
     assert act(api, "send_reply", {"body": "On it", "bot": "ops"}, SLACK)["detail"] == "posted"
-    post_row = sql(api, "SELECT channel, thread_ts, bot, text FROM slack_posts")[0]
-    assert post_row == {"channel": "C1", "thread_ts": "1.1", "bot": "ops", "text": "On it"}
+    with api.app.state.store.read() as c:
+        post_row = c.execute(
+            "SELECT destination, json_extract(metadata,'$.thread_ts'), actor, json_extract(payload,'$.text') "
+            "FROM outbound_actions WHERE channel='slack'"
+        ).fetchone()
+        assert tuple(post_row) == ("C1", "1.1", "bot:ops", "On it")
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO automation_inboxes VALUES('slack:#general',0,?,'human:ana')", (H.now(),))
     drafted = act(api, "send_reply", {"body": "On it", "bot": "ops"}, SLACK)
-    assert drafted["ok"] and drafted["task"] and len(sql(api, "SELECT 1 FROM slack_posts")) == 1
+    assert (
+        drafted["ok"]
+        and drafted["task"]
+        and len(sql(api, "SELECT id FROM outbound_actions WHERE channel='slack'")) == 1
+    )
+
+
+def test_owner_sql_reads_slack_receipts_through_the_message_gate(api):
+    from backend.tests.helpers.sql import query
+
+    made = act(api, "send_reply", {"body": "On it", "bot": "ops"}, SLACK)
+    select = "SELECT id, state FROM outbound_actions WHERE channel='slack'"
+    assert query(api, select)["rows"] == [[made["message"], "queued"]]
+    assert query(api, select, "ben-test")["rows"] == []
+    query(api, "SELECT payload FROM outbound_actions", expected=422)
 
 
 def test_an_unknown_action_is_refused(api):

@@ -1,5 +1,5 @@
 """Release close-out of a task filed for a Jira issue (backend/release_closeout.py): its merge proven in an actual
-release tag queues the Jira transition to Done and one release comment, each once (no Slack reply yet);
+release tag queues the Jira transition to Done and one release comment, each once;
 a Jira issue withdrawn mid-work or closed outside Tico freezes the close-out behind ONE owner ask, taken back when the
 issue is back in Ready; an external outbound action whose outcome stays unknown asks its owner once
 (backend/owner_asks.py). GitHub is backend/tests/helpers/fake_github.py and Jira a fake answer at the pass's sender;
@@ -51,6 +51,12 @@ def jira(company, monkeypatch):
             (now, now, TOOL),
         )
 
+    class Vault:
+        class cipher:  # noqa: N801 - the vault's attribute
+            @staticmethod
+            def decrypt(c, credential):
+                return "jira-synthetic-token"
+
     class Jira:
         status = ("Ready", "new")
         passes = 0
@@ -60,23 +66,26 @@ def jira(company, monkeypatch):
             self.status = (status, category)
             self.passes += 1
 
-            class Vault:
-                class cipher:  # noqa: N801 - the vault's attribute
-                    @staticmethod
-                    def decrypt(c, credential):
-                        return "jira-synthetic-token"
+            JS.refresh(company, Vault(), now=H.shift(H.now(), minutes=10 * self.passes), sender=self.answer)
 
-            def sender(url, headers, params, seconds):
-                if self.status[0] == "timeout":
-                    raise TimeoutError("Jira took too long")
-                if self.status[0] is None:
-                    return 404, {"errorMessages": ["Issue does not exist"]}
-                found = {"name": self.status[0], "statusCategory": {"key": self.status[1]}}
-                return 200, {"fields": {"status": found, "updated": f"2026-11-21T10:{self.passes:02d}:00.000+0000"}}
+        def answer(self, *args):
+            if self.status[0] == "timeout":
+                raise TimeoutError("Jira took too long")
+            if self.status[0] is None:
+                return 404, {"errorMessages": ["Issue does not exist"]}
+            found = {"name": self.status[0], "statusCategory": {"key": self.status[1]}}
+            return 200, {"fields": {"status": found, "updated": f"2026-11-21T10:{self.passes:02d}:00.000+0000"}}
 
-            JS.refresh(company, Vault(), now=H.shift(H.now(), minutes=10 * self.passes), sender=sender)
+    issue = Jira()
 
-    return Jira()
+    def live(method, url, *args, **kwargs):
+        assert method == "GET" and url.endswith("/" + ISSUE)
+        status, body = issue.answer()
+        return JS.Reply(status, body)
+
+    monkeypatch.setattr(OA, "vault", Vault)
+    monkeypatch.setattr(JS, "call", live)
+    return issue
 
 
 def filed(c, task_id, ready="Ready", issue=ISSUE):
@@ -133,13 +142,191 @@ def test_a_release_queues_the_jira_done_and_comment_once(company, gh, jira):
         assert f"Released in v1.0.0: {link}" in found["comment"]["payload"]
         frozen = [json.loads(r["payload"]) for r in found.values()]
         assert all(p["closeout"] and p["ready"] == "Ready" and p["done"] == "Done" for p in frozen)
-        assert c.execute("SELECT COUNT(*) FROM slack_posts").fetchone()[0] == 0  # no Slack reply yet
+        assert c.execute("SELECT COUNT(*) FROM outbound_actions WHERE channel='slack'").fetchone()[0] == 0
         # A replay of every trigger adds nothing: the move, the close-out itself, the release read again.
         visit = release_visit(c, task_id)
         assert RC.moved(c, task_id, visit) == 0 and RC.close_out(c, task_id, visit) == 0
     released(company, gh, tag="v1.0.1", minutes=40)
     with company.transaction() as c:
         assert len(actions(c, task_id)) == 2
+
+
+@pytest.fixture
+def released_slack(company, gh, jira, monkeypatch):
+    from backend import slack_bots as SB, slack_channels as SC, slack_gateway as G
+    from backend.auth import Identity
+    from backend.tests.helpers.slack_gateway import APP, MARKETING, TEAM, FakeSlack
+
+    slack = FakeSlack()
+    gateway = G.Gateway(company, slack)
+    gateway.team_id, gateway.app_id = TEAM, APP
+    gateway.verify_app()
+    monkeypatch.setattr(SB, "slack_entry", lambda *_: {"can": ["post"]})
+    task_id = to_release(company, gh)
+    root = "1700000000.000100"
+    with company.transaction() as c:
+        filed(c, task_id)
+        c.execute("UPDATE tasks SET private=0 WHERE id=?", (task_id,))
+        SC.add(c, company.settings, Identity("human:ana", "owner"), MARKETING, name="marketing")
+        base = f"https://acme.slack.com/archives/{MARKETING}/p"
+        H.task_link(c, "human:ana", task_id, base + "1700000001000200?thread_ts=" + root)
+        H.task_link(c, "human:ana", task_id, base + "1700000002000300")
+    released(company, gh)
+    return gateway, task_id, root, MARKETING
+
+
+@pytest.mark.parametrize("make_private", [False, True], ids=["public", "private-before-send"])
+def test_release_slack_replies_once_in_oldest_thread_and_rechecks_privacy(company, released_slack, make_private):
+    gateway, task_id, root, channel = released_slack
+    slack = gateway.slack
+    with company.transaction() as c:
+        row = actions(c, task_id)["post"]
+        assert row["occurrence_key"] == f"closeout:{task_id}:{REPO}@v1.0.0:slack"
+        assert row["actor"] == "bot:release"
+        assert RC.moved(c, task_id, release_visit(c, task_id)) == 0
+        assert (
+            c.execute(
+                "SELECT COUNT(*) FROM messages WHERE json_extract(refs,'$.task')=? "
+                "AND json_extract(refs,'$.slack_post.channel')=?",
+                (task_id, channel),
+            ).fetchone()[0]
+            == 1
+        )
+        if make_private:
+            c.execute("UPDATE tasks SET private=1 WHERE id=?", (task_id,))
+    gateway.deliver()
+    gateway.deliver()
+    with company.read() as c:
+        saved = OA.get(c, row["id"])
+    if make_private:
+        assert not slack.posts and saved["state"] == "canceled" and saved["provider_attempted_at"] is None
+    else:
+        [post] = slack.posts
+        assert post["channel"] == channel and post["thread_ts"] == root
+        assert "Released in v1.0.0:" in post["text"]
+        assert saved["state"] == "done" and json.loads(saved["receipt"])["ts"]
+
+
+@pytest.mark.parametrize("status,category", [("Backlog", "new"), (None, "new"), ("Won't Do", "done"), ("Done", "done")])
+def test_release_slack_reads_jira_live_after_sibling_writes_settle(company, released_slack, jira, status, category):
+    gateway, task_id, _, _ = released_slack
+    with company.transaction() as c:
+        found = actions(c, task_id)
+        for op in ("transition", "comment"):
+            OA.settle(c, found[op], "done")
+    jira.status = (status, category)  # Jira changed after the last background poll.
+    gateway.deliver()
+    with company.transaction() as c:
+        row = actions(c, task_id)["post"]
+        if status == "Done":
+            assert row["state"] == "done" and len(gateway.slack.posts) == 1
+            return
+        assert row["state"] == "queued" and row["attempts"] == 0
+        assert "waiting" in row["last_error"].lower() and not gateway.slack.posts
+    jira.status = ("Ready", "new")
+    gateway.clock = lambda: row["next_attempt_at"]
+    gateway.deliver()
+    with company.read() as c:
+        sent = actions(c, task_id)["post"]
+        assert sent["occurrence_key"] == row["occurrence_key"] and sent["state"] == "done"
+    assert len(gateway.slack.posts) == 1
+
+
+def test_release_slack_cancels_if_task_no_longer_has_one_primary_issue(company, released_slack):
+    gateway, task_id, _, _ = released_slack
+    with company.transaction() as c:
+        filed(c, task_id, issue="HM-13")
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == "canceled" and row["attempts"] == 0
+    assert not gateway.slack.posts
+
+
+def test_release_slack_rechecks_an_org_rule_when_its_audience_moves(company, released_slack, monkeypatch):
+    from backend import org_rule_check as OR
+
+    gateway, task_id, _, _ = released_slack
+    original = OR.apply
+    monkeypatch.setattr(OR, "apply", lambda *_a, **_kw: {"moved": True})
+    gateway.deliver()
+    with company.read() as c:
+        row = actions(c, task_id)["post"]
+        assert row["state"] == "queued" and row["attempts"] == 0 and not gateway.slack.posts
+    monkeypatch.setattr(OR, "apply", original)
+    gateway.clock = lambda: row["next_attempt_at"]
+    gateway.deliver()
+    assert len(gateway.slack.posts) == 1
+
+
+def test_send_anyway_resumes_the_held_release_reply_through_live_jira(company, released_slack, jira):
+    from backend import org_rule_check as OR, org_rules
+    from backend.auth import Auth, Identity
+    from backend.tests.helpers.org_rule_check import COLOR, Judge
+
+    gateway, task_id, _, _ = released_slack
+    auth = Auth(company)
+    owner = Identity("human:ana", "owner", email="ana@acme.example")
+    gateway._judge = Judge(company, {COLOR: "Released in v1.0.0"})
+    with company.transaction() as c:
+        org_rules.add_rule(
+            c,
+            auth,
+            owner,
+            {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "with": {}, "if_broken": "block"},
+        )
+    gateway.deliver()
+    OR.settle_parts()
+    with company.read() as c:
+        held = actions(c, task_id)["post"]
+        hold = dict(c.execute("SELECT * FROM org_rule_holds WHERE operation='slack_post'").fetchone())
+    assert held["state"] == "blocked" and gateway.slack.posts == []
+    check = OR.recheck(company, gateway.judge, hold, auth=auth)
+    with company.transaction() as c:
+        sent = OR.send(c, owner, hold["id"], hold["nonce"], check=check, auth=auth)
+        assert sent["result"]["message_id"] == held["id"]
+    jira.status = ("Backlog", "new")
+    gateway.deliver()
+    with company.read() as c:
+        waiting = actions(c, task_id)["post"]
+        assert waiting["id"] == held["id"] and waiting["state"] == "queued"
+    assert gateway.slack.posts == []
+    jira.status = ("Ready", "new")
+    gateway.clock = lambda: waiting["next_attempt_at"]
+    gateway.deliver()
+    with company.read() as c:
+        assert actions(c, task_id)["post"]["state"] == "done"
+        events = c.execute("SELECT actor FROM events WHERE action='slack.post' AND target=?", (held["id"],)).fetchall()
+        assert [row[0] for row in events] == [held["actor"]]
+    assert len(gateway.slack.posts) == 1
+
+
+@pytest.mark.parametrize("withdrawal", ["wiped", "private-message"])
+def test_release_slack_skips_org_rules_if_payload_was_withdrawn_after_claim(
+    company, released_slack, monkeypatch, withdrawal
+):
+    from backend import org_rule_check as OR
+
+    gateway, task_id, _, _ = released_slack
+    claim = OA.claim
+    checks = []
+
+    def withdraw(*args, **kwargs):
+        claimed = claim(*args, **kwargs)
+        if claimed:
+            with company.transaction() as c:
+                if withdrawal == "wiped":
+                    c.execute("UPDATE outbound_actions SET payload='' WHERE id=?", (claimed.id,))
+                else:
+                    c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), claimed.id))
+        return claimed
+
+    monkeypatch.setattr(OA, "claim", withdraw)
+    monkeypatch.setattr(OR, "check_as", lambda *a, **_kw: checks.append(a))
+    gateway.deliver()
+    with company.read() as c:
+        assert actions(c, task_id)["post"]["state"] == "canceled"
+    assert checks == [] and gateway.slack.posts == []
 
 
 def test_a_task_with_two_primary_jira_links_closes_neither_out_and_asks_once(company, gh, jira):

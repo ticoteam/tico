@@ -236,6 +236,7 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
         row = c.execute("SELECT body,sender_id FROM messages WHERE id=?", (mid,)).fetchone()
         if row and row["sender_id"] == person.actor and value in (row["body"] or ""):
             c.execute("UPDATE messages SET body=? WHERE id=?", ((row["body"] or "").replace(value, label), mid))
+            H._withdraw_queued_comment_copies(c, mid)
             # Its revision history (backend/threads.py) keeps each body too.
             c.execute("UPDATE message_revisions SET body=replace(body, ?, ?) WHERE message_id=?", (value, label, mid))
             count += 1
@@ -719,6 +720,7 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 "UPDATE message_revisions SET body=replace(body, ?, ?) WHERE message_id=?",
                 (span, f"{MASK} {label}", mid),
             )
+            H._withdraw_queued_comment_copies(c, mid)
             from .stream_capture import scrub_value
 
             scrub_value(c, span, f"{MASK} {label}", conversation_id=msg["conversation_id"])

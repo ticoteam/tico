@@ -8,6 +8,21 @@ call or a Slack event logs the class alone instead: a Slack error's text can ech
 
 from .run_diagnostics import scrub
 
+RATE_LIMIT_DEFAULT = 30  # seconds, when Slack's Retry-After is unreadable
+
+
+class SlackError(Exception):
+    """Slack answered with an error code, which may leave the effect unknown."""
+
+    def __init__(self, method: str, code: str, retry_after: float | None = None):
+        super().__init__(f"Slack {method}: {code}")
+        self.method, self.code, self.retry_after = method, code, retry_after
+
+
+class SlackUnreachable(Exception):
+    """No conclusive answer: after a post this is uncertain."""
+
+
 LIMIT = 200  # characters of the message in a log line
 
 

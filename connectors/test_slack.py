@@ -6,13 +6,13 @@ python3 -m unittest discover -s connectors
 """
 
 import contextlib, io, json, os, stat, sys, tempfile, unittest, urllib.error, urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-import slack  # noqa: E402
+from connectors import slack  # noqa: E402
 from clients.tests.helpers.wire import Raw, Refusal, Wire  # noqa: E402
 
 TZ = "America/Los_Angeles"
@@ -61,7 +61,7 @@ class Times(unittest.TestCase):
         self.assertEqual((end - start).total_seconds(), 5400)
         self.assertEqual(slack.time_range("today", "now", TZ, NOW)[0].hour, 0)
         start, _ = slack.time_range("2026-09-01T09:00Z", None, TZ, NOW)
-        self.assertEqual(start.utcoffset().total_seconds(), 0)
+        self.assertEqual(start.utcoffset(), timedelta(0))
 
     def test_an_empty_range_a_bad_time_or_zone_is_a_failure(self):
         for since, until, tz in (
@@ -223,8 +223,8 @@ class Calls(unittest.TestCase):
         self.assertEqual((code, out.strip()), (0, "posted to #general: https://x/p1"))
         self.assertEqual(wire.writes()[0].body, {"channel": "#general", "text": "Shipped", "thread_ts": "1.2"})
 
-    def test_a_canceled_post_is_refused_and_a_failed_one_fails(self):
-        for state, code in (("canceled", 2), ("failed", 1)):
+    def test_a_canceled_or_blocked_post_is_refused_and_a_failed_one_fails(self):
+        for state, code in (("canceled", 2), ("blocked", 2), ("failed", 1), ("uncertain", 1)):
             _, connected = connector_at(
                 {
                     "POST slack/posts": {"message_id": "m1", "channel": "C1"},
@@ -235,6 +235,8 @@ class Calls(unittest.TestCase):
                 got, _, err = run("post", "--channel", "#partners", "--text", "hi")
             self.assertEqual(got, code)
             self.assertIn("Slack Connect channel", err)
+            if state == "uncertain":
+                self.assertIn("could not confirm delivery", err)
 
     def test_a_held_post_says_why_and_sends_nothing(self):
         _, connected = connector_at({"POST slack/posts": {"held": {"reason": "No prices in public channels"}}})

@@ -159,13 +159,13 @@ def release(c, table, row_id, token=None):
     )
 
 
-def reclaim_stale(c, table, before, now):
+def reclaim_stale(c, table, before, now, *, where="1"):
     """Rows still in flight whose lease was stamped before `before` go back to due at `now`, their claim token cleared,
     so the worker that was cut off can no longer settle them. Returns how many."""
     cleared = f", {table.token}=NULL" if table.token else ""
     back = c.execute(
         f"UPDATE {table.name} SET state=?, {table.lease}=NULL{cleared}, {table.due_at}=? "
-        f"WHERE state=? AND {table.lease}<?",
+        f"WHERE state=? AND {table.lease}<? AND ({where})",
         (table.due, now, table.flight, before),
     ).rowcount
     if back:

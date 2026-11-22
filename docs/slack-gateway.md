@@ -186,10 +186,9 @@ task-done post adds the same line for the owner's result comment, before **Open 
 The reply text is escaped as Slack requires (`&`, `<`, `>`), so a bot writing `<!channel>` shows
 those characters and pages nobody, and "x < y" survives the parser.
 
-One try per post. A confirmed rate limit waits Slack's `Retry-After` and tries again, ten
-tries at most, then the post is `failed`. Any other Slack refusal (`channel_not_found`,
-`missing_scope`) is `failed`. A network fault, an unreadable answer or a crash between send and
-record is `uncertain` and waits for a human.
+The gateway claims the Slack action and records an attempt before it posts. A confirmed rate limit waits Slack's
+`Retry-After` and tries again, up to ten attempts. A definite post refusal is `failed`. A network fault, unreadable
+answer or crash after the permit leaves an `unknown` action for a person to verify.
 Thread replies are solicited: turning bot posting off for a channel does not stop them, and they
 grant no bot any posting right there; a bot's own posts go through `connectors/slack.py` and its gates (below).
 
@@ -206,9 +205,9 @@ org's rules and screening, and then has the gateway act:
   that the API still waits (the row is there and its deadline, 60 s for history and 150 s for a file, has not passed),
   so a read the API gave up on stops at once. A ref like `<#C...|name>` is authorized on its id alone. A file's bytes go to `slack-files/` beside the database (the
   shared `tico-data` volume), never into it, and are deleted once streamed.
-- `POST /api/v2/slack/posts` writes the post as a message in the bot's room plus a `slack_posts` row, which `deliver`
-  sends with the bot's name and `(sent from <bot>)`. `deliver` asks Slack about the channel on every post
-  (never from a cache) and cancels it in a Slack Connect channel; a rate-limited check leaves it for the next pass.
+- `POST /api/v2/slack/posts` writes a message in the bot's room and an `outbound_actions` row. The commit signals
+  the gateway. It asks Slack about the destination on every attempt and holds the row if the channel uses Slack Connect
+  or Slack cannot confirm an internal audience. A temporary verification failure preserves the provider's retry time.
 - `POST /api/v2/slack/dms` is the bot's message to the person in Tico, which `originate` copies into their Slack DM.
 
 With the gateway not connected, or not claiming a request within 8 seconds, each route answers 503 and says what to
@@ -247,11 +246,12 @@ the preview is sent again with the same link as text.
 |---|---|---|
 | `slack_events` | Slack message, unique on `event_id` and on `(channel, ts)`; `author`, `author_name`, `edited`, `deleted` | `received`, `denied`, `recorded`, `routed`, `failed`; `stored` for a channel message nobody was woken for |
 | `slack_threads` | Slack thread and bot: the Tico conversation it continues | |
-| `slack_posts` | bot reply to mirror | `ready`, `sending`, `sent`, `rate_limited`, `failed`, `uncertain` |
+| `outbound_actions` with `channel='slack'` | outbound message or dedupe marker | `queued`, `attempting`, `done`, `blocked`, `canceled`, `failed`, `unknown` |
 | `slack_requests` | bot's history read or file download waiting on the gateway; deleted once read, or after 10 minutes | `pending`, `running`, `done`, `failed` |
 | `slack_digests` | digest the old hourly pass wrote (read-only; nothing writes it) | |
 
-Only `slack_posts` is in `tico sql`'s safe-column list (`backend/sql.py`, `docs/hub-sql.md`); the other Slack tables are not readable there.
+The owner can read safe columns of Slack outbound actions through `tico sql` for messages they can read. See
+[Hub SQL](hub-sql.md).
 
 ## Running it
 
@@ -300,8 +300,8 @@ Read the queue with `tico sql` or SQLite against the live database, read-only:
 SELECT event_id, channel, thread_ts, state, reason, processed_at
 FROM slack_events WHERE state NOT IN ('routed', 'recorded', 'denied') ORDER BY received_at;
 
-SELECT message_id, bot, channel, thread_ts, state, attempts, next_attempt_at, slack_ts, error
-FROM slack_posts WHERE state NOT IN ('sent') ORDER BY created_at;
+SELECT id, state, attempts, next_attempt_at
+FROM outbound_actions WHERE channel='slack' AND state<>'done' ORDER BY created_at;
 
 -- each read channel's link and readers
 SELECT l.channel_ref, l.channel_id, l.state, l.reason, f.actor
@@ -313,22 +313,18 @@ WHERE l.read_only=1 AND l.state<>'unlinked' ORDER BY l.channel_ref, f.actor;
 A read-only link that stays `requested` or is `refused` names why in `reason`; invite Tico to the channel, then
 add a reader again (or Resume) to ask once more.
 
-For an `uncertain` post, open the exact thread in Slack. If the reply is there, record its
-timestamp and close the row:
+For an `unknown` action, check the exact thread in Slack. If the reply is there, use
+`tico outbound confirm-sent <id> --slack-ts 1700000009.000100` as a person who can read the action. Use the timestamp
+of the posted message so Tico can link to it. Keep the action as the dedupe record. Before a new send, verify that
+the original worker has stopped.
 
-```sql
-UPDATE slack_posts SET state='sent', slack_ts='<ts from Slack>', error=NULL WHERE message_id='<id>';
-```
+The migration copies existing Slack posts into the outbound queue with their message ids, sent text, retry times
+and dedupe markers. It holds copied pending posts for two minutes. Posts already being sent become unknown.
+The gateway checks the old row before permitting a send and reads later results during its normal tick. A sent
+result keeps the original Slack timestamp. An uncertain or in-flight result prevents an automatic resend.
 
-Only when its absence is confirmed may the one row go back for a single new try:
-
-```sql
-UPDATE slack_posts SET state='ready', error=NULL WHERE message_id='<id>';
-```
-
-Never delete an event or a post: the row is the dedupe record. A `failed` post stays failed;
-fix the cause (a scope, a channel the app was removed from) and set that one row `ready` if the
-reply should still go out. Parameterize values; never interpolate Slack text.
+The new gateway uses `slack_posts` only to read legacy results. A later release will remove it. Replace any
+separately supervised legacy gateway during the upgrade so it stops claiming posts before the two-minute hold ends.
 
 ## What the tests cover
 

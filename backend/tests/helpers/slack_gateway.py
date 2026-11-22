@@ -72,6 +72,7 @@ USERS = {
         "profile": {"email": "guest@acme.example"},
     },
     "U6": {"id": "U6", "team_id": TEAM, "name": "gone", "deleted": True, "profile": {"email": "cara@acme.example"}},
+    "UC": {"id": "UC", "team_id": TEAM, "profile": {"email": "cara@acme.example"}},
     "U7": {"id": "U7", "team_id": TEAM, "name": "somebot", "is_bot": True, "profile": {"email": ""}},
     # A Slack Connect member of another workspace, with a acme.example address on the roster.
     "U8": {"id": "U8", "team_id": "T0OTHER", "name": "ben-elsewhere", "profile": {"email": "ben@acme.example"}},
@@ -113,9 +114,11 @@ class FakeSlack:
 
     def conversations_info(self, channel):
         self.calls.append(("conversations.info", channel))
+        if channel == DM or (channel.startswith("D0") and channel[2:] in USERS):
+            return {"id": channel, "is_im": True, "user": "U1" if channel == DM else channel[2:]}
         if channel not in CHANNELS:
             raise G.SlackError("conversations.info", "channel_not_found")
-        return CHANNELS[channel]
+        return {"is_ext_shared": False, **CHANNELS[channel]}
 
     def conversations_list(self):
         self.calls.append(("conversations.list",))

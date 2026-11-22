@@ -643,6 +643,7 @@ def scrub_page_task(c, tid):
     )
     for (mid,) in messages:
         c.execute("UPDATE messages SET body=?,revision=revision+1 WHERE id=?", (REMOVED_PAGE, mid))
+        H._withdraw_queued_comment_copies(c, mid)
     for attempt in attempts:
         aid = attempt["id"]
         c.execute("DELETE FROM deltas WHERE attempt_id=?", (aid,))

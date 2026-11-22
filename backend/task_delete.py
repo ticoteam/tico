@@ -111,7 +111,6 @@ CONVERSATION_WORK = (
 # Delivery bookkeeping for the messages: kept with them.
 MESSAGE_ROWS = (
     ("message_assets", "message_id"),
-    ("slack_posts", "message_id"),
     ("slack_digests", "message_id"),
     ("update_queue", "message_id"),
     ("task_file_reviews", "comment_id"),
@@ -365,6 +364,14 @@ def delete_tasks(c, ids, apply=False, actor=None, keep_work=False):
                 task.get("readers"),
             ),
         )
+        from . import outbound_slack
+
+        post_ids = set(_column(c, "SELECT id FROM outbound_actions WHERE channel='slack' AND id IN ({})", msgs))
+        post_ids.update(
+            r[0] for r in c.execute("SELECT id FROM outbound_actions WHERE channel='slack' AND task_id=?", (tid,))
+        )
+        for mid in post_ids:
+            outbound_slack.withdraw(c, mid)
         for table, column in MESSAGE_ROWS:
             _delete(c, table, column, msgs)
         for table, column in CONVERSATION_ROWS:
