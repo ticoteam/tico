@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from setup import envfile, hosted, state, verify
+from setup import cli, envfile, hosted, state, verify
 from setup.remote import Result
-from setup.tests.fakes import FakeShell
+from setup.tests.fakes import CaptureIO, FakeShell
 from setup.tests.helpers.hosted import DOMAIN, HOSTED, INVITE, ZONE, env_sent, go, link_token, over_ssh
 
 
@@ -139,6 +139,39 @@ def test_no_support_turns_the_presets_support_off():
         ["--dry-run", "--target", "aws", "--hosted", "own", "--preset", "recommended", "--no-support", *HOSTED]
     )
     assert code == 0 and "TICO_SUPPORT=off" in out and "Tico Support off" in out
+
+
+def test_a_rerun_without_no_support_keeps_the_servers_support_off():
+    argv = ["--target", "ssh", "--ssh", "root@203.0.113.7", "--yes", "--hosted", "own", "--preset", "recommended"]
+    argv += [*HOSTED, "--company", "Acme"]
+    first = FakeShell()
+    assert go([*argv, "--no-support"], deps=over_ssh(first))[0] == 0
+    assert env_sent(first)["TICO_SUPPORT"] == "off"
+    again = FakeShell()
+    assert go(argv, deps=over_ssh(again))[0] == 0
+    assert env_sent(again)["TICO_SUPPORT"] == "off"
+    # The domain typed at the prompt, not given with --domain: still off.
+    prompted, io = FakeShell(), DomainAsked(interactive=True)
+    i = argv.index("--domain")
+    rest = [a for a in argv[:i] + argv[i + 2 :] if a != "--non-interactive"] + ["--skip-dns-wait"]
+    assert cli.main(rest, deps=over_ssh(prompted), io=io) == 0, io.text
+    assert io.asked and env_sent(prompted)["TICO_SUPPORT"] == "off"
+    # ... and without --preset again: the saved choice still reaches the server.
+    bare, io = FakeShell(), DomainAsked(interactive=True)
+    rest = [a for a in rest if a not in ("--preset", "recommended")]
+    assert cli.main(rest, deps=over_ssh(bare), io=io) == 0, io.text
+    assert env_sent(bare)["TICO_SUPPORT"] == "off"
+
+
+class DomainAsked(CaptureIO):
+    def __init__(self, interactive=False):
+        super().__init__(interactive)
+        self.asked = []
+
+    def ask(self, question, default="", secret=False):
+        self.asked.append(question)
+        assert len(self.asked) < 20, self.asked
+        return DOMAIN if "domain" in question.lower() else default
 
 
 def test_self_hosted_installs_leave_the_mark_and_the_preset_unset(monkeypatch):

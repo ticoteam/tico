@@ -179,7 +179,7 @@ class Settings:
     # sha256 of the setup handoff secret from TICO_SETUP_HANDOFF (hosted.read_handoff); the secret is never kept here
     setup_handoff_hash: str = ""
     preset: str = ""  # recommended: subscriptions plus Gateway, Support
-    support: str = ""  # with the preset: on, or off with --no-support
+    support: str = ""  # with the preset: on, or off with --no-support (kept off on a re-run)
     gateway_invite: str = ""
     inbound_key: str = ""  # existing company Inbox credential; setup never issues one
     inbound_url: str = ""  # optional server endpoint; blank keeps the server's HQ default
@@ -296,6 +296,8 @@ class Settings:
                 TICO_SUPPORT=self.support or "on",
                 TICO_GATEWAY_INVITE=self.gateway_invite,
             )
+        if self.support == "off":  # an install that turned Support off keeps it off, with or without the preset again
+            e["TICO_SUPPORT"] = "off"
         if self.company_file_data and self.plan_bucket:
             # Only where it is and its sha256: the server copies the plan to a file at first boot (remote.py pull-env.sh).
             e.update(

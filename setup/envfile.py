@@ -26,6 +26,12 @@ def render(values: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def keys(text: str) -> list[str]:
+    """The keys of a .env render() wrote, line by line as sh and grep see it: split on \\n only (a value may hold other
+    line separators, such as U+2028)."""
+    return [line.split("=", 1)[0] for line in text.split("\n") if "=" in line and not line.startswith("#")]
+
+
 def parse(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for line in text.splitlines():

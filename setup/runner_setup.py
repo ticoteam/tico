@@ -19,6 +19,14 @@ from .wizard import Deps, host_of
 TARGETS = {k: v for k, v in st.TARGETS.items() if k in ("ssh", "aws", "command")}
 
 
+# scripts/install.sh --runner's own checks of --url, --code and --label (a test keeps them the same).
+INSTALLER_JOIN_CHECKS = {
+    "TICO_JOIN_URL": r"^https?://[A-Za-z0-9.-]+(:[0-9]+)?$",
+    "TICO_JOIN_CODE": r"^[A-Za-z0-9_-]+$",
+    "TICO_JOIN_LABEL": r'^[^"$`\\]{1,80}$',
+}
+
+
 def join_env(url: str, code: str, label: str) -> str:
     """Sourced by sh, so values are shell-quoted; removed as soon as the container has been started."""
     q = shlex.quote
@@ -76,8 +84,22 @@ def bootstrap_script(
     L += [f"mkdir -p {d}", "umask 077"]
     if env_param:
         name, region = env_param
+        failed = f"tico-setup runner: FAILED: could not read the join settings in {name}"
+        # Checked before join_lines, which on --rejoin removes the running runner and its .env. A command substitution:
+        # aws's own exit status, and its stdout a pipe (the snap aws-cli can write nothing to a file).
         L += [
-            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption --query Parameter.Value --output text > {d}/join.env"
+            f"if ! join=$(aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
+            "--query Parameter.Value --output text); then",
+            f"  echo {q(failed)} >&2; exit 1",
+            "fi",
+            f"printf '%s\\n' \"$join\" > {d}/join.env",
+            # Only the three assignments, read in a subshell and held to install.sh's own checks: nothing is removed
+            # until the installer would take them.
+            f"if grep -qvE '^TICO_JOIN_(URL|CODE|LABEL)=.' {d}/join.env || ! ( set -a; . {d}/join.env; "
+            + " && ".join(f'printf "%s" "${{{k}:-}}" | grep -Eq {q(rx)}' for k, rx in INSTALLER_JOIN_CHECKS.items())
+            + " ) >/dev/null 2>&1; then",
+            f"  rm -f {d}/join.env; echo {q(failed + ' (missing or malformed values)')} >&2; exit 1",
+            "fi",
         ]
     else:
         L += [f"echo {env_b64} | base64 -d > {d}/join.env"]

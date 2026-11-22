@@ -9,7 +9,7 @@ import shlex
 import subprocess
 import time
 from dataclasses import dataclass
-from typing import Callable, Protocol
+from typing import Callable, Protocol, Sequence
 
 from . import contract
 
@@ -382,6 +382,7 @@ def bootstrap_script(
     compose_url: str,
     env_b64: str = "",
     env_param: tuple[str, str] | None = None,
+    env_keys: Sequence[str] = (),
     wait_for_ip: str = "",
 ) -> str:
     """One script that installs Docker and starts Tico. Used as EC2 user-data (env from a SecureString parameter)
@@ -397,18 +398,7 @@ def bootstrap_script(
         L += [f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml"]
     if env_param:
         name, region = env_param
-        L += [
-            f"cat > {d}/pull-env.sh <<'EOS'",
-            "#!/bin/sh",
-            "set -eu",
-            "umask 077",
-            f"aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
-            f"--query Parameter.Value --output text > {d}/.env.new && mv {d}/.env.new {d}/.env",
-            *plan_copy_lines(),
-            "EOS",
-            f"chmod 700 {d}/pull-env.sh",
-            f"{d}/pull-env.sh",
-        ]
+        L += [*pull_env_install_lines(name, region, env_keys), f"{d}/pull-env.sh"]
     else:
         L += ["umask 077", f"echo {env_b64} | base64 -d > {d}/.env"]
     L += [f"chmod 600 {d}/.env"]
@@ -457,7 +447,48 @@ def finish_boot_guard_lines() -> list[str]:
     ]
 
 
-def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
+# Keys every server .env has (Settings.to_env); a stored parameter read back without them is not the server's settings.
+ENV_REQUIRED_KEYS = ("TICO_DOMAIN", "TICO_AUTH_PROXY")
+
+
+def pull_env_install_lines(name: str, region: str, keys: Sequence[str] = ()) -> list[str]:
+    """Install pull-env.sh (by rename): read the stored parameter into .env, then copy the starter plan. `keys` are the
+    keys of the env setup just stored. .env is replaced only by a complete read: a failed or partial one keeps the old
+    .env and fails loudly, so a re-run never leaves the server restart-looping on an empty .env."""
+    d, q = contract.REMOTE_DIR, shlex.quote
+    want = " ".join(q(k) for k in dict.fromkeys([*ENV_REQUIRED_KEYS, *keys]))
+    failed = f"tico-setup: FAILED: could not read the settings in {name}; kept the old .env"
+    return [
+        f"cat > {d}/pull-env.sh.$$ <<'EOS'",
+        "#!/bin/sh",
+        "set -eu",
+        "umask 077",
+        f'new=$(mktemp {d}/.env.new.XXXXXX)',
+        'trap \'rm -f "$new"\' EXIT',
+        # A command substitution: aws's own exit status, and its stdout a pipe (the snap aws-cli on Ubuntu can write
+        # nothing when its stdout is a file).
+        f"if ! env_text=$(aws ssm get-parameter --region {q(region)} --name {q(name)} --with-decryption "
+        "--query Parameter.Value --output text); then",
+        f"  echo {q(failed)} >&2",
+        "  exit 7",
+        "fi",
+        'printf \'%s\\n\' "$env_text" > "$new"',
+        f"for key in {want}; do",
+        '  grep -q "^$key=" "$new" || { echo '
+        + q(f"tico-setup: FAILED: the settings in {name} lack")
+        + ' "$key; kept the old .env" >&2; exit 7; }',
+        "done",
+        f'mv "$new" {d}/.env',
+        *plan_copy_lines(),
+        "EOS",
+        f"chmod 700 {d}/pull-env.sh.$$",
+        f"mv {d}/pull-env.sh.$$ {d}/pull-env.sh",
+    ]
+
+
+def rerun_script(
+    *, compose: bytes | None, compose_url: str, plan: bool, env_param: tuple[str, str], env_keys: Sequence[str] = ()
+) -> str:
     """A re-run on an existing AWS server, by SSM: refresh the env and restart, or finish a first boot that stopped. With
     the plan bucket it first installs this release's compose.yaml, the folder it mounts and the copy step (a server set up
     before them has none), pulls this release's image, and checks that the running app reads the plan: setup deletes
@@ -472,9 +503,8 @@ def rerun_script(*, compose: bytes | None, compose_url: str, plan: bool) -> str:
             else f"curl -fsSL {q(compose_url)} -o {d}/compose.yaml.new",
             f"mv {d}/compose.yaml.new {d}/compose.yaml",
         ]
-    L += [f"{d}/pull-env.sh"]
-    if plan:
-        L += plan_copy_lines()
+    # This release's pull-env.sh, with the plan's copy step: the one from the server's first boot may predate both.
+    L += [*pull_env_install_lines(*env_param, env_keys), f"{d}/pull-env.sh"]
     L += [
         f"cd {d}",
         *(["docker compose pull --quiet", *plan_read_lines(running=False)] if plan else []),

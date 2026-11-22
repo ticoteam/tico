@@ -657,7 +657,8 @@ def plan_lines(s: Settings, zone: dnsmod.Zone | None, records: list[dnsmod.Recor
     if s.backup == "aws":
         add("Backups: create the backup storage on AWS")
         if owned.strict(s.asset_prefix):
-            names = awsmod.Names(s.asset_prefix, s.install_id)
+            # A dry run of a new install has no id yet; its bucket name ends in the one the real run makes.
+            names = awsmod.Names(s.asset_prefix, s.install_id or "<install id>")
             L += [
                 f"       - {x}"
                 for x in bk.aws_plan_lines(
@@ -937,7 +938,10 @@ def run(args, io: IO, deps: Deps) -> int:
         found, found_env = state.load(asked.domain)
         found = state.record(found)
         if not found or not (strict or owned.strict(found.get("asset_prefix", ""))):
-            return asked  # a default-prefix install's prompted domain keeps today's behaviour
+            # A default-prefix install's prompted domain keeps today's behaviour, but never turns Support back on.
+            if found.get("support") == "off":
+                asked.support = "off"
+            return asked
         saved = found
         again = st.from_saved(found, found_env)
         again.cf_token, again.tunnel_token = s.cf_token, s.tunnel_token or again.tunnel_token
@@ -1325,6 +1329,7 @@ def _aws(
         compose=compose,
         compose_url=url,
         env_param=(d.param_name, s.aws_region),
+        env_keys=envfile.keys(env_text),
         wait_for_ip=ip,
     )
     iid, created = d.launch_or_reuse(prep, script)
@@ -1373,9 +1378,14 @@ def _aws(
                 "or --compose-ref with a full commit SHA."
             )
             return None
-        res = runner.run(
-            f"sh -c {shlex.quote(remote.rerun_script(compose=compose, compose_url=url, plan=bool(plan_s3)))}"
+        rerun = remote.rerun_script(
+            compose=compose,
+            compose_url=url,
+            plan=bool(plan_s3),
+            env_param=(d.param_name, s.aws_region),
+            env_keys=envfile.keys(env_text),
         )
+        res = runner.run(f"sh -c {shlex.quote(rerun)}")
         if res.returncode:
             io.say(envfile.scrub(res.stderr[-400:], s.secrets()))
             return None
@@ -1648,6 +1658,7 @@ def doctor(args, io: IO, deps: Deps) -> int:
         resolvers=deps.public_resolvers(),
         shell=runner,
         runner_host=s.runner(),
+        sleep=deps.sleep,
     )
     show(io, checks)
     ok = all(c.ok for c in checks)
