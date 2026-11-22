@@ -315,7 +315,7 @@ def test_intake_verifies_exact_sender_and_keeps_unverified_mail_in_owner_triage(
 
 
 def test_intake_ignores_machines_and_does_not_suggest_public_mail_domains(watched):
-    api, gmail, _ = watched
+    api, gmail, ordinary = watched
     store = api.app.state.store
     with store.transaction() as c:
         ES.upsert(c, "human:ana", "organization", match={"domain": "gmail.com"})
@@ -324,6 +324,7 @@ def test_intake_ignores_machines_and_does_not_suggest_public_mail_domains(watche
         ("list", "person@customer.example", {"List-Id": "support.customer.example"}),
         ("bulk", "person@customer.example", {"List-Unsubscribe": "<mailto:list@customer.example>"}),
         ("bounce", "mailer-daemon@customer.example", {}),
+        ("null-path", "person@customer.example", {"Return-Path": "<>"}),
         ("own", BOX, {}),
         ("free", "someone@gmail.com", {"Authentication-Results": "mx.google.com; dmarc=pass header.from=gmail.com"}),
     ):
@@ -338,6 +339,7 @@ def test_intake_ignores_machines_and_does_not_suggest_public_mail_domains(watche
         )
     check(api, T0)
     with time_machine.travel(T0, tick=False):
+        assert heard(api, ordinary) == []
         store.automations.drain()
     with store.read() as c:
         (run,) = c.execute("SELECT id FROM automation_runs WHERE trigger_ref LIKE 'intake:%'")
@@ -347,6 +349,37 @@ def test_intake_ignores_machines_and_does_not_suggest_public_mail_domains(watche
         text = H.task_words(c, task["id"])
         assert "/#all/free" in text
         assert "Possible contact" not in text
+        assert not ES.matching(c, "organization", {"domain": "customer.example"})
+
+
+def test_intake_distrusts_other_domains_and_hands_over_held_arrivals_at_deadline(watched):
+    api, gmail, _ = watched
+    store = api.app.state.store
+    check(api, T0)
+    with store.transaction() as c:
+        ES.upsert(c, "human:ana", "person", match={"email": "person@customer.example"})
+        c.execute("UPDATE mailboxes SET watching_since_at='invalid' WHERE address=?", (BOX,))
+    arrival = T0 + timedelta(minutes=3)
+    for mid, facts in (
+        ("upstream", {"Authentication-Results": "other.example; dmarc=pass header.from=customer.example"}),
+        ("wrong-signer", {"Authentication-Results": "mx.google.com; dkim=pass header.d=other.example"}),
+        ("duplicate-from", {**DMARC_PASS, "from": "person@other.example"}),
+    ):
+        gmail.add(BOX, mid, epoch=epoch(arrival), labels=("INBOX", "Tico Intake"), headers=facts)
+    assert check(api, arrival) == 3
+    with time_machine.travel(arrival, tick=False):
+        with store.transaction() as c:
+            aid = c.execute("SELECT automation_id FROM automation_runs WHERE trigger_ref LIKE 'intake:%'").fetchone()[0]
+            automations._hold(c, automations._row(c, aid), "flood")
+        assert store.automations.drain() == 0
+    deadline = arrival + timedelta(hours=outside_intake.DEADLINE_HOURS)
+    with time_machine.travel(deadline, tick=False):
+        automations.tick(store, deadline, drain=False)
+        assert store.automations.drain() == 3
+    with store.read() as c:
+        assert not c.execute("SELECT 1 FROM conversations WHERE audience='entity'").fetchone()
+        tasks = c.execute("SELECT title,owner_id FROM tasks WHERE occurrence_step='triage'").fetchall()
+        assert len(tasks) == 3 and all(tuple(task) == ("Triage unverified sender", "human:ana") for task in tasks)
 
 
 def test_entity_and_inbox_gate_threads_subthreads_and_history_before_paging(watched):

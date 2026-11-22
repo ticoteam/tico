@@ -2921,15 +2921,19 @@ class Hub:
             if run["claim_token"] != token:
                 log.warning("automation run %s: its claim lapsed before it started; left to the claim that has it", rid)
                 return False
-            intake = run["automation_id"].startswith(INTAKE_AUTOMATION)
-            if not intake:
-                row = c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone()
-                version = c.execute(
-                    "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
-                    (run["automation_id"], run["version"]),
-                ).fetchone()
-        if intake:
+            if run["automation_id"].startswith(INTAKE_AUTOMATION):
+                flow_rows = None
+            else:
+                flow_rows = (
+                    c.execute("SELECT * FROM automations WHERE id=?", (run["automation_id"],)).fetchone(),
+                    c.execute(
+                        "SELECT flow FROM automation_versions WHERE automation_id=? AND n=?",
+                        (run["automation_id"], run["version"]),
+                    ).fetchone(),
+                )
+        if flow_rows is None:
             return self._go_intake(run, token)
+        row, version = flow_rows
         state = json.loads(run["saved_state"] or "{}")
         try:
             # What it does comes from the run's version; its owner, cap and the rest are as they are now.
@@ -3478,7 +3482,8 @@ def tick(store, at=None, drain=True):
         c.execute(
             "UPDATE automation_runs SET status='queued',finished_at=NULL,wake_at=NULL,"
             "saved_state=json_set(saved_state,'$.recover',1) "
-            "WHERE automation_id GLOB ? AND ((status='held' AND started_at<=?) OR (status='failed' AND wake_at<=?))",
+            "WHERE automation_id GLOB ? AND trigger_ref LIKE 'intake:%' "
+            "AND ((status='held' AND started_at<=?) OR (status='failed' AND wake_at<=?))",
             (intake_pattern, H.shift(now, hours=-DEADLINE_HOURS), now),
         )
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
@@ -3498,7 +3503,7 @@ def tick(store, at=None, drain=True):
                     f"UPDATE automation_runs SET status=CASE WHEN ? THEN 'queued' ELSE {RUNNABLE} END,"
                     "claimed_at=NULL,claim_token=NULL,saved_state=? "
                     "WHERE id=?",
-                    (intake and state.get("recover") is True, json.dumps(state, default=str), run["id"]),
+                    (intake and bool(state.get("recover")), json.dumps(state, default=str), run["id"]),
                 )
         # One dropped mid-step whose step was never saved (the server stopped first): it is not resumed, but what its
         # turns cost meanwhile is charged to it and their holds released.

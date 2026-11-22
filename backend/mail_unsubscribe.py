@@ -25,6 +25,7 @@ from typing import Any, cast
 from urllib.parse import urlsplit
 
 from . import egress, gmail_live, mail_facts, mailbox_access
+from .mail_lib.gmail import dkim_tags
 from .store import H, Problem, Store
 
 Conn = sqlite3.Connection
@@ -38,16 +39,6 @@ TRANSPORT: object = None  # tests stand in for the network here (egress.post `tr
 
 class Unsupported(ValueError):
     """The message offers no one-click unsubscribe Tico may use: a person unsubscribes by hand."""
-
-
-def _tags(value: str) -> dict[str, str]:
-    """A DKIM tag list (`v=1; a=rsa-sha256; ...`) as {tag: value}, folding whitespace removed."""
-    out: dict[str, str] = {}
-    for part in value.split(";"):
-        name, eq, tagged = part.partition("=")
-        if eq:
-            out[name.strip().lower()] = re.sub(r"\s+", "", tagged)
-    return out
 
 
 # dkimpy's `dnsfunc(name, timeout=5)`, the signer's key record: tests stand in for DNS here
@@ -68,7 +59,7 @@ def verify_dkim(raw: bytes) -> bool:
     verifier: Any = dkim.DKIM(raw, timeout=5)
     dnsplug: Any = dkim.dnsplug  # dkimpy ships no type information for its functions
     for index, signature in enumerate(msg.get_all("DKIM-Signature", [])[:10]):
-        tags = _tags(str(signature))
+        tags = dkim_tags(str(signature))
         domain = tags.get("d", "").lower()
         signed = {name.strip().lower().encode() for name in tags.get("h", "").split(":")}
         if "l" in tags or not domain or not (sender == domain or sender.endswith("." + domain)) or not SIGNED <= signed:

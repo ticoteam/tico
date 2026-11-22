@@ -27,7 +27,7 @@ A thread's audience is one of these:
 | `task` | whoever may read the task it belongs to |
 | `participants` | the people in an older direct conversation, and the company owner |
 | `meeting` | the people who may see the meeting, as they do today |
-| `entity` | readers of both the Directory entity and the outside inbox on the root thread |
+| `entity` | people who can read both the Directory entity and the outside inbox on the root thread |
 
 - A new thread is private to its members. Its starter, or an admin, can make it public to a group or to the company.
   Making a thread public changes its audience, so it needs no Write on the group.

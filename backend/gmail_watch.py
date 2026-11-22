@@ -147,6 +147,7 @@ def _message(item: Json, labels: dict[str, str], domains: list[str], known: bool
         known_sender=known,
         send_facts=dict(item.get("send_facts") or {}),
         headers=dict(item.get("headers") or {}),
+        from_header_count=item.get("from_header_count", 0),
         dkim_signatures=list(item.get("dkim_signatures") or []),
     )
 

@@ -25,9 +25,9 @@ The server watches every active mailbox its Workspace key or a person's own Conn
 (`backend/gmail_watch.py`, a drain worker): about
 every 90 seconds it asks Gmail for the history since the mailbox's last check, reads each new message once, runs the
 mailbox's message automations, notes bounces and feeds the Directory, then saves its cursor. Drafts are not
-heard. A mailbox's first check starts its watch a day back and hears all of that day's mail, oldest first, over as many
-passes as it takes; older mail never starts a run. A failed check keeps where it got to and shows why on Tools > the
-mailbox; a refused Google sign-in also asks its person to reconnect. No computer touches mail: the server also sends
+heard. A mailbox's first check starts its watch a day back. Catch-up lists at most 20,000 messages and processes those
+oldest first over as many passes as it takes. Older mail never starts a run. A failed check keeps where it got to and
+shows why on Tools > the mailbox. A refused Google sign-in also asks its person to reconnect. The server also sends
 every queued email and carries out every automation mail action. A finished automation run keeps no message body or
 snippet.
 
@@ -41,6 +41,8 @@ People need access to both the contact and the inbox to read the thread. Matched
 which also checks access to the source of each recorded activity.
 Relationship-agent wakes are deferred until relationship run lanes ship. History is available through
 `tico contacts activity <ref>`, `tico_contacts_activity` in MCP, and `GET /api/v2/entities/activity`.
+The inbox owner can release or drop held runs through `tico automation held <id> release|drop`. An arrival
+still held at its 24-hour deadline goes to the owner for triage.
 
 ## Organizing live
 

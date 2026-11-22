@@ -6,14 +6,16 @@ import json
 import re
 import sqlite3
 import uuid
+from datetime import timezone
 from email.utils import getaddresses
 from types import SimpleNamespace
 from typing import Any, cast
 from urllib.parse import quote
 
 from . import auth, mailbox_access, threads
-from .entities.ingest import _automated
+from .entities.ingest import automated
 from .entities import store as entities
+from .mail_lib.gmail import dkim_tags
 from .store import H
 
 GMAIL_LABEL = "Tico Intake"
@@ -28,8 +30,12 @@ _AUTH_TOKEN = re.compile(r'"(?:\\.|[^"\\])*"|\\.|[();]|[^\s();"]+')
 def _verified_from(message: SimpleNamespace, sender: str) -> bool:
     """Use the first Authentication-Results field, which Gmail's receiving MX puts ahead of upstream results."""
     headers = cast("dict[str, str]", message.headers)
-    raw = headers.get("authentication-results", "").lower()
-    if not raw or [address.lower() for _, address in getaddresses([str(message.from_header)])] != [sender]:
+    raw = headers.get("authentication-results", "")
+    if (
+        not raw
+        or message.from_header_count != 1
+        or [address.lower() for _, address in getaddresses([str(message.from_header)])] != [sender]
+    ):
         return False
     domain = sender.rpartition("@")[2]
     clauses: list[list[str]] = [[]]
@@ -46,27 +52,28 @@ def _verified_from(message: SimpleNamespace, sender: str) -> bool:
                 clauses.append([])
             else:
                 clauses[-1].append(token)
-    if depth or clauses[0] != ["mx.google.com"]:
+    if depth or [token.lower() for token in clauses[0]] != ["mx.google.com"]:
         return False
     for clause in clauses[1:]:
         if not clause:
             continue
         result, *properties = clause
-        if result == "dmarc=pass" and f"header.from={domain}" in properties:
+        lowered = [prop.lower() for prop in properties]
+        if result.lower() == "dmarc=pass" and f"header.from={domain}" in lowered:
             return True
-        if result != "dkim=pass":
+        if result.lower() != "dkim=pass":
             continue
-        if f"header.d={domain}" in properties:
+        if f"header.d={domain}" in lowered:
             return True
         # Gmail commonly reports header.b in place of header.d. Resolve it to exactly one DKIM signature.
-        prefix = next((p.removeprefix("header.b=") for p in properties if p.startswith("header.b=")), "")
+        prefix = next((p.partition("=")[2] for p in properties if p.lower().startswith("header.b=")), "")
         if not prefix:
             continue
         signers: list[str] = []
         for signature in cast("list[str]", message.dkim_signatures):
-            tags = dict(re.findall(r"(?:^|;)\s*([a-z]+)\s*=\s*([^;]+)", signature.lower()))
-            if "".join(tags.get("b", "").split()).startswith(prefix):
-                signers.append(tags.get("d", "").strip())
+            tags = dkim_tags(signature)
+            if tags.get("b", "").startswith(prefix):
+                signers.append(tags.get("d", "").lower())
         if signers == [domain]:
             return True
     return False
@@ -76,30 +83,41 @@ def _owner(c: sqlite3.Connection, box: dict[str, Any]) -> str:
     person = str(box.get("person_id") or "")
     if not person or box["kind"] != "personal" or standing(c, person):
         return ""
-    if not mailboxes.feeds_directory(c, box) or mailboxes.level(c, f"human:{person}", box["address"]) == "none":
+    if mailboxes.level(c, f"human:{person}", box["address"]) == "none":
         return ""
     return person
 
 
 def from_gmail(c: sqlite3.Connection, box: dict[str, Any], message: SimpleNamespace, watch: str) -> bool:
-    """Accept only inbound, outside mail explicitly labeled for intake in a watched inbox."""
+    """Take over routing for inbound outside mail labeled for intake in an enrolled inbox."""
     labels = set(cast("list[str]", message.labels))
     if GMAIL_LABEL not in labels or labels.intersection(("SENT", "SPAM", "TRASH")) or message.is_internal:
         return False
     since = hub.parse_ts(watch)
+    if since and since.tzinfo is None:
+        since = since.replace(tzinfo=timezone.utc)
     if since and 0 < int(message.epoch) < since.timestamp():
         return False
     sender = str(message.from_addr)
+    owner = _owner(c, box)
+    if (
+        not owner
+        or not mailboxes.feeds_directory(c, box)
+        or "@" not in sender
+        or not message.thread_id
+        or not message.msg_id
+    ):
+        return False
     headers = cast("dict[str, str]", message.headers)
     if (
         sender == box["address"]
-        or _automated(sender, {**vars(message), "has_unsubscribe": "list-unsubscribe" in headers})
+        or "list-id" in headers
+        or ("auto-submitted" in headers and headers["auto-submitted"].strip().lower() != "no")
+        or headers.get("return-path", "").strip() == "<>"
+        or automated(sender, {**vars(message), "has_unsubscribe": "list-unsubscribe" in headers})
         or message.send_facts.get("delivery-status")
     ):
-        return False
-    owner = _owner(c, box)
-    if not owner or "@" not in sender or not message.thread_id or not message.msg_id:
-        return False
+        return True
     if not entities.is_suppressed(c, "email", sender):
         save_message(
             c,
