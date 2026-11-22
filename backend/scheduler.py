@@ -659,6 +659,12 @@ class Scheduler:
             webhook_delivery.ensure()  # a delivery worker that died comes back on the next tick
         except Exception as exc:
             failures.append({"webhook_delivery": type(exc).__name__})
+        try:
+            from . import outbound_actions
+
+            outbound_actions.ensure()  # the outbound gate's worker, if it died
+        except Exception as exc:  # noqa: BLE001 - one step's fault goes on this pass's health row
+            failures.append({"outbound_actions": type(exc).__name__})
         self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Deadline work that cannot wait for Clean up (backend/maintenance_steps/clean_up.py holds the pruning). Marked

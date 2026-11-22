@@ -20,7 +20,11 @@ def _fresh_store(tmp_path):
 
 
 # Columns whose CHECK wants a real value, not a placeholder.
-OVERRIDES = {("fin_payments", "method"): "ach", ("fin_cards", "kind"): "standing"}
+OVERRIDES = {
+    ("fin_payments", "method"): "ach",
+    ("fin_cards", "kind"): "standing",
+    ("outbound_actions", "audience"): "internal",
+}
 
 
 def _required(conn, table, skip):

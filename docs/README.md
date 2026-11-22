@@ -45,7 +45,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 ## Developer or computer operator
 
 - [Register a computer](install.md#add-computers-to-run-your-bots), its logins and usage on [Computers](computers.md), [Harnesses](harnesses.md) and [Environments](environments.md).
-- [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [Webhooks](webhooks.md) (recipes for [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md)), [System routines](system-routines.md), [Maintenance](maintenance.md), [Heartbeat](heartbeat.md), [Agent context](agent-context.md), [Watchers](watchers.md),
+- [Build a bot](creating-bots.md), [Visuals in replies](visuals.md), [Routines](routines.md), [Outbound actions](outbound-actions.md), [Webhooks](webhooks.md) (recipes for [GitHub](webhooks-github.md), [Stripe](webhooks-stripe.md), [Zapier, Make and n8n](webhooks-zapier-make-n8n.md)), [System routines](system-routines.md), [Maintenance](maintenance.md), [Heartbeat](heartbeat.md), [Agent context](agent-context.md), [Watchers](watchers.md),
   [Sessions](sessions.md) and [Task worktrees](worktrees.md).
 - [The `tico` CLI from a terminal](cli.md) (profiles for several companies, `--fields`, `tico events tail`, exit codes).
 - [API](api.md), [Custom frontend](custom-frontend.md), [Listening API](listening.md#read-and-save),

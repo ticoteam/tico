@@ -81,6 +81,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Sleep when idle | A server Tico hosts stops after quiet hours and starts again on a webhook, a routine or a sign-in (backend/sleep_idle.py). |
 | Screening | Prompt-injection screening of outside text at the doors it comes in by (backend/screening.py). |
 | Notices | Notices from Tico Team: the ones that came through the Gateway relay and the current one from the release check. |
+| Outbound actions | The outbound gate ([guide](outbound-actions.md)): one queue for sends and outside writes, each decided by the company's policy per channel and audience, approved once where it asks first, and settled from the provider's answer. |
 | Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
 | Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
 | Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |

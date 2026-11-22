@@ -111,6 +111,20 @@ def _growth_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") ->
     return growth_proposals.ok_given(conn, grant, ctx)
 
 
+def _outbound_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
+    from . import outbound_actions
+
+    module: Any = outbound_actions  # its functions are typed loosely
+    return module.ok_given(conn, grant, ctx)
+
+
+def _outbound_may_ok(conn: "sqlite3.Connection", person: str, grant: Row) -> str | None:
+    from . import outbound_actions
+
+    module: Any = outbound_actions  # its functions are typed loosely
+    return module.may_ok(conn, person, grant)
+
+
 def _rule_ok(conn: "sqlite3.Connection", grant: Row, ctx: "Context | None") -> object:
     from . import org_rules
 
@@ -208,6 +222,7 @@ ON_OK: dict[str, Callable[..., object]] = {
     "finance": _finance_ok,
     "growth": _growth_ok,
     "letter": _letter_ok,
+    "outbound": _outbound_ok,
     "proposal": _proposal_ok,
     "rule": _rule_ok,
     "support": _support_ok,
@@ -227,6 +242,7 @@ OWNED = (
     "finance",
     "growth",
     "rule",
+    "outbound",
 )
 
 # Who may OK a subject of this kind under the subject's own rule, called as fn(conn, person, grant) -> the refusal's
@@ -240,6 +256,7 @@ MAY_OK: dict[str, Callable[..., str | None]] = {
     "proposal": _proposal_may_ok,
     "growth": _growth_may_ok,
     "file": _file_may_ok,
+    "outbound": _outbound_may_ok,
 }
 CHECKS_ITSELF = ("email_send", "letter")
 # Kinds whose OK anyone its MAY_OK rule lets OK it may give, not only the person it waits on: a bot's Growth proposal is
@@ -291,6 +308,7 @@ FILED_TITLES: dict[str, str] = {
     "publish": "Publish to the roadmap",
     "finance": "OK a Finance action",
     "growth": "Add to Growth",
+    "outbound": "Approve a send",
 }
 
 

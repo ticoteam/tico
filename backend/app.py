@@ -645,6 +645,12 @@ def _lifespan(auth, execution, flight, onboarding, recorder, get_screen_sessions
 
         # A rehearsal never runs them, whatever else says so (docs/install.md, "Rehearse a migration").
         timers = settings.scheduler_enabled and not settings.rehearsal
+        if timers:
+            # The outbound gate's worker (backend/outbound_actions.py): rung by each commit that queues an action. A
+            # rehearsal copy never runs it, and a dev copy empties its table.
+            from . import outbound_actions
+
+            outbound_actions.start(store)
         # Outgoing webhooks (backend/webhook_delivery.py): a rehearsal copy runs the workers too, only to mark what is
         # due as withheld, so nothing queued there ever waits for a send that cannot happen.
         webhooks_on = timers or settings.rehearsal
@@ -2512,6 +2518,9 @@ def _install_features(
     from . import webhooks
 
     webhooks.install(app, settings, store, auth, mutate)
+    from . import outbound_actions
+
+    outbound_actions.install(app, store, auth, mutate)
     # GitHub App per company: manifest setup, installation tokens for runners (docs/github-app.md).
     from .github_app import install_github_app
 
