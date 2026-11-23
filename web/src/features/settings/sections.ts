@@ -1,11 +1,10 @@
-/* The section list, in the mock's order (pages/8-settings/settings.js NAV). Subscriptions folds into Agents (owner,
-   Nov 19). Account holds what the account menu opens on: you, this device's look, your tokens. */
+/* Account holds what the account menu opens on: you, this device's look, your tokens. */
 export const SECTION_IDS = [
   'general',
   'people',
   'agents',
   'computers',
-  'models',
+  'providers',
   'tasks',
   'contacts',
   'account',
@@ -24,7 +23,7 @@ export const NAV: readonly (readonly [SectionId, string] | null)[] = [
   ['people', 'People'],
   ['agents', 'Agents'],
   ['computers', 'Computers'],
-  ['models', 'Models'],
+  ['providers', 'Providers'],
   ['tasks', 'Tasks'],
   ['contacts', 'Contacts'],
   null,

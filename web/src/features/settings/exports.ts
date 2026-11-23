@@ -1,4 +1,5 @@
 // What the rest of the app may use from Settings and Usage.
+export { ConnectPlan } from './ConnectPlan';
 export { SettingsPage } from './SettingsPage';
 export { UsagePage, type UsageSearch } from './Usage';
 export { SECTION_IDS, isSection, type SectionId } from './sections';

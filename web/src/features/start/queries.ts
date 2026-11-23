@@ -8,11 +8,9 @@ import type {
   GitHubAppSetup,
   GitHubAuthorizeLink,
   GitHubLostKeyReplaced,
-  ModelSubscriptionList,
 } from '@/api/schema';
 import { configQuery, keys, meQuery, queryClient, quietRoot, write } from '@/data';
-
-const enc = encodeURIComponent;
+import { addSubscription, subscriptionsQuery } from '@/features/settings/routing';
 
 /* ---------------------------------------------------------------- where a person lands */
 
@@ -134,107 +132,11 @@ export async function finishSetup(job: string): Promise<void> {
   ]);
 }
 
-/* ---------------------------------------------------------------- a model subscription, one tap */
-
-export type PlanKind = 'claude_token' | 'codex_login';
 export type KeyKind = 'anthropic_key' | 'openai_key';
 
-/** The company's plans and keys; any one lets the agents run. */
-export const subscriptionsQuery = queryOptions({
-  queryKey: ['setup', 'subscriptions'] as const,
-  queryFn: ({ signal }) => api.get<ModelSubscriptionList>('/api/v2/model-subscriptions', { signal }),
-});
-
-/** The sign-in the server started on a computer (backend/model_login.py view), or `waking`: its computer is starting. */
-export interface PlanLogin {
-  kind: PlanKind;
-  id?: string;
-  state?: string;
-  runner_id?: string;
-  url?: string | null;
-  code?: string | null;
-  accepts_code?: boolean;
-  code_sent?: boolean;
-  message?: string | null;
-  name?: string;
-  waking?: boolean;
-}
-
-const LOGIN = ['setup', 'login'] as const;
-const LIVE = new Set(['requested', 'starting', 'waiting', 'finishing']);
-
-export const loginLive = (l: PlanLogin | null | undefined): boolean => !!l && (!l.id || LIVE.has(l.state ?? ''));
-const loginPath = (l: PlanLogin) => `/api/v2/computers/${enc(l.runner_id ?? '')}/logins/${enc(l.id ?? '')}` as const;
-
-/** What the cache keeps of a sign-in: its state, never its one-time code, the provider's page (which can carry the
-    code) or the terminal lines. Those go to the component that shows them, from `readLogin`, and stay in its state. */
-const statusOf = (l: PlanLogin): PlanLogin => {
-  const { url: _url, code: _code, lines: _lines, ...status } = l as PlanLogin & { lines?: unknown };
-  return status;
-};
-const hold = (l: PlanLogin | null) => queryClient.setQueryData<PlanLogin | null>(LOGIN, () => l && statusOf(l));
-
-/** The sign-in's state (no code; see `statusOf`). Set by the writes below and by `readLogin`; never fetched itself. */
-export const loginQuery = queryOptions({
-  queryKey: LOGIN,
-  queryFn: (): PlanLogin | null => queryClient.getQueryData<PlanLogin | null>(LOGIN) ?? null,
-  staleTime: Infinity,
-});
-
-/**
- * One read of the sign-in while it runs. No topic carries a sign-in's steps (backend/model_login.py), so the first run
- * calls this every two seconds (`poll` from @/lib) while the person signs in. The cache takes the state; the whole
- * answer, code and page included, goes back to the caller's component state only.
- */
-export async function readLogin(signal?: AbortSignal): Promise<PlanLogin | null> {
-  const was = queryClient.getQueryData<PlanLogin | null>(LOGIN) ?? null;
-  if (!was || !loginLive(was) || (!was.id && !was.waking)) return was;
-  let next: PlanLogin;
-  try {
-    // Its computer was starting: ask again; the server picks up a sign-in already going.
-    if (!was.id) next = { ...(await api.post<PlanLogin>('/api/v2/model-subscriptions/connect', { kind: was.kind })), kind: was.kind };
-    else next = { ...was, ...(await api.get<PlanLogin>(loginPath(was), { signal })) };
-  } catch (e) {
-    // Gone from the server (a restart ends it); anything else is the server away for a moment.
-    if (!(e instanceof ApiError && e.status === 404)) return was;
-    next = { ...was, state: 'failed', message: null };
-  }
-  // Ended or changed meanwhile (left the first run, a code sent): this answer is old.
-  if (queryClient.getQueryData(LOGIN) !== was) return next;
-  hold(next);
-  if (next.state === 'done') void queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
-  return next;
-}
-
-export async function startConnect(kind: PlanKind): Promise<void> {
-  hold({ kind, state: 'requested' });
-  try {
-    const login = await api.post<PlanLogin>('/api/v2/model-subscriptions/connect', { kind });
-    hold({ ...login, kind });
-  } catch (e) {
-    hold({ kind, id: 'none', state: 'failed', message: e instanceof ApiError ? e.message : null });
-    throw e;
-  }
-}
-
-/** The code the provider's page hands back, for a sign-in that takes one. */
-export async function sendLoginCode(code: string): Promise<void> {
-  const was = queryClient.getQueryData<PlanLogin | null>(LOGIN);
-  if (!was?.id) return;
-  const next = await api.post<PlanLogin>(`${loginPath(was)}/code`, { code });
-  hold({ ...was, ...next });
-}
-
-/** Leaving the first run ends a sign-in still going; nobody is left to finish it. */
-export function cancelConnect(): void {
-  const was = queryClient.getQueryData<PlanLogin | null>(LOGIN);
-  hold(null);
-  if (was?.id && loginLive(was)) void api.post(`${loginPath(was)}/cancel`, {}).catch(() => undefined);
-}
-
-/** A pasted API key: the fallback behind Connect. The page keeps no copy of it. */
+/** A pasted API key goes to the same list as a connected plan. */
 export async function saveKey(kind: KeyKind, secret: string): Promise<void> {
-  await api.post('/api/v2/model-subscriptions', { kind, secret });
+  await addSubscription(kind, secret);
   await queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
 }
 

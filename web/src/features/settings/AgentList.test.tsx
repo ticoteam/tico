@@ -217,23 +217,9 @@ describe('Settings › Agents', () => {
     expect(sent.at(-1)).toMatchObject({ url: '/api/v2/bots/b2/task-model', body: { task_model: null, expected_revision: 5 } });
   });
 
-  it('folded, Subscriptions and keys shows a chip for each kind and a count of keys @s709', async () => {
-    const sub = (id: string, kind: string, status = 'working') => ({ id, kind, name: `Plan ${id}`, label: 'sample', status, in_use_on: [] }) as never;
-    queryClient.setQueryData(subscriptionsQuery.queryKey, {
-      kinds: [],
-      subscriptions: [sub('s1', 'claude_login'), sub('s2', 'claude_login'), sub('s3', 'codex_login', 'needs_reconnect'), sub('s4', 'anthropic_key'), sub('s5', 'openai_key')],
-    });
-    serve(() => ({ status: 200, body: {} }));
-    show(<SettingsPage section="agents" />, '/settings/agents');
-    expect(await screen.findByText('Plan s3 expired')).toBeTruthy();
-    expect(screen.getByText('Claude').closest('.fs-chip')?.textContent).toBe('Claude2');
-    expect(screen.getByText('2 keys')).toBeTruthy();
-    expect(screen.queryByText('ChatGPT')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
-    expect(await screen.findByTitle('Plan s1')).toBeTruthy();
-    expect(screen.queryByText('2 keys')).toBeNull();
-  });
+});
 
+describe('Settings › Providers', () => {
   const claude = { kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true };
 
   it('adds Claude from the kinds the server lists and offers a setup token when Connect is offline', async () => {
@@ -249,13 +235,13 @@ describe('Settings › Agents', () => {
       if (url.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
       return pending;
     });
-    show(<SettingsPage section="agents" />, '/settings/agents');
+    show(<SettingsPage section="providers" />, '/settings/providers');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
     expect(screen.queryByRole('menuitem', { name: /Unknown plan/ })).toBeNull();
     fireEvent.click(await screen.findByRole('menuitem', { name: /Claude plan/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
     expect(sent).toEqual([{ url: '/api/v2/model-subscriptions/connect', method: 'POST', body: { kind: 'claude_token' } }]);
-    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-test-token' } });
+    fireEvent.change(await screen.findByLabelText('Setup token'), { target: { value: 'sk-ant-test-token' } });
     const submit = screen.getByRole<HTMLButtonElement>('button', { name: 'Connect' });
     fireEvent.click(submit);
     expect(submit.disabled).toBe(true);
@@ -273,7 +259,7 @@ describe('Settings › Agents', () => {
   const plan: Subscription = {
     id: 'plan-1', kind: 'claude_login', label: 'Claude plan', name: 'Work plan',
     in_use_on: [], computers: [], owner_id: 'human:p1', owner_name: 'Ana Test', added_by: 'human:p1', added_by_name: 'Ana Test',
-    status: 'needs_reconnect', status_at: null, status_detail: '', runtime: 'claude', preview: '', usage: null,
+    status: 'needs_reconnect', status_at: null, status_detail: '', expired: false, runtime: 'claude', preview: '', usage: null,
     order: null, revision: 1, created_at: '', updated_at: '',
   };
   const restart = { status: 409, body: { error: { code: 'confirm_restart', detail: '2 running runs will stop and start again', running: 2 } } };
@@ -288,8 +274,9 @@ describe('Settings › Agents', () => {
       }
       return restart;
     });
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
     expect(ask.textContent).toContain(restart.body.error.detail);
     expect(sent).toEqual([{ url, method: 'POST', body: { subscription: plan.id } }]);
@@ -308,10 +295,11 @@ describe('Settings › Agents', () => {
       if (path === url && method === 'POST') return sent.filter((s) => s.url === url).length > 1 ? pending : restart;
       if (path === '/api/v2/model-subscriptions') return ok({ kinds: [], subscriptions: [plan] });
     });
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
-    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
+    fireEvent.change(await screen.findByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reconnect' }));
     const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
     expect(sent.at(-1)).toEqual({ url, method: 'POST', body: { secret: 'sk-ant-replacement-token' } });
@@ -336,12 +324,13 @@ describe('Settings › Agents', () => {
       if (method === 'POST') return ok(plan);
       return ok(catalog);
     });
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     const ask = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
     fireEvent.click(within(ask).getByRole('button', { name: 'Reconnect' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Paste instead' }));
-    fireEvent.change(screen.getByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
+    fireEvent.change(await screen.findByLabelText('Setup token'), { target: { value: 'sk-ant-replacement-token' } });
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Reconnect' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({
       url: `/api/v2/model-subscriptions/${plan.id}`, body: { secret: 'sk-ant-replacement-token', confirm: true },
@@ -361,8 +350,9 @@ describe('Settings › Agents', () => {
       if (url.endsWith('/logins/login-1')) return ok(login);
       if (url === '/api/v2/model-subscriptions') return ok(catalog);
     });
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     expect(await screen.findByRole('link', { name: 'Open Claude' })).toBeTruthy();
     expect(screen.getByRole('dialog', { description: /credential passes through someone else's computer.*Acme Mac/i })).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Paste instead' }));
@@ -385,9 +375,10 @@ describe('Settings › Agents', () => {
         if (url.endsWith('/connect')) return pending;
         if (url.endsWith('/cancel')) return ok({ state: 'canceled' });
       });
-      show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+      show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
       await act(() => vi.advanceTimersByTimeAsync(0));
-      fireEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+      fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Reconnect' }));
       await act(() => vi.advanceTimersByTimeAsync(5 * 60_000));
       expect(sent).toHaveLength(1);
       expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
@@ -410,8 +401,9 @@ describe('Settings › Agents', () => {
       if (url === connect) return pending;
       if (url === cancel) return ok({ state: 'canceled' });
     });
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     await waitFor(() => expect(sent.map(({ url }) => url)).toEqual([connect]));
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
@@ -422,18 +414,21 @@ describe('Settings › Agents', () => {
 
   it.each(['member', 'admin'])('shows Add and Reconnect according to the %s role', async (role) => {
     queryClient.setQueryData(['me'], { id: 'human:p2', email: 'ben@example.test', role: 'person', slug: null });
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [plan] });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [{ ...plan, can_remove: true }] });
     serve((url) => url === '/api/v2/access'
       ? role === 'admin' ? ok({ you: role }) : { status: 403, body: { error: { code: 'forbidden' } } }
       : undefined);
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
     expect(await screen.findByTitle(plan.name)).toBeTruthy();
     if (role === 'admin') {
       expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy();
-      expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
+      expect(await screen.findByRole('menuitem', { name: 'Reconnect' })).toBeTruthy();
     } else {
       expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
-      expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
+      expect(await screen.findByRole('menuitem', { name: 'Remove' })).toBeTruthy();
+      expect(screen.getAllByRole('menuitem')).toHaveLength(1);
     }
   });
 
@@ -441,24 +436,90 @@ describe('Settings › Agents', () => {
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
     serve((url) => url.endsWith('/connect')
       ? { status: 409, body: { error: { code: 'state', detail: 'Someone else is connecting' } } } : undefined);
-    show(<SettingsPage section="agents" open={plan.id} />, '/settings/agents?open=plan-1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }));
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reconnect' }));
     expect(await screen.findByText('Someone else is connecting')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
   });
 
-  it('a plan the provider refused for its billing says so, folded and in its row @s709', async () => {
-    const past = { id: 's1', kind: 'claude_login', name: 'brooke@acme.example', label: 'Claude plan', status: 'working', problem: 'Payment past due', in_use_on: [] };
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [past as never] });
-    serve(() => ({ status: 200, body: {} }));
-    show(<SettingsPage section="agents" />, '/settings/agents');
-    expect(await screen.findByText('brooke@acme.example: Payment past due')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: /Subscriptions and keys/ }));
-    const row = await screen.findByTitle('brooke@acme.example');
-    expect(row.className).toContain('is-bad');
-    expect(row.textContent).toContain('Payment past due');
+  it('replaces a company key in place after restart confirmation', async () => {
+    const key = { ...plan, id: 'key-1', name: 'Company key', kind: 'anthropic_key' as const, owner_id: '', status: 'working' as const };
+    const catalog = { kinds: [], subscriptions: [key] };
+    const path = '/api/v2/model-subscriptions/key-1';
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    serve((url, method) => {
+      if (url === path && method === 'POST') return sent.length === 1 ? restart : ok(key);
+      if (url === '/api/v2/model-subscriptions') return ok(catalog);
+    });
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Company key' }));
+    expect(screen.queryByRole('menuitem', { name: 'Check use' })).toBeNull();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Replace key' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Replace key for Company key' });
+    fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'made-up-api-key' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Replace key' }));
+    const confirm = await screen.findByRole('alertdialog', { name: 'Restart runs?' });
+    expect(sent).toEqual([{ url: path, method: 'POST', body: { secret: 'made-up-api-key' } }]);
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Replace key' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(sent.at(-1)).toEqual({ url: path, method: 'POST', body: { secret: 'made-up-api-key', confirm: true } });
   });
 
+  it('groups providers by owner and counts each visible agent once per pool @s709', async () => {
+    const shared = { id: 'a1', name: 'Alpha Agent', fallback: false };
+    const rows: Subscription[] = [
+      { ...plan, id: 'other', name: 'Other plan', owner_id: 'human:p2', owner_name: 'Ben Sample' },
+      { ...plan, id: 'legacy', name: 'Legacy plan', owner_id: '', owner_name: '' },
+      { ...plan, id: 'company', kind: 'anthropic_key', name: 'Company key', owner_id: '', owner_name: '' },
+      { ...plan, name: 'My plan', agents: [shared] },
+      { ...plan, id: 'mine2', name: 'My other plan', agents: [shared] },
+    ];
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: rows });
+    serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: rows }) : undefined);
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const mine = await screen.findByRole('region', { name: 'Your pool' });
+    const other = screen.getByRole('region', { name: "Ben Sample's pool" });
+    const legacy = screen.getByRole('region', { name: 'No owner' });
+    const company = screen.getByRole('region', { name: 'Company keys' });
+    expect(within(mine).getByText('2 plans')).toBeTruthy();
+    expect(within(mine).getByText('Used by 1 agent')).toBeTruthy();
+    expect(within(mine).getAllByText('On 1 agent')).toHaveLength(2);
+    expect(within(other).getByText('Other plan')).toBeTruthy();
+    expect(within(legacy).getByText('Added by Ana Test')).toBeTruthy();
+    expect(within(company).getByText('Company key')).toBeTruthy();
+    expect(mine.compareDocumentPosition(other)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(other.compareDocumentPosition(legacy)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(legacy.compareDocumentPosition(company)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('selects one badge per row by severity before rotation', async () => {
+    const usage: NonNullable<Subscription['usage']> = { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z', near: true };
+    const base = { ...plan, status: 'working' as const };
+    const rows = [
+      { ...base, name: 'Payment', problem: 'Payment past due', expired: true, usage },
+      { ...base, id: 'expired', name: 'Expired', expired: true, usage },
+      { ...base, id: 'limited', name: 'Limited', usage, in_use_on: ['r1'] },
+      { ...base, id: 'near', name: 'Near', usage: { ...usage, used_pct: 96 }, in_use_on: ['r1'] },
+      { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'] },
+      { ...base, id: 'next', name: 'Spare', order: 2 },
+      { ...base, id: 'ready', name: 'Ready plan', order: 3 },
+    ];
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: rows });
+    serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: rows }) : undefined);
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    await screen.findByRole('region', { name: 'Your pool' });
+    for (const [row, words] of [['Payment', 'Problem'], ['Expired', 'Reconnect needed'], ['Limited', 'At limit until'], ['Near', 'Near limit'], ['Live', 'In use'], ['Spare', 'Next'], ['Ready plan', 'Ready']] as const) {
+      const badges = screen.getByTitle(row).querySelectorAll('.pill');
+      expect(badges).toHaveLength(1);
+      expect(badges[0]?.textContent).toContain(words);
+    }
+    expect(screen.getByText('Problem').getAttribute('title')).toBe('Payment past due');
+  });
+
+});
+
+describe('Settings › Agents and Computers', () => {
   it('counts a restored agent when its owner returns to the warm Computers list @s693', async () => {
     function Page() {
       const path = useLocation({ select: (where) => where.pathname });
@@ -933,7 +994,7 @@ describe('Settings actions', () => {
         : { status: 200, body: {} },
     );
     queryClient.setQueryData(providersQuery.queryKey, { enabled: ['anthropic'], default: { model: 'model-one' }, revision: 4, meeting_model: '' });
-    show(<SettingsPage section="models" />, '/settings/models');
+    show(<SettingsPage section="agents" />, '/settings/agents');
     await screen.findByText('Defaults');
     const done = run('settings.defaultModel', { model: 'model-two' }, { via: 'click' });
     await waitFor(() => expect(queryClient.getQueryData<{ default: { model: string } }>(providersQuery.queryKey)?.default.model).toBe('model-two'));
@@ -947,6 +1008,8 @@ describe('Settings actions', () => {
 describe('Settings search', () => {
   it('opens each hit in its section here, or leaves it out', () => {
     expect(hitHref('#/settings/bots/settings-bots')).toBe('/settings/agents');
+    expect(hitHref('#/settings/models/settings-subs')).toBe('/settings/providers');
+    expect(hitHref('#/settings/models/settings-defaults')).toBe('/settings/agents');
     expect(hitHref('https://tico.example.test/#/settings/devices/x')).toBe('/settings/computers');
     expect(hitHref('#/usage')).toBe('/company/usage');
     expect(hitHref('#/bot/sam/settings')).toBe('/team/sam?tab=settings');

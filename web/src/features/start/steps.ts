@@ -1,4 +1,5 @@
 import type { ModelSubscriptionList } from '@/api/schema';
+import { providerReady } from '@/features/settings/routing';
 import type { SetupRecord } from './queries';
 
 /* The first run's steps, held in the address (`?setup=<step>`) so Back walks them and a reload resumes where it was.
@@ -12,7 +13,7 @@ export const setupStep = (v: unknown): SetupStep | null => (STEPS.includes(v as 
 /** Where "Set it up myself" picks up: the first step not yet done. */
 export function resumeStep(record: SetupRecord | undefined, subs: ModelSubscriptionList | undefined): SetupStep {
   if (!record?.names.company_name.trim()) return 'name';
-  if (!subs?.subscriptions.length) return 'model';
+  if (!subs?.subscriptions.some(providerReady)) return 'model';
   return 'team';
 }
 

@@ -38,7 +38,7 @@ export function SignIns({ c }: { c: Computer }) {
   if (!tools.length) return null;
   return (
     <Section
-      name="Sign-ins on this computer"
+      name="This computer’s sign-in"
       count={tools.length}
       actions={manage && tools.some((t) => t.signIn) ? <IconButton icon="plus" size="sm" quiet label="Add a sign-in" onClick={() => setAdding(true)} /> : undefined}
     >

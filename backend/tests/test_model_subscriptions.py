@@ -632,7 +632,8 @@ def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_l
         before = can_run(c, "ops", "codex")
     # Signed out of Codex while the company has a ChatGPT plan: said plainly, and the fix is giving it the plan.
     assert before["can_run"] is False and before["problem"].endswith(" has no ChatGPT plan")
-    assert before["fix"] == "Give it one in Settings > Computers" and before["sign_in"] is True
+    assert "tico settings set models.computer_subscription" in before["fix"]
+    assert before["link"] == "#/settings/providers" and before["sign_in"] is True
     give(api, m, "codex", sid)
     give(api, old, "codex", sid)
     with api.app.state.store.read() as c:

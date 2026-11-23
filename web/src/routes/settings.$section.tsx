@@ -9,7 +9,8 @@ export const Route = createFileRoute('/settings/$section')({
     ...(typeof raw.open === 'string' && raw.open ? { open: raw.open } : {}),
     ...(raw.who === 'people' || raw.who === 'agents' ? { who: raw.who } : {}),
   }),
-  beforeLoad: ({ params }) => {
+  beforeLoad: ({ params, search }) => {
+    if (params.section === 'models') throw redirect({ to: '/settings/$section', params: { section: 'providers' }, search, replace: true });
     if (!isSection(params.section)) throw redirect({ to: '/settings' });
   },
   loader: ({ params, context: { queryClient } }) => (isSection(params.section) ? loadSection(queryClient, params.section) : undefined),

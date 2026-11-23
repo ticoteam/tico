@@ -190,7 +190,7 @@ test('a thread: send a message; archive a mail row', async ({ browser, hub }) =>
 });
 
 test('settings: change the model a new agent uses; add a Cloud agent', async ({ browser, hub }) => {
-  const page = await open(browser, hub, '/settings/models');
+  const page = await open(browser, hub, '/settings/agents');
   const pick = page.locator('[data-target="setting:default-model"]').getByRole('combobox');
   await pick.click();
   const option = page.getByRole('option').filter({ hasNotText: /^$/ }).nth(1);
@@ -199,7 +199,6 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   await expect(pick).toContainText(label);
   await expect.poll(async () => (await api<{ default: { model: string } }>(hub, 'providers')).default.model).not.toBe('');
 
-  await page.goto(`${hub.url}/settings/agents`);
   await page.getByRole('button', { name: 'Add agent' }).click();
   await page.locator('[data-target="team:cloud"]').click();
   await page.locator('[data-target="cloud:claude"]').getByRole('button', { name: 'Add' }).click();

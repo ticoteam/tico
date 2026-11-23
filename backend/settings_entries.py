@@ -37,7 +37,7 @@ RELEASES, GENERAL_MANAGER, SECURITY = (
 )
 SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
-MODELS = "Settings > Models"
+PROVIDERS = "Settings > Providers"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -472,7 +472,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "team.turn_levels",
         "Company turn levels",
-        MODELS + " > Limits",
+        "Usage > Limits",
         "admin",
         "confirm",
         "POST",
@@ -695,8 +695,8 @@ ENTRIES = TEAM_RULES + [
     ),
     S(
         "models.providers",
-        "Models",
-        MODELS + " > Defaults",
+        "Default models",
+        "Settings > Agents > Defaults",
         "owner",
         "confirm",
         "PUT",
@@ -709,7 +709,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.gateway",
         "Tico AI Gateway",
-        MODELS + " > Tico Gateway",
+        PROVIDERS + " > Tico Gateway",
         "owner",
         "person",
         "PUT",
@@ -721,7 +721,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.gateway.automatic",
         "Tico AI Gateway, automatic",
-        MODELS + " > Tico Gateway",
+        PROVIDERS + " > Tico Gateway",
         "owner",
         "confirm",
         "POST",
@@ -732,7 +732,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.gateway.remove",
         "Remove the Tico AI Gateway",
-        MODELS + " > Tico Gateway",
+        PROVIDERS + " > Tico Gateway",
         "owner",
         "confirm",
         "DELETE",
@@ -745,7 +745,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.subscription.add",
         "Add a subscription",
-        MODELS + " > Subscriptions",
+        PROVIDERS,
         "admin",
         "person",
         "POST",
@@ -758,7 +758,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.subscription.change",
         "Rename or reconnect a subscription",
-        MODELS + " > Subscriptions",
+        PROVIDERS,
         "admin",
         "person",
         "POST",
@@ -771,7 +771,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.subscription.remove",
         "Remove a subscription",
-        MODELS + " > Subscriptions",
+        PROVIDERS,
         "admin",
         "confirm",
         "DELETE",
@@ -782,7 +782,7 @@ ENTRIES = TEAM_RULES + [
     S(
         "models.computer_subscription",
         "A computer's subscription",
-        MODELS + " > Subscriptions",
+        PROVIDERS,
         "admin",
         "confirm",
         "PUT",

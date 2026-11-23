@@ -747,8 +747,8 @@ def _when(ts):
     return f"{when:%b} {when.day} {when:%H:%M} UTC"
 
 
-def hold_words(held, label, runtime):
-    """(problem, fix, settings tab) for a computer whose plans for `runtime` are all passed over, at least one held at
+def hold_words(held, label, runtime, *, manages=False):
+    """(problem, fix) for a computer whose plans for `runtime` are all passed over, at least one held at
     its usage limit (`plan_hold`), never "sign in": the plan, its limit and its reset, any given plan that needs
     reconnecting, and the one change that runs its turns now."""
     tool = next(
@@ -774,18 +774,16 @@ def hold_words(held, label, runtime):
         problem += f"; {names} {'needs' if len(held['reconnect']) == 1 else 'need'} reconnecting"
     fix = held["fix"]
     if fix and fix.get("reconnect"):
-        return problem, f"Reconnect {fix['name']} in Settings > Models", "models"
-    if fix and fix.get("person"):
-        words = f"Give {label} {fix['name']}'s plans, in turn, in Settings > Computers: it moves to one with usage left"
+        action = f"reconnect {fix['name']} in Settings > Providers"
     elif fix:
-        words = f"Give {label} {fix['name']}, which has usage left, in Settings > Computers"
+        provider = f"{fix['name']}'s plans" if fix.get("person") else fix["name"]
+        action = f"assign {provider} to {label} with `tico settings set models.computer_subscription`"
     else:
-        return (
-            problem,
-            f"Add a {tool} plan with usage left in Settings > Models, or its turns wait for the reset",
-            "models",
-        )
-    return problem, words, "devices"
+        action = f"add a {tool} plan with usage left in Settings > Providers"
+    words = action[0].upper() + action[1:] if manages else f"An owner or admin can {action}"
+    if until:
+        words += f", or wait{until}"
+    return problem, words
 
 
 def turn_runtimes(config, record=None):
@@ -1172,7 +1170,7 @@ def problem(c, sub):
 
 
 def view(c, sub, ctx=None):
-    """A subscription as Settings > Models lists it: no value, a preview, its status, the computers given it."""
+    """A subscription as Settings > Providers lists it: no value, a preview, its status, the computers given it."""
     from . import claude_login, subscription_refresh as SR
 
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
@@ -1264,7 +1262,7 @@ def _agents_of(bots, runner_ids, runtime):
 
 
 def listed(c, settings=None):
-    """Every subscription as Settings > Models lists it, each plan with where it comes in its owner's plans for its
+    """Every subscription as Settings > Providers lists it, each plan with where it comes in its owner's plans for its
     runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
     other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
     in with it now (`in_use_on`), and `place`: its place among that person's plans of every tool, those in use first and
@@ -1426,7 +1424,7 @@ def _admin(auth, who, secret=False):
     if not _may_manage(auth, who):
         raise Problem("forbidden", "Only an owner or admin changes the company's subscriptions", 403)
     if secret and (who.via or who.attempt_id):
-        raise Problem("forbidden", "Save a subscription yourself in Settings > Models", 403)
+        raise Problem("forbidden", "Save a subscription yourself in Settings > Providers", 403)
 
 
 def owned(kind):

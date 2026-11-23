@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ApiError } from '@/api/client';
 import type { ModelSubscriptionList } from '@/api/schema';
-import { queryClient } from '@/data';
-import { loginQuery, readLogin, screenFor, startConnect, type SetupRecord } from './queries';
+import { screenFor, type SetupRecord } from './queries';
 import { resumeStep, setupStep, stepBefore } from './steps';
 
 const err = (status: number, signIn: string | null = null) => new ApiError(status, 'x', 'Not on the list', false, signIn);
@@ -26,12 +25,14 @@ describe('first run steps @s1171', () => {
     completed: null,
     needed: true,
   });
-  const subs = (n: number) => ({ kinds: [], subscriptions: Array.from({ length: n }, () => ({})) }) as unknown as ModelSubscriptionList;
+  const subs = (...subscriptions: Partial<ModelSubscriptionList['subscriptions'][number]>[]) =>
+    ({ kinds: [], subscriptions }) as ModelSubscriptionList;
 
   it('resumes at the first step not done', () => {
-    expect(resumeStep(record(' '), subs(1))).toBe('name');
-    expect(resumeStep(record('Acme'), subs(0))).toBe('model');
-    expect(resumeStep(record('Acme'), subs(1))).toBe('team');
+    expect(resumeStep(record(' '), subs({ status: 'working' }))).toBe('name');
+    expect(resumeStep(record('Acme'), subs())).toBe('model');
+    expect(resumeStep(record('Acme'), subs({ status: 'working' }))).toBe('team');
+    expect(resumeStep(record('Acme'), subs({ status: 'needs_reconnect' }))).toBe('model');
   });
 
   it('walks back to the step before, and reads only known steps from the address', () => {
@@ -40,27 +41,5 @@ describe('first run steps @s1171', () => {
     expect(stepBefore('name')).toBe('path');
     expect(setupStep('model')).toBe('model');
     expect(setupStep('welcome')).toBeNull();
-  });
-});
-
-describe('a model sign-in in the first run', () => {
-  afterEach(() => vi.unstubAllGlobals());
-  const CODE = 'WDJB-MJHT';
-  const PAGE = `https://auth.example/device?user_code=${CODE}`;
-
-  it('caches the state only; the code and page go back to the caller', async () => {
-    queryClient.clear();
-    vi.stubGlobal('fetch', async (url: string) => {
-      const body = String(url).endsWith('/connect')
-        ? { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE }
-        : { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`], accepts_code: false };
-      return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
-    });
-    await startConnect('codex_login');
-    const read = await readLogin();
-    expect(read?.code).toBe(CODE);
-    expect(read?.url).toBe(PAGE);
-    expect(queryClient.getQueryData(loginQuery.queryKey)).toEqual({ id: 'l1', runner_id: 'r1', state: 'waiting', kind: 'codex_login', accepts_code: false });
-    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
 });

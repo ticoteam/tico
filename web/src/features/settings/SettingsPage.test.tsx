@@ -1,12 +1,13 @@
 import { CancelledError, notifyManager, QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { Agents } from './Agents';
+import { Route as settingsRoute } from '@/routes/settings.$section';
+import { Providers } from './Providers';
 import { run } from '@/actions/run';
 import { Account, General, People, Security } from './Basics';
 import { loadSection } from './main';
@@ -20,7 +21,6 @@ import {
   historyQuery,
   humansQuery,
   labelsQuery,
-  modelsQuery,
   roadmapQuery,
   screeningQuery,
   settingsCatalogQuery,
@@ -263,7 +263,7 @@ describe('A model sign-in @s746', () => {
     const kind = { connect: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     queryClient.setQueryData(computersQuery.queryKey, []);
-    show(<Agents />, '/settings/agents');
+    show(<Providers />, '/settings/providers');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /ChatGPT plan/ }));
     const dialog = await screen.findByRole('dialog', { name: 'Connect ChatGPT plan' });
@@ -390,17 +390,19 @@ describe('Settings › Computers › when idle', () => {
   });
 });
 
-describe('Settings › Agents › a subscription', () => {
-  it('Edit renames it and sends only the name when the holder is unchanged @s747', async () => {
+describe('Settings › Providers › a subscription', () => {
+  it('Rename saves the name without changing ownership @s747', async () => {
     serve((url, method) => (method === 'POST' ? { status: 200, body: {} } : url.startsWith('/api/v2/access') ? { status: 200, body: ACCESS } : { status: 404, body: { detail: 'not_found' } }));
     const kind = { connect: true, help: '', kind: 'claude_login' as const, label: 'Claude', owned: true, runtime: 'claude' as const, secret_label: '' };
     const plan = { id: 's1', kind: 'claude_login', name: 'Plan One', label: 'Claude', status: 'working', in_use_on: [], owner_id: 'human:p1', owner_name: 'Ana Test' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [plan] } as never);
     queryClient.setQueryData(computersQuery.queryKey, []);
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
-    show(<Agents open="s1" />, '/settings/agents?open=s1');
-    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    const edit = await screen.findByRole('dialog', { name: 'Edit Plan One' });
+    show(<Providers open="s1" />, '/settings/providers?open=s1');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Plan One' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Rename' }));
+    const edit = await screen.findByRole('dialog', { name: 'Rename Plan One' });
+    expect(within(edit).queryByRole('combobox', { name: 'Held by' })).toBeNull();
     const field = within(edit).getByLabelText('Name');
     const save = within(edit).getByRole<HTMLButtonElement>('button', { name: 'Save' });
     const name = `${'🌿'.repeat(66)}'s Claude plan`;
@@ -479,21 +481,35 @@ describe('Settings › Security', () => {
   });
 });
 
-describe('Settings › Models @s1076 @s710', () => {
-  it('When a plan runs out has each computer’s Gateway switch, which sends at once', async () => {
-    const studio = { id: 'r1', label: 'Studio', online: true, gateway_fallback: false };
-    serve((url) => {
-      if (url === '/api/v2/providers') return { status: 200, body: { enabled: [], default: {}, revision: 0 } };
-      if (url === '/api/v2/operations') return { status: 200, body: { machines: [{ ...studio, gateway_fallback: true }] } };
-      return { status: 200, body: {} };
+describe('Settings › Providers @s710', () => {
+  it('redirects a Models bookmark to Providers and preserves the opened row', async () => {
+    serve();
+    const root = createRootRoute();
+    const beforeLoad = settingsRoute.options.beforeLoad!;
+    const route = createRoute({
+      getParentRoute: () => root,
+      path: '/settings/$section',
+      validateSearch: settingsRoute.options.validateSearch,
+      beforeLoad: (ctx) => beforeLoad({
+        ...ctx,
+        context: { queryClient },
+      }),
+      component: () => null,
     });
-    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm1', label: 'Sample Model', provider: 'anthropic' }] } as never);
-    queryClient.setQueryData(computersQuery.queryKey, [studio]);
-    show(<SettingsPage section="models" />, '/settings/models', () => loadSection(queryClient, 'models'));
-    const out = await screen.findByRole('region', { name: 'When a plan runs out' });
-    fireEvent.click(within(out).getByRole('switch', { name: 'Studio: use Tico Gateway' }));
-    await waitFor(() => expect(sent[0]).toMatchObject({ url: '/api/v2/computers/r1/gateway-fallback', body: { on: true } }));
-    expect(screen.queryByRole('region', { name: 'Anthropic' })).toBeNull();
+    const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ['/settings/models?open=s1'] }) });
+    render(<RouterProvider router={router} />);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/providers'));
+    expect(router.state.location.search).toEqual({ open: 's1' });
+  });
+
+  it('keeps Gateway limits in Providers and computer switches in the computer panel', async () => {
+    serve();
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [] });
+    queryClient.setQueryData(computersQuery.queryKey, [{ id: 'r1', label: 'Studio', online: true, gateway_fallback: false }]);
+    show(<SettingsPage section="providers" />, '/settings/providers', () => loadSection(queryClient, 'providers'));
+    const gateway = await screen.findByRole('region', { name: 'Tico Gateway' });
+    expect(within(gateway).getByRole('link', { name: 'Limits' }).getAttribute('href')).toBe('/company/usage?view=limits');
+    expect(within(gateway).queryByRole('switch')).toBeNull();
   });
 });
 

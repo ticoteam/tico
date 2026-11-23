@@ -390,7 +390,7 @@ export const addProductUpdate = async (title: string, bullets: string[]) => {
   await queryClient.invalidateQueries({ queryKey: changelogQuery.queryKey });
 };
 
-// ---------------------------------------------------------------- model subscriptions (Settings, Agents)
+// ---------------------------------------------------------------- model subscriptions (Settings, Providers)
 
 /** The agents on a subscription: the server adds `agents` (S2); until it does there are none to draw. */
 export interface SubscriptionAgent {
@@ -447,6 +447,7 @@ export interface SignIn {
   url?: string | null;
   code?: string | null;
   accepts_code?: boolean;
+  code_sent?: boolean;
   message?: string | null;
   computer?: string | null;
   not_yours?: boolean;
@@ -464,8 +465,14 @@ export const startSignIn = (input: { kind: SignInKind } | { subscription: string
 
 /** One read of a sign-in under way. Not a query: its answer holds the provider's one-time code and page, which stay
     in the dialog's state (polled with `poll` from @/lib), never the query cache. */
-export const readSignIn = (runner: string, id: string, signal?: AbortSignal) =>
-  api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal });
+export async function readSignIn(runner: string, id: string, signal?: AbortSignal): Promise<Partial<SignIn>> {
+  try {
+    return await api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { state: 'failed' };
+    throw error;
+  }
+}
 
 export const sendSignInCode = (runner: string, id: string, code: string) =>
   api.post<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/code`, { code });

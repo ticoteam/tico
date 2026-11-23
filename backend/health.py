@@ -766,7 +766,7 @@ def _needs_sign_in(computers):
 
 
 def _plans_held(computers):
-    """(problem, fix, settings tab) for each online computer whose turns on a model wait because every plan it is given
+    """(problem, fix) for each online computer whose turns on a model wait because every plan it is given
     for it is at its usage limit (`plan_held`, model_subscriptions.plan_hold)."""
     from .model_subscriptions import hold_words
 
@@ -774,8 +774,8 @@ def _plans_held(computers):
     for x in computers:
         for r in x["runtimes"] if x["online"] else ():
             if held := r.get("plan_held"):
-                problem, fix, tab = hold_words(held, x["label"], r["name"])
-                out.append((problem[0].upper() + problem[1:], fix, tab))
+                problem, fix = hold_words(held, x["label"], r["name"], manages=True)
+                out.append((problem[0].upper() + problem[1:], fix))
     return out
 
 
@@ -784,19 +784,18 @@ def _rejected_summary(rows):
     first = ", ".join(sorted({f"{name} on {label}" for label, name, _, _, _ in rows}))
     when, why = rows[0][2], rows[0][3]
     sources = {row[4] for row in rows}
-    fix = (
-        " Replace the model key in Tools > Keys."
-        if sources == {"credentials"}
-        else " Update the computer-local key or sign in again from Settings > Computers."
-        if sources == {"computer"}
-        else " If the model key is stored in Tools > Keys, replace it there. Otherwise update the "
-        "computer-local key or sign in again from Settings > Computers."
-    )
+    fixes = []
+    if "credentials" in sources or "" in sources:
+        fixes.append("For a key stored in Tools > Keys, replace it there")
+    if "computer" in sources or "" in sources:
+        fixes.append("Update the computer-local key or sign in again on an agent's Computer tab")
+    if "" in sources:
+        fixes.append("Ask an owner or admin to check saved plans and keys in Settings > Providers")
     return (
         f"Sign-in rejected for {first}"
         + (f" at {_clock(when)}" if when else "")
         + (f": {why}" if why else ".")
-        + fix
+        + (" " + ". ".join(fixes) + "." if fixes else "")
         + " It takes no work that needs it until then."
     )
 
@@ -1270,6 +1269,8 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
         if "not installed" in problem
         else "no key"
         if answer.get("link") == "#/tools/keys?show=credentials"
+        else "provider unavailable"
+        if answer.get("link") == "#/settings/providers"
         else "not on this computer"
         if "Tico Gateway work" in problem
         else "sign in"
@@ -1460,11 +1461,13 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                     }
                 else:
                     move = choice.get("move")
-                    fix = (
-                        _fix("Open Keys", "#/tools/keys?show=credentials")
-                        if choice.get("link") == "#/tools/keys?show=credentials"
-                        else _fix("Open Computers", "#/settings", "devices")
-                    )
+                    link = choice.get("link")
+                    if link == "#/tools/keys?show=credentials":
+                        fix = _fix("Open Keys", link)
+                    elif link == "#/settings/providers":
+                        fix = _fix("Open Providers", link)
+                    else:
+                        fix = _fix("Open Computers", "#/settings", "devices")
             else:
                 fix = _fix("Open bot settings", "#/settings", "bots")
         elif reason == "cloud_machine":
@@ -2934,7 +2937,9 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     # the Gateway are not independent, and a person reads that here.
     if running_on := _fallback_lines(c, settings, on_fallback, carrying):
         checks.append(
-            _check("on_fallback", "What bots run on", "info", running_on, [_fix("Open Models", "#/settings", "models")])
+            _check(
+                "on_fallback", "What bots run on", "info", running_on, [_fix("Open Providers", "#/settings/providers")]
+            )
         )
     from . import task_privacy
 
@@ -3644,7 +3649,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     "Models",
                     "warn",
                     "No AI provider is chosen yet.",
-                    [_fix("Choose providers", "#/settings", "models")],
+                    [_fix("Open Providers", "#/settings/providers")],
                 )
             )
         elif online and not signed and rejected:
@@ -3656,7 +3661,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     _rejected_summary(rejected),
                     [
                         _fix("Open Keys", "#/tools/keys?show=credentials"),
-                        _fix("Open Computers", "#/settings", "devices"),
+                        _fix("Open Providers", "#/settings/providers"),
                     ],
                 )
             )
@@ -3668,7 +3673,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     "Models",
                     "bad",
                     "No online computer can run your model now: the plans it is given are at their usage limit.",
-                    [_fix("Open Computers", "#/settings", "devices")],
+                    [_fix("Open Providers", "#/settings/providers")],
                 )
             )
         elif online and not signed and gateway_runs:
@@ -3700,7 +3705,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     f"{_harness_name(signed)} is signed in on another computer. " + _rejected_summary(rejected),
                     [
                         _fix("Open Keys", "#/tools/keys?show=credentials"),
-                        _fix("Open Computers", "#/settings", "devices"),
+                        _fix("Open Providers", "#/settings/providers"),
                     ],
                 )
             )
@@ -3710,32 +3715,28 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
             checks.append(_check("models", "Models", "unknown", "Nothing to check until a computer is online."))
 
     if (held := _plans_held(computers)) and not full:
-        # Plan names, owners and resets are Settings > Models' to show: other readers get the count, as Computer
-        # logins below gives them.
+        # This company-wide check gives members a count; it does not tie saved plans to other people's computers.
         checks.append(
             _check(
                 "computer_plan_held",
                 "Computer plans at their limit",
                 "bad",
                 f"{len(held)} computer(s) wait for a model plan at its usage limit. "
-                "Ask an owner or admin to check Settings > Computers.",
+                "Ask an owner or admin to check Settings > Providers.",
+                [_fix("Open Providers", "#/settings/providers")],
             )
         )
     elif held:
         # Every plan a computer is given is at its usage limit: name the plan, the limit and its reset, and the one
         # change that runs its turns now. It needs no sign-in, so it is not in Computer sign-in below.
-        fixes = {
-            "devices": _fix("Open Computers", "#/settings", "devices"),
-            "models": _fix("Open Models", "#/settings", "models"),
-        }
         checks.append(
             _check(
                 "computer_plan_held",
                 "Computer plans at their limit",
                 "bad",
-                "; ".join(f"{problem}. {fix}." for problem, fix, _ in held[:5])
+                "; ".join(f"{problem}. {fix}." for problem, fix in held[:5])
                 + ("" if len(held) <= 5 else f" And {len(held) - 5} more."),
-                [fixes[tab] for tab in dict.fromkeys(tab for _, _, tab in held)],
+                [_fix("Open Providers", "#/settings/providers")],
             )
         )
     if full and (unsigned := _needs_sign_in(computers)):
@@ -3746,7 +3747,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "warn",
                 "; ".join(f"{label}: sign in to {model}" for label, model in unsigned[:5])
                 + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
-                + " Sign in from Settings > Computers (Agent Ops can start it). To have new computers sign in by "
+                + " Sign in on an agent’s Computer tab (Agent Ops can start it). To have new computers sign in by "
                 "themselves, store the company's model key in Tools > Keys and give it to every computer.",
                 [_fix("Open Computers", "#/settings", "devices"), _fix("Open Keys", "#/tools/keys?show=credentials")],
             )
@@ -3768,9 +3769,9 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 + (
                     "bots depend on an unavailable computer login. "
                     + (
-                        runtime['login_problem'] + ". Check this tool in Settings > Computers"
+                        runtime['login_problem'] + ". Check this tool on an agent’s Computer tab"
                         if runtime['login_problem']
-                        else "Sign in or switch account in Settings > Computers"
+                        else "Sign in or switch account on an agent’s Computer tab"
                     )
                     if runtime["login_unavailable"]
                     else runtime["login_warning"]
@@ -3779,7 +3780,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
             )
             + (f"; and {len(logins) - 5} more." if len(logins) > 5 else "")
             if full
-            else f"{len(logins)} computer login(s) used by bots need attention. Ask a computer operator to check Settings > Computers."
+            else f"{len(logins)} computer login(s) used by bots need attention. Ask a computer operator to check an agent’s Computer tab."
         )
         checks.append(
             _check(
@@ -3799,7 +3800,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "Tico AI Gateway",
                 gateway["status"],
                 gateway["summary"],
-                [_fix("Open Models", "#/settings", "models")],
+                [_fix("Open Providers", "#/settings/providers")],
             )
         )
     # Webhooks waiting at Tico Gateway that this server is not collecting (backend/hook_relay.py).
@@ -3810,7 +3811,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "Webhooks through Tico Gateway",
                 relay["status"],
                 relay["summary"],
-                [_fix("Open Webhooks", "#/settings/models/wh-gateway")],
+                [_fix("Open Providers", "#/settings/providers")],
             )
         )
     # Sleep when idle is on but Tico could not be asked to stop this server (backend/sleep_idle.py).

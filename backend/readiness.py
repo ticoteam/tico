@@ -183,7 +183,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
     def verdict(can, problem="", fix="", link="#/settings", sign_in=False):
         out.update(can_run=can)
         if sign_in:
-            out["sign_in"] = True  # the model is not signed in on this computer: Settings > Computers fixes it
+            out["sign_in"] = True  # The model has no working sign-in on this computer.
         if can is not True:
             out["problem"] = problem
         if can is False:
@@ -301,25 +301,22 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         out["gateway"] = line
         return verdict(True)
     if signed in SIGNED_OUT and (held := model_subscriptions.plan_hold(c, row["id"], runtime)):
-        # Every plan this computer is given for it is at its usage limit: that, its reset and the plan to give it
-        # instead, never "login required" or "has no plan" (it has one).
-        problem, fix, _ = model_subscriptions.hold_words(held, label, runtime)
+        problem, fix = model_subscriptions.hold_words(held, label, runtime)
         out["bot_problems"] = [problem[0].upper() + problem[1:]]
-        return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings")
+        return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings/providers")
     if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):
-        # The company has a plan for it and this computer was given none: giving it one is the fix, not a sign-in.
         return verdict(
             False,
             label + " has no " + plan,
-            "Give it one in Settings > Computers",
-            "#/settings",
+            "An owner or admin can assign one with `tico settings set models.computer_subscription`",
+            "#/settings/providers",
             sign_in=True,
         )
     if signed in SIGNED_OUT:
         return verdict(
             False,
             shared.get("detail") or (str(runtime) + " is not signed in on " + label),
-            "Sign in " + str(runtime) + " on " + label + " in Settings > Computers, or choose a model it already runs",
+            f"Sign in {runtime} on {label} from the agent’s Computer tab, or choose a model it already runs",
             sign_in=True,
         )
     return verdict(None, label + " has not checked the " + str(runtime) + " sign-in yet")

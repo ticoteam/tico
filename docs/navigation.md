@@ -1,7 +1,7 @@
 # Navigation
 
 The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
-shown in the address bar while the tab is open (`#/settings/people`, `#/settings/models`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
+shown in the address bar while the tab is open (`/settings/people`, `/settings/providers`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
 Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.

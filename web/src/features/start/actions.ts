@@ -3,9 +3,9 @@ import * as z from 'zod/mini';
 import { defineAction, run } from '@/actions';
 import { meQuery, queryClient } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
+import { providerReady, subscriptionsQuery } from '@/features/settings/routing';
 import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
 import {
-  cancelConnect,
   checkGithub,
   disconnectGithub,
   finishGithub,
@@ -15,10 +15,7 @@ import {
   replaceGithubKey,
   saveCompanyName,
   saveKey,
-  sendLoginCode,
   setupQuery,
-  startConnect,
-  subscriptionsQuery,
 } from './queries';
 import { STEPS, resumeStep, stepBefore, type SetupStep } from './steps';
 
@@ -66,10 +63,7 @@ export const closeSetup = defineAction({
   title: 'Close setup',
   kind: 'view',
   input: z.strictObject({}),
-  run: ({ router }) => {
-    cancelConnect();
-    return toStep(router, null);
-  },
+  run: ({ router }) => toStep(router, null),
   did: () => 'Closed setup',
 });
 
@@ -104,12 +98,14 @@ export const nextStep = defineAction({
   kind: 'change',
   input: z.strictObject({ from: z.enum(['name', 'model'] as const), name: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
   can: () => isOwner(),
-  run: async ({ router }, { from, name }) => {
+  run: async ({ router, queryClient }, { from, name }) => {
     if (from === 'name') {
       if (!name?.trim()) throw Object.assign(new Error('a name is needed'), { code: 'name_missing' });
       await saveCompanyName(name.trim());
       return toStep(router, 'model');
     }
+    const providers = await queryClient.fetchQuery(subscriptionsQuery);
+    if (!providers.subscriptions.some(providerReady)) throw Object.assign(new Error('Connect a provider first'), { code: 'provider_missing' });
     return toStep(router, 'team');
   },
   did: ({ from }) => (from === 'name' ? 'Named the company' : 'Next step'),
@@ -122,27 +118,6 @@ export const backStep = defineAction({
   kind: 'view',
   input: z.strictObject({ from: z.enum(STEPS) }),
   run: ({ router }, { from }) => toStep(router, stepBefore(from)),
-  target: () => SETUP_TARGET,
-});
-
-/* A model subscription: the provider's own sign-in, which only the person can finish. */
-export const connect = defineAction({
-  id: 'setup.connect',
-  title: 'Connect a model subscription',
-  kind: 'change',
-  tico: false,
-  input: z.strictObject({ kind: z.enum(['claude_token', 'codex_login'] as const) }),
-  run: (_ctx, { kind }) => startConnect(kind),
-  target: () => SETUP_TARGET,
-});
-
-export const sendCode = defineAction({
-  id: 'setup.sendCode',
-  title: 'Send the sign-in code',
-  kind: 'change',
-  tico: false,
-  input: z.strictObject({ code: z.string().check(z.minLength(1), z.maxLength(700)) }),
-  run: (_ctx, { code }) => sendLoginCode(code.trim()),
   target: () => SETUP_TARGET,
 });
 
@@ -167,7 +142,6 @@ export const finish = defineAction({
   can: () => isOwner(),
   run: async ({ router }, { job }) => {
     await finishSetup(job);
-    cancelConnect();
     return router.navigate({ to: '/tasks' });
   },
   did: () => 'Created the team',
