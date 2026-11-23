@@ -219,7 +219,7 @@ def scoped_wake(c, auth, attempt):
     """A claim of the shared Assistant's run as that run may read it: the other active tasks its wake lists to reconcile
     with (refs.reconcile.active, stored when the task was filed) only as far as the run reads them by its whole task
     rule (auth.task: its scope, rooms.run_scope, and the Assistant's bot activity access), in every copy of a message the
-    claim carries (`message`, `history`, `refs` and `refs_json`), at the claim and at its replay. The stored messages
+    claim carries, including both history pages, at the claim and at its replay. The stored messages
     stay as they are: what the run may read of them is decided as it reads (task_privacy). Changed in place; returns
     it."""
     from .auth import Identity
@@ -256,8 +256,9 @@ def scoped_wake(c, auth, attempt):
 
     if isinstance(attempt.get("message"), dict):
         attempt["message"] = scoped(attempt["message"])
-    if isinstance(attempt.get("history"), list):
-        attempt["history"] = [scoped(m) if isinstance(m, dict) else m for m in attempt["history"]]
+    for key in ("history", "moved_history"):
+        if isinstance(attempt.get(key), list):
+            attempt[key] = [scoped(m) if isinstance(m, dict) else m for m in attempt[key]]
     return attempt
 
 

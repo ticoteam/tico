@@ -49,6 +49,9 @@ IDENTITY = ('expected_head', 'checkout_target', 'expected_base')
 ACTION_FAILED = 'Worktree action failed;'
 REMOVAL = ('cleanup_requested', 'release_requested', 'delete_requested')
 RETIRED = 'Left on a retired computer'
+WORKTREE_OWNER = (
+    "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
+)
 
 
 def retired(c, computer):
@@ -56,6 +59,42 @@ def retired(c, computer):
     return bool(
         computer and not c.execute('SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL', (computer,)).fetchone()
     )
+
+
+def worktree_task(c, bot, task_id, root):
+    """The child owns its worktree selection even if its checkout needs recovery."""
+    from .read_cache import one
+
+    if (
+        root
+        and root != task_id
+        and not one(
+            c,
+            "SELECT 1 FROM task_links l JOIN tasks t ON t.id=l.task_id "
+            "WHERE l.task_id=? AND l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
+            f"AND {WORKTREE_OWNER}=? LIMIT 1",
+            (task_id, 'bot:' + bot),
+        )
+    ):
+        return root
+    return task_id
+
+
+def worktree_homes(c, bot, task_id):
+    """Computers that still own this bot's task worktrees, including offline registrations."""
+    from .read_cache import rows
+
+    return {
+        row[0]
+        for row in rows(
+            c,
+            "SELECT DISTINCT l.computer_id FROM task_links l INDEXED BY task_links_task JOIN tasks t ON t.id=l.task_id "
+            "JOIN runners r ON r.id=l.computer_id AND r.revoked_at IS NULL "
+            "WHERE l.task_id=? AND l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
+            f"AND {WORKTREE_OWNER}=?",
+            (task_id, 'bot:' + bot),
+        )
+    }
 
 
 def status(c, row, *, gone=None):
@@ -472,7 +511,7 @@ def held_reason(c, row, detail, memo=None):
 def inventory(c, computer):
     if retired(c, computer):
         return []
-    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
+    owner = WORKTREE_OWNER
     return [
         dict(r)
         for r in c.execute(
@@ -493,10 +532,9 @@ def attached(c, task_id, computer, bot):
     task turn carries them (backend/execution.py) so the runner adds each to the session with its repo's rules."""
     if not task_id or not computer:
         return []
-    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner_id END)"
     rows = c.execute(
-        f"SELECT l.repo,l.branch,l.path,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
-        f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
+        "SELECT l.repo,l.branch,l.path,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
+        f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {WORKTREE_OWNER}=? "
         "ORDER BY l.created_at",
         (task_id, computer, "bot:" + bot),
     ).fetchall()
@@ -1428,8 +1466,18 @@ def install(app, store, auth, mutate):
                 ):
                     raise Problem('worktree_branch', 'Only a queued recovery can start a new branch', 409)
                 detail['recovery_note'] = (
-                    'The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.'
+                    'No pushed work could be recovered from origin. Starting a new branch from the default branch.'
                 )
+                if link['branch'] != recovery['fallback_branch']:
+                    H._task_event(
+                        c,
+                        task_id,
+                        H.TICO_ACTOR,
+                        'link',
+                        link['branch'],
+                        recovery['fallback_branch'],
+                        detail['recovery_note'],
+                    )
                 c.execute('UPDATE task_links SET branch=? WHERE id=?', (recovery['fallback_branch'], link_id))
             checkout_state = body.checkout_state if body.checkout_state is not None else detail.get('checkout_state')
             setup_pending = body.setup_pending if body.setup_pending is not None else detail.get('setup_pending', False)

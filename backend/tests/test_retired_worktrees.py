@@ -166,6 +166,8 @@ def test_retired_links_do_not_fill_the_limit_and_cleanup_needs_no_dead_computer(
 def test_missing_origin_branch_changes_only_a_queued_recovery(prepared):
     api, tid, _ = prepared
     old = leave_on_old_computer(api, tid)
+    with api.app_state.store.transaction() as c:
+        c.execute("UPDATE task_links SET detail=json_remove(detail,'$.pushed') WHERE id=?", (old['link_id'],))
     moved = post(api, f'tasks/{tid}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()
     route = f'/api/v2/tasks/{tid}/links/{old["link_id"]}'
 
@@ -176,7 +178,12 @@ def test_missing_origin_branch_changes_only_a_queued_recovery(prepared):
     assert fallback.status_code == 200, fallback.text
     assert fallback.json()['branch'] == moved['recovery']['fallback_branch'] != old['branch']
     detail = json.loads(fallback.json()['detail_json'])
-    assert 'not published' in detail['recovery_note'] and detail['retired_worktree']['ahead'] == 2
+    assert 'No pushed work' in detail['recovery_note'] and detail['retired_worktree']['ahead'] == 2
+    assert patch({'recovery_branch_missing': True}).status_code == 200
+    task = api.get(f'/api/v2/tasks/{tid}', headers=auth())
+    assert task.status_code == 200, task.text
+    warnings = [event for event in task.json()['events'] if event['new'] == fallback.json()['branch']]
+    assert [event['note'] for event in warnings] == [detail['recovery_note']]
     proof = {
         'state': 'pending',
         'checkout_state': 'initializing',

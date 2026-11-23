@@ -3,10 +3,12 @@ bot's task wakes the bot on the parent."""
 
 import json
 
+import pytest
+
 from backend.store import H
-from backend.tests.helpers.api import assign, claim, get, post, runner  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
-from backend import bot_settings as BS
+from backend import bot_settings as BS, delivery, execution, migrations
 
 
 def tasks(api, *specs):
@@ -104,18 +106,13 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
         assert H.session_root(c, "ops", public) == public
 
 
-def roots_runner(api):
+def roots_runner(api, mode="task"):
     with api.app.state.store.transaction() as c:
         config = BS.read(c, 'ops')
-        BS.write(c, 'ops', {**config, 'session': 'task'})
+        BS.write(c, 'ops', {**config, 'session': mode})
     machine = runner(api)
     assign(api, machine, "ops")
-    post(
-        api,
-        "runners/heartbeat",
-        {"version": "test", "platform": "test", "readiness": {"ops": True}, "capabilities": RUNNER_CAPABILITIES},
-        token=machine["token"],
-    )
+    ready(api, machine, ["ops"], RUNNER_CAPABILITIES)
     return machine
 
 
@@ -159,6 +156,238 @@ def test_a_subtask_turn_runs_in_its_parents_lane_and_session_and_links_and_check
         assert "thread_id" not in json.loads(stored) and json.loads(stored)["bot"] == "ops"
     assert get(api, "tasks/" + parent)["task"]["checkpoint"] == "Step 1 drafted."
     assert not get(api, "tasks/" + sub)["task"].get("checkpoint")
+
+
+@pytest.mark.parametrize("mode", ["task", "bot"])
+def test_only_started_moves_advance_the_fence_of_the_shared_session(api, mode):
+    first_machine = roots_runner(api, mode)
+    second_machine = runner(api, label="Second computer")
+    parent, generation = None, 1
+    for index, (machine, fence) in enumerate(
+        [(first_machine, 0), (second_machine, 1), (first_machine, 0), (second_machine, 1), (first_machine, 2)]
+    ):
+        if index:
+            generation = assign(api, machine, "ops", generation=generation)["generation"]
+            ready(api, machine, ["ops"], RUNNER_CAPABILITIES)
+        if index != 2:  # The previous machine handed that same job back before start.
+            with api.app.state.store.transaction() as c:
+                task = H.task_create(
+                    c, "human:ana", f"Launch step {index}", "Do this step.", "bot:ops", parent_id=parent, private=False
+                )
+            if mode == "task" and parent is None:
+                parent = task["id"]
+        turn = claim(api, machine)
+        assert turn["task"]["id"] == task["id"] and turn["session_fence"] == fence
+        if mode == "task":
+            assert turn["task"]["session_task_id"] == parent
+        if index != 1:
+            post(api, f"attempts/{turn['id']}/started", {"thread_id": f"thread-{index}"}, machine["token"])
+        result = {"outcome": "interrupted", "yielded": True} if index == 1 else {"outcome": "completed"}
+        post(api, f"attempts/{turn['id']}/complete", {**result, "last_seq": 0}, machine["token"])
+
+
+@pytest.mark.parametrize("mode", ["task", "bot"])
+def test_the_first_claim_after_upgrade_fences_an_older_thread_on_the_target_computer(api, mode):
+    target = roots_runner(api, mode)
+    latest = runner(api, label="Second computer")
+    (parent,) = tasks(api, ("bot:ops", None))
+
+    def finish(machine, name):
+        turn = claim(api, machine)
+        post(api, f"attempts/{turn['id']}/started", {"thread_id": name}, machine["token"])
+        post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+
+    finish(target, "thread-older")
+    generation = assign(api, latest, "ops", generation=1)["generation"]
+    ready(api, latest, ["ops"], RUNNER_CAPABILITIES)
+    with api.app.state.store.transaction() as c:
+        H.task_create(
+            c,
+            "human:ana",
+            "Latest step",
+            "Continue.",
+            "bot:ops",
+            parent_id=parent if mode == "task" else None,
+            private=False,
+        )
+    finish(latest, "thread-latest")
+
+    with api.app.state.store.transaction() as c:
+        c.execute("DROP TABLE session_computers")
+        c.execute("DROP INDEX attempts_saved_session")
+        c.execute("ALTER TABLE attempts DROP COLUMN computer_session_key")
+        migration = next(m for m in migrations.files() if m.version.endswith("_session_computers"))
+        migrations._module(migration).up(c)
+        key = "task:" + parent if mode == "task" else "bot"
+        plan = [r["detail"] for r in c.execute("EXPLAIN QUERY PLAN " + execution.LATEST_SESSION_RUN_SQL, ("ops", key))]
+        assert len(plan) == 1 and "attempts_saved_session (bot_id=? AND computer_session_key=?)" in plan[0]
+        H.task_create(c, "human:ana", "Next step", "Continue.", "bot:ops", parent_id=parent, private=False)
+    assign(api, target, "ops", generation=generation)
+    ready(api, target, ["ops"], RUNNER_CAPABILITIES)
+    assert claim(api, target)["session_fence"] == 1
+
+
+@pytest.mark.parametrize("retired", [False, True])
+def test_an_exact_continuation_waits_for_its_computer_and_preserves_the_thread(api, retired):
+    home = roots_runner(api)
+    other = runner(api, label="Second computer")
+    tasks(api, ("bot:ops", None))
+    first = claim(api, home)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "saved-here"}, home["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, home["token"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET result=json_set(result,'$.lease_continue',1) WHERE id=?", (first["id"],))
+        c.execute(
+            "UPDATE jobs SET state='queued',created_at=? WHERE id=?",
+            (H.shift(H.now(), minutes=-60), first["job_id"]),
+        )
+
+    generation = assign(api, other, "ops", generation=first["generation"])["generation"]
+    ready(api, other, ["ops"], RUNNER_CAPABILITIES)
+    assert claim(api, other) is None
+    [held] = [row for row in get(api, "health")["stuck"] if row["reason"] == "continuation_home"]
+    assert "computer that saved its session" in held["why"]
+
+    if retired:
+        post(api, f"computers/{home['runner_id']}/revoke", {})
+        machine = other
+    else:
+        assign(api, home, "ops", generation=generation)
+        ready(api, home, ["ops"], RUNNER_CAPABILITIES)
+        machine = home
+    following = claim(api, machine)
+    assert following["job_id"] == first["job_id"] and following["continue_thread"] == "saved-here"
+    post(api, f"attempts/{following['id']}/started", {"thread_id": "saved-here"}, machine["token"])
+    if retired:
+        post(
+            api,
+            f"attempts/{following['id']}/complete",
+            {"outcome": "failed", "last_seq": 0, "text": "The saved thread could not be resumed on this computer."},
+            machine["token"],
+        )
+    with api.app.state.store.read() as c:
+        assert tuple(c.execute("SELECT runner_id,fence FROM session_computers WHERE bot_id='ops'").fetchone()) == (
+            home["runner_id"],
+            0,
+        )
+        if retired:
+            assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "uncertain"
+
+
+@pytest.mark.parametrize("homes", ["root", "child", "split"])
+def test_subtask_prefers_its_own_worktrees_and_reports_split_homes(api, homes):
+    old = roots_runner(api)
+    (parent,) = tasks(api, ("bot:ops", None))
+    first = claim(api, old)
+    assert first["task"]["id"] == parent
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,repo,branch,computer_id,path) "
+            "VALUES('fixture-tree',?,'worktree','worktree:fixture','present','bot:ops',?,'Acme/product',"
+            "'tico/fixture',?,'tasks/fixture/product')",
+            (parent, H.now(), old["runner_id"]),
+        )
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "old-thread"}, old["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, old["token"])
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, "human:ana", "Launch follow-up", "Do this step.", "bot:ops", parent_id=parent)["id"]
+
+    new = runner(api, label="Second computer")
+    assign(api, new, "ops", generation=first["generation"])
+    ready(api, new, ["ops"], RUNNER_CAPABILITIES)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runner_states SET last_seen_at=NULL WHERE runner_id=?", (old["runner_id"],))
+        c.execute("UPDATE jobs SET created_at=? WHERE state='queued'", (H.shift(H.now(), minutes=-60),))
+        if homes != "root":
+            c.execute(
+                "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id,repo,path) "
+                "VALUES('child-tree',?,'worktree','worktree:child','present','bot:ops',?,?,'Acme/child','tasks/child')",
+                (child, H.now(), new["runner_id"]),
+            )
+        if homes == "split":
+            c.execute(
+                "INSERT INTO task_links(id,task_id,kind,url,state,added_by,created_at,computer_id) "
+                "VALUES('child-other-tree',?,'worktree','worktree:child-other','present','bot:ops',?,?)",
+                (child, H.now(), old["runner_id"]),
+            )
+    if homes == "child":
+        turn = claim(api, new)
+        assert turn["task"]["id"] == child
+        assert [tree["repo"] for tree in turn["worktrees"]] == ["Acme/child"]
+        return
+    assert claim(api, new) is None
+    health = get(api, "health")
+    reason = "worktree_conflict" if homes == "split" else "worktree_home"
+    [stuck] = [item for item in health["stuck"] if item["reason"] == reason]
+    assert "Test Mac" in stuck["why"]
+    if homes == "split":
+        assert "Second computer" in stuck["why"]
+    assert stuck["fix"]["tab"] == "devices"
+    if homes == "root":
+        # A run already on the same task still holds it when its saved lane differs from the queued job's lane.
+        store = api.app.state.store
+        with store.transaction() as c:
+            c.execute("UPDATE attempts SET state='running',task_id=?,lane='main' WHERE id=?", (child, first["id"]))
+        with store.read() as c:
+            assert execution.bot_claimable(c, store.settings, new["runner_id"], "ops")[0] == "lane_held"
+        assert all(item["reason"] != "worktree_home" for item in get(api, "health")["stuck"])
+        with store.transaction() as c:
+            c.execute(
+                "UPDATE attempts SET state='completed',task_id=?,lane=? WHERE id=?",
+                (parent, first["lane"], first["id"]),
+            )
+        assign(api, old, "ops", generation=first["generation"] + 1)
+        post(
+            api,
+            "runners/heartbeat",
+            {
+                "version": "test",
+                "platform": "test",
+                "readiness": {"schema_version": 1, "bots": {"ops": {"ready": True}}, "worktrees": True},
+                "capabilities": RUNNER_CAPABILITIES,
+            },
+            old["token"],
+        )
+        resumed = claim(api, old)
+        assert resumed["task"]["id"] == child
+        assert [tree["repo"] for tree in resumed["worktrees"]] == ["Acme/product"]
+        return
+
+    post(api, f"computers/{old['runner_id']}/revoke", {})
+    moved = claim(api, new)
+    assert moved["task"]["id"] == child
+    assert [tree["repo"] for tree in moved["worktrees"]] == ["Acme/child"]
+
+
+def test_a_moved_subtask_replays_messages_posted_while_the_parent_was_running(api):
+    home = roots_runner(api)
+    (parent,) = tasks(api, ("bot:ops", None))
+    first = claim(api, home)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "parent-thread"}, home["token"])
+    store = api.app.state.store
+    with store.transaction() as c:
+        in_flight = H.task_comment(c, "human:ana", parent, "Include the revised figures.", wake=False)
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "The draft is ready."},
+        home["token"],
+    )
+    with store.transaction() as c:
+        child = H.task_create(c, "human:ana", "Finish the draft", "Finish it.", "bot:ops", parent_id=parent)
+        deferred = H.task_comment(c, "human:ana", child["id"], "Use the approved template.", wake=False)
+        delivery.defer(
+            c, "ops", "comment", deferred["id"], conversation_id=child["conversation_id"], task_id=child["id"]
+        )
+    new = runner(api, label="Second computer")
+    assign(api, new, "ops", generation=first["generation"])
+    ready(api, new, ["ops"], RUNNER_CAPABILITIES)
+    turn = claim(api, new)
+    assert turn["task"]["id"] == child["id"] and turn["session_fence"] == 1
+    assert in_flight["created_at"] < turn["task"]["checkpoint_at"]
+    replayed = {m["id"] for m in turn["moved_history"]}
+    assert in_flight["id"] in replayed and deferred["id"] not in replayed
+    assert f"[{deferred['id']}]" in turn["deferred"]
 
 
 def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_side_by_side(api):

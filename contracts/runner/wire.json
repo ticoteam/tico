@@ -145,6 +145,7 @@
         "task": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "github_repository": {"type": "string", "x-note": "The one GitHub repository (owner/name) the task's work is in: the repository of every PR linked to the task and to the tasks it filed that the bot may read (backend/stage_inputs.py repository). The runner sets it as the turn's GH_REPO. Omitted when no PR is linked or they are in more than one repository; an older server omits it."},
         "history": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+        "moved_history": {"type": "array", "items": {"type": "object", "additionalProperties": true}, "x-note": "Optional replay after a computer move, ordered oldest first and excluding the current message and messages in the deferred block."},
         "principal": {"type": ["string", "null"]},
         "config": {"type": "object", "additionalProperties": true},
         "chat_goal": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
@@ -176,6 +177,7 @@
         "updates": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},
         "run_header": {"type": "string", "maxLength": 2000, "x-note": "Where the turn's card stands now and, in a person's own Assistant turn, their Needs you and open handoffs (backend/run_header.py), read just after the claim as whoever the turn acts for. The runner puts it in the turn's own part of the prompt, never the standing part. Omitted when there is nothing to say or it could not be read in time; an older server omits it."},
         "session_epoch": {"type": "integer"},
+        "session_fence": {"type": "integer"},
         "bot_session_epoch": {"type": "integer"}
       }
     },

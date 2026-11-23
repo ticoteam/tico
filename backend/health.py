@@ -1008,14 +1008,24 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
     on_cloud = homes(c)
 
     def queue_reasons(runner_id, slug, ignore_refusals=()):
-        groups = {}
+        groups, worktree_waits = {}, {}
         for job, why in queued_reasons(
-            c, settings, runner_id, slug, limits, loads=loads, ignore_refusals=ignore_refusals
+            c,
+            settings,
+            runner_id,
+            slug,
+            limits,
+            loads=loads,
+            ignore_refusals=ignore_refusals,
+            worktree_waits=worktree_waits,
         ):
             key = why or "slow"
             group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
             group["queued"] += 1
             group["oldest"] = min(group["oldest"], job["created_at"])
+            if homes := worktree_waits.get(job["id"]):
+                known = group.setdefault("worktree_homes", [])
+                known.extend(sorted(homes.difference(known)))
         return list(groups.values())
 
     for bot in c.execute(
@@ -1150,6 +1160,12 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                     refused, first, person = diagnostic[:3]
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
             refused, first, person = _fenced_queue_reason(row, refused, first, person)
+            # An old worktree wait needs a fix even while other jobs on this bot can start.
+            row["queue_reasons"] = queue_reasons(where[0], slug)
+            worktree_wait = next(
+                (g["reason"] for g in row["queue_reasons"] if g.get("worktree_homes") and g["oldest"] < cutoff), None
+            )
+            refused = worktree_wait or refused
             # A running turn only explains this queue when it holds the queued lane. Free task
             # lanes still get the claim's actual refusal, even while another lane runs.
             idle = where[0] not in full and not (refused == 'lane_held' and slug in busy)
@@ -1157,8 +1173,6 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue  # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
-            # Counts belong to the individual job's task, not the representative oldest job.
-            row["queue_reasons"] = queue_reasons(where[0], slug)
             reason = (
                 "limit"
                 if refused == "limit"
@@ -1175,7 +1189,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
                 | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
             )
-            if idle and not resting:
+            if (idle or worktree_wait) and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                     | (
@@ -1361,6 +1375,7 @@ HELD = {
     "config": ("Its settings cannot be read", BOT_SETTINGS),
     "check_model": ("Its check model does not run on {computer}, or is on hold", BOT_SETTINGS),
     "unreadable": ("Its queued message is one it may not read", RUNS),
+    "continuation_home": ("This turn can only continue on the computer that saved its session", COMPUTERS),
     # Tico stopped the bot (backend/bot_stops.py): a person releases it. A back-off is a short pause after a failed run.
     "run_hold": (
         "Tico stopped it after five failed runs in a row and tries one run on its own now and then: check its last runs, or release it now",
@@ -1385,6 +1400,25 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
 
     if not rows:
         return []
+    from .read_cache import one
+
+    def worktree_wait(group):
+        names = []
+        for rid in sorted(group.get("worktree_homes", ()))[:3]:
+            if home := one(c, "SELECT label,owner_id FROM runners WHERE id=?", (rid,)):
+                owner = f" ({H.person_name(c, home['owner_id'])})" if home["owner_id"] else ""
+                names.append(home["label"] + owner)
+        if group["reason"] == "worktree_conflict":
+            where = f" across {', '.join(names)}" if names else " across multiple computers"
+            return (
+                f"Task worktrees are split{where}. "
+                "Their owners can keep the required worktrees on one computer, or retire a computer that is gone."
+            )
+        return (
+            f"Task worktree on {', '.join(names) or 'another computer'}. Its owner can bring it online, or retire it if it is gone. "
+            "A bot administrator can assign the bot there."
+        )
+
     computers = _movable(c, who, online_ids) if full else []
     # Each stuck bot's runtime as its config declares it (filled below with the config it reads).
     configured = {}
@@ -1508,6 +1542,10 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
             manages = auth is not None and (auth.operator(c, who, row["bot"]) or auth.bot_manager(c, who, row["bot"]))
             text = H.quarantine_words(c, row["bot"], manages)
             fix = _fix(*BOT_SETTINGS)
+        elif reason in ("worktree_home", "worktree_conflict"):
+            group = next((g for g in row.get("queue_reasons") or () if g["reason"] == reason), {"reason": reason})
+            text = worktree_wait(group)
+            fix = _fix(*COMPUTERS)
         elif reason in HELD:
             words, where = HELD[reason]
             text = words.format(computer=label or "its computer")
@@ -1525,9 +1563,13 @@ def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
             text = "; ".join(
                 _plural(item["queued"], "job")
                 + ": "
-                + words.get(
-                    item["reason"],
-                    HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"),
+                + str(
+                    worktree_wait(item)
+                    if item.get("worktree_homes")
+                    else words.get(
+                        item["reason"],
+                        HELD.get(item["reason"], ("not started",))[0].format(computer=label or "its computer"),
+                    )
                 )
                 for item in queue_reasons
             )

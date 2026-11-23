@@ -318,6 +318,80 @@ def session_task_id(c, bot, config, task_id):
     return H.session_root(c, bot, task_id, config) if task_id else task_id
 
 
+def computer_session_key(config, bot, task, task_root, conversation):
+    return sessions.session_key(
+        config,
+        bot,
+        task_root,
+        conversation["id"],
+        conversation["root_id"],
+        conversation["audience_class"],
+        bool(task and task.get("private")),
+    )
+
+
+def run_session_key(c, bot, config, run):
+    """Recover the key of a run made before attempts recorded it."""
+    if run["computer_session_key"]:
+        return run["computer_session_key"]
+    if run["lane"].startswith("task:"):
+        return run["lane"]
+    msg = H.message(c, run["message_id"], include_deleted=True)
+    conv = H.conversation(c, msg["conversation_id"]) if msg else None
+    task_id = work_task_id(msg, conv) if msg else run["task_id"]
+    if not conv and not task_id:
+        return None
+    task = H.task(c, task_id) if task_id else None
+    root = session_task_id(c, bot, config, task_id)
+    if not conv:
+        return sessions.session_key(config, bot, root, None, task_private=bool(task and task.get("private")))
+    return computer_session_key(rooms.session_config(conv, bot, config), bot, task, root, thread_payload(c, conv, msg))
+
+
+SAVED_SESSION_RUN = (
+    "(started_at IS NOT NULL OR finished_at IS NOT NULL) "
+    "AND runner_id IS NOT NULL AND thread_id IS NOT NULL AND thread_id<>''"
+)
+LATEST_SESSION_RUN_SQL = (
+    "SELECT runner_id,thread_id,message_id,created_at FROM attempts "
+    f"WHERE bot_id=? AND computer_session_key=? AND {SAVED_SESSION_RUN} ORDER BY created_at DESC,rowid DESC LIMIT 1"
+)
+
+
+def latest_session_run(c, bot, key):
+    """A point lookup also covers older saved threads whose keys were set during the upgrade."""
+    return c.execute(LATEST_SESSION_RUN_SQL, (bot, key)).fetchone()
+
+
+def session_computer(c, bot, key):
+    return c.execute(
+        "SELECT runner_id,fence FROM session_computers WHERE bot_id=? AND session_key=?", (bot, key)
+    ).fetchone()
+
+
+def claim_session_fence(c, aid, bot, key, runner_id):
+    """Offer the next fence without advancing it for a lease handed back before start."""
+    c.execute("UPDATE attempts SET computer_session_key=? WHERE id=?", (key, aid))
+    previous = session_computer(c, bot, key)
+    return previous["fence"] + (previous["runner_id"] != runner_id) if previous else 0
+
+
+def fork_source_current(c, bot, config, source):
+    key = run_session_key(c, bot, config, source)
+    if not key:
+        return False
+    home = session_computer(c, bot, key)
+    if not home:
+        return True
+    if home["runner_id"] != source["runner_id"]:
+        return False
+    if not home["fence"]:
+        return True
+    # After a move, an earlier visit to the same computer may have left a different thread.
+    latest = latest_session_run(c, bot, key)
+    return bool(latest and latest["runner_id"] == source["runner_id"] and latest["thread_id"] == source["thread_id"])
+
+
 def reply_target(message, conversation, task):
     """Whom a turn's reply goes to: the message's sender, or for Tico's wake on a task, the personal room's
     owner, else its first person, else the task's requester. The completion posts to it; the org rule check
@@ -1773,18 +1847,32 @@ def capacity_continuation(c, job_id):
     return row[0] if row else None
 
 
-SOURCE_CONTINUATION_SQL = (
-    "SELECT result FROM attempts WHERE job_id=? "
-    "AND json_extract(result,'$.source_continue')=1 ORDER BY created_at DESC,rowid DESC LIMIT 1"
+CONTINUATION_SOURCE = "json_extract(result,'$.source_continue')=1"
+CONTINUATION_CAPACITY = "json_extract(result,'$.capacity_continue')=1"
+CONTINUATION_WHERE = (
+    f"({CONTINUATION_SOURCE} OR (thread_id IS NOT NULL AND thread_id<>'' AND ({CONTINUATION_CAPACITY} "
+    "OR json_extract(result,'$.lease_continue')=1 OR json_extract(result,'$.quota_continue')=1)))"
 )
+CONTINUATION_ORDER = (
+    f"ORDER BY CASE WHEN {CONTINUATION_SOURCE} THEN 0 WHEN {CONTINUATION_CAPACITY} THEN 1 ELSE 2 END,"
+    "created_at DESC,rowid DESC"
+)
+CONTINUATION_FIELDS = f"runner_id,thread_id,CASE WHEN {CONTINUATION_SOURCE} THEN result END AS source"
+CONTINUATION_SQL = (
+    f"SELECT {CONTINUATION_FIELDS} FROM attempts WHERE job_id=? AND {CONTINUATION_WHERE} {CONTINUATION_ORDER} LIMIT 1"
+)
+
+
+def continuation_run(c, job_id):
+    from .read_cache import one
+
+    return one(c, CONTINUATION_SQL, (job_id,))
 
 
 def source_continuation(c, job_id):
     """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
-    from .read_cache import one
-
-    row = one(c, SOURCE_CONTINUATION_SQL, (job_id,))
-    return json.loads(row[0]).get('source_continuation') if row else None
+    row = continuation_run(c, job_id)
+    return json.loads(row["source"]).get('source_continuation') if row and row["source"] else None
 
 
 def thread_payload(c, conv, msg):
@@ -1811,16 +1899,8 @@ def continuation_thread(c, job_id):
     source = source_continuation(c, job_id)
     if source:
         return source["thread_id"]
-    capacity = capacity_continuation(c, job_id)
-    if capacity:
-        return capacity
-    row = c.execute(
-        "SELECT thread_id FROM attempts WHERE job_id=? "
-        "AND (json_extract(result,'$.lease_continue')=1 OR json_extract(result,'$.quota_continue')=1) "
-        "ORDER BY created_at DESC LIMIT 1",
-        (job_id,),
-    ).fetchone()
-    return row[0] if row else None
+    row = continuation_run(c, job_id)
+    return row["thread_id"] if row else None
 
 
 LAST_LIMIT_SQL = (
@@ -3020,7 +3100,9 @@ def waiting_payers(c, settings, runner, bot, followed, loads=None, *, readable=N
                 break
 
 
-def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None, loads=None, settings=None):
+def job_refusal(
+    c, job, followed, ready, busy, live=frozenset(), *, runner=None, loads=None, settings=None, worktree_waits=None
+):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in; `loads`
@@ -3127,16 +3209,36 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
         and login_holds.holding(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, job["id"])
     ):
         return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
+    lane = job_lane(c, job["bot_id"], config, message, conversation)
     # A hub upgrade leaves active meeting attempts on the lane they were leased with.
     if (
-        (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
+        (job["bot_id"], lane) in busy
         or (job["bot_id"], sessions.LEGACY_MEETING_LANE + message["conversation_id"]) in busy
         or (job["bot_id"], task_id) in live
         or filer_live(c, message)
     ):
         return "lane_held"
-    if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):  # Health passes no live set: read it
+    if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):
         return "task_turn_out"
+    if runner is not None and job["attempt_id"]:
+        from .worktrees import retired
+
+        saved = continuation_run(c, job["id"])
+        if saved and saved["runner_id"] != runner["id"] and not retired(c, saved["runner_id"]):
+            return "continuation_home"
+    if task_id and runner is not None:
+        from .worktrees import worktree_homes, worktree_task
+
+        root = (
+            lane.removeprefix("task:")
+            if lane.startswith("task:")
+            else session_task_id(c, job["bot_id"], config, task_id)
+        )
+        homes = worktree_homes(c, job["bot_id"], worktree_task(c, job["bot_id"], task_id, root))
+        if homes and homes != {runner["id"]}:
+            if worktree_waits is not None:
+                worktree_waits[job["id"]] = homes
+            return "worktree_conflict" if len(homes) > 1 else "worktree_home"
     return holds.why(c, job["bot_id"], kinds=(holds.HANDED_BACK,), job=job, loads=loads)
 
 
@@ -3615,13 +3717,12 @@ def prime_job_checks(c, jobs):
     found = {}
     for part in H.chunks(ids):
         for row in c.execute(
-            "SELECT result,job_id FROM attempts WHERE job_id IN (%s) "
-            "AND json_extract(result,'$.source_continue')=1 ORDER BY created_at DESC,rowid DESC"
-            % ",".join("?" * len(part)),
+            f"SELECT {CONTINUATION_FIELDS},job_id FROM attempts WHERE job_id IN ({','.join('?' * len(part))}) "
+            f"AND {CONTINUATION_WHERE} {CONTINUATION_ORDER}",
             part,
         ):
             found.setdefault(row["job_id"], row)
-    prime(c, SOURCE_CONTINUATION_SQL, {(job_id,): found.get(job_id) for job_id in ids})
+    prime(c, CONTINUATION_SQL, {(job_id,): found.get(job_id) for job_id in ids})
     pairs = set()
     for job in jobs:
         message = H.message(c, job["message_id"])
@@ -3699,11 +3800,12 @@ def bot_claimable(
             return result(why, first["created_at"] if first else None, job=first["id"] if first else None)
         return result(why)
     busy = set(live_lanes(c)) | held_lanes
+    live = live_tasks(c)
     followed, refused = follow(c, bot, config), None  # refused: (created, reason) of the oldest held job
     queue = rows(c, queued_jobs_sql(), (bot,))
     for job in sorted(queue, key=lambda j: (j["created_at"], j["id"])) if oldest else queue:
         person = bool(job["person_sent"])
-        why = job_reason(c, settings, runner, job, followed, ready, busy, frozenset(), loads)
+        why = job_reason(c, settings, runner, job, followed, ready, busy, live, loads)
         if why is None or why in ignore_refusals or (oldest and why != "lane_held"):
             return result(None if why in ignore_refusals else why, job["created_at"], person, job["id"])
         if refused is None or job["created_at"] < refused[0]:
@@ -3712,7 +3814,17 @@ def bot_claimable(
 
 
 def queued_reasons(
-    c, settings, runner_id, bot, default=None, *, oldest=False, loads=None, ignore_refusals=(), sample=None
+    c,
+    settings,
+    runner_id,
+    bot,
+    default=None,
+    *,
+    oldest=False,
+    loads=None,
+    ignore_refusals=(),
+    sample=None,
+    worktree_waits=None,
 ):
     """Each queued job with its own claim reason; common bot fences are read once. `ignore_refusals`: last-boot holds
     to look past, as bot_claimable takes it."""
@@ -3759,7 +3871,7 @@ def queued_reasons(
     followed = follow(c, bot, config)
     live = live_tasks(c)
     for job in queue:
-        why = job_reason(c, settings, runner, job, followed, ready, busy, live, loads)
+        why = job_reason(c, settings, runner, job, followed, ready, busy, live, loads, worktree_waits=worktree_waits)
         yield job, None if why in ignore_refusals else why
 
 
@@ -3769,7 +3881,7 @@ def claim_waiting(c, job, loads=None):
     return holds.why(c, job["bot_id"], kinds=(holds.CLAIM_HELD,), job=job, loads=loads) is not None
 
 
-def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
+def job_reason(c, settings, runner, job, followed, ready, busy, live, loads, *, worktree_waits=None):
     """Why the claim passes over one queued job (a queued_jobs_sql row) of a bot claim_refusal let through, or None:
     the one per-job answer bot_claimable and queued_reasons give. A claim scope, the interrupted-work fence and a
     quarantine on its task or chat come from the row; the rest is job_refusal's, then the job's own login hold."""
@@ -3781,7 +3893,18 @@ def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
         return "lane_held"
     if claim_waiting(c, job, loads):
         return holds.CLAIM_HELD
-    return job_refusal(c, job, followed, ready, busy, live, runner=runner, loads=loads, settings=settings)
+    return job_refusal(
+        c,
+        job,
+        followed,
+        ready,
+        busy,
+        live,
+        runner=runner,
+        loads=loads,
+        settings=settings,
+        worktree_waits=worktree_waits,
+    )
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
@@ -5633,10 +5756,11 @@ class Execution:
         # What woke this turn, the bot's profile and how the release policy let it go, for its run record
         # (backend/wake_presets.py). A job released to fork the bot's latest session names it to a runner that can.
         job = c.execute("SELECT wake_class,hold_until,release,released FROM jobs WHERE id=?", (row["id"],)).fetchone()
-        fork_thread = (
-            wake_presets.fork_thread(c, row["id"], row["bot_id"], runner["id"]) if runner_forks(runner) else None
+        fork = wake_presets.fork_source(c, row["id"], row["bot_id"], runner["id"]) if runner_forks(runner) else None
+        fork_thread = fork["thread_id"] if fork and fork_source_current(c, row["bot_id"], config, fork) else None
+        fresh_session = runner_starts_fresh(runner) and wake_presets.fresh_session(
+            job, stale_fork=bool(fork and not fork_thread)
         )
-        fresh_session = runner_starts_fresh(runner) and wake_presets.fresh_session(c, row["id"])
         c.execute(
             "UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?",
             (json.dumps(wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))), *handed, aid),
@@ -5769,7 +5893,9 @@ class Execution:
             else None
         )
         routine = None
+        attached_worktrees = []
         github_repository = None
+        root = None
         if task:
             # A task has no description: what was asked is its first message (from whoever wrote it), and a routine's
             # or a setup's working instructions reach its bot through the run, never the chat. A run started by the
@@ -5813,10 +5939,8 @@ class Execution:
 
             # The one repository the task's work is in, for the turn's `gh` (GH_REPO, runner-rs/src/env.rs).
             github_repository = repository(c, task["id"], lambda other: readable(H.task(c, other)))
-            from .worktrees import recovery_prompt
+            from .worktrees import attached, recovery_prompt, worktree_task
 
-            if recovery_notes := recovery_prompt(c, task, row['bot_id']):
-                task['worktree_recovery'] = recovery_notes
             if check:
                 task["check"] = {k: check[k] for k in ("runtime", "model", "role")}
             goal = task_goal(c, row["bot_id"], followed, task)
@@ -5836,6 +5960,12 @@ class Execution:
                         "checkpoint_by_id": root.get("checkpoint_by_id") if kept else None,
                     }
                 )
+            else:
+                root = None
+            tree_task = worktree_task(c, row["bot_id"], task["id"], root["id"] if root else None)
+            attached_worktrees = attached(c, tree_task, runner["id"], row["bot_id"])
+            if recovery_notes := recovery_prompt(c, task if tree_task == task["id"] else root, row["bot_id"]):
+                task["worktree_recovery"] = recovery_notes
             own_room = conv and conv.get("kind") == "task" and conv.get("task_id") == task["id"]
             from .chat_goals import clear_task_goal, task_goal_row
 
@@ -5925,6 +6055,7 @@ class Execution:
         # prompt since the history page may not reach them, and the deferred notes above. Their deadlines are met.
         from . import delivery
 
+        deferred_ids = set()
         deferred = (
             ""
             if making_page or voice_call or relationship
@@ -5937,6 +6068,7 @@ class Execution:
                     [item["id"] for item in notes],
                     job=row["id"],
                     current=msg["id"],
+                    message_ids=deferred_ids,
                 ),
                 notes=len(notes),
             )
@@ -5956,7 +6088,7 @@ class Execution:
         subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
-        from . import task_context, worktrees
+        from . import task_context
         from .finance import brief as finance_brief
 
         make_page_task = self.auth.task(c, acting or bot_who, making_page["task"]) if making_page else None
@@ -5972,6 +6104,42 @@ class Execution:
         runner_wire.conversation(c, conv)
         runner_wire.conversation(c, conversation)  # the claim's copy (thread_payload) was made before
         wire_task = runner_wire.task(task)
+        wire_config = runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config))
+        session_fence = None
+        moved_history = None
+        if not (
+            continue_thread
+            or relationship
+            or making_page
+            or voice_call
+            or (not task and sessions.stateless(wire_config))
+        ):
+            key = computer_session_key(
+                wire_config, row["bot_id"], task, task["session_task_id"] if task else None, conversation
+            )
+            home = session_computer(c, row["bot_id"], key)
+            session_fence = claim_session_fence(c, aid, row["bot_id"], key, runner["id"])
+            # Only a turn landing on another computer than the session's last one starts fresh and needs the replay.
+            if (
+                home
+                and home["runner_id"] != runner["id"]
+                and not (row["bot_id"] == self.store.settings.assistant_bot and conv["scope"] == "personal")
+            ):
+                # From the run the checkpoint covers; with no checkpoint, no lower bound (the epoch and page cap bound it).
+                checkpoint_at = (root or {}).get("checkpoint_at")
+                previous = (
+                    c.execute(
+                        "SELECT runner_id,thread_id,message_id,created_at FROM attempts WHERE bot_id=? "
+                        f"AND computer_session_key=? AND {SAVED_SESSION_RUN} AND created_at<=? "
+                        "ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                        (row["bot_id"], key, checkpoint_at),
+                    ).fetchone()
+                    if checkpoint_at
+                    else None
+                )
+                moved_history = self.moved_history(
+                    c, bot_who, row, msg["id"], conversation, root, followed, lane, previous, deferred_ids
+                )
         return {
             "attempt": rooms.scoped_wake(
                 c,
@@ -6057,8 +6225,9 @@ class Execution:
                     **({"fresh_session": True} if fresh_session else {}),
                     **({"source_continuation": source} if source and not relationship and payment is None else {}),
                     # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
-                    "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
+                    "worktrees": attached_worktrees,
                     "history": history,
+                    **({"moved_history": moved_history} if moved_history is not None else {}),
                     "principal": principal,
                     # What the person's chat bot has learned, read now: a deleted entry is gone from this turn
                     # (backend/learned.py; rendered by runner-rs/src/prompt.rs). Outside their own chat only
@@ -6073,7 +6242,8 @@ class Execution:
                     # (backend/updates_chat.py). None for every other turn.
                     "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
                     # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
-                    "config": runner_versions.wire_template(rooms.session_config(conv, row["bot_id"], config)),
+                    "config": wire_config,
+                    **({"session_fence": session_fence} if session_fence is not None else {}),
                     # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                     # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).
                     "session_epoch": session_epoch["epoch"] if session_epoch else 0,
@@ -6082,6 +6252,44 @@ class Execution:
                 },
             )
         }
+
+    def moved_history(self, c, who, job, current_id, conversation, root, config, lane, previous, deferred_ids):
+        """A new computer recovers what arrived after the last prompt snapshot in each readable room."""
+        from . import threads
+
+        bot = job["bot_id"]
+        rooms_by_id = {conversation["id"]: conversation}
+        parent_id = (root or {}).get("conversation_id")
+        if parent_id and parent_id not in rooms_by_id:
+            try:
+                parent = thread_payload(c, self.auth.conversation(c, who, parent_id), None)
+                if parent["audience_class"] == conversation["audience_class"]:
+                    rooms_by_id[parent_id] = parent
+            except Problem:
+                pass
+        wake = H.message(c, previous["message_id"], include_deleted=True) if previous else None
+        replay = {}
+        for cid, room in rooms_by_id.items():
+            since = previous["created_at"] if previous else None
+            if wake and wake["conversation_id"] == cid:
+                since = min(since, wake["created_at"])
+            epoch = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (cid,)).fetchone()
+            if epoch:
+                since = max(since or "", epoch["updated_at"])
+            page = privacy.page(c, who, cid, since=since, limit=HISTORY_PAGE, max_bytes=64_000)["messages"]
+            page = lane_history(c, bot, config, page, room, lane)
+            if card_slot.of(job):
+                pending = card_slot.pending(c, bot, [m["id"] for m in page])
+                page = [m for m in page if m["id"] not in pending]
+            if room["audience_class"] == "public":
+                threads.mark_narrower(c, page)
+            replay.update(
+                (m["id"], m)
+                for m in page
+                if m["id"] != current_id and m["id"] not in deferred_ids and not m.get("audience_limited")
+            )
+        history = sorted(replay.values(), key=lambda m: m["created_at"])[-HISTORY_PAGE:]
+        return runner_wire.messages(c, history, who=who, auth=self.auth)
 
     @staticmethod
     def refuse_unreadable(c, row, msg, aid):
@@ -6702,6 +6910,13 @@ class Execution:
                     "detail": reserved.get("waiting", "Start reservation expired or stopped"),
                 },
             }
+        if key := row["computer_session_key"]:
+            c.execute(
+                "INSERT INTO session_computers(bot_id,session_key,runner_id,fence) VALUES(?,?,?,0) "
+                "ON CONFLICT(bot_id,session_key) DO UPDATE SET runner_id=excluded.runner_id,fence=fence+1 "
+                "WHERE session_computers.runner_id<>excluded.runner_id",
+                (row["bot_id"], key, row["runner_id"]),
+            )
         c.execute("UPDATE attempts SET state='running',started_at=? WHERE id=?", (H.now(), aid))
         task_reads.run_moved(c, aid)
         from . import task_wakes

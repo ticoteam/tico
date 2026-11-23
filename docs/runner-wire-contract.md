@@ -42,6 +42,10 @@ directions and fails on any break.
 Answers are read leniently: a runner ignores fields it does not know. Requests are read strictly: the server's models
 forbid unknown fields (a 422 `validation` error naming the field).
 
+Claim attempts may include `session_fence`, an integer for the bot's session key. It advances when a turn
+starts on a different computer and makes saved primary and fallback threads from before that move ineligible
+to resume. Older runners ignore the field. Newer runners use their existing resume rules when it is absent.
+
 Claim attempts may include `task_context`: up to ten pages and ten meetings as ids, titles, versions and dates.
 It contains no source content. An older server omits it; the runner then renders no context block. The bot pulls
 content with its normal read commands and its own permissions, the same during task work as in any other turn.
@@ -84,6 +88,10 @@ an `Option` with that fallback. An answer it cannot read at all is a `protocol` 
 A pre-start hand-back sends a status event with `planned_drain: true` alongside `yielded`.
 Older servers accept the open payload and use their existing yield handling. If a server answers
 422 naming `planned_drain`, the runner retries the event batch without that field.
+
+A claim may carry `moved_history` for fresh threads after a computer move, including task-model fallback threads.
+It holds a bounded page since the previous turn's inputs, with readable parent-room messages for a shared task session.
+Older runners ignore the field. Newer runners can use the ordinary history page when the hub omits it.
 
 ## A runner older than the server takes
 

@@ -513,6 +513,19 @@ impl State {
         })
     }
 
+    /// The computer fence clears stale primary and side threads together, independently of a person's Clear.
+    pub fn fence_session(
+        &self,
+        bot: &str,
+        session: &str,
+        fence: Option<i64>,
+    ) -> Result<(), String> {
+        if let Some(epoch) = fence {
+            self.epoch_moved(bot, "\0computer", session, epoch)?;
+        }
+        Ok(())
+    }
+
     /// Whether the Hub cleared this session since it last ran here: its epoch moved (backend/execution.py
     /// `bot_session_epoch` for the bot's shared thread, recorded for conversation "", and `session_epoch` for any
     /// other). Then the session's threads are dropped, in the same transaction that records the new epoch, so a turn
@@ -597,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn a_moved_epoch_drops_its_sessions_threads_and_an_unchanged_one_keeps_them() {
+    fn a_session_clear_and_computer_fence_drop_only_affected_threads() {
         let state = State::open(&temp()).unwrap();
         state.save_session("ops", "bot", "claude", "t-old").unwrap();
         state.save_session("ops", "bot", "codex", "x-old").unwrap();
@@ -629,8 +642,7 @@ mod tests {
             state.session("ops", "bot", "claude").unwrap().as_deref(),
             Some("t-new")
         );
-        // A conversation's own thread moves with that conversation's epoch, apart from the bot's, and its side
-        // sessions with it; another conversation whose key only starts the same way keeps its own.
+        // A computer fence changes independently of Clear and drops this session's side threads too.
         state
             .save_session("ops", "conversation:c-ana", "claude", "c-old")
             .unwrap();
@@ -644,9 +656,10 @@ mod tests {
         assert!(!state
             .epoch_moved("ops", "c-ana", "conversation:c-ana", 0)
             .unwrap());
-        assert!(state
-            .epoch_moved("ops", "c-ana", "conversation:c-ana", 1)
-            .unwrap());
+        let room = "conversation:c-ana";
+        state.fence_session("ops", room, Some(0)).unwrap();
+        assert!(state.session("ops", room, "claude").unwrap().is_some());
+        state.fence_session("ops", room, Some(2)).unwrap();
         assert_eq!(
             state
                 .session("ops", "conversation:c-ana", "claude")
@@ -654,6 +667,14 @@ mod tests {
             None
         );
         assert_eq!(state.session("ops", &side, "claude").unwrap(), None);
+        state.save_session("ops", room, "claude", "c-new").unwrap();
+        state.fence_session("ops", room, None).unwrap();
+        state.fence_session("ops", room, Some(2)).unwrap();
+        assert!(!state.epoch_moved("ops", "c-ana", room, 0).unwrap());
+        assert_eq!(
+            state.session("ops", room, "claude").unwrap().as_deref(),
+            Some("c-new")
+        );
         assert_eq!(
             state
                 .session("ops", "conversation:c-ana2", "claude")

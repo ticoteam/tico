@@ -35,8 +35,9 @@ Messages you write there go to that task's session.
 
 ## Subtasks
 
-A subtask someone else files for a bot under its task continues the parent's session by default: same thread, same
-worktree, same checkpoint. The bot's turns on the parent and that subtask take turns. A subtask the bot filed for
+A subtask someone else files for a bot under its task continues the parent's thread and checkpoint by default.
+It uses the parent's worktrees when it has none of its own. The bot's turns on the parent and that subtask take turns.
+A subtask the bot filed for
 itself is new work, so it starts its own session and runs beside the parent. A subtask whose parent belongs to
 someone else, or has different readers, also starts its own session.
 
@@ -54,10 +55,13 @@ A bot's Home and a task each keep one session, however long it runs. The harness
 the bot's `compact_at` (or the task's own run window, or the fallback's when a fallback runs it), and that is the only size limit: Tico never starts a new session to save tokens. The next turn
 resumes the saved session. If the host refuses, Tico asks once more after a short pause.
 
-A new session starts only when the saved one is not on this computer (another computer ran the bot, or its
-files were cleared) or the host refuses it twice. The new session starts from the task's checkpoint and what was said
-since that turn, the bot's own replies included, and it is told so. A session does not move between computers. Every
-run records how its session began (`attempts.session_kind`, `attempts.session_why`, [hub sql](hub-sql.md)): resumed or new,
+A turn that starts on another computer advances its session's fence. Returning to an earlier computer starts a fresh
+provider session when the saved thread predates that move. This applies to shared bot sessions, task sessions, and their
+fallbacks. The new session gets the checkpoint and a bounded page of messages since the previous turn's input, including
+the bot's own replies and the parent room when they share a session. A released routine can fork only a current thread
+on its computer. An exact continuation waits for the computer that saved it while that computer is registered. If the
+computer is retired and the saved thread is lost, the run goes to interrupted-work review.
+Every run records how its session began (`attempts.session_kind`, `attempts.session_why`, [hub sql](hub-sql.md)): resumed or new,
 with the reason (`none_saved`, `not_found`, `resume_failed`, `compact_failed`, `interrupted`, `fallback_side`). A new
 session other than the first also leaves a line in the run's diagnostics and in the task's history ("Started a new
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.

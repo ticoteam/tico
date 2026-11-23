@@ -336,7 +336,7 @@ def _repeat_slot(c, job, due):
 def idle_seconds(c, bot, at, forked=False):
     """How long the bot has been idle at `at`: None while a turn of it is running, or when it never ran (no warm cache
     to wait for). Its last model request is read as its last turn's end. With `forked`, for a job that continues the
-    bot's latest session, idle counts from the turn `fork_thread` continues (the newest on a task that is not private),
+    bot's latest session, idle counts from the turn `fork_source` continues (the newest on a task that is not private),
     so a private task's or a chat's turn since does not restart the count: its cache is not the one the job reads."""
     if c.execute("SELECT 1 FROM attempts WHERE bot_id=? AND state IN ('leased','running') LIMIT 1", (bot,)).fetchone():
         return None
@@ -461,29 +461,28 @@ def replan(c, bot):
     )
 
 
-def fork_thread(c, job_id, bot, runner_id):
-    """The session a released job with session `fork` continues from: the thread of the bot's latest finished turn on
-    this computer (a fork reads it from there) on a task that is not private, that reached the model (the same turn
-    `idle_seconds` counts from with `forked`), or None. A private task's session and a
-    chat's are never forked into a routine's run, whose task others may read; the runner keeps those apart too."""
+def fork_source(c, job_id, bot, runner_id):
+    """The latest finished turn on this computer eligible to supply a released job's fork. It reached the model
+    (`idle_seconds` counts from the same kind of turn) and ran on a non-private task, since a routine may be read
+    by others."""
     row = c.execute("SELECT release FROM jobs WHERE id=?", (job_id,)).fetchone()
     if not row or policy_of(row[0])["session"] != FORK:
         return None
-    found = c.execute(
-        "SELECT a.thread_id FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.bot_id=? AND a.runner_id=? "
+    return c.execute(
+        "SELECT a.thread_id,a.runner_id,a.computer_session_key,a.message_id,a.task_id,a.lane "
+        "FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.bot_id=? AND a.runner_id=? "
         "AND a.thread_id IS NOT NULL AND a.finished_at IS NOT NULL AND coalesce(a.job_id,'')<>? "
         f"AND coalesce(t.private,0)=0 AND {WARMED} ORDER BY a.finished_at DESC LIMIT 1",
         (bot, runner_id, job_id),
     ).fetchone()
-    return found[0] if found else None
 
 
-def fresh_session(c, job_id):
-    """Whether a job the release policy let go must start a session of its own (session `fresh`, the default) rather
-    than resume its conversation's: the runner then starts a new one and leaves the conversation's session as it was."""
-    row = c.execute("SELECT wake_class,release,released FROM jobs WHERE id=?", (job_id,)).fetchone()
+def fresh_session(job, *, stale_fork=False):
+    """A released job starts fresh by default, including when its fork candidate is from an earlier computer visit."""
     return bool(
-        row and row["wake_class"] in POLICY_CLASSES and row["released"] and policy_of(row["release"])["session"] != FORK
+        job["wake_class"] in POLICY_CLASSES
+        and job["released"]
+        and (stale_fork or policy_of(job["release"])["session"] != FORK)
     )
 
 

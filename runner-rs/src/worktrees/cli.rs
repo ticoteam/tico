@@ -352,7 +352,8 @@ fn recovery_warning(link: &Map<String, Value>) -> String {
     notes.join(" ")
 }
 
-const RECOVERY_NOTE: &str = "The old branch is missing on origin. Old work was not published there; starting a new branch from the default branch.";
+const RECOVERY_NOTE: &str =
+    "No pushed work could be recovered from origin. Starting a new branch from the default branch.";
 
 /// `link` with `fields` set, as the command's answer.
 fn answer(link: &Value, fields: Value) -> Value {
