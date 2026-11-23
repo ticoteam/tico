@@ -150,7 +150,10 @@ def test_health_warns_only_for_a_personal_plan_without_an_exit(api):
     assert warnings() == []
     add(api, token="cara-test")
     [check] = warnings()
-    assert (check["label"], check["status"], check["items"]) == ("No exit computer", "warn", [{"text": "Cara"}])
+    assert (check["label"], check["status"]) == ("No exit computer", "warn")
+    assert [item["name"] for item in check["items"]] == ["Cara"]
+    # The issue list sorts every check's items by name, so this one must carry the shared item shape.
+    assert [i["name"] for i in get(api, "health/issues")["issues"] if i["kind"] == "plan_exit_missing"] == ["Cara"]
 
     runner(api, operator="cara")
     assert warnings() == []

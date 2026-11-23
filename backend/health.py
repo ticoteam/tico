@@ -3072,8 +3072,12 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     "No exit computer",
                     "warn",
                     "Personal plans",
-                    [_fix("Open Providers", "#/settings/providers")],
-                    items=[{"text": name} for _, name in missing],
+                    [fix := _fix("Open Providers", "#/settings/providers")],
+                    # The shared item shape (bot, name, text, fixes) lets issue lists sort and show them.
+                    items=[
+                        {"bot": "", "name": name, "text": "No exit computer for personal plans", "fixes": [fix]}
+                        for _, name in missing
+                    ],
                 )
             )
     if wait := _payer_waits(c, who, auth, loads, settings):
