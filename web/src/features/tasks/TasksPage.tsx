@@ -5,6 +5,7 @@ import { useAction } from '@/actions';
 import { meQuery, useActor } from '@/data';
 import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
+import { pressListRow } from '@/lib';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { announce, useDrag } from '@/kit/Drag';
@@ -416,7 +417,11 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
       title={t.title}
       data-target={`task:${t.number ?? t.id}`}
       aria-pressed={onPick ? !!picked : undefined}
-      onClick={onPick}
+      onClick={(e) => {
+        onPick?.(e);
+        // opened from its board: an answer that leaves nothing on it goes on to the task below it in the list beside it
+        pressListRow(p.id, String(t.number ?? t.id), e);
+      }}
       // the card's wrapper drags it, not the link (while picking nothing drags)
       draggable={picked === undefined ? false : undefined}
     >

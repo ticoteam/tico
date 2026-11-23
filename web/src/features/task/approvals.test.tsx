@@ -10,7 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, noteList, notePlace, type ListRow } from '@/lib';
+import { forgetPlaces, noteList, notePlace, pressListRow, type ListRow } from '@/lib';
 import { useFollow } from '@/live/follow';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
@@ -1383,10 +1383,11 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     const row = (id: string, n: number): ListRow => ({ id, n: String(n) });
     const answered = () => send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
     // as the shell's list does: its rows in the order drawn (`earlier`, then `rows`), again as an answer moves them
-    // (`then`, once it is taken); opened from its board
+    // (`then`, once it is taken); opened by a press on its board's card
     const approveBeside = async (rows: ListRow[], then?: ListRow[], earlier?: ListRow[]) => {
       serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? (then && noteList({ pipeline: 'legal-responses', open: '36461', rows: then }), { body: { task: answered() } }) : null));
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
+      pressListRow('legal-responses', '36461'); // its card on the board
       await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
       if (earlier) noteList({ pipeline: 'legal-responses', open: '36461', rows: earlier });
       noteList({ pipeline: 'legal-responses', open: '36461', rows });
@@ -1441,6 +1442,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
             ? { status: 404, body: {} }
             : own(url, method);
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
+      pressListRow('legal-responses', '36461'); // its card on the board
       await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
       noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461), row('a2', 36470)] });
       const box = (named: string) =>

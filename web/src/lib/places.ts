@@ -35,7 +35,7 @@ export function notePlace(path: string, searchStr: string, search: Record<string
   if (!isTaskPath(path)) beforeTask = { href: path + searchStr, at: stepOf(state) };
   const board = BOARD.exec(path);
   if (board?.[1]) boards.set(decodeURIComponent(board[1]), search);
-  noteFromList(path, search, entryOf(state), board?.[1] ? decodeURIComponent(board[1]) : null);
+  noteFromList(path, search, entryOf(state));
 }
 
 /** The search a pipeline's board was last shown with (its view and filters), or none. */
@@ -58,15 +58,15 @@ export function leaveTask(r: Steps, board?: () => string | null | Promise<string
   });
 }
 
-/* A task opened from its pipeline: from its board (not a thread's card over it), or by a press on a row of the list
-   beside an open task. Each entry in the history that is one (its own key: Back and Forward come to the same entry, a
-   new address is a new one), with its task (`<pipeline>/<task>`); `seen`, every entry shown, so a step back or forward
-   onto one keeps what it had; `here`, the place shown now; `last`, the board shown just before it, if one was. */
+/* A task opened from its pipeline: by a press on a card of its board, on a row of the list beside an open task, or as
+   Tico went on to the row below after an answer. Only that press says so, never the address before it (a link, the
+   tracker over the board). Each entry in the history that is one (its own key: Back and Forward come to the same
+   entry, a new address is a new one), with its task (`<pipeline>/<task>`); `seen`, every entry shown, so a step back
+   or forward onto one keeps what it had; `here`, the place shown now. Kept in memory: after a reload, none is. */
 const OPEN_TASK = /^\/tasks\/([^/]+)\/(?!edit(?:\/|$))([^/]+)/;
 const fromList = new Map<string, string>();
 const seen = new Set<string>();
 let pressed: string | null = null;
-let last: string | null = null;
 let here: { entry: string; task: string } | null = null;
 
 const entryOf = (state: unknown): string => {
@@ -74,26 +74,27 @@ const entryOf = (state: unknown): string => {
   return String(s?.__TSR_key ?? s?.key ?? stepOf(state) ?? '');
 };
 
-function noteFromList(path: string, search: Record<string, unknown>, entry: string, board: string | null): void {
+function noteFromList(path: string, search: Record<string, unknown>, entry: string): void {
   const t = OPEN_TASK.exec(path);
   const task = t ? `${decodeURIComponent(t[1]!)}/${decodeURIComponent(t[2]!)}` : null;
   // a new entry only (an address opened, or one changed in place): Back and Forward come to one as it was
   if (task && !seen.has(entry)) {
-    const plain = search.chat === undefined && search.via === undefined; // not a thread's card
-    const fromBoard = plain && last !== null && task.startsWith(`${last}/`);
-    // the same task's address changing (its tab named, another tab) keeps how it was opened
-    const kept = plain && here?.task === task && fromList.get(here.entry) === task;
-    if (pressed === task || fromBoard || kept) fromList.set(entry, task);
+    // the same task's address changing (its tab named, another tab) keeps how it was opened; a thread's card does not
+    const kept = search.chat === undefined && search.via === undefined && here?.task === task && fromList.get(here.entry) === task;
+    if (pressed === task || kept) fromList.set(entry, task);
   }
   seen.add(entry);
   pressed = null;
   here = task ? { entry, task } : null;
-  last = board;
 }
 
-/** A row of the list beside an open task pressed (its pipeline and task, as its address names them): the task it opens
-    was opened from the list. */
-export const pressListRow = (pipeline: string, task: string): void => void (pressed = `${pipeline}/${task}`);
+/** A press that opens a task from its pipeline (a board's card, a row of the list beside an open task; none for Tico's
+    own move on): its pipeline and task as the address names them. Only a plain press opens it here: one with a key
+    held, another button, or one the page took for itself (picking) marks nothing. */
+export function pressListRow(pipeline: string, task: string, e?: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented: boolean }): void {
+  if (e && (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.defaultPrevented)) return;
+  pressed = `${pipeline}/${task}`;
+}
 
 /** A row of the list beside an open task: its task's id, its number as the address names it. */
 export interface ListRow {
@@ -136,6 +137,5 @@ export function forgetPlaces(): void {
   fromList.clear();
   seen.clear();
   pressed = null;
-  last = null;
   here = null;
 }

@@ -824,8 +824,7 @@ function PipelineRow({ t, pipeline, open, me }: { t: TaskItem; pipeline: string;
       className={n === open || t.id === open ? 'li is-on' : 'li'}
       title={t.title}
       data-target={`task:${n}`}
-      // a plain press opens it here; a press with a key held opens it elsewhere (another tab or window)
-      onClick={(e) => void (e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey && pressListRow(pipeline, n))}
+      onClick={(e) => pressListRow(pipeline, n, e)}
     >
       <span className="li-mark">{waits ? <FlowMark size={10} /> : null}</span>
       <span className="li-main">

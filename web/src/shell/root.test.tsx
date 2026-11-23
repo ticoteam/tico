@@ -11,7 +11,7 @@ import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
 import { pipelineTasksQuery } from '@/features/tasks/routing';
-import { forgetPlaces, nextInList } from '@/lib';
+import { forgetPlaces, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
@@ -167,7 +167,9 @@ function show(at: string, browser = false, opened?: (p: { pipeline: string; task
     component: () => (
       <main className="pane page">
         <h1>Board</h1>
-        <Link to="/tasks/$pipeline/$task" params={{ pipeline: 'eng', task: '7' }}>Bulk edit stock</Link>
+        <Link to="/tasks/$pipeline/$task" params={{ pipeline: 'eng', task: '7' }} onClick={(e) => pressListRow('eng', '7', e)}>
+          Bulk edit stock
+        </Link>
       </main>
     ),
   });
@@ -1037,11 +1039,24 @@ describe('an answer on a task beside its pipeline’s list', () => {
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/8(\/|$)/));
   });
 
-  it('opened by a link, stepping back to it from its board does not make it opened from the board: Approve goes to the board', async () => {
+  it('opened over its board with no press on its card (Tico’s tracker), Approve goes back to the board', async () => {
+    const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+  });
+
+  it('opened by a link, then its board, a reload and Back: Approve goes to the board', async () => {
     const router = show('/tasks/eng/7', false, page);
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/details'));
     await act(() => router.navigate({ href: '/tasks/eng' }));
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    // the reload: what the app noted in memory is gone, and the board it loads on is noted afresh
+    forgetPlaces();
+    notePlace('/tasks/eng', '', {}, router.state.location.state);
     act(() => router.history.back());
     await screen.findByRole('navigation', { name: 'Engineering' });
     await approve(router, 7);

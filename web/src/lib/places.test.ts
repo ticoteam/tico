@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forgetPlaces, leaveTask, nextInList, noteList, notePlace } from './places';
+import { forgetPlaces, leaveTask, nextInList, noteList, notePlace, pressListRow } from './places';
 
 /* Closing a task goes back to where it was opened from, never to the task itself. */
 
@@ -62,10 +62,21 @@ describe('nextInList', () => {
     { id: 't5', n: '5' },
   ];
 
-  it('goes on to the row below only for a task opened from its board, not from a thread’s card over the board', () => {
+  it('goes on to the row below only for a task a press opened from its board or list, never from the address before it', () => {
     // each entry in the history as the router keys it
     const entry = (n: number, key: string) => ({ ...at(n), __TSR_key: key });
     notePlace('/tasks/p1', '', {}, entry(0, 'a'));
+    // opened over the board with no press of its own (Tico's tracker, a link): not from the board
+    notePlace('/tasks/p1/7', '', {}, entry(1, 'x'));
+    noteList({ pipeline: 'p1', open: '7', rows });
+    expect(nextInList('t7')).toBeNull();
+    notePlace('/tasks/p1', '', {}, entry(0, 'a'));
+    // a press on its card that the page took for itself (picking) opens nothing
+    pressListRow('p1', '7', { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: true });
+    notePlace('/tasks/p1/7', '', {}, entry(1, 'y'));
+    expect(nextInList('t7')).toBeNull();
+    notePlace('/tasks/p1', '', {}, entry(0, 'a'));
+    pressListRow('p1', '7', { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, defaultPrevented: false });
     notePlace('/tasks/p1/7', '', {}, entry(1, 'b'));
     // the address names its tab in place: the same task
     notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
@@ -74,12 +85,14 @@ describe('nextInList', () => {
     // the same task opened again from a thread's card in it: from the thread
     notePlace('/tasks/p1/7', '?chat=c1&via=thread', { chat: 'c1', via: 'thread' }, entry(2, 'e'));
     expect(nextInList('t7')).toBeNull();
-    // Back to the board, and the task again from a thread's card over it
+    // Back and Forward to the entry its card opened: from the board again
     notePlace('/tasks/p1', '', {}, entry(0, 'a'));
-    notePlace('/tasks/p1/7', '?chat=c1&via=thread', { chat: 'c1', via: 'thread' }, entry(1, 'd'));
-    expect(nextInList('t7')).toBeNull();
-    // Back and Forward to the entry opened from the board: from the board again
     notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
     expect(nextInList('t7')).toEqual({ pipeline: 'p1', task: '5' });
+    // after a reload nothing is marked: Back to it goes back, as from a link
+    forgetPlaces();
+    notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
+    noteList({ pipeline: 'p1', open: '7', rows });
+    expect(nextInList('t7')).toBeNull();
   });
 });
