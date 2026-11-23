@@ -18,8 +18,7 @@ import threading
 import time
 import uuid
 from collections import namedtuple
-from concurrent.futures import Future, ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FutureTimeout
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -1009,20 +1008,30 @@ class GitHubApp:
         if self.settings.rehearsal or not slug:
             return None
 
-        def look():
-            # httpx's timeout is per connect and per read: a slow answer in pieces outlasts it, so the wait below is
-            # the deadline, and this read ends on its own timeouts after the connect has moved on.
-            with _client() as http:
-                r = http.get("/users/" + quote(bot_login(slug), safe=""), timeout=BOT_LOOKUP_SECONDS)
-            return (int(r.json().get("id") or 0) or None) if r.status_code < 300 else None
+        deadline = time.monotonic() + BOT_LOOKUP_SECONDS
+        found = {}
 
-        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="github-bot-id")
-        try:
-            return pool.submit(look).result(timeout=BOT_LOOKUP_SECONDS)
-        except (FutureTimeout, httpx.HTTPError, ValueError, AttributeError, TypeError):
-            return None
-        finally:
-            pool.shutdown(wait=False)
+        def look():
+            # httpx times each connect and read, not the whole answer: the body is read in pieces and dropped at the
+            # deadline, and the thread is a daemon, so a GitHub that stalls holds neither the connect nor the shutdown.
+            try:
+                with _client() as http:
+                    url = "/users/" + quote(bot_login(slug), safe="")
+                    with http.stream("GET", url, timeout=BOT_LOOKUP_SECONDS) as r:
+                        body = b""
+                        for piece in r.iter_bytes():
+                            body += piece
+                            if time.monotonic() > deadline or len(body) > 65536:
+                                return
+                        if r.status_code < 300:
+                            found["id"] = int(json.loads(body).get("id") or 0) or None
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+                pass
+
+        worker = threading.Thread(target=look, name="github-bot-id", daemon=True)
+        worker.start()
+        worker.join(BOT_LOOKUP_SECONDS)
+        return None if worker.is_alive() else found.get("id")
 
     def exchange(self, code):
         r = self._call("POST", f"/app-manifests/{quote(code, safe='')}/conversions")

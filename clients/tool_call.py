@@ -81,9 +81,11 @@ def not_proxied(tool, environ, shell=True):
         )
     stem = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
     if not shell:
+        # The first word's prefix covers the full id's too (own_variables' fallback); cut drops every value first.
+        first = stem.split("_", 1)[0] or stem
         return (
             f"{tool} is not proxied for this MCP server, which cannot see your shell's variables. Run "
-            f"`env | grep ^{stem}_` (names only): if it lists any, {tool}'s access is on your computer, so call the "
+            f"`env | cut -d= -f1 | grep ^{first}_` (names only): if it lists any, {tool}'s access is on your computer, so call the "
             f"{vendor} API yourself with them; if none, check that this bot is granted {tool} (tico tool show {tool})."
         )
     return (

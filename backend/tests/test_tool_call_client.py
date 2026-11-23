@@ -106,8 +106,14 @@ def test_the_mcp_tool_names_the_variables_it_sees_and_never_says_none_are_set(mo
         monkeypatch.delenv(name)
     unseen = tools.tool_call(None, ask)["error"]
     assert unseen.startswith("jira is not proxied for this MCP server, which cannot see your shell's variables.")
-    assert "env | grep ^JIRA_" in unseen and "call the Jira API yourself" in unseen and "tico tool show jira" in unseen
+    # The check prints names only (cut drops every value first) and looks under the first word, as own_variables does.
+    assert (
+        "`env | cut -d= -f1 | grep ^JIRA_`" in unseen
+        and "call the Jira API yourself" in unseen
+        and "tico tool show jira" in unseen
+    )
     assert "no JIRA_ variable is set" not in unseen
+    assert "`env | cut -d= -f1 | grep ^CLOSE_`" in tool_call.not_proxied("close-crm", {}, shell=False)
     monkeypatch.setenv("JIRA_API_TOKEN", "s3cret-token")
     monkeypatch.setenv("JIRA_BASE_URL", "https://acme.example")
     seen = tools.tool_call(None, ask)["error"]

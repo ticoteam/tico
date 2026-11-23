@@ -54,7 +54,7 @@ directly. Called for one anyway, it says the access is on this computer and name
 (`JIRA_*`, or the first word's: `CLOSE_*` for close-crm), names only, never values; with none, it says to check the
 grant (clients/tool_call.py `not_proxied`). The MCP tool `tico_tool_call` runs in a server a harness starts with
 Tico's own variables only, so it cannot see a key in the agent's shell: with none of its own it says how to look
-(`env | grep ^JIRA_`, names only) and what to do either way. One exception holds a bot at Read to reads on a computer tool too: a bot granted Read gets the tool's
+(`env | cut -d= -f1 | grep ^JIRA_`, names only) and what to do either way. One exception holds a bot at Read to reads on a computer tool too: a bot granted Read gets the tool's
 read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 
