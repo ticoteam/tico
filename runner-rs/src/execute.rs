@@ -3233,7 +3233,9 @@ impl Runner {
                 // The new conversation agy moved the thread to holds this turn only: the next turn is told everything
                 // again (continuity::refresh_key). Marked here, beside the id agy saved, so a drain that cancels the
                 // drive cannot leave the one without the other.
-                let _ = self.state.repo_rules(&crate::continuity::refresh_key(th), Some("1"));
+                let _ = self
+                    .state
+                    .repo_rules(&crate::continuity::refresh_key(th), Some("1"));
             }
             if session
                 .as_ref()
@@ -3360,18 +3362,17 @@ impl Runner {
         // changed things.
         let fallback_allowed =
             !paid_by && !voice_reply && !native_control && continuing.is_empty() && !drove.tool_ran;
-        let mut pending =
-            if unavailable && drove.outcome != "completed" && fallback_allowed {
-                crate::fallback::configured_for(
-                    &fallback_config,
-                    &self.sign_in,
-                    selected.as_ref(),
-                    &bot,
-                    |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt),
-                )
-            } else {
-                None
-            };
+        let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
+            crate::fallback::configured_for(
+                &fallback_config,
+                &self.sign_in,
+                selected.as_ref(),
+                &bot,
+                |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt),
+            )
+        } else {
+            None
+        };
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && fallback_allowed && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
@@ -7342,11 +7343,31 @@ mod tests {
         // hops there, one after a tool ran does not.
         for (fixture, hops) in [("error.jsonl", true), ("tool_then_limit.jsonl", false)] {
             crate::fallback::TEST_CHOICES.with(|c| {
-                *c.borrow_mut() = Some(vec![json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"})])
+                *c.borrow_mut() = Some(vec![
+                    json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
+                ])
             });
-            let ran = session_turns_playing(true, true, &[("m4", json!({}), json!({}))], &[0], fixture, &["codex"]).await;
-            assert_eq!(ran.completions[0]["fallback"] == "codex", hops, "{fixture}: {}", ran.completions[0]);
-            assert_eq!(ran.sessions.len(), if hops { 2 } else { 1 }, "{fixture}: {:?}", ran.sessions);
+            let ran = session_turns_playing(
+                true,
+                true,
+                &[("m4", json!({}), json!({}))],
+                &[0],
+                fixture,
+                &["codex"],
+            )
+            .await;
+            assert_eq!(
+                ran.completions[0]["fallback"] == "codex",
+                hops,
+                "{fixture}: {}",
+                ran.completions[0]
+            );
+            assert_eq!(
+                ran.sessions.len(),
+                if hops { 2 } else { 1 },
+                "{fixture}: {:?}",
+                ran.sessions
+            );
         }
     }
 
@@ -7411,7 +7432,8 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
     }
 
     #[tokio::test]
-    async fn a_new_antigravity_conversation_in_place_of_one_not_on_this_computer_is_told_the_history() {
+    async fn a_new_antigravity_conversation_in_place_of_one_not_on_this_computer_is_told_the_history(
+    ) {
         // Turn 1's record of its agy conversation is gone when turn 2 comes: turn 2 begins a new conversation, which
         // holds nothing, so it is given the conversation's history, including what came before the old cursor (m1).
         let folder =
@@ -7419,15 +7441,27 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("agy-forget-0"), "").unwrap();
         fake_agy_in(&folder);
-        let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
-        let ran = session_turns(false, true, &[("m1", json!({}), agy.clone()), ("m4", json!({}), agy)]).await;
+        let agy =
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(
+            false,
+            true,
+            &[("m1", json!({}), agy.clone()), ("m4", json!({}), agy)],
+        )
+        .await;
         for (n, c) in ran.completions.iter().enumerate() {
             assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
         }
-        assert_eq!(session_of(&ran.completions[1]).1, json!(crate::continuity::NOT_FOUND), "{}", ran.completions[1]);
+        assert_eq!(
+            session_of(&ran.completions[1]).1,
+            json!(crate::continuity::NOT_FOUND),
+            "{}",
+            ran.completions[1]
+        );
         let told = std::fs::read_to_string(folder.join("agy-prompt-1")).unwrap();
         assert!(
-            told.contains("latest messages before the current one are replayed here") && told.contains("Watch the Acme release."),
+            told.contains("latest messages before the current one are replayed here")
+                && told.contains("Watch the Acme release."),
             "{told}"
         );
         let _ = std::fs::remove_dir_all(&folder);

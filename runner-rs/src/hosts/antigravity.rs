@@ -457,8 +457,13 @@ impl AntigravityHost {
         let settings = inner.settings.clone().unwrap_or_default();
         // A resumed turn's prompt waits until agy names the conversation it resumed.
         let provider = inner.provider.clone();
-        let (proc, running) =
-            self.spawn(&settings, effort, provider.as_deref(), text, provider.is_some())?;
+        let (proc, running) = self.spawn(
+            &settings,
+            effort,
+            provider.as_deref(),
+            text,
+            provider.is_some(),
+        )?;
         inner.proc = Some(proc);
         inner.turn = Some(turn.clone());
         let host = self.clone();
@@ -1222,7 +1227,10 @@ read -r _
         host.remember(&mut host.inner(), SAVED, false).unwrap();
         host.start_turn(&thread, "hello", None).unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_completed"), "{events:?}");
+        assert!(
+            events.iter().any(|e| e["kind"] == "turn_completed"),
+            "{events:?}"
+        );
         host.stop().await;
     }
 

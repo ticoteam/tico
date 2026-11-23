@@ -820,7 +820,10 @@ mod tests {
         ];
         let config = json!({"runtime": "claude", "harness": "claude"});
         let hop = default_choice(&config, &choices, &crate::env::Env::new(), |_| true).unwrap();
-        assert_eq!((hop.harness.as_str(), hop.runtime.as_str()), ("codex", "codex"));
+        assert_eq!(
+            (hop.harness.as_str(), hop.runtime.as_str()),
+            ("codex", "codex")
+        );
     }
 
     #[test]

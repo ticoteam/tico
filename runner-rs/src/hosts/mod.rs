@@ -2195,7 +2195,10 @@ pub(crate) mod tests {
         );
         // Antigravity's own words are its refusal's line.
         assert_eq!(
-            rejection_reason("antigravity", "Process exited (exit code 1)\nError: authentication required"),
+            rejection_reason(
+                "antigravity",
+                "Process exited (exit code 1)\nError: authentication required"
+            ),
             "Error: authentication required"
         );
         assert_eq!(compact_at(&json!("120000")), 120000);
