@@ -212,6 +212,22 @@ def test_closing_a_task_closes_the_open_tasks_it_filed_and_nesting_stops_at_five
     assert X.guard_closed(c)
 
 
+def test_closing_a_task_that_depends_on_the_task_it_filed_closes_both(c, general):
+    """A Health task files an ask for a person and waits on it (HotMic #95 and #188): closing the Health task closes
+    the ask, and the ask's end must not move the Health task on from inside its own close."""
+    from backend import task_relations as TR
+
+    health = X.new_task(c, ANA, "Health: Version", assignee="bot:builder")
+    ask = X.new_task(c, ANA, "Install the Tico update", assignee="bot:builder", parent=health["id"])
+    assert TR.relate(c, ANA, health["id"], ask["id"], "depends_on")
+    X.say_done(c, E.task(c, health["id"]))  # its own work is finished: only the ask holds it
+    assert E.advance(c, health["id"]) is None
+    E.move(c, health["id"], E.CLOSED, ANA, "Board cleanup")
+    assert [E.task(c, t["id"])["status"] for t in (health, ask)] == ["closed", "closed"]
+    open_visits = c.execute("SELECT COUNT(*) FROM visits WHERE task_id=? AND left_at IS NULL", (health["id"],))
+    assert open_visits.fetchone()[0] == 1  # the one in Closed
+
+
 def test_closing_a_task_leaves_open_a_filed_task_whose_pr_merged(c, general):
     from backend.item_sources import github as F
 
