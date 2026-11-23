@@ -8953,13 +8953,12 @@ class Execution:
         wait_hold = login_hold
         if paid_next is not None and paid_next.subscription is None and paid_next.until:
             earliest_iso = login_holds._iso(paid_next.until)
-            if not wait_hold or (wait_hold.get("until") or "") > earliest_iso:
-                held_row = (
-                    login_holds.get(c, "", login_holds.subscription_login(paid_next.held_subscription), runtime)
-                    if paid_next.held_subscription
-                    else {}
-                )
-                wait_hold = held_row if held_row else {"until": earliest_iso, "reset": True}
+            held_row = (
+                login_holds.get(c, "", login_holds.subscription_login(paid_next.held_subscription), runtime)
+                if paid_next.held_subscription
+                else {}
+            )
+            wait_hold = held_row if held_row else {"until": earliest_iso, "reset": True}
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             # The primary's hold keeps the bot off that fallback until it ends (`failed_fallback`, `stuck`).
             login_hold = (

@@ -396,6 +396,61 @@ def test_mid_turn_pool_quota_after_irreversible_action_stays_held_for_review(api
     assert claim(api, m) is None
 
 
+def test_mid_turn_payer_switch_uses_current_pools_reset_not_former_plans_earlier_reset(api, readings, monkeypatch):
+    import json
+    from backend.execution import limit_until
+    from backend.tests.helpers.login_holds import at
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    at(monkeypatch, "2026-10-19T01:00:00.000000Z")
+    former = add(api, secret=TOKEN, name="Former plan")["id"]
+    current = add(api, secret=OTHER, name="Current plan", token="ben-test")["id"]
+    readings.update({former: (40, 1), current: (100, 1)})
+    with api.app.state.store.transaction() as c:
+        login_holds.record(
+            c, "", login_holds.subscription_login(current), "claude", H.now(), reset="2026-10-19T08:00:00.000000Z"
+        )
+    m = machine(api, label="Studio Mac")
+    pick(api, "ops", "claude", former)
+    post(api, "tasks", {"owner": "ops", "title": "Check switch", "body": "Run it."})
+    first = claim(api, m)
+    assert first and signed_with(api, first) == former
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "former-thread"}, m["token"])
+    # Switch the bot mid-turn to Ben's held pool (resets 08:00 UTC) before the former plan hits an earlier limit (02:00 UTC).
+    pick(api, "ops", "claude", person="ben")
+    post(
+        api,
+        f"attempts/{first['id']}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+                {"seq": 2, "kind": "tool", "payload": {"tool": "Read", "summary": "notes.md"}},
+                {
+                    "seq": 3,
+                    "kind": "error",
+                    "payload": {"error": "Your usage window resets at 2026-10-19T02:00:00Z", "limit": True},
+                },
+            ]
+        },
+        m["token"],
+    )
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "last_seq": 3, "limited": True, "text": "Read notes.md."},
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        status = H.status(c, "ops") or {}
+        assert status.get("state") == "limited"
+        assert "08:00 UTC" in status.get("focus", "")
+        assert limit_until(c, "ops", status["changed_at"]) == "2026-10-19T08:00:00.000000Z"
+        saved = json.loads(c.execute("SELECT result FROM attempts WHERE id=?", (first["id"],)).fetchone()[0])
+        assert saved.get("limit_resets_at") == "2026-10-19T08:00:00.000000Z"
+
+
 def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readings):
     setup(api)
     company(api)
