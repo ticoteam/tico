@@ -364,6 +364,10 @@ export interface Model {
 export interface Harness {
   id: string;
   name: string;
+  /** False: not offered for new picks; an agent already on it keeps it. */
+  offered?: boolean;
+  /** An agent synced in from outside; Tico runs no turns for it. */
+  external?: boolean;
   /** What its CLI can do from here: a sign-in in the browser, a sign-out. */
   capabilities?: { browser_sign_in?: boolean; sign_out?: boolean };
 }

@@ -133,6 +133,32 @@ describe('Settings › Agents', () => {
     expect(moves.find((m) => m.url.includes('alpha'))?.body).toMatchObject({ harness: 'claude', expected_generation: 7, expected_revision: 3 });
   });
 
+  it('Change model leaves out a harness no longer offered', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, {
+      ...MODELS,
+      models: [
+        ...MODELS.models,
+        { id: 'model-c', provider: '', label: 'Model C', harnesses: ['codex', 'cursor'] },
+        { id: 'model-d', provider: '', label: 'Model D', harnesses: ['cursor'] },
+      ],
+      harnesses: [{ id: 'claude', name: 'Claude Code' }, { id: 'codex', name: 'Codex' }, { id: 'cursor', name: 'Cursor', offered: false }],
+    });
+    serve(() => ({ status: 200, body: {} }));
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Check Alpha Agent' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change model' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Change model' });
+    fireEvent.click(within(dialog).getByRole('combobox', { name: 'Harness' }));
+    // Codex runs only a model with no provider: it stays.
+    expect(await screen.findByRole('option', { name: 'Codex' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Cursor' })).toBeNull();
+    // Each its own: a model only that harness runs is left out too, so no agent is sent to it.
+    fireEvent.click(screen.getByRole('option', { name: 'Each its own' }));
+    fireEvent.click(within(dialog).getByRole('combobox', { name: 'Model' }));
+    expect(await screen.findByRole('option', { name: 'Model C' })).toBeTruthy();
+    expect(screen.queryByRole('option', { name: 'Model D' })).toBeNull();
+  });
+
   it('the search narrows the list by name, team or model @s1074', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');

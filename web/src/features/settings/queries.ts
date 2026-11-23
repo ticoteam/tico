@@ -585,7 +585,7 @@ export interface CatalogModel {
 export const modelsQuery = queryOptions({
   queryKey: ['settings', 'models'],
   queryFn: ({ signal }) =>
-    api.get<{ models: CatalogModel[]; enabled_providers?: string[]; harnesses?: { id: string; name: string }[]; default?: { model?: string } }>(
+    api.get<{ models: CatalogModel[]; enabled_providers?: string[]; harnesses?: { id: string; name: string; offered?: boolean; external?: boolean }[]; default?: { model?: string } }>(
       '/api/v2/models',
       { signal },
     ),

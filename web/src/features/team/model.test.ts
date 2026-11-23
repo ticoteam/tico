@@ -8,7 +8,9 @@ import {
   instructionsChange,
   managerOf,
   modelLine,
+  pickable,
   resolveWho,
+  routeTo,
   runFigures,
   seatBoss,
   seatHref,
@@ -126,5 +128,52 @@ describe('a requested seat', () => {
     expect(seatBoss('seat:s2')).toBeNull();
     expect(seatBoss('')).toBeNull();
     expect(seatHref('s9')).toBe('/team/seat%3As9');
+  });
+});
+
+describe('what a model picker offers', () => {
+  const data = {
+    enabled_providers: ['anthropic'],
+    harnesses: [
+      { id: 'claude' },
+      { id: 'cursor', offered: false },
+      { id: 'gemini', offered: false },
+      { id: 'antigravity' },
+      { id: 'hermes', external: true },
+    ],
+    models: [
+      { id: 'opus', provider: 'anthropic', harnesses: ['claude'] },
+      { id: 'auto', provider: '', harnesses: ['cursor'] },
+      { id: 'neon', provider: '', harnesses: ['gemini', 'antigravity'] },
+      { id: 'profile', provider: '', harnesses: ['hermes'] },
+      { id: 'gpt', provider: 'openai', harnesses: ['claude'] },
+      { id: 'old', provider: 'anthropic', harnesses: ['claude'], deprecated: true },
+    ],
+  };
+  const ids = (xs: { id: string }[]) => xs.map((x) => x.id);
+
+  it('leaves out harnesses no longer offered, and models only they run', () => {
+    const { models, harnesses } = pickable(data);
+    expect(ids(harnesses)).toEqual(['claude', 'antigravity', 'hermes']);
+    expect(ids(models)).toEqual(['opus', 'neon', 'profile']);
+  });
+
+  it('keeps the harness and model the agents being changed are already on', () => {
+    const { models, harnesses } = pickable(data, { harness: 'cursor', model: 'old' });
+    expect(ids(harnesses)).toEqual(['claude', 'cursor', 'antigravity', 'hermes']);
+    expect(ids(models)).toEqual(['opus', 'auto', 'neon', 'profile', 'old']);
+  });
+
+  it('managed picks never offer an external harness', () => {
+    const { models, harnesses } = pickable(data, { managed: true });
+    expect(ids(harnesses)).toEqual(['claude', 'antigravity']);
+    expect(ids(models)).toEqual(['opus', 'neon']);
+  });
+
+  it('routes a pick to the first harness still offered, or nowhere when the agent can stay', () => {
+    expect(routeTo(['gemini', 'antigravity'], 'claude', data.harnesses)).toBe('antigravity');
+    expect(routeTo(['gemini', 'antigravity'], 'gemini', data.harnesses)).toBeUndefined();
+    expect(routeTo(['cursor'], 'claude', data.harnesses)).toBe('cursor');
+    expect(routeTo(undefined, 'claude', data.harnesses)).toBeUndefined();
   });
 });

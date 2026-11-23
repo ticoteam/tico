@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { effortLabel, modelName } from './model';
+import { effortLabel, modelName, pickable, routeTo } from './model';
 import { agentQuery, COMPACT_AT, modelsQuery, type AgentRow } from './queries';
 import './team.css';
 
@@ -37,7 +37,8 @@ export function ModelPicker({
   const detail = useQuery({ ...agentQuery(agent.slug), enabled: open && !also.length }).data;
   const apply = useAction('agents.setModel');
   const compactAt = useAction('agents.setCompact');
-  const [harness, setHarness] = useState(agent.harness ?? '');
+  // A batch starts with no harness chosen, so each agent stays on its own unless one is picked.
+  const [harness, setHarness] = useState(also.length ? '' : (agent.harness ?? ''));
   const [model, setModel] = useState(agent.model || agent.resolved_model || '');
   const [effort, setEffort] = useState(agent.reasoning_effort ?? '');
   const [more, setMore] = useState(false);
@@ -45,9 +46,16 @@ export function ModelPicker({
   const savedCompact = detail?.compact_at ? String(detail.compact_at) : '';
   const compactNow = compact ?? savedCompact;
 
-  const enabled = data?.enabled_providers;
-  const usable = (data?.models ?? []).filter((m) => !m.deprecated && (!enabled || !m.provider || enabled.includes(m.provider)));
-  const harnesses = (data?.harnesses ?? []).filter((h) => usable.some((m) => !m.harnesses || m.harnesses.includes(h.id)));
+  // A harness no longer offered stays listed only when every agent being changed is on it (older rows: their runtime).
+  const own = (a: AgentRow) => a.harness || a.resolved_runtime || '';
+  const all = [agent, ...also];
+  const modelOf = (a: AgentRow) => a.model || a.resolved_model || '';
+  // A batch moves the computer's agents Tico runs, so it never offers an external harness.
+  const keep = {
+    ...(all.every((a) => own(a) === own(agent)) ? { harness: own(agent) } : {}),
+    ...(all.every((a) => modelOf(a) === modelOf(agent)) ? { model: modelOf(agent) } : {}),
+  };
+  const { models: usable, harnesses } = pickable(data, { ...keep, managed: also.length > 0 });
   const models = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const chosen = models.find((m) => m.id === model);
   const efforts = chosen?.efforts ?? [];
@@ -64,7 +72,7 @@ export function ModelPicker({
     setModel(id);
     if (!usable.find((m) => m.id === id)?.efforts?.includes(effort)) setEffort('');
   };
-  const differs = (a: AgentRow) => model !== (a.model || a.resolved_model || '') || effort !== (a.reasoning_effort ?? '') || harness !== (a.harness ?? '');
+  const differs = (a: AgentRow) => model !== (a.model || a.resolved_model || '') || effort !== (a.reasoning_effort ?? '') || (!!harness && harness !== (a.harness ?? ''));
   const moving = [agent, ...also].filter(differs);
   const modelChanged = moving.length > 0;
   const compactChanged = compactNow !== savedCompact;
@@ -75,7 +83,11 @@ export function ModelPicker({
       const result = await compactAt.run({ slug: agent.slug, at: compactNow ? Number(compactNow) : null });
       if (!result.ok) return;
     }
-    for (const a of moving) void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(harness ? { harness } : {}) });
+    for (const a of moving) {
+      // No harness chosen: each stays on its own where the model runs there, else moves to the model's first offered one.
+      const to = harness || routeTo(chosen?.harnesses, own(a), data?.harnesses);
+      void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(to ? { harness: to } : {}) });
+    }
   };
 
   return (
@@ -88,7 +100,7 @@ export function ModelPicker({
           <Button onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={!model || (!modelChanged && !compactChanged)}
+            disabled={!model || (modelChanged ? !chosen : !compactChanged)}
             onClick={() => save()}
           >
             Apply

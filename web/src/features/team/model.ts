@@ -88,6 +88,38 @@ export function modelName(label: string | null | undefined): string {
 const EFFORT: Record<string, string> = { xhigh: 'XHigh' };
 export const effortLabel = (e: string | null | undefined) => (e ? (EFFORT[e] ?? cap(e)) : 'Default');
 
+type PickModel = { id: string; provider?: string; harnesses?: readonly string[]; deprecated?: boolean };
+type PickHarness = { id: string; offered?: boolean; external?: boolean };
+
+/**
+ * What a model picker offers from GET /api/v2/models: models not deprecated whose provider is on (or names none) and
+ * that a listed harness runs, and the harnesses that run at least one of them. A harness the team no longer offers
+ * (`offered: false`) is listed only as `keep.harness`, the one the agents being changed are already on; `keep.model`
+ * stays listed too. `managed` leaves out external harnesses, for picks that move agents Tico runs.
+ */
+export function pickable<M extends PickModel, H extends PickHarness>(
+  data: { models?: readonly M[]; harnesses?: readonly H[]; enabled_providers?: readonly string[] } | undefined,
+  keep: { harness?: string; model?: string; managed?: boolean } = {},
+): { models: M[]; harnesses: H[] } {
+  const on = data?.enabled_providers;
+  const listed = (data?.harnesses ?? []).filter((h) => (h.offered !== false || h.id === keep.harness) && !(keep.managed && h.external));
+  const runs = (m: M) => !m.harnesses || m.harnesses.some((h) => listed.some((x) => x.id === h));
+  const models = (data?.models ?? []).filter(
+    (m) => m.id === keep.model || (!m.deprecated && (!on || !m.provider || on.includes(m.provider)) && runs(m)),
+  );
+  const harnesses = listed.filter((h) => models.some((m) => !m.harnesses || m.harnesses.includes(h.id)));
+  return { models, harnesses };
+}
+
+/**
+ * The harness a model pick sends for an agent on `own` (its harness; older rows: its runtime): none when the model
+ * runs there (the agent stays put), else the model's first harness still offered, else its first.
+ */
+export function routeTo(runs: readonly string[] | undefined, own: string, harnesses: readonly PickHarness[] = []): string | undefined {
+  if (!runs?.length || runs.includes(own)) return undefined;
+  return runs.find((h) => harnesses.some((c) => c.id === h && c.offered !== false)) ?? runs[0];
+}
+
 /** "Opus 5.5, High": the model it runs and its effort, as the server resolved them. */
 export function modelLine(row: Pick<AgentRow, 'model' | 'resolved_model' | 'resolved_model_label' | 'reasoning_effort' | 'resolved_effort'>, models?: readonly Model[]) {
   const id = row.resolved_model || row.model;

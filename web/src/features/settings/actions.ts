@@ -4,7 +4,7 @@ import type { Ctx } from '@/actions';
 import { refused, run } from '@/actions/run';
 import { meQuery } from '@/data';
 import { desktopApp, tellDesktopSigningOut } from '@/desktop';
-import { agentsQuery, computersQuery, moveAgentWithFeedback } from '@/features/team/routing';
+import { agentsQuery, computersQuery, moveAgentWithFeedback, routeTo } from '@/features/team/routing';
 import { setMotionChoice } from '@/motion';
 import { setThemeChoice, type Theme } from '@/prefs';
 import {
@@ -682,11 +682,10 @@ export const changeModels = defineAction({
     if (!agents.length) throw new Error('Pick at least one agent');
     const [rows, catalog] = await Promise.all([ctx.queryClient.ensureQueryData(agentsQuery), ctx.queryClient.ensureQueryData(modelsQuery)]);
     const runs = catalog.models.find((m) => m.id === model)?.harnesses;
-    // Each agent keeps its own harness when the model runs there; otherwise the one asked for, or the model's first.
+    // The harness asked for; else each stays on its own (older rows: its runtime) where the model runs there, or moves.
     const pick = (slug: string) => {
-      const own = rows.find((r) => r.slug === slug)?.harness;
-      if (!runs?.length || (own && runs.includes(own))) return harness || own;
-      return harness && runs.includes(harness) ? harness : runs[0];
+      const row = rows.find((r) => r.slug === slug);
+      return harness || routeTo(runs, row?.harness || row?.resolved_runtime || '', catalog.harnesses) || row?.harness;
     };
     const done = await Promise.all(
       agents.map((slug) => {
@@ -736,7 +735,8 @@ export const taskModel = defineAction({
     const row = rows.find((r) => r.slug === slug);
     if (!row) throw new Error('No such agent');
     const runs = catalog.models.find((m) => m.id === model)?.harnesses;
-    const harness = !runs?.length || (row.harness && runs.includes(row.harness)) ? row.harness : runs[0];
+    // Its own harness (older rows: its runtime) where the model runs there; else the model's first still offered.
+    const harness = routeTo(runs, row.harness || row.resolved_runtime || '', catalog.harnesses) || row.harness;
     const out = await setTaskModel(row.id, model ? { model, ...(harness ? { harness } : {}), ...(effort ? { effort } : {}) } : null, row.revision ?? 1);
     void ctx.queryClient.invalidateQueries({ queryKey: agentsQuery.queryKey });
     return { warning: out?.warning };

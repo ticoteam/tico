@@ -9,7 +9,7 @@ import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQ
 // a teammate's address. No components here: the first load imports this file, and a page comes through exports.ts.
 export { agentsQuery, groupsQuery, computersQuery, teammateAccessQuery, type AgentRow, type Computer } from './queries';
 export { moveAgentWithFeedback } from './actions';
-export { teamSlug, whoHref, modelName, effortLabel } from './model';
+export { teamSlug, whoHref, modelName, effortLabel, pickable, routeTo } from './model';
 
 export interface TeamSearch {
   tab?: Tab;

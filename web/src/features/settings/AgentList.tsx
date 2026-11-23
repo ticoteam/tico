@@ -4,7 +4,7 @@ import { useState, type Ref } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery, useDirectory, type Directory } from '@/data';
 import { ModelPicker, PaidBy } from '@/features/team/exports';
-import { agentsQuery, computersQuery, effortLabel, modelName, type AgentRow } from '@/features/team/routing';
+import { agentsQuery, computersQuery, effortLabel, modelName, pickable, type AgentRow } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Checkbox } from '@/kit/Checkbox';
@@ -88,9 +88,8 @@ function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: 
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
   const v = models.data;
-  const on = v?.enabled_providers;
-  const usable = (v?.models ?? []).filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
-  const harnesses = (v?.harnesses ?? []).filter((h) => usable.some((m) => !m.harnesses || m.harnesses.includes(h.id)));
+  // Only harnesses Tico runs: a bulk pick never turns managed agents into external ones.
+  const { models: usable, harnesses } = pickable(v, { managed: true });
   const shown = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const efforts = shown.find((m) => m.id === model)?.efforts ?? [];
   const apply = async () => {
@@ -492,8 +491,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
   const [effort, setEffort] = useState(now?.reasoning_effort ?? '');
   const [busy, setBusy] = useState(false);
   const v = models.data;
-  const on = v?.enabled_providers;
-  const usable = (v?.models ?? []).filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
+  const { models: usable } = pickable(v, { managed: true, model: now?.model ?? undefined });
   const efforts = usable.find((m) => m.id === model)?.efforts ?? [];
   const save = async () => {
     setBusy(true);

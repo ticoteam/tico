@@ -526,6 +526,44 @@ describe("An agent's Settings", () => {
   });
 });
 
+describe('the Model dialog and harnesses no longer offered', () => {
+  const catalog = {
+    models: [
+      { id: 'm-one', label: 'Model One', harnesses: ['old'] },
+      { id: 'm-two', label: 'Model Two', harnesses: ['old', 'new'] },
+      { id: 'm-three', label: 'Model Three', harnesses: ['h1'] },
+    ],
+    harnesses: [
+      { id: 'old', name: 'Old One', offered: false },
+      { id: 'new', name: 'New One' },
+      { id: 'h1', name: 'Harness One' },
+    ],
+  };
+
+  it('an older row with no harness keeps the one its runtime runs', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, catalog as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-one', harness: undefined, resolved_runtime: 'old' } as AgentRow]);
+    serve(() => undefined);
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).getByRole('button', { name: 'Old One' })).toBeTruthy();
+    expect(within(dialog).getByRole('radio', { name: 'Model One' })).toBeTruthy();
+  });
+
+  it('a pick with no harness chosen moves an agent elsewhere to the first harness still offered', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, catalog as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-three', harness: undefined, resolved_runtime: 'h1' } as AgentRow]);
+    serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ revision: 4 }) : undefined));
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).queryByRole('button', { name: 'Old One' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model Two' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(posted('/transitions')).toBeTruthy());
+    expect(JSON.stringify(posted('/transitions'))).toContain('"harness":"new"');
+  });
+});
+
 describe("An agent's rules @s616", () => {
   const rules = (url: string) =>
     url.endsWith('/bots/ana/rules')
@@ -919,6 +957,39 @@ describe('A computer', () => {
       expect.stringContaining('/bots/ana/transitions'),
       expect.stringContaining('/bots/bo/transitions'),
     ]));
+  });
+
+  it('the All agents row starts with no harness chosen, never offers an external one, and routes each agent on its own', async () => {
+    queryClient.setQueryData(directoryQuery.queryKey, directory([ana, bo, pat, kim]));
+    queryClient.setQueryData(agentsQuery.queryKey, [
+      { ...anaRow, model: 'm-one', harness: 'new' },
+      { id: '0191-bo', slug: 'bo', display_name: 'Bo', revision: 5, model: 'm-one', harness: 'old', machine: { runner_id: 'r1', label: 'Studio', generation: 2 } } as AgentRow,
+    ]);
+    queryClient.setQueryData(computersQuery.queryKey, [{ ...studio, bots: ['0190-ana', '0191-bo'] }]);
+    queryClient.setQueryData(modelsQuery.queryKey, {
+      models: [
+        { id: 'm-one', label: 'Model One', harnesses: ['old', 'new'] },
+        { id: 'm-two', label: 'Model Two', harnesses: ['old', 'new'] },
+        { id: 'm-ext', label: 'Outside', harnesses: ['ext'] },
+      ],
+      harnesses: [
+        { id: 'old', name: 'Old One', offered: false },
+        { id: 'new', name: 'New One' },
+        { id: 'ext', name: 'Outside One', external: true },
+      ],
+    } as never);
+    serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ id: 'tr' }) : undefined));
+    show(<TeamWho who="ana" tab="computer" />, '/team/ana?tab=computer');
+    const on = await screen.findByRole('region', { name: /Agents on this computer/ });
+    fireEvent.click(within(on).getByRole('button', { name: 'Model for all agents' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).queryByRole('radio', { name: 'Outside' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model Two' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(sent.filter((s) => s.url.includes('/transitions'))).toHaveLength(2));
+    // Both already run on a harness that runs Model Two: each stays on its own.
+    expect((posted('/bots/ana/transitions')?.body as { harness?: string }).harness).toBe('new');
+    expect((posted('/bots/bo/transitions')?.body as { harness?: string }).harness).toBe('old');
   });
 
   it("says how it is doing in one status line, CPU and memory among it, on the computer's page @s686", async () => {

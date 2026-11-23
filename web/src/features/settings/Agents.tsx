@@ -12,7 +12,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { modelName } from '@/features/team/routing';
+import { modelName, pickable } from '@/features/team/routing';
 import { AgentList } from './AgentList';
 import { ComputerList } from './ComputerList';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
@@ -228,10 +228,12 @@ export function Computers({ open }: { open?: string }) {
 
 function Defaults() {
   const catalog = useQuery(modelsQuery);
-  const names = (catalog.data?.models ?? [])
-    .filter((m) => !m.deprecated && (!catalog.data?.enabled_providers || catalog.data.enabled_providers.includes(m.provider)))
-    .map((m) => ({ value: m.id, label: modelName(m.label) }));
   const providers = useQuery({ ...providersQuery, retry: false });
+  // Only models a harness Tico still offers runs; each selector keeps its own saved value through known().
+  const names = pickable(catalog.data, { managed: true }).models.map((m) => ({
+    value: m.id,
+    label: modelName(m.label),
+  }));
   const me = useQuery(meQuery);
   const v = providers.data;
   if (!v?.default) return null;
@@ -239,7 +241,8 @@ function Defaults() {
   const owner = me.data?.role === 'owner';
   const model = v.default.model ?? '';
   const meeting = v.meeting_model ?? '';
-  const known = (id: string) => (id && !names.some((n) => n.value === id) ? [{ value: id, label: id }] : []);
+  const known = (id: string) =>
+    id && !names.some((n) => n.value === id) ? [{ value: id, label: modelName(catalog.data?.models.find((m) => m.id === id)?.label) || id }] : [];
   return (
     <Section name="Defaults" target="setting:defaults">
       <Facts label="Defaults">
