@@ -18,7 +18,8 @@ conversation; starting a new chat starts a new one. A resumed turn's prompt wait
 it resumed (it does so before it reads its input). A turn that must continue the saved conversation is never sent into
 another one: it stops instead. On any other turn, when `agy` names a new conversation instead, the runner closes it
 without sending the prompt and starts the turn once more in a new conversation, given the whole prompt and the
-conversation's recent history. If `agy` moves to a new conversation only after the model has worked, the runner keeps
+conversation's recent history; the saved conversation stays until the new one has worked. This happens only while
+the prompt is still held: once it has gone, the turn is never started again. If `agy` moves to a new conversation only after the model has worked, the runner keeps
 that one, marks it in the saved record, and tells the next turn the conversation's history again; nothing runs twice.
 When `agy` exits, whatever of its process group is left (a tool it started) is stopped too.
 
