@@ -160,6 +160,11 @@ fn choose(
         let harness = Some(text_of(&row["harness"]))
             .filter(|h| !h.is_empty())
             .unwrap_or_else(|| runtime.clone());
+        // Every harness here is its own runtime: an older server's row for a harness on another runtime (Antigravity
+        // on gemini) would start that runtime's CLI on the harness's model.
+        if harness != runtime {
+            return None;
+        }
         // The Gateway (last under the company's Gateway choices, backend/models_preset.py) signs in with the turn's
         // relay alone (gateway_relay.rs): no login or key of its own here, and no relay means no hop. It is never a
         // hop from itself; any other row is never one on the primary's own runtime.
@@ -517,6 +522,12 @@ pub fn config_stale() {
     CONFIG_STALE.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The company's fallback models one test's turns see, in place of the shared answer (execute's tests).
+    pub static TEST_CHOICES: std::cell::RefCell<Option<Vec<Value>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// Whether a config answer has been kept since start.
 pub fn config_seen() -> bool {
     CHOICES.lock().unwrap().is_some()
@@ -581,6 +592,10 @@ impl Runner {
     /// tells this computer of a config change (events.rs relays_pushed), the harness relay's last read stands for
     /// BACKUP_POLL_S, until the server says the config changed.
     pub async fn default_fallbacks(&self) -> Vec<Value> {
+        #[cfg(test)]
+        if let Some(rows) = TEST_CHOICES.with(|c| c.borrow().clone()) {
+            return rows;
+        }
         let stale = CONFIG_STALE.load(std::sync::atomic::Ordering::SeqCst);
         let keep = if self.events.relays_pushed() && !stale {
             crate::events::BACKUP_POLL_S
@@ -794,6 +809,18 @@ mod tests {
         let keyed = json!({"runtime": "pi", "harness": "pi", "model": "own-key-model",
                            "fallback": {"harness": "pi", "model": "tico-medium-1.0"}});
         assert_eq!(limited_config(&keyed, None), keyed);
+    }
+
+    #[test]
+    fn a_company_row_whose_harness_runs_on_another_runtime_is_skipped_for_the_next() {
+        // An older server's Google row: Antigravity on the Gemini runtime.
+        let choices = [
+            json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-4-neon"}),
+            json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
+        ];
+        let config = json!({"runtime": "claude", "harness": "claude"});
+        let hop = default_choice(&config, &choices, &crate::env::Env::new(), |_| true).unwrap();
+        assert_eq!((hop.harness.as_str(), hop.runtime.as_str()), ("codex", "codex"));
     }
 
     #[test]
