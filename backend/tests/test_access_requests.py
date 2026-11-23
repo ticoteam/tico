@@ -119,8 +119,110 @@ def test_read_is_granted_at_once_only_where_it_is_enforceable_and_writes_and_sen
     assert lv(api, off) is None and lv(api, db) is None and lv(api, bank) is None
 
 
+def owned_by_ben(api, extra=0):
+    with api.app.state.store.transaction() as c:  # Ben runs ops; Ana owns the company and added the tools
+        c.execute("UPDATE bot_config SET owner_id='ben' WHERE bot='ops'")
+        for n in range(extra):  # people who could never be asked
+            c.execute("INSERT INTO humans(id,name,email) VALUES(?,?,?)", (f"p{n}", f"P{n}", f"p{n}@acme.example"))
+
+
+def test_a_request_goes_to_the_bots_own_owner_alone_when_they_can_see_it_through(api):
+    world(api)
+    owned_by_ben(api, extra=40)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write")
+    assert set(cards(api, asked["id"])) == {"human:ben"}
+    # Read before anyone else: the roster is not walked when an owner qualifies.
+    seen = []
+    with api.app.state.store.read() as c:
+        c.set_trace_callback(seen.append)
+        try:
+            people = AR.approvers(c, row(api, asked["id"]), api.app.state.vault, api.app.state.vault.auth)
+        finally:
+            c.set_trace_callback(None)
+    assert [p.actor for p in people] == ["human:ben"] and len(seen) < 40, len(seen)
+
+
+def test_an_owner_who_cannot_read_the_asking_task_is_not_asked_alone(api):
+    world(api)
+    owned_by_ben(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    tid = task(api, "bot:ops", "Update the deal stages", private=True)
+    with api.app.state.store.read() as c:
+        from backend.store import H
+
+        assert not H.task_private_readable(c, "human:ben", H.task(c, tid))
+    asked = ask(api, crm, "read_write", task=tid)
+    assert set(cards(api, asked["id"])) == {"human:ana", "human:ben"}
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is not None  # the task waits on the card of someone who can read it
+
+
+def test_a_repeat_from_a_task_the_owner_cannot_read_reaches_a_reader_and_the_task_waits_on_them(api):
+    world(api)
+    owned_by_ben(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write")  # no task: Ben alone
+    assert set(cards(api, asked["id"])) == {"human:ben"}
+    tid = task(api, "bot:ops", "Update the deal stages", private=True)
+    again = ask(api, crm, "read_write", task=tid)
+    assert again["repeat"] and set(cards(api, asked["id"])) == {"human:ben", "human:ana"}
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is not None
+    post(api, f"access-requests/{asked['id']}/decline", {})
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is None
+        told = c.execute(
+            "SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'Access request closed%'"
+        ).fetchall()
+    assert len(told) == 1 and "declined" in told[0]["body"]
+
+
+def test_a_repeat_reaches_no_one_who_cannot_read_the_task_that_first_asked(api):
+    world(api)
+    owned_by_ben(api)
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "ben@acme.example", "cara@acme.example")
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    first = task(api, "bot:ops", "Merge the duplicate deals", private=True, assignee_id="human:ben")
+    asked = ask(api, crm, "read_write", task=first, why="merge the duplicates for the acquirer")
+    assert set(cards(api, asked["id"])) == {"human:ben"}
+    later = task(api, "bot:ops", "Update the deal stages", private=True, assignee_id="human:cara")
+    with api.app.state.store.read() as c:
+        from backend.store import H
+
+        assert H.task_private_readable(c, "human:cara", H.task(c, later))
+        assert not H.task_private_readable(c, "human:cara", H.task(c, first))
+    ask(api, crm, "read_write", task=later)
+    assert "human:cara" not in cards(api, asked["id"])  # the card would tell Cara the first task's why
+
+
+def test_a_repeat_reaches_a_reader_when_the_one_asked_can_no_longer_grant_it(api):
+    world(api)
+    owned_by_ben(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write")  # no task: Ben alone
+    assert set(cards(api, asked["id"])) == {"human:ben"}
+    api.app.state.store.settings.credential_admins = ("ana@acme.example",)  # Ben can no longer grant it
+    later = task(api, "bot:ops", "Update the deal stages")  # Ben can read it
+    with api.app.state.store.read() as c:
+        from backend.store import H
+
+        assert H.task_private_readable(c, "human:ben", H.task(c, later))
+        ben = api.app.state.vault.auth.identity_for_actor(c, "human:ben")
+        assert not AR.may_unblock(c, ben, row(api, asked["id"]), api.app.state.vault, api.app.state.vault.auth)
+    ask(api, crm, "read_write", task=later)
+    assert set(cards(api, asked["id"])) == {"human:ben", "human:ana"}
+
+
 def test_a_request_reaches_everyone_who_can_grant_it_and_the_first_tap_resolves_every_copy(api):
     world(api)
+    with api.app.state.store.transaction() as c:  # ops' own owner cannot grant: everyone who can is asked
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     crm = tool(api)["id"]
     key(api, crm, SECRET)
     asked = ask(api, crm, "read_write", why="update deals")
