@@ -346,13 +346,14 @@ interface BodyProps {
   onEdit: () => void;
 }
 
-function byStage(stages: readonly Stage[], rows: readonly TaskItem[], me: string | undefined) {
+function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
   const out = new Map<string, TaskItem[]>(stages.map((s) => [s.id, []]));
   for (const t of rows) if (t.stage_id) out.get(t.stage_id)?.push(t);
-  // What waits on you leads its stage, so a long stage never hides it below the fold or the cap.
-  for (const [id, list] of out) out.set(id, [...list.filter((t) => waitsOnMe(t, me)), ...list.filter((t) => !waitsOnMe(t, me))]);
   return out;
 }
+
+/** Shown order only: what waits on you leads its stage, so a long stage never hides it below the cap. Bulk moves keep the stage's own order. */
+const yoursFirst = (list: readonly TaskItem[], me: string | undefined) => [...list.filter((t) => waitsOnMe(t, me)), ...list.filter((t) => !waitsOnMe(t, me))];
 
 /** In Select, the box in the mark's place. */
 const Pick = ({ on }: { on: boolean }) => (
@@ -441,7 +442,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
       void move.run({ task, to }).then((r) => r.ok && announce(`${r.did} to ${name}`));
     },
   });
-  const groups = byStage(p.stages, rows, me);
+  const groups = byStage(p.stages, rows);
   const shape = p.stages.map((s) => `${s.id}:${groups.get(s.id)?.length ?? 0}:${folds.includes(s.id) ? 1 : 0}`).join(',');
   return (
     <>
@@ -467,7 +468,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
             }
           >
             <Capped
-              list={list}
+              list={yoursFirst(list, me)}
               cap={COL_CAP}
               show={COL_SHOW}
               more={more}
@@ -500,7 +501,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
 
 function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const cards = useCards();
-  const groups = byStage(p.stages, rows, me);
+  const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
   return (
     <>
@@ -524,7 +525,7 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
               }
             >
               <Capped
-                list={list}
+                list={yoursFirst(list, me)}
                 cap={LIST_CAP}
                 show={LIST_SHOW}
                 more={more}

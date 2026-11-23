@@ -282,14 +282,27 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(screen.getByRole('heading', { name: /Inbox/ }).closest('.stage-line')).toBeTruthy();
   });
 
-  it('what waits on you leads its stage on the board and in the list', async () => {
-    serve(() => ({ status: 200, body: {} }));
-    const mine = { state: 'person' as const, who: ME, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false };
-    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1'), task('a3', 9, 'Approve the copy', 's1', { turn: mine })]);
-    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
-    await screen.findByTitle('Approve the copy');
-    const order = () => screen.getAllByTitle(/Fix the export|Write the notes|Approve the copy/).map((el) => el.getAttribute('title'));
-    expect(order()).toEqual(['Approve the copy', 'Fix the export', 'Write the notes']);
+  it('what waits on you leads its stage past the cap, on the board and in the list; a bulk move keeps the stage order', async () => {
+    serve(() => ({ status: 200, body: { batch_id: 'b', moved: [], moved_unseen: 0, skipped: [] } }));
+    const turn = (who: string) => ({ state: 'person' as const, who, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false });
+    const many = Array.from({ length: 12 }, (_, i) => task(`a${i + 1}`, i + 1, `Task ${i + 1}`, 's1'));
+    many[10] = task('a11', 11, 'Ana approves', 's1', { turn: turn('human:ana') });
+    many[11] = task('a12', 12, 'You approve', 's1', { turn: turn(ME) });
+    const titles = () => screen.getAllByTitle(/^(Task \d+|Ana approves|You approve)$/).map((el) => el.getAttribute('title'));
+    for (const view of ['board', 'list'] as const) {
+      seed(many);
+      show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
+      await screen.findByTitle('You approve');
+      // Only yours leads: a turn that is someone else's keeps its place.
+      expect(titles().slice(0, 2)).toEqual(['You approve', 'Task 1']);
+      cleanup();
+    }
+    seed(many);
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close all' }));
+    await waitFor(() => expect(posts.length).toBe(1));
+    expect(posts[0].body).toEqual({ ids: many.map((x) => x.id), to: 'closed' });
   });
 
   it('a card and a row say which tasks they block', async () => {
