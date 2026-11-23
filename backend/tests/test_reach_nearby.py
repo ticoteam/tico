@@ -929,8 +929,8 @@ def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_human_once_in_needs_you(a
         headers=headers("ops-test"),
     )
     assert r.status_code == 200, r.text
-    [item] = [i for i in _needs(api, "ben-test", "ask") if own["id"] in json.dumps(i)]
-    assert item, item
+    [item] = _needs(api, "ben-test", "ask")
+    assert (item["requirement_id"], item["task_id"]) == (r.json()["requirement_id"], own["id"]), item
 
 
 def test_a_tasks_human_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(api):
@@ -952,36 +952,65 @@ def test_a_tasks_human_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(a
     _ask(api, "bot:ops", own["id"])  # the ask on its own task still goes through
 
 
-def _child(api, parent_id, set_by="bot:ops"):
-    """A task ops owns, filed under `parent_id`, whose Human `set_by` named Ben."""
-    child = task(api, "ana-test", "bot:ops", title=f"Child note under {parent_id}")
+def _set_human(api, task_id, who, actor):
+    """`actor` makes `who` the task's Human: set as data with its history row, as hubdb.task_update writes it."""
     with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',NULL,?)",
-            (child["id"], parent_id, H.now()),
-        )
-        c.execute("UPDATE tasks SET human_id='human:ben' WHERE id=?", (child["id"],))
-        H._task_event(c, child["id"], set_by, "human_id", None, "human:ben", "")
-    return child
+        c.execute("UPDATE tasks SET human_id=? WHERE id=?", (who, task_id))
+        H._task_event(c, task_id, actor, "human_id", None, who, "")
 
 
-def test_a_human_a_bot_named_opens_nothing_unless_the_persons_side_named_them_up_the_chain(api):
-    """AC-4, AC-5, AC-9: a Human ops named itself is refused with the one sentence alone; so is the same Human it named
-    on the parent too. Handed down from a parent Ben requested, or whose Human a person named, or named by Tico, he is
-    open."""
+def test_only_a_human_a_person_or_tico_named_on_this_task_opens_it(api):
+    """AC-4, AC-5, AC-9: a Human ops named itself is refused with the one sentence alone, also when a person named the
+    same Human on its parent (no other task is read) and when ops names him again after a person did (the latest change
+    counts). Named by Tico on the task itself, he is open."""
     own = _humaned(api, set_by="bot:ops")
     detail = _refused_ask(api, "bot:ops", own["id"])
     assert detail == (
-        "A bot named this task's Human, not a person, Tico or the task it is filed under, so this task does not let "
-        "it ask them. Nothing was sent."
+        "A bot named this task's Human, not a person or Tico, so this task does not let it ask them. Nothing was sent."
     ), detail
-    bot_named = _child(api, own["id"])  # the parent's Human is ops's own pick: still closed
-    _refused_ask(api, "bot:ops", bot_named["id"])
-    _ask(api, "bot:ops", _child(api, task(api, "ben-test", "bot:cpo", title="Ben's launch")["id"])["id"])
-    person_named = _humaned(api, set_by="human:ana", chart_too=False)
-    grandchild = _child(api, _child(api, person_named["id"])["id"])  # traced up two levels to Ana's pick
-    _ask(api, "bot:ops", grandchild["id"])
+    parent = _humaned(api, set_by="human:ana", chart_too=False)
+    child = task(api, "ana-test", "bot:ops", title="Child note")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',NULL,?)",
+            (child["id"], parent["id"], H.now()),
+        )
+    _set_human(api, child["id"], "human:ben", "bot:ops")
+    _refused_ask(api, "bot:ops", child["id"])
+    _set_human(api, parent["id"], "human:cara", "bot:ops")  # ops moves it off Ben and back: now its own pick
+    _set_human(api, parent["id"], "human:ben", "bot:ops")
+    _refused_ask(api, "bot:ops", parent["id"])
     _ask(api, "bot:ops", _humaned(api, set_by="keeper", chart_too=False)["id"])
+
+
+def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_first(api):
+    """Only a ❓ and a stage ask open the Human: an OK for an action (POST /oks, a grant the bot then uses) is refused
+    as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""
+    own = _humaned(api)
+    with api.app.state.store.read() as c:
+        version = H.task(c, own["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/oks",
+        json={
+            "to": "ben",
+            "line": "OK to post this?",
+            "subject": "hq_reply:note-1",
+            "content": {"text": "We ship on Friday."},
+            "version": version,
+        },
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/move",
+        json={"to": "closed", "why": "Not needed", "version": version},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 200, r.text
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused) as ended:
+            H.task_ask(c, "bot:ops", own["id"], "human:ben", "OK the launch note?", kind="ok", seen_version=None)
+    assert "The task has ended: a stage ask is for an open task." in str(ended.value), ended.value
 
 
 def test_a_tasks_human_is_not_asked_once_it_ends_or_by_another_bot(api):

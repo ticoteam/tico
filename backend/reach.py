@@ -1024,41 +1024,22 @@ def handed(c, sender, receiver, task_id, before=None):
     )
 
 
-HUMAN_CHAIN = 20  # how many parent tasks an inherited Human is traced up before it counts as unproven
-
-
-def _human_set_by_their_side(c, task_id, receiver, before=None, depth=0):
-    """Whether the person's side named `receiver` this task's Human: the latest change that made them its Human was a
-    person's or Tico's, or a bot's that handed down the parent task's requester, or the parent's Human when the
-    person's side named them there too (traced up the chain). Any other Human a bot named opens nothing: otherwise any
-    bot could name anyone as Human, on a task and its parent alike, and ask them."""
+def _human_set_by_a_person(c, task_id, receiver, before=None):
+    """Whether a person or Tico itself named `receiver` this task's Human: the latest change to the task's Human, read
+    from this task's own history, made them its Human and was not a bot's. A bot cannot open its own reach by naming
+    someone, and no other task is read (so nothing about a parent the bot may not see shows through)."""
     row = c.execute(
-        "SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='human_id' AND new=?"
+        "SELECT actor_id, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='human_id'"
         + (" AND created_at<?" if before else "")
-        + " ORDER BY created_at DESC LIMIT 1",
-        (task_id, receiver, *((before,) if before else ())),
+        + " ORDER BY created_at DESC, rowid DESC LIMIT 1",
+        (task_id, *((before,) if before else ())),
     ).fetchone()
-    if not row:
-        return False
-    if not H.is_bot(row["actor_id"]):
-        return True
-    if depth >= HUMAN_CHAIN:
-        return False
-    for parent in c.execute(
-        "SELECT p.id, p.human_id, p.requester_id FROM task_relations r JOIN tasks p ON p.id=r.to_task "
-        "WHERE r.from_task=? AND r.kind='parent'",
-        (task_id,),
-    ):
-        if parent["requester_id"] == receiver:
-            return True
-        if parent["human_id"] == receiver and _human_set_by_their_side(c, parent["id"], receiver, before, depth + 1):
-            return True
-    return False
+    return bool(row) and row["new"] == receiver and not H.is_bot(row["actor_id"])
 
 
 def human_of(c, sender, receiver, task_id, before=None):
-    """`receiver` is the Human of this exact open task `sender` owns, named by the person's side
-    (_human_set_by_their_side). The wake tells the owner to ask its Human (task_wakes.HUMAN_LINE); this lets it ask
+    """`receiver` is the Human of this exact open task `sender` owns, named by a person or Tico
+    (_human_set_by_a_person; its requester handed() opens already). The wake tells the owner to ask its Human (task_wakes.HUMAN_LINE); this lets it ask
     them there, and only ask: check(ask=True) is a ❓ on the task or a stage ask, never a chat, a new task or a
     hand-off."""
     if not task_id:
@@ -1068,7 +1049,7 @@ def human_of(c, sender, receiver, task_id, before=None):
         + (" AND created_at<?" if before else ""),
         (task_id, receiver, sender, *((before,) if before else ())),
     ).fetchone()
-    return row is not None and _human_set_by_their_side(c, task_id, receiver, before)
+    return row is not None and _human_set_by_a_person(c, task_id, receiver, before)
 
 
 def _human_refused(c, sender, receiver, task_id):
@@ -1082,10 +1063,7 @@ def _human_refused(c, sender, receiver, task_id):
     ).fetchone()
     if not row:
         return None
-    return (
-        "A bot named this task's Human, not a person, Tico or the task it is filed under, so this task does not let "
-        "it ask them."
-    )
+    return "A bot named this task's Human, not a person or Tico, so this task does not let it ask them."
 
 
 def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_reply_to=None, before=None):

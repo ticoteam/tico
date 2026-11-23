@@ -459,13 +459,18 @@ def task_ask(
     target = H._reach(conn, actor, person)
     if is_bot(actor):
         # An ask writes to the one it names, so a bot's ask keeps to its reach as its messages do (reach.check: the
-        # person who handed it the task is always in it). Refused before anything is written.
+        # person who handed it the task is always in it). Refused before anything is written. An ended task is
+        # refused first, so its refusal is never reach's advice. A stage ask also reaches the task's Human
+        # (reach.human_of); an action's approval (`for_action`, a budget raise) keeps the plain reach.
+        if row["status"] != "open":
+            _refuse(conn, actor, "task_ended", "The task has ended: a stage ask is for an open task.")
         from types import SimpleNamespace
 
         from . import reach as reach_module
 
         reach: Any = reach_module
-        reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id, ask=True)
+        who = SimpleNamespace(role="bot", actor=actor)
+        reach.check(conn, who, target, "task", task_id=task_id, ask=not for_action)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: a first line of one or two short sentences, no ids or paths
