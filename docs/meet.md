@@ -233,8 +233,10 @@ or moved, takes no agent but the Assistant for its whole life (409 `assistant_al
 nor is it linked to Slack, rung into or its meeting shared, while it is on or booked (409 `call_private`). Its voice session, claimed while the call is yours
 alone, then acts as you, as your own chat with the Assistant does: its tools read and write with your rights (Needs
 you, your tasks, OKs and threads; nothing once you may not sign in), a write citing what you just said aloud as your
-chat's writes cite your message, and your snapshot (what waits on you and the handoffs it filed for you) in its opening prompt, from its claim's run
-header. A restarted session keeps its tools; its fresh prompt carries no snapshot. That claim is pinned to you for its life: a personal run (a throwaway checkout, no Git credential),
+chat's writes cite your message (only your own voice as the recorder heard it: never a typed line, an uploaded
+transcript, nor in a call whose transcript has anyone else's line, relabelled as yours or not; your Assistant's changes show
+those words), and your snapshot (what waits on you and the handoffs it filed for you) in its opening prompt, from its claim's run
+header. A restarted session keeps its tools; its fresh prompt carries no snapshot. That claim, or on a runner with no resident voice each turn's own job, is pinned to you for its life: a personal run (a throwaway checkout, no Git credential),
 which acts as you only while the call still qualifies and you may still sign in: once anyone else is in it, it is
 the Assistant itself again. A call in a person's own room gets no prep task, whoever
 starts it. An

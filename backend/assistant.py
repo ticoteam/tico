@@ -525,23 +525,48 @@ def edited(c, msg):
 def call_turn(c, who):
     """The delegation record for what the person just said aloud, when this is the Assistant's voice session in a call
     in their own Assistant chat that is theirs alone (rooms.call_person: nobody else has been in it), pinned to them at
-    its claim: the question it is answering now (a voice turn it holds), spoken by them within INSTRUCTION_TTL_S. Else
-    None, and `turn` names the run's message as in their chat."""
+    its claim, or its turn's own job on a runner with no resident voice: the question it is answering now (the turn it
+    holds), within INSTRUCTION_TTL_S. Only a turn the recorder made from the person's own voice counts: a 1:1 call's
+    gathered utterance (call_voice.GATHERED_SOURCE), never a typed chat line or an uploaded transcript line, in a call
+    whose transcript holds nobody's voice but theirs, each line first written by the recorder for them, whatever a
+    correction says since. Else None, and `turn` names the run's message as in their chat."""
     from . import rooms
+    from .call_voice import GATHERED_SOURCE
 
     if rooms.pinned_person(c, who.attempt_id) != who.actor:
         return None
     turn = c.execute(
-        "SELECT t.id,a.job_id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "SELECT t.id,t.meeting_id,t.source_key,t.transcript_seq,a.job_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
+        "JOIN messages m ON m.id=j.message_id "
         "JOIN live_meeting_turns t ON t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND t.bot=a.bot_id "
-        "AND t.status='claimed' AND t.voice_attempt=a.id "
-        "JOIN live_meeting_chunks k ON k.meeting_id=t.meeting_id AND k.seq=t.transcript_seq AND k.speaker=? "
+        "AND t.status='claimed' AND (t.voice_attempt=a.id OR t.voice_input IS NULL AND t.claim_owner='job:'||a.job_id) "
         "WHERE a.id=? AND t.created_at>=? ORDER BY t.claimed_at DESC LIMIT 1",
-        (H.actor_id(who.actor), who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
+        (who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
     ).fetchone()
-    if not turn or rooms.call_person(c, turn["job_id"]) != who.actor:
+    if not turn or turn["source_key"] != f"{GATHERED_SOURCE}{turn['transcript_seq']}":
+        return None
+    # The recorder writes each utterance once, as said by the participant whose audio it was (calls._store_clip): a
+    # line written or labelled by anyone else, an upload or a correction included, means this is not their voice alone.
+    if c.execute(
+        "SELECT 1 FROM live_meeting_chunk_versions WHERE meeting_id=? AND (speaker<>? OR authored_by<>?) LIMIT 1",
+        (turn["meeting_id"], H.actor_id(who.actor), who.actor),
+    ).fetchone():
+        return None
+    if rooms.call_person(c, turn["job_id"]) != who.actor:
         return None
     return {"for": who.actor, "cited": turn["id"], "run": "asked"}
+
+
+def spoken_words(c, turn_id):
+    """The words of a call turn a voice-authorized change cited (`call_turn`): the question the Assistant was asked, as
+    its turn record keeps it (the resident session's input, or the gathered question its own job carries), or ""."""
+    row = c.execute(
+        "SELECT t.voice_input,json_extract(m.refs,'$.live_meeting.question') FROM live_meeting_turns t "
+        "LEFT JOIN jobs j ON j.id=substr(t.claim_owner,5) AND t.claim_owner LIKE 'job:%' "
+        "LEFT JOIN messages m ON m.id=j.message_id WHERE t.id=?",
+        (turn_id,),
+    ).fetchone()
+    return str((row[0] or row[1] or "") if row else "")
 
 
 def instruction(c, who, ref):
