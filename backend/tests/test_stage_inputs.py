@@ -358,7 +358,8 @@ def test_a_builder_with_no_repository_in_use_is_told_there_is_nowhere_to_build(c
     assert f"Repository: {REPO}." in wake and SI.NOWHERE not in wake
     c.execute("UPDATE repositories SET enabled=0")
     c.execute(
-        "UPDATE stages SET retired_at=? WHERE id IN (SELECT stage_id FROM requirements WHERE source='github')", (H.now(),)
+        "UPDATE stages SET retired_at=? WHERE id IN (SELECT stage_id FROM requirements WHERE source='github')",
+        (H.now(),),
     )
     assert SI.NOWHERE not in TW.body(c, E.task(c, eng), to="bot:builder")
 

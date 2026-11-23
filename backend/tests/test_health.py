@@ -1825,7 +1825,9 @@ def test_a_company_that_builds_software_with_no_repository_in_use_is_told_where_
         "warn",
         "Connected to Acme, but no repository is in use, so the Builder has nowhere to write.",
     )
-    assert check["fixes"] == [{"label": "Choose a repository", "href": "#/settings/general/set-repos", "tab": "", "click": ""}]
+    assert check["fixes"] == [
+        {"label": "Choose a repository", "href": "#/settings/general/set-repos", "tab": "", "click": ""}
+    ]
     with api.app.state.store.transaction() as c:  # a bot's own repository is not where the product is built
         c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('Acme/bot-builder',1,1)")
     assert health_of(api)[1]["github"]["status"] == "warn"

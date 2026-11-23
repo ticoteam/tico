@@ -1727,7 +1727,9 @@ def test_the_health_page_feeds_the_lifecycle_lists_findings_and_reads_the_github
     _story(environment, monkeypatch, [_part_warning, _part_lists, _part_github])
 
 
-def test_no_repository_in_use_is_one_agent_ops_task_that_hears_the_new_fix_and_messages_no_person(environment, monkeypatch):
+def test_no_repository_in_use_is_one_agent_ops_task_that_hears_the_new_fix_and_messages_no_person(
+    environment, monkeypatch
+):
     """Nov 22, Acme: a Builder with nothing In use. While the App is not installed the GitHub line's fix is Open GitHub;
     once installed with nothing In use it is Choose a repository, under the same id. The one Agent Ops task hears the
     new fix (the changed-fix path), and no person is messaged."""
