@@ -19,12 +19,13 @@ def _card(tab, card=""):
 
 GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "Settings > Computers", "Settings > Bots"
 RULES, TASKS, REPOS = "Automations > System jobs", "Settings > Tasks", "Settings > General > Repositories"
+PROVIDERS = "Settings > Providers"
 # Webhooks left Settings: incoming ones are on Automations, outgoing ones on Tools, their Gateway addresses a fold of
-# the Tico Gateway card on Models (ui/app/settings-webhooks.ts).
+# the Tico Gateway card in Providers.
 HOOKS_IN, HOOKS_OUT, HOOKS_GW = (
     "Automations > Incoming webhooks",
     "Tools > Webhooks",
-    "Settings > Models > Tico Gateway > Webhooks",
+    PROVIDERS + " > Tico Gateway > Webhooks",
 )
 HOOKS_IN_CARD, HOOKS_OUT_CARD = "#/automations/webhooks", "#/tools/webhooks"
 INBOXES, STRATEGY = "Tools", "Strategy bot > Settings"
@@ -37,7 +38,6 @@ RELEASES, GENERAL_MANAGER, SECURITY = (
 )
 SYSTEM_JOBS = "#/automations/system-jobs"
 INBOUND, TEXTS, MAIL = (INBOXES + " > Settings > " + s for s in ("Email", "Texts", "Letters in"))
-PROVIDERS = "Settings > Providers"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),

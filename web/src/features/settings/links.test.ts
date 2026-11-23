@@ -5,6 +5,7 @@ import { installCommands, runnerName } from './install';
 describe('health fixes', () => {
   it("take the new app's address, keep outside pages, and drop a page with no new address", () => {
     expect(fixHref({ label: 'Open Computers', href: '#/settings', tab: 'devices' })).toBe('/settings/computers');
+    expect(fixHref({ label: 'Open Computer', href: '#/bot/support/computer' })).toBe('/team/support?tab=computer');
     expect(fixHref({ label: 'Open Usage', href: '#/usage' })).toBe('/company/usage');
     expect(fixHref({ label: 'Open task', href: '#/tasks/412' })).toBe('/task/412');
     expect(fixHref({ label: 'Open GitHub', href: '#/tools/github' })).toBe('/library/tools');

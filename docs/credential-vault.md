@@ -203,7 +203,7 @@ this way: they stay a bot.yaml `tools:` entry.
 Model credentials named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY` infer
 that variable when the optional variable field is blank. An explicit variable always wins. Older name-only model
 credentials gain the variable when they are granted, without changing the secret. A key that signs computers' models in
-is added in **Settings > Models** and given to computers there ([Computers](computers.md#api-keys-on-a-computer)); a grant
+is added in **Settings > Providers** and given to computers with the CLI ([Computers](computers.md#api-keys-on-a-computer)); a grant
 here to every computer is refused with that address. A key there gives no bot access: grant a bot separately.
 
 ## Website logins
@@ -359,7 +359,7 @@ that this server could not keep. Secrets an older release kept in plaintext are 
 idempotent, and when the vault cannot be opened at start they are sealed on the next start or the next use.
 
 **Company model subscriptions.** A Claude setup-token, ChatGPT login or model API key an owner or admin saves in
-Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed_at`,
+Settings > Providers ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed_at`,
 bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. **Connect**
 gets the same value from a sign-in on a computer, which sends it once in its own request, outside the sign-in relay and
 any request receipt; the browser never holds it. Bots, the
@@ -517,7 +517,7 @@ can remove credentials they manage. Use **Remove** on the tool, **Delete** on a 
 `tico credential delete <name>` for a key in the vault. Deletion erases the encrypted value and grants, and the audit
 event records who removed it and the credential's identifying metadata.
 
-Model keys for computers are not granted here: add them in **Settings > Models** and give them to computers there. The
+Model keys for computers are not granted here: add them in **Settings > Providers** and give them to computers with the CLI. The
 names `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` and `CURSOR_API_KEY` still infer a blank variable
 on a stored Credential; older name-only keys fill the field when granted. Tool Credentials still need a grant per bot;
 `tico_credential_grant` targets one bot.

@@ -1,6 +1,9 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { SettingsPage } from '@/features/settings/exports';
-import { isSection, loadSection } from '@/features/settings/routing';
+import { isSection, loadSection, subscriptionsQuery } from '@/features/settings/routing';
+
+// Older migrated subscriptions used UUIDs without hyphens.
+const SUBSCRIPTION_ID = /^(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
 
 /* `/settings/<section>`: one section of Settings. `?open=<id>` is the row opened in it (a person, a computer, a
    subscription); `?who=people|agents` filters History. An unknown section goes to the list. */
@@ -9,8 +12,16 @@ export const Route = createFileRoute('/settings/$section')({
     ...(typeof raw.open === 'string' && raw.open ? { open: raw.open } : {}),
     ...(raw.who === 'people' || raw.who === 'agents' ? { who: raw.who } : {}),
   }),
-  beforeLoad: ({ params, search }) => {
-    if (params.section === 'models') throw redirect({ to: '/settings/$section', params: { section: 'providers' }, search, replace: true });
+  beforeLoad: async ({ params, search, context: { queryClient } }) => {
+    const { open } = search;
+    const subscription = params.section === 'agents' && open && (
+      open.startsWith('subscription:') ||
+      (SUBSCRIPTION_ID.test(open) && await queryClient.ensureQueryData(subscriptionsQuery)
+        .then((data) => data.subscriptions.some((s) => s.id === open), () => false))
+    );
+    if (params.section === 'models' || subscription) {
+      throw redirect({ to: '/settings/$section', params: { section: 'providers' }, search, replace: true });
+    }
     if (!isSection(params.section)) throw redirect({ to: '/settings' });
   },
   loader: ({ params, context: { queryClient } }) => (isSection(params.section) ? loadSection(queryClient, params.section) : undefined),

@@ -62,8 +62,8 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused
 until it updates.
 
-Providers shows **Your pool** first, then each person's pool, then older plans under **No owner** and any
-**Company keys**. Each header counts its plans and keys and shows how many visible agents use them. A row shows
+Providers opens **Your pool** first and folds other people's pools by default. Older plans appear under **No owner**
+and shared keys under **Company keys**. Each populated pool counts its plans and keys and shows how many visible agents use them. A row shows
 the number of agents on it, usage and reset for a plan, or monthly spend for a key. Its badge shows the most
 urgent problem or the plan's place in today's rotation. Owners and admins use the row menu to manage plans and
 keys. **Replace key** updates the existing key and asks for confirmation if work would restart.
@@ -192,7 +192,7 @@ The company-limit message does not confirm that an automatic repair has run.
 
 You must be the owner or an admin. The server rejects changes from anyone else.
 
-![Settings, Models, Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
+![Usage Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
 
 Example owner/admin view of **Usage → Limits**, using synthetic data.
 
@@ -286,8 +286,8 @@ another active person in the company, now or later. A plan is for its owner's ow
 so. Owners and admins add, edit, reconnect and remove them in **Settings > Providers**. The person who added a plan or API key
 can also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
 plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
-logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
-account email to its owner and admins, and only the agents each viewer can read.
+logins, including Claude logins since converted to setup tokens. The list shows plan usage to all members and the
+account email only to the plan's owner and admins. Only admins see API key previews. Each viewer sees agents they can read.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
 Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another

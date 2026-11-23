@@ -32,9 +32,9 @@ def checks(api):
     return {row["id"]: row for row in get(api, "health", "ana-test")["checks"]}
 
 
-def ready(api):
+def ready(api, *, manages=False):
     with api.app.state.store.read() as c:
-        return readiness.can_run(c, "ops", "claude")
+        return readiness.can_run(c, "ops", "claude", manages=manages)
 
 
 def pinned(api, *, second=True):
@@ -65,6 +65,8 @@ def test_a_held_pinned_plan_points_to_providers_and_gives_the_cli_assignment(api
     assert "Matheus" in verdict["problem"] and "has no" not in verdict["problem"]
     assert verdict["bot_problems"] == [verdict["problem"]]
     assert verdict["link"] == "#/settings/providers"
+    assert verdict["fix"].startswith("An owner or admin can assign")
+    assert ready(api, manages=True)["fix"].startswith("Assign")
 
 
 def test_a_held_plan_with_no_other_plan_left_says_to_add_one(api):

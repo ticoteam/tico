@@ -30,7 +30,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'description': 'What a person must fix on a plan that still counts, in a few words ("Payment past due"), '
             'else empty',
         },
-        'preview': {'type': 'string', 'description': 'For a plan, empty unless the viewer owns it or is an admin'},
+        'preview': {'type': 'string', 'description': 'Visible to admins and, for a plan, its owner'},
         'revision': 'i',
         'computers': items({'type': 'string'}),
         'usage': {
@@ -41,6 +41,7 @@ SCHEMAS['ModelSubscription'] = obj(
                         'used_pct': NUM_N,
                         'cost_usd_month': NUM_N,
                         'resets_at': 'n',
+                        'quota_hold_until': {'type': 'string', 'description': 'Reset of an active quota hold'},
                         'reason': {'type': ['string', 'null']},
                         'weekly_resets_at': 'n',
                         'weekly_used_pct': NUM_N,
@@ -61,6 +62,11 @@ SCHEMAS['ModelSubscription'] = obj(
         'updated_at': 's',
         'order': {'type': ['integer', 'null']},
         'in_use_on': items({'type': 'string'}),
+        'available': {'type': 'boolean', 'description': 'Whether the credential can be selected now'},
+        'next_in_rotation': {
+            'type': 'boolean',
+            'description': "At least one computer using this person's other plans can switch to this plan next",
+        },
         'agents': {
             **items(obj({'id': 's', 'name': 's', 'fallback': 'b'}, required=['id', 'name', 'fallback'])),
             'description': "The bots it serves that the viewer can read, by name: those on a computer given it "

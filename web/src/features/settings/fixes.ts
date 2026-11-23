@@ -20,6 +20,7 @@ const OLD: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => string]> = [
   [/^#\/changelog$/, () => '/settings/changelog'],
   [/^#\/tools(\/.*)?$/, () => '/library/tools'],
   [/^#\/settings\/(?:models|providers|subscriptions)(\/.*)?$/, () => '/settings/providers'],
+  [/^#\/bot\/([^/?#]+)\/computer$/, (m) => `/team/${m[1]}?tab=computer`],
   [/^#\/bot\/([^/?#]+)(\/.*)?$/, (m) => `/team/${m[1]}`],
   [/^#\/computers\/([^/?#]+)(\/.*)?$/, (m) => `/settings/computers?open=${m[1]}`],
 ];

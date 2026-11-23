@@ -2,7 +2,7 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
 level (X-Low, Low, Medium, High or X-High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Models**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
+connect it once, in **Settings → Providers**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
@@ -35,7 +35,7 @@ still runs as that level.
 
 ## Choose how bots get their models
 
-In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
+In the first step of setup the owner picks one of four choices. Later, **Settings → Providers → Tico Gateway** keeps one
 switch, **Use until a computer is signed in** (used while a computer has no subscription and no login of its own): on is
 the first choice (or Tico Gateway only, when that was picked), off is the second (or your company's plans or API keys).
 Whether a computer's bots run on Tico Gateway when its plans run out is that computer's own **Fall back to Tico Gateway**
@@ -82,7 +82,7 @@ its monthly cap, the Gateway work stops and Health says **Gateway cap reached** 
 
 Only the owner can do this.
 
-1. Open **Settings → Models**. The **Tico AI Gateway** card is under the providers.
+1. Open **Settings → Providers**. The **Tico AI Gateway** card is under the providers.
 2. Paste the key Tico gave you in **Gateway key**.
 3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
    you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
@@ -130,7 +130,7 @@ Sign in directly as an owner or admin to link the server:
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
 With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
 Gateway use spends that company's credit.
-The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
+The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Providers** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
 [connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → General → Health → Details**;
@@ -259,7 +259,7 @@ The Gateway is one login for the whole company, as a provider login is for its c
 | The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
-| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in the bot's Model controls; **Settings → Models → Tico Gateway** lists the picks in use. |
+| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in the bot's Model controls; **Settings → Providers → Tico Gateway** lists the picks in use. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
 | The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
@@ -268,7 +268,7 @@ The Gateway is one login for the whole company, as a provider login is for its c
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
 
-## Settings → Models → Tico Gateway
+## Settings → Providers → Tico Gateway
 
 One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
 cap, with a bar) beside the **Use until a computer is signed in** switch. Owners and admins also see **prices** per 1M tokens in and out by
@@ -289,7 +289,7 @@ skill is `skills/gateway/SKILL.md`.
 ## API keys
 
 To use the Gateway from other tools (your own code, Claude Code, Codex, curl), make an API key on
-[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Models → Tico Gateway → API keys**.
+[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Providers → Tico Gateway → API keys**.
 Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by default), and its use bills to the company's
 credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
 prepaid credit. The key is shown once.
@@ -378,7 +378,7 @@ period ends.
 
 ## Webhooks through the Gateway
 
-With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Models → Tico
+With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Providers → Tico
 Gateway → Webhooks). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
 and wakes a server Tico hosts that is asleep. The same key brings notices from Tico Team. See [Webhooks](webhooks.md#through-tico-gateway).
 

@@ -205,7 +205,7 @@ ACTIVE_CONFIGS_SQL = (
 
 
 def _login_dependencies(c, settings):
-    """Active bots' primary and fallback tools that actually use a computer login."""
+    """Active bots by computer and runtime for the tools that use a computer login."""
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
 
@@ -222,7 +222,7 @@ def _login_dependencies(c, settings):
                 and caps.get('readiness') is not False
                 and caps.get('api_keys') != 'bot'
             ):
-                found.setdefault(row['runner_id'], set()).add(runtime)
+                found.setdefault(row['runner_id'], {}).setdefault(runtime, set()).add(row['bot'])
     return found
 
 
@@ -743,9 +743,9 @@ def repository_fix(c, bot, label, github_owner="", why=""):
 
 
 def _rejected(computers):
-    """Online computers whose wanted harness refused its key or login: (computer, runtime, when, why, credential source)."""
+    """Online computers whose wanted harness refused its key or login."""
     return [
-        (x["label"], r["name"], r["rejected_at"], r["rejected_reason"], r["credential_source"])
+        (x["label"], r["name"], r["rejected_at"], r["rejected_reason"], r["credential_source"], x["id"])
         for x in computers
         if x["online"]
         for r in x["runtimes"]
@@ -781,7 +781,7 @@ def _plans_held(computers):
 
 def _rejected_summary(rows):
     """What to do about it; the reason is the harness's own sanitized words, never the key."""
-    first = ", ".join(sorted({f"{name} on {label}" for label, name, _, _, _ in rows}))
+    first = ", ".join(sorted({f"{name} on {label}" for label, name, *_ in rows}))
     when, why = rows[0][2], rows[0][3]
     sources = {row[4] for row in rows}
     fixes = []
@@ -798,6 +798,32 @@ def _rejected_summary(rows):
         + (" " + ". ".join(fixes) + "." if fixes else "")
         + " It takes no work that needs it until then."
     )
+
+
+def _rejected_fixes(c, settings, rows):
+    from urllib.parse import quote
+
+    sources = {row[4] for row in rows}
+    fixes = []
+    if "credentials" in sources or "" in sources:
+        fixes.append(_fix("Open Keys", "#/tools/keys?show=credentials"))
+    if "computer" in sources or "" in sources:
+        logins = _login_dependencies(c, settings)
+        linked = set()
+        for label, runtime, _, _, source, runner in rows:
+            if source not in ("", "computer") or runner in linked:
+                continue
+            linked.add(runner)
+            agents = logins.get(runner, {}).get(runtime, ())
+            if agents:
+                fixes.append(_fix(f"Open Computer on {label}", f"#/bot/{quote(min(agents), safe='')}/computer"))
+            else:
+                fixes.append(_fix(f"Open {label}", f"#/computers/{quote(runner, safe='')}"))
+            if len(linked) == 5:
+                break
+    if "" in sources:
+        fixes.append(_fix("Open Providers", "#/settings/providers"))
+    return fixes
 
 
 def silent_computers(c, minutes=SILENT_MINUTES):
@@ -1247,13 +1273,13 @@ def _movable(c, who, online_ids):
     ]
 
 
-def runtime_choice(c, bot, runtime, who, computers, harness="", model=""):
+def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, manages=False):
     """What Settings and Health show for running `runtime` on this bot's computer, from the one rule
     (backend/readiness.py `can_run`): the answer, a short label, and at most one way out: sign in there (a computer's
     shared sign-in for a runtime that signs in from the browser) or a computer `who` may move it to that can run it."""
     from .readiness import can_run
 
-    answer = can_run(c, bot, runtime, harness=harness, model=model)
+    answer = can_run(c, bot, runtime, harness=harness, model=model, manages=manages)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
     if answer.get("warning"):
         view["warning"] = answer["warning"]
@@ -1447,7 +1473,13 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                     None,
                 )
         elif reason == "not_ready":
-            choice = runtime_choice(c, row["bot"], runtime, who, computers, harness=harness) if runtime else {}
+            choice = (
+                runtime_choice(
+                    c, row["bot"], runtime, who, computers, harness=harness, manages=full and not who.support
+                )
+                if runtime
+                else {}
+            )
             problem = row.get("problem") or "Not ready"
             problem = str(choice.get("problem") or problem) if choice.get("can_run") is False else problem
             text = problem if label and label in problem else f"{problem} on {label}"
@@ -3659,10 +3691,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     "Models",
                     "bad",
                     _rejected_summary(rejected),
-                    [
-                        _fix("Open Keys", "#/tools/keys?show=credentials"),
-                        _fix("Open Providers", "#/settings/providers"),
-                    ],
+                    _rejected_fixes(c, settings, rejected),
                 )
             )
         elif online and not signed and held_plans:
@@ -3703,10 +3732,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     "Models",
                     "warn",
                     f"{_harness_name(signed)} is signed in on another computer. " + _rejected_summary(rejected),
-                    [
-                        _fix("Open Keys", "#/tools/keys?show=credentials"),
-                        _fix("Open Providers", "#/settings/providers"),
-                    ],
+                    _rejected_fixes(c, settings, rejected),
                 )
             )
         elif signed:

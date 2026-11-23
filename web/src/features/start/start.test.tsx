@@ -6,6 +6,8 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { ActionsRoot } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
+// Keep the lazy Settings import's transform outside the sign-in test.
+import '@/features/settings/exports';
 import { subscriptionsQuery } from '@/features/settings/routing';
 import { FirstRun } from './FirstRun';
 import { useStartGate } from './gate';
@@ -264,7 +266,8 @@ describe('Setup dialog, three steps @s1171', () => {
   it('connects inline, retries, and continues only after a provider is ready', async () => {
     let allowed = false;
     let saved = false;
-    const existing = { id: 'old', name: 'Expired plan', runtime: 'claude', status: 'needs_reconnect' };
+    const usage = { used_pct: 100, resets_at: '2099-07-01T00:00:00Z' };
+    const existing = { id: 'old', name: 'Held plan', runtime: 'claude', status: 'working', available: false, usage: { ...usage, quota_hold_until: usage.resets_at } };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [existing] } as never);
     const codePage = 'https://auth.example/claude';
     otherwise = (method, url) => {
@@ -280,7 +283,7 @@ describe('Setup dialog, three steps @s1171', () => {
           saved = true;
           return { body: { id: 'new', name: 'New plan' } };
         }
-        return { body: { kinds: [], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working' }] : [existing] } };
+        return { body: { kinds: [], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working', available: true, usage }] : [existing] } };
       }
       return { body: RECORD };
     };

@@ -170,11 +170,11 @@ def test_only_a_heartbeat_moves_readiness_at_so_the_page_can_tell_a_report_from_
 
 def test_switch_to_subscription_is_refused_with_where_keys_are_changed_now(api):
     """Switch to subscription is gone with the computer keys (D11-5): a page drawn before asks once and is told to take
-    the key off the computer in Settings > Models; nothing is queued for the computer."""
+    the key off the computer in Settings > Providers; nothing is queued for the computer."""
     r = online(api)
     rid = r["runner_id"]
     refused = post(api, f"computers/{rid}/logins", {"runtime": "codex", "to": "subscription"}, expected=410)
-    assert refused["error"]["code"] == "moved" and "Settings > Models" in refused["error"]["detail"]
+    assert refused["error"]["code"] == "moved" and "Settings > Providers" in refused["error"]["detail"]
     assert pending(api, r) == []
 
 

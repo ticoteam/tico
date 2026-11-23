@@ -226,8 +226,6 @@ export function Computers({ open }: { open?: string }) {
   );
 }
 
-// ---------------------------------------------------------------- Models
-
 function Defaults() {
   const catalog = useQuery(modelsQuery);
   const names = (catalog.data?.models ?? [])

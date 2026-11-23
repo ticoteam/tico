@@ -5,11 +5,10 @@ pages are behind it, dimmed, and the heading reads **Set up <company>** with **S
 and one primary button each:
 
 1. **What are you building?** The website and one line. The strategy research starts from them in the background.
-2. **Your team.** The default team, one switch per team, each team's manager first and the seats under it after it; a
-   team of built-ins only is always on. **Create team** makes it. **Change** opens the detailed [team builder](#the-team-builder); **I have a company
-   file** takes a company file instead.
-3. **What your bots run on.** Two rows: the computer, and **Add a Claude or ChatGPT subscription** (recommended). Both
-   are optional, except on Tico Cloud, where **Done** waits for a plan or key; **Done** lands on Tasks. The model plan is a default, chosen in Settings > Models, not a step.
+2. **Connect your AI plan.** Connect Claude or ChatGPT, or choose **Use an API key**. **Continue** appears when a provider is ready.
+3. **Pick a team.** Pick the team's first job and choose **Start**, or choose **Skip**. Setup lands on Tasks.
+
+The default model is in **Settings > Agents > Defaults**.
 
 Every team gets the assistant, Agent Ops, the Librarian and the Strategy Owner, and none of them can be archived.
 **Setup picks the chart, not the bots:** the built-ins and any seat marked `live` are the bots on day one, and they work
@@ -101,8 +100,8 @@ returns the record, plus `default_chart` (the default chart by team, below) unti
 | Step | What it asks | What it stores |
 |---|---|---|
 | What are you building? | **Website** (optional) and **What you're building**: the team's one line, or a new idea in a few sentences. **Next** with either starts the strategy research (`POST /api/v2/strategy/draft-from`), which drafts the [strategy](strategy.md#setup) in the background, each section marked unconfirmed; nothing is shown or asked about it in setup. An address that is not a public website keeps you on the step with the reason. To retry interrupted research, see [Recover from interrupted strategy research](#recover-from-interrupted-strategy-research). On a fresh install with no team name yet it also asks the company name, and it asks your name only when Tico does not know it | `names.website` and `answers.building` (the website is stored as an `https://` address; anything that is not a public web address is refused with 422; finishing setup files the Librarian's market task from it), and `names.company_name`, `names.owner_name` when asked |
+| Connect your AI plan | Start a Claude or ChatGPT sign-in inline, or choose **Use an API key**. **Continue** appears after a provider is ready | The plan or key is saved in **Settings > Providers** |
 | Your team | A **Start with** line above the teams (`first_jobs`: `{choices: [{key, label, seat, team}], picked}`): one radio per first job, Plan what to build next (the Product Owner), Get more customers (the Growth Manager), Look after customers (the Success Manager) and Check contracts and policies (the Legal Owner), each offered only when its seat is in the chart; picked at first is Plan what to build next, or Get more customers when software is not the product. Picking one redraws the chart with that seat as the only live seat besides the built-ins, and switches its team on, the switch disabled while it is picked. Then the default chart (`default_chart`: `[{team, on, locked, picked, roles: [{id, title, live, built_in, reports_to}]}]`, the chart formula's own, see [What Create does](#what-create-does)) as one row per team with a switch, the team's seats on one line (two at most): its top seats first, each followed by the seats under it. A role's `reports_to` is the seat above it in the same team, or null for the team's top seats; a role that is not `live` is a Recruiting seat and is drawn muted. A team whose seats are all built-ins is `locked`: always on, its switch disabled, and never left out by `teams_off`. **Create team** makes it. **Change** opens the [team builder](#the-team-builder) and **Back** returns to the default team; **I have a company file** previews a file ([A company file](#a-company-file)) | `answers.first_job` (`plan`, `grow`, `customers` or `legal`) and `answers.teams_off`: the teams switched off. Creating with the default team calls `POST /api/v2/setup/complete` with nothing picked; with the builder, `answers.departments`, `answers.briefings` and `selected` as before; with a file, `POST /api/v2/setup/company/import` |
-| What your bots run on | After the team exists. Up to three rows. The computer: the online computers, or Tico Cloud computers on a hosted company (ticked), or **Add the computer your bots run on**, which opens the kind of computer (**A Mac**, **A Linux or cloud server (Docker)**), a one-time code or setup file and the commands. **Connect GitHub** goes to Tools › GitHub until the app is installed (Getting started's `github` item, required: bots need it for their repositories). **Add a Claude or ChatGPT subscription** opens the [sign-in sheet](computers.md#add-a-connection) over the pop-up (Getting started's `subscription` item; gone once one is signed in or skipped). The [model choice](ai-gateway.md#choose-how-bots-get-their-models) is not asked: it is in Settings > Models. **Done** lands on Tasks | Nothing. The step polls `GET /api/v2/setup` every ten seconds and shows a computer once it answers |
 
 **Removed from setup, still accepted.** Earlier setups also asked for the first bets (Your bets), names, About the
 team, an external agent and a review, and showed a screen after Create. Setup no longer shows them: the strategy draft
@@ -217,7 +216,7 @@ second). It reaches no computer.
   below about starters and other templates describe a bot made from a template: from a seat once someone picks a bot for
   it.
 - **No AI provider and no computer are needed.** The team is created first. With no provider chosen a bot names no runtime or model and
-  follows the team default, so it runs once a provider is added in Settings > Models. With no computer enrolled the bots stay
+  follows the team default, so it runs once a provider is added in Settings > Providers. With no computer enrolled the bots stay
   `planned`; when the owner's computer enrolls, the bots are placed on it and activated.
 - Each bot goes in the **group** its template belongs to (Marketing, Product, Engineering ...); the group is made if the team has none yet,
   and one it already has by that name is reused ([the team chart](org-chart.md#groups)). Built-in bots stay in the General group, which Tico keeps, each reporting to the General Manager; the Assistant reports to its person and is in no group; the Finance Owner
@@ -653,7 +652,7 @@ also call `POST /api/v2/bots/{bot}/onboarded` to release a bot whose thread went
 
 In **AI providers**, choose **Your company's plans or API keys** to show the provider checkboxes.
 With none ticked, **Skip for now** continues without a provider; bots wait until one is added.
-Settings > Models can also save with no providers enabled. After choosing providers, sign in on each computer
-from that page, or add the model key in **Settings > Models** and give it to the computers. For a model API key or token
+Add company plans or keys in **Settings > Providers** and give them to computers with the CLI. For a computer's
+own sign-in, open the agent's **Computer** tab. For a model API key or token
 named `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `CURSOR_API_KEY`, a blank **Bot variable name** is
 inferred automatically; otherwise set the model's variable explicitly. Bot access still needs its own grant.

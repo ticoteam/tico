@@ -104,6 +104,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/meetings?live=lm_1', '/calendar'],
   ['#/bot/qa-agent', '/team/qa-agent'],
   ['#/bot/qa-agent/settings', '/team/qa-agent?tab=settings'],
+  ['#/bot/qa-agent/computer', '/team/qa-agent?tab=computer'],
   ['#/bot/qa-agent/more', '/team/qa-agent'],
   ['#/threads', '/threads'],
   ['#/calendar?view=3day&date=2026-03-04', '/calendar?view=3day&date=2026-03-04'],

@@ -150,7 +150,7 @@ and `grok` homes, so a bot's commits still have an author. Edit them per environ
 
 **Gemini is an API key, not an interactive login.** `profile login <name> gemini` says so and
 exits: store a Credential with **Bot variable name** `GEMINI_API_KEY` in **Tools → Add → Key**
-and grant it to the bot. A model key given to computers in **Settings > Models** signs model software in;
+and grant it to the bot. A model key given to computers in **Settings > Providers** signs model software in;
 a bot still needs its own grant. Existing credential files are migration sources only.
 The profile still owns that runtime's session directory.
 

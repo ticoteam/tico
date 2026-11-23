@@ -1,4 +1,4 @@
-"""Company subscriptions: saved once in Settings > Models, given to computers one per runtime, and signing in every turn
+"""Company subscriptions: saved once in Settings > Providers, given to computers one per runtime, and signing in every turn
 on that computer (backend/model_subscriptions.py)."""
 
 import json
@@ -1780,6 +1780,40 @@ def test_a_persons_plans_list_in_use_first_across_tools(api):
     assert by[chatgpt]["order"] == by[claude]["order"] == 1
 
 
+def test_the_list_distinguishes_readings_from_holds_and_pins_from_rotation(api):
+    from backend.tests.helpers.api import put
+
+    setup(api)
+    company(api)
+    current = add(api, name="Plan A")["id"]
+    spare = add(api, secret=OTHER, name="Plan B")["id"]
+    m = usage_machine(api)
+    turn_on(api, m, current)
+    beat(api, m, {"own": {"claude": {"signed_in": True, "weekly": turn_window(100, timedelta(days=3), current)}}})
+
+    def rows():
+        return {s["id"]: s for s in listed(api)}
+
+    before = rows()
+    assert before[current]["usage"]["used_pct"] == 100
+    assert "quota_hold_until" not in before[current]["usage"]
+    assert before[current]["available"] and before[current]["in_use_on"] == [m["runner_id"]]
+    assert not before[spare]["next_in_rotation"]
+
+    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": "human:ana"})
+    rotating = rows()
+    live = effect(api, m)
+    next_plan = spare if live == current else current
+    assert rotating[live]["in_use_on"] == [m["runner_id"]]
+    assert rotating[next_plan]["next_in_rotation"]
+
+    hold_plan(api, live)
+    held = rows()
+    assert held[live]["usage"]["quota_hold_until"] == held[live]["usage"]["resets_at"]
+    assert not held[live]["available"] and not held[live]["in_use_on"] and not held[live]["next_in_rotation"]
+    assert held[next_plan]["in_use_on"] == [m["runner_id"]]
+
+
 def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fall_back_to_it(api):
     """The Agents screen's faces on a subscription row: the bots on the computers given it whose turns run its runtime,
     one that reaches it only through its named fallback marked as such. One that needs reconnecting still lists the
@@ -1817,21 +1851,34 @@ def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fa
 def test_a_plan_default_uses_its_owner_and_only_the_owner_and_admins_see_its_preview(api):
     setup(api)
     company(api)
+    email = "cara@acme.example"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE humans SET name='Casey' WHERE id='cara'")
     plan = post(
-        api, "model-subscriptions", {"kind": "codex_login", "secret": codex_file(), "owner_id": "cara"}, "ben-test"
+        api,
+        "model-subscriptions",
+        {"kind": "codex_login", "secret": codex_file(email=email), "owner_id": "cara"},
+        "ben-test",
     )
     assert plan["name"] == "Casey's ChatGPT plan" and plan["expired"] is False
-    assert listed(api, "ben-test")[0]["preview"] == "ana@acme.example"
+    assert listed(api, "ben-test")[0]["preview"] == email
     post(api, "access/humans/ben", {"role": "member"})
     [member] = listed(api, "ben-test")
     assert member["preview"] == "" and member["usage"] == plan["usage"] and member["can_remove"]
-    assert listed(api, "cara-test")[0]["preview"] == "ana@acme.example"
-    assert listed(api)[0]["preview"] == "ana@acme.example"
+    assert listed(api, "cara-test")[0]["preview"] == email
+    assert listed(api)[0]["preview"] == email
     with api.app.state.store.transaction() as c:
+        c.execute("UPDATE humans SET name='' WHERE id='cara'")
+        c.execute("UPDATE humans SET name=email WHERE id='ben'")
         c.execute("UPDATE humans SET name=email WHERE id='ana'")
     assert add(api, name=None)["name"] == "Claude plan"
+    key = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
+    for token in ("ben-test", "ana-test"):
+        rows = {s["id"]: s for s in listed(api, token)}
+        assert rows[plan["id"]]["owner_name"] == rows[plan["id"]]["added_by_name"] == "A teammate"
+        assert rows[key["id"]]["preview"] == (key["preview"] if token == "ana-test" else "")
+        if token == "ben-test":
+            assert email not in json.dumps(rows[plan["id"]])
 
 
 def test_the_migration_renames_legacy_login_emails_with_or_without_an_owner(api):

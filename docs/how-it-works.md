@@ -433,14 +433,14 @@ harness in **Settings → Bots**, the runner reruns that run at once on the fall
 session, given the thread's latest messages, up to about 16,000 tokens, marked as history; never a
 person's private Assistant DM) and
 reports `fallback` as that harness, which **Settings → History → Runs** shows beside the model. A named fallback on the same
-login as the spent one is skipped (it would hit the same limit). While **Fall back when a plan runs out** is on in **Settings → Models**, the turn goes to the company's other providers as
+login as the spent one is skipped (it would hit the same limit). While automatic fallback is enabled, the turn goes to the company's other providers as
 described below.
 Tico is seeded with Gemini CLI as its fallback from Antigravity, so a usage limit uses
 a stored `GEMINI_API_KEY` Credential granted to the bot. **None** in a bot's fallback picker (History shows *None (fail)*) means no named hop: the bot still takes
 the company's automatic hop below when that is on and one is ready.
 
 A bot with no fallback of its own, or whose named fallback is another model on the same login (that fallback is skipped
-once the login is spent), still gets one on a usage limit, while **Fall back when a plan runs out** is on in **Settings → Models** (a spend cap such as "monthly spend limit" counts).
+once the login is spent), still gets one on a usage limit, while automatic fallback is enabled (a spend cap such as "monthly spend limit" counts).
 The runner runs that turn once on the first of the company's other providers that is signed in on the same computer, either by its
 own sign-in or by a company subscription given to that computer ([Computers](computers.md)). It runs the company's default
 model when that model is on that tool and is not a Tico Gateway model (a Gateway model runs only through Tico's own provider,
@@ -451,7 +451,7 @@ its key into a login).
 A login on that computer that failed a turn on its usage limit is skipped until the provider's reset time, or for
 30 minutes when the provider gives none, and the next provider in the list takes the turn (a subscription profile
 that shares the computer's own logins counts as that login; a bot's own key is never shared with another bot). When the fallback itself
-hits its limit, the same turn moves on to the next signed-in provider instead of ending. Under the two choices that include the Gateway (`subscriptions-gateway` and `gateway`), while automatic fallback is on (**Fall back when a plan runs out** in **Settings → Models**), a bot with no fallback of its own (**None** is no fallback) gets a Tico model last, after every signed-in provider. That hop goes only to a bot whose own model is not a Tico model, and only on a computer that runs bots as their own user or is a Tico cloud machine ([AI Gateway](ai-gateway.md)); a computer that is neither leaves it out. A bot that names a fallback, even one on the same login, gets no company Tico hop. With no ready provider and no such hop, the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
+hits its limit, the same turn moves on to the next signed-in provider instead of ending. Under the two choices that include the Gateway (`subscriptions-gateway` and `gateway`), while automatic fallback is enabled, a bot with no fallback of its own (**None** is no fallback) gets a Tico model last, after every signed-in provider. That hop goes only to a bot whose own model is not a Tico model, and only on a computer that runs bots as their own user or is a Tico cloud machine ([AI Gateway](ai-gateway.md)); a computer that is neither leaves it out. A bot that names a fallback, even one on the same login, gets no company Tico hop. With no ready provider and no such hop, the run is limited as above. A limit is named by the login that returned it: the bot's status, its run log and
 Health say *Primary* or *Fallback*, the provider and login, and whether it was an API key's quota or billing refusal
 or the plan's usage limit (with its 5-hour or weekly window when the provider says so), for example *Fallback codex
 API quota or billing limit; primary claude not limited*. Each login keeps its own hold and retry time: a fallback's
@@ -465,8 +465,7 @@ its confirmed side session is then saved locally and on the server while the tur
 can therefore continue that session once, even before any quota/capacity result. An unconfirmed side session never
 resumes the old primary; unknown effects and final answers keep their settlement safeguards. Late diagnostics cannot
 erase an already recorded continuation decision. The result field is sent to every runner the server accepts (each advertises `source_continue_v1`). Other turns try the bot's own provider first, so the
-bot moves back on its own once the limit resets. The owner turns this off in **Settings → Models**
-(*Fall back when a plan runs out*, `auto_fallback`). Settings › Health's *What bots run on* check lists the bots running
+bot moves back on its own once the limit resets. The owner can turn this off with the `auto_fallback` setting. Settings › Health's *What bots run on* check lists the bots running
 on a fallback, and `GET /api/v2/health` names them (`on_fallback`, `limited`).
 
 **Held runs after a usage limit (Unreleased).** Safe runs previously held after the primary hit its limit and the fallback failed to start recover automatically.
@@ -565,8 +564,7 @@ model" finding. When a computer's default login (no subscription) keeps stopping
 says so once per computer and tool, e.g. "Team box's default Codex login is out of quota", until a turn on
 it completes or the reset time passes ([Check health](health-monitor.md), `default_login_limited`).
 
-The company's **check model** (*Check model* in **Settings → Models**, `check_models` on
-`/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
+The company's **check model** (`check_models` on `/api/v2/providers`) is what review and check subtasks run on when they name no model: an ordered list such as
 `grok, codex`, each entry a runtime or `runtime:model`. The other enabled providers follow it, in their order. The
 pick is the first from a provider other than the one the work was written on; with none that can run, it runs on
 the author's own provider and the task's history says so. Another provider is preferred, never required. An entry whose provider is off or whose model is retired is skipped, and a

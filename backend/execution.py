@@ -8290,7 +8290,7 @@ class Execution:
                 "idle" if requeue else "crashed",
                 f"{body.auth_rejected.runtime} sign-in was rejected; "
                 + (
-                    f"reconnect {subscription['name']} in Settings > Models"
+                    f"reconnect {subscription['name']} in Settings > Providers"
                     if subscription and requeue
                     else "sign in on this computer to continue"
                     if requeue

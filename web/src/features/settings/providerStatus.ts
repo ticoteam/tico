@@ -8,14 +8,15 @@ export function limitReset(s: Subscription) {
 
 export const needsReconnect = (s: Subscription) => s.status === 'needs_reconnect' || s.expired;
 
-export const providerReady = (s: Subscription) => !s.problem && !needsReconnect(s) && !(s.usage?.used_pct === 100 && limitReset(s));
+export const providerReady = (s: Subscription) => !s.problem && !needsReconnect(s) && s.available !== false;
 
-export function providerBadge(s: Subscription, next: boolean) {
+export function providerBadge(s: Subscription) {
   if (s.problem) return { label: 'Problem', detail: s.problem };
   if (needsReconnect(s)) return { label: 'Reconnect needed', detail: s.status_detail };
-  const reset = limitReset(s);
-  if (s.usage?.used_pct === 100 && reset) return { label: `At limit until ${reset}` };
+  const hold = s.usage?.quota_hold_until;
+  if (hold) return { label: `At limit until ${fmtWhen(hold)}` };
+  if (s.available === false) return { label: 'Problem' };
   if (s.usage?.near) return { label: 'Near limit' };
   if (s.in_use_on.length) return { label: 'In use' };
-  return { label: next ? 'Next' : 'Ready' };
+  return { label: s.next_in_rotation ? 'Next' : 'Ready' };
 }

@@ -1,4 +1,4 @@
-"""Company subscriptions, given to computers (Settings > Models).
+"""Company subscriptions, given to computers (Settings > Providers).
 
 A subscription is one of the company's model logins or keys, saved once in Tico rather than on a computer: a Claude
 setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a `codex login`), or an Anthropic or
@@ -52,7 +52,7 @@ own, so that computer's own login stays as it was. The person gets the link in t
 result (`POST runner-logins/<id>/subscription`), which `connected` seals as the subscription the person named, or as
 the new value of the one they are reconnecting. The browser never holds it.
 
-Owners and admins save, rename, reconnect, remove and give subscriptions. A person who sees Settings > Models reads the
+Owners and admins save, rename, reconnect, remove and give subscriptions. A person who sees Settings > Providers reads the
 list (never a value). A bot, a run or a Tico support session never saves a value; support writes nothing here.
 
 Delivery: the claim records what it handed each attempt (`attempt_subscriptions`) and names it in the attempt
@@ -594,12 +594,16 @@ def in_effect(c, runner_id, runtime, loads=None):
         from .read_cache import one
 
         runner = one(c, RUNNER_CAPABILITIES_SQL, (runner_id,))
+    return sub if _runner_takes(runner, sub) else None
+
+
+def _runner_takes(runner, sub):
     if runner and sub["kind"] == "claude_login":
         from . import claude_login
 
         # A runner that cannot put the token in a turn's own file never gets one: its turns run as if none were given.
-        return sub if claude_login.takes_turns(runner) else None
-    return sub if runner else None
+        return claude_login.takes_turns(runner)
+    return bool(runner)
 
 
 def held_plan(c, runner_id, runtime, loads=None, profile=""):
@@ -735,7 +739,7 @@ def plan_hold(c, runner_id, runtime, loads=None):
 
 def _name_of(c, actor):
     person = H.human(c, H.actor_id(actor)) or {}
-    return person.get("name") or person.get("email") or H.actor_id(actor)
+    return _display_name(person) or "A teammate"
 
 
 def _when(ts):
@@ -867,7 +871,7 @@ def _api_costs(c, month, sid=None):
 
 def _listing(c, sid=None):
     """What a plan list reads about plans and their computers, in a fixed number of queries however many plans and
-    computers there are (Settings > Models shows every plan's usage at once): the grants with their computers, each
+    computers there are (Settings > Providers shows every plan's usage at once): the grants with their computers, each
     computer's readiness, its named logins' reported runtimes, the login holds, the API keys' month cost and the
     registry metadata. With `sid`, only that plan's grants and computers are read."""
     from .claim_loads import open_holds
@@ -943,6 +947,11 @@ def _person(c, ctx, pid):
     return ctx["people"][pid]
 
 
+def _display_name(person):
+    name = (person.get("name") or "").strip()
+    return name if name and "@" not in name else ""
+
+
 def _usage(c, sub, ctx=None):
     """What is known of a subscription's use without new telemetry: an API key's cost this month from the runs that
     used it; a plan's limit while its hold stands (backend/login_holds.py), else its used percent from its computers'
@@ -964,7 +973,13 @@ def _usage(c, sub, ctx=None):
     if hold and (hold.get("until") or "") > H.now() and not hold.get("capacity"):
         kind = login_holds.window(hold.get("error"))
         window = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
-        return {"window": window, "used_pct": 100, "cost_usd_month": None, "resets_at": hold["until"]}
+        return {
+            "window": window,
+            "used_pct": 100,
+            "cost_usd_month": None,
+            "resets_at": hold["until"],
+            "quota_hold_until": hold["until"],
+        }
     return _plan_usage(c, sub, spec.get("runtime", ""), ctx)
 
 
@@ -1172,6 +1187,7 @@ def problem(c, sub):
 def view(c, sub, ctx=None):
     """A subscription as Settings > Providers lists it: no value, a preview, its status, the computers given it."""
     from . import claude_login, subscription_refresh as SR
+    from types import SimpleNamespace
 
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
@@ -1193,13 +1209,14 @@ def view(c, sub, ctx=None):
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
         "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
+        "available": available(c, sub, spec.get("runtime", ""), SimpleNamespace(holds=ctx["holds"])),
         "expired": claude_login.expired(sub),
         # A full login runs out about a month after its sign-in: when to reconnect, shown a few days before.
         "reconnect_by": claude_login.reconnect_by(sub),
         "added_by": sub["added_by"],
-        "added_by_name": added.get("name") or added.get("email") or "",
+        "added_by_name": _display_name(added) or "A teammate",
         "owner_id": sub.get("owner_id") or "",
-        "owner_name": owner.get("name") or owner.get("email") or "",
+        "owner_name": (_display_name(owner) or "A teammate") if sub.get("owner_id") else "",
         "created_at": sub["created_at"],
         "updated_at": sub["updated_at"],
     }
@@ -1277,15 +1294,19 @@ def listed(c, settings=None):
     from types import SimpleNamespace
 
     holds = SimpleNamespace(holds=ctx["holds"])  # read once by `_listing`: no read per computer
-    using, serving = {}, {}
+    using, serving, rotating = {}, {}, {}
     for (runner_id, runtime), entry in _given(c).items():
-        on = _pick(c, runner_id, runtime, entry, holds) if entry.get("person") else entry if entry["id"] else None
-        live = on if on and available(c, on, runtime, holds) else None
+        person = entry.get("person")
+        on = _pick(c, runner_id, runtime, entry, holds) if person else entry if entry["id"] else None
+        runner = ctx["runners"].get(runner_id)
+        live = on if on and available(c, on, runtime, holds) and _runner_takes(runner, on) else None
         if live:
             using.setdefault(live["id"], []).append(runner_id)
+            if person:
+                rotating.setdefault((person, runtime), []).append((live["id"], runner))
         # A subscription given to a computer serves its bots whatever its state, so one that needs reconnecting still
         # shows whose turns stopped; from a person's plans, only the one in use there.
-        served = live if entry.get("person") else on
+        served = live if person else on
         if served:
             serving.setdefault(served["id"], []).append(runner_id)
     bots = _agents_on(c, settings, [rid for rids in serving.values() for rid in rids])
@@ -1294,10 +1315,17 @@ def listed(c, settings=None):
         v["in_use_on"] = using.get(v["id"], [])
         v["agents"] = _agents_of(bots, serving.get(v["id"], []), v["runtime"])
         v["order"] = v["place"] = None
-        if owned(v["kind"]) and v["owner_id"] and available(c, v, v["runtime"], holds):
+        v["next_in_rotation"] = False
+        if owned(v["kind"]) and v["owner_id"] and v["available"]:
             groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
-    for plans in groups.values():
-        plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
+    for group, plans in groups.items():
+        plans.sort(key=lambda v: pick_key(v, v["usage"]))
+        if len(plans) > 1:
+            for current, runner in rotating.get(group, ()):
+                spare = plans[1] if plans[0]["id"] == current else plans[0]
+                if _runner_takes(runner, spare):
+                    spare["next_in_rotation"] = True
+        plans.sort(key=lambda v: not v["in_use_on"])
         for n, v in enumerate(plans, 1):
             v["order"] = n
     # A person's plans of every tool in one list (`place`): the Settings list groups by person and keeps this order.
@@ -1643,9 +1671,9 @@ def default_name(c, kind, owner=""):
     base = spec["name"]
     if owned(kind):
         person = H.human(c, owner) if owner else None
-        display_name = ((person or {}).get("name") or "").strip()
+        display_name = _display_name(person or {})
         base = spec["label"]
-        if display_name and "@" not in display_name:
+        if display_name:
             ending = f"'s {base}"
             owner_limit = MAX_NAME - len(ending) - len(f" {MAX_SUBSCRIPTIONS}")
             base = display_name[:owner_limit].rstrip() + ending
@@ -2862,7 +2890,7 @@ def install(app, store, auth, mutate, settings):
             access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
             for sub in subscriptions:
                 sub["can_remove"] = may_remove(who, sub["added_by"], manages=manages)
-                if owned(sub["kind"]) and not manages and sub["owner_id"] != who.actor:
+                if not manages and (not owned(sub["kind"]) or sub["owner_id"] != who.actor):
                     sub["preview"] = ""
                 sub["agents"] = [agent for agent in sub["agents"] if access[agent["id"]]["read"]]
             return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}

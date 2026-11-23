@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { reasonIn, run } from '@/actions';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
@@ -29,58 +29,70 @@ function KeyDialog({ kind, label, subscription, onClose }: { kind: string; label
   const [secret, setSecret] = useState('');
   const [restart, setRestart] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const save = async (confirm = false) => {
-    if (!subscription) {
-      if (await act('settings.addKey', { kind, secret: secret.trim() })) onClose();
-      return;
-    }
-    const result = await run('settings.pastePlan', { subscription: subscription.id, secret: secret.trim(), ...(confirm && { confirm: true }) }, { via: 'click' });
-    if (result.ok) return onClose();
-    if (result.error === 'confirm_restart' && !confirm) {
-      setRestart(reasonIn(result) ?? 'Running work will restart');
-    } else {
-      setRestart(null);
-      setError(reasonIn(result) ?? "Couldn't replace the key");
+    setBusy(true);
+    try {
+      if (!subscription) {
+        if (await act('settings.addKey', { kind, secret: secret.trim() })) onClose();
+        return;
+      }
+      const result = await run('settings.pastePlan', { subscription: subscription.id, secret: secret.trim(), ...(confirm && { confirm: true }) }, { via: 'click' });
+      if (result.ok) return onClose();
+      if (result.error === 'confirm_restart' && !confirm) {
+        setRestart(reasonIn(result) ?? 'Running work will restart');
+      } else {
+        setRestart(null);
+        setError(reasonIn(result) ?? "Couldn't replace the key");
+      }
+    } finally {
+      setBusy(false);
     }
   };
   const verb = subscription ? 'Replace key' : 'Add';
   return (
     <Dialog
       open
-      onOpenChange={(o) => !o && onClose()}
+      onOpenChange={(o) => !o && !busy && onClose()}
       title={restart ? 'Restart runs?' : subscription ? `Replace key for ${subscription.name}` : `Add ${label}`}
       alert={!!restart}
       description={restart ?? error ?? undefined}
       actions={
         <>
-          <Button variant="quiet" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={secret.trim().length < 8} onClick={() => save(!!restart)}>{verb}</Button>
+          <Button variant="quiet" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={secret.trim().length < 8} onClick={() => save(!!restart)}>{verb}</Button>
         </>
       }
     >
-      {!restart && <Field label={label} type="password" value={secret} onValueChange={setSecret} autoComplete="off" autoFocus />}
+      {!restart && <Field label={label} type="password" value={secret} onValueChange={setSecret} disabled={busy} autoComplete="off" autoFocus />}
     </Dialog>
   );
 }
 
 function RenameDialog({ s, onClose }: { s: Subscription; onClose: () => void }) {
   const [name, setName] = useState(s.name);
+  const [busy, setBusy] = useState(false);
   const save = async () => {
-    if (await act('settings.editSubscription', { subscription: s.id, name })) onClose();
+    setBusy(true);
+    try {
+      if (await act('settings.editSubscription', { subscription: s.id, name })) onClose();
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <Dialog
       open
-      onOpenChange={(o) => !o && onClose()}
+      onOpenChange={(o) => !o && !busy && onClose()}
       title={`Rename ${s.name}`}
       actions={
         <>
-          <Button variant="quiet" onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={!editSubscriptionName.safeParse(name).success} onClick={save}>Save</Button>
+          <Button variant="quiet" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={!editSubscriptionName.safeParse(name).success} onClick={save}>Save</Button>
         </>
       }
     >
-      <Field label="Name" value={name} onValueChange={setName} autoFocus />
+      <Field label="Name" value={name} onValueChange={setName} disabled={busy} autoFocus />
     </Dialog>
   );
 }
@@ -101,12 +113,14 @@ function Usage({ s }: { s: Subscription }) {
   return <span className="provider-usage">{u?.cost_usd_month != null ? `${usd(u.cost_usd_month)} this month` : u?.reason || '—'}</span>;
 }
 
-function ProviderRow({ s, admin, next, open }: { s: Subscription; admin: boolean; next: boolean; open: boolean }) {
+function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open: boolean }) {
   const [changing, setChanging] = useState<Change | null>(null);
   const plan = isPlan(s.kind);
   const agents = s.agents ?? [];
-  const badge = providerBadge(s, next);
-  const by = plan && !s.owner_id ? `Added by ${s.added_by_name || s.added_by || 'Tico'}` : s.preview || s.owner_name;
+  const badge = providerBadge(s);
+  const expandable = !!badge.detail || agents.length > 0;
+  const by = plan ? (s.owner_id ? s.owner_name || 'A teammate' : `Added by ${s.added_by_name || 'A teammate'}`) : '';
+  const preview = plan || admin ? s.preview : '';
   const byWhen = s.reconnect_by && !needsReconnect(s) && fmtDate(s.reconnect_by);
   const mayRemove = s.can_remove ?? admin;
   const close = () => setChanging(null);
@@ -115,7 +129,7 @@ function ProviderRow({ s, admin, next, open }: { s: Subscription; admin: boolean
       <div className="row g-provider" data-target={`subscription:${s.id}`} title={s.name}>
         <span className="provider-order">{s.order ?? '–'}</span>
         <div className="provider-name">
-          <Link
+          {expandable ? <Link
             className="row-title"
             to="/settings/$section"
             params={{ section: 'providers' }}
@@ -123,13 +137,14 @@ function ProviderRow({ s, admin, next, open }: { s: Subscription; admin: boolean
             aria-expanded={open}
           >
             {s.name}
-          </Link>
+          </Link> : <span className="row-title">{s.name}</span>}
           {by && <small title={by}>{by}</small>}
+          {preview && <small title={preview}>{preview}</small>}
           {byWhen && <small>Reconnect by {byWhen}</small>}
         </div>
         <span className="provider-kind">{plan ? (s.kind === 'codex_login' ? 'ChatGPT plan' : 'Claude plan') : 'API key'}</span>
-        <Usage s={s} />
-        <span className="provider-badge"><Pill flag={!!s.problem || needsReconnect(s)} title={badge.detail}>{badge.label}</Pill></span>
+        {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? <Usage s={s} /> : <span className="provider-usage" />}
+        <span className="provider-badge"><Pill flag={badge.label === 'Problem' || needsReconnect(s)} title={badge.detail}>{badge.label}</Pill></span>
         <span className="provider-agents">On {agentsWord(agents.length)}</span>
         <span className="provider-more">
           {(admin || mayRemove) && (
@@ -144,7 +159,7 @@ function ProviderRow({ s, admin, next, open }: { s: Subscription; admin: boolean
           )}
         </span>
       </div>
-      {open && (badge.detail || agents.length > 0) && (
+      {open && expandable && (
         <Facts label={s.name}>
           {badge.detail && <Line label="State">{badge.detail}</Line>}
           {agents.length > 0 && <Line label="Agents on it">{agents.map((a) => a.name).join(', ')}</Line>}
@@ -172,31 +187,33 @@ function ProviderRow({ s, admin, next, open }: { s: Subscription; admin: boolean
   );
 }
 
-function Pool({ name, list, admin, open }: { name: string; list: Subscription[]; admin: boolean; open?: string }) {
+function Pool({ name, list, admin, open, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; open?: string; defaultExpanded?: boolean }) {
+  const content = useId();
+  const opened = open?.replace(/^subscription:/, '');
+  const addressed = list.some((s) => s.id === opened) ? opened : undefined;
+  const [toggle, setToggle] = useState<{ addressed?: string; expanded: boolean }>();
+  const expanded = toggle && toggle.addressed === addressed ? toggle.expanded : defaultExpanded || !!addressed;
   const plans = list.filter((s) => isPlan(s.kind));
   const keys = list.filter((s) => !isPlan(s.kind));
   const agents = new Set(list.flatMap((s) => (s.agents ?? []).map((a) => a.id)));
   const summary = [
     plans.length && `${plans.length} ${plans.length === 1 ? 'plan' : 'plans'}`,
     keys.length && `${keys.length} ${keys.length === 1 ? 'key' : 'keys'}`,
-  ].filter(Boolean).join(', ') || 'Empty';
+  ].filter(Boolean).join(', ') || 'empty';
   const sorted = [...plans].sort((a, b) => a.runtime.localeCompare(b.runtime) || (a.order ?? Infinity) - (b.order ?? Infinity));
-  const next = new Map<string, string>();
-  for (const s of sorted) {
-    if (s.order != null && !s.in_use_on.length && !next.has(s.runtime) && plans.some((p) => p.runtime === s.runtime && p.in_use_on.length)) {
-      next.set(s.runtime, s.id);
-    }
-  }
   return (
     <section className="provider-pool" aria-label={name}>
       <header className="provider-pool-head">
-        <SectionHead level={2} name={name} />
+        <SectionHead level={2} name={name} open={expanded} controls={content} onToggle={() => setToggle({ addressed, expanded: !expanded })} />
         <span>{summary}</span>
-        <span>Used by {agentsWord(agents.size)}</span>
+        {list.length > 0 && <span className="provider-pool-count">Used by {agentsWord(agents.size)}</span>}
       </header>
-      {[...sorted, ...keys].map((s) => (
-        <ProviderRow key={s.id} s={s} admin={admin} next={next.get(s.runtime) === s.id} open={open === s.id || open === `subscription:${s.id}`} />
-      ))}
+      <div id={content} hidden={!expanded}>
+        {expanded && [...sorted, ...keys].map((s) => (
+          <ProviderRow key={s.id} s={s} admin={admin} open={addressed === s.id} />
+        ))}
+        {expanded && !list.length && <div className="provider-pool-note">{admin ? 'Add a Claude or ChatGPT plan, or an API key.' : 'Ask an owner or admin to add a plan.'}</div>}
+      </div>
     </section>
   );
 }
@@ -217,7 +234,7 @@ export function Providers({ open }: { open?: string }) {
     else {
       const pool = other.get(s.owner_id);
       if (pool) pool.list.push(s);
-      else other.set(s.owner_id, { name: s.owner_name || s.owner_id.replace(/^human:/, ''), list: [s] });
+      else other.set(s.owner_id, { name: s.owner_name || 'A teammate', list: [s] });
     }
   }
   const signIns = data.kinds.filter((k): k is typeof k & { kind: SignInKind } => k.connect && isPlan(k.kind));
@@ -235,7 +252,7 @@ export function Providers({ open }: { open?: string }) {
         <SectionHead name="Providers" actions={add} />
         <Pool name="Your pool" list={mine} admin={admin} open={open} />
         {[...other].sort(([, a], [, b]) => a.name.localeCompare(b.name)).map(([id, pool]) => (
-          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} />
+          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} defaultExpanded={false} />
         ))}
         {ownerless.length > 0 && <Pool name="No owner" list={ownerless} admin={admin} open={open} />}
         {company.length > 0 && <Pool name="Company keys" list={company} admin={admin} open={open} />}

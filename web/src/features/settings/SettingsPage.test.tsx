@@ -270,6 +270,34 @@ describe('A model sign-in @s746', () => {
     expect((await within(dialog).findByRole('link', { name: 'Open ChatGPT' })).getAttribute('href')).toBe(PAGE);
     expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain(CODE);
   });
+
+  it('submits the pasted code as a form and removes it when the server accepts it', async () => {
+    const waiting = { id: 'l1', runner_id: 'r1', state: 'waiting', accepts_code: true };
+    let finish!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { finish = resolve; });
+    let codeSent = false;
+    serve((url) => {
+      if (url.endsWith('/connect')) return ok(waiting);
+      if (url.endsWith('/logins/l1/code')) return pending;
+      if (url.endsWith('/logins/l1')) return ok({ ...waiting, code_sent: codeSent });
+    });
+    const kind = { connect: true, help: '', kind: 'claude_token' as const, label: 'Claude plan', owned: true, runtime: 'claude' as const, secret_label: 'Setup token' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
+    show(<Providers />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Claude plan/ }));
+    const field = await screen.findByLabelText('Code from the page');
+    const form = field.closest('form')!;
+    fireEvent.change(field, { target: { value: 'paste-once' } });
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+    const send = screen.getByRole<HTMLButtonElement>('button', { name: 'Send code' });
+    expect(send.disabled).toBe(true);
+    expect(sent.filter((r) => r.url.endsWith('/code'))).toMatchObject([{ body: { code: 'paste-once' } }]);
+    codeSent = true;
+    finish(ok({ ...waiting, code_sent: true }));
+    await waitFor(() => expect(screen.queryByLabelText('Code from the page')).toBeNull());
+  });
 });
 
 describe('Settings › Account › API tokens', () => {
@@ -394,7 +422,7 @@ describe('Settings › Providers › a subscription', () => {
   it('Rename saves the name without changing ownership @s747', async () => {
     serve((url, method) => (method === 'POST' ? { status: 200, body: {} } : url.startsWith('/api/v2/access') ? { status: 200, body: ACCESS } : { status: 404, body: { detail: 'not_found' } }));
     const kind = { connect: true, help: '', kind: 'claude_login' as const, label: 'Claude', owned: true, runtime: 'claude' as const, secret_label: '' };
-    const plan = { id: 's1', kind: 'claude_login', name: 'Plan One', label: 'Claude', status: 'working', in_use_on: [], owner_id: 'human:p1', owner_name: 'Ana Test' };
+    const plan = { id: 's1', kind: 'claude_login', name: 'Plan One', label: 'Claude', status: 'working', in_use_on: [], owner_id: 'human:p2', owner_name: 'Ben Sample' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [plan] } as never);
     queryClient.setQueryData(computersQuery.queryKey, []);
     queryClient.setQueryData(accessQuery.queryKey, ACCESS);
@@ -482,8 +510,15 @@ describe('Settings › Security', () => {
 });
 
 describe('Settings › Providers @s710', () => {
-  it('redirects a Models bookmark to Providers and preserves the opened row', async () => {
-    serve();
+  const planId = '5ed13d77-db89-42a3-90a6-cd51a8d977f0';
+  it.each([
+    ['models', 's1', 'providers'],
+    ['agents', planId, 'providers'],
+    ['agents', '5ed13d77db8942a390a6cd51a8d977f1', 'providers'],
+    ['agents', 'alpha', 'agents'],
+    ['agents', 'computer:studio', 'agents'],
+  ])('routes the %s bookmark for %s to %s', async (section, open, expected) => {
+    serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: [{ id: planId }, { id: '5ed13d77db8942a390a6cd51a8d977f1' }] }) : undefined);
     const root = createRootRoute();
     const beforeLoad = settingsRoute.options.beforeLoad!;
     const route = createRoute({
@@ -494,12 +529,13 @@ describe('Settings › Providers @s710', () => {
         ...ctx,
         context: { queryClient },
       }),
-      component: () => null,
+      component: () => <div>Loaded settings</div>,
     });
-    const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: ['/settings/models?open=s1'] }) });
+    const router = createRouter({ routeTree: root.addChildren([route]), history: createMemoryHistory({ initialEntries: [`/settings/${section}?open=${open}`] }) });
     render(<RouterProvider router={router} />);
-    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/providers'));
-    expect(router.state.location.search).toEqual({ open: 's1' });
+    await screen.findByText('Loaded settings');
+    expect(router.state.location.pathname).toBe(`/settings/${expected}`);
+    expect(router.state.location.search).toEqual({ open });
   });
 
   it('keeps Gateway limits in Providers and computer switches in the computer panel', async () => {

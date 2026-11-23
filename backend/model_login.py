@@ -11,12 +11,12 @@ taken it, then dropped.
 
 The same relay signs a login out, switches it to another account, and puts the key the computer is given
 back (`kind`). A computer's own login that a person signed out stays signed out (`model_login_cleared`):
-the server stops handing that computer the key it is given from Settings > Models for it, and the runner keeps its
+the server stops handing that computer the key it is given from Settings > Providers for it, and the runner keeps its
 own mark, until a person signs in again or chooses to use the shared key (`use_shared_key`, the one job that lifts a
-v0.6.0-rc.1 runner's own marks). A key deleted in Settings > Models or Credentials clears it the same way
+v0.6.0-rc.1 runner's own marks). A key deleted in Settings > Providers or Credentials clears it the same way
 (`mark_key_cleared`).
 
-A model key is a subscription, added and given to computers in Settings > Models (backend/model_subscriptions.py).
+A model key is a subscription, added and given to computers in Settings > Providers (backend/model_subscriptions.py).
 The Settings > Computers key jobs (Add, Replace and Clear key, Switch to subscription, Switch to API key) are gone: a
 page or client that still asks is told where keys are changed now (`MOVED`).
 
@@ -24,7 +24,7 @@ Remove (`remove`) takes a named subscription's login for one tool off a computer
 once nothing else is signed in on that subscription, deletes the subscription from the computer. It is refused while
 bots run on it; they are moved on the Bots page first, never by this.
 
-Connect (`connect`, Settings > Models) is the one job that does end with a credential: the CLI signs in to a plan, and
+Connect (`connect`, Settings > Providers) is the one job that does end with a credential: the CLI signs in to a plan, and
 the runner sends what that gave it to `backend/model_subscriptions.py`, which seals it as a company subscription. It
 leaves the computer's own login as it was. The value never passes through this relay: not in a report, a line or a row.
 Only that save ends the job `done`; a report can only fail it.
@@ -85,7 +85,7 @@ VERDICTS.update(LEGACY_VERDICTS)
 MAX_LINES, MAX_LINE = 12, 200
 # What a page drawn before D11-5, or a client, is told when it asks for a key job from Settings > Computers.
 MOVED = (
-    "Model keys moved to Settings > Models: add the key there as a subscription and give it to this computer. "
+    "Model keys moved to Settings > Providers: add the key there as a subscription and give it to this computer. "
     "To stop a computer using a key, take it off the computer there and sign the computer in"
 )
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -305,7 +305,7 @@ def start(c, who, rid, runtime, profile="", auth=None, switch=False, to=""):
     """Sign `runtime` in on a computer: its own login, the only one (a named `profile` is refused). `switch` signs in to another
     account in place: the runner signs in on the side and puts the new login in place only once it has finished, so
     a canceled or failed switch leaves the old login working. `to` (Switch to subscription) is refused: a key comes
-    off a computer in Settings > Models now."""
+    off a computer in Settings > Providers now."""
     if to:
         raise Problem("moved", MOVED, 410)
     if profile:
@@ -384,7 +384,7 @@ def cleared_by_runner(c):
 
 
 def key_cleared_logins(c, rid):
-    """[runtime, ...] whose computer login's key was cleared (its key deleted in Settings > Models or Credentials, not a
+    """[runtime, ...] whose computer login's key was cleared (its key deleted in Settings > Providers or Credentials, not a
     Sign out): it reads "No key"."""
     return [
         row["runtime"]
@@ -431,7 +431,7 @@ def sign_out(c, who, rid, runtime, profile="", auth=None):
 
 
 def use_shared_key(c, who, rid, runtime, auth=None):
-    """Let the key this computer is given (Settings > Models) sign a signed-out computer login in again: the sign-out
+    """Let the key this computer is given (Settings > Providers) sign a signed-out computer login in again: the sign-out
     mark is lifted here, and on the computer, which keeps a mark of its own and fetches no key while it has it, by
     the Use the shared key job that removes it."""
     _operator(c, who, rid, auth)

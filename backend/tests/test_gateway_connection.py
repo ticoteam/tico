@@ -983,8 +983,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
     [
         (
             "unknown_model",
-            "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)",
-            "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks",
+            "Tico AI Gateway: this model isn't offered; Settings > Providers lists the picks (unknown_model)",
+            "The Tico AI Gateway doesn't offer this model; Settings > Providers lists the picks",
         ),
         (
             "unsupported_field",

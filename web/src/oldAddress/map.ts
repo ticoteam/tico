@@ -304,11 +304,11 @@ export const ROWS: readonly Row[] = [
   // A live meeting's page has no counterpart: the Calendar holds meetings.
   { page: 'Live meeting', path: /^#\/meetings\/live\/(.+)$/, to: () => '/calendar' },
   { page: 'Meetings', path: /^#\/meetings$/, to: (_m, q) => (q.get('live') ? '/calendar' : meetingsAddress(q.get('meeting'))) },
-  // An agent's page; a person's or agent's Settings and Instructions are tabs there. Other old tabs open the page.
+  // An agent's page and its tabs.
   {
     page: 'Agent page',
     path: /^#\/bot\/([^/]+)(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' ? tab : null }),
+    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' || tab === 'computer' ? tab : null }),
   },
   { page: 'Threads', path: /^#\/threads$/, to: () => '/threads' },
   {

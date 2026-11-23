@@ -102,7 +102,7 @@ def test_computer_keys_move_into_subscriptions_and_each_computer_keeps_what_it_r
     terminal = computer(api, "Echo", source="terminal", runtime="claude", name="ANTHROPIC_API_KEY")
     cleared = computer(api, "Foxtrot", beat=False)
     named = computer(api, "Golf", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
-    held = computer(api, "Hotel", source="computer")  # given a Settings > Models subscription already
+    held = computer(api, "Hotel", source="computer")  # given a Settings > Providers subscription already
     failed = computer(api, "India", beat=False)  # its Claude check failed: it never said which key it ran on
     beat(api, failed, "claude", {"installed": True, "authenticated": "failed", "detail": "timed out"})
     alpha_key = own_key(api, alpha, "codex", "OPENAI_API_KEY", OWN)
@@ -151,7 +151,7 @@ def test_computer_keys_move_into_subscriptions_and_each_computer_keeps_what_it_r
         (bravo["runner_id"], "claude"): ("Team Claude key", team),
         # The one shared with it by name comes first.
         (named["runner_id"], "claude"): ("Golf's Claude key", by_name),
-        # A Settings > Models subscription stays; the computer's own key is moved in but given to nothing.
+        # A Settings > Providers subscription stays; the computer's own key is moved in but given to nothing.
         (held["runner_id"], "codex"): ("Company OpenAI", None),
     }
     with api.app.state.store.read() as c:
@@ -177,7 +177,7 @@ def test_computer_keys_move_into_subscriptions_and_each_computer_keeps_what_it_r
     assert fetch(api, named, runtime="claude")["credentials"][0]["value"] == NAMED
     assert fetch(api, cleared, runtime="claude") == {"credentials": [], "signed_out": True}
     assert fetch(api, terminal, runtime="claude") == {"credentials": []}
-    assert fetch(api, held) == {"credentials": []}, "a Settings > Models subscription is not sent here"
+    assert fetch(api, held) == {"credentials": []}, "a Settings > Providers subscription is not sent here"
     # Billing does not change: Delta keeps its own Claude login, Echo its terminal key, and a computer that never said
     # which key it ran on is handed none.
     assert fetch(api, login, runtime="claude") == {"credentials": []}
@@ -211,7 +211,7 @@ def test_a_moved_key_reads_from_the_vault_and_a_new_computer_gets_none_by_itself
     # A computer enrolled after the upgrade is not given the shared key by itself.
     fresh = computer(api, "Bravo", beat=False)
     assert fetch(api, fresh) == {"credentials": []}
-    # Settings > Models lists both, each with its kind; no value leaves.
+    # Settings > Providers lists both, each with its kind; no value leaves.
     body = call(api, "GET", "model-subscriptions")
     kinds = {s["id"]: s["kind"] for s in body["subscriptions"]}
     assert {kinds[sub["id"]], kinds[shared["id"]]} == {"cursor_key", "openai_key"}
@@ -224,7 +224,7 @@ def test_a_moved_key_reads_from_the_vault_and_a_new_computer_gets_none_by_itself
         {"runner_id": fresh["runner_id"], "runtime": "codex", "subscription": shared["id"], "confirm": True},
     )
     assert fetch(api, fresh)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "shared"}]
-    # Deleting it in Settings > Models takes it off the computers and out of the vault, and each computer it was on is
+    # Deleting it in Settings > Providers takes it off the computers and out of the vault, and each computer it was on is
     # told to clear its copy: a v0.6.0-rc.1 runner logs out the Codex login the key made instead of keeping auth.json.
     call(api, "DELETE", f"model-subscriptions/{shared['id']}?confirm=true")
     assert fetch(api, fresh) == {"credentials": [], "signed_out": True, "clear_key": True}
@@ -284,7 +284,7 @@ def cleared_here(api, machine, runtime="codex", clear_key=0):
 
 def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(environment):
     """Use the shared key lifts a sign-out, here and on the computer (the job a v0.6.0-rc.1 runner needs to drop its own
-    mark), and the key the computer is given in Settings > Models reaches it again. With none given it hands nothing:
+    mark), and the key the computer is given in Settings > Providers reaches it again. With none given it hands nothing:
     no company key is put on a computer from here, by anyone."""
     api = setup(environment)
     quinn = as_person(api, "quinn")
@@ -483,14 +483,14 @@ def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):
         ("POST", "shared-key", {"runtime": "codex", "credential": team}),
     ):
         refused = call(api, method, f"computers/{rid}/{path}", body, expected=410)
-        assert refused["error"]["code"] == "moved" and "Settings > Models" in refused["error"]["detail"], path
+        assert refused["error"]["code"] == "moved" and "Settings > Providers" in refused["error"]["detail"], path
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM credentials").fetchone()[0] == before
     assert given_to(api, box) is None
 
 
 def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(environment):
-    """Settings > Computers shows the key each computer is given in Settings > Models: its own key with a preview for
+    """Settings > Computers shows the key each computer is given in Settings > Providers: its own key with a preview for
     whoever may change the computer, and the shared one with every live computer it signs in (one read for the page).
     Someone who is not a credential administrator sees which computers share it, not its name or preview."""
     api = setup(environment)

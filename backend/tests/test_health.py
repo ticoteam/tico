@@ -1812,9 +1812,40 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
 def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
     from backend import health
 
-    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials")])
+    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials", "r1")])
     assert not re.search(r"\d{4}-\d\d-\d\dT", text), text
     assert re.search(r" at \d\d:\d\d UTC: invalid key", text), text
+
+
+@pytest.mark.parametrize("other_signed_in", [False, True])
+def test_a_rejected_computer_login_links_to_the_affected_agents_computer_tab(environment, other_signed_in):
+    api = environment()
+    failed = enrolled(api)
+    add_bot(api, "helper")
+    heartbeat(
+        api,
+        failed,
+        runtimes={
+            "codex": {
+                "installed": True,
+                "authenticated": "rejected",
+                "credential_source": "computer",
+            }
+        },
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (failed, H.now()),
+        )
+    if other_signed_in:
+        from backend.tests.helpers.onboarding import machine
+
+        good = machine(api, label="Other computer")
+        heartbeat(api, good["runner_id"], runtimes=SIGNED_IN)
+    check = health_of(api)[1]["models"]
+    assert check["status"] == ("warn" if other_signed_in else "bad")
+    assert [f["href"] for f in check["fixes"]] == ["#/bot/helper/computer"]
 
 
 def test_token_use_names_a_deleted_bot_deleted_bot_never_its_id(environment):

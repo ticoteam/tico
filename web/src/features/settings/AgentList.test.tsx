@@ -365,15 +365,16 @@ describe('Settings › Providers', () => {
     expect(await screen.findByLabelText('Setup token')).toBeTruthy();
   });
 
-  it('waits for a start request that crosses the dialog deadline before allowing paste', async () => {
+  it('follows a sign-in that queues after the computer wake deadline until the server ends it', async () => {
     vi.useFakeTimers();
     try {
       queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
       let finishStart!: (reply: Reply) => void;
       const pending = new Promise<Reply>((resolve) => { finishStart = resolve; });
+      let expired = false;
       serve((url) => {
         if (url.endsWith('/connect')) return pending;
-        if (url.endsWith('/cancel')) return ok({ state: 'canceled' });
+        if (url.endsWith('/logins/login-1')) return ok({ state: expired ? 'expired' : 'waiting', url: 'https://example.test/sign-in' });
       });
       show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
       await act(() => vi.advanceTimersByTimeAsync(0));
@@ -383,8 +384,12 @@ describe('Settings › Providers', () => {
       expect(sent).toHaveLength(1);
       expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
       await act(async () => { finishStart(ok({ id: 'login-1', runner_id: 'r1', state: 'waiting' })); });
+      expect(screen.getByRole('link', { name: 'Open Claude' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Paste instead' })).toBeNull();
+      expired = true;
+      await act(() => vi.advanceTimersByTimeAsync(2000));
       await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Paste instead' })); });
-      expect(sent.at(-1)?.url).toBe('/api/v2/computers/r1/logins/login-1/cancel');
+      expect(sent).toHaveLength(1);
       expect(screen.getByLabelText('Setup token')).toBeTruthy();
     } finally {
       vi.useRealTimers();
@@ -485,7 +490,14 @@ describe('Settings › Providers', () => {
     expect(within(mine).getByText('2 plans')).toBeTruthy();
     expect(within(mine).getByText('Used by 1 agent')).toBeTruthy();
     expect(within(mine).getAllByText('On 1 agent')).toHaveLength(2);
-    expect(within(other).getByText('Other plan')).toBeTruthy();
+    const fold = within(other).getByRole('button', { name: "Ben Sample's pool" });
+    expect(fold.getAttribute('aria-expanded')).toBe('false');
+    expect(within(other).queryByText('Other plan')).toBeNull();
+    fireEvent.click(fold);
+    const otherPlan = within(other).getByText('Other plan');
+    expect(otherPlan.closest('a')).toBeNull();
+    fireEvent.click(fold);
+    expect(within(other).queryByText('Other plan')).toBeNull();
     expect(within(legacy).getByText('Added by Ana Test')).toBeTruthy();
     expect(within(company).getByText('Company key')).toBeTruthy();
     expect(mine.compareDocumentPosition(other)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -494,16 +506,16 @@ describe('Settings › Providers', () => {
   });
 
   it('selects one badge per row by severity before rotation', async () => {
-    const usage: NonNullable<Subscription['usage']> = { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z', near: true };
+    const usage: NonNullable<Subscription['usage']> = { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z' };
     const base = { ...plan, status: 'working' as const };
     const rows = [
       { ...base, name: 'Payment', problem: 'Payment past due', expired: true, usage },
       { ...base, id: 'expired', name: 'Expired', expired: true, usage },
-      { ...base, id: 'limited', name: 'Limited', usage, in_use_on: ['r1'] },
-      { ...base, id: 'near', name: 'Near', usage: { ...usage, used_pct: 96 }, in_use_on: ['r1'] },
-      { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'] },
-      { ...base, id: 'next', name: 'Spare', order: 2 },
-      { ...base, id: 'ready', name: 'Ready plan', order: 3 },
+      { ...base, id: 'limited', name: 'Limited', available: false, usage: { ...usage, quota_hold_until: usage.resets_at! } },
+      { ...base, id: 'near', name: 'Near', usage: { ...usage, used_pct: 96, near: true }, in_use_on: ['r1'] },
+      { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'], available: true, usage },
+      { ...base, id: 'ready', name: 'Ready plan', order: 2, usage: { ...usage, used_pct: 100.4, resets_at: null } },
+      { ...base, id: 'next', name: 'Spare', order: 3, next_in_rotation: true },
     ];
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: rows });
     serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: rows }) : undefined);
@@ -515,6 +527,32 @@ describe('Settings › Providers', () => {
       expect(badges[0]?.textContent).toContain(words);
     }
     expect(screen.getByText('Problem').getAttribute('title')).toBe('Payment past due');
+    expect(within(screen.getByTitle('Live')).getByText(/100%/)).toBeTruthy();
+    expect(within(screen.getByTitle('Expired')).queryByText(/100%/)).toBeNull();
+  });
+
+  it('shows the empty state inside Your pool and holds Add while the key is saving', async () => {
+    const catalog = { subscriptions: [], kinds: [{ kind: 'anthropic_key' as const, runtime: 'claude' as const, label: 'Anthropic API key', secret_label: 'API key', connect: false, help: '', owned: false }] };
+    let finish!: (reply: Reply) => void;
+    const pending = new Promise<Reply>((resolve) => { finish = resolve; });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    serve((url, method) => url === '/api/v2/model-subscriptions' ? method === 'POST' ? pending : ok(catalog) : undefined);
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const pool = await screen.findByRole('region', { name: 'Your pool' });
+    expect(within(pool).getByText('Add a Claude or ChatGPT plan, or an API key.')).toBeTruthy();
+    expect(within(pool).queryByText('Used by 0 agents')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Anthropic key/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Add API key' }));
+    fireEvent.change(dialog.getByLabelText('API key'), { target: { value: 'made-up-api-key' } });
+    const add = dialog.getByRole<HTMLButtonElement>('button', { name: 'Add' });
+    fireEvent.click(add);
+    fireEvent.click(add);
+    expect(add.disabled).toBe(true);
+    expect(add.getAttribute('aria-busy')).toBe('true');
+    expect(sent).toHaveLength(1);
+    finish(ok({ id: 'key' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
 });

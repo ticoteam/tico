@@ -137,7 +137,7 @@ def _held(c, bot):
     return {r["env"] for r in read_cache.rows(c, HELD_SQL) if r["id"] in held}
 
 
-def can_run(c, bot, runtime, runner=None, harness="", model=""):
+def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False):
     config = _config(c, bot)
     if resolve_harness({**config, **({"harness": harness} if harness else {})}, runtime or None) in EXTERNAL_HARNESSES:
         return {
@@ -301,7 +301,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         out["gateway"] = line
         return verdict(True)
     if signed in SIGNED_OUT and (held := model_subscriptions.plan_hold(c, row["id"], runtime)):
-        problem, fix = model_subscriptions.hold_words(held, label, runtime)
+        problem, fix = model_subscriptions.hold_words(held, label, runtime, manages=manages)
         out["bot_problems"] = [problem[0].upper() + problem[1:]]
         return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings/providers")
     if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):

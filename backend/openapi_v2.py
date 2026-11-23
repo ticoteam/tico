@@ -96,7 +96,7 @@ TAGS = {
     'Webhooks': "Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log (docs/webhooks.md).",
     'Cards and pins': "Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
     "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.",
-    # Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
+    # Settings > Providers: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
     'Model subscriptions': "The company's saved model logins and keys, given to computers per runtime. A value is "
     "sent only to add or reconnect one; no answer carries it.",
     'Slack links': "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "

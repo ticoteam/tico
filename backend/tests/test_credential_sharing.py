@@ -154,9 +154,9 @@ def test_agent_ops_grants_a_bot_at_once_for_an_admin_and_refuses_a_member_withou
         post(api, f"assistant/actions/{card['action']['id']}/confirm", {}, token="ana-test")["action"]["status"]
         == "done"
     )
-    # Computers get model keys in Settings > Models, not from a grant: refused, and no card is left behind.
+    # Computers get model keys in Settings > Providers, not from a grant: refused, and no card is left behind.
     refused = act(api, ana, "POST", f"credentials/{row['id']}/grants", {"subject": "computers"})
-    assert refused.status_code == 422 and "Settings > Models" in refused.json()["error"]["detail"]
+    assert refused.status_code == 422 and "Settings > Providers" in refused.json()["error"]["detail"]
     with api.app.state.store.read() as c:
         assert (
             c.execute(

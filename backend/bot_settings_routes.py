@@ -10,6 +10,7 @@ from . import (
     holds,
     login_holds,
     model_login,
+    model_subscriptions,
     models as M,
     task_privacy as privacy,
     wake_presets,
@@ -149,6 +150,7 @@ def register(
             effort = settings_admin._effort(choice, body.effort, old_effort)
             harness = settings_admin._harness(choice, body.harness, old_harness)
             runtime = runtime_of(harness) or choice["runtime"]
+            manages = model_subscriptions._may_manage(auth, who)
             if old_model == choice["id"] and old_runtime == runtime and old_effort == effort and old_harness == harness:
                 # Asking again for what is set is how a caller re-checks that the bot's computer runs it.
                 return {
@@ -160,7 +162,8 @@ def register(
                     "revision": row["revision"],
                     "sessions_reset": 0,
                     "readiness": absolute_link(
-                        can_run(c, bot, runtime, harness=harness, model=choice["id"]), settings.public_url
+                        can_run(c, bot, runtime, harness=harness, model=choice["id"], manages=manages),
+                        settings.public_url,
                     ),
                 }
             before = settings_admin.snapshot(c, bot, "model")
@@ -170,7 +173,9 @@ def register(
             # while a retry runs (Dev 353).
             # The same check a prepared change makes (settings_admin._target): a model the bot's computer reports it
             # cannot run is refused with the fix, not saved for a bot that then never runs.
-            can = absolute_link(can_run(c, bot, runtime, harness=harness, model=choice["id"]), settings.public_url)
+            can = absolute_link(
+                can_run(c, bot, runtime, harness=harness, model=choice["id"], manages=manages), settings.public_url
+            )
             if can["can_run"] is False:
                 raise Problem("runner_not_ready", can["problem"], 409, extra={"fix": can["fix"], "link": can["link"]})
             was = model_choice(c, settings, bot)
