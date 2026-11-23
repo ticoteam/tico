@@ -138,6 +138,16 @@ describe('tasks', () => {
     expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
+  it('a ❓ event that carries the task’s row lands the row, and leaves the task owed its read: a closed task reopens fresh @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    // a task read before and closed since: nothing observes it, so its read waits for the next open
+    queryClient.setQueryData(detail, { ...task('t1'), waits: [{ requirement_id: 'qmark:m1' }] });
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2, title: 'Renamed' }), 'question'));
+    flushFrame();
+    expect(queryClient.getQueryData<{ title: string }>(detail)?.title).toBe('Renamed');
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
   it('read a case again when its key date changes even if a later event of the same frame names only the task @live', () => {
     const detail = ['tasks', 'detail', 't1'];
     queryClient.setQueryData(detail, { ...task('t1'), matter: { dates: [{ id: 'd1', done_at: null }] } });

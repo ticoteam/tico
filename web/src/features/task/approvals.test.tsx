@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
@@ -12,10 +12,13 @@ import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
 import { forgetPlaces, notePlace } from '@/lib';
 import { useFollow } from '@/live/follow';
+// eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
+import { dispatch, installPatchers } from '@/live/patch';
 import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
+import { loadTask } from './routing';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -445,6 +448,18 @@ describe('the decision', () => {
     expect(within(chat).getByRole('textbox', { name: 'Message Legal Owner' })).toBeTruthy();
     fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
     expect(within(box).getByRole('textbox', { name: 'What should change?' })).toHaveProperty('value', '');
+  });
+
+  it('in the task’s chat, stays one box beside a ❓ to the person, pinned on its own over the message box @approvals', async () => {
+    shown = task({ waits: [{ state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true }] });
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    const pin = await within(chat).findByRole('region', { name: 'Needs you' });
+    expect(within(pin).getByText('Which address should it go to?')).toBeTruthy();
+    // free-form: answered in the message box, so the pin has no buttons of its own
+    expect(within(pin).queryByRole('button')).toBeNull();
+    await ready(await decision());
+    expect(within(chat).getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
   });
 
   it('keeps the decision being sent in view, and never turns into another ask on the email’s tab', async () => {
@@ -1466,5 +1481,82 @@ describe('an email’s OK reads with the matter it answers', () => {
     await screen.findByText('Dear Ms. Ruiz, our response is attached.');
     await waitFor(() => expect(queryClient.getQueryData(keys.tasks.detail('t5'))).toBeTruthy());
     expect(screen.queryByRole('region', { name: 'Brief' })).toBeNull();
+  });
+});
+
+describe('an open task reads itself afresh', () => {
+  const asked = { state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true };
+  const isRead = (url: string, method: string) => method === 'GET' && (url.endsWith('/api/v2/tasks/t1') || url.endsWith('/api/v2/tasks/%2312'));
+  const open = () =>
+    show(
+      <>
+        <TaskPage task="12" pipeline="p1" />
+        <TaskChat task="12" />
+      </>,
+      '/tasks/p1/12',
+    );
+  beforeAll(() => installPatchers());
+
+  it('reopened after its ❓ cleared while it was closed, with a rename between, it shows no pin, after one read @live', async () => {
+    shown = task({ to_leave: [], waits: [asked] } as Partial<TaskData>);
+    open();
+    expect(await screen.findByRole('region', { name: 'Needs you' })).toBeTruthy();
+    cleanup();
+    // closed: the person answered elsewhere, then the task was renamed; the copy held gets the rename's row
+    shown = task({ to_leave: [], waits: [], version: 4, title: 'Send: Renamed' } as Partial<TaskData>);
+    act(() => dispatch('tasks', [{ seq: 5, id: 't1', kind: 'question', kinds: ['question'] }]));
+    act(() => dispatch('tasks', [{ seq: 6, id: 't1', kind: 'update', kinds: ['update'], task: { ...task(), version: 4, title: 'Send: Renamed', waits: undefined } }]));
+    let reads = 0;
+    reply = (url, method) => (isRead(url, method) && reads++, null);
+    open();
+    await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    await waitFor(() => expect(reads).toBe(1));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
+    expect(reads).toBe(1);
+  });
+
+  it('back from another task the route kept its page for, the page reads itself afresh: a ❓ cleared meanwhile shows no pin @live', async () => {
+    shown = task({ to_leave: [], waits: [asked] } as Partial<TaskData>);
+    let go!: (n: string) => void;
+    function Route() {
+      const [n, setN] = useState('12');
+      go = setN;
+      // the shell's chat card follows the open task too
+      return (
+        <>
+          <TaskPage task={n} pipeline="p1" />
+          <TaskChat task={n} />
+        </>
+      );
+    }
+    show(<Route />, '/tasks/p1/12');
+    expect(await screen.findByRole('region', { name: 'Needs you' })).toBeTruthy();
+    act(() => go('13'));
+    // away on #13: the person answered elsewhere, then the task was renamed; the copy held gets the rename's row
+    shown = task({ to_leave: [], waits: [], version: 4, title: 'Send: Renamed' } as Partial<TaskData>);
+    act(() => dispatch('tasks', [{ seq: 5, id: 't1', kind: 'question', kinds: ['question'] }]));
+    act(() => dispatch('tasks', [{ seq: 6, id: 't1', kind: 'update', kinds: ['update'], task: { ...task(), version: 4, title: 'Send: Renamed', waits: undefined } }]));
+    let reads = 0;
+    reply = (url, method) => (isRead(url, method) && reads++, null);
+    act(() => go('12'));
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
+  });
+
+  it('a ❓ cleared while the route reads the task: the page opens on a fresh read, and nothing is canceled @live', async () => {
+    const stale = task({ to_leave: [], waits: [asked] } as Partial<TaskData>);
+    let land!: () => void;
+    const gate = new Promise<void>((done) => (land = done));
+    // the route's first read (by the task's number) left before the ❓ cleared, and answers after: with it still open
+    reply = (url, method) => (method === 'GET' && url.includes('/api/v2/tasks/%2312') ? gate.then(() => ({ body: { task: stale, runs: [], children: [], can_comment: true, mover: true } })) : null);
+    const loading = loadTask(queryClient, '12');
+    act(() => dispatch('tasks', [{ seq: 5, id: 't1', kind: 'question', kinds: ['question'] }]));
+    shown = task({ to_leave: [], waits: [], version: 4 } as Partial<TaskData>);
+    land();
+    expect(await loading).not.toBeNull();
+    open();
+    await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    await waitFor(() => expect(queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))?.version).toBe(4));
+    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
   });
 });

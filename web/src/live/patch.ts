@@ -285,6 +285,10 @@ function patchTasks(batch: TaskEvent[]): void {
       continue;
     }
     const held = queryClient.getQueryData<TaskRow & { waits?: { requirement_id: string | null }[] }>(detail);
+    const task = e.task;
+    // Writing the same data still counts as a write (and a redraw): only a real change is set. Set before any read is
+    // asked for below: a write marks the detail fresh, so after one it would hide that the read is still owed.
+    if (task && held && !older(task, held) && !same({ ...held, ...task }, held)) queryClient.setQueryData(detail, { ...held, ...task });
     // A sub-task filed under it or taken off (a relation): its children are read again (a second review's pill).
     // A read already in flight is from before the change: it starts again. A task with paid shots to reconcile reads its
     // waits again on any change: the row carries only their summary, and who they wait on may have moved.
@@ -293,10 +297,7 @@ function patchTasks(batch: TaskEvent[]): void {
     // A matter's key date changed or was marked done (an `obligations` change on its task): the stream's row leaves out
     // the matter, so the task's read, with its dates, starts again.
     if (dated.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
-    const task = e.task;
     if (!task) continue;
-    // Writing the same data still counts as a write (and a redraw): only a real change is set.
-    if (held && !older(task, held) && !same({ ...held, ...task }, held)) queryClient.setQueryData(detail, { ...held, ...task });
     // A file or a linked page changed: whatever the task view reads under its detail key (not the detail itself).
     if (e.kinds?.includes('files'))
       void queryClient.invalidateQueries(

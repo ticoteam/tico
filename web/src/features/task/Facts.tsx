@@ -22,6 +22,7 @@ import { failedToast, reasonOf } from './model';
 import { Face, Go, isActor, NameOf } from './parts';
 import { fixHref } from './StatusLine';
 import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFacts, type Visible } from './queries';
+import { questionLine } from './waits';
 
 /* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
    Developer, Goal, Roadmap, People, Visible to, Followers, the public text; and the Meetings section. Each value edits
@@ -84,9 +85,6 @@ const pausedOf = (t: TaskData, turn: Turn) => turn.state === 'paused' || t.statu
     more (the agent cannot run), and so does a wait on someone who can't see the task yet (`share`). */
 export const repeatsOwner = (t: TaskData, turn: Turn) => !turn.ask && !turn.share?.length && !pausedOf(t, turn) && !!t.owner_id && onWhom(turn) === t.owner_id;
 
-/** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
-const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*❓️?\s*/u, '');
-
 /** Whether the reader may open task `id`: it is among the task's sub-tasks or related tasks, which list only those. */
 const opens = (t: TaskData, id: string) => t.children.some((c) => c.id === id) || Object.values(t.relations ?? {}).some((list) => list.some((r) => r.id === id));
 
@@ -103,7 +101,7 @@ export function WaitOn({ t, turn, short = false }: { t: TaskData; turn: Turn; sh
       </>
     );
   if (who) {
-    const line = question(turn.line);
+    const line = questionLine(turn.line);
     const fix = pausedOf(t, turn) ? fixHref(turn.href) : null;
     return (
       <>

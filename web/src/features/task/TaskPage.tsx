@@ -16,10 +16,12 @@ import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
+import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
+import { AskCard } from './AskCard';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
@@ -36,7 +38,7 @@ import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
-import { waitsNow } from './waits';
+import { questionLine, questionsFor, waitsNow } from './waits';
 import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
@@ -53,12 +55,14 @@ export interface TaskPageProps {
   file?: string;
 }
 
-/** The address's task, read once and kept current by the stream while it is open. */
-function useTask(param: string) {
+/** The address's task, read once and kept current by the stream while it is open. `opens`: the task's page, which
+    reads it afresh as it opens: what changed while it was closed (a ❓ cleared, say) reaches no copy off screen, and a
+    later row merged into that copy would make it look fresh. The chat beside it shares that read. */
+function useTask(param: string, opens = false) {
   const ref = useQuery(taskRefQuery(param));
   // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
   // and this heals one it missed (a backstop, not the way it updates).
-  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: STATUS_BACKSTOP_MS });
+  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: STATUS_BACKSTOP_MS, ...(opens && { refetchOnMount: 'always' as const }) });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
   const retry = () => void (ref.isError ? ref.refetch() : detail.refetch());
@@ -72,9 +76,15 @@ function stateOf(error: unknown): PageState {
   return 'fault';
 }
 
-/** One open task: a Document whose pages are the stage's pages and Details (page-types: "A task open"). */
-export function TaskPage({ task, pipeline, tab, file }: TaskPageProps) {
-  const { t, error, retry } = useTask(task);
+/** One open task: a Document whose pages are the stage's pages and Details (page-types: "A task open"). Another task
+    is another page, opened afresh (its read with it), never this one's reused: a route that keeps its component (the
+    tab route, moving from one task to the next) would otherwise show a copy changed while it was away. */
+export function TaskPage(props: TaskPageProps) {
+  return <OneTask key={props.task} {...props} />;
+}
+
+function OneTask({ task, pipeline, tab, file }: TaskPageProps) {
+  const { t, error, retry } = useTask(task, true);
   if (!t) {
     const path = `/tasks/${pipeline ?? ''}/${task}`;
     return (
@@ -365,6 +375,7 @@ export function TaskChat({ task }: TaskChatProps) {
   const name = owner?.name ?? (t.owner_id?.startsWith('bot:') ? 'Agent' : 'Person');
   const session: Session | null = !room.data ? null : room.data.task_id === t.id ? { task: t.id, title: t.title } : 'main';
   const sub = session && <SessionLine session={session} />;
+  const asked = questionsFor(t, me);
   return (
     <>
       <header className="side-head">
@@ -403,8 +414,10 @@ export function TaskChat({ task }: TaskChatProps) {
           compose={ownTask(t, me)}
           foot={
             <>
-              <TaskStatus t={t} />
+              {/* a pinned ❓ already says it needs them: the status line would say it again */}
+              {!asked.length && <TaskStatus t={t} />}
               {decision}
+              <Questions t={t} ids={asked} />
             </>
           }
           canPost={!asking}
@@ -418,6 +431,30 @@ export function TaskChat({ task }: TaskChatProps) {
         </>
       )}
     </>
+  );
+}
+
+/** Each ❓ on the task waiting on the person, pinned over the message box they answer it in: the question, and who
+    asked, as their Needs you has it (the agent the server holds for the ❓; a snoozed one's from the snoozed list),
+    else the task's owner. Their reply clears it on the server, whose `question` change reads the task again
+    (live/patch.ts), and the pin goes. Several scroll in a bounded stack, so the message box stays in reach. */
+function Questions({ t, ids }: { t: TaskData; ids: string[] }) {
+  // Needs you, which the chat's approval cards read already (ThreadCards useApprovalCards): one read for both. A ❓ the
+  // person snoozed still waits on the task but leaves that list: only then its own short list is read.
+  const asks = useQuery({ ...flowQuery, enabled: ids.length > 0 }).data?.asks;
+  const snoozed = !!asks && ids.some((id) => !asks.some((a) => a.id === id));
+  const later = useQuery({ ...flowSnoozedAsksQuery, enabled: snoozed }).data?.items;
+  const by = (id: string) => asks?.find((a) => a.id === id)?.by ?? later?.find((it) => it.id === id)?.from_id ?? t.owner_id;
+  const asked = (t.waits ?? []).filter((w) => !!w.requirement_id && ids.includes(w.requirement_id));
+  if (!asked.length) return null;
+  return (
+    <div className="chat-pins">
+      {asked.map((w) => (
+        <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={by(w.requirement_id ?? '')}>
+          <p className="askcard-what">{questionLine(w.line)}</p>
+        </AskCard>
+      ))}
+    </div>
   );
 }
 

@@ -42,6 +42,11 @@ const task = {
   links: [],
 };
 
+/** What the server holds: the task's detail and the person's Needs you. */
+let detail: Record<string, unknown> = task;
+let needs: unknown[] = [];
+let snoozed: unknown[] = [];
+
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
     component: () => (
@@ -65,9 +70,15 @@ beforeAll(() => {
   installPatchers();
 });
 beforeEach(() => {
+  detail = task;
+  needs = [];
+  snoozed = [];
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-  const actors = [{ id: 'bot:a1', kind: 'agent', name: 'Birch Builder' }];
+  const actors = [
+    { id: 'bot:a1', kind: 'agent', name: 'Birch Builder' },
+    { id: 'bot:r2', kind: 'agent', name: 'Rowan Reviewer' },
+  ];
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
   serveRoom({ id: 'c7', task_id: 't1', title: task.title });
 });
@@ -78,8 +89,12 @@ function serveRoom(room: Record<string, unknown>) {
   vi.stubGlobal('fetch', async (url: string) => {
     const u = String(url);
     const body = u.includes('/api/v2/tasks/')
-      ? { task, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
-      : u.includes('/api/v2/threads/c7')
+      ? { task: detail, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
+      : u.includes('/api/v2/needs-you/snoozed')
+        ? { items: snoozed }
+        : u.includes('/api/v2/needs-you')
+        ? { items: needs, version: 'v1', count: needs.length }
+        : u.includes('/api/v2/threads/c7')
         ? room
         : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -114,6 +129,51 @@ describe('a task’s chat', () => {
     show(<TaskChat task="12" />, '/tasks/p1/12');
     await screen.findByText('Main chat');
     expect(screen.queryByRole('link', { name: 'Fix the sign-in page' })).toBeNull();
+  });
+});
+
+/** A ❓ on the task waiting on `who` (backend/waiting_on.py: a person's wait, `qmark:<mark id>`). */
+const asked = (mark: string, who: string, line: string) => ({ state: 'person', who, line, requirement_id: `qmark:${mark}`, since: null, until: null, ask: true });
+
+describe('a question for the person, pinned over the message box', () => {
+  it('pins each ❓ to the person with who asked it, and none to someone else', async () => {
+    detail = {
+      ...task,
+      waits: [asked('m1', 'human:me', '❓ Ship the fix on Friday?'), asked('m2', 'human:pat', 'Can Pat check the copy?'), asked('m3', 'human:me', 'Keep the old page?')],
+    };
+    // m1 a reviewer asked, as Needs you has it (the server's own record of the ❓); m3 it does not list: the owner's.
+    needs = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null }];
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
+    await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Needs you' })).toHaveLength(2));
+    const [first, second] = within(chat).getAllByRole('region', { name: 'Needs you' });
+    expect(within(first!).getByText('Ship the fix on Friday?')).toBeTruthy();
+    expect(await within(first!).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
+    expect(within(second!).getByText('Keep the old page?')).toBeTruthy();
+    expect(within(second!).getByRole('img', { name: 'Birch Builder' })).toBeTruthy();
+    expect(within(chat).queryByText('Can Pat check the copy?')).toBeNull();
+    // the pin says it needs them: the status line does not say so again
+    expect(within(chat).queryByText('Up next')).toBeNull();
+  });
+
+  it('names who asked a ❓ the person snoozed, which still waits on the task but has left their Needs you', async () => {
+    detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
+    snoozed = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null, snoozed_until: '2026-12-01T00:00:00Z' }];
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const pin = await screen.findByRole('region', { name: 'Needs you' });
+    expect(await within(pin).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
+  });
+
+  it('goes when the server clears the question (the person replied) and the stream says so', async () => {
+    detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
+    await within(chat).findByRole('region', { name: 'Needs you' });
+    // The reply cleared it (backend/question_marks.py replied): the task's change says `question`, and it is read again.
+    detail = { ...task, version: 2, waits: [] };
+    act(() => dispatch('tasks', [{ seq: 3, id: 't1', kind: 'question', kinds: ['question'] }]));
+    await waitFor(() => expect(within(chat).queryByRole('region', { name: 'Needs you' })).toBeNull());
+    expect(within(chat).getByText('Up next')).toBeTruthy();
   });
 });
 
