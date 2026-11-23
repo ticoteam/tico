@@ -13,6 +13,7 @@ Provider usage holds follow the provider across computers.
 import base64
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import Field, SecretStr
 
@@ -32,7 +33,7 @@ MAX_VALUE = 64 * 1024
 # how a turn receives it: `env` in the turn's environment, or `file` in
 # the CLI's own home (set by the runner). `billing` is what the run records (backend/usage.py). `paste: False`: only
 # Connect makes one, never a pasted value from the page. Listed in the page's order.
-KINDS = {
+KINDS: dict[str, dict[str, Any]] = {
     "claude_token": {
         "name": "Claude",
         "runtime": "claude",
@@ -117,7 +118,7 @@ KINDS = {
         "help": "A Meta API key.",
     },
 }
-RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
+RUNTIMES: tuple[str, ...] = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {
     "claude": "Claude Code",
     "codex": "Codex",

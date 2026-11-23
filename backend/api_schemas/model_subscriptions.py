@@ -5,8 +5,8 @@ from ..api_contract import ref
 from ..model_subscriptions import KINDS, RUNTIMES
 from ._base import NUM_N, SCHEMAS, items, obj
 
-_SUB_KIND = {"enum": [str(kind) for kind in KINDS]}
-_RUNTIME = {"enum": [str(runtime) for runtime in RUNTIMES]}
+_SUB_KIND = {"enum": list(KINDS)}
+_RUNTIME = {"enum": list(RUNTIMES)}
 
 
 _SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
