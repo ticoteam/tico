@@ -147,13 +147,12 @@ const paragraphs = (text: string) => text.split(/\n\s*\n/).filter((p) => p.trim(
 
 export interface DetailsProps {
   t: TaskData;
-  flow: boolean;
   /** The new line open now, from Add or a section's +. */
   adding?: Adding | null;
   onAdding?: (what: Adding | null) => void;
 }
 
-export function Details({ t, flow, adding = null, onAdding = () => undefined }: DetailsProps) {
+export function Details({ t, adding = null, onAdding = () => undefined }: DetailsProps) {
   const files = useQuery(taskFilesQuery(t.id));
   const criteria = t.acceptance_criteria ?? [];
   const leave = t.to_leave ?? [];
@@ -169,8 +168,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
   const code = (t.inputs ?? []).filter((x) => x.kind === 'pr');
   const shown = (files.data ?? []).filter((f) => !f.archived);
   const web = (t.links ?? []).filter((l) => l.kind !== 'pr' && l.kind !== 'session');
-  const details = tabAddress(t, DETAILS, flow);
-  const fileSearch = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
+  const details = tabAddress(t, DETAILS);
   const request = t.request?.text || t.body || '';
   const end = () => onAdding(null);
   const navigate = useNavigate();
@@ -359,7 +357,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
           {shown.map((f) => {
             const last = f.versions.at(-1);
             return (
-              <Go key={f.id} to={details.to} search={fileSearch(f.id)} className="row dt-file" title={f.title || f.name}>
+              <Go key={f.id} to={details} search={{ file: f.id }} className="row dt-file" title={f.title || f.name}>
                 <span className="row-mark">
                   <Icon name={f.mime.includes('html') || f.mime.includes('markdown') ? 'rules' : 'file'} />
                 </span>
@@ -451,7 +449,7 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
       )}
       <Meetings t={t} />
       {adding === 'page' && (
-        <NewPage task={t.id} onClose={end} onSaved={(file) => void navigate({ to: details.to as never, search: fileSearch(file) as never })} />
+        <NewPage task={t.id} onClose={end} onSaved={(file) => void navigate({ to: details as never, search: { file } as never })} />
       )}
     </PageBody>
   );

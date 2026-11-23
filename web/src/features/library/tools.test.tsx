@@ -748,7 +748,7 @@ describe('letters out', () => {
     expect(reads(sent)()).toContain('/api/v2/letters?limit=20&before=R18');
     await options();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Review' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/flow'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
   });
 });
 
@@ -1880,7 +1880,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     indexRow({ id: 'website:rg-site', kind: 'website', name: 'raygun.com', vendor: 'raygun', vendor_name: 'Raygun' }),
   ];
 
-  it('answers the tool requests that wait on you beside the list, and leaves a repository request to Flow', async () => {
+  it('answers the tool requests that wait on you beside the list, and leaves a repository request to Needs you', async () => {
     serve();
     tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
     waiting([accessFor('r1', 'tool', 'Meta Ads'), accessFor('r2', 'repository', 'acme/site')]);

@@ -36,7 +36,7 @@ export function Panel({ label, head, actions, children, foot, onClose, x = true,
     el?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
-      // taken here: a wider way out (leaving Flow) does not also run
+      // taken here: a wider way out does not also run
       e.preventDefault();
       close.current();
     };

@@ -48,8 +48,8 @@ export interface HeadProps {
   sub?: ReactNode;
   /** 'large': the title at figure size, for a page that stands as a column beside its chat (an agent's own page). */
   size?: 'large';
-  /** A row over the head, drawn only when given; the page's own CSS says where it shows (a task's phone row). */
-  top?: ReactNode;
+  /** A phone's Back goes here instead of up the trail (an open task closes, back to where it was opened from). */
+  onBack?: () => void;
   /** ✕, last in the head, back to where you were (plan/layers.html: an artifact opened from a thread closes). Left out,
       it shows while the address says the page was opened from a thread (`via=thread`, lib besideThread). On a phone the
       back arrow does it instead. */

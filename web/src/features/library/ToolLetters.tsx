@@ -246,7 +246,7 @@ function LetterRow({ l, onDetails }: { l: LetterOut; onDetails: (l: LetterOutCon
         <Menu trigger={<IconButton icon="more" label={`${letterTitle(l)} options`} size="sm" />}>
           <MenuItem label="Details" onSelect={() => onDetails(full)} />
           {proof && <MenuItem label="Proof PDF" onSelect={() => open(proof)} />}
-          {waits && <MenuItem label="Review" onSelect={() => void router.navigate({ href: '/flow' })} />}
+          {waits && <MenuItem label="Review" onSelect={() => void router.navigate({ href: '/needs-you' })} />}
         </Menu>
       )}
     </UseRow>

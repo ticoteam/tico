@@ -57,22 +57,22 @@ const partOf = (h: Hold, text: string): string => h.rules.map((r) => r.part ?? '
 const ruleAddress = (r: HoldRule) => ({ to: '/company/rules', search: { ...(r.kind === 'external' && { tab: 'outside' }), panel: `org:${r.id}` } });
 
 /** The review's holds that still wait, oldest first: the first is decided now. Nothing while none waits on this task. */
-export function HeldDecision({ t, flow, dock = false }: { t: TaskData; flow: boolean; dock?: boolean }) {
+export function HeldDecision({ t, dock = false }: { t: TaskData; dock?: boolean }) {
   const list = useQuery(taskHoldsQuery(t.id));
   const first = (list.data ?? []).find((h) => h.state === 'held');
   if (!first) return null;
   return (
     <Docked dock={dock}>
-      <HeldBox key={first.id} t={t} summary={first} flow={flow} />
+      <HeldBox key={first.id} t={t} summary={first} />
     </Docked>
   );
 }
 
-function HeldBox({ t, summary, flow }: { t: TaskData; summary: Hold; flow: boolean }) {
+function HeldBox({ t, summary }: { t: TaskData; summary: Hold }) {
   const opened = useQuery(holdQuery(summary.id));
   const keep = useAction('task.keepHold');
   const send = useAction('task.sendHold');
-  const { error, setError, nextUp, refused, moveOn } = useAnswering(t, flow);
+  const { error, setError, refused, moveOn } = useAnswering();
   const busy = keep.pending || send.pending;
 
   const h = opened.data ?? summary;
@@ -85,13 +85,12 @@ function HeldBox({ t, summary, flow }: { t: TaskData; summary: Hold; flow: boole
 
   const decide = async (how: 'keep' | 'send') => {
     setError('');
-    const next = nextUp();
     const more = othersHeld(t.id, h.id);
     const res = how === 'send' ? await send.run({ task: t.id, hold: h.id, nonce: h.nonce }) : await keep.run({ task: t.id, hold: h.id });
     if (!res.ok) return refused(res);
     toast({ text: how === 'send' ? 'Sent anyway' : 'Kept blocked', name: holdName(h) });
     // Another hold of the rule waits: it takes this one's place in the box. Else the review is done.
-    if (!more) moveOn(next);
+    if (!more) moveOn();
   };
 
   return (

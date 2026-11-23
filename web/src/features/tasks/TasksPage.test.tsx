@@ -9,10 +9,10 @@ import { Toasts } from '@/kit/Toast';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { follow, resetFollows } from '@/live/follow';
-import { Route as flowRoute } from '@/routes/flow.index';
+import { Route as needsRoute } from '@/routes/needs-you';
 import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
-import { FlowPage } from './FlowPage';
+import { NeedsYouPage } from './NeedsYouPage';
 import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, pipelinesQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
@@ -30,7 +30,7 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply>) {
 }
 
 function show(node: ReactNode, at: string) {
-  const flow = at.split('?')[0] === '/flow';
+  const flow = at.split('?')[0] === '/needs-you';
   // The shell's ActionsRoot lends the router to the action layer: a view action (Filter, View) runs through it.
   const root = createRootRouteWithContext<{ queryClient: typeof queryClient }>()({
     component: function TestShell() {
@@ -43,7 +43,7 @@ function show(node: ReactNode, at: string) {
       );
     },
   });
-  const routeTree = flow ? root.addChildren([flowRoute.update({ getParentRoute: () => root, id: '/flow', path: '/flow', component: () => node } as never)]) : root;
+  const routeTree = flow ? root.addChildren([needsRoute.update({ getParentRoute: () => root, id: '/needs-you', path: '/needs-you', component: () => node } as never)]) : root;
   const router = createRouter({ routeTree, context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -140,7 +140,7 @@ it('names the agents with a ❓ question or an ask waiting on the person, not th
   ]);
 });
 
-it('finishes the route’s Flow read when the shell unsubscribes', async () => {
+it('finishes the route’s Needs you read when the shell unsubscribes', async () => {
   let respond!: (reply: Reply) => void;
   serve(() => new Promise((resolve) => { respond = resolve; }));
   const loaded = queryClient.ensureQueryData(flowQuery);
@@ -150,7 +150,7 @@ it('finishes the route’s Flow read when the shell unsubscribes', async () => {
   await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [] });
 });
 
-it('keeps the Reconcile summary on a Flow row that folds several items of one task', async () => {
+it('keeps the Reconcile summary on a Needs you row that folds several items of one task', async () => {
   const brief = { id: 't1', number: 3, title: 'Make the shots', pipeline_id: 'p', stage_id: 's', owner_id: 'bot:ops' };
   const ask = { kind: 'ask', task_id: 't1', requirement_id: 'r1', line: 'OK the cut?', since: ago(60), task: brief };
   const shots = { kind: 'ask', task_id: 't1', requirement_id: 'paid_render:t1', line: 'Reconcile 1 shot', since: ago(30), task: brief };
@@ -166,9 +166,9 @@ it('a board card shows its shots to reconcile apart from its turn and status lin
   expect(within(await screen.findByTitle('Fix the export')).getByText('Reconcile 2 shots')).toBeTruthy();
 });
 
-it('keeps Flow cached when returning to Tasks, where the live needs topic stays followed', async () => {
+it('keeps Needs you cached when returning to Tasks, where the live needs topic stays followed', async () => {
   seed([]);
-  show(<FlowPage />, '/flow');
+  show(<NeedsYouPage />, '/needs-you');
   await screen.findByRole('heading', { name: 'Nothing waits on you' });
   cleanup();
   expect(queryClient.getQueryState(flowQuery.queryKey)?.isInvalidated).toBe(false);
@@ -289,13 +289,14 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(within(await screen.findByTitle('Fix the export')).getByText('Blocks E613, #633')).toBeTruthy();
   });
 
-  it("a phone's head keeps Flow and \"⋯\"; New task, Search, Filter and the other view are in the \"⋯\"", async () => {
+  it("a phone's head keeps \"⋯\": New task, Search, Filter and the other view are in it", async () => {
     document.documentElement.dataset.layout = 'cards';
     try {
       serve(() => ({ status: 200, body: {} }));
       seed([task('a1', 7, 'Fix the export', 's1')]);
       show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
-      expect((await screen.findByRole('link', { name: 'Flow' })).hasAttribute('data-phone')).toBe(true);
+      await screen.findByTitle('Fix the export');
+      expect(screen.queryByRole('link', { name: 'Flow' })).toBeNull();
       expect(screen.queryByRole('textbox', { name: 'Search tasks' })).toBeNull();
       fireEvent.click(document.querySelector('[data-target="tasks:more"]') as HTMLElement);
       for (const name of ['New task', 'Search', 'List', 'Archived', 'Select']) expect(await screen.findByRole('menuitem', { name })).toBeTruthy();
@@ -617,7 +618,7 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
   });
 });
 
-describe('Flow @s5 @s112', () => {
+describe('Needs you @s5 @s112', () => {
   const item = { id: 'a1', number: 7, title: 'Approve the copy', pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) };
 
   it('groups Mine by relationship across pipelines and keeps work without a relationship together', async () => {
@@ -629,9 +630,9 @@ describe('Flow @s5 @s112', () => {
       { ...item, ...entity, entity_id: 'organization/acme-partners', id: 'a3', number: 9, title: 'Sign the lease' },
       { ...item, id: 'a4', number: 10, title: 'Review the agenda' },
     ] });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     const row = await screen.findByTitle('Approve the copy');
-    expect(row.closest('a')?.getAttribute('href')).toBe('/flow/7');
+    expect(row.closest('a')?.getAttribute('href')).toBe('/task/7');
     expect(within(row).getByText('Needs your approval')).toBeTruthy();
     const acme = await screen.findAllByRole('region', { name: 'Acme' });
     expect(acme).toHaveLength(2);
@@ -658,7 +659,7 @@ describe('Flow @s5 @s112', () => {
       }
       return { status: 200, body: { items: [] } };
     });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Mine' }).getAttribute('aria-current')).toBe('page');
     expect(reads).toEqual([]);
@@ -708,9 +709,9 @@ describe('Flow @s5 @s112', () => {
           : { tasks: [...(done ? [] : [active]), task('a2', 8, 'Check the totals', 's1')], next_after: 'page-2', cursor: done ? '2.read' : '1.read' },
       };
     });
-    show(<FlowPage />, '/flow?view=all');
+    show(<NeedsYouPage />, '/needs-you?view=all');
     expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
-    expect(await screen.findByText('Flow · 2')).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(2));
     fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
     expect(await screen.findByTitle('Review the agenda')).toBeTruthy();
     done = true;
@@ -729,7 +730,7 @@ describe('Flow @s5 @s112', () => {
       if (url.includes('snoozed=only')) return { status: 200, body: { tasks: reassigned ? [] : [held], cursor: '1.read' } };
       return { status: 200, body: { items: [] } };
     });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
     expect(await screen.findByTitle('Send the quote')).toBeTruthy();
     reassigned = true;
@@ -746,7 +747,7 @@ describe('Flow @s5 @s112', () => {
       if (reads > 1) return { status: 200, body: { tasks: [], cursor: '2.read' } };
       return new Promise((resolve) => { finishFirst = resolve; });
     });
-    show(<FlowPage />, '/flow?view=all');
+    show(<NeedsYouPage />, '/needs-you?view=all');
     await waitFor(() => expect(finishFirst).toBeDefined());
     await act(async () => {
       dispatch('tasks', [{ seq: 2, id: active.id, kind: 'update', task: { ...active, status: 'done', version: 2 } }]);
@@ -773,7 +774,7 @@ describe('Flow @s5 @s112', () => {
       }
       return { status: 200, body: { items: [] } };
     });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     expect(await screen.findByText('Acme Shop')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
     await waitFor(() => expect(screen.getAllByText('Acme Shop')).toHaveLength(2));
@@ -792,14 +793,14 @@ describe('Flow @s5 @s112', () => {
       status: 200,
       body: url.includes('claimable=true') ? { tasks: off ? [held] : [] } : { items: [] },
     }));
-    show(<FlowPage />, '/flow?view=all');
+    show(<NeedsYouPage />, '/needs-you?view=all');
     expect(await screen.findByTitle('Help with the order')).toBeTruthy();
     off = false;
     act(() => dispatch('setup', [{ area: 'availability' }]));
     expect(await screen.findByText('No work to claim')).toBeTruthy();
   });
 
-  it('marks cached Flow pages stale when the all-task subscription ends', async () => {
+  it('marks cached Needs you pages stale when the all-task subscription ends', async () => {
     vi.useFakeTimers();
     try {
       const queryKey = flowListQuery(flowListParams(undefined, 'open')).queryKey;
@@ -833,7 +834,7 @@ describe('Flow @s5 @s112', () => {
       if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask] } };
       return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { count: +!snoozed } };
     });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
     const shelf = screen.getByRole('region', { name: 'Snoozed' });
     expect(await within(shelf).findByTitle('Approve the transfer')).toBeTruthy();
@@ -861,7 +862,7 @@ describe('Flow @s5 @s112', () => {
         if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask], snoozed_until: snoozed ? until : null } };
         return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { flow_count: +!snoozed } };
       });
-      show(<FlowPage />, '/flow');
+      show(<NeedsYouPage />, '/needs-you');
       await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Snoozed' })).toBeTruthy());
       fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
       const shelf = within(screen.getByRole('region', { name: 'Snoozed' }));
@@ -882,7 +883,7 @@ describe('Flow @s5 @s112', () => {
     }
   });
 
-  it('refreshes the badge on All at expiry and on the five-minute backstop', async () => {
+  it('refreshes the count on All at expiry and on the five-minute backstop', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
       queryClient.removeQueries({ queryKey: flowCountQuery.queryKey });
@@ -890,12 +891,12 @@ describe('Flow @s5 @s112', () => {
       serve((url) => url.includes('count=true')
         ? { status: 200, body: { flow_count: ++count, snooze_refresh_in_ms: count === 1 ? 60_000 : null } }
         : { status: 200, body: { tasks: [] } });
-      show(<FlowPage />, '/flow?view=all');
-      await vi.waitFor(() => expect(screen.getByText('Flow · 1')).toBeTruthy());
+      show(<NeedsYouPage />, '/needs-you?view=all');
+      await vi.waitFor(() => expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(1));
       await act(() => vi.advanceTimersByTimeAsync(60_000));
-      await vi.waitFor(() => expect(screen.getByText('Flow · 2')).toBeTruthy());
+      await vi.waitFor(() => expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(2));
       await act(() => vi.advanceTimersByTimeAsync(STATUS_BACKSTOP_MS));
-      await vi.waitFor(() => expect(screen.getByText('Flow · 3')).toBeTruthy());
+      await vi.waitFor(() => expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(3));
     } finally {
       cleanup();
       vi.useRealTimers();
@@ -917,7 +918,7 @@ describe('Flow @s5 @s112', () => {
       return { status: 200, body: { actor: ME, items: [need('a2', 8, 'Check the totals')], next: null } };
     });
     queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     expect(await screen.findByTitle('Check the totals')).toBeTruthy();
     expect(screen.getByTitle('Sign the lease')).toBeTruthy();
     expect(screen.queryByTitle('Approve the copy')).toBeNull();
@@ -935,8 +936,8 @@ describe('Flow @s5 @s112', () => {
       if (layout) document.documentElement.dataset.layout = layout;
       try {
         queryClient.removeQueries({ queryKey: ['flow'] });
-        show(<FlowPage />, '/flow');
-        expect((await screen.findByTitle('Pay 540.00 USD to Figma by ach')).closest('a')?.getAttribute('href')).toBe('/flow/10');
+        show(<NeedsYouPage />, '/needs-you');
+        expect((await screen.findByTitle('Pay 540.00 USD to Figma by ach')).closest('a')?.getAttribute('href')).toBe('/task/10');
         expect(screen.queryByTitle('OK a Finance action')).toBeNull();
         // One row, named by the ask's `about`, keeping its oldest item's own fields (no ask: a mention's).
         const flow = queryClient.getQueryData<{ count: number; items: { about?: string; ask?: unknown }[] }>(['flow']);
@@ -953,9 +954,13 @@ describe('Flow @s5 @s112', () => {
     serve(() => ({ status: 200, body: {} }));
     queryClient.setQueryData(pipelinesQuery.queryKey, [PIPE]);
     queryClient.setQueryData(['flow'], { count: 0, items: [] });
-    show(<FlowPage />, '/flow');
+    show(<NeedsYouPage />, '/needs-you');
     expect(await screen.findByRole('heading', { name: 'Nothing waits on you' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Open Tasks' }).getAttribute('href')).toBe('/tasks');
+    // a plain list under its own name: no Flow to enter or leave
+    expect(screen.getByRole('heading', { level: 1, name: 'Needs you' })).toBeTruthy();
+    expect(screen.queryByRole('link', { name: 'Flow' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Exit Flow' })).toBeNull();
   });
 });
 

@@ -216,12 +216,10 @@ export function answeringOf(t: TaskData): TaskRequirement | null {
 /** "Dana Ruiz" from "Dana Ruiz <dana@example.com>"; a bare address stays as it is. */
 export const personOf = (address: string): string => /^\s*"?([^"<]+?)"?\s*<[^>]+>\s*$/.exec(address)?.[1] ?? address.trim();
 
-/** The address of a task's tab: under its pipeline, or inside Flow. */
-export function tabAddress(t: Pick<TaskData, 'number' | 'id' | 'pipeline_id'>, tab: string | undefined, flow: boolean): { to: string; search: { tab?: string } } {
-  const n = String(t.number ?? t.id);
-  if (flow) return { to: `/flow/${n}`, search: tab ? { tab } : {} };
-  const base = `/tasks/${encodeURIComponent(t.pipeline_id ?? 'all')}/${n}`;
-  return { to: tab ? `${base}/${tab}` : base, search: {} };
+/** The address of a task's tab, under its pipeline. */
+export function tabAddress(t: Pick<TaskData, 'number' | 'id' | 'pipeline_id'>, tab?: string): string {
+  const base = `/tasks/${encodeURIComponent(t.pipeline_id ?? 'all')}/${t.number ?? t.id}`;
+  return tab ? `${base}/${tab}` : base;
 }
 
 /** A refusal's reason, as the action layer carries it ("code: reason", then what is missing a line each). */
@@ -252,10 +250,4 @@ export function refusalOf(error: string | undefined): Refusal {
     reason: reasonOf(error),
     missing: rest.filter((l) => l.startsWith('- ')).map((l) => l.slice(2)),
   };
-}
-
-/** The stages before the one it is in: where Move back can take it. */
-export function earlierStages<S extends { id: string }>(stages: readonly S[], at: string | null | undefined): S[] {
-  const i = stages.findIndex((s) => s.id === at);
-  return i > 0 ? stages.slice(0, i) : [];
 }

@@ -11,7 +11,7 @@ import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
-import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, useFlowGroups, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
@@ -67,7 +67,7 @@ import { MenuLip, usePhoneCards } from '@/shell/phone';
 import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, isFlowPath, leaveFlow, notePlace } from '@/lib';
+import { boardSearch, chatAddress, notePlace } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -200,7 +200,6 @@ function App() {
   const isActor = (w: string) => !w.startsWith('team:') && (known ?? isTeammate(w, undefined, me.data?.id));
   const arrangement = arrangementFor(at.path, at.chat ? { chat: at.chat } : {}, isActor);
   useNotePlaces();
-  useLeaveFlowKey(isFlowPath(at.path));
   const trail = useTrailParts(at.path, who);
   /* A task's list closed with its ×: the menu takes its place until you leave the tasks (a board, a page), so the
      company is always one press away; the next task opened from a board has its list again. */
@@ -255,17 +254,15 @@ function App() {
   let list: ReactNode;
   if (arrangement === 'task') {
     const task = top === 'tasks' ? b : a;
-    /* Beside the open task, the list it was opened from, the task chosen: inside Flow, what waits on you; under a
-       pipeline, that pipeline's tasks as its board showed them. Flow is entered only on purpose. */
-    if (task && top === 'flow') list = <TaskList open={decodeURIComponent(task)} />;
-    // a task with no pipeline of its own (`all`), or its list closed: the menu stays in its place
-    else if (task && top === 'tasks' && a && a !== 'all' && !listShut)
+    /* Beside the open task, its pipeline's tasks as its board showed them, the task chosen. A task with no pipeline of
+       its own (`all`), or its list closed: the menu stays in its place. */
+    if (task && top === 'tasks' && a && a !== 'all' && !listShut)
       list = <PipelineList pipeline={decodeURIComponent(a)} open={decodeURIComponent(task)} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
         <Suspense fallback={null}>
-          <TaskChat task={decodeURIComponent(task)} flow={top === 'flow'} />
+          <TaskChat task={decodeURIComponent(task)} />
         </Suspense>
       </Sheet>
     ) : undefined;
@@ -545,7 +542,7 @@ function AccountRows({ me, email }: { me: MenuMate; email: string }) {
   );
 }
 
-/* The phone's menu lip: the company and the Flow count, from the same reads as the menu itself. */
+/* The phone's menu lip: the company and the Needs you count, from the same reads as the menu itself. */
 function PhoneMenuLip() {
   const { data: config } = useQuery(configQuery);
   const { data: flow } = useQuery(flowCountQuery);
@@ -598,7 +595,7 @@ function useOwnerBar(place: PageAt, me: string | undefined, address: string): Ow
   const owner = !company ? null : (mine ?? (bot ? (bot.includes(':') ? bot : `bot:${bot}`) : null));
   const who = useActor(owner);
   const opened = usePageOpened();
-  // a ❓ question or an ask from this owner that waits on you for this page (Needs you's own items, read by Flow already):
+  // a ❓ question or an ask from this owner that waits on you for this page (Needs you's own items, already read):
   // one on a task opens its pipeline's page; one with no task opens the pages the agent owns itself, never those where
   // it only stands in (the General Manager for a page with no owner)
   // the agent owns this page itself: the pipeline's own agent while one is shown, else the page's own owner (not the
@@ -684,7 +681,7 @@ function TeammateSheet({ who }: { who: string }) {
 
 /* ---------------------------------------------------------------- where the person came from */
 
-/** Every address shown is noted (lib/places.ts), so leaving Flow and closing a task go back to where they started. */
+/** Every address shown is noted (lib/places.ts), so closing a task goes back to where it was opened from. */
 function useNotePlaces() {
   const router = useRouter();
   useEffect(() => {
@@ -695,32 +692,10 @@ function useNotePlaces() {
   }, [router]);
 }
 
-/** A field, or an open dialog or menu: their own Escape comes first. */
-const OVERLAY = '[role="dialog"], [role="alertdialog"], [role="menu"], [aria-modal="true"], dialog[open]';
-const typingIn = (t: EventTarget | null) =>
-  t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT');
-
-/** In Flow, Escape leaves it: back to the page it was entered from. Not while typing, nor over a dialog or a menu,
-    nor when a sheet took the key (its own Escape). */
-function useLeaveFlowKey(on: boolean) {
-  const router = useRouter();
-  useEffect(() => {
-    if (!on) return;
-    const key = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || e.defaultPrevented || e.isComposing || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
-      if (typingIn(e.target) || document.querySelector(OVERLAY)) return;
-      e.preventDefault();
-      leaveFlow(router);
-    };
-    window.addEventListener('keydown', key);
-    return () => window.removeEventListener('keydown', key);
-  }, [on, router]);
-}
-
 /* ---------------------------------------------------------------- an open task's list */
 
-/* The list's head is a crumb: Tasks, then the pipeline (or Flow) with its picker at the end. Tasks goes to every
-   pipeline, with the menu back in the list's place. */
+/* The list's head is a crumb: Tasks, then the pipeline with its picker at the end. Tasks goes to every pipeline, with
+   the menu back in the list's place. */
 function ListUp() {
   return (
     <>
@@ -737,89 +712,11 @@ function ListFace({ id }: { id: string | null }) {
   return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
 }
 
-/* Beside an open task, in the menu's place (pages/1-tasks/more.js flowList): every task that waits on you, by relationship,
-   the open one chosen. The pick goes to a pipeline's board, Flow (pressed) back to Tasks, and Close folds
-   the list to the menu's icons. */
-function TaskList({ open }: { open: string }) {
-  const { data: flow } = useQuery(flowQuery);
-  const { data: count } = useQuery(flowCountQuery);
-  const { data: pipes = [] } = useQuery(pipelinesQuery);
-  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
-  const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
-  const router = useRouter();
-  const groups = useFlowGroups(flow?.items ?? []);
-  return (
-    <Sheet kind="list" label="Flow">
-      <header className="li-head">
-        <ListUp />
-        <DropMenu
-          align="start"
-          trigger={
-            <button className="li-pick" type="button">
-              Flow
-              <Icon name="chevdown" />
-            </button>
-          }
-        >
-          <MenuItem label="Flow" on onSelect={() => undefined} />
-          {pipes.map((p) => (
-            <MenuItem key={p.id} label={p.name} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(p.id)}` })} />
-          ))}
-        </DropMenu>
-        <span className="grow" />
-        <span className="li-play is-on">
-          <FlowMark play live />
-          <b>{count ? `Flow · ${count}` : 'Flow'}</b>
-        </span>
-        <IconButton icon="close" label="Exit Flow" quiet onClick={() => leaveFlow(router)} />
-      </header>
-      <div className="nav-scroll li-body">
-        {flow && !groups.length ? <Empty title="Nothing waits on you" /> : null}
-        {groups.map((g) => (
-          <Fragment key={g.key}>
-            <div className="li-sec">
-              <h2 className="sec-name">
-                <FoldButton
-                  name={g.name}
-                  count={g.items.length}
-                  open={!shut.has(g.key)}
-                  onToggle={() => flip(g.key)}
-                />
-              </h2>
-            </div>
-            {shut.has(g.key)
-              ? null
-              : g.items.map((it) => {
-                  const n = String(it.number ?? it.id);
-                  return (
-                    <Link key={it.id} to="/flow/$task" params={{ task: n }} className={n === open || it.id === open ? 'li is-on' : 'li'} title={it.about || it.title} data-target={`task:${n}`}>
-                      <span className="li-mark">
-                        <FlowMark size={10} />
-                      </span>
-                      <span className="li-main">
-                        <span className="li-title">{it.about || it.title}</span>
-                        {it.late ? <LatePill /> : null}
-                      </span>
-                      <span className="li-who">
-                        <ListFace id={it.owner_id} />
-                        <Ago at={it.since} className="row-age" />
-                      </span>
-                    </Link>
-                  );
-                })}
-          </Fragment>
-        ))}
-      </div>
-    </Sheet>
-  );
-}
-
 /* Beside a task opened under a pipeline, in the menu's place: that pipeline's open tasks by stage, with the filters
-   its board was last shown with, the open task chosen. The pick goes to another pipeline's board, the play mark
-   enters Flow, and Close folds the list to the menu's icons. */
+   its board was last shown with, the open task chosen. The pick goes to another pipeline's board, and Close folds the
+   list to the menu's icons. */
 function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: string; onClose: () => void }) {
   const me = useQuery(meQuery).data?.id;
-  const { data: flow } = useQuery(flowCountQuery);
   const { data: pipes } = useQuery(pipelinesQuery);
   const p = pipes?.find((x) => x.id === pipeline);
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
@@ -846,10 +743,6 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
           ))}
         </DropMenu>
         <span className="grow" />
-        <Link to="/flow" className="li-play" aria-pressed={false} aria-label="Flow" title="Flow">
-          <FlowMark play />
-          {flow ? <b>{flow}</b> : null}
-        </Link>
         <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
       </header>
       <div className="nav-scroll li-body">

@@ -28,9 +28,9 @@ function closeArtifact(router: AppRouter, up: string | undefined) {
  * The page's head, one height on every page (`--head-h`). The title holds only the name: where it sits is the frame's
  * trail, over every page (shell/Trail.tsx). A task's stage and owner (`sub`) stay in its small where line. Then the
  * controls, "⋯" last, then a button for each sheet the frame tucked behind the page, then ✕ when the page was opened
- * from a thread (`close`). On a phone, Back goes one step up the trail.
+ * from a thread (`close`). On a phone, Back goes one step up the trail, or where the page says (`onBack`).
  */
-export function PageHead({ title, path, lead, after, actions, search, more, onRename, sub, size, top, close }: PageHeadProps) {
+export function PageHead({ title, path, lead, after, actions, search, more, onRename, sub, size, onBack, close }: PageHeadProps) {
   const sheet = useSheet();
   const router = useRouter();
   const opened = useLocation({ select: (l) => (l.search as Record<string, unknown>).via === 'thread' });
@@ -41,11 +41,15 @@ export function PageHead({ title, path, lead, after, actions, search, more, onRe
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
   useEffect(() => showPageName(title), [title]);
   useEffect(() => watchSteps(router), [router]);
-  const head = (
+  return (
     <header className="page-head pk-head">
       {/* a phone's back: to the thread the page was opened from, else up the trail */}
       {closes ? (
         <button type="button" className="ib back pk-back" onClick={() => closeArtifact(router, back?.to)} aria-label="Back" title="Back">
+          <Icon name="chevron" className="flip" />
+        </button>
+      ) : onBack ? (
+        <button type="button" className="ib back pk-back" onClick={onBack} aria-label="Back" title="Back">
           <Icon name="chevron" className="flip" />
         </button>
       ) : back ? (
@@ -109,13 +113,5 @@ export function PageHead({ title, path, lead, after, actions, search, more, onRe
       ))}
       {closes && <IconButton icon="close" label="Close" quiet className="pk-close" onClick={() => closeArtifact(router, back?.to)} />}
     </header>
-  );
-  return top ? (
-    <>
-      {top}
-      {head}
-    </>
-  ) : (
-    head
   );
 }

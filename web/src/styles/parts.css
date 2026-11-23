@@ -271,17 +271,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-sep{color:var(--faint);flex:none}
 .li-up~.li-pick{padding-left:4px;min-width:0}
 .li-pick:hover{background:var(--well-2)}
-/* Flow as one icon: the Dot with a play mark. No word. Off, the count sits beside it. (The Flow mark is in dot.css.) */
-.li-play{height:var(--ctl);min-width:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px;display:inline-flex;align-items:center;justify-content:center;gap:6px;
-  color:var(--ink-2);font-size:var(--t-sm);transition:background var(--dur-fast) var(--ease)}
-.li-play:hover{background:var(--hover)}
-.li-play.is-on{background:var(--well-2);box-shadow:inset 0 0 0 1px var(--line-strong)}
-.li-play>b{font-weight:var(--w-strong);font-variant-numeric:tabular-nums;padding-right:2px;white-space:nowrap}
-/* "Flow · 39" holds its line in a narrow list head: the pick beside it gives way first */
-.li-play.is-on{flex:none}
-/* in Flow the pressed mark is a label, not a button: the × beside it leaves */
-span.li-play.is-on:hover{background:var(--well-2)}
-.flow-on{display:inline-flex;align-items:center;gap:2px}
 
 .li-run{flex:none;display:flex;align-items:center;gap:2px;height:30px;padding:0 10px 4px 16px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .li-run b{color:var(--ink)}
@@ -302,7 +291,7 @@ span.li-play.is-on:hover{background:var(--well-2)}
 .li-who .row-age{font-size:var(--t-xs);min-width:27px}
 
 /* the task sheet: where it stands, its title, its pages. Nothing else sits above a page. */
-.tv-top,.dock,.doc-tab.tab-chat{display:none}
+.dock,.doc-tab.tab-chat{display:none}
 .tv-head{flex:none;position:relative;display:flex;flex-direction:column;padding:20px 60px 0 var(--pad-task)}
 .tv-where{display:flex;align-items:center;gap:5px;height:22px;font-size:var(--t-sm);color:var(--muted)}
 .tv-where>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
@@ -414,9 +403,6 @@ span.li-play.is-on:hover{background:var(--well-2)}
      where Chat sits beside the pages. The answer is one slim row docked above the bar. */
   .app-task,.app-flow{display:block}
   .tv-head{padding:0 16px}
-  .tv-top{display:flex;align-items:center;height:48px}
-  .tv-n{margin-left:2px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums}
-  .tv-n b{color:var(--ink)}
   .tv-more{right:4px;top:2px}
   .tv-title{order:1;margin-top:2px;font-size:20px;line-height:1.2;max-width:none}
   .tv-where{order:2;margin-top:8px}

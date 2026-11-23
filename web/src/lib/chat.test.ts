@@ -30,7 +30,7 @@ describe('chatActor', () => {
 describe('besideThread', () => {
   it('carries the thread and marks the page as opened from it', () => {
     expect(besideThread('/tasks/p1/12/email', 'agent:gm')).toBe('/tasks/p1/12/email?chat=agent%3Agm&via=thread');
-    expect(besideThread('/flow/12?tab=email', 'thread:t1')).toBe('/flow/12?tab=email&chat=thread%3At1&via=thread');
+    expect(besideThread('/tasks/p1/12/email?part=2', 'thread:t1')).toBe('/tasks/p1/12/email?part=2&chat=thread%3At1&via=thread');
   });
   it('leaves the address as it is with no thread', () => {
     expect(besideThread('/tasks/p1/12', undefined)).toBe('/tasks/p1/12');

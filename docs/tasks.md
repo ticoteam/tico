@@ -124,8 +124,7 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 
 A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
 message shows a small, muted "?" at its top right and is in that person's Needs you, under its task's title (or the
-bot's name in a direct chat). In Flow the item is that chat, at the marked message, with its composer: a reply there
-clears it and Flow moves on.
+bot's name in a direct chat). A reply in that chat clears it.
 
 ```sh
 tico task ask <id> --to <person> "Should the launch note go out on Friday?"   # on the task's chat
@@ -238,20 +237,23 @@ are the person's task with Agent Ops' question on it; the Strategy Owner's asks 
 Agent Ops asks for it while it cannot run. The question goes when the task moves on.
 
 `GET /api/v2/needs-you` returns the list. With `?count=true`, `count` is the number of Needs you items and `flow_count`
-counts each task row once, plus each request. The Flow header and sidebar show `flow_count`.
+counts each task row once, plus each request. The menu's **Needs you** row shows `flow_count`.
 The count response gives `snooze_refresh_in_ms` for the next snoozed ask in server time, or null. The shell refreshes
 the count and any open Needs you lists at that deadline and at least every five minutes.
 
-Flow opens on **Mine**, with your Needs you tasks grouped by relationship and requests in their own cards. **All**
+**Needs you** (`/needs-you`, its own row in the menu) opens on **Mine**, with your tasks grouped by relationship and requests in their own cards. **All**
 shows your team's open work and public Support tasks with no assignee or an assignee who is off. Tasks without a
 visible relationship appear under **Other**. Each row shows whose turn it is or what it waits on. Open **Why
 here** for its origin. Open **Snoozed** or **Done** to see that shelf, or hide both via **Hide archive**. Mine's shelves
 show your own tasks. Its Snoozed shelf also shows asks you snoozed in Needs you. An ask returns to Mine when its
-snooze ends, or sooner if you choose Unsnooze. Flow opens one task at a time, and task changes follow the usual permissions.
+snooze ends, or sooner if you choose Unsnooze. A row opens the task at its own address. Once you approve and nothing
+else on it waits on you (another approval, or a ❓ to you), the task closes back to the list you opened it from, with
+Undo; Back does the same, and a task opened from a link goes back to its board. Old `/flow` links open Needs you, and
+`/flow/<n>` the task. Task changes follow the usual permissions.
 
 The same All scope is available via `GET /api/v2/tasks?status=open&claimable=true`, `tico task list --status open
 --claimable`, or `tico_task_list` with `claimable: true` and `status: ["open"]`.
-Flow reads group names separately from Contacts for the entity IDs on its pages. Use `POST /api/v2/entities/names`
+Needs you reads group names separately from Contacts for the entity IDs on its pages. Use `POST /api/v2/entities/names`
 with up to 100 IDs in `ids`, `tico contacts names <id>...`, or `tico_contacts_names` with `ids`.
 Each call checks the caller's current access. Changes to availability refresh open claimable lists.
 

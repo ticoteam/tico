@@ -31,12 +31,11 @@ export function download(url: string, name: string) {
   a.remove();
 }
 
-/** Where Details is from the address on screen: a task's tab, or Flow's `?tab=`. */
+/** Where Details is from the address on screen: the task's own tab. */
 function useToDetails() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   return () => {
-    if (pathname.startsWith('/flow/')) return navigate({ to: pathname as never, search: { tab: DETAILS } as never });
     const m = /^(\/tasks\/[^/]+\/[^/]+)/.exec(pathname);
     return m ? navigate({ to: `${m[1]}/${DETAILS}` as never }) : undefined;
   };
@@ -98,12 +97,12 @@ export function PageMenu({ task, vs }: { task: string; vs: Versions }) {
 }
 
 /** Archived files and pages, off the tab row and folded at its end: each opens in the page sheet, where it can be restored. */
-export function ArchiveMenu({ t, flow }: { t: TaskData; flow: boolean }) {
+export function ArchiveMenu({ t }: { t: TaskData }) {
   const navigate = useNavigate();
   const files = useQuery(taskFilesQuery(t.id));
   const archived = (files.data ?? []).filter((f) => f.archived);
   if (!archived.length) return null;
-  const details = tabAddress(t, DETAILS, flow);
+  const details = tabAddress(t, DETAILS);
   return (
     <Menu
       trigger={
@@ -114,7 +113,7 @@ export function ArchiveMenu({ t, flow }: { t: TaskData; flow: boolean }) {
       }
     >
       {archived.map((f) => (
-        <MenuItem key={f.id} label={f.title || f.name} onSelect={() => void navigate({ to: details.to as never, search: (flow ? { tab: DETAILS, file: f.id } : { file: f.id }) as never })} />
+        <MenuItem key={f.id} label={f.title || f.name} onSelect={() => void navigate({ to: details as never, search: { file: f.id } as never })} />
       ))}
     </Menu>
   );

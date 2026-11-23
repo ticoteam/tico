@@ -35,7 +35,7 @@ export interface FrameProps {
   widgets?: ReactNode;
   /* a call's chat, transcript and people */
   side?: ReactNode;
-  /* on the phone: what a card's lip shows at rest (the menu's: the company and its Flow count) */
+  /* on the phone: what a card's lip shows at rest (the menu's: the company and its Needs you count) */
   lips?: PhoneCardsProps['lips'];
   /* on the phone: a control on a card's lip that is not its tap target (search beside Tico's box, mute on a call's) */
   lipActs?: PhoneCardsProps['lipActs'];
@@ -270,7 +270,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
       return;
     }
     if (e.key === 'Escape') {
-      // an Escape the sheets take is marked taken, so a wider way out (leaving Flow) does not also run
+      // an Escape the sheets take is marked taken, so a wider way out does not also run
       const t = e.target;
       const inChat = places.current.get('chat')?.contains(t as Node);
       const inPanel = places.current.get('panel')?.contains(t as Node);

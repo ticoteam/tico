@@ -36,9 +36,9 @@ async function mount(path: string, news = 0) {
 describe("Tico's chips", () => {
   it('follow the open page, a few at most', () => {
     expect(texts('/next/threads')).toEqual(['What needs me?']);
-    expect(texts('/next/flow', true)).toEqual(['Catch up', 'What needs me?']);
+    expect(texts('/next/needs-you', true)).toEqual(['Catch up', 'What needs me?']);
     expect(texts('/next/tasks/p1/t1')).toEqual(['Summarize this', "What's next?"]);
-    expect(texts('/next/flow/t1')).toEqual(['Summarize this', "What's next?"]);
+    expect(texts('/next/task/t1')).toEqual(['Summarize this', "What's next?"]);
     expect(texts('/next/tasks/p1/edit')).toEqual(['What needs me?']);
     expect(texts('/next/threads/th1', true)).toEqual(['Summarize thread']);
     expect(texts('/next/threads/mail')).toEqual(['What needs me?']);

@@ -143,7 +143,7 @@ function ThingCard({ sub, chat, requirement }: { sub: TaskData; chat?: string; r
   const tab = tabs.find((x) => (x.doc?.file_id ?? x.file?.id ?? x.other) === target?.id);
   // Always the task's own tab, where Approve is (the page marks and pins the same file: tabsOf).
   // The address names its ask (`?ask=`): the page opens on its tab at the version it pinned, with its Approve.
-  return <Card to={`${tabAddress(sub, tab?.slug, false).to}?ask=${encodeURIComponent(requirement)}`} chat={chat} what={sub.title} files={chips} />;
+  return <Card to={`${tabAddress(sub, tab?.slug)}?ask=${encodeURIComponent(requirement)}`} chat={chat} what={sub.title} files={chips} />;
 }
 
 /** An email's OK: the case it answers (else the subject) and who it goes to, from the OK task itself (its title and its
@@ -164,7 +164,7 @@ function EmailCard({ sub, send, chat }: { sub: TaskData; send: string; chat?: st
   // Named once what it reads is in, never guessed first.
   if ((matter && !read.isFetched) || (target && !resolver.settled)) return null;
   const slug = resolver.tabs.find((x) => x.email === send && (target === sub ? !x.wait : !!x.wait))?.slug;
-  const to = target && slug ? tabAddress(target, slug, false).to : one && matter ? matter.to : tabAddress(sub, undefined, false).to;
+  const to = target && slug ? tabAddress(target, slug) : one && matter ? matter.to : tabAddress(sub);
   const title = sendTitle(sub.title);
   const what = matter?.title ?? title?.subject ?? sub.title;
   return <Card to={to} chat={chat} what={title?.to ? `${what}, to ${personOf(title.to)}` : what} />;

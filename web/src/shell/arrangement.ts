@@ -11,7 +11,7 @@ export function arrangementFor(pathname: string, search: Record<string, unknown>
   const parts = pathname.replace(/^\/next(?=\/|$)/, '').split('/').filter(Boolean);
   const [root, a, b] = parts;
   if (root === 'call' && a) return 'call';
-  if ((root === 'tasks' && a && b && b !== 'edit') || ((root === 'flow' || root === 'task') && a)) return 'task';
+  if ((root === 'tasks' && a && b && b !== 'edit') || (root === 'task' && a)) return 'task';
   if (root === 'team' && a && (isActor?.(decodeURIComponent(a)) ?? true)) return 'agent';
   if (typeof search.chat === 'string' && search.chat) return 'chat';
   return 'page';

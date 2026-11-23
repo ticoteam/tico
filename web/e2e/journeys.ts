@@ -81,7 +81,7 @@ test('sign in; an old link and a /next link land on their page; a head title nev
   await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}(/|\\?|$)`));
   await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
   await page.goto(`${hub.url}/#/decide`);
-  await expect(page).toHaveURL(new RegExp('/flow(/|\\?|$)'));
+  await expect(page).toHaveURL(new RegExp('/needs-you(/|\\?|$)'));
   // A link from when the app lived at /next drops the prefix and keeps its query.
   await page.goto(`${hub.url}/next/tasks/launch?view=list`);
   await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
@@ -107,9 +107,9 @@ test('sign in; an old link and a /next link land on their page; a head title nev
 test('Needs you: open the case and approve the email; the send goes out', async ({ browser, hub }) => {
   const { subject, approval } = hub.facts.mail;
   const page = await open(browser, hub, '/tasks');
-  // Needs you is Flow, from the Tasks head
-  await page.getByRole('link', { name: 'Flow' }).click();
-  await expect(page).toHaveURL(/\/flow/);
+  // Needs you, from its own row in the menu
+  await page.locator('[data-sheet="menu"]').getByRole('link', { name: /^Needs you/ }).click();
+  await expect(page).toHaveURL(/\/needs-you/);
   await page.locator('a.row.task', { hasText: subject }).click();
   await expect(page.locator('.ap-subj')).toHaveText(subject);
   await expect(page.locator('article[aria-label="Email"]')).toContainText('order 1042 left our warehouse');

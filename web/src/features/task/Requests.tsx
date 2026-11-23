@@ -8,7 +8,7 @@ import { declineAccess, grantAccess, grantKeyDrop, saveKey, type AccessAnswer, t
 
 /* What waits on the person without a task (master plan P1): an agent's access request, a key card and the Tools owner's
    key-drop proposal, each in the one ask card with its own body. The server checks again on every press and settles
-   every copy of it; the card leaves Flow once its answer is taken, and says in place why one was refused. */
+   every copy of it; the card leaves Needs you once its answer is taken, and says in place why one was refused. */
 
 const LEVEL = { read: 'Read', read_write: 'Read and write' } as const;
 

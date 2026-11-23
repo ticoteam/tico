@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
-import { asksInChat, decisionName, decisionOf, defaultTab, earlierStages, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
+import { asksInChat, decisionName, decisionOf, defaultTab, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -96,11 +96,10 @@ describe('the open task', () => {
     expect(decisionOf(task({ to_leave: [req('r1', { may: [] })] }))).toBeNull();
   });
 
-  it('addresses a tab under its pipeline, or inside Flow', () => {
+  it('addresses a tab under its pipeline', () => {
     const t = task();
-    expect(tabAddress(t, undefined, false)).toEqual({ to: '/tasks/p1/12', search: {} });
-    expect(tabAddress(t, 'details', false)).toEqual({ to: '/tasks/p1/12/details', search: {} });
-    expect(tabAddress(t, 'spec', true)).toEqual({ to: '/flow/12', search: { tab: 'spec' } });
+    expect(tabAddress(t)).toBe('/tasks/p1/12');
+    expect(tabAddress(t, 'details')).toBe('/tasks/p1/12/details');
   });
 
   it('says why a change was refused', () => {
@@ -115,12 +114,5 @@ describe('the open task', () => {
     const r = refusalOf('task_not_met: Not met: QA report.\n- QA report: not approved\n- Checks: 2 failing');
     expect(r).toEqual({ code: 'task_not_met', reason: 'Not met: QA report.', missing: ['QA report: not approved', 'Checks: 2 failing'] });
     expect(reasonOf('task_not_met: Not met: QA report.\n- QA report: not approved')).toBe('Not met: QA report.');
-  });
-
-  it('moves back only to the stages before the one it is in', () => {
-    const stages = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
-    expect(earlierStages(stages, 'c').map((s) => s.id)).toEqual(['a', 'b']);
-    expect(earlierStages(stages, 'a')).toEqual([]);
-    expect(earlierStages(stages, null)).toEqual([]);
   });
 });

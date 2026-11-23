@@ -49,6 +49,16 @@ describe('Menu', () => {
     expect(within(nav).getByRole('link', { name: 'Engineering Manager' })).toBeTruthy();
   });
 
+  it('counts what waits on you on its own Needs you row, under Tasks, and not on Tasks', async () => {
+    const nav = await show();
+    const needs = within(nav).getByRole('link', { name: /^Needs you/ });
+    expect(needs.getAttribute('href')).toBe('/needs-you');
+    expect(needs.querySelector('.nav-flow')?.textContent).toBe('8');
+    expect(within(nav).getByRole('link', { name: /^Tasks/ }).querySelector('.nav-flow')).toBeNull();
+    const rows = [...nav.querySelectorAll('.nav-items > .nav-item .nav-label')].map((x) => x.textContent);
+    expect(rows).toEqual(['Tasks', 'Needs you', 'Calendar', 'Company', 'Library']);
+  });
+
   it('leaves out pages the person cannot open', async () => {
     const nav = await show({ can: page => page !== 'company' && page !== 'settings' });
     expect(within(nav).queryByRole('link', { name: /^Company/ })).toBeNull();
@@ -59,7 +69,7 @@ describe('Menu', () => {
   it('folded, keeps every row as an icon with its name, and the company and settings reachable', async () => {
     const nav = await show({ folded: true }, '/team/qa');
     // the faces are the rows showing: your direct reports, each folded
-    for (const name of ['Tasks', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    for (const name of ['Tasks', 'Needs you', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
     expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
     expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count

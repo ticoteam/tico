@@ -170,7 +170,7 @@ export function PdfView({ src, title, url, name, sign }: { src: string; title: s
   const [signing, setSigning] = useState(false);
   const expand = useRef<HTMLButtonElement>(null);
   // Escape closes the full view whichever control in it has focus: taken on the way down (capture), before a control,
-  // the sheet the PDF sits in (shell/Frame.tsx) or Flow (routes/__root.tsx) can take it, keep it, or act on it too.
+  // the sheet the PDF sits in (shell/Frame.tsx) can take it, keep it, or act on it too.
   useEffect(() => {
     if (!full) return;
     const key = (e: globalThis.KeyboardEvent) => {
