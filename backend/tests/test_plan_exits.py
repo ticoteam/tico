@@ -239,3 +239,9 @@ def test_an_admin_changes_the_exit_of_someone_whose_sign_in_is_off(api):
     computer = runner(api, label="Office Mac")["runner_id"]
     post(api, "access/humans/cara", {"sign_in": False})
     assert put(api, f"{EXITS}/cara", {"runner_id": computer})["runner_id"] == computer
+
+
+def test_departure_without_an_exit_adds_no_row(api):
+    person = post(api, "access/humans", {"email": "never@acme.example"})["person"]
+    post(api, f"humans/{person}", {"left": True})
+    assert stored_exit(api, person) is None
