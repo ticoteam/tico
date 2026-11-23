@@ -23,8 +23,10 @@ pub const CAPABILITY: &str = "model_exit_v1";
 const TIME: Duration = Duration::from_secs(25);
 const BODY: usize = 32 * 1024 * 1024;
 const BUDGET_WAIT: Duration = Duration::from_millis(250);
-// Permits count KiB across all local and exit tunnels in this process.
+// Permits count KiB across this computer's local tunnels.
 static BODY_BUDGET: Semaphore = Semaphore::const_new(256 * 1024);
+/// The exit's own budget, so this computer's turns can never make it refuse someone else's plan.
+static EXIT_BODY_BUDGET: Semaphore = Semaphore::const_new(256 * 1024);
 const FRAME: usize = 64 * 1024;
 const CLAUDE: &str = "api.anthropic.com";
 const CODEX: &str = "chatgpt.com";
@@ -487,7 +489,7 @@ async fn serve_exit_with(
             .map_err(|_| UNAVAILABLE)?;
         let wire = tokio::time::timeout(
             TIME,
-            read_wire(&mut ws, credential.provider()?, &BODY_BUDGET),
+            read_wire(&mut ws, credential.provider()?, &EXIT_BODY_BUDGET),
         )
         .await
         .map_err(|_| BAD_REQUEST)??;
