@@ -7366,7 +7366,11 @@ mod tests {
         assert!(tools_settled(&Drove::interrupted(), &f, false));
         assert!(!tools_settled(&Drove::interrupted(), &f, true));
         // Only a host that does not report its tool calls leaves a failed, started turn uncertain.
-        assert!(reports_tool_calls("claude") && reports_tool_calls("codex") && reports_tool_calls("antigravity"));
+        assert!(
+            reports_tool_calls("claude")
+                && reports_tool_calls("codex")
+                && reports_tool_calls("antigravity")
+        );
         assert!(!reports_tool_calls("pi"));
         f.tool_ran.store(true, Ordering::SeqCst);
         assert!(!tools_settled(&Drove::interrupted(), &f, false));
