@@ -608,7 +608,7 @@ def caught(conn: Any, task_ids: Iterable[str]) -> dict[str, Row]:
     """{task id: {since, rule}}: the Late a task shows, when a stall rule caught it on its open visit and nothing
     changed since (`CAUGHT_SQL`); `since` is the first such catch and `rule` its rule's name."""
     ids = sorted({str(t) for t in task_ids if t})
-    if not ids or not H._has_table(conn, "stage_rule_marks"):
+    if not ids:
         return {}
     out: dict[str, Row] = {}
     for task_id, at, name in conn.execute(
