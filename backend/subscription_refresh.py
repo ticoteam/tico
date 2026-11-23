@@ -10,7 +10,7 @@ from pydantic import Field
 from clients.harness_manifests import caps
 
 from . import hubdb as H, models as M
-from . import runner_online
+from . import plan_exits, runner_online
 from .repositories import metadata, save_metadata
 from .store import Problem
 from .api_contract import api_v2
@@ -227,6 +227,8 @@ def _can_read_plan(runner):
 def _plan_computers(c, sub):
     from .agent_subscriptions import provider_runners
 
+    if route := plan_exits.routed(c, sub):
+        return {route[0]}
     return provider_runners(c, sub)
 
 
@@ -266,6 +268,9 @@ def request_plan_read(c, sid, actor):
         raise Problem('offline', 'Its computers are offline or not yet updated to read usage', 409)
     value = metadata(c, plan_key(sid)) or {}
     old = value.get('request') or {}
+    route = plan_exits.routed(c, sub)
+    if old and not plan_exits.matches(route, old.get('runner_id'), old.get('exit_generation')):
+        old = {}
     now = H.now()
     if (old.get('state') == 'requested' and old.get('expires_at', '') > now) or old.get('requested_at', '') > H.shift(
         now, seconds=-COOLDOWN
@@ -278,6 +283,7 @@ def request_plan_read(c, sid, actor):
         'updated_at': now,
         'expires_at': H.shift(now, seconds=LIFETIME),
         'state': 'requested',
+        **({'exit_generation': route[1]} if route else {}),
     }
     save_metadata(c, plan_key(sid), value)
     H.event(c, actor, 'subscription.usage_requested', sid, {'runner_id': ready[0]})
@@ -286,6 +292,8 @@ def request_plan_read(c, sid, actor):
 
 def plan_pending(c, runner):
     """This computer's reads asked and not yet answered (at most five), as its runner polls them."""
+    from . import model_subscriptions as MS
+
     rows = c.execute(
         'SELECT key, value FROM registry_metadata WHERE key>=? AND key<?', (PLAN_PREFIX, PLAN_PREFIX[:-1] + ';')
     )
@@ -296,10 +304,14 @@ def plan_pending(c, runner):
         if request.get('kind') == 'oauth_usage':
             continue  # a full login's read, polled with its token (backend/claude_login.py)
         if request.get('state') == 'requested' and request.get('runner_id') == runner and request['expires_at'] > now:
+            sid = row['key'][len(PLAN_PREFIX) :]
+            route = plan_exits.routed(c, MS.row(c, sid))
+            if not plan_exits.matches(route, runner, request.get('exit_generation')):
+                continue
             out.append(
                 {
                     'id': request['id'],
-                    'subscription': row['key'][len(PLAN_PREFIX) :],
+                    'subscription': sid,
                     'profile': '',
                     'runtime': 'claude',
                     'state': 'requested',
@@ -307,7 +319,9 @@ def plan_pending(c, runner):
                     'expires_at': request['expires_at'],
                 }
             )
-    return out[:5]
+            if len(out) == 5:
+                break
+    return out
 
 
 def plan_with_value(c, vault, runner, item):
@@ -319,6 +333,14 @@ def plan_with_value(c, vault, runner, item):
     sub = MS.row(c, sid)
     if not sub or sub['status'] == 'needs_reconnect' or runner not in _plan_computers(c, sub):
         return item
+    route = plan_exits.routed(c, sub)
+    request = (metadata(c, plan_key(sid)) or {}).get('request') or {}
+    if (route or request.get('exit_generation') is not None) and (
+        request.get('id') != item['id']
+        or request.get('runner_id') != runner
+        or not plan_exits.matches(route, runner, request.get('exit_generation'))
+    ):
+        return item
     value = MS.value_of(c, vault.cipher, sub)
     if value is None:
         return item
@@ -329,10 +351,15 @@ def plan_with_value(c, vault, runner, item):
 def plan_report(c, runner, rid, body):
     """A computer's answer to a read it was asked. A succeeded read with its week (a reset in a week's reach) is kept as
     the plan's reading; any other answer only ends the read with its state."""
+    from . import model_subscriptions as MS
+
     storage = plan_key(body.subscription)
     value = metadata(c, storage) or {}
     request = value.get('request') or {}
     if not request or request.get('id') != rid or request.get('runner_id') != runner:
+        raise Problem('not_found', 'Usage request not found', 404)
+    route = plan_exits.routed(c, MS.row(c, body.subscription))
+    if not plan_exits.matches(route, runner, request.get('exit_generation')):
         raise Problem('not_found', 'Usage request not found', 404)
     now = H.now()
     if request['state'] != 'requested' or request['expires_at'] <= now:
@@ -370,7 +397,7 @@ def install(app, store, auth, mutate):
 
     @app.get('/api/v2/runner-subscription-refreshes')
     def runner_refreshes(request: Request):
-        with store.read() as c:
+        with store.read_transaction() as c:
             who = request.state.identity
             request.app.state.execution.runner(c, who)
             vault = request.app.state.vault

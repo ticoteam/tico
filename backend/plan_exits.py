@@ -10,6 +10,7 @@ from . import access, hubdb
 from .api_contract import api_v2, error
 from .auth import Identity
 from .models import ID, Contract
+from .read_cache import readiness
 from .store import Problem
 
 H: Any = hubdb
@@ -32,6 +33,42 @@ EXIT_ROWS = (
     "LEFT JOIN runners r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
 PAGE_SIZE = 100
+# Upkeep stays dark until turn routing is ready and legacy maintenance jobs have drained.
+UPKEEP_ROUTING = False
+Route = tuple[str, int]
+
+
+def routed(c: Connection, sub: Any) -> Route | None:
+    """The personal Claude plan's maintenance computer and selection generation."""
+    if (
+        not UPKEEP_ROUTING
+        or not sub
+        or sub["kind"] not in ("claude_token", "claude_login")
+        or not sub["owner_id"].startswith("human:")
+    ):
+        return None
+    exit_runner = c.execute(
+        "SELECT r.id,r.platform,r.capabilities,r.readiness,e.generation FROM plan_exits e "
+        "JOIN runners_with_state r ON r.id=e.runner_id WHERE e.person_id=? AND r.revoked_at IS NULL",
+        (sub["owner_id"].removeprefix("human:"),),
+    ).fetchone()
+    if exit_runner is None:
+        return None
+    if sub["kind"] == "claude_login":
+        from .claude_login import can_refresh
+
+        # An offline exit remains authoritative. Its ability to refresh is independent of its heartbeat.
+        ready = readiness(c, exit_runner["id"], exit_runner["readiness"])
+        runtimes: Row = ready.get("runtimes") or {}
+        claude: Row = runtimes.get("claude") or {}
+        if not can_refresh(exit_runner) or not claude.get("installed"):
+            return None
+    return exit_runner["id"], exit_runner["generation"]
+
+
+def matches(route: Route | None, runner_id: str | None, generation: int | None) -> bool:
+    """Legacy jobs and generation-bound jobs each belong to their own routing mode."""
+    return route == (None if generation is None else (runner_id, generation))
 
 
 class ChangeExit(Contract):

@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
-from . import hubdb as H
+from . import hubdb as H, plan_exits
 from .credentials import SERVICE, keep_service
 from .models import Contract, ID
 from .store import Problem, encode, readiness_document
@@ -1039,19 +1039,29 @@ def remember_turn_usage(c, runner_id, runtimes):
             reading = provenance(state.get(window))
             if not reading or reading.get("origin") != "subscription" or not (sid := reading.get("subscription_id")):
                 continue
-            if not c.execute(
-                "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+            sub = c.execute(
+                "SELECT m.kind,m.owner_id FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
                 "JOIN model_subscriptions m ON m.id=s.subscription_id "
                 "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
                 "AND a.created_at>=m.credential_at LIMIT 1",
                 (sid, runtime, runner_id),
-            ).fetchone():
+            ).fetchone()
+            if not sub:
+                continue
+            route = plan_exits.routed(c, sub)
+            if route and route[0] != runner_id:
                 continue
             key = plan_key(sid)
             saved = metadata(c, key) or {}
             field = "turn_" + window
+            binding = field + "_exit"
             previous = (saved.get(field) or {}).get("reported_at")
-            if not previous or _at(reading["reported_at"]) > _at(previous):
+            current = list(route) if route else None
+            if saved.get(binding) != current or not previous or _at(reading["reported_at"]) > _at(previous):
+                if current:
+                    saved[binding] = current
+                else:
+                    saved.pop(binding, None)
                 save_metadata(c, key, {**saved, field: reading})
 
 
@@ -1079,9 +1089,18 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
-    computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
+    route = plan_exits.routed(c, sub)
+    computers = [
+        g
+        for g in ctx["grants"].get(sub["id"], [])
+        if g["runtime"] == runtime and g["runner_id"] in runners and (not route or g["runner_id"] == route[0])
+    ]
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
-    has_turn_reading = bool(meta.get("turn_weekly") or meta.get("turn_five_hour"))
+    turn_weekly, turn_five_hour = (
+        meta.get(field) if not route or meta.get(field + "_exit") == list(route) else None
+        for field in ("turn_weekly", "turn_five_hour")
+    )
+    has_turn_reading = bool(turn_weekly or turn_five_hour)
     has_own_reading = bool(SR.plan_reading(meta) or meta.get("five_hour"))
     if not computers and not has_turn_reading and not has_own_reading and windows is None:
         return _reason("Not on a computer yet")
@@ -1142,8 +1161,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     for reading, window, label in (
         (SR.plan_reading(meta), "weekly", "week"),
         (meta.get("five_hour") if sub["kind"] == "claude_login" else None, "five_hour", "5h"),
-        (meta.get("turn_weekly"), "weekly", "week"),
-        (meta.get("turn_five_hour"), "five_hour", "5h"),
+        (turn_weekly, "weekly", "week"),
+        (turn_five_hour, "five_hour", "5h"),
     ):
         own = weekly_snapshot(reading, window)
         if (
@@ -2035,6 +2054,13 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
         "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
         (_keep_value(c, vault, sub, value, preview, actor, now), preview, now, sub["id"]),
     )
+    if route := plan_exits.routed(c, sub):
+        c.execute(
+            "UPDATE attempt_subscriptions SET revision=? WHERE subscription_id=? AND delivery='model_exit' "
+            "AND exit_generation=? AND revision=? AND attempt_id IN (SELECT id FROM attempts "
+            "WHERE state IN ('leased','running') AND stop_requested_at IS NULL AND lease_until>?)",
+            (sub["revision"] + 1, sub["id"], route[1], sub["revision"], now),
+        )
 
 
 def _agent_attempts(c, sid):
@@ -2552,10 +2578,19 @@ def hand_out(c, attempt_id, chosen):
     for item in chosen:
         sub = item["subscription"]
         delivery = item.get("delivery", "")
+        route = plan_exits.routed(c, sub)
         c.execute(
-            "INSERT OR REPLACE INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) "
-            "VALUES(?,?,?,?,?,?)",
-            (attempt_id, item["runtime"], sub["id"], sub["revision"], delivery, sub.get("payer_parent")),
+            "INSERT OR REPLACE INTO attempt_subscriptions"
+            "(attempt_id,runtime,subscription_id,revision,delivery,parent_grant,exit_generation) VALUES(?,?,?,?,?,?,?)",
+            (
+                attempt_id,
+                item["runtime"],
+                sub["id"],
+                sub["revision"],
+                delivery,
+                sub.get("payer_parent"),
+                route[1] if route else None,
+            ),
         )
         if item.get("activate"):
             c.execute(
@@ -2897,6 +2932,7 @@ def connect(c, settings, auth, who, body):
     owner = sub["owner_id"] if sub else _default_owner(c, auth, who, body)
     if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
         raise Problem("owner", "A provider keeps its owner", 422)
+    exit_id, exit_generation = plan_exits.routed(c, sub or {"owner_id": owner, "kind": kind}) or (None, None)
 
     def answer(login, runner, plan_name):
         return {
@@ -2915,9 +2951,10 @@ def connect(c, settings, auth, who, body):
         f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
         f"AND s.subscription_id=? AND s.owner_id=? AND {model_login.ACTIVE_SQL}"
+        " AND s.exit_generation IS ? AND l.runner_id=coalesce(?,l.runner_id)"
         + (" AND s.name=?" if name else "")
         + " ORDER BY l.created_at",
-        (who.actor, *same, sid, owner, *([name] if name else [])),
+        (who.actor, *same, sid, owner, exit_generation, exit_id, *([name] if name else [])),
     ).fetchone()
     if target:
         if body.confirm:
@@ -2926,11 +2963,15 @@ def connect(c, settings, auth, who, body):
         plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
         return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
     computers = _connect_computers(c, spec["runtime"], who)
+    if exit_id:
+        computers = [r for r in computers if r["id"] == exit_id]
     if kind in claude:
         full = [r for r in computers if claude_login.can_sign_in(r)]
         if full or kind == "claude_login":
             computers, kind = full, "claude_login"
     plan_name = sub["name"] if sub else name or default_name(c, kind, owner)
+    if exit_id and not computers:
+        raise Problem("offline", "The plan's exit needs to be online with Claude Code installed", 409)
     if not computers and kind == "claude_login" and sub and sub["kind"] == "claude_login":
         raise Problem(
             "offline",
@@ -2973,9 +3014,9 @@ def connect(c, settings, auth, who, body):
         )
     # The default name is numbered when saved, so concurrent sign-ins still get distinct names.
     c.execute(
-        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id,restart_confirmed) "
-        "VALUES(?,?,?,?,?,?)",
-        (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm)),
+        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id,restart_confirmed,exit_generation) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm), exit_generation),
     )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner, plan_name)
@@ -3008,6 +3049,10 @@ def connected(c, vault, settings, auth, who, login_id, body):
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
         try:
+            sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
+            route = plan_exits.routed(c, sub)
+            if not plan_exits.matches(route, who.runner_id, target["exit_generation"]):
+                raise Problem("stale_exit", "The plan's exit changed. Reconnect again on the current exit.", 409)
             auth.sync_access(c)
             requester = auth.identity_for_actor(c, login["requested_by"])
             save(
