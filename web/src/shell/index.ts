@@ -10,7 +10,7 @@ export { Menu } from './Menu';
 export type { MenuProps, MenuNode, MenuTeam, MenuMate, MenuCompany, MenuCounts, MenuRowId, MenuTalk } from './Menu';
 export { orgTree, type OrgNode } from './orgTree';
 export { useArrangement, arrangementFor, isTeammate } from './arrangement';
-export { layout, modeFor, press, forwardFor, openCount, C, SPEC, ARR, TICO_MARK, TICO_MARK_LIP } from './layout';
+export { layout, modeFor, press, forwardFor, openCount, C, SPEC, ARR, TICO_MARK } from './layout';
 export type { Arrangement, ArrangementSpec, Saved, SheetId, SheetLayout, SheetState, Layout } from './layout';
 export { resetSheetSizes } from './memory';
 export { useCompanies, type Company } from './companies';

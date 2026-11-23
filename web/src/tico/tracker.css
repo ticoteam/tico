@@ -11,6 +11,5 @@
 .tracker-row[aria-expanded="false"]>.ico{transform:rotate(-90deg)}
 .tracker-groups{flex:0 1 auto;min-height:0;overflow:auto;padding:0 var(--s-2) var(--s-2)}
 :root[data-layout="cards"] .tracker-row{height:44px;font-size:var(--t-md)}
-/* the phone's card: against what shows of it (shell/phone/phone.css --vis: the 410px half) */
-.phone[data-card="tico-half"] .ly-tico .tracker{max-height:calc(var(--vis) * .45)}
-.phone[data-card="tico"] .ly-tico .tracker{max-height:45dvh}
+/* the phone's card: under half the screen, so the conversation keeps the rest */
+.phone .ly-tico .tracker{max-height:45dvh}

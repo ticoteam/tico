@@ -27,7 +27,7 @@ export function TicoSheet() {
   const room = useQuery(ticoRoomQuery);
   // what the person is looking at: its page, and what is open there
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
-  // On a phone the card draws Tico's one Dot itself, where the lip had it: the head has none of its own.
+  // On a phone the bar draws Tico's one Dot: the head has none of its own.
   const phone = usePhoneCards();
   return (
     <Sheet kind="tico" label="Tico">

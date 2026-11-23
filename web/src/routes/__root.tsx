@@ -1,16 +1,17 @@
 import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
 import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
-import { Fragment, Suspense, lazy, useEffect, useState, type ReactNode } from 'react';
+import { Fragment, Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
 import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
-import { TOGGLE_MUTE, callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
+import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
+import { CHAT_TAB, useLoadedTask } from '@/features/task/routing';
 import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
@@ -63,11 +64,11 @@ import {
   type OrgNode,
   type TrailPart,
 } from '@/shell';
-import { MenuLip, usePhoneCards } from '@/shell/phone';
+import { usePhoneCards } from '@/shell/phone';
 import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, notePlace } from '@/lib';
+import { boardSearch, chatAddress, leaveTask, notePlace } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -190,8 +191,9 @@ function App() {
   const at = {
     path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
+    tab: useLocation({ select: (l) => word((l.search as Record<string, unknown>).tab) }),
   };
-  const [, top, a, b] = at.path.split('/');
+  const [, top, a, b, c] = at.path.split('/');
   // A teammate's own page is the `agent` arrangement; a team's old address and your own page are plain pages. Only that
   // one answer is read from the directory, so an agent's status line does not redraw the shell.
   const who = top === 'team' && a ? decodeURIComponent(a) : '';
@@ -247,17 +249,19 @@ function App() {
         </Suspense>
       </Sheet>
     ) : at.chat ? (
-      <SecondChat chat={at.chat} />
+      <SecondChat chat={at.chat} task={arrangement === 'task'} />
     ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
   let list: ReactNode;
+  // An open task: its pipeline (`/tasks/<pipeline>/<n>`; none by its number alone) and the task as its route loaded it.
+  const task = arrangement === 'task' ? (top === 'tasks' ? b : a) : undefined;
+  const pipeline = arrangement === 'task' && top === 'tasks' && a && a !== 'all' ? decodeURIComponent(a) : undefined;
+  const open = useLoadedTask(task && decodeURIComponent(task));
   if (arrangement === 'task') {
-    const task = top === 'tasks' ? b : a;
     /* Beside the open task, its pipeline's tasks as its board showed them, the task chosen. A task with no pipeline of
        its own (`all`), or its list closed: the menu stays in its place. */
-    if (task && top === 'tasks' && a && a !== 'all' && !listShut)
-      list = <PipelineList pipeline={decodeURIComponent(a)} open={decodeURIComponent(task)} onClose={closeList} />;
+    if (task && pipeline && !listShut) list = <PipelineList pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -281,6 +285,11 @@ function App() {
   const callNow = useCall();
   const callChat = arrangement === 'page' && !chat && isCallActive(callNow) ? (callNow.chat ?? null) : null;
   if (callChat) chat = <SecondChat chat={callChat} />;
+  // On a phone: whose face the Agent icon shows (the page owner's comes with the bar), and whether the chat comes up: a
+  // link to a task's chat (`/tasks/<p>/<n>/chat`, `?tab=chat`), or a ❓ in it that waits on the person.
+  const chatWho = arrangement === 'agent' ? who : at.chat && at.chat !== SUPPORT_CHAT ? bare(at.chat) : (open.task?.owner_id ?? (callChat ? bare(callChat) : undefined));
+  const raiseChat = arrangement === 'task' && (c === CHAT_TAB || at.tab === CHAT_TAB || open.asksInChat);
+  const leave = () => leaveTask(router, open.task?.pipeline_id ?? pipeline);
   // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
   const place = pageAt(at.path);
   // the phone's card is set again on any change of the full address (path and search); the fold stays per page
@@ -314,8 +323,10 @@ function App() {
           side={side}
           panel={panel ? <PanelHost /> : undefined}
           trail={trail}
-          lips={{ menu: <PhoneMenuLip /> }}
-          lipActs={{ call: <CallMute />, tico: <SearchButton /> }}
+          marks={{ menu: <CompanyMark />, chat: <ChatFace id={chatWho} /> }}
+          raiseChat={raiseChat}
+          onSearch={() => openSearch()}
+          onLeave={leave}
           edgeActs={{ tico: <SearchButton /> }}
           onCloseChat={callChat ? hideCallChat : closeChat}
           onClosePanel={closePanel}
@@ -542,31 +553,54 @@ function AccountRows({ me, email }: { me: MenuMate; email: string }) {
   );
 }
 
-/* The phone's menu lip: the company and the Needs you count, from the same reads as the menu itself. */
-function PhoneMenuLip() {
+/* The company's mark, and the Flow mark when something waits on you (from the same read as the menu's count): on the
+   menu's tucked edge and the phone's Company icon. */
+function CompanyMark() {
   const { data: config } = useQuery(configQuery);
   const { data: flow } = useQuery(flowCountQuery);
-  return <MenuLip company={config?.company_name || config?.app_name || ''} flow={some(flow)} />;
+  return (
+    <>
+      <span className="co-mark" aria-hidden="true">
+        {(config?.company_name || config?.app_name || '').slice(0, 1).toUpperCase()}
+      </span>
+      {flow ? (
+        <span className="lip-end">
+          <span className="dot flow" style={{ '--d': '12px' } as CSSProperties} role="img" aria-label="Waits on you">
+            <i />
+            <b />
+          </span>
+        </span>
+      ) : null}
+    </>
+  );
 }
 
-/* The phone's call lip: mute without opening the call. */
-function CallMute() {
-  const { muted } = useCall();
-  return <IconButton icon={muted ? 'micoff' : 'mic'} label={muted ? 'Unmute' : 'Mute'} on={muted} onClick={() => run(TOGGLE_MUTE, {}, { via: 'click' })} />;
+/* The open chat's face on the phone's Agent icon: the agent or person it is with, else a chat's mark (a thread). */
+function ChatFace({ id }: { id: string | null | undefined }) {
+  const who = useActor(id);
+  return who ? <Avatar decorative kind={who.kind} name={who.name} initials={short(who.name)} hue={who.hue ?? 0} size={28} live={who.working} /> : <Icon name="message" />;
 }
 
-/* Search beside Tico: on the phone's bar and on Tico's edge. It opens with the cursor in its field, inside this same
-   press (iOS's keyboard; search/state.ts). */
+/* Search under Tico's Dot on its tucked edge. It opens with the cursor in its field, inside this same press (iOS's
+   keyboard; search/state.ts). */
 function SearchButton() {
   return <IconButton icon="search" label="Search" onClick={() => openSearch()} />;
 }
 
 /* ---------------------------------------------------------------- the chats */
 
-function SecondChat({ chat }: { chat: string }) {
+/** A chat beside the page. Beside a task on a phone (a side thread a card opened it from), it links to the task's own
+    chat, which takes its place in the same card. */
+function SecondChat({ chat, task = false }: { chat: string; task?: boolean }) {
   const who = useActor(bare(chat));
+  const phone = usePhoneCards();
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
+      {task && phone ? (
+        <Link className="bar-ask" data-stay to="." search={(({ chat: _c, via: _v, ...rest }: Record<string, unknown>) => rest) as never}>
+          Task chat
+        </Link>
+      ) : null}
       <Suspense fallback={null}>
         <ChatSheet chat={chat} />
       </Suspense>

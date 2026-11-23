@@ -27,7 +27,7 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, asksInChat, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
+import { askOf, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -139,14 +139,8 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  // On a phone, a ❓ for the person in the task's chat opens the chat, where its message box answers the agent asking:
-  // whose it is needs who the person is, so a phone picks once that is known.
-  const meRead = useQuery(meQuery);
-  const me = meRead.data?.id;
-  const phone = useCards();
-  const chatFirst = phone && asksInChat(t, me);
-  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError)) && !(phone && meRead.isPending))
-    setFirst(defaultTab(tabs, chatFirst));
+  const me = useQuery(meQuery).data?.id;
+  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;
@@ -208,9 +202,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (asks !== on) void navigate({ to: tabAddress(t, asks) as never });
   }, [seek, asks, on, t, navigate, ask, named, files.data, tabs]);
   const [adding, setAdding] = useState<Adding | null>(null);
-  const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
-  const owner = useActor(t.owner_id);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
   const versions = useVersions(current?.doc, search.v, search.vs, current?.version);
@@ -239,8 +231,6 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
 
   const cards = useCards();
   const beside = !!new URLSearchParams(useRouterState({ select: (s) => s.location.searchStr })).get('chat');
-  // A phone's Chat tab: an email's OK hung on this task, as a card in the chat.
-  const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} details={quiet} />;
 
   const askTarget = targetOf(named);
@@ -249,7 +239,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     .map((x) => {
       // The tab of the ask the address names keeps it (`?ask=`), so going back to it is still that ask.
       const mine = !!askTarget && (x.doc?.file_id ?? x.file?.id ?? x.other) === askTarget.id;
-      return { label: x.label, to: tabAddress(t, x.slug), ...(mine && ask && { search: { ask } }), mark: markOf(x), target: `task-tab:${x.slug}`, ...(x.chat && { className: 'tab-chat' }) };
+      return { label: x.label, to: tabAddress(t, x.slug), ...(mine && ask && { search: { ask } }), mark: markOf(x), target: `task-tab:${x.slug}` };
     });
 
   const body =
@@ -283,30 +273,12 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
           <div className="tv-lead">
             <Brief note={t.note} />
             <MatterDates matter={t.matter} />
-            <Decision t={current.wait} />
+            {!cards && <Decision t={current.wait} />}
           </div>
         }
       />
     ) : current?.email ? (
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
-    ) : current?.chat && t.conversation_id ? (
-      // A phone's Chat tab: the decision sits over its message box, and stands in for it while changes are asked.
-      <Conversation
-        id={t.conversation_id}
-        variant="page"
-        title={owner?.name}
-        actor={t.owner_id ?? undefined}
-        compose={ownTask(t, me)}
-        foot={
-          <>
-            <TaskStatus t={t} />
-            <Decision t={t} onAsking={setAsking} email={null} />
-          </>
-        }
-        canPost={!asking}
-        extra={approvals}
-        card={approvalCard}
-      />
     ) : null;
 
   return (
@@ -335,9 +307,11 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
           {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}
           {!current?.email && <EmailPointers t={t} items={own.flatMap((x) => (x.email && x.mark === 'ask' ? [{ send: x.email, to: tabAddress(t, x.slug) }] : []))} />}
           {body}
-          {/* Docked (a phone's bottom, beside the chat sheet's own card on a computer), or in the page when the thread a
-              card was opened from holds the chat sheet (`?chat=`): Approve is always somewhere. */}
-          {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} dock={cards || !beside} email={pick.email} requirement={ask} />}
+          {/* Docked (a phone's bottom, on every tab: the task's chat there has none; beside the chat sheet's own card on a
+              computer), or in the page when the thread a card was opened from holds the chat sheet (`?chat=`): Approve
+              is always somewhere. An email's OK filed apart docks on a phone too, in place of its lead's. */}
+          {pick && <Decision key={pick.email ?? ''} t={t} dock={cards || !beside} email={pick.email} requirement={ask} />}
+          {cards && current?.wait && <Decision t={current.wait} dock />}
         </div>
       }
     />
@@ -358,7 +332,9 @@ export function TaskChat({ task }: TaskChatProps) {
   const owner = useActor(t?.owner_id);
   const me = useQuery(meQuery).data?.id;
   const [asking, setAsking] = useState(false);
-  const decision = t && <ChatDecision key={t.id} t={t} onAsking={setAsking} />;
+  // On a phone the task page docks the one decision on every tab, so its chat has none.
+  const cards = useCards();
+  const decision = t && !cards && <ChatDecision key={t.id} t={t} onAsking={setAsking} />;
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
   // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.

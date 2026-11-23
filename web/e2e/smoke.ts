@@ -241,62 +241,49 @@ async function quick(page: Page, where: string, o: { tico: () => Promise<void>; 
 
 async function phone(browser: Browser, name: string) {
   note(`phone (${name})`);
-  const { ctx, page } = await open(browser, true, '/tasks', true); // gestures and layout only: nothing is written
+  const { ctx, page } = await open(browser, true, '/tasks', true); // taps and layout only: nothing is written
   await settle(page, 4000);
   await shot(page, `phone-${name}-rest`);
+  const tab = (label: string) => page.locator('.phone>.tabbar').getByRole('button', { name: label, exact: true });
+  const card = () => page.locator('.phone').getAttribute('data-card');
   if (want('quick')) {
-    // the bar: Tico's box and search on one level, each one tap to type
-    await quick(page, `phone, ${name}`, {
-      sync: true,
-      tico: () => page.locator('.phone>.ly-tico>.lip').tap(),
-      search: () => page.locator('.phone>.ly-tico>.lip-act').getByRole('button', { name: 'Search' }).tap(),
-    });
+    // the bar: Tico and search, each one tap to type
+    await quick(page, `phone, ${name}`, { sync: true, tico: () => tab('Tico').tap(), search: () => tab('Search').tap() });
     if (!want('phone')) return void (await ctx.close());
     await page.goto(`${APP}/tasks`);
     await settle(page, 2500);
   }
-  const lip = page.locator('.phone [data-card="tico"], .phone .lip').first();
-  check(await lip.count(), 'lips drawn', 'no lips on the phone');
+  const icons = () => page.locator('.phone>.tabbar button').evaluateAll((bs) => bs.map((b) => b.getAttribute('aria-label') ?? ''));
+  const first = await icons();
+  check(first.slice(0, 3).join() === 'Search,Tico,Company' && !first.includes('Task'), `the bar on a board: ${first.join(', ')}`, `the bar on a board: ${first.join(', ') || 'none'}`);
   const histBefore = await page.evaluate(() => history.length);
   const urlBefore = page.url();
-  const menuLip = page.getByRole('button', { name: 'Open Menu' });
-  // a finger on the lip's middle: the grab handle's wide hit area lies over it, so this is what a person's tap hits
-  const tapMenu = () => menuLip.tap();
-  if (await menuLip.count()) {
-    await tapMenu();
-    await settle(page, 900);
-    check(await page.locator('.phone[data-card="menu"]').count(), 'a tap on the menu lip raises the menu', `menu not up after a tap (card: ${await page.locator('.phone').getAttribute('data-card')})`);
-    await shot(page, `phone-${name}-menu`);
-    await page.goBack();
-    await settle(page, 900);
-    check(page.url() === urlBefore, 'Back closes the card and stays on the page', `Back navigated: ${urlBefore} → ${page.url()}`);
-    await shot(page, `phone-${name}-after-back`);
-    // a card open, then a navigation from inside it: Back afterwards should go to the page before, not a stranded card
-    await tapMenu();
-    await settle(page, 900);
-    await page.locator('.ly-menu .nav-item', { hasText: 'Calendar' }).first().tap();
-    await settle(page, 900);
-    const atCal = page.url();
-    await page.goBack();
-    await settle(page, 900);
-    check(page.url() !== atCal, `Back after a navigation from a card: ${new URL(page.url()).pathname}`, 'Back after navigating from a card stayed (stranded card entry)');
-    note(`  history ${histBefore} → ${await page.evaluate(() => history.length)}`);
-  } else bad('no menu lip button');
-
-  // a raised card keeps the stack behind it: the menu peeks above Tico, enough of its mark to know it, and a tap on the
-  // peek brings it forward without tucking Tico first
-  await page.goto(`${APP}/tasks`);
-  await settle(page, 2500);
-  await page.getByRole('button', { name: 'Open Tico' }).first().tap();
+  // Company on the page opens the menu, and again puts it away; neither is a step in the history
+  await tab('Company').tap();
+  await settle(page, 600);
+  check((await card()) === 'menu', 'Company on the page raises the menu', `menu not up after Company (card: ${await card()})`);
+  await shot(page, `phone-${name}-menu`);
+  await tab('Company').tap();
+  await settle(page, 600);
+  check((await card()) === 'none', 'Company again brings the page back', `the menu stayed (card: ${await card()})`);
+  await tab('Tico').tap();
+  await settle(page, 600);
+  await page.locator('.phone .ly-tico textarea').first().blur();
+  await tab('Company').tap();
+  await settle(page, 600);
+  check((await card()) === 'none' && page.url() === urlBefore, 'Company from Tico brings the page back', `Company from Tico: card ${await card()}, ${page.url()}`);
+  check((await page.evaluate(() => history.length)) === histBefore, 'the bar adds nothing to the history', 'a tap on the bar pushed a history entry');
+  // a place picked in the menu: the menu goes, the page comes, and Back is the page before
+  await tab('Company').tap();
+  await settle(page, 600);
+  await page.locator('.ly-menu .nav-item', { hasText: 'Calendar' }).first().tap();
   await settle(page, 900);
-  await shot(page, `phone-${name}-tico-peeks`);
-  if (await peekTaps(page, 'menu', 'tico', 'the menu behind Tico')) {
-    check((await page.locator('.phone').getAttribute('data-card')) === 'menu', 'a tap on the peek brings the menu forward', 'the menu peek did not raise the menu');
-  }
+  check((await card()) === 'none' && new URL(page.url()).pathname === '/calendar', 'a place in the menu opens with the menu down', `after Calendar: card ${await card()}, ${page.url()}`);
   await page.goBack();
   await settle(page, 900);
+  check(page.url() === urlBefore, 'Back after a place in the menu is the page before', `Back went to ${page.url()}`);
 
-  // Tico's Dot never sits on a field: not the handle on a raised chat's message box, not a lip on a page's own box
+  // no field under the bar: a thread's own box ends above it
   await page.goto(`${APP}/threads`);
   await settle(page, 2500);
   const thread = await page.evaluate(() =>
@@ -305,89 +292,47 @@ async function phone(browser: Browser, name: string) {
   if (thread) {
     await page.goto(`${APP}${thread}`);
     await settle(page, 2500);
-    await noTicoOnFields(page, 'a thread');
+    await noBarOnFields(page, 'a thread');
   }
+  // a task: Agent and Task come out, Agent is its chat, Company goes back to the list and they leave
   await page.goto(`${APP}/tasks`);
   await settle(page, 2500);
-  const task = await page.evaluate(() =>
+  const href = await page.evaluate(() =>
     [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href') ?? '').find((h) => /^\/tasks\/[^/]+\/[^/]+/.test(h) && !h.endsWith('/edit')),
   );
-  if (task) {
-    await page.goto(`${APP}${task}`);
+  if (href) {
+    await page.locator(`a[href="${href}"]`).first().tap();
     await settle(page, 2500);
-    const chatLip = page.locator('.phone>.ly-chat>.lip');
-    if (await chatLip.isVisible()) {
-      await chatLip.tap();
+    const on = await icons();
+    check(on.includes('Task') && on.length >= 4, `the bar on a task: ${on.join(', ')}`, `the bar on a task: ${on.join(', ')}`);
+    await shot(page, `phone-${name}-task`);
+    if (on.length === 5) {
+      await page.locator('.phone>.tabbar .tab-agent').tap();
       await settle(page, 1200);
-      await noTicoOnFields(page, "a task's chat, raised");
-      await page.setViewportSize({ width: 390, height: 508 }); // a keyboard that resizes the page (Android)
-      await page.locator('.phone .ly-chat textarea').first().focus();
-      await settle(page, 900);
-      await noTicoOnFields(page, "a task's chat, typing");
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.locator('.phone .ly-chat textarea').first().blur();
-      await settle(page, 600);
-      // Tico raised from the chat: the chat and the menu peek above it in order, and the chat is a tap away
-      await page.locator('.phone>.nub').tap();
-      await settle(page, 1200);
-      await shot(page, `phone-${name}-chat-peeks`);
-      await noTicoOnFields(page, 'Tico raised over a task');
-      if (await peekTaps(page, 'chat', 'menu', 'the chat behind the menu, behind Tico')) {
-        check((await page.locator('.phone').getAttribute('data-card')) === 'chat', 'a tap on the chat peek brings the chat forward', 'the chat peek did not raise the chat');
-      }
+      check((await card()) === 'chat', "Agent raises the task's chat", `Agent: card ${await card()}`);
+      check((await page.locator('.phone textarea:visible').count()) <= 1, 'one message box on screen', 'two message boxes on screen');
+      await noBarOnFields(page, "a task's chat, raised");
+      await shot(page, `phone-${name}-task-agent`);
     }
+    await tab('Company').tap();
+    await settle(page, 1500);
+    check(new URL(page.url()).pathname === '/tasks' && !(await icons()).includes('Task'), 'Company on a task goes back to the list', `Company on a task: ${page.url()}`);
   }
   await ctx.close();
 }
 
-/** A card behind a raised one shows a peek above the card in front of it, and a finger on the peek reaches its lip. */
-async function peekTaps(page: Page, card: 'menu' | 'chat', front: 'tico' | 'menu', where: string): Promise<boolean> {
-  const g = await page.evaluate(
-    ([c, f]) => {
-      const lip = document.querySelector(`.phone>.ly-${c}>.lip`);
-      const over = document.querySelector(`.phone>.ly-${f}`);
-      if (!lip || !over) return null;
-      const a = lip.getBoundingClientRect();
-      const top = over.getBoundingClientRect().top;
-      const x = a.left + a.width / 2;
-      const y = (a.top + top) / 2;
-      const mark = lip.querySelector('.co-mark')?.getBoundingClientRect();
-      return {
-        strip: top - a.top,
-        x,
-        y,
-        hit: !!document.elementFromPoint(x, y)?.closest(`.phone>.ly-${c}>.lip`),
-        mark: mark ? Math.max(0, Math.min(mark.bottom, top) - mark.top) / mark.height : null,
-      };
-    },
-    [card, front] as const,
-  );
-  if (!g) return (bad(`${where}: no card`), false);
-  check(g.strip >= 15 && g.strip <= 24, `${where} peeks ${Math.round(g.strip)}px`, `${where} peeks ${Math.round(g.strip)}px (want 15-24)`);
-  if (g.mark !== null) check(g.mark >= 0.2 && g.mark <= 0.5, `${Math.round(g.mark * 100)}% of the company mark shows`, `${Math.round(g.mark * 100)}% of the company mark shows (want 20-50%)`);
-  check(g.hit, `${where} can be tapped`, `${where}: its peek is covered`);
-  if (!g.hit) return false;
-  await page.touchscreen.tap(g.x, g.y);
-  await settle(page, 900);
-  return true;
-}
-
-/** No Tico mark (the stack's handle, Tico's Dot on its lip) drawn over a message box or a field that can be seen. */
-async function noTicoOnFields(page: Page, where: string) {
+/** Nothing that can be typed in, under the bar at the bottom. */
+async function noBarOnFields(page: Page, where: string) {
   const hits = await page.evaluate(() => {
     const seen = (el: Element) => el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && el.getBoundingClientRect().height > 0;
-    const marks = [...document.querySelectorAll('.phone>.nub, .phone .tico-dot')].filter(seen);
-    const fields = [...document.querySelectorAll('.composer, textarea, input:not([type=hidden]), [contenteditable]')].filter(seen);
-    const over: string[] = [];
-    for (const m of marks)
-      for (const f of fields) {
-        const a = m.getBoundingClientRect();
-        const b = f.getBoundingClientRect();
-        if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) over.push(`${m.className} on ${f.className || f.tagName}`);
-      }
-    return over;
+    const bar = document.querySelector('.phone>.tabbar')?.getBoundingClientRect();
+    if (!bar) return ['no bar'];
+    return [...document.querySelectorAll('.composer, textarea, input:not([type=hidden]), [contenteditable]')]
+      .filter(seen)
+      .filter((f) => f.getBoundingClientRect().bottom > bar.top + 1)
+      .map((f) => f.className || f.tagName);
   });
-  check(!hits.length, `no Tico mark on a field: ${where}`, `Tico on a field (${where}): ${hits.join(', ')}`);
+  check(!hits.length, `nothing to type in under the bar: ${where}`, `under the bar (${where}): ${hits.join(', ')}`);
 }
 
 async function responsive(browser: Browser) {

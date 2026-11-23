@@ -387,7 +387,6 @@
   --tuck-edge:44px;                  /* what shows of a tucked sheet: the edge you click to open it */
   --tuck-step:10px;                  /* a card under its neighbour sits this much shorter, top and bottom, each step */
   --tico-mark:22px;                  /* Tico's mark at the top of its sheet and on its edge */
-  --tico-mark-lip:26px;              /* on the phone's lip */
   --focus-ring:var(--focus-w) solid var(--focus);
   --art:var(--line-strong);          /* what an empty state's drawing is made of; faded for its second and third stroke */
 }

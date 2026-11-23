@@ -38,11 +38,9 @@
 /* a control on an edge that is not its tap target: search on Tico's, right under the Dot; the name moves down for it */
 .shell-edge[data-act] .shell-edge-mark{margin-bottom:calc(var(--ctl) + var(--s-1))}
 .shell-edge-act{position:absolute;top:calc(var(--frame-top) + var(--depth,0) * var(--tuck-step) + var(--s-3h) + 24px + var(--s-2));width:var(--tuck-edge);display:flex;justify-content:center}
-/* the menu's edge: the company's mark from its phone lip, and the Flow mark when something waits on you */
+/* the menu's edge: the company's mark (the phone's Company icon), and the Flow mark when something waits on you */
 .shell-edge-lip{display:flex;flex-direction:column;align-items:center;gap:var(--s-2h)}
-.shell-edge-lip>:not(.co-mark,.lip-end){display:none}
 .shell-edge-lip .co-mark{width:22px;height:22px;font-size:var(--t-micro);border-radius:var(--r-chip)}
-.shell-edge-lip .lip-end>b{display:none}
 /* tucking moves top and bottom with the card; motion Off jumps */
 :root:not([data-motion="off"]) :is(.shell-place,.shell-edge){transition:top var(--dur) var(--ease),bottom var(--dur) var(--ease),background var(--dur-fast) var(--ease)}
 .shell-place.is-moving{will-change:transform}
@@ -73,14 +71,6 @@ body.is-dragging .shell-place{pointer-events:none}
 .shell-trail>a:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
 .shell-trail>[aria-current]{color:var(--ink-2)}
 .shell-trail>.ico{flex:none;width:12px;height:12px;stroke-width:2;color:var(--faint)}
-/* on a phone it heads the page, under the status bar; the page's own head no longer keeps the notch's room */
-.phone>.pg>.shell-trail{flex:none;height:calc(env(safe-area-inset-top,0px) + var(--ctl));padding:calc(env(safe-area-inset-top,0px)) var(--s-4) 0}
-.phone>.pg:has(>.shell-trail){--page-top:0px;--sat:0px}
-.phone>.pg>.shell-trail+*{flex:1;min-height:0;height:auto}
-.phone:has(>.pg>.shell-trail){--top:calc(var(--sat) + 57px + var(--ctl))}
-/* a call's card takes the screen: the trail heads it as it heads a page */
-.phone.is-call>.ly-chat>.full>.shell-trail{flex:none;height:calc(env(safe-area-inset-top,0px) + var(--ctl));padding:calc(env(safe-area-inset-top,0px)) var(--s-4) 0}
-.phone.is-call>.ly-chat>.full>.shell-trail+*{flex:1;min-height:0;height:auto}
 /* the Agent bar's one line to a question that waits on you, wherever it lives (routes/__root.tsx OwnerBar) */
 .bar-ask{display:block;padding:var(--s-2) var(--s-4);border-bottom:1px solid var(--line);font-size:var(--t-sm);color:var(--ink);text-decoration:none}
 .bar-ask:hover{text-decoration:underline}

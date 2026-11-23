@@ -15,8 +15,6 @@ export interface PageTab {
   mark?: ReactNode;
   /** Merged into the link's search. The tab is on only while the address's search holds each of these too. */
   search?: Record<string, string>;
-  /** A class beside `doc-tab`: `tab-chat`, a tab only a phone shows (parts.css). */
-  className?: string;
 }
 
 /** The head every kind but the centered card has: one height, the title on the left, controls and "⋯" on the right. */

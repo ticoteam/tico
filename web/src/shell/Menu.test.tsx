@@ -337,10 +337,10 @@ describe('Menu', () => {
     localStorage.clear();
   });
 
-  it('on a phone, the menu is a card from its lip: the rows and a way to tuck it away; search is on the bar @s1210', async () => {
+  it('on a phone, the menu is a card from the bar’s Company icon: the rows and a way to tuck it away; search is on the bar @s1210', async () => {
     const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} />} /> });
     render(<RouterProvider router={createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) })} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Open Menu' }));
+    fireEvent.click(within(await screen.findByRole('navigation', { name: 'Bar' })).getByRole('button', { name: 'Company' }));
     const card = screen.getByRole('dialog', { name: 'Menu' });
     const nav = within(card).getByRole('navigation', { name: 'Main' });
     for (const name of ['Tasks', 'Calendar', 'Company', 'Library']) expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeTruthy();

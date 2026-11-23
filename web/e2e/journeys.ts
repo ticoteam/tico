@@ -208,14 +208,21 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   clean(page);
 });
 
-test('phone: open a task, and Back returns to the list', async ({ browser, hub }) => {
+test('phone: open a task, and Back or the bar’s Company returns to the list', async ({ browser, hub }) => {
   const [draft] = hub.facts.board.tasks;
   const page = await open(browser, hub, '/tasks/launch?view=list', PHONE);
+  const bar = page.getByRole('navigation', { name: 'Bar' });
   await page.locator('a.row.task', { hasText: draft!.title }).tap();
   await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}`));
   await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
+  await expect(bar.getByRole('button', { name: 'Task', exact: true })).toHaveAttribute('aria-current', 'true');
   await page.locator('main .pk-head').getByRole('button', { name: 'Back' }).tap();
   await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
   await expect(page.locator('a.row.task', { hasText: draft!.title })).toBeVisible();
+  await page.locator('a.row.task', { hasText: draft!.title }).tap();
+  await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}`));
+  await bar.getByRole('button', { name: 'Company', exact: true }).tap();
+  await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
+  await expect(bar.getByRole('button', { name: 'Task', exact: true })).toHaveCount(0);
   clean(page);
 });
