@@ -207,8 +207,8 @@
 .q-col.is-wide{width:620px}
 .q-dot{height:112px;margin-bottom:calc(var(--s-8) + var(--s-0))}
 .q-col h1{white-space:normal;text-wrap:balance;line-height:var(--lh-title)}
-.q-col h1.is-fault{display:inline-flex;align-items:center;gap:calc(var(--s-2) + var(--s-0))}
-.q-col h1.is-fault .ico{width:22px;height:22px;stroke-width:2}
+/* Inline with the title's first line, so a wrapped title keeps its icon beside it rather than off to the left. */
+.q-col h1.is-fault .ico{display:inline-block;vertical-align:-0.1em;margin-right:calc(var(--s-2) + var(--s-0));width:22px;height:22px;stroke-width:2}
 .q-sub{margin-top:var(--s-2);color:var(--muted);line-height:var(--lh-read);text-wrap:pretty}
 .q-sub b{color:var(--ink);font-weight:var(--w-strong)}
 .q-form{width:100%;margin-top:calc(var(--s-6) + var(--s-1));display:grid;grid-template-columns:minmax(0,1fr);gap:calc(var(--s-2) + var(--s-0))}
