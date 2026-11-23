@@ -18,7 +18,8 @@ import threading
 import time
 import uuid
 from collections import namedtuple
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
@@ -118,7 +119,7 @@ PERMISSIONS_SEEN = "github-app-permissions"
 # bots as another bot, and CI or rules that name the old one skip or block agents' pull requests.
 # Said on the connection for this long after that connect.
 APP_CHANGE_DAYS = 30
-BOT_LOOKUP_TIMEOUT = httpx.Timeout(5, connect=3)  # a connect never waits longer on the bot's user id
+BOT_LOOKUP_SECONDS = 5  # a connect never waits longer on the bot's user id, in total
 
 
 def bot_login(slug):
@@ -183,7 +184,7 @@ def bot_view(row, connect, now=None):
         at = datetime.fromisoformat(str(connect["created_at"]).replace("Z", "+00:00"))
     except ValueError:
         return bot, None
-    if (now or datetime.now(timezone.utc)) - at > timedelta(days=APP_CHANGE_DAYS):
+    if (now or datetime.now(timezone.utc)) - at >= timedelta(days=APP_CHANGE_DAYS):
         return bot, None
     words = (
         "This is a new GitHub app. GitHub now sees Tico's bots as "
@@ -1004,17 +1005,24 @@ class GitHubApp:
 
     def bot_user_id(self, slug):
         """GitHub's user id of the App's bot (`<slug>[bot]`), from its public profile with no token; None when GitHub does
-        not say within BOT_LOOKUP_TIMEOUT. The login and App ID are shown without it."""
+        not say within BOT_LOOKUP_SECONDS. The login and App ID are shown without it."""
         if self.settings.rehearsal or not slug:
             return None
-        try:
+
+        def look():
+            # httpx's timeout is per connect and per read: a slow answer in pieces outlasts it, so the wait below is
+            # the deadline, and this read ends on its own timeouts after the connect has moved on.
             with _client() as http:
-                r = http.get("/users/" + quote(bot_login(slug), safe=""), timeout=BOT_LOOKUP_TIMEOUT)
-            if r.status_code < 300:
-                return int(r.json().get("id") or 0) or None
-        except (httpx.HTTPError, ValueError, AttributeError, TypeError):
-            pass
-        return None
+                r = http.get("/users/" + quote(bot_login(slug), safe=""), timeout=BOT_LOOKUP_SECONDS)
+            return (int(r.json().get("id") or 0) or None) if r.status_code < 300 else None
+
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="github-bot-id")
+        try:
+            return pool.submit(look).result(timeout=BOT_LOOKUP_SECONDS)
+        except (FutureTimeout, httpx.HTTPError, ValueError, AttributeError, TypeError):
+            return None
+        finally:
+            pool.shutdown(wait=False)
 
     def exchange(self, code):
         r = self._call("POST", f"/app-manifests/{quote(code, safe='')}/conversions")

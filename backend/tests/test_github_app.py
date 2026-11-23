@@ -2091,3 +2091,30 @@ def test_bot_view_without_a_user_id_and_past_the_window():
         row, {"created_at": connect_at, "slug": "new", "detail": detail}, now=datetime(2026, 12, 2, tzinfo=timezone.utc)
     )
     assert gone is None
+
+
+def test_the_notice_is_gone_at_exactly_30_days():
+    """AC-7: the notice ends at 30 days to the microsecond, not after."""
+    detail = {"app_id": 2, **G.connect_detail({"slug": "old", "detail": {"app_id": 1}}, "new", 2, None)}
+    connect_at = {"created_at": "2026-11-01T00:00:00.000000Z", "slug": "new", "detail": detail}
+    row = {"slug": "new", "app_id": 2}
+    edge = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    assert G.bot_view(row, connect_at, now=edge - timedelta(microseconds=1))[1] is not None
+    bot, gone = G.bot_view(row, connect_at, now=edge)
+    assert gone is None and bot == {"login": "new[bot]", "app_id": 2, "user_id": None}
+
+
+def test_a_stalled_github_user_lookup_never_holds_the_connect(api, gh, monkeypatch):
+    """httpx times each read, so an answer in slow pieces outlasts its timeout: the lookup has one total deadline, and
+    the connect is saved with the login and App ID while GitHub is still held."""
+    import threading
+
+    monkeypatch.setattr(G, "BOT_LOOKUP_SECONDS", 0.2)
+    gh.bot_ids, gh.bot_hold = {"acme-tico[bot]": 187654321}, threading.Event()
+    try:
+        connect(api)
+        app = api.get("/api/v2/github/app", headers=auth()).json()
+        assert gh.bot_hold.is_set() is False  # answered while GitHub was still held
+        assert app["bot"] == {"login": "acme-tico[bot]", "app_id": 4242, "user_id": None}
+    finally:
+        gh.bot_hold.set()

@@ -108,6 +108,7 @@ class FakeGitHub:
         )  # each installation token's value (stateless_token: GitHub's)
         self.app = {"id": 4242, "slug": "acme-tico"}  # the App the next manifest conversion makes
         self.bot_ids = {}  # GET /users/<slug>[bot]: the bot's user id, when GitHub answers for it
+        self.bot_hold = None  # a threading.Event GET /users/<slug>[bot] waits on before answering: a GitHub that stalls
         self.accounts = {"acme": "Organization"}  # GET /users/{name}: lowercase login -> "User" or "Organization"
         self.account_status = None  # an int, or (int, headers): every account lookup answers that instead
         self.account_down = False  # every account lookup fails to connect
@@ -142,6 +143,8 @@ class FakeGitHub:
             return httpx.Response(204)
         if path.startswith("/users/"):
             name = path.split("/")[2]
+            if name.endswith("[bot]") and self.bot_hold is not None:
+                self.bot_hold.wait()
             if name in self.bot_ids:
                 return httpx.Response(200, json={"login": name, "id": self.bot_ids[name], "type": "Bot"})
             if self.account_down:

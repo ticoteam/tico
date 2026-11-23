@@ -902,7 +902,10 @@ def tool_call(api, args):
     from clients import tool_call as T
 
     try:
-        return T.call(args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or ())
+        # The MCP server runs apart from the agent's shell, so its error covers a key that is there (`shell`).
+        return T.call(
+            args['tool'], args['method'], args['path'], args.get('data'), args.get('query') or (), shell=False
+        )
     except T.CallError as exc:
         return {'error': str(exc)}
 

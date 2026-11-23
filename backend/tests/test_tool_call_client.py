@@ -2,6 +2,7 @@
 
 import base64
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -89,24 +90,29 @@ def test_a_tool_whose_key_is_on_the_computer_is_told_to_use_its_variable_never_i
         tool_call.call("jira", "GET", "/rest/api/3/myself", environ=environ)
     words = str(got.value)
     assert words == (
-        "jira's access is on this computer, not behind Tico's proxy, so tico tools call cannot use it. Call the Jira "
+        "jira's access is on this computer, not behind Tico's proxy, so tico tool call cannot use it. Call the Jira "
         "API yourself with $JIRA_API_TOKEN (this run also has $JIRA_BASE_URL)."
     )
     assert "s3cret" not in words and "acme.example" not in words and "TICO_JIRA" not in words
 
 
-def test_the_mcp_tool_gives_the_same_words(monkeypatch):
-    """AC-2: tico_tool_call answers with the same error text."""
-    import os
-
+def test_the_mcp_tool_names_the_variables_it_sees_and_never_says_none_are_set(monkeypatch):
+    """AC-2. A harness starts the MCP server with Tico's own variables only (Codex among them), so a key in the agent's
+    shell is not there: the answer then says how to look and gives both cases, never "no JIRA_ variable is set"."""
     from clients.commands import tools
 
+    ask = {"tool": "jira", "method": "GET", "path": "/rest/api/3/myself"}
+    for name in [k for k in os.environ if k.startswith(("JIRA_", "TICO_TOOL_"))]:
+        monkeypatch.delenv(name)
+    unseen = tools.tool_call(None, ask)["error"]
+    assert unseen.startswith("jira is not proxied for this MCP server, which cannot see your shell's variables.")
+    assert "env | grep ^JIRA_" in unseen and "call the Jira API yourself" in unseen and "tico tool show jira" in unseen
+    assert "no JIRA_ variable is set" not in unseen
     monkeypatch.setenv("JIRA_API_TOKEN", "s3cret-token")
     monkeypatch.setenv("JIRA_BASE_URL", "https://acme.example")
-    monkeypatch.delenv("TICO_TOOL_JIRA_URL", raising=False)
-    out = tools.tool_call(None, {"tool": "jira", "method": "GET", "path": "/rest/api/3/myself"})
-    assert out == {"error": tool_call.not_proxied("jira", os.environ)}
-    assert out["error"].startswith("jira's access is on this computer")
+    seen = tools.tool_call(None, ask)["error"]
+    assert seen == tool_call.not_proxied("jira", os.environ)  # the CLI's words when the server does see them
+    assert seen.startswith("jira's access is on this computer") and "s3cret" not in seen
 
 
 def test_a_tool_id_with_two_words_falls_back_to_its_first_word():
