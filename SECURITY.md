@@ -82,7 +82,8 @@ bots on a team cooperate.
 The same holds for a company model subscription given to a computer (docs/computers.md#company-subscriptions): it is
 handed to the turns of every bot on that computer, in their environment or a Codex home under the runner's state, so
 any bot there could read it. One computer is one trust group; give a subscription only to computers whose bots may all
-use it.
+use it. A ChatGPT or Antigravity plan's file holds its refresh token, so a bot paid by it can read that token while its
+turn runs.
 
 What is separated: the computer's own credential. The runner's registration (`runner.json`) can claim the
 work of any bot assigned to that computer, so code a bot runs must not be able to read it.

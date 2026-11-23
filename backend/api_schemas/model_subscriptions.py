@@ -2,11 +2,11 @@
 """The answers of the Model subscriptions routes (backend/openapi_v2.py gathers them)."""
 
 from ..api_contract import ref
+from ..model_subscriptions import KINDS, RUNTIMES
 from ._base import NUM_N, SCHEMAS, items, obj
 
-_SUB_KIND = {
-    "enum": ["claude_token", "claude_login", "codex_login", "anthropic_key", "openai_key", "cursor_key", "meta_key"]
-}
+_SUB_KIND = {"enum": [str(kind) for kind in KINDS]}
+_RUNTIME = {"enum": [str(runtime) for runtime in RUNTIMES]}
 
 
 _SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
@@ -26,7 +26,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'maximum': 200,
             'description': 'Maximum live turns across all computers. Present for plans, which default to 20.',
         },
-        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+        'runtime': _RUNTIME,
         'label': 's',
         'status': {'enum': ['new', 'working', 'needs_reconnect']},
         'status_detail': 's',
@@ -143,10 +143,11 @@ SCHEMAS['ModelSubscriptionList'] = obj(
                 {
                     'kind': _SUB_KIND,
                     'label': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'secret_label': 's',
                     'help': 's',
                     'connect': 'b',
+                    'paste': 'b',
                     'owned': 'b',
                 }
             )
@@ -165,7 +166,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
             obj(
                 {
                     'runner_id': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'subscription_id': 's',
                     'person': 's',
                     'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
@@ -201,7 +202,7 @@ SCHEMAS['AgentSubscriptionList'] = obj(
             'additionalProperties': obj(
                 {
                     'bot': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'kind': {'enum': ['pool', 'plan', 'key']},
                     'person': 's',
                     'subscription_id': 's',

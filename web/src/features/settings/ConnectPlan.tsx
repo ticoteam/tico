@@ -1,4 +1,4 @@
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { reasonIn, run } from '@/actions';
 import { Button } from '@/kit/Button';
@@ -43,6 +43,13 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
   const [codeError, setCodeError] = useState<string | null>(null);
   const submitting = useRef(false);
   const [tries, setTries] = useState(0);
+  const [waiting, setWaiting] = useState<string | null>(null);
+  // `claude_login` is not listed: a Claude plan's entry is `claude_token`'s. Paste is offered only once the list says so.
+  const kinds = useQuery(subscriptionsQuery).data?.kinds;
+  const listed = kinds?.find((k) => k.kind === (kind === 'claude_login' ? 'claude_token' : kind));
+  const canPaste = listed?.paste === true;
+  const codex = kind === 'codex_login';
+  const label = listed?.label ?? (codex ? 'ChatGPT plan' : kind === 'antigravity_login' ? 'Antigravity plan' : 'Claude plan');
   const startedLogin = useRef<SignIn | 'dismissed' | null>(null);
   useEffect(() => {
     startedLogin.current = null;
@@ -79,6 +86,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
           }
           if (!r.ok) return setError({ message: reasonIn(r) ?? "Couldn't start", code: r.error });
           if (!got) return setError({ message: 'No computer can sign in yet', code: 'offline' });
+          setWaiting(got.id ? null : got.message ?? null);
           if (got.id) {
             startedLogin.current = got;
             setLogin(got);
@@ -110,9 +118,9 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
     if (state !== 'done' || finished.current) return;
     finished.current = true;
     void qc.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
-    toast({ text: `${now.name ?? 'Subscription'} connected`, kind: 'done' });
+    toast({ text: `${label} connected`, kind: 'done' });
     onClose();
-  }, [state, now.name, qc, onClose]);
+  }, [state, label, qc, onClose]);
   const timedOut = late && !starting && !login;
   const ended =
     error?.message ??
@@ -125,9 +133,9 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
           : null);
   const hostWarning = now.not_yours ? `Credential passes through someone else's computer${now.computer ? ` (${now.computer})` : ''}` : null;
   const signingIn = state === 'waiting' ? undefined : `Signing in${now.computer ? ` on ${now.computer}` : ''}`;
-  const offerPaste = error
+  const offerPaste = canPaste && (error
     ? error.code === 'offline' || error.code === 'runner_version'
-    : state !== 'done' && (!!hostWarning || !!ended);
+    : state !== 'done' && (!!hostWarning || !!ended));
   const endAttempt = async () => {
     const cancellation = cancelLiveSignIn(now);
     if (cancellation) {
@@ -173,8 +181,6 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
       setSending(false);
     }
   };
-  const codex = kind === 'codex_login';
-  const label = codex ? 'ChatGPT plan' : 'Claude plan';
   const paste = async (confirm = confirmed) => {
     const value = secret.trim();
     const input = subscription ? { subscription, secret: value, ...(confirm && { confirm: true }) } : { kind: codex ? 'codex_login' : 'claude_token', secret: value, ...(owner && { owner: owner.id }) };
@@ -196,7 +202,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
     setConfirmed(true);
   };
   const title = restart ? 'Restart runs?' : `${subscription ? 'Reconnect' : 'Connect'} ${label}${owner ? ` for ${owner.name}` : ''}`;
-  const description = restart ?? (pasting ? error?.message : cancelError ?? ended ?? hostWarning ?? signingIn);
+  const description = restart ?? (pasting ? error?.message : cancelError ?? ended ?? hostWarning ?? (waiting ?? signingIn));
   const actions = (
     <>
       <Button variant="quiet" onClick={onClose}>{ended && !pasting && !restart ? 'Close' : 'Cancel'}</Button>
@@ -210,7 +216,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
           {offerPaste && <Button disabled={ending} onClick={switchToPaste}>Paste instead</Button>}
           {!ended && !cancelError && now.url && (
             <a className="btn btn-fill" href={now.url} target="_blank" rel="noreferrer">
-              Open {codex ? 'ChatGPT' : 'Claude'}
+              Open {codex ? 'ChatGPT' : kind === 'antigravity_login' ? 'Google' : 'Claude'}
             </a>
           )}
         </>

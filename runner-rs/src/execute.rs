@@ -2579,7 +2579,8 @@ impl Runner {
             // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
             // when it will run: a held login's turn goes to its fallback, which is signed in when it starts.
             if held.is_none() {
-                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env)
+                    .map_err(Fail::runtime)?;
                 vault.values.extend(placed);
             }
             if paid_by && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_none() {
@@ -3465,7 +3466,8 @@ impl Runner {
                         }
                     }
                 }
-                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env)
+                    .map_err(Fail::runtime)?;
                 mask(&aid, &mut redactor, &mut vault, placed);
                 let delivered = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime);
                 segments.push(Segment {

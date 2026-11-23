@@ -14,7 +14,7 @@ and holds no harness.
 | Codex | `runner-rs/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
-| Antigravity | `antigravity.toml` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`. Readiness checks sign-in with `agy models`. No MCP servers |
+| Antigravity | `antigravity.toml` | Google | Its script from Google's updater manifest (sha512 checked) | The computer's Google account in `agy`, or an Antigravity plan through Connect, signed in per turn ([Antigravity](antigravity-runner.md)). Readiness checks sign-in with `agy models`. No MCP servers |
 | Grok Build | `grok.toml` | xAI | npm `@xai-official/grok` (xAI's own package) | Grok subscription (device code, from Settings) or `XAI_API_KEY` |
 | Cursor Agent | `cursor-agent.toml` | Cursor | Cursor's install script, run with `HOME` inside the tools directory | Cursor subscription (browser link, from Settings) or `CURSOR_API_KEY` |
 | Muse Code | `muse-code.toml` | Meta | Meta's install script (`dev.meta.ai/install.sh`), run with `HOME` inside the tools directory | Meta account (device code, from Settings) or `META_API_KEY` |
@@ -579,5 +579,5 @@ counts a call to a directory skill once per (attempt, tool id); a person's messa
 counts as that person's use of the bot's installed skill. Usage rows hold the skill, who, where and when only.
 
 A provider may have more than one CLI, each its own manifest and runtime (Google: the Gemini CLI and Antigravity). A
-manifest with no `[install]` names a CLI the operator installs (Antigravity); the runner never installs or updates it.
+manifest with no `[install]` names a CLI the operator installs; the runner never installs or updates it.
 

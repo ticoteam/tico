@@ -25,6 +25,8 @@ Row = dict[str, Any]
 Window = tuple[str, str, float, datetime, datetime]
 HOLD: Any = login_holds
 CAPABILITY = "attempt_credentials_v1"
+# Written as the model_subscriptions_pool index's own condition is, so the pool read can use it (INDEXED BY).
+POOL_KINDS_SQL = ",".join(f"'{kind}'" for kind in MS.POOL_KINDS)
 
 
 class Pick(Contract):
@@ -43,7 +45,7 @@ class Pick(Contract):
 
 
 class ChangePicks(Contract):
-    subscriptions: dict[str, Pick | None] = Field(max_length=4)
+    subscriptions: dict[str, Pick | None] = Field(max_length=len(MS.RUNTIMES))
 
 
 def can_edit(c: Connection, auth: Any, who: Identity, bot: str) -> bool:
@@ -270,7 +272,7 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             f"WHERE p.bot IN ({marks}) AND p.kind<>'pool' UNION ALL "
             "SELECT p.bot,p.runtime,p.parent_grant,s.id FROM agent_subscriptions p "
             "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_pool ON s.owner_id=p.person "
-            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ('claude_token','claude_login','codex_login')), "
+            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ({POOL_KINDS_SQL})), "
             # Drive the count from live attempts across the team, including legacy delivery and excluding shell sign-ins.
             "live AS MATERIALIZED (SELECT s.subscription_id,count(*) AS turns "
             "FROM attempts a INDEXED BY attempts_live_lease CROSS JOIN attempt_subscriptions s ON s.attempt_id=a.id "

@@ -32,6 +32,13 @@
 //! this computer or another, claude_login.rs) the file in every home running on it is rewritten (`rewrite`) before the
 //! old token is revoked or, at worst, before the turn's next call.
 //!
+//! An Antigravity plan (`antigravity_login`) is a home subscription made for each turn too (`TURN_HOMES`): `agy` reads its
+//! sign-in from `<GEMINI_HOME>/antigravity-cli/antigravity-oauth-token` only when it believes it runs over SSH (else
+//! from the system keyring), so a plan turn's GEMINI_HOME is a home of its own holding that file, and its `agy` alone
+//! is told it runs over SSH (hosts/antigravity.rs). The bot's own `~/.gemini` rules, skills and conversations are
+//! linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so a move between
+//! plans, or to the computer's sign-in, resumes the same conversation.
+//!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
@@ -49,6 +56,104 @@ use crate::util::text_of;
 const MAX_VALUE: usize = 64 * 1024;
 /// The sign-in files a home subscription may hold; nothing else in its home is removed.
 const FILES: &[&str] = &["auth.json", CREDENTIALS];
+/// Where `agy` keeps a sign-in in its home when it believes it runs over SSH.
+pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
+/// What `agy` is told so it reads and writes AGY_TOKEN, never the system keyring.
+pub const OVER_SSH: (&str, &str) = ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0");
+
+/// A runtime whose plan login lives in a home made for each turn, which its CLI finds through `var`.
+pub struct TurnHome {
+    pub runtime: &'static str,
+    pub var: &'static str,
+    /// The CLI's own home under HOME when `var` is unset (the bot's own, whose `links` the turn's home gets).
+    pub default: &'static str,
+    /// The sign-in file, relative to the home.
+    pub file: &'static str,
+    /// Linked from the bot's own home when there, `keep` made there first so what the CLI writes in them stays.
+    links: &'static [&'static str],
+    keep: &'static [&'static str],
+    /// Variables that would sign the CLI in some other way than the file.
+    pub strip: &'static [&'static str],
+    /// Set on the CLI's own process only (the bot's tools inside it inherit it), never in the turn's environment.
+    pub env: &'static [(&'static str, &'static str)],
+}
+
+pub const TURN_HOMES: &[TurnHome] = &[TurnHome {
+    runtime: "antigravity",
+    var: "GEMINI_HOME",
+    default: ".gemini",
+    file: AGY_TOKEN,
+    links: &[
+        "AGENTS.md",
+        "GEMINI.md",
+        "config/skills.json",
+        "config/skills",
+        "antigravity-cli/skills",
+        "antigravity-cli/conversations",
+        "antigravity-cli/brain",
+        "antigravity-cli/annotations",
+        "antigravity-cli/implicit",
+        "antigravity-cli/knowledge",
+        "antigravity-cli/conversation_summaries.db",
+    ],
+    keep: &["antigravity-cli/conversations", "antigravity-cli/brain"],
+    strip: &[
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GCLOUD_PROJECT",
+        "CLOUDSDK_CORE_PROJECT",
+    ],
+    env: &[OVER_SSH],
+}];
+
+pub fn turn_home(runtime: &str) -> Option<&'static TurnHome> {
+    TURN_HOMES.iter().find(|t| t.runtime == runtime)
+}
+
+impl TurnHome {
+    /// The CLI's own home in `env`: `var`, else `default` under HOME.
+    pub fn own(&self, env: &Env) -> Option<PathBuf> {
+        match env.get(self.var).filter(|v| !v.is_empty()) {
+            Some(v) => Some(v.into()),
+            None => env
+                .get("HOME")
+                .filter(|h| !h.is_empty())
+                .map(|h| Path::new(h).join(self.default)),
+        }
+    }
+
+    /// Whether `home` is a turn's home of this runtime with its sign-in in place: its CLI runs on the plan.
+    pub fn holds(&self, home: &str) -> bool {
+        let home = Path::new(home);
+        homes().live.contains_key(home) && home.join(self.file).is_file()
+    }
+
+    /// Link `links` of the bot's own home `own` into the turn's `home`. Best effort: a turn whose links fail still runs.
+    fn link(&self, home: &Path, own: &Path) {
+        if own == home {
+            return;
+        }
+        for rel in self.keep {
+            let _ = crate::isolation::mkdir(&own.join(rel), 0o700);
+        }
+        for rel in self.links {
+            let target = own.join(rel);
+            let link = home.join(rel);
+            if std::fs::symlink_metadata(&target).is_err() || std::fs::symlink_metadata(&link).is_ok() {
+                continue;
+            }
+            if let Some(parent) = link.parent() {
+                let _ = crate::isolation::mkdir(parent, 0o700);
+            }
+            let _ = std::os::unix::fs::symlink(&target, &link);
+        }
+    }
+}
 /// Claude Code's sign-in file in its config directory.
 pub const CREDENTIALS: &str = ".credentials.json";
 /// What stays the subscription home's own in a full Claude login's config directory: everything else is linked to the
@@ -120,10 +225,16 @@ impl Delivered {
         self.env.is_some() || self.home_env.is_some()
     }
 
+    /// A plan login in a home made for each turn (TURN_HOMES), with its runtime's row.
+    fn turn_home(&self) -> Option<&'static TurnHome> {
+        turn_home(&self.runtime).filter(|_| self.home.is_some())
+    }
+
     /// A plan login in its own CLI home can sign in shell commands during another runtime's turn. Current hubs send
     /// the agent's shell payer, and older hubs send the computer's login. API keys pay only for their own runtime.
     fn for_shell(&self) -> bool {
         self.home.is_some()
+            && self.turn_home().is_none()
             && self.billing == "subscription"
             && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
     }
@@ -263,18 +374,26 @@ pub fn apply(
             delivered.env = Some(env_name);
         } else {
             let name = text_of(&item["file"]);
-            let home_env = text_of(&item["home_env"]);
+            let mut home_env = text_of(&item["home_env"]);
             let overrides = crate::harness_tools::caps(&runtime).profile_home_overrides;
-            if !FILES.contains(&name.as_str())
-                || (name == CREDENTIALS) == home_env.is_empty()
-                || (!home_env.is_empty() && !overrides.contains(&home_env))
-            {
+            let per_turn = turn_home(&runtime);
+            let known = match per_turn {
+                Some(t) => name == t.file && home_env.is_empty(),
+                None => {
+                    FILES.contains(&name.as_str())
+                        && (name == CREDENTIALS) != home_env.is_empty()
+                        && (home_env.is_empty() || overrides.contains(&home_env))
+                }
+            };
+            if !known {
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {id} names no known file"
                 ));
                 continue;
             }
-            if !home_env.is_empty() {
+            if let Some(t) = per_turn {
+                home_env = t.var.to_string();
+            } else if !home_env.is_empty() {
                 // The CLI ranks a token in its environment above the file.
                 for other in crate::harness_tools::api_key_env(&runtime) {
                     env.remove(&other);
@@ -285,7 +404,7 @@ pub fn apply(
             let plan = crate::isolation::bot_state(state_dir)
                 .join("subscriptions")
                 .join(&id);
-            let home = if name == CREDENTIALS || delivered.attempt_only {
+            let home = if name == CREDENTIALS || per_turn.is_some() || delivered.attempt_only {
                 plan.join(TURNS)
                     .join(uuid::Uuid::new_v4().simple().to_string())
                     .join(&runtime)
@@ -379,8 +498,13 @@ pub async fn activate(
 /// it has stopped, except a plan login kept in a home (`Delivered::for_shell`), which stays in place with its CLI's
 /// home variable set so the turn's own commands can run that CLI signed in. A home subscription's file is put in
 /// place now. Returns what joins the turn's redaction list: the file as found in place, and what Codex refreshed in a
-/// home let go. A home that cannot be made leaves its subscription out of the turn, said in the runner's log.
-pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Vec<String> {
+/// home let go. A home kept for another runtime's commands that cannot be made leaves its subscription out of the turn,
+/// said in the runner's log; this runtime's own fails the turn before it starts, rather than run it on another login.
+pub fn start(
+    delivered: &mut Vec<Delivered>,
+    runtime: &str,
+    env: &mut Env,
+) -> Result<Vec<String>, String> {
     let mut secrets = vec![];
     for d in delivered
         .iter_mut()
@@ -423,7 +547,7 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
         }
     }
     let Some(at) = delivered.iter().position(|d| d.runtime == runtime) else {
-        return secrets;
+        return Ok(secrets);
     };
     let d = &mut delivered[at];
     if let Some(name) = d.env.clone() {
@@ -431,21 +555,13 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
             env.remove(&other);
         }
         env.insert(name, d.value.clone());
-        return secrets;
+        return Ok(secrets);
     }
     if d.home.is_none() || d.file.is_none() {
-        return secrets;
+        return Ok(secrets);
     }
-    match hold(d, env) {
-        Ok(found) => secrets.extend(found),
-        Err(e) => {
-            crate::util::diagnostic(&format!(
-                "Tico runner: left a subscription out of this turn: {e}"
-            ));
-            delivered.remove(at);
-        }
-    }
-    secrets
+    secrets.extend(hold(d, env).map_err(|e| format!("The plan's sign-in could not be put in place: {e}"))?);
+    Ok(secrets)
 }
 
 /// Put a home subscription's file in place for this turn (once: a held home keeps what is there) and point its CLI's
@@ -457,13 +573,14 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         return Ok(secrets);
     };
     if !d.held {
+        // A path inside the home, checked against TURN_HOMES or FILES when it was handed (`apply`).
         let name = file
-            .file_name()
+            .strip_prefix(&home)
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let written = place(&home, &name, &d.value, d.revision)?;
         if written != d.value {
-            secrets.extend(if d.home_env.is_some() {
+            secrets.extend(if d.home_env.is_some() && d.turn_home().is_none() {
                 claude_secrets(&written)
             } else {
                 secrets_in(&written)
@@ -471,6 +588,21 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         }
         d.written = written;
         d.held = true;
+    }
+    if let Some(t) = d.turn_home() {
+        for key in t
+            .strip
+            .iter()
+            .map(|k| k.to_string())
+            .chain(crate::harness_tools::api_key_env(&d.runtime))
+        {
+            env.remove(&key);
+        }
+        if let Some(own) = t.own(env) {
+            t.link(&home, &own);
+        }
+        env.insert(t.var.into(), home.display().to_string());
+        return Ok(secrets);
     }
     if let Some(var) = d.home_env.clone() {
         for other in crate::harness_tools::api_key_env(&d.runtime) {
@@ -649,9 +781,18 @@ fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
 /// unless it brings a newer revision (someone reconnected it). Returns what the file holds now.
 fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
     let mut homes = homes();
-    crate::isolation::mkdir(home, 0o700)
-        .map_err(|e| format!("cannot make a subscription home: {e}"))?;
     let path = home.join(name);
+    let folder = path.parent().unwrap_or(home);
+    crate::isolation::mkdir(folder, 0o700)
+        .map_err(|e| format!("cannot make a subscription home: {e}"))?;
+    // Every folder from the home down to the file's is a real one: a link there would put the file elsewhere.
+    if folder
+        .ancestors()
+        .take_while(|p| p.starts_with(home))
+        .any(|p| !std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()))
+    {
+        return Err("a subscription home's folder is not a plain folder".into());
+    }
     let live = homes.live.get(home).map(|l| l.revision);
     let current = match live {
         Some(at) if revision <= at => std::fs::read_to_string(&path)
@@ -911,7 +1052,7 @@ mod tests {
             &mut vec![],
             &mut BTreeSet::new(),
         );
-        start(&mut got, runtime, &mut Env::new());
+        start(&mut got, runtime, &mut Env::new()).unwrap();
         got
     }
 
@@ -935,7 +1076,7 @@ mod tests {
         assert!(!keys.contains("ANTHROPIC_API_KEY"));
         assert_eq!(values, vec!["sk-ant-oat01-synthetic".to_string()]);
         // Set when Claude starts.
-        assert!(start(&mut got, "claude", &mut env).is_empty());
+        assert!(start(&mut got, "claude", &mut env).unwrap().is_empty());
         assert_eq!(
             env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
             Some("sk-ant-oat01-synthetic")
@@ -968,7 +1109,7 @@ mod tests {
             std::fs::create_dir_all(own.join(bot)).unwrap();
             let mut env: Env = [("HOME".into(), state.join(bot).display().to_string())].into();
             let mut got = apply(&state, &item, &mut env, &mut vec![], &mut BTreeSet::new());
-            start(&mut got, "claude", &mut env);
+            start(&mut got, "claude", &mut env).unwrap();
             let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
             assert!(is_config_home(&env["CLAUDE_CONFIG_DIR"]));
             // Its transcripts are the turn's own, so a move to or from another Claude plan resumes the thread.
@@ -1037,7 +1178,7 @@ mod tests {
         assert!(home.starts_with(&state) && home.ends_with("subscriptions/s3/codex"));
         let file = home.join("auth.json");
         assert!(!file.exists(), "written before Codex starts");
-        start(&mut got, "codex", &mut env);
+        start(&mut got, "codex", &mut env).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"tokens\":1}");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -1119,7 +1260,7 @@ mod tests {
         for leaked in [token, "rt_synthetic_fallback_cccccccc"] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
-        start(&mut got, "claude", &mut env);
+        start(&mut got, "claude", &mut env).unwrap();
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
         // The ChatGPT login signs `codex` in for Claude's own commands (`codex exec` in its shell), in its own home.
         assert_eq!(env["CODEX_HOME"], home.display().to_string());
@@ -1138,7 +1279,7 @@ mod tests {
         assert!(crate::fallback::default_choice(&config, &choices, &env, |_| false).is_none());
         // The hop: its environment is copied from the turn's; it gets the Codex home and loses Claude's token.
         let mut hop = env.clone();
-        start(&mut got, "codex", &mut hop);
+        start(&mut got, "codex", &mut hop).unwrap();
         assert_eq!(hop["CODEX_HOME"], home.display().to_string());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), login);
         assert!(!hop.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{hop:?}");
@@ -1149,7 +1290,7 @@ mod tests {
         // refreshed goes back when the turn ends.
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
-        start(&mut got, "codex", &mut env);
+        start(&mut got, "codex", &mut env).unwrap();
         assert!(file.exists() && !env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
         std::fs::write(
             &file,
@@ -1157,7 +1298,7 @@ mod tests {
         )
         .unwrap();
         let mut hop = env.clone();
-        start(&mut got, "claude", &mut hop);
+        start(&mut got, "claude", &mut hop).unwrap();
         assert!(got[1].held && file.exists());
         assert_eq!(hop["CODEX_HOME"], home.display().to_string());
         assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
@@ -1185,7 +1326,7 @@ mod tests {
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
         let file = got[0].file.clone().unwrap();
-        start(&mut got, "claude", &mut env);
+        start(&mut got, "claude", &mut env).unwrap();
         assert!(!file.exists() && !env.contains_key("CODEX_HOME"), "{env:?}");
         std::fs::remove_dir_all(&state).unwrap();
     }
@@ -1241,7 +1382,7 @@ mod tests {
             "fetching never places the file"
         );
         assert!(seen.lock().unwrap()[0].contains("credential-runtime?subscription_runtime=codex"));
-        start(&mut given, "codex", &mut env);
+        start(&mut given, "codex", &mut env).unwrap();
         assert!(given[0].file.as_ref().unwrap().exists());
         finish(&mut given);
         let (url, _) = crate::client::tests::serve(vec![(200, "{\"credentials\":[]}")]).await;
@@ -1272,6 +1413,71 @@ mod tests {
             available(&given, &old_server, "codex"),
             "old server up-front values stay usable"
         );
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_antigravity_plan_gets_a_private_home_per_turn_with_the_bots_conversations_and_nothing_else() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = dir();
+        let own = state.join("bot/.gemini");
+        for rel in ["antigravity-cli/conversations/c1.pb", "settings.json", "antigravity-cli/settings.json", "GEMINI.md"] {
+            std::fs::create_dir_all(own.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(own.join(rel), "x").unwrap();
+        }
+        // The computer's own sign-in, which no plan turn may see.
+        std::fs::write(own.join(AGY_TOKEN), "computer-token").unwrap();
+        let item = |value: &str| {
+            json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login", "file": AGY_TOKEN,
+                    "value": value, "revision": 1, "billing": "subscription"}])
+        };
+        let value = r#"{"token":{"access_token":"ya29.synthetic-access-token-0123456789"}}"#;
+        let mut turns = vec![];
+        for _ in 0..2 {
+            let mut env: Env = [
+                ("HOME".into(), state.join("bot").display().to_string()),
+                ("GOOGLE_API_KEY".into(), "AIza-computer".into()),
+            ]
+            .into();
+            let mut values = vec![];
+            let mut got = apply(&state, &item(value), &mut env, &mut values, &mut BTreeSet::new());
+            assert!(values.iter().any(|v| v == "ya29.synthetic-access-token-0123456789"));
+            start(&mut got, "antigravity", &mut env).unwrap();
+            assert!(!env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
+            let home = PathBuf::from(&env["GEMINI_HOME"]);
+            let token = home.join(AGY_TOKEN);
+            assert_eq!(std::fs::read_to_string(&token).unwrap(), value);
+            assert_eq!(token.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+            assert!(!std::fs::symlink_metadata(token.parent().unwrap()).unwrap().is_symlink());
+            assert_eq!(
+                std::fs::read_link(home.join("antigravity-cli/conversations")).unwrap(),
+                own.join("antigravity-cli/conversations")
+            );
+            assert_eq!(std::fs::read_link(home.join("GEMINI.md")).unwrap(), own.join("GEMINI.md"));
+            assert!(!home.join("settings.json").exists() && !home.join("antigravity-cli/settings.json").exists());
+            // Two plans, or a plan and the computer, resume one conversation; a shell of another runtime never runs on it.
+            assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
+            assert!(!got[0].for_shell());
+            turns.push((got, home));
+        }
+        assert_ne!(turns[0].1, turns[1].1);
+        for (mut got, home) in turns {
+            finish(&mut got);
+            assert!(!home.exists());
+        }
+        assert_eq!(std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(), "computer-token");
+        assert!(own.join("antigravity-cli/conversations/c1.pb").exists());
+        // A file the runner does not know, or a home it cannot make, never runs the turn on another login.
+        let mut env: Env = [("HOME".into(), state.join("bot").display().to_string())].into();
+        let bad = json!([{"id": "agyplan", "runtime": "antigravity", "file": "../token", "value": value, "revision": 1}]);
+        assert!(apply(&state, &bad, &mut env, &mut vec![], &mut BTreeSet::new()).is_empty());
+        let mut got = apply(&state, &item(value), &mut env, &mut vec![], &mut BTreeSet::new());
+        let home = got[0].home.clone().unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&own.join("antigravity-cli"), home.join("antigravity-cli")).unwrap();
+        assert!(start(&mut got, "antigravity", &mut env).is_err());
+        assert!(!env.contains_key("GEMINI_HOME"));
+        assert_eq!(std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(), "computer-token");
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -1389,7 +1595,7 @@ mod tests {
             &mut values,
             &mut BTreeSet::new(),
         );
-        values.extend(start(&mut got, "codex", &mut Env::new()));
+        values.extend(start(&mut got, "codex", &mut Env::new()).unwrap());
         let r = crate::redact::Redactor::new(&values);
         for leaked in [
             "sk-proj-synthetic-key-1-aaaaaaaaaaaa",
@@ -1433,7 +1639,7 @@ mod tests {
         ] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
-        start(&mut next, "codex", &mut Env::new());
+        start(&mut next, "codex", &mut Env::new()).unwrap();
         assert_eq!(next[0].written, login(2));
         finish(&mut next);
         std::fs::remove_dir_all(&state).unwrap();

@@ -1533,14 +1533,26 @@ def signin_wake(c, settings):
         return False
     at = now()
     asked = _signin_asked(c, at)
-    since = asked["since"] if asked else at
-    if at - since >= SIGNIN_START:
+    if asked and at - asked["since"] >= SIGNIN_START:
         return False
+    _ask_signin(c, at)
+    return True
+
+
+def _ask_signin(c, at):
+    """The sign-in want, asked for again now: kept since it was first asked for, else from now."""
+    asked = _signin_asked(c, at)
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (SIGNIN_KEY, json.dumps({"since": since, "seen": at})),
+        (SIGNIN_KEY, json.dumps({"since": asked["since"] if asked else at, "seen": at})),
     )
-    return True
+
+
+def keep_signin_asked(c, settings):
+    """A Connect waits while the shared machine, already up, installs the sign-in's CLI: it stays wanted for as long as
+    the page keeps asking, as for a sign-in (`signin_wake`), however long the install takes."""
+    if offered(c, settings) and not cloud_access.frozen(c):
+        _ask_signin(c, now())
 
 
 def signin_live(c, runner_id, at):

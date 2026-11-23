@@ -178,7 +178,7 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
           {byWhen && <small>Reconnect by {byWhen}</small>}
         </div>
         <div className="provider-kind">
-          {plan ? (s.kind === 'codex_login' ? 'ChatGPT plan' : 'Claude plan') : 'API key'}
+          {plan ? s.label : 'API key'}
           {plan && s.max_live_turns !== undefined && <LiveTurnLimit id={s.id} limit={s.max_live_turns} manage={manage} />}
         </div>
         {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? <Usage s={s} /> : <span className="provider-usage" />}

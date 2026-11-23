@@ -1,17 +1,30 @@
-# Google's Antigravity CLI (`agy`), signed in with a Google account. Google publishes it only through its own updater
-# (a release manifest naming a per-build download), which no install method here reads, so the runner never installs
-# it: the operator does, and readiness finds it on PATH.
+# Google's Antigravity CLI (`agy`), signed in with a Google account.
 id = "antigravity"
 name = "Antigravity"
 host = "antigravity"
 executable = "agy"
 providers = ["google"]
 
+# Google publishes it only through its own updater: a manifest per platform names a build-numbered tarball and its
+# sha512. antigravity-install.sh (in this folder, fetched from the main branch at this checksum) checks both and
+# installs the CLI as bin/agy. A change to the script changes this checksum in the same commit.
+[install]
+method = "script"
+url = "https://raw.githubusercontent.com/ticoteam/tico/main/runner-rs/harnesses/antigravity-install.sh"
+sha256 = "6611fa6f23e59c53627782ef6179a559d228c9b2cbf56f164e83cc42b0d64abb"
+requires = ["curl", "tar", "mktemp"]
+prefix_env = "AGY_PREFIX"
+bin = "bin/agy"
+latest_url = "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_amd64.json"
+latest_pattern = '"version"\s*:\s*"(\d+\.\d+\.\d+)"'
+
 [version]
 args = ["--version"]
 pattern = '(\d+\.\d+\.\d+)'
-# The oldest release that takes its home from GEMINI_HOME and prints the stream-json events hosts/antigravity.rs reads.
-minimum = "1.5.12"
+# The oldest release checked to take its home from GEMINI_HOME, keep a sign-in in GEMINI_HOME's
+# antigravity-cli/antigravity-oauth-token when it sees SSH_CONNECTION, read `acp --login`'s code from its input and
+# print the stream-json events hosts/antigravity.rs reads.
+minimum = "1.5.15"
 
 [update]
 policy = "latest"
@@ -19,14 +32,26 @@ policy = "latest"
 [auth]
 methods = ["subscription"]
 
+[login]
+# Settings > Computers: the computer's own sign-in (on a Mac, in its keychain). It prints a Google link and reads the
+# code that page shows.
+command = ["acp", "--login", "--app-data-dir", "antigravity-cli"]
+terminal = true
+paste_code = true
+files = ["antigravity-cli/antigravity-oauth-token"]
+# Connect (Settings > Providers): the same sign-in in a home of its own ({home}), told it runs over SSH so it writes
+# this file there and never the keychain (model_subscriptions.rs TURN_HOMES).
+connect = ["acp", "--login", "--gemini-dir", "{home}", "--app-data-dir", "antigravity-cli"]
+connect_file = "antigravity-cli/antigravity-oauth-token"
+
 # The CLI updates itself on every run unless this is set.
 [env]
 AGY_CLI_DISABLE_AUTO_UPDATE = "1"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
-# Its own sign-in per subscription profile (subscription_profiles, profile_home GEMINI_HOME) waits for Connect, which
-# signs one in: until then a profile's home would hold no login.
+# No subscription profiles: a profile's own home would hold no sign-in, and a profile's bots would lose the computer's.
+# A plan's sign-in is put in a home of each turn's own instead (model_subscriptions.rs TURN_HOMES).
 tool_events = true
 mcp_unsupported = "it reads MCP servers only from a config file in the operator's home, which Tico does not touch (the operator's own servers would reach every bot)"
 resume_command = "agy --conversation"

@@ -258,7 +258,7 @@ describe('Settings › Agents', () => {
 });
 
 describe('Settings › Providers', () => {
-  const claude = { kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true };
+  const claude = { kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true, paste: true };
 
   const payerPath = '/api/v2/bots/a1/subscriptions';
 
@@ -407,7 +407,7 @@ describe('Settings › Providers', () => {
   const restart = { status: 409, body: { error: { code: 'confirm_restart', detail: '2 running runs will stop and start again', running: 2 } } };
 
   it('reconnects the selected plan only after confirming the restart', async () => {
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [plan] });
     const url = '/api/v2/model-subscriptions/connect';
     serve((path) => {
       if (path !== url) return;
@@ -428,14 +428,14 @@ describe('Settings › Providers', () => {
   });
 
   it('pasting during Reconnect updates the same plan and waits for restart approval', async () => {
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [plan] });
     const url = `/api/v2/model-subscriptions/${plan.id}`;
     let save!: (reply: Reply) => void;
     const pending = new Promise<Reply>((resolve) => { save = resolve; });
     serve((path, method) => {
       if (path.endsWith('/connect')) return { status: 409, body: { error: { code: 'offline', detail: 'No computer can sign in' } } };
       if (path === url && method === 'POST') return sent.filter((s) => s.url === url).length > 1 ? pending : restart;
-      if (path === '/api/v2/model-subscriptions') return ok({ kinds: [], subscriptions: [plan] });
+      if (path === '/api/v2/model-subscriptions') return ok({ kinds: [claude], subscriptions: [plan] });
     });
     show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
     fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
@@ -456,7 +456,7 @@ describe('Settings › Providers', () => {
   });
 
   it.each(['offline', 'runner_version'])('carries restart approval into paste when sign-in returns %s', async (code) => {
-    const catalog = { kinds: [], subscriptions: [plan] };
+    const catalog = { kinds: [claude], subscriptions: [plan] };
     queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
     serve((url, method) => {
       if (url.endsWith('/connect')) {
@@ -480,7 +480,7 @@ describe('Settings › Providers', () => {
   });
 
   it('warns before opening sign-in on someone else’s computer and waits for cancellation before paste', async () => {
-    const catalog = { kinds: [], subscriptions: [plan] };
+    const catalog = { kinds: [claude], subscriptions: [plan] };
     const login = { id: 'login-1', runner_id: 'r1', state: 'waiting', url: 'https://example.test/sign-in' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
     let finishCancel!: (reply: Reply) => void;

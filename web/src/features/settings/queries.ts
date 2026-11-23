@@ -500,7 +500,7 @@ export interface SignIn {
 
 export const LIVE_SIGN_IN = ['requested', 'starting', 'waiting', 'finishing'];
 
-export const SIGN_IN_KINDS = ['claude_token', 'claude_login', 'codex_login'] as const;
+export const SIGN_IN_KINDS = ['claude_token', 'claude_login', 'codex_login', 'antigravity_login'] as const;
 export type SignInKind = (typeof SIGN_IN_KINDS)[number];
 
 export const startSignIn = (input: { kind: SignInKind; owner_id?: string } | { subscription: string; confirm?: boolean }) =>

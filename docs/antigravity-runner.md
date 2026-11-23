@@ -4,12 +4,26 @@ Choose `runtime: antigravity` for a bot (its harness is `antigravity` too) and s
 Gemini 4 Hydrogen, and effort in Settings. Google serves both Antigravity and the Gemini CLI (`runtime: gemini`), so a
 Gemini CLI bot keeps its own runtime and models. See [Harnesses](harnesses.md) for general provider setup.
 
-The runner never installs or updates `agy`: Google ships it only through its own updater. Install it on the assigned
-computer by hand from Google's [CLI page](https://www.antigravity.google/docs/cli/), and sign it in there with the
-computer's Google account. Until `agy` is on the runner's PATH, Settings says Antigravity is not installed on that
-computer. Tico does not change its global settings, and runs it with `AGY_CLI_DISABLE_AUTO_UPDATE=1`. A Gemini API key
-alone does not select Antigravity's API-key provider; follow Google's CLI settings documentation if switching that
-authentication mode. Readiness finds `agy` and checks sign-in with `agy models` before the runner claims work.
+The runner installs `agy` itself on a computer whose bots use Antigravity, or where the owner turns it on: Google
+publishes it only through its own updater, so `runner-rs/harnesses/antigravity-install.sh` (fetched from this
+repository at the checksum `antigravity.toml` pins) reads the updater's manifest for the platform (Linux x64 and arm64,
+musl included, and Mac arm64 and x64), checks the download's address and sha512, and installs its one executable as
+`agy`. An `agy` already on PATH is used as it is. Tico does not change its global settings, and runs it with
+`AGY_CLI_DISABLE_AUTO_UPDATE=1`. A Gemini API key alone does not select Antigravity's API-key provider; follow
+Google's CLI settings documentation if switching that authentication mode. Readiness finds `agy` and checks sign-in
+with `agy models` before the runner claims work.
+
+A turn signs in with the computer's own Google account (on a Mac, from its keychain), or with an Antigravity plan:
+Settings > Providers > Add > Antigravity plan. Connect runs `agy acp --login` on one of your computers, in a home of
+its own and told it runs over SSH, so it prints Google's link, reads the code the page shows (or the page's whole
+address) and writes its sign-in to a file there, never the keychain; it counts once `agy models` says it is signed in
+there. With no online computer that has `agy`, the owner's first Connect turns Antigravity on for their computer (or
+the company's shared cloud computer) and the page waits while it installs. A plan is never pasted. Each turn on a plan
+gets a `GEMINI_HOME` of its own holding only that file (mode 600) and links to the bot's own `~/.gemini` rules,
+skills and conversations, so a move between plans resumes the same conversation; that turn's `agy` alone is told it
+runs over SSH, and no Gemini or Google key reaches it. The home is removed once `agy` has exited, and any left by a
+stopped runner when it starts again. The file holds the plan's refresh token, so, as for a ChatGPT plan, a bot paid by
+the plan can read it while its turn runs (SECURITY.md).
 
 Each turn starts its own `agy` process, which ends with the turn; no process is kept between turns. The runner saves
 each thread's conversation ID locally (`state/agy/<bot>/`, readable by the runner only) and resumes it with

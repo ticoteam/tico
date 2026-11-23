@@ -10,7 +10,7 @@ import { fmtWhen } from '@/lib';
 import { useFollow } from '@/live/follow';
 import { paidByQuery, setPaidBy, type PayerPick } from './queries';
 
-const TOOLS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', musecode: 'Muse Code' };
+const TOOLS = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', cursor: 'Cursor', musecode: 'Muse Code' };
 type Tool = keyof typeof TOOLS;
 const isTool = (runtime: string): runtime is Tool => Object.hasOwn(TOOLS, runtime);
 const isPlan = (provider: ModelSubscription) => provider.kind.endsWith('_login') || provider.kind === 'claude_token';
@@ -62,7 +62,7 @@ function Picker({ bot, tool, payer, pools, editable, showTool }: {
         {pools.map(({ id, name, providers }) => {
           const matching = providers.filter((s) => s.runtime === tool);
           const plans = matching.filter(isPlan);
-          const allowPool = !!id && (tool === 'claude' || tool === 'codex');
+          const allowPool = !!id && (tool === 'claude' || tool === 'codex' || tool === 'antigravity');
           if (!allowPool && !matching.length) return null;
           return (
             <MenuGroup key={id} label={name}>

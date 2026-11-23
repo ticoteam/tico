@@ -224,8 +224,8 @@ def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_the
     assert answer["can_run"] is False and "could not be installed" in answer["problem"]
 
 
-def test_a_harness_the_runner_does_not_install_is_not_installed_not_installing(api):
-    # Antigravity has no [install]: the operator installs agy, so a computer without it waits on nobody.
+def test_antigravity_without_agy_reads_installing(api):
+    # Antigravity's [install] fetches agy from Google's updater, so a computer without it waits for that install.
     from backend.readiness import can_run
     from backend.tests.helpers.settings_transitions import _company_default
 
@@ -256,4 +256,4 @@ def test_a_harness_the_runner_does_not_install_is_not_installed_not_installing(a
     )
     with api.app.state.store.read() as c:
         answer = can_run(c, "cpo", "antigravity", runner=there["runner_id"])
-    assert (answer["can_run"], answer["problem"]) == (False, "antigravity is not installed on Ben Mac")
+    assert (answer["can_run"], answer["problem"]) == (None, "Antigravity is installing on Ben Mac")

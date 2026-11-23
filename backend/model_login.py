@@ -84,6 +84,10 @@ MOVED = "Add or replace model keys in Settings > Providers. Choose the key under
 CONNECT_CHANGED = "This plan changed. Start the connect again."
 EXIT_NOT_READY = "The plan's exit is temporarily unavailable. Try again shortly."
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
+# A runtime whose sign-in shows only a link to its provider's page, and what it takes back besides a code: Antigravity's
+# Google sign-in, which takes the code or the whole page address it ends on.
+LINKS = {"antigravity": ("https://accounts.google.com", ("/o/oauth2/auth", "/o/oauth2/v2/auth"))}
+CALLBACKS = {"antigravity": re.compile(r"^https://antigravity\.google/oauth-callback\?[A-Za-z0-9_\-.~%+=&/]{1,2000}$")}
 
 # The runner redacts before it reports; this is the same rule again because the server does not
 # take a runner's word for it.
@@ -142,7 +146,7 @@ def clean_trace(trace, hide=""):
     }
 
 
-def clean_url(url):
+def clean_url(url, runtime=""):
     url = str(url or "").strip()
     if not url:
         return ""
@@ -153,6 +157,13 @@ def clean_url(url):
         or "@" in url.split("/")[2]
     ):
         return ""
+    if runtime in LINKS:
+        from urllib.parse import urlsplit
+
+        origin, paths = LINKS[runtime]
+        parts = urlsplit(url)
+        if f"{parts.scheme}://{parts.netloc}" != origin or parts.path not in paths:
+            return ""
     return url
 
 
@@ -648,7 +659,8 @@ def submit_code(c, who, rid, lid, code, auth=None):
     if row["kind"] == "connect" and lid in _stale_connects(c, rid, require_ready=True):
         raise Problem("offline", EXIT_NOT_READY, 409)
     code = str(code or "").strip()
-    if not PASTE_RE.fullmatch(code):
+    callback = CALLBACKS.get(row["runtime"])
+    if not (PASTE_RE.fullmatch(code) or (callback and callback.fullmatch(code))):
         raise Problem("kind", "That does not look like the code the sign-in page showed", 422)
     if row["code_sent"]:
         raise Problem("state", "A code was already sent; start a new sign-in to try again", 409)
@@ -740,7 +752,7 @@ def report(c, runner_id, lid, body, settings=None):
     terminal = state in ("signed_in", "signed_out", "done", "failed")
     # Finishing, the person has nothing left to open or enter.
     done_with_page = terminal or state == "finishing"
-    url = "" if done_with_page else clean_url(body.url) or row["url"]
+    url = "" if done_with_page else clean_url(body.url, row["runtime"]) or row["url"]
     code = "" if done_with_page else clean_user_code(body.code) or row["user_code"]
     # Connect keeps no lines: what it prints ends with the credential itself.
     lines = [] if row["kind"] == "connect" else clean_lines(body.lines) or json.loads(row["lines"] or "[]")
