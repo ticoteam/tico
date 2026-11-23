@@ -75,7 +75,7 @@ _wanted_runtimes = providers.wanted_runtimes
 
 
 def _signed_in_runtime(runners, wanted, c=None):
-    """A wanted runtime an online computer is signed in to: by its own login, or (with `c`) the company's plan."""
+    """A wanted runtime an online computer is signed in to using its own login."""
     for runner in runners:
         for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
             if name in wanted and row.get("installed") and row.get("authenticated") == "ready":
@@ -98,16 +98,14 @@ def _login_target(runners, wanted, c=None):
 
 
 def _plan_signed_in(c):
-    """Whether a Claude or ChatGPT plan is signed in on one of the company's computers: the computer's own login for
-    that tool, when it is not an API key, or a company plan given to the computer that bills by subscription
-    (backend/model_subscriptions.py). A computer that is offline keeps its last report, so its sign-in still counts."""
+    """Whether a computer's own login uses a Claude or ChatGPT plan. Offline computers keep their last report."""
     from .model_subscriptions import KINDS
-    from .readiness import api_key_login, computer_login
+    from .readiness import api_key_login, computer_login, local_sign_ins
 
     # The tools a plan signs in to: the ones a subscription kind names (Claude and Codex today).
     plan_runtimes = sorted({kind["runtime"] for kind in KINDS.values() if kind.get("billing") == "subscription"})
     for runner in c.execute("SELECT id,readiness FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
-        readiness = readiness_document(runner["readiness"])
+        readiness = local_sign_ins(readiness_document(runner["readiness"]))
         for runtime in plan_runtimes:
             login = computer_login(readiness, runtime)
             if login.get("installed") and login.get("authenticated") == "ready" and not api_key_login(login):
@@ -115,11 +113,18 @@ def _plan_signed_in(c):
     return False
 
 
-def _saved_plan_or_key(c):
-    """Whether the company has a Claude or ChatGPT plan or an API key saved that does not need reconnecting."""
+def _saved_provider(c, *, allow_keys):
+    """Whether a plan (or, for Tico Cloud, a key) is saved and does not need reconnecting."""
+    from .model_subscriptions import KINDS
+
+    kinds = [kind for kind, spec in KINDS.items() if allow_keys or spec["billing"] == "subscription"]
     return (
         H._has_table(c, "model_subscriptions")
-        and c.execute("SELECT 1 FROM model_subscriptions WHERE status<>'needs_reconnect' LIMIT 1").fetchone()
+        and c.execute(
+            f"SELECT 1 FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
+            "AND status<>'needs_reconnect' LIMIT 1",
+            kinds,
+        ).fetchone()
         is not None
     )
 
@@ -238,7 +243,7 @@ def checklist(c, who, settings, github):
         _item(
             "subscription",
             "Add a Claude or ChatGPT subscription",
-            _plan_signed_in(c) or (cloud and _saved_plan_or_key(c)),
+            _saved_provider(c, allow_keys=cloud) or _plan_signed_in(c),
             "Use your own subscription for your own bots, within the provider's terms."
             if cloud
             else "Recommended. Use your own subscription for your own bots, within the provider's terms.",

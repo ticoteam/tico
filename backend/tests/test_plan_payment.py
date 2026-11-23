@@ -1,14 +1,13 @@
 """A plan the provider refuses for its billing holds the plan, never the bots on it (backend/login_holds.py payment):
-one hold on every computer given it, one Needs-you item for the person who holds it, a status line that names it, and
+one hold for every agent that selects it, one Needs-you item for the person who holds it, a status line that names it, and
 everyone back at work once a turn on it works again (Tico Team, Nov 21: a plan past due held its bots by hand)."""
 
 from backend import login_holds, run_failures
-from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.login_holds import PAST_DUE, at
-from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
 
 
 def refused(api, m, turn):
@@ -46,32 +45,34 @@ def plan(api):
     return found
 
 
-def test_a_plan_past_due_holds_the_plan_on_every_computer_names_it_and_comes_back_once_a_turn_works(api, monkeypatch):
+def test_a_plan_past_due_holds_every_agent_on_it_and_recovers_once_a_turn_works(api, monkeypatch):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     on(api, "cpo", "claude", "claude-sonnet-5-5")
     sid = add(api, name="brooke@acme.example")["id"]
     m, n = machine(api), machine(api, bot="cpo", label="Other Mac")  # no Claude login of their own
-    give(api, m, "claude", sid)
-    give(api, n, "claude", sid)
+    pick(api, "ops", "claude", sid)
+    pick(api, "cpo", "claude", sid)
     post(api, "chat/ops", {"text": "Bug?"})
     turn = claim(api, m)
     refused(api, m, turn)
     sub_login = login_holds.subscription_login(sid)
     with api.app.state.store.read() as c:
         hold = login_holds.get(c, "", sub_login, "claude")
-        # The plan's, on every computer given it; the bot's own count of failed runs is untouched.
+        # The hold covers the plan that both agents selected and leaves their failed-run counters alone.
         assert hold and login_holds.payment(hold["error"])
         assert hold["until"] == H.shift(hold["since"], seconds=login_holds.PAYMENT_WAIT)
         assert run_failures.get(c, "ops") == {}
-        assert MS.in_effect(c, n["runner_id"], "claude") is None
         # The person's message waits for the plan, not marked failed.
         assert c.execute("SELECT state FROM jobs WHERE id=?", (turn["job_id"],)).fetchone()[0] == "queued"
         focus = H.status(c, "ops")["focus"]
     assert focus.startswith("The Claude plan brooke@acme.example can't be used: payment past due.")
     assert login_holds.BILLING_URL in focus
     assert plan(api)["problem"] == "Payment past due"
+    post(api, "chat/cpo", {"text": "Price the Acme plan."})
+    other = post(api, "jobs/claim", {"bot": "cpo", "start_places": True}, n["token"])
+    assert other["attempt"] is None and "payment past due" in other["waiting"]
     [item] = items(api)
     assert item["title"] == "Pay for the Claude plan brooke@acme.example" and item["status"] == "open"
     assert login_holds.BILLING_URL in item["body"]
@@ -94,10 +95,8 @@ def test_a_plan_past_due_holds_the_plan_on_every_computer_names_it_and_comes_bac
     worked(api, m, probe)
     with api.app.state.store.read() as c:
         assert not login_holds.get(c, "", sub_login, "claude")
-        assert MS.in_effect(c, n["runner_id"], "claude")["id"] == sid
     assert plan(api)["problem"] == ""
     assert items(api)[0]["status"] != "open"
-    post(api, "chat/cpo", {"text": "Price the Acme plan."})
     other = claim(api, n)
     assert other and other["bot"] == "cpo" and other["subscriptions"][0]["id"] == sid
 
@@ -125,7 +124,7 @@ def past_due_plan(api):
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, name="brooke@acme.example")["id"]
     m = machine(api)
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Bug?"})
     return sid, m, claim(api, m)
 

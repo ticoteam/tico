@@ -147,7 +147,7 @@ def _held(c, bot):
     return {r["env"] for r in read_cache.rows(c, HELD_SQL) if r["id"] in held}
 
 
-def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False):
+def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False, loads=None):
     config = _config(c, bot)
     if resolve_harness({**config, **({"harness": harness} if harness else {})}, runtime or None) in EXTERNAL_HARNESSES:
         return {
@@ -242,7 +242,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
 
     payer_model = model or (config.get("model") if config.get("runtime") == runtime else "")
     if (
-        payment := agent_subscriptions.for_runner(c, row, bot, {**config, "runtime": runtime, "model": payer_model})
+        payment := agent_subscriptions.for_runner(
+            c, row, bot, {**config, "runtime": runtime, "model": payer_model}, loads=loads
+        )
     ) is not None:
         if payment.subscription:
             return verdict(True)

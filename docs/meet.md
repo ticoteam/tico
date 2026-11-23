@@ -261,8 +261,9 @@ question is dropped with a note (`<bot> missed a question`) 30 seconds after it 
 own transcript and chat routes ask through the same queue, so they never open a second question. A question heard 30
 seconds or more before it was transcribed (a slow Gateway) is not asked; a 1:1 call shows `Please repeat that`.
 
-**The answer.** When a bot joins, a current runner starts a Claude Code or Codex session on the bot's computer with the
-company subscription. Its first model request warms the bot's identity, the call notes and the voice instructions.
+**The answer.** When a bot joins, a current runner starts a Claude Code or Codex session on the bot's computer using
+the plan selected by **Paid by** for that tool. Its first model request warms the bot's identity, the call notes and
+the voice instructions.
 Each bot in the call holds a normal lease and uses one `turns_at_once` slot for the whole call (five slots on Shared).
 Each question goes to the resident session, with updated notes when they change. At 24,000 context tokens the runner
 re-primes Claude Code with a short excerpt of the recent call transcript. Codex keeps an app-server thread for the call

@@ -267,6 +267,17 @@ class Inputs:
     parked: set[tuple[str, str]] = field(default_factory=set)
 
 
+def prime(c: Connection, bots: list[str]) -> None:
+    """Share payer inputs across readiness views in this snapshot."""
+    values = RC.cache(c)
+    if values is None:
+        return
+    bots = [bot for bot in bots if ("agent_subscriptions.inputs", bot) not in values]
+    snapshot = read(c, bots)
+    for bot in bots:
+        values[("agent_subscriptions.inputs", bot)] = snapshot
+
+
 def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
     """Read the selected agents, providers and their usage together for one claim snapshot."""
     result = Inputs({bot: {} for bot in bots}, {})
@@ -366,7 +377,7 @@ def resolve(
         if sub["id"] == exclude or MS.KINDS[sub["kind"]]["runtime"] != runtime:
             continue
         if not MS.available(c, sub, runtime, loads):
-            if (end := H.parse_ts(MS._hold_end(c, sub["id"], runtime, loads))) and end > datetime.now(timezone.utc):
+            if (end := H.parse_ts(MS._hold_end(c, sub["id"], runtime, loads))) and end > H.parse_ts(H.now()):
                 resets.append((end, sub["id"]))
             continue
         if (job, sub["id"]) in snapshot.parked:
@@ -389,7 +400,10 @@ def resolve(
         reset, held = min(resets)
         hold: Row = HOLD.get(c, "", HOLD.subscription_login(held), runtime, loads) if held else {}
         when = MS._when(reset.isoformat())
-        reason = f"busy until {when}" if hold.get("capacity") else f"next reset {when}"
+        if HOLD.payment(hold.get("error")):
+            reason = f"payment past due, retry at {when}"
+        else:
+            reason = f"busy until {when}" if hold.get("capacity") else f"next reset {when}"
         return Payment(None, f"{payer_label()}: {reason}", reset, held_subscription=held)
     if probing:
         return Payment(None, f"{payer_label()}: checking usage after the reset")
@@ -411,6 +425,8 @@ def for_runner(
     """The next turn's payer, including whether this computer can carry it."""
     runtime = str(config.get("runtime") or "")
     snapshot = inputs if inputs is not None else (loads.payers if loads is not None else None)
+    if snapshot is None and job is None and (values := RC.cache(c)) is not None:
+        snapshot = values.get(("agent_subscriptions.inputs", bot))
     if snapshot is None or bot not in snapshot.picks:
         snapshot = read(c, [bot], job)
     if runtime not in snapshot.picks[bot]:

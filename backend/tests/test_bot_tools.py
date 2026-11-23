@@ -3,10 +3,11 @@ before the report still gets a row, and that a private bot's tools stay private 
 
 import json
 
+from backend import views
 from backend.store import H
 from backend.tests.helpers.api import assign, get, headers, post, ready, restrict, runner  # noqa: F401  (fixtures)
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
 from backend.tests.helpers.bot_tools import configure, report
 
 TOOLS = [
@@ -115,7 +116,7 @@ def test_a_runner_from_before_the_report_yields_the_model_and_repository_only(ap
     assert bare["computer"] is None and bare["online"] is False and bare["tools"][0]["id"] == "model"
 
 
-def test_a_computer_whose_plan_signs_the_bots_runtime_in_reads_it_signed_in(api):
+def test_a_bots_selected_plan_signs_its_runtime_in(api):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
@@ -123,9 +124,19 @@ def test_a_computer_whose_plan_signs_the_bots_runtime_in_reads_it_signed_in(api)
     model = tools_of(api)["tools"][0]
     assert (model["status"], model["problem"]) == ("problem", "Runtime is not signed in on Test Mac")
     sid = add(api)["id"]
-    give(api, m, "claude", sid)  # the company's plan now signs the runtime in here
+    pick(api, "ops", "claude", sid)
     model = tools_of(api)["tools"][0]
     assert model["status"] == "ready" and "problem" not in model
+    store = api.app.state.store
+    with store.transaction() as c:
+        # A heartbeat can report the agent ready via its payer even though the local login is missing.
+        c.execute(
+            "UPDATE runner_states SET readiness=json_set(readiness,'$.bots.ops.sign_in','ready') WHERE runner_id=?",
+            (m["runner_id"],),
+        )
+    with store.read_transaction() as c:
+        views.prime_machines(c, ["ops"])
+        assert views.machine(c, "ops")["ready"] is True
     # Not installed is still a problem, plan or not.
     post(
         api,

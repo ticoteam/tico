@@ -27,7 +27,7 @@ from fastapi import Request
 from clients import access_entry, harness_manifests, mcp_servers
 from . import model_subscriptions
 from . import models as M
-from . import google_workspace, providers, read_cache, routines, runner_online
+from . import agent_subscriptions, google_workspace, providers, read_cache, routines, runner_online
 from .harnesses import EXTERNAL_HARNESSES, resolve_harness
 from .store import H, Problem, encode, readiness_document, repo_url
 from . import bot_settings as BS
@@ -152,14 +152,16 @@ def _model_tool(c, settings, bot, config, readiness, label, runner=None):
     status, problem = "unknown", ""
     state = (readiness.get("runtimes") or {}).get(runtime) if harness not in EXTERNAL_HARNESSES else None
     if isinstance(state, dict):
+        payment = (
+            agent_subscriptions.for_runner(c, runner, bot, {"runtime": runtime, "model": model})
+            if runner and state.get("installed")
+            else None
+        )
         if not state.get("installed"):
             status, problem = "problem", "Runtime is not installed on " + label
-        elif state.get("authenticated") in ("missing", "failed", "rejected") and not (
-            # The computer's company subscription signs this bot's turns in (backend/model_subscriptions.py).
-            runner
-            and runtime
-            in model_subscriptions.covered_runtimes(c, runner, providers.fill(providers.load(c, settings), config))
-        ):
+        elif payment is not None:
+            status, problem = ("ready", "") if payment.subscription else ("problem", payment.reason)
+        elif state.get("authenticated") in ("missing", "failed", "rejected"):
             status, problem = "problem", state.get("detail") or "Runtime is not signed in on " + label
         else:
             status = "ready"
@@ -393,8 +395,10 @@ def prime_state(c, bots):
 
     if cache(c) is None:
         return
-    prime_granted(c, ["bot:" + bot for bot in set(bots)])
-    for part in H.chunks(sorted(set(bots))):
+    bots = sorted(set(bots))
+    prime_granted(c, ["bot:" + bot for bot in bots])
+    agent_subscriptions.prime(c, bots)
+    for part in H.chunks(bots):
         marks = ",".join("?" * len(part))
         configs = {
             r["bot"]: r

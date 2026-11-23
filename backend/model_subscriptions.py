@@ -615,12 +615,12 @@ def held_plan(c, runner_id, runtime, loads=None, profile=""):
 
 def company_plan(c, runtime):
     """A plan label for this tool when the team has a saved plan, for Paid by guidance in readiness."""
+    from .read_cache import one
+
     kinds = [k for k, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"]
     if not kinds or not _present(c):
         return ""
-    found = c.execute(
-        f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds
-    ).fetchone()
+    found = one(c, f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds)
     return KINDS[found["kind"]]["label"] if found else ""
 
 
@@ -785,9 +785,8 @@ def turn_runtimes(config, record=None):
     return [r for r in dict.fromkeys(out) if r in RUNTIMES]
 
 
-def covered_runtimes(c, runner, config, loads=None, *, bot=""):
-    """{runtime: kind} the computer's subscriptions sign in for a bot on `config` there: a covered runtime needs no
-    sign-in on that computer, for the bot's readiness and the claim's check."""
+def covered_runtimes(c, runner, config, loads=None, *, bot):
+    """{runtime: kind} the agent's selected payer signs in on this computer."""
     return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config, loads, bot=bot)}
 
 
@@ -2487,11 +2486,11 @@ def key_listing(c):
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
-def for_claim(c, runner, config, loads=None, bot=""):
+def for_claim(c, runner, config, loads=None, *, bot):
     """The chosen payer for this turn, if one was assigned to the agent."""
     from . import agent_subscriptions
 
-    if runner and bot and (payment := agent_subscriptions.for_runner(c, runner, bot, config, loads=loads)):
+    if runner and (payment := agent_subscriptions.for_runner(c, runner, bot, config, loads=loads)):
         if payment.subscription:
             return [agent_subscriptions.claim_entry(config["runtime"], payment)]
     return []

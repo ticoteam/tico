@@ -390,6 +390,9 @@ when the task has none, and the four questions stay for a team that gave no webs
 
 ### What is stored, and who may do what
 
+The **Add a Claude or ChatGPT subscription** step counts a plan saved in **Providers** or signed in on a
+computer. On Tico Cloud, a saved API key also completes this step.
+
 A human's choices are one row in `preferences` (key `onboarding.progress`, the same per-human store as
 `/api/v2/preferences/{key}`): whether they saw the tour.
 `POST /api/v2/setup/getting-started/state` writes only the caller's own row, and the read shows only

@@ -1257,13 +1257,13 @@ def _movable(c, who, online_ids):
     ]
 
 
-def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, manages=False):
+def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, manages=False, loads=None):
     """What Settings and Health show for running `runtime` on this bot's computer, from the one rule
     (backend/readiness.py `can_run`): the answer, a short label, and at most one way out: sign in there (a computer's
     shared sign-in for a runtime that signs in from the browser) or a computer `who` may move it to that can run it."""
     from .readiness import can_run
 
-    answer = can_run(c, bot, runtime, harness=harness, model=model, manages=manages)
+    answer = can_run(c, bot, runtime, harness=harness, model=model, manages=manages, loads=loads)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
     if answer.get("warning"):
         view["warning"] = answer["warning"]
@@ -1292,7 +1292,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, man
             {"id": rid, "label": label}
             for rid, label in computers
             if rid != here.get("id")
-            and can_run(c, bot, runtime, runner=rid, harness=harness, model=model)["can_run"] is True
+            and can_run(c, bot, runtime, runner=rid, harness=harness, model=model, loads=loads)["can_run"] is True
         ),
         None,
     )
@@ -1376,7 +1376,7 @@ HELD = {
 }
 
 
-def _stuck(c, rows, online_ids, who, full, auth=None):
+def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
     A bot stuck in onboarding is the exception: whoever may manage it gets "Finish with defaults"."""
@@ -1454,14 +1454,21 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                     (
                         {"id": rid, "label": name}
                         for rid, name in computers
-                        if rid != row["runner_id"] and _can(c, row["bot"], runtime, rid, harness)
+                        if rid != row["runner_id"] and _can(c, row["bot"], runtime, rid, harness, loads=loads)
                     ),
                     None,
                 )
         elif reason == "not_ready":
             choice = (
                 runtime_choice(
-                    c, row["bot"], runtime, who, computers, harness=harness, manages=full and not who.support
+                    c,
+                    row["bot"],
+                    runtime,
+                    who,
+                    computers,
+                    harness=harness,
+                    manages=full and not who.support,
+                    loads=loads,
                 )
                 if runtime
                 else {}
@@ -1631,10 +1638,10 @@ def updating_words(row, advise=True):
     return f"{row['computer']} is updating{to}"
 
 
-def _can(c, bot, runtime, runner, harness=""):
+def _can(c, bot, runtime, runner, harness="", *, loads=None):
     from .readiness import can_run
 
-    return can_run(c, bot, runtime, runner=runner, harness=harness)["can_run"] is True
+    return can_run(c, bot, runtime, runner=runner, harness=harness, loads=loads)["can_run"] is True
 
 
 TOKEN_CACHE_SECONDS = 300
@@ -3009,7 +3016,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     if not full and stuck_rows:  # someone who is not an administrator hears only about the bots they may read
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
-    blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
+    blocked = _stuck(c, stuck_rows, online_ids, who, full, auth, loads=loads)
     on_fallback, limited, carrying = _fallbacks(c, settings, loads) if kind != "bot" else ([], [], set())
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
@@ -3981,9 +3988,16 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         who,
         full,
         auth,
+        loads=loads,
     )
     resting_rows = _stuck(
-        c, [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth
+        c,
+        [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]],
+        online_ids,
+        who,
+        full,
+        auth,
+        loads=loads,
     )
     if blocking:
         items = _queue_items(blocking + busy_rows + resting_rows, full, kind == "bot") if full or kind == "bot" else []

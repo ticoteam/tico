@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 
+from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
@@ -14,7 +15,7 @@ from backend.tests.helpers.assistant import room
 from backend.tests.helpers.calls import join, meet, start_call, thread  # noqa: F401 - meet installs the call doubles
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
-from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
 
 DONE = {"outcome": "completed", "last_seq": 0}
 
@@ -33,9 +34,9 @@ def _resident(api):
     company(api)
     default = get(api, "providers")["default"]
     on(api, "assistant", default["runtime"], default["model"])
-    caps = ("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1")
+    caps = ("model_subscriptions_v1", PAYER_CAPABILITY, "private_lanes_v1", "voice_sessions_v1")
     worker = machine(api, signed_in=True, bot="assistant", caps=caps)
-    give(api, worker, "claude", add(api)["id"])
+    pick(api, "assistant", default["runtime"], add(api)["id"])
     return worker
 
 
@@ -409,8 +410,6 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
     get(meet, f"threads/{everyone}", token, expected=404)
     assert get(meet, "threads?limit=200", token)["threads"] == []
     # Every caller form denies it too: a raw identity, a viewer without auth (readable, the rail, execution) or with it.
-    from backend.auth import Identity
-
     lease = meet.app.state.auth.authenticate({"authorization": "Bearer " + token}, "/api/v2/threads", "GET")
     bot = Identity("bot:assistant", "bot", attempt_id=session["id"])
     with meet.app.state.store.read() as c:

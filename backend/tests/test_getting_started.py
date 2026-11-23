@@ -129,16 +129,15 @@ def test_an_api_key_on_a_computer_is_not_a_subscription(api):
     assert plan_step(api)["done"] is False
 
 
-def test_a_company_api_key_given_to_a_computer_does_not_count_but_a_company_plan_does(api):
+def test_a_saved_api_key_does_not_count_as_a_plan_but_a_saved_plan_does(api):
     setup(api)
     subs.company(api)
-    m = subs.machine(api)
-    key = subs.add(api, "anthropic_key", "sk-ant-api-" + "c" * 24, name="Company API")["id"]
-    subs.give(api, m, "claude", key)  # billed per use, not a subscription
+    subs.add(api, "anthropic_key", "sk-ant-api-" + "c" * 24, name="Company API")
     assert plan_step(api)["done"] is False
-    plan = subs.add(api, name="Company Max")["id"]
-    subs.give(api, m, "claude", plan)
+    sid = subs.add(api, name="Company Max")["id"]
     assert plan_step(api)["done"] is True
+    api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=bearer(OWNER)).raise_for_status()
+    assert plan_step(api)["done"] is False
 
 
 def test_the_step_never_blocks_setup_and_can_be_set_aside(api):

@@ -552,6 +552,8 @@ def prime_machines(c, slugs):
     each), so Health's pass over every bot reads none of them again per bot. Outside a snapshot nothing is kept."""
     from .agents import CONFIG_SQL, ROW_SQL
     from .auth import OPERATOR_SQL
+    from . import agent_subscriptions
+    from .execution import signed_in_by_lapsed_plan
 
     if read_cache.cache(c) is None:
         return
@@ -569,7 +571,18 @@ def prime_machines(c, slugs):
         ):
             found = {row["bot"]: row for row in c.execute(query, part)}
             read_cache.prime(c, statement, {(s,): found.get(s) for s in part})
-    read_cache.prime(c, ASSIGNED_SQL, _assigned_rows(c, sorted(set(slugs))))
+    assigned = _assigned_rows(c, sorted(set(slugs)))
+    read_cache.prime(c, ASSIGNED_SQL, assigned)
+    signed_in = []
+    for (bot,), row in assigned.items():
+        if not row or row["revoked_at"]:
+            continue
+        document = read_cache.readiness(c, row["runner_id"], row["readiness"])
+        detail = bot_readiness(document, bot)
+        if detail.get("ready") is True and signed_in_by_lapsed_plan(document, detail, {}):
+            signed_in.append(bot)
+    if signed_in:
+        agent_subscriptions.prime(c, signed_in)
 
 
 def _assigned_rows(c, slugs):
@@ -622,10 +635,10 @@ def machine(c, bot):
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
 
-    # One parse of the computer's report: /api/employees and Health call this once per bot.
-    document = readiness_document(row["readiness"])
+    # /api/employees and Health check each bot against the same report for its computer.
+    document = read_cache.readiness(c, row["runner_id"], row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
-    detail = as_served(c, bot, document, _lapsed_plan(c, bot, row["runner_id"], document, detail))
+    detail = as_served(c, bot, document, _lapsed_plan(c, bot, row, document, detail))
     return {
         "online": online,
         "awake": awake,
@@ -641,7 +654,7 @@ def machine(c, bot):
     }
 
 
-def _lapsed_plan(c, bot, runner_id, document, detail):
+def _lapsed_plan(c, bot, runner, document, detail):
     """The bot's readiness row, not ready when its computer read a plan's sign-in as ready and no plan signs it in
     now (execution.signed_in_by_lapsed_plan, which the claim refuses on): the cheap check first, so the plans are
     read only for a row that looks that way."""
@@ -651,11 +664,13 @@ def _lapsed_plan(c, bot, runner_id, document, detail):
         return detail
     from . import model_subscriptions, providers
 
-    # Read once per snapshot: every bot on one computer asks for the same row (read_cache.one).
-    runner = read_cache.one(c, "SELECT id, capabilities FROM runners_with_state WHERE id=?", (runner_id,))
     filled = providers.fill(providers.load(c), BS.read_in_snapshot(c, bot))
-    if not runner or not signed_in_by_lapsed_plan(
-        document, detail, model_subscriptions.covered_runtimes(c, dict(runner), filled)
+    place = {key: runner[key] for key in ("label", "capabilities")}
+    place["id"] = runner["runner_id"]
+    if not signed_in_by_lapsed_plan(
+        document,
+        detail,
+        model_subscriptions.covered_runtimes(c, place, filled, bot=bot),
     ):
         return detail
     from .models_preset import LOGIN_NAMES
@@ -3757,6 +3772,7 @@ def install_views(app, store, auth, mutate, task_view):
 def runnable_choices(c, who, auth, settings):
     """{bot: {harness: answer}} for the harnesses the model picker offers that the bot's computer cannot run, for the bots
     this person manages (backend/readiness.py `can_run`, via health.runtime_choice). A harness not listed is not refused."""
+    from . import agent_subscriptions
     from .harnesses import HARNESS_BY_ID
     from .health import _movable, runtime_choice
     from .model_subscriptions import _may_manage
@@ -3792,6 +3808,7 @@ def runnable_choices(c, who, auth, settings):
         f"SELECT a.bot,{BS.CONFIG} AS config,bc.bot AS configured FROM assignments a JOIN bots b ON b.id=a.bot "
         f"LEFT JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} WHERE b.state<>'archived' ORDER BY a.bot"
     ).fetchall()
+    agent_subscriptions.prime(c, [row["bot"] for row in rows])
     # A bot with no bot_config row has no config, as CONFIG_SQL answers for it alone (None, not the JOIN's "{}").
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row if row["configured"] else None for row in rows})
     for row in rows:
