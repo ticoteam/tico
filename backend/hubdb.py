@@ -650,7 +650,7 @@ RUN = contextvars.ContextVar("hub_run", default="")
 # The agent session a write belongs to (session views: messages.session_agent_id, backend/threads.py), named by the
 # writer that makes it for an agent (`session_of`): a stage wake, a run's reply, a person's message to that agent. ""
 # stamps nothing (an ask, a done note). Unset, a run's own tool call is its agent's session (`session_stamp`).
-SESSION = contextvars.ContextVar("hub_session", default=None)
+SESSION: contextvars.ContextVar[tuple[str, str | None] | None] = contextvars.ContextVar("hub_session", default=None)
 # A task write made without a run token still attributes its refusal to the task being changed.
 REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,

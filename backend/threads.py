@@ -1800,7 +1800,7 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         from . import question_marks
 
         named = {r["actor"] for r in reached} | {primary}
-        for bot in question_marks.cleared_askers(c, message["id"]):
+        for bot in question_marks.cleared_askers(c, (root or {}).get("task_id") or "", message["id"]):
             if bot not in named and bot.startswith("bot:"):
                 reached.append({"actor": bot, "reason": "reply", "mode": "steer", "defer_for": None})
     seq = (message.get("seq") or 1) - 1
@@ -1926,6 +1926,17 @@ def _replied_author(c, root, target):
     if not row or row[2] != root["id"] or not str(row[0] or "").startswith(("bot:", "human:")):
         return None
     return row[0]
+
+
+def deliver_to_people(c, thread_id, message, people):
+    """One message delivered to each of these people (a Tico line several people are told by, task_effects), each
+    checked on its own as any delivery to a person is."""
+    thread = thread_row(c, thread_id)
+    if thread is None:
+        return
+    root = root_of(c, thread)
+    for person in people:
+        _deliver_person(c, thread, root, message, person, "addressed", True, None)
 
 
 def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
@@ -5512,7 +5523,9 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
     places = _open_subtree(c, v, row) if flat and not old_only else [row["id"]]
     if session:
-        session = H.resolve_actor(c, session) or session
+        session = H.resolve_actor(c, session)
+        if not str(session or "").startswith("bot:") or v.known(c).unseen_of([session]):
+            raise Problem("validation", "No agent by that name", 422)  # the same answer whether or not it exists
     view_sql, view_args = session_sql(places, session, comments)
     rows = [
         dict(r)

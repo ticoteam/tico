@@ -147,7 +147,7 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
 def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
     """The people who asked for a task hear once how it ended: one unstamped Tico line in its own thread, delivered to
     each human requester (`requester_id` and task_requesters) who still reads it, never the one who ended it nor the
-    holder. It says the done note of this cycle (or the close's why), else just Done or Closed. Keyed on the visit the
+    holder unless they asked for it too. It says the done note of this cycle (or the close's why), else just Done or Closed. Keyed on the visit the
     end opened (`<task>:<visit>:told`), so a retry tells nobody again and a reopen starts a new completion. It widens
     nothing: who may not read the task is left out."""
     H = _h()
@@ -163,9 +163,7 @@ def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | 
         for r in conn.execute("SELECT actor FROM task_requesters WHERE task_id=? ORDER BY created_at", (after["id"],))
     ]
     people = [
-        p
-        for p in dict.fromkeys(asked)
-        if H.is_human(p) and p not in (actor, after.get("owner_id")) and H.task_private_readable(conn, p, after)
+        p for p in dict.fromkeys(asked) if H.is_human(p) and p != actor and H.task_private_readable(conn, p, after)
     ]
     if not people:
         return
@@ -181,10 +179,8 @@ def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | 
     conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
     from . import threads
 
-    thread = threads.thread_row(conn, room["id"])
-    root = threads.root_of(conn, thread)
-    for person in people:  # one message, delivered to each (the first is its recipient)
-        threads._deliver_person(conn, thread, root, message, person, "addressed", True, None)
+    threads_: Any = threads
+    threads_.deliver_to_people(conn, room["id"], message, people)  # one message, delivered to each
 
 
 # The latest completion note of this cycle (since the last reopen): the owner's done, a done again after a send back

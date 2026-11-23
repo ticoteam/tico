@@ -807,12 +807,13 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
 ANSWERS = "answers_ask"
 
 
-def cleared_askers(conn: sqlite3.Connection, message_id: str) -> list[str]:
-    """The agents whose ❓ this message cleared (`replied`), each once."""
+def cleared_askers(conn: sqlite3.Connection, task_id: str, message_id: str) -> list[str]:
+    """The agents whose ❓ on this task this message cleared (`replied`), each once."""
     return [
         str(r[0])
         for r in conn.execute(
-            "SELECT DISTINCT bot_id FROM question_marks WHERE cleared_message_id=? ORDER BY bot_id", (message_id,)
+            "SELECT DISTINCT bot_id FROM question_marks WHERE task_id=? AND cleared_message_id=? ORDER BY bot_id",
+            (task_id, message_id),
         )
     ]
 

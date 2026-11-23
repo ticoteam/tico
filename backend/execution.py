@@ -7507,7 +7507,7 @@ class Execution:
                     "bot:" + row["bot_id"],
                     defang(text, c),
                     kind="notice",
-                    conversation_id=task["conversation_id"] if task else origin["conversation_id"],
+                    conversation_id=task["conversation_id"] if task else (origin or {})["conversation_id"],
                     refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid),
                 )
         H.event(

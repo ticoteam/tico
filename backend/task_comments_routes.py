@@ -91,12 +91,19 @@ def register(
 
     def session_target(c, who, row, body):
         """The agent a session message (`to`) is written to: an active agent the writer may see that reads the task,
-        else 422 (the same answer whether or not it exists). A person who may not direct the task's agents gets 403."""
+        else 422 (the same answer whether or not it exists). A person who may not direct the task's agents gets 403
+        first, so they learn nothing about which agents exist or read it."""
         if not body.to:
             return None
-        if body.public or body.ask or body.delivery == "goal":
+        from .chat_goals import may_direct
+
+        if who.role != "bot" and not may_direct(c, who, row):
+            raise Problem("delivery", "Only someone on this task can message its agents", 403)
+        if body.public or body.ask or body.delivery == "goal" or body.in_reply_to:
             raise Problem(
-                "validation", "A message to an agent's session is plain: send it without public, ask or goal", 422
+                "validation",
+                "A message to an agent's session is plain: send it without public, ask, goal or in_reply_to",
+                422,
             )
         agent = H.resolve_actor(c, body.to)
         found = H.bot(c, H.actor_id(agent)) if agent and H.is_bot(agent) else None
@@ -107,11 +114,21 @@ def register(
             or not H.task_private_readable(c, agent, row)
         ):
             raise Problem("validation", "No agent by that name can read this task", 422)
-        from .chat_goals import may_direct
-
-        if who.role != "bot" and not may_direct(c, who, row):
-            raise Problem("delivery", "Only someone on this task can message its agents", 403)
         return agent
+
+    def addressed_extra(c, who, row, body):
+        """Whom a comment reaches beyond its text's @mentions, for the org rule check's audience: the agent a session
+        message is written to and the author a Reply answers."""
+        out = []
+        if body.to:
+            agent = H.resolve_actor(c, body.to)
+            if agent:
+                out.append(agent)
+        if body.in_reply_to:
+            msg = H.comment_on(c, row, body.in_reply_to)
+            if msg and str(msg.get("sender_id") or "").startswith(("human:", "bot:")):
+                out.append(msg["sender_id"])
+        return [a for a in dict.fromkeys(out) if a != who.actor]
 
     def addressed_bot(c, who, row, text, replied):
         """The first bot a comment addresses (threads.plan): one it @mentions that reads the task, or the bot a
@@ -147,8 +164,8 @@ def register(
         if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
             question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        extra = (ask_to,) if ask_to else ()
-        audience = rule_comment_audience(c, who, row, body.text, *extra) if rc is not None else None
+        also = ((ask_to,) if ask_to else ()) + tuple(addressed_extra(c, who, row, body))
+        audience = rule_comment_audience(c, who, row, body.text, *also) if rc is not None else None
         rule = org_rule_check.apply(
             c,
             rc,
@@ -313,6 +330,11 @@ def register(
         if row and found and found[0] == task_id and row["status"] == "open":
             raise Problem("own_turn", OWN_TURN, 409)
 
+    def comment_audience(c, who, tid, body):
+        """A comment's audience as the org rule check's preflight reads it (`comment_write` counts the same)."""
+        row = auth.task(c, who, auth.resolve_task(c, who, tid))
+        return rule_comment_audience(c, who, row, body.text, *addressed_extra(c, who, row, body))
+
     @org_rule_check.replayer("comment")
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
         return comment_write(
@@ -331,7 +353,9 @@ def register(
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            agent = (H.resolve_actor(c, session) or session) if session else None
+            agent = H.resolve_actor(c, session) if session else None
+            if session and (not H.is_bot(agent) or teammate_access.Known(c, who, auth).unseen_of([agent])):
+                raise Problem("validation", "No agent by that name", 422)  # the same answer whether or not it exists
             return {
                 "comments": visual_view(
                     c, who, H.task_comments(c, task_id, actor=privacy.actor(who), session=agent, comments=comments)
@@ -365,7 +389,7 @@ def register(
             who,
             "comment",
             body.text,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
+            lambda c: comment_audience(c, who, tid, body),
             place=task_place(who, tid),
             late=True,
         )

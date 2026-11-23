@@ -164,6 +164,8 @@ def test_a_session_message_is_refused_to_whoever_may_not_direct_and_for_an_agent
     row = ticket(api)
     comment(api, row["id"], "Ship it.", token="ben-test", to="ops", expected=403)
     comment(api, row["id"], "Ship it.", to="ops", public=True, expected=422)
+    said = agent_says(api, "bot:ops", row["id"], "Ready to ship.")
+    comment(api, row["id"], "Ship it.", to="ops", in_reply_to=said["id"], expected=422)
     comment(api, row["id"], "Ship it.", to="nobody-by-that-name", expected=422)
     with api.app.state.store.transaction() as c:
         hidden = H.task_create(c, "human:ana", "Payroll review", "Confidential.", "human:ana", private=True, lint=False)
@@ -234,6 +236,7 @@ def test_a_message_in_one_agents_session_clears_only_that_agents_ask(api):
 
 def test_a_done_note_is_one_comment_by_the_agent_whose_mentions_reach_nobody(api):
     from backend import task_calls
+    from backend import task_engine as E
 
     row = ticket(api)
     with api.app.state.store.transaction() as c:
@@ -248,8 +251,9 @@ def test_a_done_note_is_one_comment_by_the_agent_whose_mentions_reach_nobody(api
     # Done again on one visit (after a send back): the same comment, updated in place.
     again = ticket(api)
     with api.app.state.store.transaction() as c:
-        task_calls.done_note(c, "bot:ops", again["id"], "First pass done.")
-        task_calls.done_note(c, "bot:ops", again["id"], "Second pass done, with the fix.")
+        visit = E.task(c, again["id"])["visit"]["id"]
+        task_calls.done_note(c, "bot:ops", again["id"], "First pass done.", visit)
+        task_calls.done_note(c, "bot:ops", again["id"], "Second pass done, with the fix.", visit)
     said = rows(api, "SELECT body, edited_at FROM messages WHERE body LIKE '%pass done%'")
     assert len(said) == 1 and said[0]["body"] == "Second pass done, with the fix." and said[0]["edited_at"]
 
@@ -274,6 +278,11 @@ def test_a_human_requester_hears_the_end_once_per_completion(api):
         H.task_close(c, "human:ana", row["id"], "Moved to June", mover=True)
     assert [r["body"] for r in told(api, "human:ben")] == ["Done: May is closed.", "Closed: Moved to June"]
     assert told(api, "human:ana") == []
+    # A requester who also holds it hears it too, unless they ended it themselves.
+    with api.app.state.store.transaction() as c:
+        own = H.task_create(c, "human:ben", "File the May report", "For the board.", "human:ben", lint=False)
+        H.task_close(c, "human:ana", own["id"], "Not needed this month", mover=True)
+    assert told(api, "human:ben")[-1]["body"] == "Closed: Not needed this month"
     # An agent requester gets only its quiet report, as before.
     with api.app.state.store.transaction() as c:
         filed = H.task_create(c, "bot:cpo", "Check the refunds", "For May.", "bot:ops", lint=False)

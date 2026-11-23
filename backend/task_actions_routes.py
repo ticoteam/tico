@@ -357,17 +357,21 @@ def register_core(
         who = request.state.identity
         with store.read_transaction() as c:
             row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            bot = H.resolve_actor(c, agent) if agent else None
-            return {"execution": task_execution(c, who, row, bot if H.is_bot(bot) else None)}
+            if not agent:
+                return {"execution": task_execution(c, who, row)}
+            bot = H.resolve_actor(c, agent)
+            if not H.is_bot(bot) or teammate_access.Known(c, who, auth).unseen_of([bot]):
+                return {"execution": None}
+            return {"execution": task_execution(c, who, row, bot)}
 
     # One row per agent on a task: the holder when an agent, every agent with a stamped message or an @mention on its
     # thread, and every agent with a job there; `last_seq` is the newest message its session view shows.
     SESSIONS_SQL = (
         "SELECT agent, MAX(seq), MIN(n) FROM ("
         "SELECT session_agent_id AS agent, seq, 1 AS n FROM messages WHERE conversation_id=? "
-        "AND session_agent_id IS NOT NULL "
+        "AND session_agent_id IS NOT NULL AND deleted_at IS NULL "
         "UNION ALL SELECT d.recipient, m.seq, 1 FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-        "WHERE d.thread_id=? AND d.reason='mention' AND d.recipient LIKE 'bot:%' "
+        "WHERE d.thread_id=? AND d.reason='mention' AND d.recipient LIKE 'bot:%' AND m.deleted_at IS NULL "
         "UNION ALL SELECT 'bot:'||j.bot_id, NULL, 1 FROM messages m JOIN jobs j ON j.message_id=m.id "
         "WHERE m.conversation_id=? "
         "UNION ALL SELECT ?, NULL, 0 WHERE ? LIKE 'bot:%'"
@@ -398,8 +402,9 @@ def register_core(
         from .views import conversation_execution
 
         bot = agent or (owner if H.is_bot(owner) else None)
+        # One agent's session follows that agent's runs only; the task's own view also follows a person's message.
         return conversation_execution(
-            c, cid, who, settings, bot=bot.removeprefix("bot:") if bot else None, auth=auth, people=True
+            c, cid, who, settings, bot=bot.removeprefix("bot:") if bot else None, auth=auth, people=not agent
         )
 
     def comment_bot(c, row):
