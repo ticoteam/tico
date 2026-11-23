@@ -228,10 +228,11 @@ def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, comp
         assert calls[1]["argv"][calls[1]["argv"].index("--resume") + 1] == session
         assert "--resume" not in calls[-1]["argv"] and session not in calls[-1]["argv"]
     elif computer.harness == "antigravity":
-        # Another conversation is another warm scope: its own process and home, so a provider conversation of its own.
-        assert calls[1]["pid"] == calls[0]["pid"]
-        assert calls[-1]["pid"] != calls[0]["pid"] and all("--conversation" not in c["argv"] for c in calls)
-        assert calls[-1]["argv"][calls[-1]["argv"].index("--model") + 1] == "gemini-4-neon-low"
+        # Each turn is its own agy: the follow-up resumes the first turn's conversation, another thread begins its own.
+        assert len({c["pid"] for c in calls}) == 3 and "--conversation" not in calls[0]["argv"]
+        assert calls[1]["argv"][calls[1]["argv"].index("--conversation") + 1] == calls[0]["conversation"]
+        assert "--conversation" not in calls[-1]["argv"]
+        assert calls[-1]["argv"][calls[-1]["argv"].index("--model") + 1] == "gemini-4-neon-high"
     elif computer.harness in ("pi", "cursor"):
         # Pi's session id and Cursor's chat id are the thread: its turns name the first one, another thread its own.
         option = "--session-id" if computer.harness == "pi" else "--resume"
@@ -445,8 +446,8 @@ def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one
         ]
         assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start"]
     elif computer.harness == "antigravity":
-        # A new epoch is a new warm scope: its own process, so a provider conversation of its own.
-        assert calls[-1]["pid"] != calls[0]["pid"] == calls[1]["pid"]
+        # A new epoch is a new thread: its turn begins a conversation of its own, not a resume of the old.
+        assert "--conversation" in calls[1]["argv"] and "--conversation" not in calls[-1]["argv"]
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -511,7 +512,7 @@ def test_one_persons_clear_starts_their_chat_anew_and_leaves_another_persons_cha
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
-def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, computer):
+def test_a_second_message_resumes_the_session(api, computer):
     computer.start()
     first = post(api, "chat/ops", {"text": "reply with the word ok"})
     until(lambda: reply_to(api, first["conversation_id"]), "the first reply")
@@ -534,13 +535,10 @@ def test_a_second_message_reuses_the_warm_process_or_resumes_the_session(api, co
     tokens = {a["id"]: a for a in computer.attempts()}
     assert [a["result"]["outcome"] for a in tokens.values()] == ["completed", "completed"]
     if computer.harness == "antigravity":
-        # One process for the conversation; each turn read its own attempt token from the lease file, which is blank
-        # between turns, and each turn's usage is its own share of the process's running total.
-        assert len({c["pid"] for c in calls}) == 1 and calls[0]["env"]["HUB_TOKEN"].startswith("tico-file:")
+        # Each turn starts its own agy on the saved conversation, with its own attempt token and its own usage.
+        assert len({c["pid"] for c in calls}) == 2
+        assert calls[1]["argv"][calls[1]["argv"].index("--conversation") + 1] == calls[0]["conversation"]
         assert calls[0]["token"] and calls[1]["token"] and calls[0]["token"] != calls[1]["token"]
-        until(
-            lambda: Path(calls[0]["env"]["HUB_TOKEN"][len("tico-file:") :]).read_text() == "", "the blanked token file"
-        )
         assert [a["result"]["usage"]["output_tokens"] for a in tokens.values()] == [2, 2]
         assert "reply with the word ok" not in calls[1]["prompt"] and "and once more" in calls[1]["prompt"]
     else:

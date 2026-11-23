@@ -1132,7 +1132,6 @@ pub enum Host {
     Claude(claude::ClaudeHost),
     Codex(codex::CodexHost),
     Gemini(gemini::GeminiHost),
-    /// The gemini runtime's Antigravity harness, kept warm between turns (crate::warm).
     Antigravity(antigravity::AntigravityHost),
     MuseCode(musecode::MuseCodeHost),
     Pi(pi::PiHost),
@@ -1141,11 +1140,10 @@ pub enum Host {
 }
 
 impl Host {
-    /// Whether the newest turn ran on a harness process already running: a kept Antigravity or pooled pi process.
-    /// Every other harness starts a process for each turn.
+    /// Whether the newest turn ran on a harness process already running: a pooled pi process. Every other harness
+    /// starts a process for each turn.
     pub fn warm(&self) -> bool {
         match self {
-            Host::Antigravity(h) => h.warm(),
             Host::Pi(h) => h.warm(),
             _ => false,
         }
@@ -1243,25 +1241,24 @@ impl Host {
         }
     }
 
-    /// The manifest runtime and variant this host runs, for its declared capabilities.
-    fn harness(&self) -> (&'static str, &'static str) {
+    /// The manifest runtime this host runs, for its declared capabilities.
+    fn runtime(&self) -> &'static str {
         match self {
-            Host::Claude(_) => ("claude", ""),
-            Host::Codex(_) => ("codex", ""),
-            Host::Gemini(_) => ("gemini", ""),
-            Host::Antigravity(_) => ("gemini", "antigravity"),
-            Host::MuseCode(_) => ("musecode", ""),
-            Host::Pi(_) => ("pi", ""),
-            Host::Cursor(_) => ("cursor", ""),
-            Host::Grok(_) => ("grok", ""),
+            Host::Claude(_) => "claude",
+            Host::Codex(_) => "codex",
+            Host::Gemini(_) => "gemini",
+            Host::Antigravity(_) => "antigravity",
+            Host::MuseCode(_) => "musecode",
+            Host::Pi(_) => "pi",
+            Host::Cursor(_) => "cursor",
+            Host::Grok(_) => "grok",
         }
     }
 
     /// A running turn takes new input only when the harness declares `steer`, and for Claude Code only when the
     /// installed CLI echoes its input; otherwise the input waits for the next turn.
     pub fn supports_steer(&self) -> bool {
-        let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).steer
+        crate::harness_tools::caps(self.runtime()).steer
             && match self {
                 Host::Claude(h) => h.supports_steer(),
                 _ => true,
@@ -1393,11 +1390,12 @@ impl Host {
     }
 
     /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
-    /// new session in its place (Claude Code and Gemini find out only when the turn runs).
+    /// new session in its place (Claude Code, Gemini and Antigravity find out only when the turn runs).
     pub fn restored(&self, thread_id: &str) -> bool {
         match self {
             Host::Claude(h) => h.restored(thread_id),
             Host::Gemini(h) => h.restored(thread_id),
+            Host::Antigravity(h) => h.restored(thread_id),
             _ => false,
         }
     }
@@ -1405,8 +1403,7 @@ impl Host {
     /// Whether the harness says in its stream when it compacts a session (`compaction_events`), so a resumed turn
     /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
     pub fn reports_compaction(&self) -> bool {
-        let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).compaction_events
+        crate::harness_tools::caps(self.runtime()).compaction_events
             && matches!(self, Host::Claude(_) | Host::Pi(_))
     }
 
@@ -1432,8 +1429,10 @@ impl Host {
     /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
     /// harness starts a new one in its place (`restored`): a new session's whole prompt.
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
-        if let Host::Claude(h) = self {
-            h.full_prompt(thread_id, text);
+        match self {
+            Host::Claude(h) => h.full_prompt(thread_id, text),
+            Host::Antigravity(h) => h.full_prompt(thread_id, text),
+            _ => {}
         }
     }
 
@@ -2174,11 +2173,11 @@ pub(crate) mod tests {
             bot_key_problem("gemini", &gemini, "has", &grants),
             Some("Gemini API key required".into())
         );
-        // Antigravity runs on the Gemini runtime with its own sign-in, not a key here.
+        // Antigravity signs in with a Google account, not a key here.
         let antigravity =
-            json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.7-flash"});
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
         assert_eq!(
-            bot_key_problem("gemini", &antigravity, "none", &grants),
+            bot_key_problem("antigravity", &antigravity, "none", &grants),
             None
         );
         assert_eq!(

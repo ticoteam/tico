@@ -1,8 +1,7 @@
-//! The Antigravity host: one persistent `agy` per Hub conversation, kept warm
-//! between turns by crate::warm. Each turn is one stream-json user line on stdin; the provider's conversation id
-//! is saved beside the stable thread id (`<home>/<thread>.json`), so a cold start resumes it with
-//! `--conversation`. A failed or interrupted turn is never replayed. `agy` runs in a session of its own and is
-//! stopped as a process group.
+//! The Antigravity host: each turn starts its own `agy` and reaps it when the turn ends. The prompt is one stream-json
+//! user line on stdin, closed once the result is in; the provider's conversation id is saved beside the stable thread id
+//! (`<home>/<thread>.json`, supervisor-only), so the next turn resumes it with `--conversation` on any model or effort.
+//! A failed or interrupted turn is never replayed. `agy` runs in a session of its own and is stopped as a process group.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -10,21 +9,35 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Command;
-use tokio::sync::{mpsc, watch};
+use serde_json::{json, Value};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{ChildStdout, Command};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::util::{log, py_dumps, text_of};
 
-pub const NAME: &str = "antigravity";
 pub const DEFAULT_MODEL: &str = "gemini-4-neon";
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
-const STOP_GRACE: Duration = Duration::from_secs(5);
-const USAGE_KEYS: [&str; 3] = ["input_tokens", "output_tokens", "cache_read_tokens"];
+const DEFAULT_EFFORT: &str = "high";
+// A test's stuck fake waits out the grace; a second is as good a proof as five.
+const STOP_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
+/// How long `agy` may go on writing after its result before the turn stops reading it.
+const DRAIN: Duration = Duration::from_secs(5);
+/// Lines that are not JSON (a banner, a warning) skipped before the stream counts as broken, and how many of the last
+/// ones a failure's error keeps (each cut to KEPT_CHARS).
+const SKIP_MAX: usize = 100;
+const SKIP_KEPT: usize = 5;
+const KEPT_CHARS: usize = 300;
+/// The most of what `agy` said (stderr and skipped lines) a failure's error carries.
+const ERROR_CHARS: usize = 1000;
+/// What resuming a thread whose record is gone says: worded for continuity::missing, so the turn moves to a new thread.
+const MISSING: &str = "No conversation found for this Antigravity thread on this computer";
+/// A turn that must continue its saved conversation, which `agy` did not resume.
+const LOST: &str =
+    "No conversation found: Antigravity began a new conversation in place of the saved one";
 
-/// `agy`'s argv for a first turn: model `<model>-<effort>`, effort low unless set, permissions skipped.
+/// `agy`'s argv: model `<model>-<effort>`, effort high unless set, permissions skipped, the saved conversation if any.
 pub fn argv(
     cmd: &[String],
     settings: &Settings,
@@ -39,10 +52,15 @@ pub fn argv(
     let effort = effort
         .filter(|e| !e.is_empty())
         .or(settings.effort.as_deref().filter(|e| !e.is_empty()))
-        .unwrap_or("low");
+        .unwrap_or(DEFAULT_EFFORT);
     if !EFFORTS.contains(&effort) {
         return Err(failed("Unsupported Antigravity effort"));
     }
+    // A model id that already names an effort (`gemini-4-neon-low`) takes this turn's in its place.
+    let base = EFFORTS
+        .iter()
+        .find_map(|e| model.strip_suffix(&format!("-{e}")))
+        .unwrap_or(&model);
     let mut argv = cmd.to_vec();
     for a in [
         "--input-format",
@@ -54,7 +72,7 @@ pub fn argv(
         argv.push(a.into());
     }
     argv.extend([
-        format!("{model}-{effort}"),
+        format!("{base}-{effort}"),
         "--effort".into(),
         effort.into(),
         "--dangerously-skip-permissions".into(),
@@ -85,35 +103,82 @@ fn count(v: &Value) -> i64 {
     }
 }
 
-/// The running `agy`: its stdin, and the task that owns, signals and reaps it.
+/// The last `n` characters of `text`.
+fn last_chars(text: &str, n: usize) -> String {
+    let skip = text.chars().count().saturating_sub(n);
+    text.chars().skip(skip).collect()
+}
+
+/// A running `agy`: the task that owns, signals and reaps it, and its exit code once reaped.
+#[derive(Clone)]
 struct Proc {
-    stdin: mpsc::UnboundedSender<String>,
     kill: mpsc::UnboundedSender<i32>,
-    exited: watch::Receiver<bool>,
+    exited: watch::Receiver<Option<i32>>,
+}
+
+impl Proc {
+    /// SIGTERM to the group, SIGKILL after STOP_GRACE, then until it has gone: whatever it was given (its home, the
+    /// turn's folder) is not removed while it runs.
+    async fn reap(&self) {
+        let mut exited = self.exited.clone();
+        if exited.borrow().is_some() {
+            return;
+        }
+        let _ = self.kill.send(libc::SIGTERM);
+        if tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| e.is_some()))
+            .await
+            .is_err()
+        {
+            let _ = self.kill.send(libc::SIGKILL);
+            let _ = exited.wait_for(|e| e.is_some()).await;
+        }
+    }
+}
+
+/// What the turn's reader holds of its process: stdout, stderr, and the stdin it closes once the result is in.
+struct Running {
+    stdout: Lines<BufReader<ChildStdout>>,
+    stderr: crate::run_diagnostics::Stderr,
+    close: Option<oneshot::Sender<()>>,
+    exited: watch::Receiver<Option<i32>>,
+}
+
+/// One process's stream as the reader sees it.
+#[derive(Default)]
+struct Stream {
+    /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
+    streamed: (String, String),
+    new_message: bool,
+    /// Per-step usage emitted by `step_update`, keyed by `step_index`.
+    step_usage: BTreeMap<i64, Value>,
+    /// A step has run: the conversation `agy` is on can no longer be swapped for another without losing work.
+    stepped: bool,
+    skipped: Vec<String>,
+    skipped_count: usize,
+}
+
+/// How a process's stream ended.
+enum End {
+    Result(Value),
+    /// No result: the stream closed, or broke (why).
+    Closed(Option<String>),
+    /// `agy` began another conversation than the saved one before any step.
+    Mismatch,
 }
 
 struct Inner {
     up: bool,
-    proc: Option<Proc>,
     thread: Option<String>,
-    turn: Option<String>,
     settings: Option<Settings>,
     provider: Option<String>,
-    usage: Value,
-    /// Per-step usage emitted by `step_update` in the active turn, keyed by `step_index`.
-    step_usage: BTreeMap<i64, Value>,
-    /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
-    streamed: (String, String),
-    new_message: bool,
-    tx: Events,
+    /// The saved conversation was not the one `agy` ran: it began a new one for the thread.
+    restored: bool,
+    /// What a new conversation started in place of a missing one is given instead of the turn's prompt.
+    full_prompt: Option<String>,
+    turn: Option<String>,
+    proc: Option<Proc>,
     reader: Option<tokio::task::JoinHandle<()>>,
-    /// Counts the processes started: one replaced (`retire`) says nothing more to the turns after it.
-    generation: u64,
-    /// The thread and folder the process was started for: a turn on another one gets a new process (a kept host
-    /// serves the next attempt, crate::warm).
-    spawned_for: Option<(String, String)>,
-    /// The newest turn ran on the process an earlier turn left running, not a new or replacing one.
-    warm: bool,
+    tx: Events,
 }
 
 struct Shared {
@@ -134,20 +199,15 @@ impl AntigravityHost {
             cmd,
             inner: Mutex::new(Inner {
                 up: false,
-                proc: None,
                 thread: None,
-                turn: None,
                 settings: None,
                 provider: None,
-                usage: json!({}),
-                step_usage: BTreeMap::new(),
-                streamed: Default::default(),
-                new_message: false,
-                tx,
+                restored: false,
+                full_prompt: None,
+                turn: None,
+                proc: None,
                 reader: None,
-                generation: 0,
-                spawned_for: None,
-                warm: false,
+                tx,
             }),
         }))
     }
@@ -156,14 +216,8 @@ impl AntigravityHost {
         self.0.inner.lock().unwrap_or_else(|p| p.into_inner())
     }
 
-    /// Whether two handles are the one host (the warm cache finds its entry by this).
-    pub fn same(&self, other: &AntigravityHost) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-
-    /// Send this host's events to `tx` from now on: a warm host serves one turn after another.
-    pub fn attach(&self, tx: Events) {
-        self.inner().tx = tx;
+    fn emit(&self, ev: Value) {
+        let _ = self.inner().tx.send(ev);
     }
 
     pub fn start(&self) -> Result<(), HostError> {
@@ -176,13 +230,8 @@ impl AntigravityHost {
         {
             return Err(failed("Antigravity home must not be a symbolic link"));
         }
-        // agy reads the bot-owned lease-token here; its conversation record remains supervisor-only.
-        let mode = if crate::isolation::enabled() {
-            0o711
-        } else {
-            0o700
-        };
-        std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(mode))
+        // Only the runner reads the conversation records; agy is never given this folder.
+        std::fs::set_permissions(&self.0.home, std::fs::Permissions::from_mode(0o700))
             .map_err(|e| failed(e.to_string()))?;
         self.inner().up = true;
         Ok(())
@@ -192,14 +241,9 @@ impl AntigravityHost {
         self.0.allocation.track(turn);
     }
 
-    /// Whether the newest turn ran on the process an earlier turn left running (its timings' `warm`).
-    pub fn warm(&self) -> bool {
-        self.inner().warm
-    }
-
+    /// Whether this host takes turns: each starts its own process.
     pub fn alive(&self) -> bool {
-        let inner = self.inner();
-        inner.up && inner.proc.as_ref().is_none_or(|p| !*p.exited.borrow())
+        self.inner().up
     }
 
     fn path(&self, thread: &str) -> Option<PathBuf> {
@@ -212,40 +256,43 @@ impl AntigravityHost {
         inner.thread = Some(id.clone());
         inner.settings = Some(settings.clone());
         inner.provider = None;
+        inner.restored = false;
         id
     }
 
     pub fn resume_thread(&self, thread_id: &str, settings: &Settings) -> Result<String, HostError> {
-        if self.inner().thread.as_deref() == Some(thread_id) && self.alive() {
-            self.inner().settings = Some(settings.clone());
-            return Ok(thread_id.into());
-        }
-        let unavailable = || failed("Antigravity conversation is unavailable");
-        let path = self.path(thread_id).ok_or_else(unavailable)?;
+        let missing = || failed(MISSING);
+        let path = self.path(thread_id).ok_or_else(missing)?;
         let record: Value =
-            serde_json::from_str(&std::fs::read_to_string(path).map_err(|_| unavailable())?)
-                .map_err(|_| unavailable())?;
+            serde_json::from_str(&std::fs::read_to_string(path).map_err(|_| missing())?)
+                .map_err(|_| missing())?;
         let provider = record["conversation_id"]
             .as_str()
             .and_then(canonical)
-            .ok_or_else(unavailable)?;
+            .ok_or_else(missing)?;
         let mut inner = self.inner();
         inner.provider = Some(provider);
         inner.thread = Some(thread_id.into());
         inner.settings = Some(settings.clone());
+        inner.restored = false;
         Ok(thread_id.into())
     }
 
-    /// Save the provider's conversation id for this thread, once; a different one later is an error.
-    fn remember(&self, inner: &mut Inner, cid: &str) -> Result<(), String> {
-        let cid = canonical(cid).ok_or("not a conversation id")?;
-        if inner.provider.as_deref() == Some(cid.as_str()) {
-            return Ok(());
+    /// Whether `agy` began a new conversation for `thread_id` in place of its saved one.
+    pub fn restored(&self, thread_id: &str) -> bool {
+        let inner = self.inner();
+        inner.restored && inner.thread.as_deref() == Some(thread_id)
+    }
+
+    pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
+        let mut inner = self.inner();
+        if inner.thread.as_deref() == Some(thread_id) {
+            inner.full_prompt = text;
         }
-        if inner.provider.is_some() {
-            return Err("Antigravity resumed the wrong conversation".into());
-        }
-        inner.provider = Some(cid.clone());
+    }
+
+    /// Save `cid` as the thread's conversation.
+    fn save(&self, inner: &mut Inner, cid: &str) -> Result<(), String> {
         let path = inner
             .thread
             .as_deref()
@@ -264,7 +311,24 @@ impl AntigravityHost {
         f.write_all(py_dumps(&json!({"conversation_id": cid})).as_bytes())
             .map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+        inner.provider = Some(cid.into());
         Ok(())
+    }
+
+    /// The conversation `agy` says it runs. The first one a thread hears of is saved. Another than the saved one before
+    /// any step is a Mismatch (the turn starts a new conversation itself, or stops); after a step the work is in it, so
+    /// it is saved and the thread counts as restored: the next turn gives it everything again.
+    fn remember(&self, inner: &mut Inner, cid: &str, stepped: bool) -> Result<bool, String> {
+        let cid = canonical(cid).ok_or("not a conversation id")?;
+        match inner.provider.as_deref() {
+            Some(saved) if saved == cid => Ok(false),
+            None => self.save(inner, &cid).map(|_| false),
+            Some(_) if !stepped => Ok(true),
+            Some(_) => {
+                inner.restored = true;
+                self.save(inner, &cid).map(|_| false)
+            }
+        }
     }
 
     fn command(
@@ -284,6 +348,7 @@ impl AntigravityHost {
         if !settings.env.is_empty() {
             command.env_clear().envs(&settings.env);
         }
+        command.envs(crate::harness_tools::env_for("antigravity"));
         // start_new_session: its own process group, so a stop reaches the tools it started too.
         unsafe {
             command.pre_exec(|| {
@@ -294,24 +359,25 @@ impl AntigravityHost {
         Ok(command)
     }
 
+    /// Start `agy` on `text`: its stdin gets the one user line and stays open until the reader closes it.
     fn spawn(
         &self,
         settings: &Settings,
         effort: Option<&str>,
         provider: Option<&str>,
-        generation: u64,
-    ) -> Result<(Proc, tokio::process::ChildStdout), HostError> {
-        let mut command = self.command(settings, effort, provider)?;
-        let mut child = command
+        text: &str,
+    ) -> Result<(Proc, Running), HostError> {
+        let mut child = self
+            .command(settings, effort, provider)?
             .spawn()
             .map_err(|e| failed(format!("could not start agy: {e}")))?;
         self.0.allocation.mark();
         let host = self.clone();
-        let _stderr = crate::run_diagnostics::Stderr::capture_with(
+        let stderr = crate::run_diagnostics::Stderr::capture_with(
             &mut child,
             move |value| {
                 let inner = host.inner();
-                if inner.turn.is_some() && inner.generation == generation {
+                if inner.turn.is_some() {
                     let _ = inner.tx.send(value);
                 }
             },
@@ -326,31 +392,22 @@ impl AntigravityHost {
             .take()
             .ok_or_else(|| failed("agy has no stdout"))?;
         let mut stdin = child.stdin.take();
-        let (lines, mut rx) = mpsc::unbounded_channel::<String>();
+        let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
+        let (close, closed) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            while let Some(line) = rx.recv().await {
-                let Some(s) = stdin.as_mut() else { break };
-                if s.write_all(line.as_bytes()).await.is_err() || s.flush().await.is_err() {
-                    break;
-                }
+            if let Some(s) = stdin.as_mut() {
+                let _ = s.write_all(line.as_bytes()).await;
+                let _ = s.flush().await;
             }
+            let _ = closed.await;
         });
         let (kill, mut asks) = mpsc::unbounded_channel::<i32>();
-        let (done, exited) = watch::channel(false);
-        let host = self.clone();
+        let (done, exited) = watch::channel(None);
         tokio::spawn(async move {
             let mut asking = true;
-            loop {
+            let code = loop {
                 tokio::select! {
-                    status = child.wait() => {
-                        let code = super::return_code(&status);
-                        let inner = host.inner();
-                        if inner.generation != generation {
-                            break; // replaced (`retire`): the turns after it are not its
-                        }
-                        let _ = inner.tx.send(json!({"kind": "error", "error": crate::run_diagnostics::process_reason(code, &_stderr.tail()), "exit_code": code, "process_exit": true}));
-                        break;
-                    },
+                    status = child.wait() => break super::return_code(&status),
                     sig = asks.recv(), if asking => match sig {
                         // Not reaped yet: only this task waits for the child, so the group is still its own.
                         Some(sig) => if let Some(pid) = child.id() {
@@ -359,16 +416,20 @@ impl AntigravityHost {
                         None => asking = false,
                     },
                 }
-            }
-            let _ = done.send(true);
+            };
+            let _ = done.send(Some(code));
         });
         Ok((
             Proc {
-                stdin: lines,
                 kill,
+                exited: exited.clone(),
+            },
+            Running {
+                stdout: BufReader::new(stdout).lines(),
+                stderr,
+                close: Some(close),
                 exited,
             },
-            stdout,
         ))
     }
 
@@ -380,48 +441,26 @@ impl AntigravityHost {
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
         let mut inner = self.inner();
-        let alive = inner.up && inner.proc.as_ref().is_none_or(|p| !*p.exited.borrow());
-        if !alive || inner.thread.as_deref() != Some(thread_id) || inner.turn.is_some() {
+        if !inner.up || inner.thread.as_deref() != Some(thread_id) || inner.turn.is_some() {
             return Err(failed(
                 "Antigravity is unavailable or already running a turn",
             ));
         }
         let settings = inner.settings.clone().unwrap_or_default();
-        let place = (thread_id.to_string(), settings.cwd.clone());
-        if inner.proc.is_some() && inner.spawned_for.as_ref() != Some(&place) {
-            // A new thread (a fresh session, a resume that failed) or another folder on a kept process: agy holds
-            // one conversation in one folder, so it is replaced, never handed this turn's prompt.
-            Self::retire(&mut inner);
-        }
-        inner.warm = inner.proc.is_some();
-        if inner.proc.is_none() {
-            inner.generation += 1;
-            let (proc, stdout) = self.spawn(
-                &settings,
-                effort,
-                inner.provider.as_deref(),
-                inner.generation,
-            )?;
-            inner.proc = Some(proc);
-            inner.spawned_for = Some(place);
-            let (host, generation) = (self.clone(), inner.generation);
-            inner.reader = Some(tokio::spawn(
-                async move { host.read(stdout, generation).await },
-            ));
-        }
-        let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
-        if inner
-            .proc
-            .as_ref()
-            .is_none_or(|p| p.stdin.send(line).is_err())
-        {
-            return Err(failed(
-                "Antigravity is unavailable or already running a turn",
-            ));
-        }
+        let (proc, running) = self.spawn(&settings, effort, inner.provider.as_deref(), text)?;
+        inner.proc = Some(proc);
         inner.turn = Some(turn.clone());
-        (inner.streamed, inner.new_message) = Default::default();
-        inner.step_usage.clear();
+        let host = self.clone();
+        let (tid, id, effort, text) = (
+            thread_id.to_string(),
+            turn.clone(),
+            effort.map(String::from),
+            text.to_string(),
+        );
+        inner.reader = Some(tokio::spawn(async move {
+            host.run(&tid, &id, &settings, effort.as_deref(), text, running)
+                .await
+        }));
         let _ = inner.tx.send(event(
             "status",
             Some(thread_id),
@@ -431,64 +470,179 @@ impl AntigravityHost {
         Ok(turn)
     }
 
-    async fn read(&self, stdout: tokio::process::ChildStdout, generation: u64) {
-        let mut lines = BufReader::new(stdout).lines();
-        let why = loop {
-            let line = match lines.next_line().await {
+    /// The turn's one reader: it alone says how the turn ended.
+    async fn run(
+        &self,
+        tid: &str,
+        turn: &str,
+        settings: &Settings,
+        effort: Option<&str>,
+        text: String,
+        mut running: Running,
+    ) {
+        let mut stream = Stream::default();
+        let mut respawned = false;
+        loop {
+            match self.read(tid, turn, &mut stream, &mut running).await {
+                End::Result(result) => {
+                    self.finish(tid, turn, &result, &stream);
+                    if let Some(close) = running.close.take() {
+                        let _ = close.send(());
+                    }
+                    let _ = tokio::time::timeout(DRAIN, async {
+                        while let Ok(Some(_)) = running.stdout.next_line().await {}
+                    })
+                    .await;
+                    return;
+                }
+                End::Closed(why) => {
+                    if let Some(why) = &why {
+                        log(&format!("Antigravity stream failed: {why}"));
+                    }
+                    let code =
+                        tokio::time::timeout(STOP_GRACE, running.exited.wait_for(|e| e.is_some()))
+                            .await
+                            .ok()
+                            .and_then(|e| e.ok().and_then(|e| *e));
+                    running.stderr.drained().await;
+                    self.fail_closed(tid, turn, code, &running.stderr.tail(), &stream);
+                    return;
+                }
+                End::Mismatch => {
+                    // Kept on the host while it goes, so a stop meanwhile waits for it too.
+                    let proc = self.inner().proc.clone();
+                    if let Some(p) = proc {
+                        p.reap().await;
+                    }
+                    let require = settings.require_existing_session || respawned;
+                    if require {
+                        // The saved conversation stays as it was: a continuation must not run on another one.
+                        self.end(
+                            tid,
+                            turn,
+                            event(
+                                "turn_failed",
+                                Some(tid),
+                                Some(turn),
+                                json!({"error": LOST, "limit": false}),
+                            ),
+                        );
+                        return;
+                    }
+                    // One fresh start, with no saved conversation and the whole prompt.
+                    respawned = true;
+                    let text = {
+                        let mut inner = self.inner();
+                        if !inner.up {
+                            return;
+                        }
+                        inner.provider = None;
+                        inner.restored = true;
+                        inner.full_prompt.take().unwrap_or(text.clone())
+                    };
+                    self.emit(event(
+                        "diagnostic",
+                        Some(tid),
+                        Some(turn),
+                        json!({"text": super::claude::RESTORING}),
+                    ));
+                    match self.spawn(settings, effort, None, &text) {
+                        Ok((proc, again)) => {
+                            let stopped = {
+                                let mut inner = self.inner();
+                                if inner.up {
+                                    inner.proc = Some(proc.clone());
+                                }
+                                !inner.up
+                            };
+                            if stopped {
+                                proc.reap().await;
+                                return;
+                            }
+                            running = again;
+                            stream = Stream::default();
+                        }
+                        Err(e) => {
+                            let error = e.to_string();
+                            self.end(
+                                tid,
+                                turn,
+                                event(
+                                    "turn_failed",
+                                    Some(tid),
+                                    Some(turn),
+                                    json!({"error": error, "limit": is_limit(&error)}),
+                                ),
+                            );
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read one process's stream to its result or its end.
+    async fn read(&self, tid: &str, turn: &str, stream: &mut Stream, running: &mut Running) -> End {
+        let scrub = crate::redact::Redactor::new(&crate::redact::env_secrets(
+            &self.inner().settings.clone().unwrap_or_default().env,
+        ));
+        loop {
+            let line = match running.stdout.next_line().await {
                 Ok(Some(l)) => l,
-                Ok(None) => break None,
-                Err(e) => break Some(e.to_string()),
+                Ok(None) => return End::Closed(None),
+                Err(e) => return End::Closed(Some(e.to_string())),
             };
             if line.trim().is_empty() {
                 continue;
             }
             let ev: Value = match serde_json::from_str(&line) {
                 Ok(v) => v,
-                Err(_) => break Some("JSONDecodeError".into()),
+                Err(_) => {
+                    // A banner or warning: skipped, and the last few kept, redacted, for a failure's error.
+                    stream.skipped_count += 1;
+                    if stream.skipped_count > SKIP_MAX {
+                        return End::Closed(Some("too many lines that are not JSON".into()));
+                    }
+                    let kept = crate::run_diagnostics::safe(&line, &scrub);
+                    stream
+                        .skipped
+                        .push(kept.trim().chars().take(KEPT_CHARS).collect());
+                    if stream.skipped.len() > SKIP_KEPT {
+                        stream.skipped.remove(0);
+                    }
+                    continue;
+                }
             };
             let mut inner = self.inner();
-            if inner.generation != generation {
-                return; // replaced (`retire`)
-            }
             if !inner.up {
-                break None;
+                return End::Closed(None);
             }
-            match self.on_event(&mut inner, &ev) {
-                Ok(()) => {}
-                Err(e) => break Some(e),
-            }
-        };
-        if let Some(why) = why {
-            log(&format!("Antigravity stream failed: {why}"));
-        }
-        let mut inner = self.inner();
-        if inner.generation != generation {
-            return;
-        }
-        if inner.up {
-            if let Some(turn) = inner.turn.take() {
-                let ev = event(
-                    "turn_failed",
-                    inner.thread.as_deref(),
-                    Some(&turn),
-                    json!({"error": "Antigravity stream ended before a result", "limit": false}),
-                );
-                let _ = inner.tx.send(ev);
+            match self.on_event(&mut inner, tid, turn, stream, &ev) {
+                Ok(None) => {}
+                Ok(Some(end)) => return end,
+                Err(e) => return End::Closed(Some(e)),
             }
         }
-        inner.turn = None;
-        inner.up = false;
     }
 
-    /// One stdout event; Err ends the stream as Python's exception does.
-    fn on_event(&self, inner: &mut Inner, ev: &Value) -> Result<(), String> {
-        let (tid, turn) = (inner.thread.clone(), inner.turn.clone());
+    /// One stdout event; Err ends the stream.
+    fn on_event(
+        &self,
+        inner: &mut Inner,
+        tid: &str,
+        turn: &str,
+        stream: &mut Stream,
+        ev: &Value,
+    ) -> Result<Option<End>, String> {
         if ev["event"] == "init" {
             let cid = Some(&ev["conversation_id"])
                 .filter(|c| crate::util::truthy(Some(c)))
                 .unwrap_or(&ev["init"]["conversation_id"]);
-            if crate::util::truthy(Some(cid)) {
-                self.remember(inner, &text_of(cid))?;
+            if crate::util::truthy(Some(cid))
+                && self.remember(inner, &text_of(cid), stream.stepped)?
+            {
+                return Ok(Some(End::Mismatch));
             }
         }
         let step = ev
@@ -496,24 +650,26 @@ impl AntigravityHost {
             .filter(|s| crate::util::truthy(Some(s)))
             .cloned()
             .unwrap_or(json!({}));
-        if crate::util::truthy(step.get("conversation_id")) {
-            self.remember(inner, &text_of(&step["conversation_id"]))?;
+        if step.as_object().is_some_and(|s| !s.is_empty()) {
+            stream.stepped = true;
         }
-        let Some(turn) = turn else { return Ok(()) };
-        let (tid, turn) = (tid.as_deref(), Some(turn.as_str()));
+        if crate::util::truthy(step.get("conversation_id")) {
+            self.remember(inner, &text_of(&step["conversation_id"]), true)?;
+        }
+        let (tid, turn) = (Some(tid), Some(turn));
         if let Some(usage) = step.get("usage").filter(|u| u.is_object()) {
             let idx = step
                 .get("step_index")
                 .and_then(Value::as_i64)
-                .unwrap_or_else(|| inner.step_usage.len() as i64);
-            inner.step_usage.insert(idx, usage.clone());
+                .unwrap_or_else(|| stream.step_usage.len() as i64);
+            stream.step_usage.insert(idx, usage.clone());
         }
         if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
             let text = text_of(&step["text_delta"]);
-            inner.streamed.0.push_str(&text);
+            stream.streamed.0.push_str(&text);
             let piece = super::add_piece(
-                &mut inner.streamed.1,
-                std::mem::take(&mut inner.new_message),
+                &mut stream.streamed.1,
+                std::mem::take(&mut stream.new_message),
                 &text,
             );
             let _ = inner.tx.send(event(
@@ -524,7 +680,7 @@ impl AntigravityHost {
             ));
         }
         if step["step_type"] == "tool" {
-            inner.new_message = true;
+            stream.new_message = true;
             let tool = step.get("tool_name").cloned().unwrap_or(json!("tool"));
             let _ = inner.tx.send(event(
                 "tool",
@@ -534,54 +690,55 @@ impl AntigravityHost {
             ));
         }
         if ev["event"] != "result" {
-            return Ok(());
+            return Ok(None);
         }
         let result = ev
             .get("result")
             .filter(|r| r.is_object())
             .ok_or("KeyError: 'result'")?;
         if crate::util::truthy(result.get("conversation_id")) {
-            self.remember(inner, &text_of(&result["conversation_id"]))?;
+            self.remember(inner, &text_of(&result["conversation_id"]), true)?;
         }
+        Ok(Some(End::Result(result.clone())))
+    }
+
+    /// The turn's events from its result.
+    fn finish(&self, tid: &str, turn: &str, result: &Value, stream: &Stream) {
         let usage = result
             .get("usage")
             .filter(|u| u.is_object())
             .cloned()
             .unwrap_or(json!({}));
-        let mut delta = Map::new();
-        if !inner.step_usage.is_empty() {
-            // Current agy reports per-step usage on step_update and conversation-cumulative usage on result
-            // (including across --conversation cold resumes), so summing this turn's steps avoids double-counting.
-            for k in USAGE_KEYS {
-                let sum: i64 = inner.step_usage.values().map(|u| count(&u[k])).sum();
-                delta.insert(k.into(), json!(sum.max(0)));
+        // agy reports per-step usage on step_update and conversation-cumulative usage on result (across --conversation
+        // resumes too), so this turn's steps are summed; an older build without steps reports this process's total.
+        let spent = |k: &str| {
+            if stream.step_usage.is_empty() {
+                count(&usage[k]).max(0)
+            } else {
+                stream
+                    .step_usage
+                    .values()
+                    .map(|u| count(&u[k]))
+                    .sum::<i64>()
+                    .max(0)
             }
-        } else {
-            // Older agy builds report only the process's running total on result: this turn spent the difference.
-            for k in USAGE_KEYS {
-                delta.insert(
-                    k.into(),
-                    json!((count(&usage[k]) - count(&inner.usage[k])).max(0)),
-                );
-            }
-        }
-        inner.usage = usage;
-        inner.step_usage.clear();
-        let (i, o, c) = (
-            count(&delta["input_tokens"]),
-            count(&delta["output_tokens"]),
-            count(&delta["cache_read_tokens"]),
-        );
-        let send = |ev: Value| {
-            let _ = inner.tx.send(ev);
         };
-        send(event(
-            "tokens",
-            tid,
-            turn,
-            json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}}),
-        ));
-        if result["status"] == "SUCCESS" {
+        let (i, o, c) = (
+            spent("input_tokens"),
+            spent("output_tokens"),
+            spent("cache_read_tokens"),
+        );
+        let (tid, turn) = (Some(tid), Some(turn));
+        // A refusal before any model call spent nothing, and says so by sending no usage: the hub may queue it again.
+        if i + o + c > 0 {
+            self.emit(event(
+                "tokens",
+                tid,
+                turn,
+                json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}}),
+            ));
+        }
+        let outcome = if result["status"] == "SUCCESS" {
             let mut text = result["response"]
                 .as_str()
                 .unwrap_or_default()
@@ -589,94 +746,100 @@ impl AntigravityHost {
                 .to_string();
             // Antigravity's answer runs the turn's messages together with nothing between them: when it is just the
             // streamed text, each message keeps its own paragraph.
-            if !text.is_empty() && text == inner.streamed.0.trim() {
-                text = inner.streamed.1.trim().to_string();
+            if !text.is_empty() && text == stream.streamed.0.trim() {
+                text = stream.streamed.1.trim().to_string();
             }
-            send(event(
+            self.emit(event(
                 "message",
                 tid,
                 turn,
                 json!({"text": text, "final": true}),
             ));
-            send(event(
-                "turn_completed",
-                tid,
-                turn,
-                json!({"status": "completed"}),
-            ));
+            event("turn_completed", tid, turn, json!({"status": "completed"}))
         } else {
             let error = [&result["error"], &result["status"]]
                 .into_iter()
                 .find(|v| crate::util::truthy(Some(v)))
                 .map(text_of)
                 .unwrap_or_else(|| "Antigravity failed".into());
-            send(event(
+            event(
                 "turn_failed",
                 tid,
                 turn,
                 json!({"error": error, "limit": is_limit(&error)}),
-            ));
+            )
+        };
+        self.end(tid.unwrap_or_default(), turn.unwrap_or_default(), outcome);
+    }
+
+    /// A process that ended with no result: one failure carrying what it said, so a refusal it printed (on stderr or as
+    /// a plain line) is read as one.
+    fn fail_closed(&self, tid: &str, turn: &str, code: Option<i32>, stderr: &str, stream: &Stream) {
+        let reason = match code {
+            Some(c) => crate::run_diagnostics::process_reason(c, stderr),
+            None => "Antigravity stream ended before a result".into(),
+        };
+        let said: Vec<&str> = stream
+            .skipped
+            .iter()
+            .map(String::as_str)
+            .chain(stderr.lines())
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        let error = if said.is_empty() {
+            reason
+        } else {
+            format!("{reason}: {}", last_chars(&said.join("\n"), ERROR_CHARS))
+        };
+        let mut failure = event(
+            "turn_failed",
+            Some(tid),
+            Some(turn),
+            json!({"error": error, "limit": is_limit(&error)}),
+        );
+        if let Some(c) = code.filter(|c| *c != 0) {
+            failure["exit_code"] = json!(c);
+            failure["process_exit"] = json!(true);
         }
-        send(event("status", tid, turn, json!({"state": "idle"})));
+        self.end(tid, turn, failure);
+    }
+
+    /// The turn's last events, unless it was stopped: a stop says nothing more.
+    fn end(&self, tid: &str, turn: &str, outcome: Value) {
+        let mut inner = self.inner();
+        if !inner.up || inner.turn.as_deref() != Some(turn) {
+            return;
+        }
+        let _ = inner.tx.send(outcome);
+        let _ = inner.tx.send(event(
+            "status",
+            Some(tid),
+            Some(turn),
+            json!({"state": "idle"}),
+        ));
         inner.turn = None;
-        Ok(())
     }
 
     pub fn steer(&self) -> Result<(), HostError> {
         Err(failed("Antigravity steering is not enabled"))
     }
 
-    /// Interrupting a turn stops the process: the next turn starts a new one on the saved conversation.
+    /// Interrupting a turn stops its process: the next turn starts a new one on the saved conversation.
     pub async fn interrupt(&self) {
         self.stop().await;
     }
 
-    /// Stop the process without a word to the turns after it: its reader ends now, its exit is not reported, and its
-    /// group gets SIGTERM, then SIGKILL after STOP_GRACE.
-    fn retire(inner: &mut Inner) {
-        if let Some(reader) = inner.reader.take() {
-            reader.abort();
-        }
-        inner.spawned_for = None;
-        let Some(old) = inner.proc.take() else { return };
-        inner.generation += 1;
-        let (kill, mut exited) = (old.kill.clone(), old.exited.clone());
-        drop(old);
-        let _ = kill.send(libc::SIGTERM);
-        tokio::spawn(async move {
-            if tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| *e))
-                .await
-                .is_err()
-            {
-                let _ = kill.send(libc::SIGKILL);
-            }
-        });
-    }
-
-    /// SIGTERM to the group, SIGKILL after 5 s, then up to 5 s more for it to go.
+    /// Stop the turn's process (crate::hosts Proc::reap) and its reader.
     pub async fn stop(&self) {
         let (proc, reader) = {
             let mut inner = self.inner();
             inner.up = false;
-            (
-                inner
-                    .proc
-                    .as_ref()
-                    .map(|p| (p.kill.clone(), p.exited.clone())),
-                inner.reader.take(),
-            )
+            inner.turn = None;
+            (inner.proc.take(), inner.reader.take())
         };
-        if let Some((kill, mut exited)) = proc {
-            if !*exited.borrow() {
-                let _ = kill.send(libc::SIGTERM);
-                if tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| *e))
-                    .await
-                    .is_err()
-                {
-                    let _ = kill.send(libc::SIGKILL);
-                    let _ = tokio::time::timeout(STOP_GRACE, exited.wait_for(|e| *e)).await;
-                }
-            }
+        if let Some(p) = proc {
+            p.reap().await;
         }
         if let Some(r) = reader {
             let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
@@ -688,15 +851,20 @@ impl AntigravityHost {
 mod tests {
     use super::*;
 
+    const SAVED: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
+    const OTHER: &str = "0b2e6f1c-3a1d-4f43-9a51-6c2f2f7e9d10";
+    const FRESH: &str = "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f";
+
     #[tokio::test]
-    async fn turn_launch_keeps_the_bot_identity_and_revocable_token_access() {
-        if !super::super::isolationtests::child("hosts::antigravity::tests::turn_launch_keeps_the_bot_identity_and_revocable_token_access") { return; }
+    async fn turn_launch_keeps_the_bot_identity_and_a_supervisor_only_record() {
+        if !super::super::isolationtests::child("hosts::antigravity::tests::turn_launch_keeps_the_bot_identity_and_a_supervisor_only_record") { return; }
         let f = super::super::isolationtests::Fixture::new();
         let mut settings = f.settings();
-        let make = |home: &Path, _: &crate::env::Env| {
-            AntigravityHost::new(home, f.argv(), mpsc::unbounded_channel().0)
-        };
-        let host = make(&f.root.join("warm/scope"), &settings.env);
+        let host = AntigravityHost::new(
+            &f.root.join("agy/acme"),
+            f.argv(),
+            mpsc::unbounded_channel().0,
+        );
         super::super::isolationtests::prefix(
             &host.command(&settings, None, None).unwrap(),
             &argv(&f.argv(), &settings, None, None).unwrap(),
@@ -704,59 +872,60 @@ mod tests {
         if !f.actual() {
             return;
         }
-        let warm = crate::warm::WarmSessions::new(f.root.join("warm"), 1);
-        settings
-            .env
-            .insert("HUB_TOKEN".into(), "fixture attempt token".into());
-        let attempt = json!({"bot":"acme","conversation":{"id":"conversation"},"principal":"human:acme","config":{"harness":"antigravity"}});
-        let (host, env) = warm.acquire(&attempt, &settings.env, make).await.unwrap();
-        settings.env = env;
         host.start().unwrap();
         let thread = host.start_thread(&settings);
-        let provider = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
-        host.remember(&mut host.inner(), provider).unwrap();
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
         let record = host.path(&thread).unwrap();
         settings
             .env
             .insert("TEST_PRIVATE".into(), record.display().to_string());
-        let token = PathBuf::from(
-            settings.env["HUB_TOKEN"]
-                .strip_prefix("tico-file:")
-                .unwrap(),
-        );
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        assert_eq!(token.metadata().unwrap().uid(), 10003);
-        assert_eq!(
-            token.metadata().unwrap().permissions().mode() & 0o777,
-            0o600
-        );
         f.run(
-            host.command(&settings, None, Some(provider)).unwrap(),
-            &[&token],
+            host.command(&settings, None, Some(SAVED)).unwrap(),
+            &[],
             &[],
         )
         .await;
+        use std::os::unix::fs::MetadataExt;
         assert_eq!(
             record.metadata().unwrap().uid(),
             0,
             "conversation record stays supervisor-only"
         );
-        warm.release(&host, true).await;
-        assert_eq!(
-            std::fs::read_to_string(&token).unwrap(),
-            "",
-            "no live token between turns"
-        );
-        assert_eq!(token.metadata().unwrap().uid(), 10003);
     }
 
-    /// An `agy` that answers every stdin line with the fixture (`$FIXTURE`), or, with `$CUMULATIVE`, a result whose
-    /// usage grows by the same amount each turn, and exits when stdin closes.
+    /// An `agy` for one turn: it logs its argv and pid, reads the user line, and answers with the fixture (`$FIXTURE`,
+    /// then the fixture's `.stderr` beside it on stderr and exit 1), or with its conversation (`$NEW` when it begins one)
+    /// and the prompt it was given. `--conversation` resumes that one unless `$LOSE` names the one it begins instead; with `$LATE` it says
+    /// which only after a step. With `$STUCK` it ignores SIGTERM and never answers. It exits when stdin closes.
     fn fake_agy(dir: &Path) -> String {
-        let path = dir.join("agy");
+        let path = dir.join("fake-agy");
         crate::util::write_script(
             &path,
-            "#!/bin/sh\necho \"$@\" >> \"$ARGS_LOG\"\nn=0\nwhile IFS= read -r line; do\n  n=$((n+1))\n  if [ -n \"$CUMULATIVE\" ]; then\n    echo '{\"event\": \"init\", \"conversation_id\": \"6f9619ff-8b86-d011-b42d-00c04fc964ff\"}'\n    echo \"{\\\"event\\\": \\\"result\\\", \\\"result\\\": {\\\"status\\\": \\\"SUCCESS\\\", \\\"response\\\": \\\"turn $n\\\", \\\"usage\\\": {\\\"input_tokens\\\": $((n*10)), \\\"output_tokens\\\": $((n*2)), \\\"cache_read_tokens\\\": $((n*4))}}}\"\n  else\n    cat \"$FIXTURE\"\n  fi\ndone\n",
+            &format!(
+                r##"#!/bin/sh
+echo "$@" >> "$ARGS_LOG"
+echo $$ > "$ARGS_LOG.pid"
+if [ -n "$STUCK" ]; then trap '' TERM; while :; do sleep 1; done; fi
+IFS= read -r line
+if [ -n "$FIXTURE" ]; then
+  cat "$FIXTURE"
+  if [ -f "${{FIXTURE%.jsonl}}.stderr" ]; then cat "${{FIXTURE%.jsonl}}.stderr" >&2; exit 1; fi
+else
+  conv=${{NEW:-{SAVED}}}
+  prev=""
+  for a in "$@"; do [ "$prev" = --conversation ] && conv="${{LOSE:-$a}}"; prev="$a"; done
+  text=$(printf '%s' "$line" | sed 's/.*"content": "\(.*\)"}}}}$/\1/')
+  if [ -n "$LATE" ]; then
+    echo '{{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "x"}}}}'
+    echo "{{\"event\": \"step_update\", \"step_update\": {{\"conversation_id\": \"$conv\"}}}}"
+  else
+    echo "{{\"event\": \"init\", \"conversation_id\": \"$conv\"}}"
+  fi
+  echo "{{\"event\": \"result\", \"result\": {{\"status\": \"SUCCESS\", \"response\": \"$text\", \"usage\": {{\"input_tokens\": 10, \"output_tokens\": 2}}}}}}"
+fi
+read -r _
+"##
+            ),
         );
         path.display().to_string()
     }
@@ -765,9 +934,10 @@ mod tests {
         let mut got = vec![];
         while let Ok(Some(mut ev)) = tokio::time::timeout(Duration::from_secs(10), rx.recv()).await
         {
-            let end = ev["kind"] == "status" && ev["state"] == "idle"
-                || ev["kind"] == "turn_failed"
-                    && ev["error"] == "Antigravity stream ended before a result";
+            if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
+                continue;
+            }
+            let end = ev["kind"] == "status" && ev["state"] == "idle";
             ev.as_object_mut()
                 .unwrap()
                 .retain(|k, _| k != "thread_id" && k != "turn_id");
@@ -779,137 +949,194 @@ mod tests {
         got
     }
 
-    fn settings(dir: &Path, vars: &[(&str, String)]) -> Settings {
-        let mut s = Settings {
-            cwd: dir.display().to_string(),
-            model: Some("gemini-3.8-flash".into()),
-            ..Default::default()
-        };
-        s.env.insert("PATH".into(), "/usr/bin:/bin".into());
-        s.env.insert(
-            "ARGS_LOG".into(),
-            dir.join("args.log").display().to_string(),
-        );
-        for (k, v) in vars {
-            s.env.insert(k.to_string(), v.clone());
+    struct Rig {
+        dir: PathBuf,
+        cmd: String,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let dir =
+                std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
+            std::fs::create_dir_all(&dir).unwrap();
+            let cmd = fake_agy(&dir);
+            Rig { dir, cmd }
         }
-        s
+
+        fn settings(&self, vars: &[(&str, String)]) -> Settings {
+            let mut s = Settings {
+                cwd: self.dir.display().to_string(),
+                model: Some("gemini-4-hydrogen".into()),
+                ..Default::default()
+            };
+            s.env.insert("PATH".into(), "/usr/bin:/bin".into());
+            s.env.insert(
+                "ARGS_LOG".into(),
+                self.dir.join("args.log").display().to_string(),
+            );
+            for (k, v) in vars {
+                s.env.insert(k.to_string(), v.clone());
+            }
+            s
+        }
+
+        fn host(&self) -> (AntigravityHost, mpsc::UnboundedReceiver<Value>) {
+            let (tx, rx) = mpsc::unbounded_channel();
+            let host = AntigravityHost::new(&self.dir.join("agy/acme"), vec![self.cmd.clone()], tx);
+            host.start().unwrap();
+            (host, rx)
+        }
+
+        fn runs(&self) -> Vec<String> {
+            std::fs::read_to_string(self.dir.join("args.log"))
+                .unwrap_or_default()
+                .lines()
+                .map(String::from)
+                .collect()
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 
     #[tokio::test]
-    async fn every_antigravity_fixture_gives_the_python_hosts_events() {
-        let dir = std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cmd = fake_agy(&dir);
+    async fn every_antigravity_fixture_gives_its_events() {
+        let rig = Rig::new();
         for (path, expected) in crate::hosts::fixtures::cases("antigravity") {
-            let (tx, mut rx) = mpsc::unbounded_channel();
-            let home = dir.join(path.file_stem().unwrap());
-            let host = AntigravityHost::new(&home, vec![cmd.clone()], tx);
-            host.start().unwrap();
-            let s = settings(&dir, &[("FIXTURE", path.display().to_string())]);
+            let (host, mut rx) = rig.host();
+            let s = rig.settings(&[("FIXTURE", path.display().to_string())]);
             let thread = host.start_thread(&s);
             host.start_turn(&thread, "hello", None).unwrap();
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
         }
-        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]
-    async fn one_process_serves_each_turn_its_own_usage_and_a_cold_start_resumes_the_conversation()
-    {
-        let dir = std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let cmd = fake_agy(&dir);
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = AntigravityHost::new(&dir.join("home"), vec![cmd.clone()], tx);
-        host.start().unwrap();
-        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
+    async fn each_turn_is_its_own_process_and_resumes_the_conversation_on_any_effort() {
+        let rig = Rig::new();
+        let s = rig.settings(&[]);
+        let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", Some("medium")).unwrap();
         let first = turn_events(&mut rx).await;
-        assert_eq!(host.resume_thread(&thread, &s).unwrap(), thread);
-        host.start_turn(&thread, "two", None).unwrap();
-        let second = turn_events(&mut rx).await;
-        for (events, text) in [(&first, "turn 1"), (&second, "turn 2")] {
-            assert_eq!(events[0], json!({"kind": "status", "state": "active"}));
-            assert_eq!(
-                events[1],
-                json!({"kind": "tokens", "input": 10, "output": 2, "cached": 4, "total": 12, "usage": {"input": 10, "cached": 4, "output": 2}})
-            );
-            assert_eq!(
-                events[2],
-                json!({"kind": "message", "text": text, "final": true})
-            );
-        }
+        assert_eq!(
+            first[2],
+            json!({"kind": "message", "text": "one", "final": true})
+        );
         host.stop().await;
-        assert!(!host.alive());
-        // The provider's id is saved beside the thread, so a new process resumes that conversation.
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let cold = AntigravityHost::new(&dir.join("home"), vec![cmd], tx);
-        cold.start().unwrap();
-        assert!(cold
-            .resume_thread(&uuid::Uuid::new_v4().to_string(), &s)
-            .is_err());
+        // The next turn, on another effort and another host: the saved conversation goes on.
+        let (cold, mut rx) = rig.host();
+        assert!(crate::continuity::missing(
+            &cold
+                .resume_thread(&uuid::Uuid::new_v4().to_string(), &s)
+                .unwrap_err()
+                .to_string()
+        ));
         cold.resume_thread(&thread, &s).unwrap();
-        cold.start_turn(&thread, "three", None).unwrap();
-        assert_eq!(turn_events(&mut rx).await[2]["text"], "turn 1");
+        cold.start_turn(&thread, "two", Some("xhigh")).unwrap();
+        assert_eq!(turn_events(&mut rx).await[2]["text"], "two");
+        assert!(!cold.restored(&thread));
         cold.stop().await;
-        let args = std::fs::read_to_string(dir.join("args.log")).unwrap();
-        let runs: Vec<&str> = args.lines().collect();
-        assert_eq!(runs[0], "--input-format stream-json --output-format stream-json --model gemini-3.8-flash-medium --effort medium --dangerously-skip-permissions");
-        assert!(runs[1].ends_with("--effort low --dangerously-skip-permissions --conversation 6f9619ff-8b86-d011-b42d-00c04fc964ff"), "{}", runs[1]);
-        std::fs::remove_dir_all(dir).unwrap();
+        let runs = rig.runs();
+        assert_eq!(runs[0], "--input-format stream-json --output-format stream-json --model gemini-4-hydrogen-medium --effort medium --dangerously-skip-permissions");
+        assert_eq!(runs[1], format!("--input-format stream-json --output-format stream-json --model gemini-4-hydrogen-xhigh --effort xhigh --dangerously-skip-permissions --conversation {SAVED}"));
     }
 
     #[tokio::test]
-    async fn a_kept_process_takes_only_its_own_thread_in_its_own_folder() {
-        let dir = std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(dir.join("worktree")).unwrap();
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = AntigravityHost::new(&dir.join("home"), vec![fake_agy(&dir)], tx);
-        host.start().unwrap();
-        let s = settings(&dir, &[("CUMULATIVE", "1".into())]);
-        let reply = |events: &[Value]| events[2]["text"].clone();
-        // The next turn on the same thread and folder writes to the running process.
+    async fn a_conversation_agy_does_not_resume_before_a_step_starts_once_anew_with_the_whole_prompt(
+    ) {
+        let rig = Rig::new();
+        let s = rig.settings(&[("LOSE", OTHER.into()), ("NEW", FRESH.into())]);
+        let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "one", None).unwrap();
-        assert!(!host.warm());
-        assert_eq!(reply(&turn_events(&mut rx).await), "turn 1");
-        host.resume_thread(&thread, &s).unwrap();
-        host.start_turn(&thread, "two", None).unwrap();
-        assert!(host.warm(), "the kept process took the turn");
-        assert_eq!(reply(&turn_events(&mut rx).await), "turn 2");
-        // A fresh session is a new thread: agy's conversation is the old one's, so a new process takes it.
-        let fresh = host.start_thread(&s);
-        host.start_turn(&fresh, "three", None).unwrap();
-        assert!(!host.warm(), "a replacing process is cold");
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
+        host.full_prompt(&thread, Some("everything".into()));
+        host.start_turn(&thread, "short", None).unwrap();
         let events = turn_events(&mut rx).await;
-        assert_eq!(reply(&events), "turn 1", "{events:?}");
-        // So does the same thread in another folder (a task that moved to its worktree).
-        let mut moved = s.clone();
-        moved.cwd = dir.join("worktree").display().to_string();
-        host.resume_thread(&fresh, &moved).unwrap();
-        host.start_turn(&fresh, "four", None).unwrap();
-        let events = turn_events(&mut rx).await;
-        assert_eq!(reply(&events), "turn 1", "{events:?}");
-        // The replaced processes said nothing more to the turns after them.
-        tokio::time::sleep(Duration::from_millis(500)).await;
-        assert!(rx.try_recv().is_err());
-        assert!(host.alive());
-        assert_eq!(
-            std::fs::read_to_string(dir.join("args.log"))
-                .unwrap()
-                .lines()
-                .count(),
-            3
-        );
+        assert!(events
+            .iter()
+            .any(|e| e["kind"] == "diagnostic" && e["text"] == super::super::claude::RESTORING));
+        let message = events.iter().find(|e| e["kind"] == "message").unwrap();
+        assert_eq!(message["text"], "everything");
+        assert!(host.restored(&thread));
         host.stop().await;
-        std::fs::remove_dir_all(dir).unwrap();
+        let runs = rig.runs();
+        assert_eq!(runs.len(), 2);
+        assert!(runs[0].ends_with(&format!("--conversation {SAVED}")));
+        assert!(!runs[1].contains("--conversation"));
+        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+        assert!(record.contains(FRESH), "{record}");
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_must_continue_its_conversation_stops_rather_than_start_another() {
+        let rig = Rig::new();
+        let mut s = rig.settings(&[("LOSE", OTHER.into())]);
+        s.require_existing_session = true;
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
+        host.start_turn(&thread, "go on", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert!(crate::continuity::missing(&text_of(&failed["error"])));
+        host.stop().await;
+        assert_eq!(rig.runs().len(), 1, "no second start");
+        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+        assert!(
+            record.contains(SAVED) && !record.contains(OTHER),
+            "{record}"
+        );
+    }
+
+    #[tokio::test]
+    async fn another_conversation_named_after_a_step_is_kept_and_the_thread_reads_restored() {
+        let rig = Rig::new();
+        let s = rig.settings(&[("LOSE", OTHER.into()), ("LATE", "1".into())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
+        host.start_turn(&thread, "hi", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
+        assert!(host.restored(&thread));
+        assert_eq!(rig.runs().len(), 1, "nothing is replayed after a step");
+        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+        assert!(record.contains(OTHER), "{record}");
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn stop_waits_for_a_process_that_ignores_sigterm_to_go() {
+        let rig = Rig::new();
+        let s = rig.settings(&[("STUCK", "1".into())]);
+        let (host, _rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        let pid_file = rig.dir.join("args.log.pid");
+        let pid = loop {
+            if let Some(pid) = std::fs::read_to_string(&pid_file)
+                .ok()
+                .and_then(|p| p.trim().parse::<i32>().ok())
+            {
+                break pid;
+            }
+            tokio::task::yield_now().await;
+        };
+        host.stop().await;
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            -1,
+            "agy is gone once stop returns"
+        );
     }
 
     #[test]
-    fn efforts_accept_xhigh_and_reject_unsupported_levels() {
+    fn efforts_default_to_high_replace_a_named_one_and_reject_unsupported_levels() {
         let s = Settings {
             effort: Some("max".into()),
             ..Default::default()
@@ -919,52 +1146,14 @@ mod tests {
             argv(&["agy".into()], &s, Some("xhigh"), None).unwrap()[6],
             "gemini-4-neon-xhigh"
         );
+        let named = Settings {
+            model: Some("gemini-4-hydrogen-low".into()),
+            ..Default::default()
+        };
+        let default = argv(&["agy".into()], &named, None, None).unwrap();
         assert_eq!(
-            argv(&["agy".into()], &s, Some("high"), None).unwrap()[6],
-            "gemini-4-neon-high"
-        );
-    }
-
-    #[test]
-    fn step_usage_keeps_resumed_turn_tokens_separate_from_conversation_totals() {
-        let dir =
-            std::env::temp_dir().join(format!("agy-step-usage-{}", uuid::Uuid::new_v4().simple()));
-        let (tx, mut rx) = mpsc::unbounded_channel();
-        let host = AntigravityHost::new(&dir, vec!["agy".into()], tx);
-        let mut inner = host.inner();
-        inner.thread = Some("t1".into());
-        inner.turn = Some("turn-1".into());
-        host.on_event(
-            &mut inner,
-            &json!({"event": "step_update", "step_update": {"step_index": 6, "state": "DONE", "step_type": "agent_response", "text_delta": "ok", "usage": {"input_tokens": 900, "output_tokens": 50, "cache_read_tokens": 200}}}),
-        )
-        .unwrap();
-        host.on_event(
-            &mut inner,
-            &json!({"event": "step_update", "step_update": {"step_index": 8, "state": "DONE", "step_type": "agent_response", "text_delta": "!", "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 300}}}),
-        )
-        .unwrap();
-        host.on_event(
-            &mut inner,
-            &json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok!", "usage": {"input_tokens": 20000, "output_tokens": 500, "cache_read_tokens": 8000}}}),
-        )
-        .unwrap();
-        drop(inner);
-        let mut tokens = None;
-        while let Ok(ev) = rx.try_recv() {
-            if ev["kind"] == "tokens" {
-                tokens = Some(ev);
-            }
-        }
-        let tokens = tokens.expect("tokens event");
-        assert_eq!(
-            (
-                tokens["input"].as_i64(),
-                tokens["output"].as_i64(),
-                tokens["cached"].as_i64(),
-                tokens["total"].as_i64()
-            ),
-            (Some(1000), Some(60), Some(500), Some(1060))
+            (default[6].as_str(), default[8].as_str()),
+            ("gemini-4-hydrogen-high", "high")
         );
     }
 }

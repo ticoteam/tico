@@ -14,7 +14,7 @@ const BYTES: usize = 64 * 1024;
 const LINES: usize = 200;
 const LINE_BYTES: usize = 8192;
 
-fn safe(text: &str, scrub: &Redactor) -> String {
+pub(crate) fn safe(text: &str, scrub: &Redactor) -> String {
     static SHAPES: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let shapes = SHAPES.get_or_init(|| regex::Regex::new(r"(?i)(?:bearer|basic)\s+\S+|\b(?:sk|pk|xai|gsk|ghp|github_pat)[-_][\w-]{6,}|\b[A-Za-z0-9_+=-]{32,}\b|(?:password|token|api[_ -]?key|secret)\s*[:=]\s*\S+").unwrap());
     shapes

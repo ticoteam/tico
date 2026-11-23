@@ -1,10 +1,10 @@
 """A stand-in for the Antigravity `agy` CLI, for the runner conformance suite (runner_support/tests/test_conformance.py).
 
-`--version` answers as agy 1.3.5. With `--input-format stream-json` it is one persistent process that runs a turn
-for each user line on stdin, the way runner-rs/src/hosts/antigravity.rs reads it: `init` with the conversation id, text
-deltas, then a `result` whose usage is the process's running total. Every turn is appended to $FAKE_LOG as one JSON
-line (argv, pid, the prompt, the granted variables and the token HUB_TOKEN's file held at that moment). A prompt
-containing HANG streams one delta and answers nothing more, once per $FAKE_LOG; the process exits when stdin closes."""
+`--version` answers as agy 1.5.15. With `--input-format stream-json` it runs the turn on its user line on stdin, the way
+runner-rs/src/hosts/antigravity.rs reads it: `init` with the conversation id, text deltas, then a `result` whose usage
+is the process's running total. Every turn is appended to $FAKE_LOG as one JSON line (argv, pid, the conversation, the
+prompt, the granted variables and the token HUB_TOKEN held). A prompt containing HANG streams one delta and answers
+nothing more, once per $FAKE_LOG; the process exits when stdin closes."""
 
 import json
 import os
@@ -35,7 +35,10 @@ def lease_token():
 def main():
     args = sys.argv[1:]
     if args == ["--version"]:
-        print("1.3.5")
+        print("1.5.15")
+        return
+    if args == ["models"]:  # the sign-in check (harnesses/antigravity.toml)
+        print("gemini-4-neon\ngemini-4-hydrogen")
         return
     conversation = args[args.index("--conversation") + 1] if "--conversation" in args else str(uuid.uuid4())
     turns = 0
@@ -50,6 +53,7 @@ def main():
                 "harness": "antigravity",
                 "argv": args,
                 "pid": os.getpid(),
+                "conversation": conversation,
                 "prompt": text,
                 "token": lease_token(),
                 "env": {k: os.environ.get(k) for k in GRANTED},
