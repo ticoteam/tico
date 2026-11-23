@@ -549,6 +549,25 @@ describe("An agent's Settings", () => {
     expect(within(dialog).getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
     expect(posted('/bots/ana/compact-at')).toBeUndefined();
   });
+
+  it('an older row with no harness keeps the one its runtime runs, and Compact follows the model picked', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, {
+      models: [{ id: 'm-one', label: 'Model One', harnesses: ['old'] }, { id: 'm-two', label: 'Model Two', harnesses: ['new'] }],
+      harnesses: [
+        { id: 'old', name: 'Old One', offered: false },
+        { id: 'new', name: 'New One', capabilities: { compaction: true } },
+      ],
+    } as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-one', harness: undefined, resolved_runtime: 'old' } as AgentRow]);
+    serve(() => undefined);
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).getByRole('button', { name: 'Old One' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'More' })).toBeNull();
+    // No harness chosen: picking a model only New One runs moves it there, which compacts.
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model Two' }));
+    expect(within(dialog).getByRole('button', { name: 'More' })).toBeTruthy();
+  });
 });
 
 describe("An agent's rules @s616", () => {

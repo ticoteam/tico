@@ -45,12 +45,18 @@ export function ModelPicker({
   const savedCompact = detail?.compact_at ? String(detail.compact_at) : '';
   const compactNow = compact ?? savedCompact;
 
-  const { models: usable, harnesses } = pickable(data, agent.harness);
+  // Older rows without a harness run their runtime's. A harness no longer offered stays only when every target is on it.
+  const on = (a: AgentRow) => a.harness || a.resolved_runtime || '';
+  const current = also.every((a) => on(a) === on(agent)) ? on(agent) : undefined;
+  const { models: usable, harnesses } = pickable(data, current);
   const models = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const chosen = models.find((m) => m.id === model);
   const efforts = chosen?.efforts ?? [];
-  // Only a harness that compacts where it is told to has a Compact; older rows without a harness run their runtime's.
-  const compacts = !also.length && !!data?.harnesses.find((h) => h.id === (harness || agent.resolved_runtime))?.capabilities?.compaction;
+  // Where the pick runs: the harness chosen, else the agent's own when the model runs there, else the model's first.
+  const runs = chosen?.harnesses;
+  const dest = harness || (!runs?.length || runs.includes(on(agent)) ? on(agent) : runs[0]);
+  // Compact shows only where that harness compacts, or while a saved value (a fallback may use it) can still be cleared.
+  const compacts = !also.length && (!!data?.harnesses.find((h) => h.id === dest)?.capabilities?.compaction || !!savedCompact);
 
   const pickHarness = (h: string) => {
     setHarness(h);

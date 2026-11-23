@@ -89,9 +89,9 @@ const EFFORT: Record<string, string> = { xhigh: 'XHigh' };
 export const effortLabel = (e: string | null | undefined) => (e ? (EFFORT[e] ?? cap(e)) : 'Default');
 
 /**
- * What a model picker offers from GET /api/v2/models: models not deprecated whose provider is on (or names none), and
- * the harnesses that run at least one of them. A harness the team no longer offers (`offered: false`) stays only for
- * the agent already on it (`current`).
+ * What a model picker offers from GET /api/v2/models: models not deprecated whose provider is on (or names none) and
+ * that some offered harness runs, and the harnesses that run at least one of them. A harness the team no longer offers
+ * (`offered: false`) stays only for the agents already on it (`current`).
  */
 export function pickable<M extends { provider?: string; harnesses?: string[]; deprecated?: boolean }, H extends { id: string; offered?: boolean }>(
   data: { models?: readonly M[]; harnesses?: readonly H[]; enabled_providers?: readonly string[] } | undefined,
@@ -99,10 +99,11 @@ export function pickable<M extends { provider?: string; harnesses?: string[]; de
 ): { models: M[]; harnesses: H[] } {
   const on = data?.enabled_providers;
   const models = (data?.models ?? []).filter((m) => !m.deprecated && (!on || !m.provider || on.includes(m.provider)));
-  const harnesses = (data?.harnesses ?? []).filter(
-    (h) => (h.offered !== false || h.id === current) && models.some((m) => !m.harnesses || m.harnesses.includes(h.id)),
-  );
-  return { models, harnesses };
+  const offered = (data?.harnesses ?? []).filter((h) => h.offered !== false || h.id === current);
+  const ids = offered.map((h) => h.id);
+  const runnable = models.filter((m) => !m.harnesses || m.harnesses.some((h) => ids.includes(h)));
+  const harnesses = offered.filter((h) => runnable.some((m) => !m.harnesses || m.harnesses.includes(h.id)));
+  return { models: runnable, harnesses };
 }
 
 /** "Opus 5.5, High": the model it runs and its effort, as the server resolved them. */
