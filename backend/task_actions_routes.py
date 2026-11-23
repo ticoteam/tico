@@ -802,7 +802,7 @@ def register_core(
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
             unassigned=unassigned,
             wake_refs=wake_refs,
-            human_id=body.human,
+            human_role=body.human,
             asks=owner if asks_person and holder != owner else None,
             entity_id=entity_id,
         )
@@ -1276,7 +1276,9 @@ def register_core(
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
-        fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
+        # The old `human` field, the `human` role until the upgrade floor passes: sent as "" or null, it takes it off.
+        named = fields.pop("human")
+        fields["human_role"] = (named or "") if "human" in body.model_fields_set else None
         entity = fields.pop("entity", None)
         fields["entity_id"] = None if entity is None else for_entity(c, who, entity)
         if "size" in body.model_fields_set and body.size is None:

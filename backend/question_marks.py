@@ -479,7 +479,9 @@ def _addressee(
 
         who = SimpleNamespace(role="bot", actor=actor)
         if task_id:
-            reach.check(conn, who, target, "task", task_id=task_id, ask=True)  # its Human too (reach.human_of)
+            reach.check(
+                conn, who, target, "task", task_id=task_id, ask=True
+            )  # its person assignee too (reach.assignee_of)
         else:
             reach.check(conn, who, target, "chat", conversation_id=(message or {}).get("conversation_id"))
     if task is not None:

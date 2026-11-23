@@ -214,7 +214,7 @@ class TaskCreate(Contract):
     body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
-    # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
+    # The old Human field: until the upgrade floor passes, it sets the `human` role alone (a person; hubdb._human_role).
     human: ID | None = None
     # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
     pipeline: ID | None = None
@@ -355,7 +355,8 @@ class TaskUpdate(Contract):
     number: TaskNumber | None = None  # a mover's, for a task that has none
     # Replace the people in the roles named: {role: [actors]}; [] clears one.
     roles: dict[str, list[str]] | None = None
-    # The task's Human (hubdb.task_human), a person; "" takes them off.
+    # The old Human field: until the upgrade floor passes, it sets the `human` role alone (a person; hubdb._human_role);
+    # "" or null takes the role off.
     human: str | None = Field(default=None, max_length=200)
     # Agent Ops applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as Agent Ops.

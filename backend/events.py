@@ -251,7 +251,8 @@ _RUN_CONVERSATION = (
     "(SELECT m.conversation_id FROM attempts a JOIN jobs j ON j.id=a.job_id "
     "JOIN messages m ON m.id=j.message_id WHERE a.id={aid})"
 )
-_PARTIES = ("owner_id", "requester_id")
+# A task's people whose Needs you a change of the task may move: its assignee is on its ladder (waiting_on.person_for).
+_PARTIES = ("owner_id", "requester_id", "assignee_id")
 
 
 def _letters_for_source(kind, *ids):
@@ -288,7 +289,7 @@ TRIGGERS = [
         "changes_task_letters_access",
         "UPDATE",
         "tasks",
-        _changed("private", "readers", "assignee_id", *_PARTIES),
+        _changed("private", "readers", *_PARTIES),
         _letters_for_task("NEW.id"),
     ),
     ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),

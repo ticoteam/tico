@@ -155,9 +155,9 @@ def view(wait: Wait, shown: Callable[[str], bool]) -> Row:
 
 
 def person_for(conn: "sqlite3.Connection", row: Row) -> str | None:
-    """The person a task falls to when no bot can take it further: the task's Human (`tasks.human_id`, the person
-    accountable for it whoever owns it), else the one the ladder already chose, else the task's owner where that is a
-    person, else the pipeline's owner or manager where that is a person, else the first person
+    """The person a task falls to when no bot can take it further: the one the ladder already chose, else the task's
+    holder where that is a person, else its assignee where that is a person (who it is for, whoever holds this stage),
+    else the pipeline's owner or manager where that is a person, else the first person
     above its manager bot on the org chart (C16), else the company owner, else the person who has been here longest.
     Anyone on the way who left, was removed or cannot sign in is skipped, and on a private task anyone who cannot read
     it. A private task then falls to whoever asked for it, else a person on its reader list, a group's by its members
@@ -196,9 +196,9 @@ def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
     people = (
-        row.get("human_id"),
         visit.get("person_id"),
         row.get("owner_id"),
+        row.get("assignee_id"),
         pipe.get("owner_id"),
         pipe.get("manager_id"),
     )
@@ -906,7 +906,7 @@ def waiting_on(conn: "sqlite3.Connection", task_id: str) -> list[Wait]:
 # acceptance, note or checkpoint, so hot reads (GET /api/v2/bots) stay on the covering partial index.
 SLIM_TASK_COLUMNS = (
     "id,owner_id,requester_id,status,conversation_id,private,readers,"
-    "pipeline_id,stage_id,assignee_id,human_id,version,created_at,live_meeting_id"
+    "pipeline_id,stage_id,assignee_id,version,created_at,live_meeting_id"
 )
 SLIM_TASK_SQL = f"SELECT {SLIM_TASK_COLUMNS} FROM tasks WHERE id=?"
 
@@ -1248,8 +1248,8 @@ def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> 
     list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`,
     `needs_by_person`):
 
-    - it is theirs (its owner), they are its Human (first on its ladder, `person_for`), the ladder already brought it
-      to them (its visit's person), or a requirement on its stage or visit names them (one of a page's approvers
+    - it is theirs (its owner), they are its assignee (on its ladder after the holder, `person_for`), the ladder already
+      brought it to them (its visit's person), or a requirement on its stage or visit names them (one of a page's approvers
       too), or was given to them;
     - a page on it that names nobody asks again whoever sent it back or whose OK lapsed (an answer of theirs);
     - a bot they fix cannot run (`_fixer`) and the task is that bot's turn: its owner, its pipeline's manager, a
@@ -1278,7 +1278,7 @@ def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> 
     }
     found |= {
         str(row[0])
-        for row in conn.execute("SELECT id FROM tasks WHERE human_id=? AND status='open'", (person,)).fetchall()
+        for row in conn.execute("SELECT id FROM tasks WHERE assignee_id=? AND status='open'", (person,)).fetchall()
     }
     visits |= {
         str(row[0])

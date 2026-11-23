@@ -847,22 +847,18 @@ def test_a_deleted_newest_message_does_not_hide_an_older_one_and_filing_from_it_
     assert filed["requester_id"] == "human:ben", filed
 
 
-# ---------------------------------------------------------------- a task's Human (#3041, the HotMic stall)
+# ---------------------------------------------------------------- a task's person assignee (#3041, the HotMic stall)
 def _humaned(api, set_by="human:ana", chart_too=True):
-    """ops, two levels down, owns a task Ana asked for; `set_by` names Ben its Human. Ben is outside ops's reach and
-    is not the task's requester, so only being its Human can open him."""
+    """ops, two levels down, owns a task Ana asked for; `set_by` makes Ben its assignee (None: he is the one it was
+    filed for, with no change in its history). Ben is outside ops's reach and is not the task's requester, so only
+    being its assignee can open him."""
     if chart_too:
         two_levels_down(api)
     own = task(api, "ana-test", "bot:ops", title=f"Write the launch note ({set_by})")
-    if set_by == "human:ana":
-        r = api.post(
-            f"/api/v2/tasks/{own['id']}", json={"version": own["version"], "human": "ben"}, headers=headers("ana-test")
-        )
-        assert r.status_code == 200, r.text
-    else:  # a bot or Tico named him: set as data with its history row, as hubdb.task_update writes it
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET human_id='human:ben' WHERE id=?", (own["id"],))
-            H._task_event(c, own["id"], set_by, "human_id", None, "human:ben", "")
+    with api.app.state.store.transaction() as c:  # set as data with its history row, as task_engine.reassign writes it
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (own["id"],))
+        if set_by:
+            H._task_event(c, own["id"], set_by, "assignee_id", "bot:ops", "human:ben", "")
     return own
 
 
@@ -886,8 +882,8 @@ def _needs(api, token, kind):
     return [i for i in (view["items"] if isinstance(view, dict) else view) if i["kind"] == kind]
 
 
-def test_the_owning_bot_asks_its_tasks_human_on_it_once_in_needs_you_and_with_no_ping(api):
-    """AC-1, AC-3: a ❓ from the owner to the Human a person named is posted, is one Needs you item, and sends Ben
+def test_the_owning_bot_asks_its_tasks_assignee_on_it_once_in_needs_you_and_with_no_ping(api):
+    """AC-1, AC-3: a ❓ from the owner to the assignee a person named is posted, is one Needs you item, and sends Ben
     nothing anywhere else."""
     own = _humaned(api)
     with api.app.state.store.read() as c:
@@ -910,8 +906,8 @@ def test_the_owning_bot_asks_its_tasks_human_on_it_once_in_needs_you_and_with_no
         )
 
 
-def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_human_once_in_needs_you(api):
-    """AC-2: a real stage ask (POST /asks, an OK of a page) from the owner to its task's Human goes through and is one
+def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_assignee_once_in_needs_you(api):
+    """AC-2: a real stage ask (POST /asks, an OK of a page) from the owner to its task's person assignee goes through and is one
     Needs you item for Ben."""
     own = _humaned(api)
     file_id, _ = store_file(api, "The launch note.", title="Launch note")
@@ -933,8 +929,8 @@ def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_human_once_in_needs_you(a
     assert (item["requirement_id"], item["task_id"]) == (r.json()["requirement_id"], own["id"]), item
 
 
-def test_a_tasks_human_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(api):
-    """AC-8 and the spec's 'no chat ping': being the Human opens the ❓ and the stage ask on the task, nothing else
+def test_a_tasks_assignee_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(api):
+    """AC-8 and the spec's 'no chat ping': being the assignee opens the ❓ and the stage ask on the task, nothing else
     through the shared gate: a message naming the task, a sub-task filed for him and handing him the task stay
     refused."""
     own = _humaned(api)
@@ -953,20 +949,20 @@ def test_a_tasks_human_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(a
 
 
 def _set_human(api, task_id, who, actor):
-    """`actor` makes `who` the task's Human: set as data with its history row, as hubdb.task_update writes it."""
+    """`actor` makes `who` the task's assignee: set as data with its history row, as task_engine.reassign writes it."""
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET human_id=? WHERE id=?", (who, task_id))
-        H._task_event(c, task_id, actor, "human_id", None, who, "")
+        c.execute("UPDATE tasks SET assignee_id=? WHERE id=?", (who, task_id))
+        H._task_event(c, task_id, actor, "assignee_id", None, who, "")
 
 
-def test_only_a_human_a_person_or_tico_named_on_this_task_opens_it(api):
-    """AC-4, AC-5, AC-9: a Human ops named itself is refused with the one sentence alone, also when a person named the
-    same Human on its parent (no other task is read) and when ops names him again after a person did (the latest change
+def test_only_an_assignee_a_person_or_tico_named_on_this_task_opens_it(api):
+    """AC-4, AC-5, AC-9: an assignee ops named itself is refused with the one sentence alone, also when a person named the
+    same assignee on its parent (no other task is read) and when ops names him again after a person did (the latest change
     counts). Named by Tico on the task itself, he is open."""
     own = _humaned(api, set_by="bot:ops")
     detail = _refused_ask(api, "bot:ops", own["id"])
     assert detail == (
-        "A bot named this task's Human, not a person or Tico, so this task does not let it ask them. Nothing was sent."
+        "A bot named this task's assignee, not a person or Tico, so this task does not let it ask them. Nothing was sent."
     ), detail
     parent = _humaned(api, set_by="human:ana", chart_too=False)
     child = task(api, "ana-test", "bot:ops", title="Child note")
@@ -981,10 +977,11 @@ def test_only_a_human_a_person_or_tico_named_on_this_task_opens_it(api):
     _set_human(api, parent["id"], "human:ben", "bot:ops")
     _refused_ask(api, "bot:ops", parent["id"])
     _ask(api, "bot:ops", _humaned(api, set_by="keeper", chart_too=False)["id"])
+    _ask(api, "bot:ops", _humaned(api, set_by=None, chart_too=False)["id"])  # filed for him: no change to read
 
 
 def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_first(api):
-    """Only a ❓ and a stage ask open the Human: an OK for an action (POST /oks, a grant the bot then uses) is refused
+    """Only a ❓ and a stage ask open the assignee: an OK for an action (POST /oks, a grant the bot then uses) is refused
     as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""
     own = _humaned(api)
     with api.app.state.store.read() as c:
@@ -1013,7 +1010,7 @@ def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_fir
     assert "The task has ended: a stage ask is for an open task." in str(ended.value), ended.value
 
 
-def test_a_tasks_human_is_not_asked_once_it_ends_or_by_another_bot(api):
+def test_a_tasks_assignee_is_not_asked_once_it_ends_or_by_another_bot(api):
     """AC-6, AC-7: an earlier owner and a closed task stay refused."""
     own = _humaned(api)
 
@@ -1025,9 +1022,12 @@ def test_a_tasks_human_is_not_asked_once_it_ends_or_by_another_bot(api):
         )
         assert r.status_code == 200, r.text
 
+    # A reassign in To do names the assignee too: Ana names Ben its assignee again each time.
     as_ana("owner", {"owner": "bot:finance"})  # ops is now an earlier owner, finance the owner
+    _set_human(api, own["id"], "human:ben", "human:ana")
     _refused_ask(api, "bot:ops", own["id"])
     as_ana("owner", {"owner": "bot:ops"})
+    _set_human(api, own["id"], "human:ben", "human:ana")
     _ask(api, "bot:ops", own["id"])  # its owner again: open
     as_ana("move", {"to": "closed", "why": "Not needed"})
     with api.app.state.store.read() as c:

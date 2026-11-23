@@ -154,16 +154,16 @@ def instructions(conn: "sqlite3.Connection", task_id: str) -> str:
     return "\n\n".join(out)
 
 
-# The task's Human (tasks.human_id): the person its questions and OKs go to, whoever owns it (one sentence).
-HUMAN_LINE = "{name} is this task's Human, so ask them the questions and OKs it needs from a person (--to {to})."
+# A person assignee the task falls to (waiting_on.person_for): its questions and OKs go to them (one sentence).
+ASSIGNEE_LINE = "{name} is this task's assignee, so ask them the questions and OKs it needs from a person (--to {to})."
 
 
 def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | None) -> str:
     """What a bot reads when it is woken for a task: the stage, the person's notes on the sign-off that let it in
-    (stage_effects.notes_on_the_way_in), what earlier stages handed on (stage_inputs), what is missing, whom to ask (the
-    task's Human, while they can act on it), and how its run may end. Said to `to`, whom it wakes, in words kept in the
-    task's thread: a task this one filed is named only as `told` allows, and the pages of the task that filed this one
-    only when it is not private."""
+    (stage_effects.notes_on_the_way_in), what earlier stages handed on (stage_inputs), what is missing, whom to ask (a
+    person assignee, while the task falls to them), and how its run may end. Said to `to`, whom it wakes, in words kept
+    in the task's thread: a task this one filed is named only as `told` allows, and the pages of the task that filed
+    this one only when it is not private."""
     from . import stage_inputs
     from . import waiting_on as W
 
@@ -203,8 +203,9 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
                 lines.append(f"  {R.decide_commands(str(task['id']), str(s.requirement['id']))}")
             elif R.asked_to_review(s, to):
                 lines.append(f"  {R.review_commands(str(task['id']), str(s.requirement['id']))}")
-    if (human := task.get("human_id")) and W.person_for(conn, task) == human:  # their Human, while they can act on it
-        lines.append(HUMAN_LINE.format(name=_h().actor_name(conn, human), to=human))
+    assignee = task.get("assignee_id")
+    if _h().is_human(assignee) and W.person_for(conn, task) == assignee:  # while the task falls to them
+        lines.append(ASSIGNEE_LINE.format(name=_h().actor_name(conn, assignee), to=assignee))
     if any(_review_page(s.requirement) for s in missing):
         lines.append(FROM_THE_DIFF)
     lines.append(f"Version {task.get('version')}. Send it with every command on this task.")

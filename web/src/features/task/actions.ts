@@ -373,19 +373,9 @@ export const newPage = defineAction({
 
 /* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
 
-import { deleteTask, moveTaskTo, setTaskHuman, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
+import { deleteTask, moveTaskTo, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
 
 const actor =z.string().check(z.minLength(1), z.maxLength(200));
-
-export const setHuman = defineAction({
-  id: 'task.setHuman',
-  title: 'Set the person accountable for a task',
-  kind: 'change',
-  input: z.strictObject({ task, human: z.nullable(actor) }),
-  run: (_ctx, i) => said(setTaskHuman(i.task, i.human)),
-  did: (i) => (i.human ? 'Set the Human' : 'Took the Human off'),
-  target: (i) => ({ kind: 'task-human', id: i.task }),
-});
 
 export const setSize = defineAction({
   id: 'task.setSize',

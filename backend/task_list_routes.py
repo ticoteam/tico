@@ -318,7 +318,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                             "size",
                         ):
                             row.pop(field, None)
-                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "human_id", "came_from"):
+                        for field in ("done_at", "closed_at", "closed_by_id", "assignee_id", "came_from"):
                             if row.get(field) is None:
                                 row.pop(field, None)
 
@@ -670,8 +670,17 @@ def readers(auth):
 
     # The columns of a task's row that are the server's own, never in a view. `prefix` is read as the task's label
     # (hubdb.ticket_refs); a list of 500 rows carries no copy of it. `body` is the description tasks no longer have:
-    # what was asked is the first message on the task's chat.
-    SERVER_COLUMNS = ("checkpoint_state", "work_revision", "occurrence_step", "rule_due_id", "prefix", "body")
+    # what was asked is the first message on the task's chat. `human_id` is the retired Human, frozen for a rolled-back
+    # server: its people are the assignee or the `human` role now.
+    SERVER_COLUMNS = (
+        "checkpoint_state",
+        "work_revision",
+        "occurrence_step",
+        "rule_due_id",
+        "prefix",
+        "body",
+        "human_id",
+    )
 
     def plain_view(row, c=None):
         """A task's plain fields, as every view of it starts: the row, without the server's own columns."""

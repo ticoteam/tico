@@ -416,7 +416,7 @@ def reconcile(c: Any, actor: str, task_id: str, keys: Iterable[str]) -> list[Row
 
 
 # A task write that may move who a card's shots wait on (`holder`): no other write reads them.
-MOVES = frozenset(("owner_id", "human_id", "stage_id", "pipeline_id", "private"))
+MOVES = frozenset(("owner_id", "assignee_id", "stage_id", "pipeline_id", "private"))
 # Whether any shot of the company is unknown now: one seek of events_action_ts, stopping at the first.
 _ANY = f"SELECT 1 FROM events s WHERE s.action=? AND {_LATER} LIMIT 1"
 
@@ -433,7 +433,7 @@ def holder(c: Any, task_id: str) -> str | None:
 
 
 def holder_moved(c: Any, task_id: str, before: str | None) -> None:
-    """After a write to the card that may move who it waits on (its owner, Human or stage): when the person its shots
+    """After a write to the card that may move who it waits on (its owner, assignee or stage): when the person its shots
     wait on changed from `before` (`holder`, read before the write), both their Needs you are sent again."""
     if before is None:
         return

@@ -6,7 +6,7 @@ import io
 import json
 import urllib.error
 
-from backend import paid_renders
+from backend import paid_renders, task_engine
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner
 from clients import gateway as G
@@ -446,8 +446,8 @@ def test_an_unknown_shot_waits_on_the_cards_person_until_they_mark_it_reconciled
     connect(api)
     task, token = turn(api)
     store = api.app.state.store
-    with store.transaction() as c:  # ben is the card's person: the wait is his, not the owner's
-        c.execute("UPDATE tasks SET human_id='human:ben' WHERE id=?", (task["id"],))
+    with store.transaction() as c:  # ben, its assignee, is the card's person: the wait is his, not the owner's
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (task["id"],))
     sent = []
     monkeypatch.setattr(G, "video_submit", counting(sent, (202, {"id": JOB, "status": "queued"}, "")))
     body = {"prompt": "a kettle", "shot": "Kettle wide"}
@@ -696,10 +696,13 @@ def test_a_new_person_for_the_card_moves_both_needs_you(api, monkeypatch):
     unknown_now(api, token, "Kettle wide", monkeypatch)
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET human_id='human:ben' WHERE id=?", (task["id"],))
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (task["id"],))
         mark = c.execute("SELECT coalesce(max(seq), 0) FROM changes").fetchone()[0]
-        H.task_update(c, "human:ana", task["id"], human_id="human:cara")
-        told = {r[0] for r in c.execute("SELECT subject_id FROM changes WHERE topic='needs' AND seq>?", (mark,))}
+        task_engine._write(c, task["id"], assignee_id="human:cara")  # as a reassign, refile or restore writes it
+        told = {
+            r[0]
+            for r in c.execute("SELECT subject_id FROM changes WHERE topic='needs' AND kind='ask' AND seq>?", (mark,))
+        }
     assert {"human:ben", "human:cara"} <= told
 
 

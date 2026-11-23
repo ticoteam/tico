@@ -139,7 +139,7 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
   old one. People have no such limit. An OK bound to an action (send this email, mail this letter) is not counted: it
   is keyed by what it approves, so each send on a task keeps its own OK and a later ask never replaces it.
 - **C16.** The person at the top of the ladder is the first person above the pipeline's manager bot on the org chart. If
-  there is none, the org owner. A task with a Human ([tasks.md](../tasks.md#the-tasks-human)) falls to them first.
+  there is none, the org owner. A task's person assignee comes after its holder ([tasks.md](../tasks.md#who-a-task-falls-to)).
 - **C17.** From phase 1 until the proof, the other orgs stay on today's release. A fix for them comes from a branch off
   that release. Only the new Tico Team takes new releases.
 - **C18.** Version: phases 1 to 3 go to the new Tico Team as 0.6.0 pre-releases. 0.6.0 itself is published when

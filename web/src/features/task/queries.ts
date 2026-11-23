@@ -458,9 +458,6 @@ export const taskGoalQuery = (goal: string) =>
 /** A field edit (POST /api/v2/tasks/{tid}): shown at once, the server's task in its place. */
 const edit = (id: string, fields: Fields | ((t: TaskData) => Fields), body: object) => change(id, fields, (idem) => post(taskPath(id), body, idem));
 
-/** The person accountable for it, whoever owns it; null takes them off. */
-export const setTaskHuman = (id: string, human: string | null) => edit(id, { human_id: human }, { human: human ?? '' });
-
 export const setTaskSize = (id: string, size: number) => edit(id, { size }, { size });
 
 /** The people in one role, replacing who was in it; none takes the role off. */

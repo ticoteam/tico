@@ -459,8 +459,8 @@ def task_ask(
     if is_bot(actor):
         # An ask writes to the one it names, so a bot's ask keeps to its reach as its messages do (reach.check: the
         # person who handed it the task is always in it). Refused before anything is written. An ended task is
-        # refused first, so its refusal is never reach's advice. A stage ask also reaches the task's Human
-        # (reach.human_of); an action's approval (`for_action`, a budget raise) keeps the plain reach.
+        # refused first, so its refusal is never reach's advice. A stage ask also reaches the task's person
+        # assignee (reach.assignee_of); an action's approval (`for_action`, a budget raise) keeps the plain reach.
         if row["status"] != "open":
             _refuse(conn, actor, "task_ended", "The task has ended: a stage ask is for an open task.")
         from types import SimpleNamespace
