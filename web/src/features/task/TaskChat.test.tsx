@@ -20,6 +20,7 @@ vi.mock('@/conversation', async () => ({
   ),
   MessageBones: () => <div role="status" aria-label="Loading messages" />,
   SessionLine: (await import('@/conversation/Session')).SessionLine,
+  timelineQuery: (await import('@/conversation/queries')).timelineQuery,
 }));
 
 /* Made-up rows only. */
@@ -41,6 +42,10 @@ const task = {
   to_leave: [],
   links: [],
 };
+
+/** What the server holds: the task's detail and its chat's messages. */
+let detail: Record<string, unknown> = task;
+let messages: unknown[] = [];
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
@@ -65,9 +70,14 @@ beforeAll(() => {
   installPatchers();
 });
 beforeEach(() => {
+  detail = task;
+  messages = [];
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-  const actors = [{ id: 'bot:a1', kind: 'agent', name: 'Birch Builder' }];
+  const actors = [
+    { id: 'bot:a1', kind: 'agent', name: 'Birch Builder' },
+    { id: 'bot:r2', kind: 'agent', name: 'Rowan Reviewer' },
+  ];
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.map((a) => [a.id, a])) });
   serveRoom({ id: 'c7', task_id: 't1', title: task.title });
 });
@@ -78,8 +88,10 @@ function serveRoom(room: Record<string, unknown>) {
   vi.stubGlobal('fetch', async (url: string) => {
     const u = String(url);
     const body = u.includes('/api/v2/tasks/')
-      ? { task, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
-      : u.includes('/api/v2/threads/c7')
+      ? { task: detail, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
+      : u.includes('/api/v2/threads/c7/timeline')
+        ? { messages }
+        : u.includes('/api/v2/threads/c7')
         ? room
         : {};
     return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
@@ -114,6 +126,40 @@ describe('a task’s chat', () => {
     show(<TaskChat task="12" />, '/tasks/p1/12');
     await screen.findByText('Main chat');
     expect(screen.queryByRole('link', { name: 'Fix the sign-in page' })).toBeNull();
+  });
+});
+
+/** A ❓ on the task waiting on `who` (backend/waiting_on.py: a person's wait, `qmark:<mark id>`). */
+const asked = (mark: string, who: string, line: string) => ({ state: 'person', who, line, requirement_id: `qmark:${mark}`, since: null, until: null, ask: true });
+
+describe('a question for the person, pinned over the message box', () => {
+  it('pins each ❓ to the person with who asked it, and none to someone else', async () => {
+    detail = {
+      ...task,
+      waits: [asked('m1', 'human:me', '❓ Ship the fix on Friday?'), asked('m2', 'human:pat', 'Can Pat check the copy?'), asked('m3', 'human:me', 'Keep the old page?')],
+    };
+    // m1's message is a reviewer's on the task's chat; m3's is not in what was read, so it reads as the owner's.
+    messages = [{ id: 'msg1', sender_id: 'bot:r2', body: '❓ Ship the fix on Friday?', refs: { question: { id: 'm1', to: 'human:me' } } }];
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
+    await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Needs you' })).toHaveLength(2));
+    const [first, second] = within(chat).getAllByRole('region', { name: 'Needs you' });
+    expect(within(first!).getByText('Ship the fix on Friday?')).toBeTruthy();
+    expect(await within(first!).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
+    expect(within(second!).getByText('Keep the old page?')).toBeTruthy();
+    expect(within(second!).getByRole('img', { name: 'Birch Builder' })).toBeTruthy();
+    expect(within(chat).queryByText('Can Pat check the copy?')).toBeNull();
+  });
+
+  it('goes when the server clears the question (the person replied) and the stream says so', async () => {
+    detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
+    await within(chat).findByRole('region', { name: 'Needs you' });
+    // The reply cleared it (backend/question_marks.py replied): the task's change says `question`, and it is read again.
+    detail = { ...task, version: 2, waits: [] };
+    act(() => dispatch('tasks', [{ seq: 3, id: 't1', kind: 'question', kinds: ['question'] }]));
+    await waitFor(() => expect(within(chat).queryByRole('region', { name: 'Needs you' })).toBeNull());
   });
 });
 

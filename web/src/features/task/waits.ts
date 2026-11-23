@@ -62,6 +62,10 @@ export const questionsFor = (t: Pick<TaskData, 'waits'>, me: string | undefined)
 /** Whether a ❓ on the task waits on `me`. */
 export const questionFor = (t: Pick<TaskData, 'waits'>, me: string | undefined): boolean => questionsFor(t, me).length > 0;
 
+/** The waiting question as a line: a leading "❓" goes, since what shows it already says it waits (and the emoji draws in
+    red). */
+export const questionLine = (line: string | null | undefined) => (line ?? '').replace(/^\s*❓️?\s*/u, '');
+
 /** What on a task waits on the person `me` now, from what is already read: an ask (its own, or an email's OK hung on it
     whose email is still to go out), else a ❓ to them, else nothing. */
 export function waitsNow(client: QueryClient, id: string, me: string | undefined): 'ask' | 'question' | null {

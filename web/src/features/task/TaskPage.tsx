@@ -1,9 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouter, useRouterState, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
-import { Conversation, MessageBones, SessionLine, type Session } from '@/conversation';
+import { Conversation, MessageBones, SessionLine, timelineQuery, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -20,6 +20,7 @@ import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
+import { AskCard } from './AskCard';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
@@ -36,7 +37,7 @@ import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
-import { waitsNow } from './waits';
+import { questionLine, questionsFor, waitsNow } from './waits';
 import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
@@ -405,6 +406,7 @@ export function TaskChat({ task }: TaskChatProps) {
             <>
               <TaskStatus t={t} />
               {decision}
+              <Questions t={t} me={me} />
             </>
           }
           canPost={!asking}
@@ -419,6 +421,27 @@ export function TaskChat({ task }: TaskChatProps) {
       )}
     </>
   );
+}
+
+/** Each ❓ on the task waiting on the person, pinned over the message box they answer it in: the question, and who
+    asked (the marked message's sender, else the task's owner). Their reply clears it on the server, whose `question`
+    change reads the task again (live/patch.ts), and the pin goes. */
+function Questions({ t, me }: { t: TaskData; me: string | undefined }) {
+  const ids = questionsFor(t, me);
+  const asked = (t.waits ?? []).filter((w) => !!w.requirement_id && ids.includes(w.requirement_id));
+  // The chat's own timeline, which the conversation above already reads: the asker is the marked message's sender.
+  const timeline = useInfiniteQuery({ ...timelineQuery(t.conversation_id ?? ''), enabled: asked.length > 0 && !!t.conversation_id });
+  const messages = timeline.data?.pages.flatMap((p) => p.messages ?? []) ?? [];
+  return asked.map((w) => {
+    // its wait is `qmark:<mark id>`; the marked message carries the mark as `refs.question.id`
+    const mark = w.requirement_id?.replace(/^qmark:/, '');
+    const by = messages.find((m) => (m.refs?.question as { id?: string } | undefined)?.id === mark)?.sender_id ?? t.owner_id;
+    return (
+      <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={by}>
+        <p className="askcard-what">{questionLine(w.line)}</p>
+      </AskCard>
+    );
+  });
 }
 
 /** The chat card beside the page: the decision for the tab the page has open, read from the same tab list

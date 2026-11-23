@@ -447,6 +447,18 @@ describe('the decision', () => {
     expect(within(box).getByRole('textbox', { name: 'What should change?' })).toHaveProperty('value', '');
   });
 
+  it('in the task’s chat, stays one box beside a ❓ to the person, pinned on its own over the message box @approvals', async () => {
+    shown = task({ waits: [{ state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true }] });
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    const pin = await within(chat).findByRole('region', { name: 'Needs you' });
+    expect(within(pin).getByText('Which address should it go to?')).toBeTruthy();
+    // free-form: answered in the message box, so the pin has no buttons of its own
+    expect(within(pin).queryByRole('button')).toBeNull();
+    await ready(await decision());
+    expect(within(chat).getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+  });
+
   it('keeps the decision being sent in view, and never turns into another ask on the email’s tab', async () => {
     const next = req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' });
     shown = task({ to_leave: [req(), next] });
