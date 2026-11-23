@@ -930,7 +930,7 @@ def may_start(conn: "sqlite3.Connection", message: str | Row, attempt: str | Non
     Every automatic start tied to a task on the engine is held: the engine's wakes, and any other message a person did
     not write (a scheduled occurrence's notice, a CI nudge, a task's news), retries included. Such a run may start only
     while the task is open, not snoozed and not at level person, while its bot has a turn on it (`waiting_on.turns`;
-    Late's one look for the manager bot and the owner's wake that what it filed ended, `FILED`, need none), and while the visit has started fewer than 7 runs since it last
+    a stage rule's tell to the owner bot, `STAGE_RULE`, and the owner's wake that what it filed ended, `FILED`, need none), and while the visit has started fewer than 7 runs since it last
     changed, the leases about to start included. An engine wake must also be about the task's open visit. When the
     run is held its queued job is canceled, here. True for a person's own message (their words always get an answer)
     and anything about no task on the engine. A message in a person's name they did not type themselves (the
@@ -1016,10 +1016,8 @@ def _may_start(
         return False
     if (task["visit"].get("level") or "owner") == "person":
         return False
-    pipe: Row = task.get("pipeline") or {}
-    late = kind == "late" and bot == pipe.get("manager_id")
-    filed = kind == FILED and bot == task.get("owner_id")
-    if not (late or filed or _related(conn, task, bot, kind)) and bot not in W.turns(conn, task):
+    ruled = kind in (STAGE_RULE, FILED) and bot == task.get("owner_id")
+    if not (ruled or _related(conn, task, bot, kind)) and bot not in W.turns(conn, task):
         return False
     return runs_since(conn, task, starting=True, besides=attempt) < RUNS
 
@@ -1039,6 +1037,9 @@ RELATED = "related"
 # The wake key's kind for "what this task filed has ended" (task_engine._ended): its owner bot's run may start though
 # it has no turn, since the task waits on a person's OK that the filed review was about.
 FILED = "filed"
+# The wake key's kind for a stage rule's tell to the task's owner bot (stage_rule_timers._tell_owner): the rule judged
+# whose turn it is, and a blocked task, whose waits name only its blockers, is still its owner's to chase.
+STAGE_RULE = "stage_rule"
 # A job in one of these states may still start its run: its wake is not lost.
 LIVE_JOBS = ("queued", "leased", "running", "input", "stalled")
 

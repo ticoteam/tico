@@ -16,6 +16,7 @@ from backend import stage_rule_timers as T
 from backend import stage_rules as SR
 from backend import task_depends
 from backend import task_engine as E
+from backend import task_wakes
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -453,6 +454,11 @@ def test_a_dead_blocker_is_caught_once_a_live_one_is_left_alone(c, time_machine)
     time_machine.shift(timedelta(hours=1))
     T.sweep(c)
     ((who, body),) = _owner_told(c, blocked, "Late")
+    # Its waits name only the blocker, so nobody has a turn on it: the rule's wake starts its owner's run all the same.
+    (wake,) = c.execute(
+        "SELECT id FROM messages WHERE json_extract(refs, '$.task') = ? AND body LIKE '%Rule Late%'", (blocked,)
+    ).fetchone()
+    assert task_wakes.may_start(c, wake)
     named = task_depends.ref(E.task(c, blocker))
     assert who == "bot:builder" and f"Rule Late: 24 h in Build. Blocked by {named}, no change on it for 36 h." in body
     assert "Chase it, take the link off, reassign or re-plan." in body
@@ -475,6 +481,32 @@ def test_a_blocked_task_is_caught_once_per_visit_however_often_its_blocker_goes_
     time_machine.shift(timedelta(hours=7))
     T.sweep(c)
     assert len(_owner_told(c, blocked, "Late")) == 1  # its blocker went quiet again: not on this visit
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+def test_a_persons_task_handed_to_a_bot_in_the_same_visit_is_still_late(c, time_machine, blocked):
+    _late(c, minutes=6 * 60)
+    task_id = _task(c, "eng", "Build", ANA, "Ana starts it")
+    if blocked:
+        _block(c, task_id, _task(c, "ops", "Build", "bot:fixer", "The API"))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)  # due, but a person's: not the rule's to tell
+    E.reassign(c, task_id, "bot:builder", ANA, "hand it to the bot")
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    ((who, _),) = _owner_told(c, task_id, "Late")
+    assert who == "bot:builder"
+
+
+def test_a_blocked_task_waiting_on_a_persons_ok_is_not_late(c, time_machine):
+    _late(c, stage="Review", minutes=6 * 60)
+    waiting = _task(c, "eng", "Review", "bot:builder", "Waits on Ana's OK and on the API")
+    _block(c, waiting, _task(c, "ops", "Build", "bot:fixer", "The API"))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert _owner_told(c, waiting, "Late") == []  # the person's turn, blocked or not
 
 
 def test_a_timer_never_messages_a_person(c, time_machine):

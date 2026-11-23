@@ -259,8 +259,12 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
     label = str(rule["cond"].get("label") or "")
     if label and _mod("stage_rules")._tagged(conn, {"id": task["id"]}, label):
         mark += f"#{label.lower()}"  # a tag added to a task judged without it is judged again
+    # A rule that did not match is judged again once the task has another owner: a person's task handed to a bot in
+    # the same visit is still caught. A match, told or not, stays once per visit whoever owns it next.
+    unmatched = f"{mark}~{task['owner_id'] or ''}"
     if conn.execute(
-        "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark=?", (rule["id"], task["id"], mark)
+        "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark IN (?,?)",
+        (rule["id"], task["id"], mark, unmatched),
     ).fetchone():
         return None
     if _told_urgently(conn, rule, task, mark):
@@ -287,7 +291,7 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
     manager = _manager(conn, task, own=_support_rule(rule)) if outcome == "pending" else None
     conn.execute(
         "INSERT OR IGNORE INTO stage_rule_marks(rule_id,task_id,mark,outcome,manager_id,matched_at) VALUES(?,?,?,?,?,?)",
-        (rule["id"], task["id"], mark, outcome, manager, at),
+        (rule["id"], task["id"], unmatched if outcome == "no" else mark, outcome, manager, at),
     )
     return manager
 
@@ -303,7 +307,9 @@ def _matches(conn: Any, rule: Row, task: Row) -> bool:
         return False
     turn = rule["cond"].get("turn")
     if turn and task.get("blocked"):
-        if _kind(row.get("owner_id")) != turn:
+        # Blocked: its owner's turn, who chases what it waits on, unless a person's OK or answer is still asked.
+        asked = [w.who for w in W.of(conn, row) if w.state == W.PERSON]
+        if _kind(asked[0] if asked else row.get("owner_id")) != turn:
             return False
     elif turn:
         waits: list[Any] = W.of(conn, row)
@@ -402,7 +408,7 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str, done: dict[str, int]
     row = E.task(conn, task["id"])
     if not H.is_bot(owner) or not row:
         return False
-    key = f"{task['id']}:{task['visit_id']}:stage_rule:{rule['id']}:{task['active_at']}"
+    key = f"{task['id']}:{task['visit_id']}:{task_wakes.STAGE_RULE}:{rule['id']}:{task['active_at']}"
     body = task_wakes.body(conn, row, said, to=owner)
     task_wakes.add(conn, row, owner, row["visit"], body, wake_key=key, refs=_rule_refs([rule]))
     SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
