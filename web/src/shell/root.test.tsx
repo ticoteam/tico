@@ -563,6 +563,21 @@ describe('the Agent bar @4857', () => {
     expect((await screen.findByRole('link', { name: 'An OK waits on you' })).getAttribute('href')).toBe('/task/t1');
   });
 
+  it('a phone widened to 780, still a phone until 800, keeps the board up when an OK from the owner waits', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    await askRead();
+    at(780);
+    await act(async () => {});
+    expect(document.documentElement.dataset.layout).toBe('cards');
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+    expect(document.querySelector('.tabbar button[aria-label="QA Owner"]')?.getAttribute('aria-current')).toBeNull();
+  });
+
   it('at 820, a computer, an OK from the owner still brings the bar up, as a card over the page', async () => {
     at(820);
     people(MAYA, QA);

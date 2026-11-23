@@ -39,11 +39,7 @@ KIND = "merge_order"  # the standing's requirement kind; never a stored requirem
 RELATION = "after"
 LINE = "After {ref}: waits for it to merge"
 UNNAMED = "After a task you can't open: waits for it to merge"
-# GitHub's PR merged while the task it merges after has not (item_sources/github.py), said to its readers and others
-QUEUE_LINE = "Not queued until {ref} merges"
-QUEUE_UNNAMED = "Not queued until a task you can't open merges"
 CLOSED = "{ref} closed without merging. Queue it, or send it back."
-CLOSED_UNNAMED = "A task you can't open closed without merging. Queue it, or send it back."
 WAKE_CLOSED = "after_closed"
 QUEUED_ANYWAY = "Queued before {ref} merged"
 
@@ -199,11 +195,6 @@ def stops_queue(conn: "sqlite3.Connection", row: Row) -> Row | None:
 
 def closed_line(earlier: Row) -> str:
     return CLOSED.format(ref=ref(earlier))
-
-
-def is_closed_line(line: object) -> bool:
-    """Whether a line is `closed_line`'s, which names the task: said to a reader who may not open it as CLOSED_UNNAMED."""
-    return str(line or "").endswith(CLOSED.removeprefix("{ref}"))
 
 
 def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:

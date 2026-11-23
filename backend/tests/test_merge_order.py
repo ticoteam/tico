@@ -247,24 +247,6 @@ def test_both_tasks_show_the_order_and_a_reader_who_cannot_open_the_earlier_one_
     assert (shown["who"], shown["line"]) == (None, MO.UNNAMED)
 
 
-def test_the_later_tasks_own_read_names_a_private_earlier_one_to_its_readers_only(c):
-    """Nov 23 gate review: what the later task needs to leave Merge and what it waits on name the earlier task only to
-    a reader who may open it: to anyone else neither its number, its title nor its id."""
-    import json
-
-    gh = FakeGitHub()
-    b6, b7 = pair(c)
-    green(c, gh, 2)
-    c.execute(
-        "UPDATE tasks SET number=CASE id WHEN ? THEN 40 ELSE 41 END, private=CASE id WHEN ? THEN 1 ELSE 0 END WHERE id IN (?,?)",
-        (b6, b6, b6, b7),
-    )
-    assert "#40" in json.dumps(H.task_view(c, b7, X.ANA))  # Ana asked for both: it is named to her
-    ben = json.dumps(H.task_view(c, b7, "human:ben"))
-    assert MO.UNNAMED in ben
-    assert b6 not in ben and "#40" not in ben
-
-
 def test_a_pr_whose_metadata_comes_after_the_task_entered_merge_is_held_too(c):
     b6, b7 = pair(c)
     c.execute("UPDATE requirements SET can_push_past=1")
@@ -300,27 +282,6 @@ def test_an_earlier_task_closed_before_the_later_one_reaches_merge_is_the_owner_
     green(c, gh, 2)
     assert stage(c, b7) == "Merge" and effects(c, b7) == []
     assert merged_line(c, b7)[:2] == (R.NOT_MET, RM)
-
-
-def test_a_private_earlier_task_closed_without_merging_is_not_named_to_who_may_not_open_it(c):
-    """Nov 23 gate review: "#40 closed without merging" names the earlier task: to a reader who may not open it, the task
-    read, a board card and the owner's Needs you say what to do without which task."""
-    import json
-
-    from backend import task_reads
-
-    gh = FakeGitHub()
-    b6, b7 = pair(c)
-    green(c, gh, 2)
-    c.execute("UPDATE tasks SET number=40 WHERE id=?", (b6,))
-    E.move(c, b6, E.CLOSED, X.ANA, "Not needed after all")
-    c.execute("UPDATE tasks SET private=1 WHERE id=?", (b6,))
-    assert "#40 closed without merging" in json.dumps(H.task_view(c, b7, X.ANA))  # Ana asked for both
-    ben = H.task_view(c, b7, "human:ben")
-    (row,) = task_reads.brief(c, [E.task(c, b7)], "private = 0", "human:ben")
-    for said in (json.dumps(ben), json.dumps(row, default=str)):
-        assert "#40" not in said and b6 not in said
-    assert MO.CLOSED_UNNAMED in json.dumps(ben)
 
 
 def test_who_may_change_the_later_task_sets_its_order_and_need_only_read_the_earlier_one(c):

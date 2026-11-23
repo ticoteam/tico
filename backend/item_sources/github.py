@@ -2352,11 +2352,10 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
         earlier = MO.held(conn, task)
         if earlier:
             # It goes after a task that has not merged: merge_order's own standing is its turn; this says why.
-            line = MO.QUEUE_LINE.format(ref=MO.ref(earlier))
-            return Standing(requirement, WAITING, SOURCE, line, about=str(earlier["id"]))
+            return Standing(requirement, WAITING, SOURCE, f"Not queued until {MO.ref(earlier)} merges")
         closed = MO.closed_before(conn, task)
         if closed:
-            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed), about=str(closed["id"]))
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 
