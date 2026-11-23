@@ -545,7 +545,11 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
                       mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, me)}
                       selected={picking?.has(t.id)}
                       aria-pressed={picking ? picking.has(t.id) : undefined}
-                      onClick={picker(toggle, t.id)}
+                      onClick={(e) => {
+                        picker(toggle, t.id)?.(e);
+                        // opened from its board, as its card does (TaskPage goes on down the list beside it)
+                        pressListRow(p.id, String(t.number ?? t.id), e);
+                      }}
                       late={!!t.late}
                       pills={<Blocks t={t} />}
                       avatar={<Face actor={t.owner_id} />}

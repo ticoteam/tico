@@ -222,6 +222,34 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(row.closest('a')?.getAttribute('href')).toBe('/tasks/eng/7');
   });
 
+  it('a plain press on a list row opens its task from the board too, so an answer on it can go on down the list beside it', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1')]);
+    forgetPlaces();
+    const router = show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    // as the shell does: each address shown is noted
+    const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
+    note(router.state.location);
+    router.subscribe('onResolved', (e) => note(e.toLocation));
+    const rows = [
+      { id: 'a1', n: '7' },
+      { id: 'a2', n: '8' },
+    ];
+    // pressed with Ctrl it opens elsewhere: the task opened here next is not from the board
+    fireEvent.click((await screen.findByTitle('Fix the export')).closest('a')!, { ctrlKey: true });
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    noteList({ pipeline: 'eng', open: '7', rows });
+    expect(nextInList('a1')).toBeNull();
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    // a plain press: here the kit's link is a plain anchor, so the address moves as the app's router link moves it
+    fireEvent.click(screen.getByTitle('Fix the export').closest('a')!);
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    noteList({ pipeline: 'eng', open: '7', rows });
+    expect(nextInList('a1')).toEqual({ pipeline: 'eng', task: '8' });
+    forgetPlaces();
+  });
+
   it('puts the stage paging buttons outside the scrolling board', async () => {
     const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(220);
     try {
