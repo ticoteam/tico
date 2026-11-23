@@ -74,6 +74,8 @@
     ],
     "next": null,
     "snoozed_until": null,
+    "sorting": false,
+    "sorting_until": null,
     "version": "<opaque>"
   },
   "request": "GET /api/v2/needs-you",

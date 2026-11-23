@@ -295,10 +295,9 @@ class _ByDeadline:
             raise TimeoutError("no time left to connect")
         wait = min(timeout, left) if isinstance(timeout, (int, float)) else left
         sock = socket.create_connection(address, wait, source_address)
-        watch = _Watch(sock, deadline - clock())
         watches = _WATCHES.get()
-        if watches is not None:
-            watches.append(watch)
+        if watches is not None:  # only inside an attempt (`one_try`), which ends the watch with it: else none is left
+            watches.append(_Watch(sock, deadline - clock()))
         return sock
 
 
@@ -843,7 +842,15 @@ def _written(text, model, usage):
         raise _paid(JudgeError("shape", "the model did not answer with JSON"), model, usage)
     if not isinstance(parsed, dict):
         raise _paid(JudgeError("shape", "the model did not answer with an object"), model, usage)
-    return parsed
+    return Written(parsed, usage)
+
+
+class Written(dict):
+    """A writer's answer: the JSON object, with the provider's `usage` for the meter (backend/judge.py `metered`)."""
+
+    def __init__(self, answer, usage):
+        super().__init__(answer)
+        self.usage = usage
 
 
 def gateway_writer(key_of, url, model, timeout=TIMEOUT, opener=None):
@@ -906,18 +913,29 @@ def llm_writer(provider, api_key, model, timeout=TIMEOUT, opener=None):
     no memory, no history), capped at MAX_OUTPUT_TOKENS, and returns the JSON object the model answered with."""
     if provider not in LLM_URLS or not api_key or not model:
         raise JudgeError("unconfigured", "no provider key or model to write with")
-    opener = opener or urllib.request.urlopen
+    plain = urllib.request.urlopen
 
     def write(system, user):
+        # Inside an attempt (`one_try`), its connection is shut at the attempt's deadline (`urlopen`).
+        found = opener or (urlopen if _WATCHES.get() is not None else plain)
         try:
-            with opener(
-                llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=timeout
+            with found(
+                llm_request(provider, api_key, model, system, user, MAX_OUTPUT_TOKENS), timeout=time_left(timeout)
             ) as response:
                 payload = json.load(response)
         except urllib.error.HTTPError as exc:
             with exc:
                 raise JudgeError("unavailable", f"{provider} answered {exc.code}", exc.code, retryable=True)
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        except (
+            urllib.error.URLError,
+            http.client.HTTPException,  # the attempt's watch cut an answer short (IncompleteRead)
+            TimeoutError,
+            OSError,
+            ValueError,
+            KeyError,
+            IndexError,
+            TypeError,
+        ) as exc:
             raise JudgeError("unavailable", f"{provider} did not answer: {type(exc).__name__}", retryable=True)
         usage = _usage(payload)
         try:

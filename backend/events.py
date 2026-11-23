@@ -22,7 +22,7 @@ signed-in person as they commit, filtered to what that person may read:
 - `needs`: the viewer's own Needs-you list, whole, when anything on it may have moved. A page that asks
   `needs=changes` is sent its `count`, `version`, and the ids `changed` and `removed` since `base` instead (both
   null when more than NEEDS_CHANGES_MAX moved: read the list whole), and reads only those items
-  (`GET /api/v2/needs-you?ids=`). The stream keeps the marks of the list it last described, from its start; a page
+  (`GET /api/v2/needs-you?ids=`); `moved: true` says items changed places (Tico sorted the list): read it whole. The stream keeps the marks of the list it last described, from its start; a page
   whose held version is not `base` reads the list whole.
   Without `needs=changes` a page gets the whole list, as before, so an older page keeps working.
 - `screen`: an action the person's Assistant asks their open app to do (backend/screen_actions.py), to that person's own
@@ -3164,6 +3164,10 @@ def _needs_list(view, rows, task_view, held=None):
         "stages": dict(stages),
         "by_kind": dict(by_kind),
     }  # whole-list facts, even on a page
+    # Items that stayed but changed places (Tico sorted the list, backend/needs_order.py): no ids say that, so the
+    # page reads the list whole; `changed` still names what is new, for a notice of it.
+    if [k for k in before if k in marks] != [k for k in marks if k in before]:
+        entry["moved"] = True
     held.update(marks=marks, version=version)  # shared, never changed: the next build replaces it whole
     return [(rows[-1], entry)]
 
@@ -3772,7 +3776,8 @@ EVENTS_DESCRIPTION = (
     "item carries `message_id`, `conversation_id` and its thread's `root_id`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `plate_count`, `version`, each bot's count (`bots`), each stage's count (`stages`), counts by kind (`by_kind`), "
     "task ids represented by other cards (`folded_task_ids`), and the ids `changed` and `removed` "
-    "since `base` (null when more than 100 moved: read the list whole). `folded_task_ids` is omitted when unchanged "
+    "since `base` (null when more than 100 moved: read the list whole); `moved: true` when items changed places "
+    "(Tico sorted the list): read the list whole. `folded_task_ids` is omitted when unchanged "
     "(keep the held set), or null when the replacement or its difference exceeds 100 ids (read the list whole); read the changed items with "
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"

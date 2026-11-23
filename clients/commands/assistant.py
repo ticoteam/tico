@@ -632,7 +632,7 @@ def batch_abandon(api, args):
     "must let someone see; ask: an OK or question with their name; paused: a bot that cannot run "
     "until they fix it; question: a bot's ❓ for them; access: an access request they can grant; "
     "key: a key card they can fill; key_drop: the Tools owner's key proposal they can grant), and "
-    "the items, oldest first, each with its task or its card. Use it to see the pile before closing "
+    "the items, in Tico's order (its last saved sort), each with its task or its card. Use it to see the pile before closing "
     "or stopping anything.",
     {
         "kind": {
@@ -724,7 +724,7 @@ NEEDS_YOU = (
     ),
     Command(
         "needs-you show",
-        "what needs you: the count per kind and the items, oldest first",
+        "what needs you: the count per kind and the items, in Tico's order",
         example="tico needs-you show --kind ask --limit 5",
     ),
 )

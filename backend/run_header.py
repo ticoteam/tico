@@ -393,7 +393,7 @@ def snapshot(
     """What waits on the person now (their Needs you count and its first TOP items, as the list they are served shows
     them) and the open tasks their Assistant filed for them, as they may read them; and how many of those tasks were
     not read or not kept. Handoffs are read only while what `capped` keeps after the lines `before` still has room."""
-    items: list[Row] = sorted(views.needs_shown(c, auth, person), key=views.needs_key)
+    items: list[Row] = views.needs_shown(c, auth, person)  # in Tico's order for them (backend/needs_order.py)
     out = [f"Needs you ({H.actor_name(c, person.actor)}): {len(items)}"]
     for item in items[:TOP]:
         task: Row = item.get("task") or {}

@@ -9,6 +9,7 @@ from backend import hubdb as H
 from backend import run_header
 from backend import task_engine as E
 from backend import stage_rules
+from backend import views
 from backend.auth import Identity
 from backend.tests.helpers.api import assign, post, ready, runner
 from backend.tests.helpers.assistant import assistant_turn
@@ -165,6 +166,27 @@ def test_the_assistant_snapshot_holds_only_its_persons_own_items(api, monkeypatc
         full = ["Card now: " + "y" * 90] * 19  # what the card took already: no room left for a handoff
         lines, unseen = run_header.snapshot(c, api.app.state.auth, cara, full)
     assert unseen == 1 and not any("Book the venue" in line for line in lines), "past its room a handoff is not read"
+
+
+def test_the_assistant_snapshot_lists_needs_you_in_ticos_order(api):
+    """The Assistant reads Needs you as the person is served it: in Tico's saved order (backend/needs_order.py)."""
+    with api.app.state.store.transaction() as c:
+        older = new_task(c, "human:ana", "Ship the launch note", assignee="bot:ops")
+        ok_ask(c, older["id"], "bot:ops", "cara", "OK the launch note")
+        newer = new_task(c, "human:ana", "Ship the price list", assignee="bot:ops")
+        ok_ask(c, newer["id"], "bot:ops", "cara", "OK the price list")
+    cara = Identity("human:cara", "human", "cara@acme.example")
+    with api.app.state.store.read_transaction() as c:
+        ids = [str(i["id"]) for i in views.needs_shown(c, api.app.state.auth, cara)]
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO needs_you_orders (person_id, item_ids, sorted_at, created_at, updated_at) VALUES (?,?,?,?,?)",
+            ("human:cara", json.dumps(ids[::-1]), H.now(), H.now(), H.now()),
+        )
+    with api.app.state.store.read_transaction() as c:
+        lines, _ = run_header.snapshot(c, api.app.state.auth, cara)
+    asks = [line for line in lines if line.startswith("- OK the")]
+    assert asks == ["- OK the price list (Ship the price list)", "- OK the launch note (Ship the launch note)"], lines
 
 
 def test_a_claim_is_answered_while_a_stalled_header_is_still_being_built(api, monkeypatch):
