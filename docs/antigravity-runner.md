@@ -1,20 +1,21 @@
 # Antigravity harness
 
-Choose `runtime: gemini` and `harness: antigravity` for a bot on its assigned computer. Select its model and effort in Settings;
-other Gemini bots keep their configured harness. See [Harnesses](harnesses.md) for general provider setup.
+Choose `runtime: antigravity` for a bot (its harness is `antigravity` too) and select its model, Gemini 4 Neon or
+Gemini 4 Hydrogen, and effort in Settings. Google serves both Antigravity and the Gemini CLI (`runtime: gemini`), so a
+Gemini CLI bot keeps its own runtime and models. See [Harnesses](harnesses.md) for general provider setup.
 
-Install and authenticate Google's `agy` CLI on the assigned computer.
-The current computer uses Antigravity's existing Google account sign-in. Its
-global settings are not changed by Tico. A Gemini API key alone does not select
-Antigravity's API-key provider; follow Google's CLI settings documentation if
-switching that authentication mode. Readiness finds `agy` and checks sign-in
-with `agy models` before the runner claims work.
+The runner never installs or updates `agy`: Google ships it only through its own updater. Install it on the assigned
+computer by hand from Google's [CLI page](https://www.antigravity.google/docs/cli/), and sign it in there with the
+computer's Google account. Until `agy` is on the runner's PATH, Settings says Antigravity is not installed on that
+computer. Tico does not change its global settings, and runs it with `AGY_CLI_DISABLE_AUTO_UPDATE=1`. A Gemini API key
+alone does not select Antigravity's API-key provider; follow Google's CLI settings documentation if switching that
+authentication mode. Readiness finds `agy` and checks sign-in with `agy models` before the runner claims work.
 
-The runner keeps a separate NDJSON process per bot, human, conversation, session
-epoch, model, and effort. Idle processes expire after 15 minutes; the cache is
-bounded to eight idle sessions. Provider conversation IDs are saved locally so
-an evicted session can resume. Failed or interrupted runs are never replayed
-automatically. Changing the model or starting a new chat creates a separate session.
+Each turn starts its own `agy` process, which ends with the turn; no process is kept between turns. The runner saves
+each thread's conversation ID locally (`state/agy/<bot>/`, readable by the runner only) and resumes it with
+`--conversation`. Failed or interrupted runs are never replayed automatically. Changing the effort keeps the
+conversation; starting a new chat starts a new one. When `agy` cannot resume the saved conversation, the turn starts a
+new one with the whole conversation (or stops, when it must continue the old one).
 
 Only the initial run gets the recent conversation bootstrap (up to 30 messages).
 Later runs send messages after the last successfully delivered human request,
@@ -28,8 +29,7 @@ Python client reads that file on every request; it is rotated to the current
 run credential and cleared when the run ends. Bots must use the Tico client
 or `clients/hubcli.py`, rather than treating `$HUB_TOKEN` as a literal bearer
 token. The server continues to enforce the current run's permissions.
-Changed environment credentials discard the warm process. External service
-credentials granted to a bot remain in that process until it expires or stops.
+External service credentials granted to a bot reach only that turn's process.
 
 Runner readiness probes run separately from the 250 ms claim loop. Tico flushes streaming output every 150 ms.
 

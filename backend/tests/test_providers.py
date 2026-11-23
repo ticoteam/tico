@@ -33,6 +33,13 @@ def test_resolution_order_bot_then_company_then_first_provider_then_error():
     assert "Settings > Computers" in refused.value.detail and refused.value.status == 409
 
 
+def test_a_providers_other_cli_never_becomes_the_computers_first_runtime():
+    # Google also serves Antigravity, which sorts first by name but is only Google's second CLI.
+    assert P.default_runtime(P._record({"enabled": ["anthropic", "google"]})) == "claude"
+    assert P.default_runtime(P._record({"enabled": ["google"]})) == "gemini"
+    assert P.default_runtime(P._record({"enabled": ["google"], "runtime": "antigravity"})) == "antigravity"
+
+
 def test_recommended_is_worked_out_once_and_answers_as_the_catalog_does(monkeypatch):
     # Pages ask resolve (and so recommended) of every bot: the answer is kept per provider, and is the catalog's own row.
     monkeypatch.setattr(P, "_RECOMMENDED", {})
@@ -282,10 +289,13 @@ def test_the_antigravity_migration_moves_every_antigravity_pick_and_flash_to_hyd
         "CREATE TABLE bot_settings(bot_id TEXT PRIMARY KEY, harness TEXT, runtime TEXT, model TEXT, fallback TEXT,"
         " extra TEXT NOT NULL DEFAULT '{}');"
         "CREATE TABLE task_run_models(task_id TEXT PRIMARY KEY, runtime TEXT, model TEXT, harness TEXT);"
+        "CREATE TABLE task_check_models(task_id TEXT PRIMARY KEY, runtime TEXT, model TEXT, harness TEXT);"
         "CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
     )
     agy_flash = {"harness": "antigravity", "runtime": "gemini", "model": "gemini-3.8-flash"}
     cli_flash = {"harness": "gemini", "runtime": "gemini", "model": "gemini-3.8-flash"}
+    # Neon on the Gemini runtime with no harness saved: the server took Antigravity for it before the split.
+    bare_neon = {"runtime": "gemini", "model": "gemini-4-neon"}
     c.executemany(
         "INSERT INTO bot_settings VALUES (?,?,?,?,?,?)",
         [
@@ -299,9 +309,20 @@ def test_the_antigravity_migration_moves_every_antigravity_pick_and_flash_to_hyd
                 json.dumps(agy_flash),
                 json.dumps({"task_model": cli_flash}),
             ),
+            ("bare", None, "gemini", "gemini-4-neon", json.dumps(bare_neon), json.dumps({"task_model": bare_neon})),
+            ("empty", "", "gemini", "gemini-4-neon", None, "{}"),
         ],
     )
     c.execute("INSERT INTO task_run_models VALUES ('t1', 'gemini', 'gemini-3.8-flash', 'antigravity')")
+    c.execute("INSERT INTO task_run_models VALUES ('t2', 'gemini', 'gemini-4-neon', '')")
+    c.executemany(
+        "INSERT INTO task_check_models VALUES (?,?,?,?)",
+        [
+            ("t1", "gemini", "gemini-3.8-flash", "antigravity"),
+            ("t2", "gemini", "gemini-4-neon", ""),
+            ("t3", "gemini", "gemini-3.8-flash", "gemini"),
+        ],
+    )
     c.execute(
         "INSERT INTO registry_metadata VALUES ('providers', ?)",
         (
@@ -320,7 +341,21 @@ def test_the_antigravity_migration_moves_every_antigravity_pick_and_flash_to_hyd
     # A Gemini CLI bot keeps its own pick; only its pick on Antigravity moves.
     assert rows["cli"][:2] == ("gemini", "gemini-3.8-flash") and json.loads(rows["cli"][2]) == hydrogen
     assert json.loads(rows["cli"][3]) == {"task_model": cli_flash}
-    assert c.execute("SELECT runtime, model FROM task_run_models").fetchone() == ("antigravity", "gemini-4-hydrogen")
+    neon = {"harness": "antigravity", "runtime": "antigravity", "model": "gemini-4-neon"}
+    rows = {r[0]: r[1:] for r in c.execute("SELECT bot_id, harness, runtime, model, fallback, extra FROM bot_settings")}
+    assert rows["bare"][:3] == ("antigravity", "antigravity", "gemini-4-neon")
+    assert json.loads(rows["bare"][3]) == neon and json.loads(rows["bare"][4]) == {"task_model": neon}
+    assert rows["empty"][:3] == ("antigravity", "antigravity", "gemini-4-neon")
+    picks = "SELECT task_id, runtime, model, harness FROM {} ORDER BY task_id"
+    assert c.execute(picks.format("task_run_models")).fetchall() == [
+        ("t1", "antigravity", "gemini-4-hydrogen", "antigravity"),
+        ("t2", "antigravity", "gemini-4-neon", "antigravity"),
+    ]
+    assert c.execute(picks.format("task_check_models")).fetchall() == [
+        ("t1", "antigravity", "gemini-4-hydrogen", "antigravity"),
+        ("t2", "antigravity", "gemini-4-neon", "antigravity"),
+        ("t3", "gemini", "gemini-3.8-flash", "gemini"),
+    ]
     record = json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0])
     assert record == {
         "runtime": "antigravity",

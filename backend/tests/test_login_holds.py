@@ -31,6 +31,10 @@ def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_
     assert login_holds.reset_from_text(agy.format("1h13.5s", "soon"), hit) == datetime(
         2026, 10, 19, 2, 47, 0, 500000, tzinfo=timezone.utc
     )
+    # A stamp shaped right that names no real time falls through to the delay.
+    assert login_holds.reset_from_text(agy.format("1h13.5s", "2026-13-45T99:00:00Z"), hit) == datetime(
+        2026, 10, 19, 2, 47, 0, 500000, tzinfo=timezone.utc
+    )
     assert login_holds.reset_from_text(agy.format("999999999h", "soon"), hit) is None
     assert login_holds.reset_from_text(agy.format("later", "soon"), hit) is None
     # Never a hold of no time, and a weekly reset days away is kept as it is.

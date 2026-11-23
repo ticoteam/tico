@@ -263,8 +263,8 @@ def reset_from_text(text, hit):
     occurrence after `hit`, unless that is most of a day away: then the time named has just passed."""
     hit = H.parse_ts(hit) if isinstance(hit, str) else hit
     stamped = _WINDOW_RE.search(text or "") or _QUOTA_STAMP_RE.search(text or "")
-    if stamped and hit:
-        return H.parse_ts(stamped[1])
+    if stamped and hit and (at := H.parse_ts(stamped[1])):
+        return at  # one that does not parse falls through to the delay
     delay = _QUOTA_DELAY_RE.search(text or "")
     if delay and hit:
         seconds = sum(float(n) * _GO_SECONDS[unit] for n, unit in _GO_PART_RE.findall(delay[1]))

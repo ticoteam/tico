@@ -3,7 +3,9 @@ Flash's place on it.
 
 Every pick on the `antigravity` harness moves to runtime `antigravity`: a bot's own (`bot_settings`), its fallback
 (`bot_settings.fallback`), its task model (`task_model` in `extra`), and a task's own run or check model
-(`task_run_models`, `task_check_models`). On each of them Gemini 3.8 Flash becomes Gemini 4 Hydrogen. The company
+(`task_run_models`, `task_check_models`), and every Gemini 4 Neon pick on runtime `gemini` with no harness saved (the
+server took Antigravity for it then; it gets the harness now). On each of them Gemini 3.8 Flash becomes Gemini 4
+Hydrogen. The company
 default and its check models on Gemini 4 Neon, which only Antigravity runs, move to the new runtime too. The Gemini
 CLI's bots and picks keep their runtime and model. Its earlier threads were saved under `gemini:antigravity`: each
 starts over once, as a thread the runner no longer has. Running this again changes nothing.
@@ -19,12 +21,31 @@ def _table(conn, name):
     return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
 
+# A row on Antigravity: its harness says so, or it is Neon on the Gemini runtime with no harness saved.
+ON_ANTIGRAVITY = "(harness=? OR (runtime='gemini' AND model=? AND COALESCE(harness, '')=''))"
+
+
 def _moved(pick):
     """A fallback or task model record on Antigravity, moved; None when it is not one or needs no change."""
-    if not isinstance(pick, dict) or pick.get("harness") != HARNESS:
+    if not isinstance(pick, dict):
         return None
-    out = {**pick, "runtime": RUNTIME, **({"model": HYDROGEN} if pick.get("model") == FLASH else {})}
+    inferred = pick.get("runtime") == "gemini" and pick.get("model") == NEON and not pick.get("harness")
+    if pick.get("harness") != HARNESS and not inferred:
+        return None
+    out = {
+        **pick,
+        "runtime": RUNTIME,
+        "harness": HARNESS,
+        **({"model": HYDROGEN} if pick.get("model") == FLASH else {}),
+    }
     return out if out != pick else None
+
+
+def _move_rows(conn, table):
+    conn.execute(
+        f"UPDATE {table} SET runtime=?, harness=?, model=CASE WHEN model=? THEN ? ELSE model END WHERE {ON_ANTIGRAVITY}",
+        (RUNTIME, HARNESS, FLASH, HYDROGEN, HARNESS, NEON),
+    )
 
 
 def _json(text):
@@ -37,13 +58,11 @@ def _json(text):
 
 def up(conn):
     if _table(conn, "bot_settings"):
-        conn.execute(
-            "UPDATE bot_settings SET runtime=?, model=CASE WHEN model=? THEN ? ELSE model END WHERE harness=?",
-            (RUNTIME, FLASH, HYDROGEN, HARNESS),
-        )
+        _move_rows(conn, "bot_settings")
         for bot, fallback, extra in conn.execute(
-            "SELECT bot_id, fallback, extra FROM bot_settings WHERE fallback LIKE ? OR extra LIKE ?",
-            (f"%{HARNESS}%", f"%{HARNESS}%"),
+            "SELECT bot_id, fallback, extra FROM bot_settings WHERE fallback LIKE ? OR extra LIKE ?"
+            " OR fallback LIKE ? OR extra LIKE ?",
+            (f"%{HARNESS}%", f"%{HARNESS}%", f"%{NEON}%", f"%{NEON}%"),
         ).fetchall():
             moved = _moved(_json(fallback))
             if moved:
@@ -56,10 +75,7 @@ def up(conn):
                 )
     for table in ("task_run_models", "task_check_models"):
         if _table(conn, table):
-            conn.execute(
-                f"UPDATE {table} SET runtime=?, model=CASE WHEN model=? THEN ? ELSE model END WHERE harness=?",
-                (RUNTIME, FLASH, HYDROGEN, HARNESS),
-            )
+            _move_rows(conn, table)
     if not _table(conn, "registry_metadata"):
         return
     row = conn.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()

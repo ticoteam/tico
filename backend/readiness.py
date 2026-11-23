@@ -21,6 +21,8 @@ the Gateway where configured.
 Callers refuse only on can_run False; None never blocks.
 """
 
+from clients import harness_manifests as manifests
+
 from . import model_subscriptions, models_preset, providers, read_cache, runner_online
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H
@@ -229,7 +231,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
                 + (": " + str(tool["detail"])[:200] if tool.get("detail") else ""),
                 "Check " + label + " in Settings > Computers, or choose a model it already runs",
             )
-        if tool:
+        # One the runner does not install (no [install] method: Antigravity) waits for the operator, not an install.
+        own = manifests.get(runtime)
+        if tool and (own is None or own["installable"] or tool.get("state") in ("queued", "installing")):
             return verdict(None, (tool.get("name") or str(runtime)) + " is installing on " + label)
         return verdict(
             False,

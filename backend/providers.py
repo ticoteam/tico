@@ -819,7 +819,8 @@ def recommended(provider, runtime=""):
     rows = provider_models(provider)
     rows = [row for row in rows if row["runtime"] == runtime] or rows
     found = next((row for row in rows if row.get("recommended")), rows[0] if rows else None)
-    if provider in PROVIDER_BY_ID:  # only the catalog's own providers are kept: the cache stays the catalog's size
+    # Only the catalog's own providers and runtimes are kept: the cache stays the catalog's size.
+    if provider in PROVIDER_BY_ID and (not runtime or runtime in PROVIDER_BY_RUNTIME):
         _RECOMMENDED[key] = found
     return found
 
@@ -1346,8 +1347,11 @@ def wanted_runtimes(record):
 
 def default_runtime(record):
     """The one runtime a computer with no bots installs and is signed in on first: the company's default, else the
-    first of its providers' runtimes by name. Empty before a provider is chosen."""
-    return next(iter(sorted(wanted_runtimes(record))), "")
+    first of its providers' own runtimes by name (a provider's other CLIs, like Google's Antigravity, never win it).
+    Empty before a provider is chosen."""
+    if record["runtime"]:
+        return record["runtime"]
+    return next(iter(sorted(row["runtime"] for row in PROVIDERS if row["id"] in record["enabled"])), "")
 
 
 def runtimes_run_on(c, settings):
