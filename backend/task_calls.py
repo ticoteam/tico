@@ -1158,7 +1158,6 @@ def task_view(
     (Needs you) leaves it out."""
     from . import task_engine as E
     from . import task_reads
-    from . import task_depends
     from . import task_requirements as R
     from . import waiting_on as W
 
@@ -1174,12 +1173,10 @@ def task_view(
     # in the line that says what this task waits on, nor its id, nor why it was closed (waiting_on.unnamed).
     hidden = hidden_filed(conn, row, viewer, visible_sql)
     raw_waits = W.of(conn, row, standings=standings) if live else []
-    # So may a task it depends on that this one did not file: the line names it and its stage.
-    depends = {
-        w.about for w in raw_waits if w.about and w.about not in hidden and task_depends.is_wait(w.requirement_id)
-    }
-    if depends:
-        hidden = [*hidden, *(depends - set(_readable_rows(conn, viewer, depends, visible_sql)))]
+    # So may any other task a wait or a standing names (one it depends on, one it merges after), as task_reads.brief.
+    named = {x.about for x in (*raw_waits, *standings) if x.about and x.about not in hidden}
+    if named:
+        hidden = [*hidden, *(named - set(_readable_rows(conn, viewer, named, visible_sql)))]
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
     said_waits = W.with_shots(conn, task_id, raw_waits)  # with paid shots to reconcile, keys and names: Details
     waits = [W.view(wait, shown) for wait in said_waits]

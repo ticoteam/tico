@@ -182,8 +182,13 @@ describe('an access request in Needs you', () => {
         expect([css.whiteSpace, css.overflow]).toEqual(['normal', 'visible']);
       }
       // the line it sits in wraps, so the level moves down whole rather than squeezed into a column
-      const line = within(box).getByText('Read and write').closest(noteIn) as HTMLElement;
+      const note = within(box).getByText('Read and write');
+      const line = note.closest(noteIn) as HTMLElement;
       expect(getComputedStyle(line).flexWrap).toBe('wrap');
+      // the name keeps the Dot's line, taking its room; on a phone the level is a line of its own under it and the face
+      const name = getComputedStyle(within(box).getByText('Growth Manager asks for Meta Ads'));
+      expect([name.flexGrow, name.flexBasis]).toEqual(['1', '0px']);
+      if (layout === 'cards') expect([getComputedStyle(note).order, getComputedStyle(note).flexBasis]).toEqual(['1', '100%']);
     } finally {
       style.remove();
       delete document.documentElement.dataset.layout;

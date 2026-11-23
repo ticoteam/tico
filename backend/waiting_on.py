@@ -120,12 +120,17 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS and task_depends.is_wait(said.requirement_id):
-            return replace(said, who=None, line=task_depends.UNNAMED, about=None)
+            # its id is the blocker's too (task_depends.wait_id): only the dependent's part is said
+            kept = ":".join(str(said.requirement_id).split(":")[:2])
+            return replace(said, who=None, line=task_depends.UNNAMED, about=None, requirement_id=kept)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)
     if said.state == R.WAITING and merge_order.is_order(said.requirement):
         return replace(said, on=None, line=merge_order.UNNAMED, about=None)
+    if said.state == R.WAITING and said.requirement.get("condition") == "pr_merged":
+        # GitHub's PR merged, held for the task it merges after: what holds it is said, not which task
+        return replace(said, line=merge_order.QUEUE_UNNAMED, about=None)
     if said.state == R.WAITING:
         return replace(said, on=None, line=SUB_TASK_OPEN, about=None)
     return replace(said, line=SUB_TASK_CLOSED, about=None)

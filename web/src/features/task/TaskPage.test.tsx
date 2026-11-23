@@ -350,27 +350,42 @@ describe('one open task', () => {
     expect(within(where).getByRole('link', { name: 'Blocked by Matches cause check, in To do' }).getAttribute('href')).toBe(`/task/${id}`);
   });
 
-  it('on a phone, the where line wraps, its picks never break, and the wait’s link takes no press over them', async () => {
+  it.each([
+    ['a phone', 'cards', false],
+    ['a computer', 'sheets', false],
+    ['a computer, a sent-back approval', 'sheets', true],
+  ])('on %s, the wait is whole on its own line under the where line, whose picks never break', async (_, layout, quiet) => {
     const style = document.createElement('style');
     style.textContent = ['../../styles/parts.css', '../../pagekinds/pagekinds.css', './task.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
     document.head.append(style);
-    document.documentElement.dataset.layout = 'cards';
+    document.documentElement.dataset.layout = layout;
     try {
       const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
       const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
       const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
       people([{ id: 'bot:a1', kind: 'agent', name: 'Engineering Manager' }]);
-      serve(reads(task({ to_leave: [], relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
+      serve(reads(task({ ...(!quiet && { to_leave: [] }), relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
       show(<TaskPage task="12" pipeline="p1" />);
-      expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+      await waitFor(() => expect(document.querySelector(quiet ? '.tv.is-quiet .pk-where' : '.tv:not(.is-quiet) .pk-where')).toBeTruthy());
       const where = document.querySelector('.tv .pk-where') as HTMLElement;
-      expect(getComputedStyle(where).flexWrap).toBe('wrap');
+      expect([getComputedStyle(where).flexWrap, getComputedStyle(where).height]).toEqual(['wrap', 'auto']);
+      const link = await within(where).findByRole('link', { name: 'Blocked by Matches cause check, in To do' });
+      const wait = link.closest('.tv-wait') as HTMLElement;
+      expect(wait.parentElement).toBe(where);
+      expect([getComputedStyle(wait).flexBasis, getComputedStyle(wait).whiteSpace, getComputedStyle(wait).textOverflow]).toEqual(['100%', 'normal', 'clip']);
+      expect(getComputedStyle(link).textDecoration).toContain('underline');
+      if (quiet) return;
       const owner = where.querySelector('[data-target="task-owner:t1"]') as HTMLElement;
       expect([getComputedStyle(owner).flexShrink, getComputedStyle(owner).whiteSpace]).toEqual(['0', 'nowrap']);
       expect(getComputedStyle(within(owner).getByText('Engineering Manager')).textOverflow).toBe('ellipsis');
-      const link = within(where).getByRole('link', { name: 'Blocked by Matches cause check, in To do' });
+      if (layout !== 'cards') return;
+      // a press, var(--ctl) high and centered on its 22 high row, reaches (--ctl - 22) / 2 past it each way: rows that far
+      // apart never share one (read from the sheet: jsdom computes no var() in a gap); the wait's link has none
+      const css = fs.readFileSync(new URL('./task.css', here), 'utf8');
+      expect(css).toContain(':where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick)::after{content:"";position:absolute;top:50%;right:0;left:0;height:var(--ctl);');
+      expect(css).toContain(':where(html[data-layout="cards"]) .tv .pk-where{row-gap:calc(var(--ctl) - 22px)}');
+      expect(css.indexOf('.tv .pk-where{row-gap:calc(var(--ctl) - 22px)}')).toBeGreaterThan(css.indexOf('.tv .pk-where{flex-wrap:wrap;height:auto;row-gap:var(--s-1)}'));
       expect(getComputedStyle(link, '::after').content).toBe('none');
-      expect(getComputedStyle(link).textDecoration).toContain('underline');
     } finally {
       style.remove();
       delete document.documentElement.dataset.layout;

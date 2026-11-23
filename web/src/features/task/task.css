@@ -9,13 +9,12 @@
 .tv-pick .av{margin-left:0}
 /* who has it: their name beside the face, a long one cut short */
 .tv-pick>.tv-owner{max-width:18ch;overflow:hidden;text-overflow:ellipsis}
-/* the task another task blocks it on (Facts.tsx BlockedOn), last on the where line: cut short on a computer, whole on
-   hover; on a phone the line wraps, and the wait is whole on a line of its own */
-.tv .pk-where .tv-wait{min-width:0;margin-left:var(--s-1);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+/* the where line wraps rather than run past the head; the task another task blocks it on (Facts.tsx BlockedOn) is
+   whole on a line of its own under it, on a computer and a phone, under the quiet line too */
+.tv .pk-where{flex-wrap:wrap;height:auto;row-gap:var(--s-1)}
+.tv .pk-where>.tv-wait{flex-basis:100%;min-width:0;line-height:var(--lh);overflow-wrap:anywhere}
 .tv .pk-where .tv-wait a{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
 .tv .pk-where .tv-wait a:hover{color:var(--ink)}
-html[data-layout="cards"] .tv .pk-where{flex-wrap:wrap;height:auto;row-gap:var(--s-1)}
-html[data-layout="cards"] .tv .pk-where>.tv-wait{flex-basis:100%;margin-left:0;white-space:normal}
 
 /* ---------- the head on a computer (parts.css .tv-head): where it stands, then the title, which wraps, balanced, at
    most 620 wide; "⋯" keeps the top right corner. An approval's head puts the title first (approvals.html .tv-head). ---------- */
@@ -44,7 +43,9 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
    under the head does not cover it (it starts where the press ends). */
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick){position:relative}
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick)::after{content:"";position:absolute;top:50%;right:0;left:0;height:var(--ctl);transform:translateY(-50%)}
-/* the wait's link on its own line under them takes no such press: it would cover the stage's and the owner's */
+/* rows wrapped apart keep their presses apart: the gap is what a press reaches past its 22 high row, so the stage's
+   never covers the owner's under it; the wait's link on its own line takes no press */
+:where(html[data-layout="cards"]) .tv .pk-where{row-gap:calc(var(--ctl) - 22px)}
 :where(html[data-layout="cards"]) .tv .pk-where .tv-wait a::after{content:none}
 
 /* the framed body: the open page or Details, then the answer on a phone */

@@ -39,6 +39,9 @@ KIND = "merge_order"  # the standing's requirement kind; never a stored requirem
 RELATION = "after"
 LINE = "After {ref}: waits for it to merge"
 UNNAMED = "After a task you can't open: waits for it to merge"
+# GitHub's PR merged while the task it merges after has not (item_sources/github.py), said to its readers and others
+QUEUE_LINE = "Not queued until {ref} merges"
+QUEUE_UNNAMED = "Not queued until a task you can't open merges"
 CLOSED = "{ref} closed without merging. Queue it, or send it back."
 WAKE_CLOSED = "after_closed"
 QUEUED_ANYWAY = "Queued before {ref} merged"

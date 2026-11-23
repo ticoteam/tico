@@ -13,6 +13,7 @@ from backend import question_marks as Q
 from backend import task_delete
 from backend import task_engine as E
 from backend import task_followers
+from backend import task_reads
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -526,7 +527,11 @@ def test_a_private_task_it_depends_on_is_not_named_to_someone_who_reads_only_the
     assert TR.relate(c, ANA, blocked["id"], blocker["id"], "depends_on")
     ben = H.task_view(c, blocked["id"], BEN)
     assert (ben["turn"]["state"], ben["turn"]["who"], ben["turn"]["line"]) == ("tasks", None, D.UNNAMED)
-    assert "Salary" not in json.dumps(ben)
+    assert "Salary" not in json.dumps(ben) and blocker["id"] not in json.dumps(ben)
+    assert D.is_wait(ben["turn"]["requirement_id"])
+    # a list row (a board card, Needs you) says it the same way
+    (row,) = task_reads.brief(c, [H.task(c, blocked["id"])], "private = 0", BEN)
+    assert row["turn"]["line"] == D.UNNAMED and blocker["id"] not in json.dumps(row, default=str)
     assert "Salary" in H.task_view(c, blocked["id"], ANA)["turn"]["line"]  # Ana reads it: it is named to her
 
 

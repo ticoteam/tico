@@ -247,6 +247,24 @@ def test_both_tasks_show_the_order_and_a_reader_who_cannot_open_the_earlier_one_
     assert (shown["who"], shown["line"]) == (None, MO.UNNAMED)
 
 
+def test_the_later_tasks_own_read_names_a_private_earlier_one_to_its_readers_only(c):
+    """Nov 23 gate review: what the later task needs to leave Merge and what it waits on name the earlier task only to
+    a reader who may open it: to anyone else neither its number, its title nor its id."""
+    import json
+
+    gh = FakeGitHub()
+    b6, b7 = pair(c)
+    green(c, gh, 2)
+    c.execute(
+        "UPDATE tasks SET number=CASE id WHEN ? THEN 40 ELSE 41 END, private=CASE id WHEN ? THEN 1 ELSE 0 END WHERE id IN (?,?)",
+        (b6, b6, b6, b7),
+    )
+    assert "#40" in json.dumps(H.task_view(c, b7, X.ANA))  # Ana asked for both: it is named to her
+    ben = json.dumps(H.task_view(c, b7, "human:ben"))
+    assert MO.UNNAMED in ben
+    assert b6 not in ben and "#40" not in ben
+
+
 def test_a_pr_whose_metadata_comes_after_the_task_entered_merge_is_held_too(c):
     b6, b7 = pair(c)
     c.execute("UPDATE requirements SET can_push_past=1")
