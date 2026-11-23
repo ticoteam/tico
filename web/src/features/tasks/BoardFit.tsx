@@ -9,8 +9,8 @@ import { FlowMark } from '@/kit/FlowMark';
    outline at both ends. */
 const GAP = 10;
 const STRIP = 40;
-const MIN = 138;
-const MAX = 296;
+const MIN = 224;
+const MAX = 400;
 const EDGE = 4;
 
 interface Edge {
