@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { effortLabel, modelName } from './model';
+import { effortLabel, modelName, pickable } from './model';
 import { agentQuery, COMPACT_AT, modelsQuery, type AgentRow } from './queries';
 import './team.css';
 
@@ -45,12 +45,12 @@ export function ModelPicker({
   const savedCompact = detail?.compact_at ? String(detail.compact_at) : '';
   const compactNow = compact ?? savedCompact;
 
-  const enabled = data?.enabled_providers;
-  const usable = (data?.models ?? []).filter((m) => !m.deprecated && (!enabled || !m.provider || enabled.includes(m.provider)));
-  const harnesses = (data?.harnesses ?? []).filter((h) => usable.some((m) => !m.harnesses || m.harnesses.includes(h.id)));
+  const { models: usable, harnesses } = pickable(data, agent.harness);
   const models = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const chosen = models.find((m) => m.id === model);
   const efforts = chosen?.efforts ?? [];
+  // Only a harness that compacts where it is told to has a Compact; older rows without a harness run their runtime's.
+  const compacts = !also.length && !!data?.harnesses.find((h) => h.id === (harness || agent.resolved_runtime))?.capabilities?.compaction;
 
   const pickHarness = (h: string) => {
     setHarness(h);
@@ -67,7 +67,7 @@ export function ModelPicker({
   const differs = (a: AgentRow) => model !== (a.model || a.resolved_model || '') || effort !== (a.reasoning_effort ?? '') || harness !== (a.harness ?? '');
   const moving = [agent, ...also].filter(differs);
   const modelChanged = moving.length > 0;
-  const compactChanged = compactNow !== savedCompact;
+  const compactChanged = compacts && compactNow !== savedCompact;
   const save = async () => {
     onOpenChange(false);
     // Both edits advance the same configuration revision. The model change must use the revision from compact-at.
@@ -120,8 +120,8 @@ export function ModelPicker({
           <Segmented className="is-fill" label="Effort" options={['', ...efforts].map((e) => ({ value: e, label: effortLabel(e) }))} value={effort} onValueChange={setEffort} />
         </div>
       )}
-      {!also.length && <FoldButton name="More" open={more} onToggle={() => setMore(!more)} />}
-      {more && !also.length && <Select label="Compact" options={COMPACT} value={compactNow} onValueChange={setCompact} />}
+      {compacts && <FoldButton name="More" open={more} onToggle={() => setMore(!more)} />}
+      {more && compacts && <Select label="Compact" options={COMPACT} value={compactNow} onValueChange={setCompact} />}
     </Dialog>
   );
 }

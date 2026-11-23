@@ -128,7 +128,7 @@ const onModels = () =>
         { id: 'm-one', label: 'Model One', harnesses: ['h1'] },
         { id: 'm-two', label: 'Model Two', harnesses: ['h1'] },
       ],
-      harnesses: [{ id: 'h1', name: 'Harness One' }],
+      harnesses: [{ id: 'h1', name: 'Harness One', capabilities: { compaction: true } }],
     },
   });
 /** Pat, an owner, leads Design with Ana and Bo in it. */
@@ -513,8 +513,8 @@ describe("An agent's Settings", () => {
   });
 
   it('sets where the conversation compacts from the model picker’s More', async () => {
-    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm-one', label: 'Model One' }], harnesses: [] } as never);
-    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-one' } as AgentRow]);
+    queryClient.setQueryData(modelsQuery.queryKey, { models: [{ id: 'm-one', label: 'Model One' }], harnesses: [{ id: 'h1', name: 'Harness One', capabilities: { compaction: true } }] } as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-one', harness: 'h1' } as AgentRow]);
     serve((url, method) => (method === 'POST' && url.endsWith('/compact-at') ? ok({ revision: 4 }) : undefined));
     show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
     const dialog = await screen.findByRole('dialog', { name: 'Model' });
@@ -523,6 +523,31 @@ describe("An agent's Settings", () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
     await waitFor(() => expect(posted('/bots/ana/compact-at')?.body).toEqual({ compact_at: 400000, expected_revision: 3 }));
     expect(sent.some((s) => s.url.includes('/transitions'))).toBe(false);
+  });
+
+  it('keeps a harness no longer offered for the agent already on it; one that cannot compact has no Compact', async () => {
+    queryClient.setQueryData(modelsQuery.queryKey, {
+      models: [{ id: 'm-one', label: 'Model One', harnesses: ['old'] }, { id: 'm-two', label: 'Model Two', harnesses: ['new'] }],
+      harnesses: [
+        { id: 'old', name: 'Old One', offered: false },
+        { id: 'new', name: 'New One', capabilities: { compaction: true } },
+      ],
+    } as never);
+    queryClient.setQueryData(agentsQuery.queryKey, [{ ...anaRow, model: 'm-one', harness: 'old' } as AgentRow]);
+    serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ revision: 4 }) : undefined));
+    show(<TeamWho who="ana" tab="model" />, '/team/ana?tab=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).getByRole('button', { name: 'Old One' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'More' })).toBeNull();
+    // A Compact set on a harness that compacts is dropped when the pick moves back to one that cannot.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'New One' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'More' }));
+    await pick(within(dialog).getByRole('combobox', { name: 'Compact' }), '400K');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Old One' }));
+    expect(within(dialog).queryByRole('combobox', { name: 'Compact' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model One' }));
+    expect(within(dialog).getByRole('button', { name: 'Apply' }).hasAttribute('disabled')).toBe(true);
+    expect(posted('/bots/ana/compact-at')).toBeUndefined();
   });
 });
 

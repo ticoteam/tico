@@ -364,8 +364,10 @@ export interface Model {
 export interface Harness {
   id: string;
   name: string;
-  /** What its CLI can do from here: a sign-in in the browser, a sign-out. */
-  capabilities?: { browser_sign_in?: boolean; sign_out?: boolean };
+  /** False: not offered for new picks; an agent already on it keeps it. */
+  offered?: boolean;
+  /** What its CLI can do from here: a sign-in in the browser, a sign-out, compacting where it is told to. */
+  capabilities?: { browser_sign_in?: boolean; sign_out?: boolean; compaction?: boolean };
 }
 export interface Models {
   models: Model[];

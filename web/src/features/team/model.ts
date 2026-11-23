@@ -88,6 +88,23 @@ export function modelName(label: string | null | undefined): string {
 const EFFORT: Record<string, string> = { xhigh: 'XHigh' };
 export const effortLabel = (e: string | null | undefined) => (e ? (EFFORT[e] ?? cap(e)) : 'Default');
 
+/**
+ * What a model picker offers from GET /api/v2/models: models not deprecated whose provider is on (or names none), and
+ * the harnesses that run at least one of them. A harness the team no longer offers (`offered: false`) stays only for
+ * the agent already on it (`current`).
+ */
+export function pickable<M extends { provider?: string; harnesses?: string[]; deprecated?: boolean }, H extends { id: string; offered?: boolean }>(
+  data: { models?: readonly M[]; harnesses?: readonly H[]; enabled_providers?: readonly string[] } | undefined,
+  current?: string,
+): { models: M[]; harnesses: H[] } {
+  const on = data?.enabled_providers;
+  const models = (data?.models ?? []).filter((m) => !m.deprecated && (!on || !m.provider || on.includes(m.provider)));
+  const harnesses = (data?.harnesses ?? []).filter(
+    (h) => (h.offered !== false || h.id === current) && models.some((m) => !m.harnesses || m.harnesses.includes(h.id)),
+  );
+  return { models, harnesses };
+}
+
 /** "Opus 5.5, High": the model it runs and its effort, as the server resolved them. */
 export function modelLine(row: Pick<AgentRow, 'model' | 'resolved_model' | 'resolved_model_label' | 'reasoning_effort' | 'resolved_effort'>, models?: readonly Model[]) {
   const id = row.resolved_model || row.model;
