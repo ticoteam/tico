@@ -11,6 +11,10 @@ import { RequestCard } from './Requests';
    key, then Save) and a key-drop proposal (Grant selected). Each press goes to the kind's own route, and once the
    server takes it the card leaves Flow. Made-up rows only; every answer is stubbed. */
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 
 const ACCESS: FlowRequest = {
@@ -158,6 +162,42 @@ describe('an access request in Needs you', () => {
     expect((await within(box).findByRole('alert')).textContent).toBe('You can’t grant this');
     expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
   });
+  it.each([
+    ['a phone', 'cards', '.askcard-top'],
+    ['a computer', 'sheets', '.an-row'],
+  ])('on %s, Needs you and Tools alike, shows who asks, for what and at which level whole above Grant', async (_, layout, noteIn) => {
+    const style = document.createElement('style');
+    style.textContent = ['../../styles/parts.css', './ask.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    document.head.append(style);
+    document.documentElement.dataset.layout = layout;
+    try {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <RequestCard it={ACCESS} />
+        </QueryClientProvider>,
+      );
+      const box = await card('Access request');
+      for (const text of ['Growth Manager asks for Meta Ads', 'Read and write']) {
+        const css = getComputedStyle(within(box).getByText(text));
+        expect([css.whiteSpace, css.overflow]).toEqual(['normal', 'visible']);
+      }
+      // the line it sits in wraps, so the level moves down whole rather than squeezed into a column
+      const note = within(box).getByText('Read and write');
+      const line = note.closest(noteIn) as HTMLElement;
+      expect(getComputedStyle(line).flexWrap).toBe('wrap');
+      // the name keeps the Dot's line, taking its room; on a phone the level is a line of its own under it and the face
+      const name = getComputedStyle(within(box).getByText('Growth Manager asks for Meta Ads'));
+      expect([name.flexGrow, name.flexBasis]).toEqual(['1', '0px']);
+      // and all of it: no spacer shares the room, the face after the name at the line's end
+      const top = box.querySelector('.askcard-top') as HTMLElement;
+      expect([...top.children].filter((el) => getComputedStyle(el).flexGrow !== '0' && getComputedStyle(el).display !== 'none')).toEqual([within(box).getByText('Growth Manager asks for Meta Ads')]);
+      if (layout === 'cards') expect([getComputedStyle(note).order, getComputedStyle(note).flexBasis]).toEqual(['1', '100%']);
+    } finally {
+      style.remove();
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
   it('a grant that did not take effect yet keeps the card and says so', async () => {
     reply = () => ({ body: { state: 'open', level: 'read_write' } });
     show();

@@ -120,7 +120,9 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)
         if said.state == TASKS and task_depends.is_wait(said.requirement_id):
-            return replace(said, who=None, line=task_depends.UNNAMED, about=None)
+            # its id is the blocker's too (task_depends.wait_id): only the dependent's part is said
+            kept = ":".join(str(said.requirement_id).split(":")[:2])
+            return replace(said, who=None, line=task_depends.UNNAMED, about=None, requirement_id=kept)
         if said.state == TASKS:
             return replace(said, who=None, line=SUB_TASK, about=None)
         return replace(said, line=SUB_TASK_CLOSED, about=None)

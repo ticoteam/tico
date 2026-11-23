@@ -83,6 +83,7 @@ function AccessCard({ it, a }: { it: NeedsYouItem; a: NonNullable<NeedsYouItem['
       who={a.subject}
       label="Access request"
       target={`request:${it.id}`}
+      whole
       error={error}
       actions={
         <>
@@ -116,6 +117,7 @@ function KeyCard({ it, k }: { it: NeedsYouItem; k: NonNullable<NeedsYouItem['key
       who={it.from_id}
       label="Key"
       target={`request:${it.id}`}
+      whole
       error={error}
       actions={
         <Button variant="primary" disabled={!value.trim()} onClick={once(() => saveKey(it.id, k.id, value.trim()), 'Saved', k.label || k.env)}>
@@ -153,6 +155,7 @@ function KeyDropCard({ it, d }: { it: NeedsYouItem; d: NonNullable<NeedsYouItem[
       who={it.from_id}
       label="Key proposal"
       target={`request:${it.id}`}
+      whole
       error={error}
       actions={
         <Button variant="primary" disabled={!ticked.length} onClick={once(() => grantKeyDrop(it.id, d.message_id, ticked, d.losses), keyDropDone, name)}>

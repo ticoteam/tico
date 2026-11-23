@@ -60,7 +60,7 @@ export interface FrameProps {
   onClosePanel?: () => void;
   /* `chat` is the page's Agent bar (shell/pageOwner.ts), not a second chat: it folds to an edge with the owner's face
      and name instead of closing. `fold`: the person's choice for this page; `ask`: an ask from the owner waits on them,
-     which opens it (on a phone, raises its card). */
+     which opens it on a computer; a phone keeps the page up. */
   bar?: AgentBar;
 }
 
@@ -375,10 +375,12 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     const bar = { faces: { company: p.marks?.menu, chat: p.marks?.chat }, onSearch: p.onSearch } as const;
     if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} tucked {...bar} />;
     // the page's Agent bar waits behind the Agent icon with its owner's face, folded or open as the page's fold says (a
-    // phone is never wide), and comes up when an ask from them waits on you. Raising it or putting it down is kept as
-    // that fold; what the fold or an ask did by itself is not.
+    // phone is never wide). While the window is a phone's (`mode`, held to 800 coming back from one) an ask from them
+    // does not raise it: it waits on a task or their Home, and the page stays up. A computer's window here (narrow, the
+    // open bar squeezing the page) keeps it up, as its sheets would. Raising it or putting it down is kept as that
+    // fold; what the fold or an ask did by itself is not.
     const owner = p.bar && p.chat ? p.bar : null;
-    const lip = !!owner && barFolded(owner.fold, owner.ask, false);
+    const lip = !!owner && barFolded(owner.fold, mode !== 'cards' && owner.ask, false);
     const onCard = (next: PhoneCard) => {
       const was = card.current;
       card.current = next;

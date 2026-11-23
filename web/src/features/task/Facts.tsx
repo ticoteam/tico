@@ -136,6 +136,18 @@ export function WaitOn({ t, turn, short = false }: { t: TaskData; turn: Turn; sh
   return <>{turn.line}</>;
 }
 
+/** In the head's where line: the task another task blocks it on, as Details says it, so the wait shows on every tab.
+    Only one the reader may open: nothing of another (its line may name it), which Details says as the server does. */
+export function BlockedOn({ t }: { t: TaskData }) {
+  const turn = t.status === 'open' && t.turn?.state === 'tasks' ? t.turn : null;
+  if (!turn?.line || !turn.who || !opens(t, turn.who)) return null;
+  return (
+    <span className="tv-wait" title={turn.line}>
+      <WaitOn t={t} turn={turn} />
+    </span>
+  );
+}
+
 /** One quiet line: who or what the open task waits on, and for how long when its time is the wait's own: an ask
     (when it was asked) or a snooze (when it was set). Another wait's time is its stage's or requirement's, which a
     reassignment in the same stage leaves as it was. */

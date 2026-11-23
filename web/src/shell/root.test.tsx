@@ -537,6 +537,60 @@ describe('the Agent bar @4857', () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: true } }));
   });
 
+  // an OK on a task in Engineering, its pipeline's agent being QA: Needs you's items as the server gives them
+  const okOnTask = () => {
+    asks.push({ id: 'n5', kind: 'ask', by: 'bot:qa', pipeline: 'eng', href: '/task/t1' });
+    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
+  };
+  const askRead = async () => {
+    await waitFor(() => expect(queryClient.getQueryData<{ asks: unknown[] }>(['flow'])?.asks).toHaveLength(1));
+    await act(async () => {});
+  };
+
+  it('on a phone keeps the board up when an OK from the owner waits on you: the ask stays behind the Agent icon', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    const icon = await screen.findByRole('button', { name: 'QA Owner' });
+    await askRead();
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+    expect(icon.getAttribute('aria-current')).toBeNull();
+    // raised by hand, the line to the OK is there
+    fireEvent.click(icon);
+    expect((await screen.findByRole('link', { name: 'An OK waits on you' })).getAttribute('href')).toBe('/task/t1');
+  });
+
+  it('a phone widened to 780, still a phone until 800, keeps the board up when an OK from the owner waits', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    await askRead();
+    at(780);
+    await act(async () => {});
+    expect(document.documentElement.dataset.layout).toBe('cards');
+    expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none');
+    expect(document.querySelector('.tabbar button[aria-label="QA Owner"]')?.getAttribute('aria-current')).toBeNull();
+  });
+
+  it('at 820, a computer, an OK from the owner still brings the bar up, as a card over the page', async () => {
+    at(820);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    await askRead();
+    const lip = () => document.querySelector('.tabbar button[aria-label="QA Owner"]');
+    await waitFor(() => expect(lip()?.getAttribute('aria-current')).toBe('true'));
+    expect(document.documentElement.dataset.layout).toBe('cards');
+    expect(await screen.findByRole('link', { name: 'An OK waits on you' })).toBeTruthy();
+  });
+
   it("on a phone follows each page's own fold as you move between pages, both ways @4857-S3", async () => {
     at(390);
     people(MAYA, QA);

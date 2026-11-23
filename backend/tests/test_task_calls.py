@@ -13,6 +13,7 @@ from backend import question_marks as Q
 from backend import task_delete
 from backend import task_engine as E
 from backend import task_followers
+from backend import task_reads
 from backend.store import H
 from backend.tests.helpers import engine as X
 
@@ -512,6 +513,26 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     text = json.dumps(H.task_view(c, parent["id"], BEN))
     assert "Salary" not in text and "A sub-task" in text
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
+
+
+def test_a_private_task_it_depends_on_is_not_named_to_someone_who_reads_only_the_dependent(c):
+    """Nov 23 gate review: the task head shows what a blocked task waits on on every tab. A private task it depends on
+    that it did not file is no more named to a reader who may not open it than a filed one: not its title, nor its id."""
+    from backend import task_depends as D
+    from backend import task_relations as TR
+
+    blocked = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+    blocker = _new(c, by=ANA, owner=HELPER, title="Salary numbers", private=True)
+    assert not H.task_private_readable(c, BEN, H.task(c, blocker["id"]))
+    assert TR.relate(c, ANA, blocked["id"], blocker["id"], "depends_on")
+    ben = H.task_view(c, blocked["id"], BEN)
+    assert (ben["turn"]["state"], ben["turn"]["who"], ben["turn"]["line"]) == ("tasks", None, D.UNNAMED)
+    assert "Salary" not in json.dumps(ben) and blocker["id"] not in json.dumps(ben)
+    assert D.is_wait(ben["turn"]["requirement_id"])
+    # a list row (a board card, Needs you) says it the same way
+    (row,) = task_reads.brief(c, [H.task(c, blocked["id"])], "private = 0", BEN)
+    assert row["turn"]["line"] == D.UNNAMED and blocker["id"] not in json.dumps(row, default=str)
+    assert "Salary" in H.task_view(c, blocked["id"], ANA)["turn"]["line"]  # Ana reads it: it is named to her
 
 
 def test_the_wake_that_says_a_tasks_sub_tasks_ended_names_only_those_everyone_who_reads_it_may_read(c):

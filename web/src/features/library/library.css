@@ -316,10 +316,9 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 .lib .msg-find{display:flex;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
 /* Tools' requests: the Needs you cards, one under another (tasks.css .flow-requests) */
 .tools .tool-requests{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-1) 0 var(--s-3)}
-/* a card never widens the list: its buttons wrap to a second line when the three do not fit */
+/* a card never widens the list: its buttons wrap to a second line when the three do not fit (ask.css .is-whole) */
 .tools .tool-requests,.tools .tool-requests>*{min-width:0}
 .tools .tools-list>.stage{min-width:0;overflow-x:clip}
-.tools .tool-requests .an-row{flex-wrap:wrap}
 :where(html[data-layout="cards"]) .tools .tool-requests{padding:var(--s-1) var(--s-2) var(--s-3)}
 /* Find or connect: the catalog scrolls under its search; the kinds wrap below; a service's ways stack */
 .modal .connect-list{display:flex;flex-direction:column;max-height:280px;overflow:auto;margin:var(--s-1) 0}
