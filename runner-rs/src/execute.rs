@@ -1116,6 +1116,13 @@ impl Drove {
     }
 }
 
+/// Whether this runner's host for `runtime` reports every tool call it makes, so that `Flags::tool_ran` staying false
+/// proves none ran: Claude and Codex say so on each run (a `status` event with `tool_events`, hosts/claude.rs and
+/// hosts/codex.rs), the rest through their manifest's `tool_events`.
+fn reports_tool_calls(runtime: &str) -> bool {
+    matches!(runtime, "claude" | "codex") || crate::harness_tools::caps(runtime).tool_events
+}
+
 /// Whether a turn may still go to a fallback once it has run: never after a tool ran (in its result, or seen by the
 /// drive before the drive failed: `Flags::tool_ran`), nor after a failure once its turn had started
 /// (`failed_after_start`), when what the harness did is not known.
@@ -3374,7 +3381,8 @@ impl Runner {
             && !voice_reply
             && !native_control
             && continuing.is_empty()
-            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some());
+            // A turn that failed after it started is uncertain only on a host that does not report its tool calls.
+            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some() && !reports_tool_calls(&runtime));
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
@@ -7357,6 +7365,9 @@ mod tests {
         let f = lease_flags();
         assert!(tools_settled(&Drove::interrupted(), &f, false));
         assert!(!tools_settled(&Drove::interrupted(), &f, true));
+        // Only a host that does not report its tool calls leaves a failed, started turn uncertain.
+        assert!(reports_tool_calls("claude") && reports_tool_calls("codex") && reports_tool_calls("antigravity"));
+        assert!(!reports_tool_calls("pi"));
         f.tool_ran.store(true, Ordering::SeqCst);
         assert!(!tools_settled(&Drove::interrupted(), &f, false));
     }
