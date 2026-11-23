@@ -37,19 +37,17 @@ export function PageHead({ title, path, lead, after, actions, search, more, onRe
   const closes = close ?? opened;
   const big = size === 'large' ? 't-figure' : undefined;
   const back = upOf(useTrail());
+  // the page's own way back (an open task's) also closes it when it was opened from a thread
+  const leave = onBack ?? (() => closeArtifact(router, back?.to));
   const [renaming, setRenaming] = useState(false);
   // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
   useEffect(() => showPageName(title), [title]);
   useEffect(() => watchSteps(router), [router]);
   return (
     <header className="page-head pk-head">
-      {/* a phone's back: to the thread the page was opened from, else up the trail */}
-      {closes ? (
-        <button type="button" className="ib back pk-back" onClick={() => closeArtifact(router, back?.to)} aria-label="Back" title="Back">
-          <Icon name="chevron" className="flip" />
-        </button>
-      ) : onBack ? (
-        <button type="button" className="ib back pk-back" onClick={onBack} aria-label="Back" title="Back">
+      {/* a phone's back: the page's own way back, else to the thread the page was opened from, else up the trail */}
+      {closes || onBack ? (
+        <button type="button" className="ib back pk-back" onClick={leave} aria-label="Back" title="Back">
           <Icon name="chevron" className="flip" />
         </button>
       ) : back ? (
@@ -111,7 +109,7 @@ export function PageHead({ title, path, lead, after, actions, search, more, onRe
       {sheet.tucked.map((t) => (
         <IconButton key={t.id} icon="panel" label={t.label} quiet onClick={t.open} />
       ))}
-      {closes && <IconButton icon="close" label="Close" quiet className="pk-close" onClick={() => closeArtifact(router, back?.to)} />}
+      {closes && <IconButton icon="close" label="Close" quiet className="pk-close" onClick={leave} />}
     </header>
   );
 }

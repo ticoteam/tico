@@ -15,6 +15,7 @@ import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
+import { pipelinesQuery } from '@/features/tasks/routing';
 import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
@@ -30,6 +31,7 @@ import { askOf, asksInChat, changesAskedOf, decisionOf, defaultTab, DETAILS, ema
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
+import { ownAddress } from './routing';
 import { useTabs, type Tab } from './tabs';
 import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
@@ -155,22 +157,25 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     // The address's other words (a version, `v`) stay while the tab is named.
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: TaskSearch) => prev) as never, replace: true });
   }, [known, unresolved, first, opened, t, navigate]);
-  /* Answered: while something else on this task waits on the person (an approval, or a question for them), its page
-     opens; once nothing does, the task closes, back to the board, list or page it was opened from. */
+  /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
+     the task stays as it is; once nothing does, it closes, back to the board, list or page it was opened from (its
+     board, while there is one, when nothing is behind it). */
   const router = useRouter();
   const client = useQueryClient();
   const pipeline = t.pipeline_id;
   const close = useCallback(() => {
     leaving.current = true;
-    leaveTask(router, pipeline);
-  }, [router, pipeline]);
+    const board = client.getQueryData(pipelinesQuery.queryKey)?.some((p) => p.id === pipeline);
+    leaveTask(router, board ? pipeline : null);
+  }, [router, client, pipeline]);
   const [seek, setSeek] = useState(0);
   const sought = useRef(0);
   useEffect(
     () =>
       onAnswered(() => {
-        if (waitsNow(client, t.id, me)) return setSeek((n) => n + 1);
-        close();
+        const waits = waitsNow(client, t.id, me);
+        if (waits === 'ask') return setSeek((n) => n + 1);
+        if (!waits) close();
       }),
     [t.id, me, client, close],
   );
@@ -429,13 +434,18 @@ function ChatDecision({ t, onAsking }: { t: TaskData; onAsking: (asking: boolean
   return pick && <Decision key={pick.email ?? ''} t={t} onAsking={onAsking} email={pick.email} requirement={ask} />;
 }
 
-/** `/task/<n>`: the task by its number alone. Once its pipeline is known the address becomes its own, replaced. */
+/** `/task/<n>` when its route could not read the task (Try again read it here): once it is read, the address becomes
+    its own, replaced, as the route would have made it (ownAddress). */
 export function TaskById({ task }: { task: string }) {
   const { t } = useTask(task);
   const navigate = useNavigate();
+  const client = useQueryClient();
+  // the address as it was opened: once the task is read it is replaced, once
+  const [search] = useState(useRouterState({ select: (s) => s.location.search as Record<string, unknown> }));
+  const read = !!t;
   useEffect(() => {
-    if (!t) return;
-    void navigate({ to: tabAddress(t) as never, replace: true });
-  }, [t, navigate]);
+    if (!read) return;
+    void ownAddress(client, task, search).then((to) => to && navigate({ ...to, search: to.search as never, replace: true }));
+  }, [read, client, task, search, navigate]);
   return t ? null : <TaskPage task={task} />;
 }

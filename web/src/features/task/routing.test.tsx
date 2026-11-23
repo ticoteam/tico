@@ -1,10 +1,13 @@
-import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet } from '@tanstack/react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
+import { render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { Route as flowTask } from '@/routes/flow.$task';
 import { Route as flowIndex } from '@/routes/flow.index';
 import { Route as taskById } from '@/routes/task.$task';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
+import { TaskById } from './TaskPage';
 
 /* Flow is gone: its old links land on Needs you and on the task's own address, with what they carried. Made-up rows. */
 
@@ -54,5 +57,25 @@ describe('/task/<n>', () => {
     await router.load();
     await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
     expect(router.state.location.search).toEqual({});
+  });
+});
+
+describe('/task/<n> read again after its route could not read it', () => {
+  it('goes to the same address the route would have: its tab, ask, version, file and thread kept', async () => {
+    const root = createRootRouteWithContext<{ queryClient: typeof queryClient }>()({ component: Outlet });
+    const byId = createRoute({ getParentRoute: () => root, path: '/task/$task', component: () => <TaskById task="12" /> });
+    const own = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task/$tab', component: () => null });
+    const router = createRouter({
+      routeTree: root.addChildren([byId, own]),
+      context: { queryClient },
+      history: createMemoryHistory({ initialEntries: ['/task/12?tab=details&ask=r1&v=2&vs=1&file=f3&chat=thread%3Ax&via=thread'] }),
+    });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    expect(router.state.location.search).toEqual({ ask: 'r1', v: 2, vs: 1, file: 'f3', chat: 'thread:x', via: 'thread' });
   });
 });

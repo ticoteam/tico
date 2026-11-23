@@ -48,7 +48,8 @@ export interface HeadProps {
   sub?: ReactNode;
   /** 'large': the title at figure size, for a page that stands as a column beside its chat (an agent's own page). */
   size?: 'large';
-  /** A phone's Back goes here instead of up the trail (an open task closes, back to where it was opened from). */
+  /** Back (and ✕ when opened from a thread) go here instead of up the trail: an open task closes, back to where it was
+      opened from. */
   onBack?: () => void;
   /** ✕, last in the head, back to where you were (plan/layers.html: an artifact opened from a thread closes). Left out,
       it shows while the address says the page was opened from a thread (`via=thread`, lib besideThread). On a phone the
