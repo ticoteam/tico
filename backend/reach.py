@@ -921,15 +921,6 @@ def task_parties(c, task_id, before=None):
                     "SELECT actor FROM thread_members WHERE thread_id=? LIMIT 500", (row["conversation_id"],)
                 )
             }
-        if not before and H._has_table(c, "thread_followers"):
-            # Its followers (task_followers): an owner who added a teammate to its task reaches them on it.
-            out |= {
-                r[0]
-                for r in c.execute(
-                    "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 LIMIT 500",
-                    (row["conversation_id"],),
-                )
-            }
     return {a for a in out if a}
 
 

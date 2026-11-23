@@ -5929,6 +5929,7 @@ class Execution:
                 conv["id"],
                 limit=HISTORY_PAGE * 2,
                 since=epoch["updated_at"] if epoch else None,
+                session=bot_who.actor,
             )["messages"]
             history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         if card_slot.of(row):
@@ -7499,15 +7500,16 @@ class Execution:
         woke = bool(origin) and (task is None or live(task))
         if woke:
             refs = {"task": task["id"]} if task else {}
-            H.say(
-                c,
-                H.TICO_ACTOR,
-                "bot:" + row["bot_id"],
-                defang(text, c),
-                kind="notice",
-                conversation_id=task["conversation_id"] if task else origin["conversation_id"],
-                refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid),
-            )
+            with H.session_of("bot:" + row["bot_id"], H.TICO_ACTOR):  # its session's run notice on a task's thread
+                H.say(
+                    c,
+                    H.TICO_ACTOR,
+                    "bot:" + row["bot_id"],
+                    defang(text, c),
+                    kind="notice",
+                    conversation_id=task["conversation_id"] if task else origin["conversation_id"],
+                    refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid),
+                )
         H.event(
             c,
             H.TICO_ACTOR,
@@ -7591,7 +7593,14 @@ class Execution:
         to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
         v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
         thread, under = conv, None
-        if parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:")):
+        # On a task's thread a reply stays in the thread, under what it answers (in_reply_to), never a sub-thread.
+        if (
+            parent_id
+            and text
+            and str(text).strip()
+            and str(target).startswith(("human:", "bot:"))
+            and threads.audience_of(threads.root_of(c, conv)) != "task"
+        ):
             root = threads.root_of(c, conv)
             parent = H.message(c, parent_id)
             if (
@@ -7901,6 +7910,16 @@ class Execution:
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "notice_only"},
                         )
+                elif (
+                    replyable
+                    and task
+                    and task["status"] == "open"
+                    and (conv or {}).get("task_id") == task["id"]
+                    and turn_wrote(c, aid, conv["id"], actor)
+                ):
+                    # Any turn on an open task that already wrote in its room (a ❓, a comment with files) posts nothing
+                    # more: an agent woken on a task never posts twice.
+                    replyable = False
                 # A turn a Stop reached after its task was closed (end_task_work) files its answer on the run
                 # instead: the closed room takes no more posts from work that was stopped.
                 if task and task["status"] == "closed" and row["stop_requested_at"]:
@@ -7981,9 +8000,11 @@ class Execution:
                     if replyable and not refused:
 
                         def post_reply():
-                            sent = self._say_reply(
-                                c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
-                            )
+                            # On a task's own thread the reply is the agent's session message (hubdb.session_stamp).
+                            with H.session_of(actor, actor):
+                                sent = self._say_reply(
+                                    c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
+                                )
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent

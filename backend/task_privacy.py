@@ -794,9 +794,13 @@ def chat_activity(
     return list(reversed(out)), None
 
 
-def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None, chat=None, auth=None):
+def page(
+    c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_bytes=None, chat=None, auth=None, session=None
+):
     """Paginate visible rows, so hidden rows cannot leak cursors or counts. `max_bytes` also ends the page once
-    its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back."""
+    its messages come to that many bytes as JSON (the newest message is always sent); the rest pages back.
+    `session`: the agent whose turn replays this room, which reads the comments and its own session (stamped for it,
+    or @mentioning it), never another agent's session (messages.session_agent_id)."""
     snapshot(c)
     from . import threads
 
@@ -823,6 +827,12 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
     if since:
         clauses.append("created_at>?")
         args.append(since)
+    if session:
+        clauses.append(
+            "(session_agent_id IS NULL OR session_agent_id=? OR id IN (SELECT message_id FROM message_deliveries "
+            "WHERE thread_id=? AND recipient=? AND reason='mention'))"
+        )
+        args += [session, cid, session]
     if task_id:
         # Only the messages that could be about the task are read (backend/message_links.py); each is still
         # checked below exactly as before, so an extra candidate costs a check and nothing more.

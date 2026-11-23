@@ -370,17 +370,19 @@ def add(
         carried.pop("release", None)
         carried.pop("release_kind", None)
     stamped: Row = RT.stamp({**carried, **theirs, **own}, trigger or "task_turn", source)
-    message = H._write_message(
-        conn,
-        H.TICO_ACTOR,
-        target,
-        text,
-        H.conversation(conn, task["conversation_id"]),
-        "notice",
-        stamped,
-        None,
-        None,
-    )
+    # A bot's wake is a run notice in its own session on the task (hubdb.session_stamp); a person's is unstamped.
+    with H.session_of(target if H.is_bot(target) else None, H.TICO_ACTOR):
+        message = H._write_message(
+            conn,
+            H.TICO_ACTOR,
+            target,
+            text,
+            H.conversation(conn, task["conversation_id"]),
+            "notice",
+            stamped,
+            None,
+            None,
+        )
     if not message:
         return None
     # `job` marks a wake that queued a run, so a wake whose job later went missing reads as lost (`lost`); one to a bot

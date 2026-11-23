@@ -1,7 +1,7 @@
-"""A bot's post in a task's own thread reaches a person who follows the task live, or whom it @mentions or replies to
-(hubdb.counts_for_person, delivery_counts_sql). Anyone else gets no delivery (so no unread, Inbox row, digest or push).
-Other threads, people's own posts and bot recipients are unchanged. Fictional people only: ana (requester, not
-following), ben (the owner, who follows).
+"""A bot's post in a task's own thread reaches a person it @mentions or replies to (hubdb.counts_for_person,
+delivery_counts_sql). Anyone else gets no delivery (so no unread, Inbox row, digest or push): nobody follows a task.
+Other threads, people's own posts and bot recipients are unchanged. Fictional people only: ana (requester), ben (the
+owner).
 """
 
 from backend import question_marks, threads, waiting_on
@@ -27,14 +27,13 @@ def bot_say(api, thread_id, body, to="human:ben"):
         return threads.post(c, "bot:ops", thread_id, body, to_actor=to)
 
 
-def test_a_bot_say_in_a_task_thread_without_a_mention_reaches_only_its_live_followers(api):
+def test_a_bot_say_in_a_task_thread_without_a_mention_reaches_nobody(api):
     thread_id = task_thread(api)
     before = unread_for(api, "human:ana", thread_id)  # Ben's request, a person's message, is hers to read
     said = bot_say(api, thread_id, "The budget draft is in the doc; the total still needs a check.", to="human:ana")
     assert rows(api, "SELECT conversation_id FROM messages WHERE id=?", said["id"]) == [{"conversation_id": thread_id}]
     assert delivery(api, said["id"], "human:ana") is None and unread_for(api, "human:ana", thread_id) == before
-    assert delivery(api, said["id"], "human:ben")["reason"] == "follower"
-    assert unread_for(api, "human:ben", thread_id) == 1
+    assert delivery(api, said["id"], "human:ben") is None, "the person holding it does not follow it"
 
 
 def test_a_bot_say_that_mentions_the_person_in_a_task_thread_reaches_them(api):

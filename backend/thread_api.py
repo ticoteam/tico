@@ -829,7 +829,7 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "getThreadTimeline",
-            "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`",
+            "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`. On a task's thread, `session=<agent>` pages only that agent's session (its stamped messages and those that @mention it) and `comments=true` only the comments (unstamped messages and the stamped answers to them)",
             "ThreadTimeline",
         ),
     )
@@ -840,9 +840,12 @@ def install(app, store, auth, mutate, rule_check):
         limit: int | None = None,
         max_bytes: int | None = None,
         flat: int = 0,
+        session: str | None = None,
+        comments: bool = False,
     ):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
-        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
+        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0. On a
+        task's thread, `session=<agent>` reads only that agent's session and `comments=true` only the comments.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         with store.read() as c:
@@ -854,6 +857,8 @@ def install(app, store, auth, mutate, rule_check):
                 limit=limit or 50,
                 max_bytes=max_bytes,
                 flat=bool(flat),
+                session=session,
+                comments=comments,
             )
 
     @app.get(

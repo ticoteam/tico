@@ -1113,15 +1113,16 @@ def register_completion(
             c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"], refs, msg
         )
         text, _ = split_runner_notices(replay["text"])
-        sent = H.say(
-            c,
-            bot.actor,
-            target,
-            org_rule_check.warned_text(gate, text),
-            conversation_id=conv["id"],
-            in_reply_to=msg["id"],
-            refs=refs,
-        )
+        with H.session_of(bot.actor, bot.actor):  # the run's reply, in its agent's session on a task's thread
+            sent = H.say(
+                c,
+                bot.actor,
+                target,
+                org_rule_check.warned_text(gate, text),
+                conversation_id=conv["id"],
+                in_reply_to=msg["id"],
+                refs=refs,
+            )
         return {"message": sent}
 
     def reply_audience(c, bot, replay):

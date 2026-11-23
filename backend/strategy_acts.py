@@ -24,7 +24,6 @@ import contextvars
 
 from . import person_asks, strategy_bot
 from . import hubdb as H
-from . import task_followers as TF
 from . import task_trigger_rules as triggers
 from .migrations import renames
 
@@ -349,45 +348,6 @@ def _mark(c, task_id):
     ).fetchone()[0]
 
 
-def _followers(c, row):
-    """Who follows the task's thread and how: {actor: [level, reason]}, or None for a task with no thread of its own.
-    Giving a task to a bot changes who follows it (task_followers.owner_moved), and giving it back starts the old
-    owner at `live`."""
-    tid = TF.thread_id(c, row)
-    if not tid:
-        return None
-    return {
-        actor: [notify, reason]
-        for actor, notify, reason in c.execute(
-            "SELECT actor, notify, reason FROM thread_followers WHERE thread_id=? AND following=1", (tid,)
-        )
-    }
-
-
-def _refollow(c, task, item, left):
-    """Each follower the decision changed and nobody changed since (`left`: as Undo found them) back as it was."""
-    was, then = (item.get("follows") or {}).get("before"), (item.get("follows") or {}).get("after")
-    tid = TF.thread_id(c, task)
-    if was is None or then is None or left is None or not tid:
-        return
-    for actor in sorted({*was, *then, *(_followers(c, task) or {})}):
-        if left.get(actor) != then.get(actor):
-            continue
-        if actor in was:
-            level, reason = was[actor]
-            TF._upsert(c, tid, actor, reason, level)
-            c.execute(
-                "UPDATE thread_followers SET notify=?, reason=? WHERE thread_id=? AND actor=?",
-                (level, reason, tid, actor),
-            )
-        else:
-            c.execute(
-                "UPDATE thread_followers SET following=0, reason='read', updated_at=? WHERE thread_id=? AND actor=? "
-                "AND following=1",
-                (H.now(), tid, actor),
-            )
-
-
 def _changed(c, task_id):
     """What Undo needs of a task the decision changed: its fields after, and where its history stood."""
     return {"after": _snapshot(H.task(c, task_id)), "mark": _mark(c, task_id)}
@@ -449,7 +409,7 @@ def _apply(c, change, goal_id, reason):
     row = H.task(c, change["task_id"])
     if not row:
         H.refuse(c, STRATEGY_BOT, "not-found", "Task not found")
-    before, follows = _snapshot(row), _followers(c, row)
+    before = _snapshot(row)
     # Each write is the Strategy Owner's own, at the version just read, and raises the task's version.
     if do == "reorder":
         rank = H._queue_end(c, row["owner_id"], top=True)
@@ -468,8 +428,7 @@ def _apply(c, change, goal_id, reason):
             if (H.task(c, t) or {}).get("status") == "closed"
         ]
         return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"]), "under": under}
-    after = {"before": follows, "after": _followers(c, H.task(c, row["id"]))} if follows is not None else None
-    return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"]), "follows": after}
+    return {"task_id": row["id"], "made": False, "before": before, **_changed(c, row["id"])}
 
 
 def decide(c, actor, reason, changes, goal_id=None, *, visible, give, sees):
@@ -885,7 +844,6 @@ def _restore(c, actor, task, item, since, note):
                 f"so it stays with {_name(c, task['owner_id'])}"
             )
             return None
-    left = _followers(c, task)
     # A task private since the decision (moved under a private task) is not the owner's to write: Tico puts it back.
     writer = H.TICO_ACTOR if H.task_private(c, task) else actor
     why = f"Undone by {_name(c, actor)}: the {strategy_bot.name(c)} did this on its own"
@@ -903,7 +861,6 @@ def _restore(c, actor, task, item, since, note):
         fields["note"] = before.get("note") or ""
     if fields:
         H.task_update(c, writer, task["id"], mover=True, **fields)
-    _refollow(c, task, item, left)
     return f"{TASK}: {', '.join(PLAIN[f] for f in back)} put back"
 
 

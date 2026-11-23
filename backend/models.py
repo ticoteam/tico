@@ -237,7 +237,7 @@ class TaskCreate(Contract):
     # name (one_reader_list).
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
     shared_with: list[ReaderName] = Field(default_factory=list, exclude=True, max_length=50)
-    # The filer follows it too (backend/task_followers.py); its owner follows anyway.
+    # Accepted and ignored until the upgrade floor passes: nobody follows a task (backend/task_followers.py).
     follow: StrictBool = False
     # With a model, the bot's own check session; review alone is a normal sub-task.
     check_model: str | None = Field(default=None, max_length=120)
@@ -721,6 +721,11 @@ class TaskComment(Contract):
     # A reply to a bot's question on this task (the ask's requirement id): written to the bot that asked, whom it
     # wakes, and the question stays open (the decision view's "Write to <bot>").
     ask: ID | None = None
+    # Reply: the message on this task it answers. A person's Reply reaches its author as an @mention would (notified,
+    # or an agent woken in its session); it shows under that comment.
+    in_reply_to: ID | None = None
+    # An agent on the task: the comment is a message in that agent's session (its session view), and wakes it.
+    to: ID | None = None
 
 
 class Question(Contract):

@@ -611,6 +611,15 @@ class StoppedAgent(TypedDict):
 
 
 @answer
+class TaskSession(TypedDict):
+    """An agent on the task with its own session view: its messages on the task's thread (`session=` on the timeline)."""
+
+    agent: str
+    last_seq: int | None
+    """The newest message its session view shows, null before it has one"""
+
+
+@answer
 class TaskDetail(TypedDict):
     task: TaskDetailTask
     events: list[TaskDetailEvent]
@@ -620,6 +629,10 @@ class TaskDetail(TypedDict):
     messages: list[Message]
     has_more: bool
     can_comment: NotRequired[bool]
+    can_direct: NotRequired[bool]
+    """Whether the reader may message an agent's session on the task (`to` on POST /api/v2/tasks/{tid}/comments)"""
+    sessions: NotRequired[list[TaskSession]]
+    """One row per agent on the task, the holder first: each opens its session view"""
     can_set_run_model: NotRequired[bool]
     stopped_agent: NotRequired[StoppedAgent | None]
     """The agent this task is the stop notice for, when the reader may release it (POST /api/v2/bots/{bot}/release)"""
