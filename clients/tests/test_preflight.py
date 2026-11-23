@@ -27,6 +27,12 @@ class Manifest(unittest.TestCase):
         self.assertTrue(any("expected 'seo'" in l for l in out))
 
 
+class Runtime(unittest.TestCase):
+    def test_a_bot_with_no_limit_of_its_own_shows_the_day_default(self):
+        r, out, _ = lines(PF.check_runtime, {"name": "seo", "runtime": "no-such-runtime"}, {})
+        self.assertIn("max_run_minutes=1440", out[0])
+
+
 class RetiredMailCli(unittest.TestCase):
     """`mail.sh` is gone: a bot told to run it fails every mail step."""
 
