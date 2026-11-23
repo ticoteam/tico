@@ -135,7 +135,22 @@ describe('names after @', () => {
     box().setSelectionRange(6, 7);
     fireEvent.select(box());
     fireEvent.keyDown(box(), { key: 'Enter' });
-    expect(box().value).toBe('Ask @release-owner !');
+    expect(box().value).toBe('Ask @release-owner!');
+  });
+
+  it('a pick keeps the punctuation after the @word and adds no space before it', () => {
+    mount();
+    type('Ask @sa, then go');
+    box().setSelectionRange(7, 7);
+    fireEvent.select(box());
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('Ask @sam, then go');
+    expect(box().selectionStart).toBe(8);
+    type('Thanks @sa.');
+    box().setSelectionRange(10, 10);
+    fireEvent.select(box());
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('Thanks @sam.');
   });
 
   it('names only the given members where only they can be reached', () => {

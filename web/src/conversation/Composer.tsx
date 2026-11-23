@@ -151,10 +151,15 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     // The whole @word goes, through a selection and the rest of the word after it (a name's letters, dots and dashes,
     // never into the next @); one space follows the name.
     const from = Math.max(caret, box.current?.selectionEnd ?? caret);
-    const rest = text.slice(from).replace(/^[\w.-]*/, '');
-    const put = /^\s/.test(rest) ? mentionText(who) : `${mentionText(who)} `;
+    const after = text.slice(from);
+    let word = /^[\w.-]*/.exec(after)![0];
+    // a full stop or dash that ends the sentence is not part of the name
+    if (!after.slice(word.length) || /^\s/.test(after.slice(word.length))) word = word.replace(/[.-]+$/, '');
+    const rest = after.slice(word.length);
+    // no space before punctuation or a space already there; the caret goes past that space
+    const put = /^[\s,;:!?.)\]}'"]/.test(rest) ? mentionText(who) : `${mentionText(who)} `;
     const next = text.slice(0, at.start) + put + rest;
-    const end = at.start + put.length + (put.endsWith(' ') ? 0 : 1);
+    const end = at.start + put.length + (/^\s/.test(rest) ? 1 : 0);
     type(next, end);
     setShut(at.start);
     placeAt.current = end;
