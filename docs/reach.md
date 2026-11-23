@@ -89,9 +89,11 @@ A bot's write is checked on:
 A person is only reached by a bot next to them on the chart: the bot's manager (the owner, for a bot with no manager)
 or a person on its own team, or a person a line allows. A bot two levels down does not reach the owner: it takes the
 work to its manager, who passes it up. Being on a task with the person (reader, former owner, thread member, party to
-a parent task) or having been given some task by them does not open them. Only four things do, for the person who is
+a parent task) or having been given some task by them does not open them. Only five things do, for the person who is
 the receiver: a direct reply to that person's own message; a write in a conversation where that person wrote to the
-bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner); and,
+bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner); a
+write on an open task the bot owns whose Human that person is, when a person or Tico named them, or a bot named the
+Human or requester of the task it is filed under (`reach.human_of`; any other Human a bot named opens nothing); and,
 for a day, any write by a bot that person pinged for questions from Flow ([Tasks](tasks.md#needs-you), `reach.pinged`),
 so its questions reach them even when it is not theirs.
 
@@ -127,7 +129,9 @@ The refusal is a 409 the bot reads once and acts on, never a retry:
   the teammate as a reader or follower, and ends "Send it to <manager>, who can pass it on." (a bot with no manager: the owner, named as such; with no owner either, the teammates it does reach,
   or that it needs a manager). When the receiver is a person who wrote to the bot (addressed or @mentioning it) in the
   last 7 days, the detail names no manager instead: it says to file the work for them from that message
-  (`--for human:<id> --from-message <id>`, so they are its requester) and ask on that task, and `via` is `null`;
+  (`--for human:<id> --from-message <id>`, so they are its requester) and ask on that task, and `via` is `null`.
+  When the receiver is the Human of the task the bot owns and is still refused (the task is done or closed, or a bot
+  named them), the detail starts with the one sentence that says why;
 - `reach_line`: a line blocks the pair (`per_day` 0) or its count for today is used;
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.
 
