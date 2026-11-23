@@ -1190,6 +1190,23 @@ def test_a_gateway_outage_retries_a_run_a_few_times_each_later_then_ends_it(api,
     from backend import execution, login_holds
 
     machine, attempt = tico_run(api, monkeypatch)
+    job_id = attempt["job_id"]
+    for _ in range(2):
+        aid = attempt["id"]
+        post(
+            api,
+            f"attempts/{aid}/events",
+            {"events": [{"seq": 1, "kind": "status", "payload": {"yielded": "Draining", "planned_drain": True}}]},
+            machine["token"],
+        )
+        post(
+            api,
+            f"attempts/{aid}/complete",
+            {"outcome": "interrupted", "yielded": True, "last_seq": 1},
+            machine["token"],
+        )
+        attempt = claim(api, machine, "ops")
+        assert attempt["job_id"] == job_id and attempt["id"] != aid
     waits = []
     for n in range(1, execution.NO_EFFECT_TRIES + 1):
         finish(api, machine, attempt, "Tico AI Gateway is unavailable, try again (upstream_unavailable)")

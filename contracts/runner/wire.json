@@ -7,7 +7,7 @@
     "claim": {"method": "POST", "path": "/api/v2/jobs/claim", "request": "Claim", "answer": "ClaimAnswer"},
     "start_place": {"method": "POST", "path": "/api/v2/attempts/{aid}/start-place", "request": "StartPlace", "answer": "StartPlaceAnswer"},
     "started": {"method": "POST", "path": "/api/v2/attempts/{aid}/started", "request": "Started", "answer": "StartedAnswer"},
-    "events": {"method": "POST", "path": "/api/v2/attempts/{aid}/events", "request": "EventBatch", "answer": "EventsAnswer"},
+    "events": {"method": "POST", "path": "/api/v2/attempts/{aid}/events", "request": "EventBatch", "answer": "EventsAnswer", "x-note": "A pre-start hand-back adds planned_drain to the open status payload alongside yielded. runner.rs retries without planned_drain on a 422 naming it."},
     "renew": {"method": "POST", "path": "/api/v2/attempts/{aid}/renew", "request": "Empty", "answer": "RenewAnswer"},
     "complete": {"method": "POST", "path": "/api/v2/attempts/{aid}/complete", "request": "Completion", "answer": "CompleteAnswer"},
     "browser_commands": {"method": "GET", "path": "/api/v2/runner-browser-commands", "answer": "BrowserCommandsAnswer"},

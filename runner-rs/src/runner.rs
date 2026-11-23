@@ -442,14 +442,7 @@ impl Runner {
                 .iter()
                 .any(|e| e["kind"] == "delta" || e["kind"] == "message");
             let began = Instant::now();
-            let result = self
-                .client
-                .post(
-                    &format!("attempts/{aid}/events"),
-                    &json!({"events": batch}),
-                    Some(&key),
-                )
-                .await;
+            let result = self.post_events(aid, batch, &key).await;
             self.upload_load.observe(began.elapsed());
             let result = result?;
             if had_text && self.first_posted.lock().unwrap().insert(aid.to_string()) {
@@ -471,6 +464,34 @@ impl Runner {
                 return Ok(());
             }
         }
+    }
+
+    async fn post_events(
+        &self,
+        aid: &str,
+        mut events: Vec<Value>,
+        key: &str,
+    ) -> Result<Value, ApiError> {
+        let path = format!("attempts/{aid}/events");
+        let result = self
+            .client
+            .post(&path, &json!({"events": events}), Some(key))
+            .await;
+        if matches!(&result, Err(e) if e.status == 422 && e.detail.contains("planned_drain")) {
+            let mut stripped = false;
+            for event in &mut events {
+                if let Some(payload) = event["payload"].as_object_mut() {
+                    stripped |= payload.remove("planned_drain").is_some();
+                }
+            }
+            if stripped {
+                return self
+                    .client
+                    .post(&path, &json!({"events": events}), Some(key))
+                    .await;
+            }
+        }
+        result
     }
 
     pub fn forget_flush(&self, aid: &str) {
@@ -787,7 +808,11 @@ impl Runner {
             let restarting = self.restart.lock().unwrap().is_some();
             follower.follow_main(restarting).await;
             follower.fields(&mut body);
-            if crate::follow::feature("runner_drain") {
+            if crate::follow::feature("runner_drain") && (restarting || follower.draining()) {
+                self.drain.begin_update(
+                    Instant::now(),
+                    restarting || !crate::follow::feature("planned_drain"),
+                );
                 if let Some(progress) = self.drain.progress().filter(|_| body["update"].is_object())
                 {
                     body["update"]["running"] = progress["running"].clone();
@@ -1007,7 +1032,7 @@ impl Runner {
             if self.start_places.load(Ordering::SeqCst) {
                 body["start_places"] = json!(true);
             }
-            match self.claim_again_or(body).await {
+            match self.claim_again_or(Some(body)).await {
                 Err(e) if e.status == 422 => {
                     if e.detail.contains("start_places") {
                         self.start_places.store(false, Ordering::SeqCst);
@@ -1028,20 +1053,14 @@ impl Runner {
             .into_iter()
             .collect();
         bots.sort();
-        self.client
-            .post(
-                "jobs/claim",
-                &json!({"next_run": true, "busy_bots": bots}),
-                None,
-            )
+        self.claim_again_or(Some(json!({"next_run": true, "busy_bots": bots})))
             .await
-            .and_then(decode)
     }
 
     /// Sends this claim, or first the one whose answer was lost: the same key and body, which the server answers from
     /// its record if it leased a job (store.py is_poll). A slow server took 20-60 s per claim on Oct 27 against this
     /// client's 10 s timeout, and every claim it finished after the runner gave up stranded a lease.
-    async fn claim_again_or(&self, body: Value) -> Result<ClaimAnswer, ApiError> {
+    async fn claim_again_or(&self, body: Option<Value>) -> Result<ClaimAnswer, ApiError> {
         let pending = self
             .unanswered_claim
             .lock()
@@ -1049,8 +1068,14 @@ impl Runner {
             .take()
             .filter(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY);
         let replayed = pending.is_some();
-        let (key, body, at) =
-            pending.unwrap_or_else(|| (uuid::Uuid::new_v4().to_string(), body, Instant::now()));
+        let Some((key, body, at)) = pending
+            .or_else(|| body.map(|body| (uuid::Uuid::new_v4().to_string(), body, Instant::now())))
+        else {
+            return Ok(ClaimAnswer {
+                attempt: None,
+                paused: None,
+            });
+        };
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
@@ -1064,6 +1089,14 @@ impl Runner {
             }
         }
         Ok(answer)
+    }
+
+    fn has_unanswered_claim(&self) -> bool {
+        self.unanswered_claim
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|(_, _, at)| at.elapsed() < UNANSWERED_CLAIM_REPLAY)
     }
 
     fn state_bot(&self, aid: &str) -> Option<String> {
@@ -1320,7 +1353,8 @@ impl Runner {
                 }
             };
             let shutdown = *self.shutdown.lock().unwrap();
-            if shutdown.is_some() && workers.is_empty() {
+            let idle = workers.is_empty() && !self.has_unanswered_claim();
+            if shutdown.is_some() && idle {
                 log("Tico runner: no turn running; stopping");
                 break;
             }
@@ -1328,11 +1362,11 @@ impl Runner {
                 log("Tico runner: turns still running at the stop deadline; interrupting them");
                 break;
             }
-            if self.restart.lock().unwrap().is_some() && workers.is_empty() {
+            if self.restart.lock().unwrap().is_some() && idle {
                 log("Tico runner: no turn running; exiting so the supervisor starts the runner again");
                 break;
             }
-            if crate::follow::shared().is_some_and(|f| f.restart_due()) && workers.is_empty() {
+            if crate::follow::shared().is_some_and(|f| f.restart_due()) && idle {
                 log("Tico runner: no turn running; exiting so the supervisor starts the updated runner");
                 break;
             }
@@ -1368,11 +1402,13 @@ impl Runner {
         paused_note: &mut String,
     ) -> Result<(), ApiError> {
         // A stop runs its own timer (Drain::stop); it never starts an update's drain.
-        if self.restart.lock().unwrap().is_some()
-            || crate::follow::shared().is_some_and(|f| f.draining())
-        {
+        let restarting = self.restart.lock().unwrap().is_some();
+        if restarting || crate::follow::shared().is_some_and(|f| f.draining()) {
             if crate::follow::feature("runner_drain") {
-                self.drain.begin(Instant::now());
+                self.drain.begin_update(
+                    Instant::now(),
+                    restarting || !crate::follow::feature("planned_drain"),
+                );
             }
         } else {
             self.drain.end(); // a failed or canceled update takes work again
@@ -1448,46 +1484,56 @@ impl Runner {
             }
         }
         crate::relays::poll(self);
-        if self.shutdown.lock().unwrap().is_some() {
-            return Ok(()); // stopping: the running turns finish, nothing new starts
-        }
-        if restart_blocks_claims(
-            *self.restart.lock().unwrap(),
-            Instant::now(),
-            crate::follow::feature("runner_drain"),
-        ) {
-            return Ok(()); // restarting: no new work, so the running turns finish
-        }
-        if let Some(follower) = crate::follow::shared() {
-            if follower.blocks_claims(!workers.is_empty()).await {
-                return Ok(()); // an update is due or under way: the updater restarts this runner once nothing runs
+        let mut blocked = self.shutdown.lock().unwrap().is_some()
+            || restart_blocks_claims(
+                *self.restart.lock().unwrap(),
+                Instant::now(),
+                crate::follow::feature("runner_drain"),
+            );
+        if !blocked {
+            if let Some(follower) = crate::follow::shared() {
+                blocked = follower
+                    .blocks_claims(!workers.is_empty() || self.has_unanswered_claim())
+                    .await;
+                if !follower.draining() {
+                    self.drain.end();
+                } // a timed-out drain can release claims in this tick
             }
-            if !follower.draining() {
-                self.drain.end();
-            } // a timed-out drain can release claims in this tick
         }
-        // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
-        let assignments = self.assignments_seen();
-        let ctx = crate::watchers::Ctx {
-            client: self.client.clone(),
-            url: self.config.url(),
-            projects_dir: self.config.projects_dir(),
-            state_dir: self.state.directory.clone(),
-        };
-        self.perbot.watchers.tick(&self.config, &assignments, ctx);
+        if !blocked {
+            // Programs bots declare in `watchers:` (crate::watchers); a failure is logged and never stops the runner.
+            let assignments = self.assignments_seen();
+            let ctx = crate::watchers::Ctx {
+                client: self.client.clone(),
+                url: self.config.url(),
+                projects_dir: self.config.projects_dir(),
+                state_dir: self.state.directory.clone(),
+            };
+            self.perbot.watchers.tick(&self.config, &assignments, ctx);
+        }
         // The server reserves starts atomically; waiting workers do not consume computer capacity.
-        while {
-            let mut places = self.places.lock().unwrap();
-            if places.len() < self.turn_limit.load(Ordering::SeqCst)
-                && clock.claim_due(&self.events)
+        loop {
+            let draining = self.drain.claims_closed();
+            let replay_only = blocked || draining;
             {
+                let mut places = self.places.lock().unwrap();
+                if replay_only {
+                    if !draining || !self.has_unanswered_claim() {
+                        break;
+                    }
+                } else if places.len() >= self.turn_limit.load(Ordering::SeqCst)
+                    || !clock.claim_due(&self.events)
+                {
+                    break;
+                }
                 places.insert("<claim>".into());
-                true
-            } else {
-                false
             }
-        } {
-            let result = self.claim_next().await;
+            // An unanswered claim may already own a lease. Resolve it even when new claims are closed.
+            let result = if replay_only {
+                self.claim_again_or(None).await
+            } else {
+                self.claim_next().await
+            };
             {
                 let mut places = self.places.lock().unwrap();
                 places.remove("<claim>");
@@ -1502,6 +1548,7 @@ impl Runner {
                 let aid = text_of(&attempt["id"]);
                 mark("claimed", &aid);
                 self.drain.register(&aid);
+                self.drain.due(&aid, Instant::now());
                 self.active.lock().unwrap().insert(aid.clone());
                 self.attempt_bots
                     .lock()
@@ -1789,6 +1836,72 @@ mod tests {
         assert!(crate::profiles::configured(&now.data).is_empty());
         assert_eq!(now.url(), "http://127.0.0.1:9");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn draining_replays_a_lost_claim_and_hands_back_the_recovered_lease() {
+        let (url, seen) = crate::client::tests::serve(vec![
+            (503, "{}"),
+            (200, r#"{"attempt":{"id":"a1","bot":"ops","start_reserved":true}}"#),
+            (422, r#"{"error":{"code":"validation","detail":"body.events.0.payload.planned_drain: Extra inputs are not permitted"}}"#),
+            (200, r#"{"ack_seq":1}"#),
+            (200, r#"{"outcome":"interrupted"}"#),
+        ])
+        .await;
+        let dir = std::env::temp_dir().join(format!("tico-drain-claim-{}", uuid::Uuid::new_v4()));
+        let config = Config {
+            path: dir.join("runner.json"),
+            data: json!({"projects_dir": dir.join("projects")})
+                .as_object()
+                .unwrap()
+                .clone(),
+        };
+        let runner = Arc::new(Runner::new(
+            config,
+            Client::new(&url, "t", 5, 0).unwrap(),
+            State::open(&dir.join("state")).unwrap(),
+        ));
+        let missed = runner.claim_next().await;
+        assert!(missed.unwrap_err().retryable && runner.has_unanswered_claim());
+        let now = Instant::now();
+        *runner.shutdown.lock().unwrap() = Some(now);
+        runner.drain.stop(now);
+        runner.stop.store(true, Ordering::SeqCst); // keep background relays out of this tick
+        let mut clock = Clock {
+            polled: [None; crate::events::CHANNELS.len()],
+            next_claim: None,
+            idle_claims: 0,
+            claim_hint: (None, CLAIM_IDLE_MAX),
+            claim_live_at: None,
+            last_heartbeat: None,
+        };
+        let mut workers = HashMap::new();
+        let mut maintenance = Some(tokio::spawn(std::future::pending()));
+        runner
+            .tick(
+                &mut clock,
+                &mut workers,
+                &mut maintenance,
+                &mut String::new(),
+            )
+            .await
+            .unwrap();
+        workers.remove("a1").unwrap().await.unwrap().unwrap();
+        assert!(!runner.has_unanswered_claim());
+        maintenance.unwrap().abort();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 5);
+        assert_eq!(seen[0], seen[1], "replay the original body and key");
+        assert!(
+            seen[2].starts_with("POST /api/v2/attempts/a1/events")
+                && seen[2].contains("\"planned_drain\":true")
+        );
+        assert!(!seen[3].contains("planned_drain") && seen[3].contains("\"yielded\":"));
+        assert!(
+            seen[4].starts_with("POST /api/v2/attempts/a1/complete")
+                && seen[4].contains("\"yielded\":true")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

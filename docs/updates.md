@@ -137,12 +137,13 @@ The runner is a git checkout. When the server's release is newer, the runner:
 1. stops taking new work and immediately returns turns parked in login, turn-share, usage or checkout queues.
    Preparation already in progress (a pull, product-file refresh, sign-in or harness start) finishes before handback;
    the start boundary prevents that turn from starting during the drain. A Git operation keeps its checkout lock
-   until it finishes so the next runner does not inherit a lock. Turns already running finish, however long they take,
-   and claims stay closed until they do. Set `drain_timeout_seconds` in `runner.json` to give an update's drain a limit
-   instead: at it running turns are interrupted, their work and resumable session are saved, and they are queued to
-   continue after the update, and a checkout still running work then (ten minutes at least, and after an older server's
-   claim window) gives claims back and tries the update again later (below). A turn with no session to continue, because
-   it was running on a fallback (a side session is not kept), is held for review like any other interrupt instead.
+   until it finishes so the next runner does not inherit a lock. The runner resolves any start acknowledgement
+   already in flight. An accepted turn runs to completion. While claims are closed, the runner retries any
+   unanswered claim and hands back the lease it recovers. The first three planned hand-backs of a job return
+   it immediately without counting against retry limits. Further hand-backs follow the usual pre-start retry policy.
+   A requested Restart and updates negotiated with an older server can use `drain_timeout_seconds` in
+   `runner.json`. At that time a running turn saves its work and session and queues to continue. A turn
+   with no session to continue is held for review.
    Each handback appears in run history. The limit does not cancel preparation in progress. Health still warns after 34 minutes without a completed restart;
    choosing a long drain does not extend that warning.
    Queued work says **Waiting for the computer to update: N running, M handed back** in chat and on its task;
@@ -176,9 +177,9 @@ a reason and lets the runner take new work. The same rule covers a ten-minute wa
 lock, work still running after the drain wait, work that starts before the final check, and a release whose runner
 binary is not published yet. Current Rust runners retry these delays after 2, 5, 15, 30, then 60 minutes,
 capped at 60 minutes. The status file saves a `not_before` time, so a restart keeps the wait. Between tries the
-runner reports `idle` for the update and takes new work. With `drain_timeout_seconds` set, a drain not finished by
-then (ten minutes at least) ends that attempt and uses the same short wait. The
-updater's second check for active work also ends after ten minutes.
+runner reports `idle` for the update and takes new work. When updating against an older server, a drain that
+exceeds the configured `drain_timeout_seconds` (ten minutes at least) uses the same short wait. The updater's
+second check for active work also ends after ten minutes.
 Active work and busy locks never count as blocked. Other causes report `blocked` only after the same cause occurs
 three times in a row, or after two hours of such delays. Active work or a busy lock resets that cause history.
 Blocked deferrals keep the short retry schedule, with the cause in Settings > Computers and Health. Lock waits
@@ -453,7 +454,7 @@ computer moved back to a release from before the move (hosted staff can set an o
 
 The runner computer's `docker/runner.compose.yaml` has an `updater` sidecar, the same image and code as the server's
 updater (`docker/updater.py`) in runner mode (`TICO_UPDATER_MODE=runner`). The runner drains the same way as a
-checkout: it immediately returns claims parked in queues, finishes preparation already in progress, lets active turns finish (or saves and requeues them at its `drain_timeout_seconds`).
+checkout. It returns claims parked in queues, finishes preparation already in progress, and lets active turns finish.
 Once all claims settle it asks the sidecar for the release its server names; it pulls `ghcr.io/ticoteam/tico-runner:vX.Y.Z`, replaces `runner.compose.yaml` with the release's copy (same checksum check, rolled back with the image), recreates the runner
 container, waits up to three minutes for the container's health check, and puts the old image back if it does not
 turn healthy. The runner then reports the outcome (`rolled_back`, `failed`) from the sidecar's `/status`, and does not

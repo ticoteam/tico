@@ -70,6 +70,11 @@ The Rust runner reads each answer into a struct with only the fields it acts on.
 field. A field the runner has always done without, such as a heartbeat feature flag or renew's 60-second default, stays
 an `Option` with that fallback. An answer it cannot read at all is a `protocol` error.
 
+`GET runners/desired` advertises `planned_drain` for updates that wait for running turns to finish.
+A pre-start hand-back sends a status event with `planned_drain: true` alongside `yielded`.
+Older servers accept the open payload and use their existing yield handling. If a server answers
+422 naming `planned_drain`, the runner retries the event batch without that field.
+
 ## A runner older than the server takes
 
 `MIN_RUNNER_RELEASE` in `backend/runner_versions.py` is the oldest runner release the server gives work to. A runner
