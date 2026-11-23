@@ -21,8 +21,8 @@ One ask serves every task waiting on the same repository: a workflow run asked a
 too, so a batch of merged tasks is one release. A tag covers only the task that named it.
 
 Nothing waits silently. With no way set, a task waits for the next release that holds its merge (`NEXT_RELEASE`): only
-that release ends it, so it is nobody's turn and no bot is woken or told Late; after RELEASE_WAIT_S a person is told
-once (never_stuck). Who may set the way: a person only (pipeline_settings `_changes_release`). GitHub refusing the ask, or no release CUT_WAIT_S after it, is the Release Owner's turn with why (it may ask again or
+that release ends it, so it is nobody's turn: no bot is woken, and a stage's Late rule, on the bot's turn only, passes
+it by. Who may set the way: a person only (pipeline_settings `_changes_release`). GitHub refusing the ask, or no release CUT_WAIT_S after it, is the Release Owner's turn with why (it may ask again or
 say why it cannot); a second failure for the repository since the merge, or a permission only a person can grant
 (`MISSING`), is a person's, once. History: `release_asked`, `release_cut`, `release_refused`, `release_found`.
 
@@ -49,10 +49,7 @@ SOURCE = "github"
 RELEASE = "release"  # GitHub's source action that cuts a release
 REPO = "repo"  # the item a release action is for: the release repository, `owner/name`
 CUT_WAIT_S = 3600  # a release asked for that has not come after this is a failure
-# With no way set, the next release ends the wait, whoever cuts it. A person is told once after a week: a weekly
-# stable train is the slowest cadence a repository keeps on purpose, and repos that cut pre-releases several times a
-# day never get near it. A stage that expects longer keeps its own time (never_stuck._late_release).
-RELEASE_WAIT_S = 7 * 86400
+# With no way set, the next release ends the wait, whoever cuts it.
 NEXT_RELEASE = "Waiting for the next release of"
 FAILS_TO_PERSON = 2  # failures for a repository since a task's merge before the task is a person's
 WORKFLOW = re.compile(r"^workflow:([A-Za-z0-9_.-]+\.ya?ml)$")
@@ -103,16 +100,6 @@ def way(settings: Row) -> tuple[str, str] | None:
         return "tag", ""
     found = WORKFLOW.match(value)
     return ("workflow", found.group(1)) if found else None
-
-
-def waits_for_next_release(requirement: Row) -> bool:
-    """Whether a requirement is In a release with no way set: only the repository's next release, made without Tico,
-    ends its wait (never_stuck tells a person once after RELEASE_WAIT_S, and no bot)."""
-    return (
-        requirement.get("kind") == "item"
-        and (requirement.get("source"), requirement.get("condition")) == (SOURCE, "in_release")
-        and way(requirement.get("settings") or {}) is None
-    )
 
 
 def valid(value: object) -> bool:
@@ -282,8 +269,7 @@ def standing(conn: "sqlite3.Connection", task: Row, requirement: Row, repo: str,
                 f"No release of {repo} asked for yet: cut one with `tico task release {task['id']}{tag}`",
             )
         # The repository releases on its own or a person cuts its releases (it has published some: C31 meets the
-        # rest). Only that release ends the wait: nobody's turn, and never_stuck tells a person once after
-        # `RELEASE_WAIT_S` (never_stuck._late_release).
+        # rest). Only that release ends the wait: nobody's turn.
         return Standing(requirement, WAITING, SOURCE, f"{NEXT_RELEASE} {repo}")
     newest = found[-1]
     if newest["state"] == "owed":

@@ -67,15 +67,6 @@ def test_a_stopped_task_no_manager_can_hear_of_asks_a_person(c, time_machine, ca
     assert NS.rules_hold(c) == []
 
 
-def test_a_stopped_task_whose_visit_was_already_late_asks_a_person(c, time_machine):
-    X.pipeline(c, manager="bot:manager")
-    c.execute("UPDATE stages SET expected_minutes=20 WHERE id='general-todo'")
-    task_id = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")["id"]
-    _stop(c, time_machine, task_id, "bot:builder")
-    assert E.task(c, task_id)["visit"]["late_told_at"]
-    assert len(_asked(c, ANA, task_id)) == 1
-
-
 def test_a_persons_task_whose_bot_never_answered_asks_her_again(c, time_machine):
     X.pipeline(c, manager="bot:manager")
     row = X.new_task(c, ANA, "Write the launch note", assignee=ANA)
@@ -94,27 +85,6 @@ def test_an_answer_starts_the_ladder_again(c, time_machine):
     assert _asked(c, ANA, task_id)
     H.task_comment(c, ANA, task_id, "Try once more, smaller")  # her reply on the task's chat clears the ❓
     assert E.task(c, task_id)["visit"]["level"] == "owner" and not _asked(c, ANA, task_id)
-
-
-def test_a_release_only_a_person_cuts_asks_them_after_a_week(company, time_machine):
-    from backend.item_sources import github as F
-    from backend.tests.helpers.fake_github import FakeGitHub
-    from backend.tests.helpers.release_cut import REPO, to_release
-
-    time_machine.move_to(START, tick=False)
-    gh = FakeGitHub()
-    gh.history[REPO] = [gh.sha()]
-    gh.publish(REPO, "v0.9.0")
-    task_id = to_release(company, gh, release={})
-    time_machine.shift(timedelta(days=8))
-    F.refresh(company, gh, H.now())
-    with company.transaction() as c:
-        c.execute("UPDATE stages SET expected_minutes=1440 WHERE id='eng-release'")
-        NS.check(c)
-        person = W.person_for(c, E.task(c, task_id))
-        [ask] = _asked(c, person, task_id)
-        assert "this waits for the next release, which only a person cuts" in ask["line"]
-        assert _author(c, ask) == E.task(c, task_id)["owner_id"]  # the release's own bot asks
 
 
 def test_a_bot_that_finishes_after_all_takes_tico_s_question_with_it(c, time_machine):

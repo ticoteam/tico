@@ -105,7 +105,8 @@ def test_a_company_that_builds_software_gets_product_and_no_engineering(c):
     assert (owners["Review"], owners["Merge"]) == ("bot:rev-a", "bot:rm")
     assert owners["QA"] == "bot:" + PPM  # no QA Owner in this team: up the ladder to the manager
     stages = {s["name"]: s for s in product["stages"]}
-    assert stages["Related input"]["expected_minutes"] >= 240  # never Late before it moves on by itself
+    related = SR.get(c, f"sr_late_{stages['Related input']['id']}")
+    assert related["timer"]["hours"] >= 4  # never Late before it moves on by itself
     assert stages["Merge"]["on_enter"] == {"act": "github.queue"}
     # The approvals: people only, each of a document; nobody named, so any person approves, but QA's names its person.
     gates = {name: r for name, s in stages.items() for r in s["requirements"] if r["who_oks"] == "people_only"}

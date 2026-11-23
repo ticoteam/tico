@@ -6,6 +6,7 @@ backend/tests/helpers/fake_github.py; nothing here reaches the real one."""
 import pytest
 
 from backend import never_stuck as NS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend import waiting_on as W
@@ -213,31 +214,22 @@ def test_no_release_after_an_ask_is_the_owner_s_then_a_person_s(company, gh):
         assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.PERSON]
 
 
-def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_a_person_is_asked_once_after_a_week(
-    company, gh
-):
-    """ticoteam/tico: Release with stays empty and a person tags each rc. Only that release ends the wait: no bot is
-    woken, climbs a ladder or is told Late, and after a week with no release a person is asked, once, to cut it."""
+def test_a_repo_whose_releases_a_person_cuts_waits_for_the_next_one_and_nobody_is_chased(company, gh):
+    """ticoteam/tico: Release with stays empty and a person tags each rc. Only that release ends the wait: it is nobody's
+    turn, so no bot is woken, climbs a ladder or is told Late, and no person is asked."""
     task_id = to_release(company, gh, release={})
     waiting = (R.WAITING, "github", f"Waiting for the next release of {REPO}")
     with company.transaction() as c:
-        c.execute("UPDATE stages SET expected_minutes=1440 WHERE id='eng-release'")  # as the preset: a day
+        assert SR.add_late(c, "eng-release", "Release", "eng", 1440)  # as the preset: a day
         assert line(c, task_id) == waiting
         assert [w.state for w in W.of(c, E.task(c, task_id))] == [W.SOURCE]
-        for days in (0.1, 1, 3, 6.9):  # past Release's expected day, and its 3 days
-            assert NS.check(c, H.shift(H.now(), hours=days * 24))["late"] == 0
+        for days in (0.1, 1, 3, 9):  # past Release's Late day, and well past it
+            done = NS.check(c, H.shift(H.now(), hours=days * 24))
+            assert (done["woken"], done["to_manager"], done["to_person"]) == (0, 0, 0)
         assert line(c, task_id) == waiting
         assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []  # neither the Release Owner nor the manager
-        assert "late" not in X.events(c, task_id)
-        done = NS.check(c, H.shift(H.now(), days=7, minutes=1))
-        assert (done["late"], done["to_person"], done["woken"]) == (1, 1, 0)
-        waits = W.of(c, E.task(c, task_id))
-        assert [w.state for w in waits] == [W.PERSON, W.SOURCE] and waits[0].who == ANA
-        assert waits[1].line == waiting[2]
-        [ask] = W.needs(c, ANA)
-        assert "this waits for the next release, which only a person cuts" in ask["line"]
-        assert NS.check(c, H.shift(H.now(), days=9))["late"] == 0  # once
-        assert wakes(c, task_id) == [] and wakes(c, task_id, EM) == []
+        assert "stage_rule" not in X.events(c, task_id)  # Late is on the bot's turn only
+        assert W.needs(c, ANA) == []
     gh.publish(REPO, "v1.0.0-rc.1", prerelease=True)  # the person's prerelease counts by default
     F.refresh(company, gh, H.shift(H.now(), minutes=20))
     with company.transaction() as c:
@@ -275,7 +267,7 @@ def test_only_a_person_changes_how_releases_are_cut(company):
             with pytest.raises(H.Refused, match="Only a person changes how releases are cut") as raised:
                 edit(EM, change)  # the pipeline's manager bot
             assert raised.value.rule == "task_settings"
-        edit(EM, lambda stage: stage.update(expected_minutes=600))  # the rest of it a manager bot still changes
+        edit(EM, lambda stage: stage.update(task_limit=5))  # the rest of it a manager bot still changes
         assert edit(EM, setting(prereleases=True))  # explicitly enabling the default changes no policy
         assert edit(ANA, setting(prereleases=False))
         with pytest.raises(H.Refused, match="Only a person changes how releases are cut"):

@@ -1003,14 +1003,15 @@ class Sim:
 
         def due(c: sqlite3.Connection) -> None:
             for r in c.execute(
-                "SELECT v.next_try_at, v.entered_at, s.expected_minutes, v.late_person_at FROM visits v "
-                "JOIN tasks t ON t.id = v.task_id JOIN stages s ON s.id = v.stage_id "
+                "SELECT v.next_try_at, v.entered_at, json_extract(r.timer, '$.hours') FROM visits v "
+                "JOIN tasks t ON t.id = v.task_id LEFT JOIN stage_rules r ON r.id = 'sr_late_' || v.stage_id "
+                "AND r.status='active' AND r.retired_at IS NULL "
                 "WHERE v.left_at IS NULL AND t.status='open' AND t.pipeline_id IS NOT NULL"
             ).fetchall():
                 if r[0]:
                     times.append(str(r[0]))
-                if r[2] and not r[3]:
-                    times.append(H.shift(r[1], seconds=int(r[2]) * 60 * 3 + 1))
+                if r[2]:  # the stage's Late rule
+                    times.append(H.shift(r[1], seconds=int(float(r[2]) * 3600) + 1))
             for r in c.execute("SELECT until_at FROM snoozes WHERE ended_at IS NULL AND until_at IS NOT NULL"):
                 times.append(str(r[0]))
             for r in c.execute("SELECT MAX(finished_at) FROM attempts"):

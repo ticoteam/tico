@@ -8,8 +8,8 @@ date. It is a named wait, not a state:
 
 - `blockers`: the tasks it depends on that are still open. While there is one, `waiting_on.of` says only "Blocked by
   #304 Growth synced sources part 1, in Build" (and any OK or answer still asked of a person): nobody's turn, so no bot is
-  woken and the never-stuck check passes it by. It holds no slot where a stage has a limit, is never Late (the time
-  it is blocked does not count, never_stuck._spent), does not move on by itself (task_engine.advance), and leaves its
+  woken and the never-stuck check passes it by. It holds no slot where a stage has a limit, is caught by a
+  stage's timer rules only once what it waits on has gone quiet too (stage_rule_timers), does not move on by itself (task_engine.advance), and leaves its
   owner's Needs you. A reader who may not open the blocker reads "Blocked by a task you can't open".
 - `release`: when a task ends, every dependency on it comes off (a dependency holds until its task first ends, so a
   reopened task blocks nothing again), and each task that depended on it and has no other open dependency is read
@@ -17,7 +17,7 @@ date. It is a named wait, not a state:
   done" or "#304 was closed without doing it" so they re-plan. A deleted task does the same, "#304 was deleted"
   (`deleted`), and so does a dependency someone takes off, "#304 no longer blocks this task" (`unlinked`), except
   that an owner bot who took it off itself is not woken for it. No poll and no date. Every dependency written or taken
-  off leaves a history row on the waiting task, from which `spans` gives the time it was blocked.
+  off leaves a history row on the waiting task.
 - `check`: the writer must be able to change the waiting task and read the other one (task_relations.relate); a loop,
   or a dependency of or on a task that has ended, is refused.
 
@@ -222,31 +222,6 @@ def _depends_on(conn: "sqlite3.Connection", task_id: str) -> list[str]:
     ]
 
 
-def spans(conn: "sqlite3.Connection", task_id: str, since: str) -> list[tuple[str, str | None]]:
-    """(from, to) of each time the task was blocked, from `since` on, for Late (never_stuck._spent): from when a
-    dependency was written to when it came off (its task ended, it was taken off, or its task was deleted), None while
-    it is on. Read from the task's history, where every write and removal of a dependency leaves a row, so a span
-    outlives its relation row; a relation row with no history (a trash restore) counts from its own date."""
-    opened: dict[str, str] = {}
-    out: list[tuple[str, str | None]] = []
-    for old, new, at in conn.execute(
-        "SELECT old, new, created_at FROM history_events WHERE subject_type='task' AND subject_id=? AND kind=? "
-        "ORDER BY created_at, rowid",
-        (task_id, RELATION),
-    ).fetchall():
-        if new:
-            opened.setdefault(str(new), str(at))
-        elif old and str(old) in opened:
-            out.append((opened.pop(str(old)), str(at)))
-    for blocker, created in conn.execute(
-        "SELECT to_task, created_at FROM task_relations WHERE from_task=? AND kind=?", (task_id, RELATION)
-    ).fetchall():
-        out.append((opened.pop(str(blocker), str(created)), None))
-    out += [(at, None) for at in opened.values()]
-    return [(max(start, since), end) for start, end in out if end is None or end > since]
-
-
-# ----------------------------------------------------------------------------- writes
 def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, until: str | None = None) -> None:
     """Refuse a dependency that cannot hold: of a task that has ended, on one that has ended, or a loop (#304 already
     depends on #307, however far round). Until released, a Done task may be depended on while production does not run

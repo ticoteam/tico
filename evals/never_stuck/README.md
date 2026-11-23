@@ -13,8 +13,8 @@ python -m evals.never_stuck.run --software --seeds 1-200 -j 2   # one idea to Do
 python -m evals.never_stuck.perf --tasks 10000              # one check pass over 10,000 open tasks
 ```
 
-- `world.py`: a disposable hub copied from a template (General and the Work pipeline: a by-hand stage, limits, an
-  expected time, a people-only OK, a stage that cannot be pushed past), owner bots, a manager bot, three people. Every
+- `world.py`: a disposable hub copied from a template (General and the Work pipeline: a by-hand stage, limits, a
+  Late rule, a people-only OK, a stage that cannot be pushed past), owner bots, a manager bot, three people. Every
   statement goes through a counting connection that can crash a write part way.
 - `sim.py`: one seeded run. Bots finish, stop early, comment and stop, crash (failed, interrupted, expired), ask a
   person, snooze with and without an end, file a sub-task, never answer. People answer, OK, say no, send back, give

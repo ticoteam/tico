@@ -22,11 +22,10 @@ are on it:
 - Paused, a person's turn, other tasks, room, by-hand stages and snoozed tasks: nothing. `waiting_on` shows them. A
   person's request is not held in a by-hand stage: it moves on when the next stage has room (`_requests`). Nobody
   is told that a stage has room.
-- Late: past the stage's expected time the manager bot gets the task once per visit; at 3 times the expected time the
-  ladder rests, once.
 - A snooze whose date came ends, and the owner is woken once.
 - Stage rules whose When is a timer (N h in the stage, N h quiet, N h waiting on a person) are judged after the
-  tasks (backend/stage_rule_timers.py): they tell the manager, in one wake an hour, tell the owner or move the task back.
+  tasks (backend/stage_rule_timers.py), blocked tasks included: they tell the manager bot, in one wake an hour, tell the
+  owner bot or move the task back. A stage's expected time is one of them, its Late rule.
 - A snooze the owner bot set on its own task ends when everything is met and there is room, and the task moves
   (`_ready_snoozes`).
 - Each task's open wait span (backend/wait_spans.py) is compared with the waits the pass read, and the spans of tasks
@@ -54,8 +53,6 @@ from typing import TYPE_CHECKING, Any, cast
 from . import (
     batch_work,
     hubdb_core,
-    late_rule,
-    merge_order,
     question_marks,
     stage_rule_timers,
     task_depends,
@@ -93,7 +90,6 @@ RUNS = task_wakes.RUNS
 assert RUNS == 1 + 2 * TRIES
 QUIET = 8  # tasks in a row that changed nothing before the pass reads ahead again (`check`)
 HOPS = 20  # stages one task is taken through in one pass, at most
-LATE_PERSON = 3  # times a stage's expected time before a late task's ladder rests (C5)
 CUT_OFF = ("expired", "failed", "interrupted")
 MANAGER_HAS_IT = "It is yours now: do it, reassign it, ask a person, snooze it or close it."
 
@@ -102,7 +98,8 @@ _OPEN = (
     "JOIN stages s ON s.id = t.stage_id "
     "WHERE t.pipeline_id IS NOT NULL AND t.status='open' AND s.kind='work' AND s.by_hand=0 "
     "AND NOT EXISTS (SELECT 1 FROM snoozes z WHERE z.task_id = t.id AND z.ended_at IS NULL) "
-    # A task blocked by one it depends on is nobody's turn, never Late, and goes on when that ends (task_depends).
+    # A task blocked by one it depends on is nobody's turn and goes on when that ends (task_depends); a stall rule
+    # catches one whose blockers went quiet (stage_rule_timers).
     f"AND NOT {task_depends.BLOCKED % 't'} "
     # Nobody waits on an auto dream: its release policy and the auto pass end it, never a manager (dream_auto.py).
     "AND NOT EXISTS(SELECT 1 FROM events e WHERE e.action='dream.auto' AND e.target=t.id) "
@@ -155,12 +152,12 @@ def check(
     stop: "Callable[[], bool] | None" = None,
 ) -> dict[str, int]:
     """One pass. Returns what it did: snoozes ended, tasks moved, bots woken, tasks handed to a manager bot, tasks
-    whose ladder rests (`to_person`), and tasks that became late. A task that raised is rolled back on its own and added to
+    whose ladder rests (`to_person`). A task that raised is rolled back on its own and added to
     `failures` with its error; without the list, the error is raised. `stop` (the read pass's, `check_read_first`) is
     asked before each task: once it says so the pass ends with `Stopped`."""
     H = _h()
     at: str = now or H.now()
-    done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0, "late": 0}
+    done = {"snoozes_ended": 0, "moved": 0, "woken": 0, "to_manager": 0, "to_person": 0}
     seen: dict[str, str | None] = {}
     live = task_wakes.live_bots(conn, at)  # a pass starts no run: read once
     _ready_snoozes(conn, done, failures)
@@ -618,7 +615,6 @@ def _one(
         _to_person(conn, row, level, done)
         return
     _ladder(conn, row, waits, E.progress_mark(conn, row["visit"]["id"], standings), at, done, seen, live)
-    _late(conn, row, at, done, seen, waits)
 
 
 # ----------------------------------------------------------------------------- the ladder
@@ -663,7 +659,7 @@ def _ladder(
     inbox = task_wakes.inbox(conn, row, target)
     if inbox and not inbox["read_at"]:
         # A bot that reads its own inbox has not read its wake yet: it is on its way, as a queued one is. Nothing more
-        # is written; if it never reads, Late takes the task on.
+        # is written; if it never reads, the stage's timer rules catch it.
         return
     read: str | None = inbox["read_at"] if inbox else None  # it took its wake then, and nothing ran on the engine
     spent = target in spent_by  # its wake for this try was lost twice: the try is spent
@@ -854,7 +850,6 @@ STUCK_ASK = "{who} stuck on {stage}: {line}. Can you help or tell me what to do?
 STUCK_LINES = {
     "stopped": "{me} stopped 3 times without finishing",
     "unanswered": "{me} could not answer your ask",
-    "release": "this waits for the next release, which only a person cuts",
     "other": "nothing has moved it",
 }
 STUCK_WHY = "The ladder tried it and no manager can take it. Reply to try again, or close it."
@@ -862,10 +857,10 @@ STUCK_WHY = "The ladder tried it and no manager can take it. Reply to try again,
 
 def manager_hears(conn: "sqlite3.Connection", row: Row) -> bool:
     """Whether the Quiet bot tasks rule will tell a manager about this stopped task (backend/stage_rule_timers.py): a
-    bot owns it, it waits on a bot, the visit was not already listed as Late, an active quiet rule covers its stage, and
-    the pipeline has a manager who is not its owner and may read it."""
+    bot owns it, it waits on a bot, an active quiet rule covers its stage, and the pipeline has a manager bot that is not
+    its owner and may read it."""
     waits = W.of(conn, row)
-    if not is_bot(row.get("owner_id")) or row["visit"].get("late_told_at"):
+    if not is_bot(row.get("owner_id")):
         return False
     if not is_bot(W.turn(conn, row, waits, resting=True)):
         return False
@@ -894,13 +889,7 @@ def ask_person(conn: "sqlite3.Connection", row: Row) -> str | None:
     waits = W.of(conn, row)
     stalled = W.turn(conn, row, waits, resting=True)
     bot = stalled if is_bot(stalled) else owner if is_bot(owner) else None
-    kind = (
-        ("unanswered" if is_human(owner) else "stopped")
-        if is_bot(stalled)
-        else "release"
-        if _next_release_only(conn, waits)
-        else "other"
-    )
+    kind = ("unanswered" if is_human(owner) else "stopped") if is_bot(stalled) else "other"
     author = bot if bot and _usable(conn, bot, {}) else _agent_ops(conn) or bot
     if not author:
         return None
@@ -931,327 +920,6 @@ def _person(conn: "sqlite3.Connection", row: Row) -> str | None:
     With no such person, None: it goes to no person and takes no bot turns; Health counts it for the company's owner
     and Admins without naming it, and the rules check reports it held for that cause."""
     return W.person_for(conn, row)
-
-
-# ----------------------------------------------------------------------------- late
-def last_answer(conn: "sqlite3.Connection", visit: Row) -> str | None:
-    """When a person last answered on this visit (late_rule.last_answers); None when nobody has."""
-    return late_rule.last_answers(conn, [(str(visit["id"]), str(visit["task_id"]), str(visit["entered_at"]))]).get(
-        str(visit["id"])
-    )
-
-
-def clock_from(conn: "sqlite3.Connection", visit: Row) -> str:
-    """Where a bot's Late clock starts on this visit: when the task entered the stage, or the last answer a person gave
-    on it since, whichever is later. A person's turn is not the bot's time: after the answer the bot has the stage's
-    whole expected time again."""
-    answered = last_answer(conn, visit)
-    entered = str(visit["entered_at"])
-    return answered if answered and answered > entered else entered
-
-
-def _spent(conn: "sqlite3.Connection", visit: Row, at: str) -> float:
-    """Seconds the task has been the bot's to move on this visit (since `clock_from`), not counting the time it was
-    snoozed or blocked by a task it depends on (task_depends), each moment once."""
-    H = _h()
-    start = clock_from(conn, visit)
-    now, begun = H.parse_ts(at), H.parse_ts(start)
-    if not now or not begun:
-        return 0.0
-    aside: list[tuple[str, str | None]] = [
-        (str(created), ended)
-        for created, ended in conn.execute(
-            "SELECT created_at, ended_at FROM snoozes WHERE task_id=? AND visit_id=?", (visit["task_id"], visit["id"])
-        ).fetchall()
-    ]
-    aside += task_depends.spans(conn, str(visit["task_id"]), start)
-    return (now - begun).total_seconds() - _covered(aside, start, at)
-
-
-def _covered(spans: "list[tuple[str, str | None]]", start: str, end: str) -> float:
-    """Seconds of [start, end] inside at least one of `spans` ((from, to); a None `to` runs to `end`)."""
-    H = _h()
-    lo, hi = H.parse_ts(start), H.parse_ts(end)
-    if not lo or not hi:
-        return 0.0
-    cut: list[tuple[Any, Any]] = []
-    for begun, ended in spans:
-        a, b = H.parse_ts(begun), H.parse_ts(ended or end)
-        if a and b:
-            a, b = max(a, lo), min(b, hi)
-            if b > a:
-                cut.append((a, b))
-    total, reach = 0.0, None
-    for a, b in sorted(cut):
-        if reach is not None and a < reach:
-            a = reach
-        if b > a:
-            total += (b - a).total_seconds()
-            reach = b if reach is None else max(reach, b)
-    return total
-
-
-def _span(seconds: float) -> str:
-    minutes = int(seconds // 60)
-    if minutes >= 2880:
-        return f"{minutes // 1440} days"
-    if minutes >= 120:
-        return f"{minutes // 60} hours"
-    return f"{max(minutes, 1)} minutes"
-
-
-def _late(
-    conn: "sqlite3.Connection",
-    row: Row,
-    at: str,
-    done: dict[str, int],
-    seen: dict[str, str | None],
-    waits: "list[W.Wait] | None" = None,
-) -> None:
-    H = _h()
-    stage = row["stage"]
-    minutes = int(stage.get("expected_minutes") or 0)
-    visit = row["visit"]
-    if is_human(row.get("owner_id")):
-        _late_by_due(conn, row, at, done)
-        return
-    if not minutes or not minutes_have_passed(H, visit, at, minutes):
-        return
-    if visit.get("late_told_at") and visit.get("late_person_at") and not _answered_since_late(conn, visit):
-        return
-    if stage.get("expected_bots_only") and not is_bot(row.get("owner_id")):
-        return
-    spent = _spent(conn, visit, at)
-    if spent < minutes * 60:
-        return
-    waits = W.of(conn, row, seen) if waits is None else waits
-    if waits and merge_order.is_order_wait(waits[0].requirement_id):
-        return  # it goes after a task that has not merged: not Late, and nobody is woken (merge_order)
-    if _next_release_only(conn, waits):
-        _late_release(conn, row, at, spent, minutes, done)
-        return
-    manager = _manager(conn, row, seen)
-    if W.persons_turn(waits):
-        # It waits only on people's answers: the person's turn, never Late (the bot is not behind, and the ask is in
-        # the person's Needs you with its age). The manager bot still looks once where it may push past an ask.
-        _person_look(conn, row, spent, minutes, manager, waits, done, seen)
-        return
-    if visit.get("late_told_at") and _answered_since_late(conn, visit):
-        # Late before a person answered: the answer gave the bot the stage's whole time again (`clock_from`), and it
-        # has sat that long once more. Late again; the ladder's keys carry the change, so a new set is not a repeat.
-        conn.execute("UPDATE visits SET late_told_at=NULL WHERE id=?", (visit["id"],))
-        visit = {**visit, "late_told_at": None}
-    said = f"Late: {_span(spent)} in {stage['name']}, expected {_span(minutes * 60)}."
-    if not visit.get("late_told_at"):
-        conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
-        _event(conn, row["id"], "late", None, None, {"expected_minutes": minutes})
-        done["late"] += 1
-        fresh = E.task(conn, row["id"]) or row
-        waits = W.of(conn, fresh, seen)
-        head = waits[0] if waits else None
-        level = fresh["visit"].get("level") or "owner"
-        target = W.turn(conn, fresh, waits)
-        if target and level == "owner" and manager and manager != target:
-            # A bot's turn: Late hands the task to the manager bot, once per visit, on the same 3 tries. Never a second
-            # set (Late again after a person's answer is the label only), and never back down from a person.
-            if not _handed_this_visit(conn, fresh):
-                _to_manager(conn, fresh, manager, f"{said} {_name(conn, target)} has it.", at, done)
-        elif head and _looks(conn, fresh, waits, manager, head.who):
-            # No bot has a turn: it waits on another task, a cause a person fixes or the outside, and the manager bot
-            # looks once. A bot that cannot run is one row for its cause in a person's list, and its tasks carry on
-            # when the cause is fixed: nothing is sent for it.
-            waits_on = W.unnamed(head, task_wakes.told(conn, fresh, manager)).line  # a sub-task it may not be told of
-            lead = (
-                f"{said} It waits on: {waits_on}. Look once: push past with a reason where that is allowed, "
-                "reassign it, snooze it or close it."
-            )
-            if _asks_only(waits):
-                # Asks with a cause a person fixes first (Connect GitHub): the manager bot's one move is to push past an
-                # ask it may push past; with none it is not woken. Never a snooze: the ask stays in the person's list.
-                lead = (
-                    f"{said} It waits on: {waits_on}. It stays in {_name(conn, head.who)}'s list. Look once: if the "
-                    "answer is not needed, push past it with a reason where that is allowed; otherwise leave the task "
-                    "as it is."
-                    if _pushable(conn, waits)
-                    else ""
-                )
-            key = f"{row['id']}:{visit['id']}:late"
-            if lead and task_wakes.add(
-                conn, fresh, manager, fresh["visit"], task_wakes.body(conn, fresh, lead, to=manager), wake_key=key
-            ):
-                done["woken"] += 1
-    elif not visit.get("late_person_at"):
-        _late_look_lost(conn, row, manager, done, seen)
-    if spent >= LATE_PERSON * minutes * 60 and not visit.get("late_person_at"):
-        conn.execute("UPDATE visits SET late_person_at=? WHERE id=?", (at, visit["id"]))
-        fresh = E.task(conn, row["id"]) or row
-        waits = W.of(conn, fresh, seen)
-        rested = fresh["visit"].get("level") == "person"
-        if not rested and not (waits and waits[0].state in (W.PERSON, W.PAUSED)):
-            # Still there at 3 times the expected time: the ladder rests, once. Rested already, a person's turn, or
-            # paused with its cause in a person's list: nothing.
-            _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
-
-
-def _next_release_only(conn: "sqlite3.Connection", waits: "list[W.Wait]") -> bool:
-    """Whether all the task waits on is the next release of a repository Tico does not cut releases for (In a release
-    with no Release with): a release a person cuts, or the repository's own train."""
-    from .item_sources import github_release
-
-    if not waits or any(wait.state != W.SOURCE or not wait.requirement_id for wait in waits):
-        return False
-    for wait in waits:
-        requirement = R.get(conn, str(wait.requirement_id))
-        if not requirement or not github_release.waits_for_next_release(requirement):
-            return False
-    return True
-
-
-def _late_release(
-    conn: "sqlite3.Connection", row: Row, at: str, spent: float, minutes: int, done: dict[str, int]
-) -> None:
-    """A task that waits only for the next release, which no bot can bring: no bot is told Late or woken. After a week
-    (github_release.RELEASE_WAIT_S), or the stage's expected time when that is longer, it is Late and the ladder
-    rests, once."""
-    from .item_sources import github_release
-
-    visit = row["visit"]
-    bound = max(minutes * 60, github_release.RELEASE_WAIT_S)
-    if spent < bound or visit.get("late_person_at"):
-        return
-    conn.execute(
-        "UPDATE visits SET late_told_at=COALESCE(late_told_at, ?), late_person_at=? WHERE id=?", (at, at, visit["id"])
-    )
-    _event(conn, row["id"], "late", None, None, {"expected_minutes": int(bound // 60)})
-    done["late"] += 1
-    fresh = E.task(conn, row["id"]) or row
-    _to_person(conn, fresh, fresh["visit"].get("level") or "owner", done)
-
-
-def _late_by_due(conn: "sqlite3.Connection", row: Row, at: str, done: dict[str, int]) -> None:
-    """A person's own task is never chased (C6): it is Late only once its due date has passed, whatever the stage
-    expects, and that is the label alone. Nobody is woken and nothing moves to anyone's list."""
-    H = _h()
-    visit = row["visit"]
-    if visit.get("late_told_at") or not row.get("due_at"):
-        return
-    due, now = late_rule.due_instant(row["due_at"]), H.parse_ts(at)
-    if not due or not now or now < due:
-        return
-    conn.execute("UPDATE visits SET late_told_at=? WHERE id=?", (at, visit["id"]))
-    _event(conn, row["id"], "late", None, None, {"due_at": row.get("due_at")})
-    done["late"] += 1
-
-
-def minutes_have_passed(H: Any, visit: Row, at: str, minutes: int) -> bool:
-    """Whether the stage's expected time has passed since the visit began (a cheap test before any read)."""
-    now, entered = H.parse_ts(at), H.parse_ts(visit["entered_at"])
-    return bool(now and entered and (now - entered).total_seconds() >= minutes * 60)
-
-
-def _handed_this_visit(conn: "sqlite3.Connection", row: Row) -> bool:
-    """Whether Late or the ladder already handed the task to the manager bot on this visit (a `ladder` event to
-    manager since it entered the stage)."""
-    return bool(
-        conn.execute(
-            "SELECT 1 FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='ladder' AND new='manager' "
-            "AND created_at >= ? LIMIT 1",
-            (row["id"], str(row["visit"]["entered_at"])),
-        ).fetchone()
-    )
-
-
-def _answered_since_late(conn: "sqlite3.Connection", visit: Row) -> bool:
-    """Whether a person answered on this visit after it was marked Late."""
-    answered, told = last_answer(conn, visit), visit.get("late_told_at")
-    return bool(answered and told and answered > str(told))
-
-
-def _person_look(
-    conn: "sqlite3.Connection",
-    row: Row,
-    spent: float,
-    minutes: int,
-    manager: str | None,
-    waits: "list[W.Wait]",
-    done: dict[str, int],
-    seen: dict[str, str | None],
-) -> None:
-    """A bot's task past its time that waits only on people's answers is not Late: nothing is marked and no event is
-    written. The manager bot's one move is to push past an ask it may push past (docs/dev/pipelines-v3.md "A task
-    waits a day on you"), so it is woken once per visit for that, and not at all with none. Never a snooze: the ask
-    stays in the person's list. A look whose wake was lost is written again once (`_late_look_lost`)."""
-    visit = row["visit"]
-    key = f"{row['id']}:{visit['id']}:late"
-    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
-        _late_look_lost(conn, row, manager, done, seen)
-        return
-    head = waits[0]
-    if not _pushable(conn, waits) or not _looks(conn, row, waits, manager, head.who):
-        return
-    waits_on = W.unnamed(head, task_wakes.told(conn, row, manager)).line
-    lead = (
-        f"{_span(spent)} in {row['stage']['name']}, expected {_span(minutes * 60)}. It waits on: {waits_on}. It "
-        f"stays in {_name(conn, head.who)}'s list. Look once: if the answer is not needed, push past it with a reason "
-        "where that is allowed; otherwise leave the task as it is."
-    )
-    if task_wakes.add(conn, row, manager, visit, task_wakes.body(conn, row, lead, to=manager), wake_key=key):
-        done["woken"] += 1
-
-
-def _asks_only(waits: list[W.Wait]) -> bool:
-    """Whether all a task waits on is OKs and answers asked of people, and causes a person fixes first (`Wait.fix`,
-    Connect GitHub). Only answers and OKs are a person's turn that is never Late (waiting_on.persons_turn)."""
-    return bool(waits) and all((wait.state == W.PERSON and wait.ask) or wait.fix for wait in waits)
-
-
-def _pushable(conn: "sqlite3.Connection", waits: list[W.Wait]) -> bool:
-    """Whether a bot may push past any of these asks: its switch is on and it is not people only (task_engine
-    ._may_push_past refuses the rest)."""
-    for wait in waits:
-        if wait.fix:
-            continue  # pushing past it would not get round its cause: the next stage needs it as well
-        requirement = R.get(conn, str(wait.requirement_id)) if wait.requirement_id else None
-        if requirement and R.can_push_past(requirement) and not R.people_only(requirement):
-            return True
-    return False
-
-
-def _looks(conn: "sqlite3.Connection", row: Row, waits: list[W.Wait], manager: str | None, head: str | None) -> bool:
-    """The manager bot looks at a late task once: no bot has a turn, the task is still the owner's, the manager bot is
-    not who it waits on, and the visit has runs left since its last change."""
-    return bool(
-        manager
-        and not W.turns(conn, row, waits)
-        and (row["visit"].get("level") or "owner") == "owner"
-        and manager != head
-        and task_wakes.runs_since(conn, row) < RUNS
-    )
-
-
-def _late_look_lost(
-    conn: "sqlite3.Connection", row: Row, manager: str | None, done: dict[str, int], seen: dict[str, str | None]
-) -> None:
-    """Being told Late is not the look: when the manager bot's wake for it was lost (its job is gone and no run of the
-    manager bot on the task started since), it is written again with the same words, once, while the look is still
-    due, on the same budget, and only to a manager bot that reads the task (`_manager`, `task_wakes.add`)."""
-    visit = row["visit"]
-    key = f"{row['id']}:{visit['id']}:late"
-    told = conn.execute("SELECT id FROM messages WHERE wake_key=?", (key,)).fetchone()
-    if (
-        not told
-        or not manager
-        or task_wakes.live_run(conn, row, manager)
-        or task_wakes.queued(conn, row["id"], manager)
-    ):
-        return
-    lost = task_wakes.lost(conn, row, manager, whole_visit=True)
-    if not lost or lost["id"] != str(told[0]):
-        return
-    waits = W.of(conn, row, seen)
-    if waits and _looks(conn, row, waits, manager, waits[0].who):
-        if task_wakes.add(conn, row, manager, visit, lost["body"], wake_key=f"{key}:again"):
-            done["woken"] += 1
 
 
 # ----------------------------------------------------------------------------- the rules that hold at all times

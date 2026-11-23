@@ -22,10 +22,9 @@ import functools
 import json
 import re
 from collections.abc import Callable, Iterable
-from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
 
-from . import ask_shape, hubdb_core, late_rule, task_effects
+from . import ask_shape, hubdb_core, task_effects
 
 if TYPE_CHECKING:
     import sqlite3
@@ -1216,20 +1215,10 @@ def task_view(
     # The repositories the work is in (a filed Engineering task's from the start), for `tico task show`.
     repos = stage_inputs.repositories(conn, task_id, shown) if inputs else []
     snooze: Row | None = row.get("snooze")
-    late = (
-        late_rule.late_of(
-            row,
-            visit,
-            stage.get("expected_minutes"),
-            datetime.now(timezone.utc),
-            persons_turn=W.persons_turn(raw_waits),
-            answered_at=late_rule.last_answers(conn, [(str(visit["id"]), task_id, str(visit["entered_at"]))]).get(
-                str(visit["id"])
-            ),
-        )
-        if live and visit.get("late_told_at")
-        else None
-    )
+    from . import stage_rule_timers
+
+    # A stall rule caught it on this visit, and nothing changed since (stage_rule_timers.caught).
+    late = stage_rule_timers.caught(conn, [task_id]).get(task_id) if live else None
     # A page several people approve is each approver's turn: `viewer` sees it as theirs (waiting_on.head_for).
     # `turn_for`: the person the read is for (waiting_on.turn_viewer), apart from `viewer`, who decides access.
     head = W.head_for(raw_waits, turn_for or viewer)  # the workflow's turn: the run header's, never a shot's

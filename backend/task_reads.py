@@ -313,7 +313,7 @@ def came_from(c: "sqlite3.Connection", ids: list[str]) -> dict[str, dict[str, st
 def brief(c, rows, visible_sql="1", viewer=None):
     """The engine's fields of a list row (docs/dev/pipelines-v3-cutover.md, "The task as JSON", Brief), laid over each
     row in place: `turn` (the headline wait; `running` when a bot's turn is a run going now), `status_line`
-    (`status_line`), `late`, `snoozed`, `blocked_by` and
+    (`status_line`), `late` (`stage_rule_timers.caught`), `snoozed`, `blocked_by` and
     `blocks` (the open tasks it depends on and those it blocks, `_dependencies`; only where there are any),
     `pushed_past` (it entered its stage pushed past a requirement), `stuck` (only when the ladder brought it to a
     person, stuck or late with them: its Needs you card is the stuck card, task #392), `stage_since` (when it
@@ -324,9 +324,7 @@ def brief(c, rows, visible_sql="1", viewer=None):
     named by neither its title nor its id in a turn's line, as in the task's own read (waiting_on.unnamed). A snoozed
     turn's line is the snooze's why, which may be any length: a row clips it to SNOOZE_LINE_BYTES, and the task's own read
     keeps it whole."""
-    from datetime import datetime, timezone
-
-    from . import cloud_machines, late_rule
+    from . import cloud_machines, stage_rule_timers
     from . import waiting_on as W
     from .store import H
 
@@ -336,27 +334,18 @@ def brief(c, rows, visible_sql="1", viewer=None):
     origins = came_from(c, ids)
     waits = H.task_waits(c, ids)
     marks = json.dumps(ids)
-    marked, pushed, entered, stuck, visits = {}, set(), {}, set(), {}
+    pushed, entered, stuck, visits = set(), {}, set(), {}
     for r in c.execute(
-        "SELECT v.task_id, v.late_told_at, v.late_person_at, v.entered_how, v.entered_at, v.level, s.expected_minutes, v.id "
-        "FROM visits v LEFT JOIN stages s ON s.id=v.stage_id "
-        "WHERE v.left_at IS NULL "
-        "AND v.task_id IN (SELECT value FROM json_each(?))",
+        "SELECT v.task_id, v.entered_how, v.entered_at, v.level, v.id FROM visits v "
+        "WHERE v.left_at IS NULL AND v.task_id IN (SELECT value FROM json_each(?))",
         (marks,),
     ):
-        entered[r[0]], visits[r[0]] = r[4], r[7]
-        if r[5] == "person":
+        entered[r[0]], visits[r[0]] = r[2], r[4]
+        if r[3] == "person":
             stuck.add(r[0])
-        if r[1]:
-            # Late is read against the owner who holds the task now (late_rule), not the owner the mark was written for.
-            marked[r[0]] = ({"late_told_at": r[1], "late_person_at": r[2], "entered_at": r[4], "id": r[7]}, r[6])
-        if r[3] == "pushed_past":
+        if r[1] == "pushed_past":
             pushed.add(r[0])
-    now = datetime.now(timezone.utc)
-    # A person who answered after the mark gave the bot its whole time again (never_stuck.clock_from): one read for all.
-    answered = late_rule.last_answers(
-        c, [(str(v["id"]), str(tid), str(v["entered_at"])) for tid, (v, _m) in marked.items()]
-    )
+    late = stage_rule_timers.caught(c, ids)  # a stall rule caught it on this visit, and nothing changed since
     snoozed = {
         r[0]
         for r in c.execute(
@@ -411,19 +400,7 @@ def brief(c, rows, visible_sql="1", viewer=None):
         row["turn"] = turn
         if turn and turn["ask"] and visits.get(row["id"]):
             row["visit_id"] = visits[row["id"]]  # only on an ask: with it the ask is read by id (waiting_on.ask_id)
-        mark = marked.get(row["id"])
-        row["late"] = (
-            late_rule.late_of(
-                row,
-                mark[0],
-                mark[1],
-                now,
-                persons_turn=W.persons_turn(waits.get(row["id"]) or []),
-                answered_at=answered.get(str(mark[0]["id"])),
-            )
-            if mark
-            else None
-        )
+        row["late"] = late.get(row["id"])
         if row["id"] in stuck:
             row["stuck"] = True  # only when true: every list row carries the brief, under its payload budget
         # Blocked wins over a snooze: no list says Snoozed for a blocked task (hubdb.tasks' snoozed filter agrees).

@@ -10,6 +10,7 @@ import re
 
 from backend import bot_settings as BS
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend.store import H
 
@@ -18,8 +19,6 @@ GENERAL = (
     {
         "name": "To do",
         "owner": "assignee",
-        "expected_minutes": 1440,
-        "expected_bots_only": 1,
         "requirements": [{"kind": "owner_done"}],
     },
 )
@@ -161,7 +160,7 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
         sid = f"{pid}-{_slug(spec['name'])}"
         c.execute(
             "INSERT INTO stages (id, pipeline_id, position, kind, name, owner, by_hand, requests_move_on, task_limit, "
-            "expected_minutes, expected_bots_only, on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "on_enter, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 sid,
                 pid,
@@ -172,8 +171,6 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
                 1 if spec.get("by_hand") else 0,
                 1 if spec.get("requests_move_on") else 0,
                 spec.get("task_limit"),
-                spec.get("expected_minutes"),
-                1 if spec.get("expected_bots_only") else 0,
                 json.dumps(spec.get("on_enter") or {}),
                 now,
                 now,
@@ -181,6 +178,9 @@ def pipeline(c, pid="general", name="General", stages=GENERAL, manager=None):
         )
         if spec.get("pick"):
             c.execute("UPDATE stages SET pick=? WHERE id=?", (json.dumps(spec["pick"]), sid))
+        if spec.get("late_minutes"):
+            # Its Late rule (backend/stage_rules.py late_rule), as a preset's stage gets with it.
+            SR.add_late(c, sid, spec["name"], pid, int(spec["late_minutes"]))
         out["stages"][spec["name"]] = sid
         out["requirements"][spec["name"]] = [
             requirement(c, sid, **dict(r, position=i)) for i, r in enumerate(spec.get("requirements") or ())

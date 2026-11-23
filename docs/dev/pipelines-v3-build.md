@@ -39,7 +39,8 @@ pipelines     id, name, goal, prefix, manager_id, owner_id, private (0|1), facto
               settings_version, created_at, updated_at, retired_at
               unique name and unique prefix among rows not retired
 stages        id, pipeline_id, position, kind (work|done|closed), name, purpose, owner, by_hand (0|1),
-              requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes, expected_bots_only (0|1),
+              requests_move_on (0|1, by-hand stages only), task_limit, expected_minutes and expected_bots_only
+              (unread since Nov 23, 2026: the Late stage rule; dropped the release after),
               on_enter (json), created_at, updated_at, retired_at
               every pipeline has exactly one done stage and one closed stage, after its work stages
 requirements  id, stage_id | visit_id (exactly one), kind, source, condition, settings (json), can_push_past (0|1),
@@ -54,7 +55,7 @@ visits        id, task_id, stage_id, entered_at,
               entered_how (new|met|pushed_past|back|closed|reopened),
               left_at, how (met|pushed_past|back|closed|reopened), by_id, why,
               tries, level (owner|manager|person), person_id, next_try_at, progress_mark,
-              last_change_at, late_told_at, late_person_at, bot_snoozes
+              last_change_at, bot_snoozes (late_told_at, late_person_at: unread since Nov 23, 2026)
               one open visit per task (left_at is null), always, Done and Closed included
 answers       id, visit_id, requirement_id, by_id, answer, notes, page_version, created_at, undone_at
 snoozes       id, task_id, visit_id, by_id, why, until_at (null = no end), created_at, ended_at,
@@ -236,11 +237,9 @@ stage in any pipeline; the moved task's owner is woken by its turn in the next s
 task in a by-hand stage rests until someone moves it. (The "has room" wake, keyed `room:<stage>:<freed by>`, was
 removed Nov 12; migration `drop_queued_room_notices` canceled the ones still queued.)
 
-The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`,
-`late_told_at`, `late_person_at`) are written by `task_engine` and `never_stuck` only. Every engine write that changes
-a task without moving it (reassign, add or withdraw a requirement, try again, a filed task ending, `changed`) starts
-the ladder again: tries 0, level `owner`, next look in `FIRST_TRY_S`. One exception: a task that Late
-brought to a person stays with that person until a person acts.
+The ladder columns of a visit (`tries`, `level`, `person_id`, `next_try_at`, `progress_mark`, `last_change_at`) are
+written by `task_engine` and `never_stuck` only. Every engine write that changes a task without moving it (reassign, add or withdraw a requirement, try again, a filed task ending, `changed`) starts
+the ladder again: tries 0, level `owner`, next look in `FIRST_TRY_S`.
 
 A requirement that names a bot wakes that bot once, when it is added. That bot is on the task's count from then on.
 
@@ -413,15 +412,10 @@ What a pass does with one task:
   bot gets none and it goes to a person.
 - Level `person`: nothing more is sent. The task is in that person's Needs you until a person acts (`try_again`,
   reassign, an answer, a move).
-- Late: when the time in this visit, less the time snoozed, passes the stage's expected time, `late_told_at` is set,
-  once per visit. A bot's turn (even beside a person's ask) goes to the manager bot on the same 3 tries, at level
-  `owner` only: never a second set, never down from a person. A task where no bot has a turn, that waits on a person,
-  on other tasks or on the outside, gets one wake to the manager bot, keyed `<task>:<visit>:late`, within the 7 runs. A
-  paused task gets nothing:
-  its cause is already in a person's list. At 3 times the expected time `late_person_at` is set and the task goes to a
-  person, unless it is already a person's turn or paused.
+- Late is not part of this check since Nov 23, 2026: it is each stage's "Late" timer rule (`stage_rules.late_rule`),
+  which the check's `stage_rules` step runs (`stage_rule_timers.sweep`) and which tells the owner bot once per visit.
 
-History events it writes: `woken_again` (data: level, try), `ladder` (old and new level), `late`.
+History events it writes: `woken_again` (data: level, try), `ladder` (old and new level).
 
 It is the only caller of `move()` with `by=SYSTEM`, through `advance`.
 
@@ -508,11 +502,13 @@ The record `read` gives and `save` takes. Keys are the column names. `settings_v
 ```
 {"id", "name", "goal", "prefix", "manager_id", "owner_id", "private", "factory_id", "preset", "settings_version",
  "retired_at", "done": {"id", "name"}, "closed": {"id", "name"},
- "stages": [{"id", "name", "purpose", "owner", "by_hand", "task_limit", "expected_minutes", "expected_bots_only",
+ "stages": [{"id", "name", "purpose", "owner", "by_hand", "task_limit",
              "on_enter", "requirements": [{"id", "kind", "settings", "can_push_past", "who_oks", "person_id",
                                            "person_ids" (a page several people approve), "line"}]}]}
 ```
 
+- A stage's expected time is its Late stage rule since Nov 23, 2026: a record that sets `expected_minutes` is refused
+  with where to change it.
 - `on_enter` is `{}`, `{"file_into": "<pipeline id>"}` (refused until phase 2: "Filing into a pipeline comes with the
   Product pipeline") or `{"act": "github.queue"}` (a source action).
 - A row with an id is changed in place; without one it is made: a stage as `<pipeline id>-<slug of its name>` (`-2`,

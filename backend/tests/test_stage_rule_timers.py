@@ -14,6 +14,7 @@ import pytest
 from backend import never_stuck as NS
 from backend import stage_rule_timers as T
 from backend import stage_rules as SR
+from backend import task_depends
 from backend import task_engine as E
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -178,17 +179,6 @@ def test_quiet_bot_tasks_tells_each_manager_once_for_all_its_tasks_with_no_model
     assert len(_told(c)) == 2  # the same quiet stretch is told once
 
 
-def test_a_task_already_listed_as_late_is_not_listed_again(c, time_machine):
-    late = _task(c, "eng", "Build", "bot:builder", "Already Late")
-    quiet = _task(c, "eng", "Build", "bot:builder", "Only quiet")
-    c.execute("UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), late))
-    time_machine.shift(timedelta(hours=6))
-    T.sweep(c)
-    ((who, body),) = _told(c)
-    assert who == "bot:lead" and body.startswith("Stage rules: 1 task.")
-    assert _title(c, quiet) in body and _title(c, late) not in body
-
-
 def test_matches_in_the_same_hour_wait_for_the_managers_next_wake(c, time_machine):
     first = _task(c, "eng", "Build", "bot:builder", "First")
     time_machine.shift(timedelta(minutes=20))
@@ -271,9 +261,9 @@ def test_a_snooze_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machin
     assert len(_told(c)) == 1
 
 
-def test_a_block_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machine):
-    """A task blocked by another (backend/task_depends.py) has no timer, even under a rule with no condition (the
-    default one asks for the bot's turn); when the block ends its owner is woken and the quiet hours start again."""
+def test_a_block_that_ends_starts_the_quiet_hours_again(c, time_machine):
+    """A task blocked by a blocker that is not quiet yet is left alone; when the block ends its owner is woken, and the
+    quiet hours start again from there."""
     from backend import task_relations as TR
 
     _rule(c, timer={"kind": "quiet", "hours": 6}, then="tell_manager")
@@ -282,9 +272,9 @@ def test_a_block_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machine
     task_id = _task(c, "eng", "Build", "bot:builder", "Blocked one")
     TR.relate(c, ANA, task_id, blocker, "depends_on")
     X.settled(c)
-    time_machine.shift(timedelta(hours=24))
+    time_machine.shift(timedelta(hours=5))
     NS.check(c)
-    assert not any(_title(c, task_id) in body for _, body in _told(c))
+    assert not any(_title(c, task_id) in body for _, body in _told(c))  # its blocker is not quiet for 6 h yet
     E.move(c, blocker, E.DONE, ANA, "Fixed")
     NS.check(c)
     assert not any(_title(c, task_id) in body for _, body in _told(c))  # just woken to pick it up: not quiet
@@ -338,26 +328,6 @@ def test_waiting_on_a_person_tells_the_owner_once(c, time_machine):
     assert len(_owner_told(c, waiting, "Chase the OK")) == 1
 
 
-def test_a_task_late_lists_while_it_waits_for_the_hourly_wake_is_not_named_again(c, time_machine):
-    first = _task(c, "eng", "Build", "bot:builder", "Quiet first")
-    time_machine.shift(timedelta(minutes=30))
-    second = _task(c, "eng", "Build", "bot:builder", "Quiet later")
-    time_machine.shift(timedelta(hours=5, minutes=30))
-    T.sweep(c)  # the first is told; the manager has had its wake this hour
-    time_machine.shift(timedelta(minutes=30))
-    T.sweep(c)  # the second matches and waits for the next wake
-    assert len(_told(c)) == 1
-    c.execute(
-        "UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), second)
-    )  # Late lists it
-    time_machine.shift(timedelta(minutes=31))
-    T.sweep(c)
-    assert len(_told(c)) == 1
-    assert _title(c, first) in _told(c)[0][1] and _title(c, second) not in _told(c)[0][1]
-    assert any("was told" in note for note in _history(c, first))
-    assert not any("was told" in note for note in _history(c, second))
-
-
 def test_a_task_that_ends_before_the_wake_is_dropped_not_told(c, time_machine):
     first = _task(c, "eng", "Build", "bot:builder", "Told")
     time_machine.shift(timedelta(minutes=30))
@@ -375,3 +345,174 @@ def test_a_task_that_ends_before_the_wake_is_dropped_not_told(c, time_machine):
     assert any("was told" in note for note in _history(c, first))
     assert any("was told" in note for note in _history(c, named))
     assert not any("was told" in note for note in _history(c, gone))
+
+
+# ----------------------------------------------------------------------------- Late, a stage rule
+def _late(c, stage="Build", minutes=24 * 60, pipeline="eng"):
+    """The stage's Late rule, as a preset or the release migration writes it."""
+    stage_id = f"{pipeline}-{stage.lower()}"
+    assert SR.add_late(c, stage_id, stage, pipeline, minutes)
+    return f"sr_late_{stage_id}"
+
+
+def _wake_refs(c, task_id, rule_name):
+    rows = c.execute(
+        "SELECT refs FROM messages WHERE json_extract(refs, '$.task') = ? AND body LIKE ? ORDER BY rowid",
+        (task_id, f"%Rule {rule_name}%"),
+    ).fetchall()
+    return [json.loads(r[0]) for r in rows]
+
+
+def _answer(c, task_id):
+    """A person's answer on the task's open visit (an OK or a question answered)."""
+    visit = E.task(c, task_id)["visit"]
+    requirement = c.execute("SELECT id FROM requirements WHERE stage_id=? LIMIT 1", (visit["stage_id"],)).fetchone()[0]
+    c.execute(
+        "INSERT INTO answers (id, visit_id, requirement_id, by_id, answer, created_at) VALUES (?,?,?,?,?,?)",
+        (H.new_id(), visit["id"], requirement, ANA, "ok", H.now()),
+    )
+
+
+def _block(c, task_id, blocker_id):
+    from backend import task_relations as TR
+
+    assert TR.relate(c, ANA, task_id, blocker_id, "depends_on")
+
+
+def test_late_is_a_stage_rule_in_the_stages_rules_with_the_same_words_everywhere(c):
+    rule_id = _late(c)
+    rule = SR.get(c, rule_id)
+    assert (rule["name"], rule["pipeline_id"], rule["stages"], rule["status"]) == (
+        "Late",
+        "eng",
+        ["eng-build"],
+        "active",
+    )
+    assert rule["timer"] == {"kind": "in_stage", "hours": 24} and rule["then"] == "tell_owner"
+    assert rule["cond"] == {"owner_kind": "bot", "turn": "bot"} and rule["builtin"] == SR.LATE
+    shown = {r["name"]: r["reason"] for r in SR.applying(c, "eng", "eng-build")}
+    assert shown["Late"] == "24 h in Build on the bot's turn"  # the run header's "Rules on this stage" line
+    assert shown["Quiet bot tasks"] == "6 h quiet on the bot's turn, blocked tasks included"
+    assert "Late" not in {r["name"] for r in SR.applying(c, "eng", "eng-review")}
+    assert not SR.add_late(c, "eng-build", "Build", "eng", 60)  # once: a stage keeps the Late rule it has
+    assert "Late" not in {item["name"] for item in SR.BUILT_IN}  # no longer a rule "in code"
+
+
+def test_an_edited_late_rule_wakes_the_owner_once_naming_the_rule(c, time_machine):
+    rule_id = _late(c)
+    SR.edit(c, ANA, rule_id, {"timer": {"kind": "in_stage", "hours": 2}, "reason": "2 h in Build on the bot's turn"})
+    task_id = _task(c, "eng", "Build", "bot:builder", "Quick build")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=1, minutes=59))
+    T.sweep(c)
+    assert _owner_told(c, task_id, "Late") == []
+    time_machine.shift(timedelta(minutes=1))
+    T.sweep(c)
+    ((who, body),) = _owner_told(c, task_id, "Late")
+    assert who == "bot:builder" and "Rule Late: 2 h in Build." in body
+    (refs,) = _wake_refs(c, task_id, "Late")
+    assert (refs["stage_rule"], refs["stage_rule_name"], refs["stage_rules"]) == (
+        rule_id,
+        "Late",
+        [rule_id],
+    )  # wakes count per rule
+    assert _history(c, task_id) == ["Rule Late: 2 h in Build."]
+    time_machine.shift(timedelta(hours=5))
+    T.sweep(c)
+    assert len(_owner_told(c, task_id, "Late")) == 1  # once per visit
+
+
+def test_a_persons_answer_restarts_the_late_clock_and_a_persons_turn_is_never_late(c, time_machine):
+    _late(c, minutes=120)
+    _late(c, stage="Review", minutes=120)
+    building = _task(c, "eng", "Build", "bot:builder", "Build with a question")
+    waiting = _task(c, "eng", "Review", "bot:builder", "Waits on Ana's OK")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=1, minutes=30))
+    _answer(c, building)  # the bot's whole time again from here
+    time_machine.shift(timedelta(hours=1))
+    T.sweep(c)
+    assert _owner_told(c, building, "Late") == []  # 2.5 h in Build, but 1 h since the answer
+    time_machine.shift(timedelta(hours=1))
+    T.sweep(c)
+    assert len(_owner_told(c, building, "Late")) == 1
+    assert _owner_told(c, waiting, "Late") == []  # 3.5 h in Review, all of it Ana's turn
+
+
+def test_a_dead_blocker_is_caught_once_a_live_one_is_left_alone(c, time_machine):
+    _late(c, minutes=24 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the API")
+    blocker = _task(c, "ops", "Build", "bot:fixer", "The API")
+    live_blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the schema")
+    live_blocker = _task(c, "ops", "Build", "bot:fixer", "The schema")
+    _block(c, blocked, blocker)
+    _block(c, live_blocked, live_blocker)
+    X.settled(c)
+    time_machine.shift(timedelta(hours=35))
+    E.changed(c, live_blocker, ANA)  # it moves within the rules' hours
+    time_machine.shift(timedelta(hours=1))
+    T.sweep(c)
+    ((who, body),) = _owner_told(c, blocked, "Late")
+    named = task_depends.ref(E.task(c, blocker))
+    assert who == "bot:builder" and f"Rule Late: 24 h in Build. Blocked by {named}, no change on it for 36 h." in body
+    assert "Chase it, take the link off, reassign or re-plan." in body
+    assert _owner_told(c, live_blocked, "Late") == []  # its blocker changed an hour ago
+    # Quiet bot tasks sees blocked tasks too: the manager hears of the dead blocker, not of the live one.
+    body = dict(_told(c))["bot:lead"]
+    assert _title(c, blocked) in body and _title(c, live_blocked) not in body
+
+
+def test_a_blocked_task_is_caught_once_per_visit_however_often_its_blocker_goes_quiet(c, time_machine):
+    _late(c, minutes=6 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the API")
+    blocker = _task(c, "ops", "Build", "bot:fixer", "The API")
+    _block(c, blocked, blocker)
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert len(_owner_told(c, blocked, "Late")) == 1
+    E.changed(c, blocker, ANA)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert len(_owner_told(c, blocked, "Late")) == 1  # its blocker went quiet again: not on this visit
+
+
+def test_a_timer_never_messages_a_person(c, time_machine):
+    _rule(c, id="tell-anyone", name="Tell anyone", timer={"kind": "quiet", "hours": 1}, then="tell_owner")
+    _rule(c, id="tell-boss", name="Tell the boss", timer={"kind": "quiet", "hours": 1}, then="tell_manager")
+    c.execute("UPDATE pipelines SET manager_id=? WHERE id='ops'", (ANA,))  # a person manages Ops
+    mine = _task(c, "eng", "Build", ANA, "Ana's own")
+    managed = _task(c, "ops", "Build", "bot:fixer", "Managed by a person")
+    X.settled(c)
+    before = c.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (ANA,)).fetchone()[0]
+    time_machine.shift(timedelta(hours=2))
+    T.sweep(c)
+    time_machine.shift(timedelta(hours=2))
+    T.sweep(c)
+    assert c.execute("SELECT count(*) FROM messages WHERE recipient_id=?", (ANA,)).fetchone()[0] == before
+    assert _owner_told(c, mine, "Tell anyone") == []
+    assert [who for who, _ in _owner_told(c, managed, "Tell anyone")] == ["bot:fixer"]  # the owner bot still hears
+
+
+def test_late_shows_while_nothing_changed_since_a_rule_caught_it(c, time_machine):
+    from backend import task_reads
+
+    rule_id = _late(c, minutes=60)
+    task_id = _task(c, "eng", "Build", "bot:builder", "Slow build")
+    X.settled(c)
+    time_machine.shift(timedelta(minutes=30))
+    assert T.caught(c, [task_id]) == {}
+    other = _task(c, "eng", "Build", "bot:builder", "Fresh build")
+    X.settled(c)
+    time_machine.shift(timedelta(minutes=31))
+    T.sweep(c)
+    assert T.caught(c, [task_id, other]) == {task_id: {"since": H.now(), "rule": "Late"}}
+    (row,) = task_reads.brief(c, [{"id": task_id, "owner_id": "bot:builder", "status": "open"}])
+    assert row["late"] == {"since": H.now(), "rule": "Late"}
+    assert H.task_view(c, task_id, ANA)["late"]["rule"] == "Late"
+    matched = c.execute(f"SELECT id FROM tasks t WHERE {T.CAUGHT_SQL % 't'}").fetchall()
+    assert [r[0] for r in matched] == [task_id]  # the Late filter
+    time_machine.shift(timedelta(minutes=5))
+    E.changed(c, task_id, "bot:builder")  # the bot moved it on
+    assert T.caught(c, [task_id]) == {}
+    assert SR.get(c, rule_id)["name"] == "Late"
