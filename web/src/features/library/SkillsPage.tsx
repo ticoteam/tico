@@ -563,7 +563,8 @@ function ProposalPage({ id }: { id: string }) {
   const lines = d.data ? diffLines(d.data.diff, d.data.files.length > 1) : [];
   const added = lines.filter((l) => l.kind === '+').length;
   const cut = lines.filter((l) => l.kind === '-').length;
-  const s = d.data?.screening;
+  // The proposal's own screen status says where screening is; the latest row may be an older, failed one.
+  const s = p?.screen_status === 'screened' ? d.data?.screening : null;
   const risky = s && (s.risk === 'high' || s.verdict === 'unsafe');
   const skill = skills.data?.find((k) => k.name === p?.name);
   const open = p?.status === 'pending';
@@ -571,7 +572,7 @@ function ProposalPage({ id }: { id: string }) {
   const mine = !!p && !!me && proposer(p) === me.id;
   // What the server says to do about a screening that did not run (backend/skills.py SCREEN_REASONS).
   const action = (p as (Proposal & { screen_action?: string | null }) | undefined)?.screen_action;
-  const screening = !s ? (p?.screen_status === 'not_screened' ? 'Not screened' : 'Not done yet') : risky ? 'High risk' : 'Nothing risky';
+  const screening = s ? (risky ? 'High risk' : 'Nothing risky') : p?.screen_status === 'not_screened' ? 'Not screened' : 'Not done yet';
 
   const approve = async (acknowledged = false) => {
     setBusy(true);
@@ -640,7 +641,7 @@ function ProposalPage({ id }: { id: string }) {
                 <p className="sp-why">{p.decline_reason}</p>
               </>
             )}
-            {open && !s && p.screen_status === 'not_screened' && action && (
+            {open && p.screen_status === 'not_screened' && action && (
               <>
                 <h3 className="sp-h t-label">Screening</h3>
                 <p className="sp-why">{action}</p>

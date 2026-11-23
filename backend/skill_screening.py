@@ -16,11 +16,12 @@ What the screen is made of:
   data, with the diff against the base for an update. No fallback to another model: a lower-quality answer is not a screen.
 
 Unlike screening.py's doors there is no switch, no length bypass, no cut and no fail-open: an update too big for the state
-with its diff is screened on the whole new skill without it (the Gateway refuses a state over J.MAX_STATE_CHARS), one
-still too big is `not_screened` (`oversize`), and no model, the spend cap, a timeout or an error is `not_screened` with
-that reason until someone screens it again. A proposal is never `screened` without a model answer. A `screened` row for the same sha, base and
-question set version is reused instead of paying again; a new question set version sends pending proposals back to be
-screened (approved versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
+with its diff is screened on the whole new skill without it when the question set allows it (`diff_optional`; the
+Gateway refuses a state over J.MAX_STATE_CHARS), one still too big is `not_screened` (`oversize`), and no model, the
+spend cap, a timeout or an error is `not_screened` with that reason until someone screens it again.
+A proposal is never `screened` without a model answer. A `screened` row for the same sha, base and question set version
+is reused instead of paying again; a new question set version sends pending proposals back to be screened (approved
+versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
 """
 
 import difflib
@@ -381,8 +382,9 @@ def screen(store, row, base_files, engine_for=None):
             cached_from=cached["id"],
         )
     state = build_state(row["name"], row["description"], files, base_files, hits)
-    if base_files is not None and state_chars(state) > J.MAX_STATE_CHARS:
-        # Too big with its diff: the whole new skill in one call, so the model still sees every file at once.
+    if base_files is not None and qset.get("diff_optional") is True and state_chars(state) > J.MAX_STATE_CHARS:
+        # Too big with its diff: the whole new skill in one call, so the model still sees every file at once. Only a
+        # question set that says it can judge an update without its diff (`diff_optional`): a company's own may not.
         state = build_state(row["name"], row["description"], files, None, hits)
     if state_chars(state) > J.MAX_STATE_CHARS:
         return _outcome("not_screened", label, hits, "oversize")
