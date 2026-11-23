@@ -373,7 +373,7 @@ export const newPage = defineAction({
 
 /* ---------------------------------------------------------------- Details' facts and the head's ⋯ (s58) */
 
-import { deleteTask, followTask, moveTaskTo, setTaskHuman, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
+import { deleteTask, moveTaskTo, setTaskHuman, setTaskPublic, setTaskReaders, setTaskRoles, setTaskSize, setTaskVisible } from './queries';
 
 const actor =z.string().check(z.minLength(1), z.maxLength(200));
 
@@ -439,17 +439,6 @@ export const setReaders = defineAction({
   run: (_ctx, i) => said(setTaskReaders(i.task, i.add, i.remove)),
   did: (i) => (i.add.length ? 'Let them see it' : 'Took them off'),
   target: (i) => ({ kind: 'task-visible', id: i.task }),
-});
-
-/** Follow or unfollow: the person, or `actor` (someone who already sees the task). */
-export const follow = defineAction({
-  id: 'task.follow',
-  title: 'Follow a task',
-  kind: 'change',
-  input: z.strictObject({ task, actor: z.optional(actor), following: z.boolean() }),
-  run: (_ctx, i) => said(followTask(i.task, { ...(i.actor && { actor: i.actor }), following: i.following })),
-  did: (i) => (i.following ? 'Following' : 'Unfollowed'),
-  target: (i) => ({ kind: 'task-followers', id: i.task }),
 });
 
 /** To another pipeline, at its `stage` (its first when left out). On the task's page, the address follows it there. */

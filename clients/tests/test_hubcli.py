@@ -1288,7 +1288,7 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
 
 
 def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
-    """`tico task create --private --reader X` sends the readers; `tico task readers list|add|remove` run the
+    """`tico task create --private --share-with X` (or `--reader X`) sends the readers; `tico task readers list|add|remove` run the
     tico_task_readers_* tools against /tasks/{id}/readers."""
     from clients import remotecli
 
@@ -1323,7 +1323,7 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
                 "--body",
                 "For the new hire.",
                 "--private",
-                "--reader",
+                "--share-with",
                 "ben",
                 "--reader",
                 "group:desk",
@@ -1332,6 +1332,14 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
     )
     made = [body for method, path, body in calls if method == "POST" and path == "tasks"]
     assert made and made[-1]["private"] is True and made[-1]["readers"] == ["ben", "group:desk"], calls
+    calls.clear()
+    # The MCP tool takes the list as `shared_with` and sends it as `readers`, which every server takes.
+    from clients.commands.tasks import task_create
+
+    task_create(Api(), {"owner": "human:ben", "title": "Draft the offer letter", "shared_with": ["ben"]})
+    assert calls[-1][2]["readers"] == ["ben"] and "shared_with" not in calls[-1][2], calls
+    with pytest.raises(ValueError, match="one list"):
+        task_create(Api(), {"owner": "human:ben", "title": "Draft it", "shared_with": ["ben"], "readers": ["cara"]})
     calls.clear()
     for argv in (
         ["task", "readers", "list", "T1"],

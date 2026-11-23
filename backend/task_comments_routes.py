@@ -419,6 +419,7 @@ def register(
             # A person assignee reads a private task as its requester does (hubdb.task_private_readable).
             "assignee_id": assignee if private and H.is_human(assignee) else None,
             "readers": view["readers"],
+            "shared_with": view["readers"],
         }
 
     @app.get("/api/v2/tasks/{tid}/readers")

@@ -72,11 +72,12 @@ def task_context(api, args):
             "run on a private task or under a private parent. Left out: a private task's run files it private; "
             "bot defaults also apply",
         },
-        "readers": {
+        "shared_with": {
             "type": "array",
             "items": {"type": "string"},
             "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>",
         },
+        "readers": {"type": "array", "items": {"type": "string"}, "description": "shared_with's older name"},
         "follow": {"type": "boolean"},  # the filer follows it too (docs/tasks.md, Followers)
         "for_actor": _s(
             "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
@@ -188,6 +189,11 @@ def task_create(api, args):
     ):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
+    if args.get("shared_with"):
+        # Sent as `readers`, the name every server takes (backend/models.py one_reader_list).
+        if body.get("readers") and sorted(body["readers"]) != sorted(args["shared_with"]):
+            raise ValueError("shared_with and readers are one list, and these differ: give one")
+        body["readers"] = args["shared_with"]
     if args.get("private") is not None:
         body["private"] = args["private"]
     after = _after(args)

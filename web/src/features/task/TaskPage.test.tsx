@@ -1036,21 +1036,35 @@ describe('Details: the facts @s58', () => {
     expect(sent).toEqual([]);
   });
 
-  it('follows the task, and puts someone in a role', async () => {
-    serve((url, method) => {
-      if (method === 'PUT' && url.endsWith('/followers')) return { status: 200, body: { task_id: 't1', following: true, notify: 'live', followers: [{ actor: 'human:me', notify: 'live' }] } };
-      return reads(task({ followers: [] } as Partial<TaskData>))(url);
-    });
+  it('has no Follow, and puts someone in a role', async () => {
+    serve(base);
     details();
     await facts();
-    fireEvent.click(await screen.findByRole('button', { name: 'Follow' }));
-    await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'PUT', url: '/api/v2/tasks/t1/followers', body: { following: true } }));
-    expect(await screen.findByRole('button', { name: 'Unfollow' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add someone' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add someone' });
     fireEvent.change(within(dialog).getByRole('textbox', { name: 'Role' }), { target: { value: 'QA Lead' } });
     expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('always shows the Assignee, and a person assignee among who sees a private task', async () => {
+    serve(reads(task({ owner_id: 'bot:a1', assignee_id: 'human:bo', private: true, readers: ['human:bo'] } as Partial<TaskData>)));
+    details();
+    await facts();
+    const assignee = (await screen.findByText('Assignee')).parentElement as HTMLElement;
+    expect(assignee.textContent).toContain('Bo Lee');
+    // Bo reads it as its assignee: a fixed face, not a reader to take off
+    const visible = (screen.getByText('Visible to').closest('.dt-kv') ?? document.body) as HTMLElement;
+    expect(within(visible).queryByRole('button', { name: 'Bo Lee' })).toBeNull();
+    expect(within(visible).getAllByText('BL').length).toBeGreaterThan(0);
+  });
+
+  it('shows Assignee as None when nobody is assigned', async () => {
+    serve(reads(task({ assignee_id: null } as Partial<TaskData>)));
+    details();
+    await facts();
+    expect(((await screen.findByText('Assignee')).parentElement as HTMLElement).textContent).toBe('AssigneeNone');
   });
 
   it('lists the meetings the task was in, each opening in the calendar', async () => {

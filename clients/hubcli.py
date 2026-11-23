@@ -676,6 +676,7 @@ def parser():
     s.add_argument("--public-summary", dest="public_summary", help="public roadmap summary")
     s.add_argument("--private", action="store_true", default=None, help="only its requester, owner and readers see it")
     s.add_argument(
+        "--share-with",
         "--reader",
         dest="readers",
         action="append",

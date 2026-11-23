@@ -424,13 +424,8 @@ export function dropLink(id: string, link: string) {
 
 import type { GoalResult, TaskMeeting, TaskMeetings } from '@/api/schema';
 
-/** Someone following a task (backend/task_followers.py). */
-export interface Follower {
-  actor: string;
-}
-/** The detail's task as Details reads its facts: its followers (null for a task with no thread of its own) and its
-    goal, which the schema's task leaves out. */
-export type TaskFacts = TaskData & { followers?: Follower[] | null; goal_id?: string | null };
+/** The detail's task as Details reads its facts: its goal, which the schema's task leaves out. */
+export type TaskFacts = TaskData & { goal_id?: string | null };
 
 /** Who may see it: its team, the public roadmap too, or only its people. */
 export type Visible = 'team' | 'public' | 'private';
@@ -502,22 +497,6 @@ export function setTaskReaders(id: string, add: string[], remove: string[]) {
     optimistic: (cur: TaskData | undefined) => cur && { ...cur, readers: [...new Set([...(cur.readers ?? []), ...add])].filter((r) => !remove.includes(r)) },
     send: (idem) => api.post<ReadersAnswer>(`${taskPath(id)}/readers`, { add, remove }, { idempotencyKey: idem }),
     settle: (cur: TaskData | undefined, answer) => cur && { ...cur, readers: answer.readers, private: answer.private },
-  });
-}
-
-/** Follow or unfollow: the person themselves, or `actor` (PUT /api/v2/tasks/{tid}/followers). */
-type FollowersAnswer = { followers: Follower[] | null };
-export function followTask(id: string, change: { actor?: string; following: boolean }) {
-  const who = change.actor ?? queryClient.getQueryData(meQuery.queryKey)?.id ?? '';
-  const shown = (list: Follower[]): Follower[] => {
-    const rest = list.filter((f) => f.actor !== who);
-    return change.following ? [...rest, { actor: who }] : rest;
-  };
-  return write<FollowersAnswer>({
-    key: keys.tasks.detail(id),
-    optimistic: (cur: TaskFacts | undefined) => cur && { ...cur, followers: shown(cur.followers ?? []) },
-    send: (idem) => api.put<FollowersAnswer>(`${taskPath(id)}/followers`, change, { idempotencyKey: idem }),
-    settle: (cur: TaskFacts | undefined, answer) => cur && { ...cur, followers: answer.followers },
   });
 }
 
