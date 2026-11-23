@@ -130,6 +130,20 @@ def test_github_status_says_what_is_connected_where_and_what_is_missing():
     assert created["missing"][0]["key"] == "not_installed"
 
 
+def test_github_status_names_the_bot_and_says_when_a_reconnect_made_a_new_app():
+    """AC-5 for agents: the agent that reconnected reads the notice in tico github status."""
+    notice = "This is a new GitHub app. GitHub now sees Tico's bots as acme-tico-2[bot] (App ID 8), not acme-tico[bot]."
+    bot = {"login": "acme-tico-2[bot]", "app_id": 8, "user_id": None}
+    changed = {**APP, "slug": "acme-tico-2", "app_id": 8, "bot": bot, "app_changed": {"notice": notice}}
+    got = tool("tico_github_status", Api({("GET", "github/app"): changed, ("GET", "repositories"): REPOS}))
+    assert got["bot"] == bot and got["app_changed"]["notice"] == notice and notice in got["summary"]
+    plain = tool(
+        "tico_github_status",
+        Api({("GET", "github/app"): {**APP, "bot": bot, "app_changed": None}, ("GET", "repositories"): REPOS}),
+    )
+    assert "app_changed" not in plain and "new GitHub app" not in plain["summary"]
+
+
 def test_github_connect_writes_the_manifest_page_and_finish_and_installed_take_the_next_steps(monkeypatch, tmp_path):
     manifest = {"name": "Acme Tico", "url": "https://acme.example", "note": "it's <ours> & \"quoted\""}
     action = "https://github.com/organizations/acme/settings/apps/new?state=s1"

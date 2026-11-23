@@ -190,6 +190,31 @@ describe('Connect GitHub @s1158', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }));
     expect(await screen.findByText('Agents create them')).toBeTruthy();
   });
+
+  it('a reconnect that made a new app shows both bots, and Disconnect says a new connect needs the new one', async () => {
+    const notice =
+      "This is a new GitHub app. GitHub now sees Tico's bots as made-up-2[bot] (App ID 22), not made-up[bot] (App ID 11). " +
+      "Update CI workflows, rulesets and branch rules that name the old bot, or they will skip or block your agents' pull requests.";
+    answers['GET /api/v2/github/app'] = {
+      body: {
+        connected: true,
+        org: 'acme-co',
+        slug: 'made-up-2',
+        account_type: 'Organization',
+        installed: true,
+        administration: true,
+        bot: { login: 'made-up-2[bot]', app_id: 22, user_id: 333 },
+        app_changed: { notice, since: '2026-11-22T00:00:00Z', previous: {} },
+      },
+    };
+    show(<GithubConnection />, '/library/tools?tool=github');
+    expect(await screen.findByText('made-up-2[bot] · App ID 22 · user id 333')).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toBe(`⚠ ${notice}`);
+    fireEvent.click(screen.getAllByRole('button', { name: 'GitHub app' }).at(-1)!);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Disconnect' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText(/Connecting again makes a new app: CI or rules that name this bot will need the new one\./)).toBeTruthy();
+  });
 });
 
 function Probe() {

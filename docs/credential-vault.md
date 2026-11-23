@@ -49,7 +49,10 @@ call. The proxy sends only to a public https address: it resolves the tool's nam
 address it resolves to is not public (a cell's metadata service, this machine, a private network), and connects to the
 address it checked, keeping the name for Host and TLS (backend/egress.py). **Computer** is the older way, and what every tool stored before Tools had: the value goes to the run's
 environment as above, so whoever controls that computer can read it. Tools lists those under Needs you with
-"Move to proxy". One exception holds a bot at Read to reads on a computer tool too: a bot granted Read gets the tool's
+"Move to proxy". `tico tool call` is only for tools Tico proxies: a tool whose key is in your environment, you call
+directly. Called for one anyway, it says the access is on this computer and names the variables it found by the tool's id
+(`JIRA_*`, or the first word's: `CLOSE_*` for close-crm), names only, never values; with none, it says to check the
+grant (clients/tool_call.py `not_proxied`). One exception holds a bot at Read to reads on a computer tool too: a bot granted Read gets the tool's
 read key when there is one, else (only a Read and write key) a proxy token as for a proxied tool, so its calls go through
 the proxy's Read rules; a tool with no API address cannot be held to reads, and Who can use it marks that bot's row.
 

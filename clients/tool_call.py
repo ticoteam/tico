@@ -1,4 +1,6 @@
 """`tico tools call <tool> <METHOD> <path>`: one call to a proxied tool from a bot's turn (backend/tool_proxy.py).
+A tool whose key reaches the computer as it is (Jira) is called directly with that key: the error says so and names the
+variables (`not_proxied`).
 
 Runs beside the bot, with no hub API: a run granted a proxied tool has the proxy's address in `TICO_TOOL_<ID>_URL` and
 a proxy token where the key would be (the credential's own variable). The token's claims name its tool, so the
@@ -48,16 +50,45 @@ def _tool_of(token):
         return None
 
 
+def own_variables(tool, environ):
+    """The run's variables named after `tool`, when its key reached this computer as it is (no proxy): its id in capitals
+    with every other character as `_`, else its first word (close-crm: CLOSE_CRM_*, then CLOSE_*). Never Tico's own."""
+    spelled = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
+    for stem in dict.fromkeys((spelled, spelled.split("_", 1)[0])):
+        if not stem:
+            continue
+        found = sorted(k for k in environ if k.startswith(stem + "_") and not k.startswith("TICO_"))
+        if found:
+            # The key first, so the sentence leads with what authenticates.
+            return sorted(found, key=lambda k: not re.search(r"TOKEN|KEY|SECRET|PASSWORD", k))
+    return []
+
+
+def not_proxied(tool, environ):
+    """Why `tool` cannot be called here, and what to do instead: a refusal read as "no access" stalls a turn whose key is
+    in its own environment. Variable names only, never their values."""
+    proxied = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
+    tail = f" Proxied tools in this run: {', '.join(proxied)}." if proxied else ""
+    names = own_variables(tool, environ)
+    if names:
+        also = f" (this run also has {', '.join('$' + n for n in names[1:])})" if names[1:] else ""
+        return (
+            f"{tool}'s access is on this computer, not behind Tico's proxy, so tico tools call cannot use it. Call the "
+            f"{tool[:1].upper() + tool[1:]} API yourself with ${names[0]}{also}.{tail}"
+        )
+    stem = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
+    return (
+        f"{tool} is not proxied in this run and no {stem}_ variable is set: check that this bot is granted {tool} "
+        f"(tico tool show {tool}).{tail}"
+    )
+
+
 def find(tool, environ=None):
     """(proxy address, token) for `tool` in this turn's environment."""
     environ = os.environ if environ is None else environ
     address = environ.get(url_env(tool), "")
     if not address:
-        have = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
-        raise CallError(
-            f"{tool} is not a proxied tool in this run"
-            + (f" (this run has {', '.join(have)})" if have else " (this run has none)")
-        )
+        raise CallError(not_proxied(tool, environ))
     wanted = address.rstrip("/").rsplit("/", 1)[-1]
     for value in environ.values():
         if value.startswith(TOKEN_PREFIX) and _tool_of(value) == urllib.parse.unquote(wanted):

@@ -885,8 +885,9 @@ def tools_propose_grant(api, args):
 
 @tool(
     'tico_tool_call',
-    'Call a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key '
-    'and logs the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
+    'Only for tools Tico proxies (their $TICO_TOOL_<ID>_URL is set). A tool whose key is in your environment, you call '
+    'directly. Calls a proxied API tool: METHOD and vendor API path, through the Tico proxy (it adds the key and logs '
+    'the call). tool: the id in TICO_TOOL_<ID>_URL. Returns {status, content_type, body}.',
     {
         'tool': _s('The API tool id, e.g. close-crm'),
         'method': {'type': 'string', 'enum': ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE']},
