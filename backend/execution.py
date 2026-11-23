@@ -4107,6 +4107,10 @@ class Execution:
                 cloud_machines.enrolled(c, self, rid, cloud_bot)  # not onboarding's: only its own bots go on it
             elif self.runner_enrolled:
                 self.runner_enrolled(c, rid, row["owner_id"])
+            if not cloud_bot and not hosted:
+                from .plan_exits import ensure_default
+
+                ensure_default(c, row["owner_id"])
             return {"runner_id": rid, "token": token, "operator": row["owner_id"]}
 
     def heartbeat(self, c, who, body, *, live_tasks=None):

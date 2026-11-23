@@ -975,6 +975,9 @@ class Store:
                 access.seed(c, self.settings, H.now())
                 access.retire_bot_lists(c, self.settings, H.now())
                 access.raise_bot_limit(c, H.now())
+                from . import plan_exits
+
+                plan_exits.initialize(c)
                 self.seed_goals(c)
                 from .public_roadmaps import seed_secret as seed_roadmap_secret
 

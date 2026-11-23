@@ -5,9 +5,18 @@ from .store import H
 UNASSIGNED_OFFLINE_RETIRE_SECONDS = 24 * 60 * 60
 
 
+def mark_revoked(c, runner_id, at=None):
+    from .plan_exits import replace_retired
+
+    if c.execute(
+        "UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (at or H.now(), runner_id)
+    ).rowcount:
+        replace_retired(c, runner_id)
+
+
 def revoke(c, actor, runner_id, *, reason=None, at=None):
     """Keep the audit record and remove the registration."""
-    c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (at or H.now(), runner_id))
+    mark_revoked(c, runner_id, at)
     c.execute(
         "DELETE FROM registry_metadata WHERE key IN (?,?)",
         ("computer-repositories:" + runner_id, "computer-enrolled-as:" + runner_id),

@@ -627,6 +627,48 @@ describe('Settings › Providers', () => {
     expect(legacy.compareDocumentPosition(company)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  it('shows each pool’s exit and lets an eligible viewer change it', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
+    const other = { ...plan, id: 'other', name: 'Other plan', owner_id: 'human:p2', owner_name: 'Ben Sample' };
+    const catalogPath = '/api/v2/model-subscriptions';
+    const exitPath = `${catalogPath}/plan-exits/p1`;
+    const office = { id: 'r1', label: 'Office Mac' };
+    const studio = { id: 'r2', label: 'Studio Mac' };
+    let exit = { person_id: 'p1', runner_id: office.id, runner_label: office.label, generation: 1, can_change: true };
+    const catalog = () => ({ kinds: [], subscriptions: [plan, other], plan_exits: [
+      exit, { person_id: 'p2', runner_id: null, runner_label: null, generation: 0, can_change: false },
+    ] });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog());
+    serve((url, method) => {
+      if (url === catalogPath) return ok(catalog());
+      if (url !== exitPath) return;
+      if (method === 'PUT') {
+        exit = { ...exit, runner_id: studio.id, runner_label: studio.label, generation: 2 };
+        return ok(exit);
+      }
+      return ok({ ...exit, computers: [office, studio], next_after: null });
+    });
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const mine = within(await screen.findByRole('region', { name: 'Your pool' }));
+    const theirs = within(screen.getByRole('region', { name: "Ben Sample's pool" }));
+    expect(mine.getByText('Exit: Office Mac')).toBeTruthy();
+    expect(theirs.getByText('Exit: None')).toBeTruthy();
+    expect(theirs.queryByRole('button', { name: 'Change' })).toBeNull();
+
+    fireEvent.click(mine.getByRole('button', { name: 'Change' }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Change exit computer' }));
+    const computer = await dialog.findByRole('combobox', { name: 'Computer' });
+    await waitFor(() => expect(computer.textContent).toBe('Office Mac'));
+    fireEvent.click(computer);
+    const option = await screen.findByRole('option', { name: 'Studio Mac' });
+    fireEvent.pointerDown(option, { pointerType: 'mouse' });
+    fireEvent.click(option);
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    expect(await mine.findByText('Exit: Studio Mac')).toBeTruthy();
+    expect(sent).toEqual([{ url: exitPath, method: 'PUT', body: { runner_id: studio.id } }]);
+  });
+
   it('lets members edit their own plan limit and read other plans’ limits', async () => {
     queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
     let mine = { ...plan, max_live_turns: 20 };

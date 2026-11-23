@@ -115,6 +115,7 @@ from clients import gateway as G
 from clients.gateway import user_agent
 
 from . import cloud_access, outbound_tls, releases, runner_online
+from .computers import mark_revoked
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
 from .api_contract import api_v2, error
@@ -1171,7 +1172,7 @@ def enrolled(c, execution, runner_id, key):
     current = row(c, key)
     old = current.get("runner_id")
     if old and old != runner_id:
-        c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
+        mark_revoked(c, old)
     replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
@@ -2047,9 +2048,7 @@ class Manager:
         if intent["reason"] == "never_enrolled":
             count_enrollment_failure(c, intent["bot"], intent["machine_id"])
         if intent["runner_id"]:
-            c.execute(
-                "UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), intent["runner_id"])
-            )
+            mark_revoked(c, intent["runner_id"])
         current = row(c, intent["bot"])
         if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":
             if intent["reason"] == "never_enrolled":
@@ -2102,9 +2101,7 @@ class Manager:
             current = count_enrollment_failure(c, key, old_id)
         fresh_runner = replacement_runner(c, key, old_id)
         if current["runner_id"] and current["runner_id"] != fresh_runner:
-            c.execute(
-                "UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"])
-            )
+            mark_revoked(c, current["runner_id"])
             c.execute(
                 "UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?", (current["runner_id"], old_id)
             )
@@ -3125,7 +3122,7 @@ def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
     if not replacing:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     if current["runner_id"] and current["runner_id"] != fresh_runner:
-        c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), current["runner_id"]))
+        mark_revoked(c, current["runner_id"])
         if replacing:
             left(c, key)
     c.execute(

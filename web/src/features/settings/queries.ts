@@ -1,4 +1,4 @@
-import { queryOptions } from '@tanstack/react-query';
+import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type {
   BotTaskChoice,
@@ -16,6 +16,8 @@ import type {
   Health,
   ModelSubscription,
   ModelSubscriptionList,
+  PlanExit,
+  PlanExitSettings,
   ScreeningModes,
   SyncRequest,
   TaskModelSetting,
@@ -418,6 +420,29 @@ export const subscriptionsQuery = queryOptions({
     return wait > 0 ? Math.min(2_147_483_647, wait) : 5_000;
   },
   refetchIntervalInBackground: true,
+});
+
+const planExitPath = (person: string) => `/api/v2/model-subscriptions/plan-exits/${enc(person)}` as const;
+
+export const planExitQuery = (person: string) => infiniteQueryOptions({
+  queryKey: ['settings', 'plan-exit', person],
+  initialPageParam: '',
+  queryFn: ({ signal, pageParam }) => api.get<PlanExitSettings>(
+    pageParam ? `${planExitPath(person)}?after=${enc(pageParam)}` : planExitPath(person), { signal },
+  ),
+  getNextPageParam: (page) => page.next_after ?? undefined,
+});
+
+export const setPlanExit = (person: string, computer: string) => write({
+  key: subscriptionsQuery.queryKey,
+  wait: true,
+  optimistic: (value: ModelSubscriptionList | undefined) => value,
+  settle: (value: ModelSubscriptionList | undefined, exit: PlanExit) =>
+    value && { ...value, plan_exits: value.plan_exits?.map((current) => current.person_id === person ? exit : current) },
+  send: (idempotencyKey) => api.put<PlanExit>(planExitPath(person), { runner_id: computer }, { idempotencyKey }),
+}).then((result) => {
+  void queryClient.invalidateQueries({ queryKey: planExitQuery(person).queryKey });
+  return result;
 });
 
 export type Subscription = ModelSubscription & { agents?: SubscriptionAgent[] };

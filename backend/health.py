@@ -3062,6 +3062,20 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    if kind != "bot":
+        from . import plan_exits
+
+        if missing := plan_exits.missing(c, DIAGNOSTIC_LIMIT):
+            checks.append(
+                _check(
+                    "plan_exit_missing",
+                    "No exit computer",
+                    "warn",
+                    "Personal plans",
+                    [_fix("Open Providers", "#/settings/providers")],
+                    items=[{"text": name} for _, name in missing],
+                )
+            )
     if wait := _payer_waits(c, who, auth, loads, settings):
         checks.append(wait)
     if full and not who.support and (lost := _lost_payers(c, who, auth)):

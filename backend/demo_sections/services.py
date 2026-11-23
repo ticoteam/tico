@@ -480,7 +480,7 @@ def _models(b):
 
 
 def _subscription(b):
-    """One plan from Ana's pool, selected by the agents on her MacBook."""
+    """A plan from Ana's pool, selected by the agents on her MacBook."""
     b.at(days=6.2)
     sub = CONTENT["subscription"]
     made = b.call(
@@ -488,6 +488,7 @@ def _subscription(b):
         "model-subscriptions",
         {"name": sub["name"], "kind": sub["kind"], "secret": "sk-ant-" + _derived("claude", 48)},
     )
+    b.call("PUT", f"model-subscriptions/plan-exits/{made['owner_id']}", {"runner_id": b.mac["runner_id"]})
     with b.store.read() as c:
         agents = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (b.mac["runner_id"],))]
     for agent in agents:

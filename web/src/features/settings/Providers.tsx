@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useId, useState } from 'react';
 import { reasonIn, run } from '@/actions';
+import type { PlanExit } from '@/api/schema';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -11,6 +12,7 @@ import { Facts } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { SectionHead } from '@/kit/SectionHead';
+import { Select } from '@/kit/Select';
 import { fmtDate } from '@/lib';
 import { Section } from '@/pagekinds';
 import { editSubscriptionName, maxLiveTurns } from './actions';
@@ -18,7 +20,7 @@ import { ConnectPlan } from './ConnectPlan';
 import { GatewayLines } from './Gateway';
 import { Line, Meter, act, agentsWord, usd, useAdmin } from './parts';
 import { limitReset, needsReconnect, providerBadge } from './providerStatus';
-import { accessQuery, SIGN_IN_KINDS, subscriptionsQuery, type SignInKind, type Subscription } from './queries';
+import { accessQuery, planExitQuery, SIGN_IN_KINDS, subscriptionsQuery, type SignInKind, type Subscription } from './queries';
 
 const isPlan = (kind: string): kind is SignInKind => (SIGN_IN_KINDS as readonly string[]).includes(kind);
 
@@ -233,8 +235,44 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
   );
 }
 
-function Pool({ name, list, admin, own = false, open, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; own?: boolean; open?: string; defaultExpanded?: boolean }) {
+function ExitPicker({ exit, close }: { exit: PlanExit; close: () => void }) {
+  const { data, isError, isPending, hasNextPage, isFetchingNextPage, fetchNextPage } = useInfiniteQuery(planExitQuery(exit.person_id));
+  const [computer, choose] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const options = data?.pages.flatMap((page) => page.computers.map(({ id, label }) => ({ value: id, label }))) ?? [];
+  const save = async () => {
+    if (!computer) return;
+    setBusy(true);
+    try {
+      if (await act('settings.changePlanExit', { person: exit.person_id, computer })) close();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !open && !busy && close()}
+      title="Change exit computer"
+      actions={
+        <>
+          <Button variant="quiet" disabled={busy} onClick={close}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={!computer || computer === exit.runner_id} onClick={save}>Save</Button>
+        </>
+      }
+    >
+      {isError && !data ? <p role="alert">Couldn't load computers</p> : (
+        <Select label="Computer" value={computer ?? exit.runner_id} options={options} onValueChange={choose}
+          placeholder={isPending ? 'Loading…' : options.length ? 'Choose a computer' : 'No computers'} disabled={busy || options.length === 0} />
+      )}
+      {hasNextPage && <Button variant="quiet" busy={isFetchingNextPage} onClick={() => void fetchNextPage()}>More computers</Button>}
+    </Dialog>
+  );
+}
+
+function Pool({ name, list, admin, own = false, open, exit, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; own?: boolean; open?: string; exit?: PlanExit; defaultExpanded?: boolean }) {
   const content = useId();
+  const [changingExit, setChangingExit] = useState(false);
   const opened = open?.replace(/^subscription:/, '');
   const addressed = list.some((s) => s.id === opened) ? opened : undefined;
   const [toggle, setToggle] = useState<{ addressed?: string; expanded: boolean }>();
@@ -252,8 +290,15 @@ function Pool({ name, list, admin, own = false, open, defaultExpanded = true }: 
       <header className="provider-pool-head">
         <SectionHead level={2} name={name} open={expanded} controls={content} onToggle={() => setToggle({ addressed, expanded: !expanded })} />
         <span>{summary}</span>
+        {exit && list.some((s) => isPlan(s.kind)) && (
+          <span>
+            Exit: {exit.runner_label ?? 'None'}
+            {exit.can_change && <> <button type="button" className="verb" onClick={() => setChangingExit(true)}>Change</button></>}
+          </span>
+        )}
         {list.length > 0 && <span className="provider-pool-count">Picked by {agentsWord(agents.size)}</span>}
       </header>
+      {changingExit && exit?.can_change && <ExitPicker exit={exit} close={() => setChangingExit(false)} />}
       <div id={content} hidden={!expanded}>
         {expanded && [...sorted, ...keys].map((s) => (
           <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} />
@@ -270,6 +315,7 @@ export function Providers({ open }: { open?: string }) {
   const { data: access } = useQuery({ ...accessQuery, retry: false, enabled: admin });
   const [adding, setAdding] = useState<Adding | null>(null);
   if (!data) return null;
+  const exits = new Map(data.plan_exits?.map((exit) => [`human:${exit.person_id}`, exit]));
   const mine: Subscription[] = [];
   const ownerless: Subscription[] = [];
   const company: Subscription[] = [];
@@ -310,9 +356,9 @@ export function Providers({ open }: { open?: string }) {
     <>
       <div className="provider-pools" data-target="setting:subscriptions">
         <SectionHead name="Providers" actions={add} />
-        <Pool name="Your pool" list={mine} admin={admin} own open={open} />
+        <Pool name="Your pool" list={mine} admin={admin} own open={open} exit={exits.get(me?.id ?? '')} />
         {[...other].sort(([, a], [, b]) => a.name.localeCompare(b.name)).map(([id, pool]) => (
-          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} defaultExpanded={false} />
+          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} exit={exits.get(id)} defaultExpanded={false} />
         ))}
         {ownerless.length > 0 && <Pool name="No owner" list={ownerless} admin={admin} open={open} />}
         {company.length > 0 && <Pool name="Company keys" list={company} admin={admin} open={open} />}

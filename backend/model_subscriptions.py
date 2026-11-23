@@ -2013,6 +2013,10 @@ def save(c, vault, settings, auth, who, body, sid=None):
             body.max_live_turns or DEFAULT_MAX_LIVE_TURNS,
         ),
     )
+    if owned(body.kind):
+        from .plan_exits import ensure_default
+
+        ensure_default(c, H.actor_id(owner))
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
@@ -3013,7 +3017,10 @@ def install(app, store, auth, mutate, settings):
 
     from .models import Empty
 
+    from . import plan_exits
+
     vault = app.state.vault
+    plan_exits.install(app, store, auth, mutate)
 
     @app.get(
         "/api/v2/model-subscriptions",
@@ -3058,7 +3065,12 @@ def install(app, store, auth, mutate, settings):
                     if sub["status_detail"]:
                         sub["status_detail"] = "The provider refused it"
                 sub["agents"] = [agent for agent in sub["agents"] if access[agent["id"]]["read"]]
-            return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
+            return {
+                "subscriptions": subscriptions,
+                "kinds": kinds(),
+                "connect": connect_ready(c),
+                "plan_exits": plan_exits.listed(c, auth, who),
+            }
 
     @app.post(
         "/api/v2/model-subscriptions",
