@@ -300,7 +300,7 @@ def test_a_manager_closes_and_reopens_its_reports_request_and_only_a_person_clos
     assert reopened["status"] == "open"
     owned = _task(c, ANA, "bot:ops", "Check the revised packet")
     if manager.startswith("bot:"):
-        # The owner bot cannot close what a person asked for, so neither can its bot manager: it asks that person.
+        # Only the owner bot closes what a person asked for; its bot manager, which does not own it, asks that person.
         with pytest.raises(H.Refused) as refused:
             H.task_close(c, manager, owned, "Not needed now.", _version(c, owned))
         assert refused.value.rule == "task_needs_person"

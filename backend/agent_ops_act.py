@@ -846,9 +846,16 @@ CARRIED = _routes(
 )
 
 
+def _classified(path):
+    """The route as `/api/v2/...` to classify a call by: `normalize`, with a task named by its number (`tasks/#12`, as
+    the request's URL spells it `tasks/%2312`; the route resolves it as auth.resolve_task does) read as any task id is.
+    `normalize` still refuses `#` and `%` in a path it stores, such as a card's."""
+    return normalize(re.sub(r"^(/api/v2/tasks/)(?:#|%23)(\d+)(?=/|$)", r"\1number-\2", str(path or "")))
+
+
 def carried_lends(method, path):
     """Whether a carried request makes this call with the person's rights (CARRIED)."""
-    path, method = normalize(path), str(method).upper()
+    path, method = _classified(path), str(method).upper()
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in CARRIED)
 
 
@@ -975,7 +982,7 @@ def default_delegable(method, path, body=None, query=None, resolve=None):
     """Whether an Agent Ops call with no explicit `on_behalf_of` acts as the person who asked: only the routes Agent Ops
     may do or propose for a person, and never its own plumbing or its own messages. `resolve` names a bot route by its
     id (`by_id`)."""
-    path = normalize(path)
+    path = _classified(path)
     if (
         path
         and str(method).upper() in ("GET", "POST")
@@ -1756,7 +1763,7 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
 
     def ends_own_task(c, who, request):
         """Whether this call finishes, closes or sets aside the task this run is on, which the caller owns (done, a move
-        to done or closed, a snooze). A bot ends its own task with its own rights (owner decision, 2026-11-23), so when
+        to done or closed, a snooze). A bot ends its own task with its own rights (the person can reopen it), so when
         no one's request lends Agent Ops theirs, it still does: the route checks the owner's own right to work its task,
         nothing wider. Only the run's own task, the one its claim recorded (execution's claim, `task_wakes.message_task`):
         words that lend nothing on one task never end another."""

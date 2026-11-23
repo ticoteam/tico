@@ -4664,16 +4664,11 @@ def expire_delegations(conn, message_id, ts):
             "SELECT carrier_id FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (message_id,)
         )
     ]
-    # Live grants only (a day at most), each a carrier or the message itself: no scan of the room's messages.
-    lent = [
-        r[0]
-        for r in conn.execute(
-            "SELECT d.message_id FROM task_delegations d JOIN messages m ON m.id=d.message_id "
-            "WHERE d.expires_at>? AND (d.message_id=? OR json_extract(m.refs,'$.carries')=?)",
-            (ts, message_id, message_id),
-        )
+    # Through messages_refs_carries: no scan of the delegations or of the room's messages.
+    carried = [
+        r[0] for r in conn.execute("SELECT id FROM messages WHERE json_extract(refs,'$.carries')=?", (message_id,))
     ]
-    woke += [m for m in lent if m not in woke]
+    woke += [m for m in carried if m not in woke]
     marks = ",".join("?" * len(woke))
     conn.execute(
         f"UPDATE task_delegations SET expires_at=? WHERE message_id IN ({marks}) AND expires_at>?", (ts, *woke, ts)

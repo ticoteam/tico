@@ -442,7 +442,7 @@ def test_a_bot_cannot_close_a_persons_request_it_does_not_own_and_is_told_to_ask
         E.move(c, asked["id"], E.CLOSED, "bot:manager", "Not possible", seen_version=asked["version"])
     assert "Ask Ana, in one sentence, why it can't be done" in str(refused.value)
     assert E.task(c, asked["id"])["status"] == "open"
-    # Its owner closes its own task (owner decision, 2026-11-23: the person can reopen it), and a person closes anything.
+    # Its owner closes its own task (the person can reopen it), and a person closes anything.
     closed = E.move(c, asked["id"], E.CLOSED, "bot:builder", "Not possible", seen_version=asked["version"])
     assert closed["status"] == "closed"
     other = X.new_task(c, ANA, "Book the hotel", assignee="bot:builder")

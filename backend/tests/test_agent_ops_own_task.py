@@ -272,7 +272,7 @@ def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, age
         assert not c.execute("SELECT 1 FROM refusals").fetchone()
 
 
-# ------------------------------------------------------------------ a bot ends its own task (owner decision 2026-11-23)
+# ------------------------------------------------------------------ a bot ends its own task
 THREAD_PAGE = {"from_page": {"label": "Thread", "page": "thread"}}
 
 
@@ -317,7 +317,7 @@ ENDS = [
 def test_agent_ops_ends_its_own_task_with_its_own_rights_when_nothing_lends(api, agent_ops):
     """Task #35014: Chris's reply in the task's chat lent nothing, and every done, close or snooze was refused ("A person's
     words inside a task are not a request to Agent Ops"). Ending its own task needs no one's rights, and its owner closes
-    it even though a person asked for it (owner decision, 2026-11-23: they can reopen it)."""
+    it even though a person asked for it (they can reopen it)."""
     for op, body, after in ENDS:
         task, _, attempt = _asked_in_its_chat(api, agent_ops, title=f"{op} {body}")
         ended = api.post(
@@ -343,6 +343,9 @@ def test_a_refused_lend_still_reaches_nothing_else(api, agent_ops):
         (f"tasks/{task['id']}/move", {"to": "next", "why": "x"}),
         # not the engine's own word for the end: it names a stage (task_engine._target), which may be a work stage
         (f"tasks/{task['id']}/move", {"to": "Closed", "why": "x"}),
+        # an end that is also a move elsewhere, or that lets someone see the task
+        (f"tasks/{task['id']}/move", {"to": "closed", "to_pipeline": "general", "why": "x"}),
+        (f"tasks/{task['id']}/move", {"to": "closed", "let_see": ["ana"], "why": "x"}),
         (f"tasks/{task['id']}/owner", {"owner": "ops", "why": "x"}),
     ):
         tried = api.post(
@@ -397,18 +400,39 @@ def test_a_body_or_header_citation_of_the_turn_ends_its_own_task_too(api, agent_
 
 
 def test_words_that_lend_nothing_on_one_task_never_end_another(api, agent_ops):
-    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused."""
+    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused, by its id or by
+    its number (`#<n>`, uncited: the call is still one done for the person, agent_ops_act `default_delegable`), and its
+    own task by number goes no further than by id."""
     other = post(api, "tasks", {"owner": "botops", "title": "Another task for Agent Ops", "body": "x"})
     finish(api, agent_ops, claim(api, agent_ops, "botops"))
-    _, _, attempt = _asked_in_its_chat(api, agent_ops)
-    tried = api.post(
-        f"/api/v2/tasks/{other['id']}/done",
-        json=_seen(api, other["id"], {"note": "x"}),
-        headers=headers(attempt["token"]),
-    )
-    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
+    task, _, attempt = _asked_in_its_chat(api, agent_ops)
+    with api.app.state.store.read() as c:
+        stage = H.task(c, task["id"])["stage_id"]
+    for row, ref, op, body in (
+        (other, other["id"], "done", {"note": "x"}),
+        (other, f"%23{other['number']}", "done", {"note": "x"}),
+        (other, f"%23{other['number']}", "move", {"to": "closed", "why": "x"}),
+        (task, f"%23{task['number']}", "move", {"to": "next", "why": "x"}),
+    ):
+        tried = api.post(
+            f"/api/v2/tasks/{ref}/{op}", json=_seen(api, row["id"], body), headers=headers(attempt["token"])
+        )
+        assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", (ref, op, tried.text)
     with api.app.state.store.read() as c:
         assert H.task(c, other["id"])["status"] == "open"
+        assert (H.task(c, task["id"])["status"], H.task(c, task["id"])["stage_id"]) == ("open", stage)
+
+
+def test_a_refused_message_citation_on_its_own_task_stays_refused(api, agent_ops):
+    """Only the run's own request (`turn`, or none) falls back: a message Agent Ops cites by id was weighed and refused,
+    and ending its own task with it is refused too."""
+    task, said, attempt = _asked_in_its_chat(api, agent_ops)
+    tried = api.post(
+        f"/api/v2/tasks/{task['id']}/done",
+        json=_seen(api, task["id"], {"note": "x"}),
+        headers={**headers(attempt["token"]), "X-Tico-On-Behalf-Of": said["id"]},
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
 
 
 def _lent(api, task_id, bot):

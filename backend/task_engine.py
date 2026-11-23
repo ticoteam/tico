@@ -1170,7 +1170,7 @@ def _may_go_back_to(conn: "sqlite3.Connection", by: str, row: Row, target: Row) 
 def _may_close(conn: "sqlite3.Connection", by: str, row: Row) -> None:
     """A bot can't close a person's request it does not own (C8): a task a person asked for that no task filed. It asks
     the person why it can't be done, and they close it or reassign it. A person closes anything; a bot closes its own
-    tasks (owner decision, 2026-11-23: the person can reopen), what a bot asked for and what a task filed."""
+    tasks (the person can reopen them), what a bot asked for and what a task filed."""
     requester = row.get("requester_id")
     if not is_bot(by) or not is_human(requester) or by == row.get("owner_id"):
         return
