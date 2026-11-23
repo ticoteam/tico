@@ -71,6 +71,10 @@ export interface ConversationProps {
   /** This thread as the shell's `?chat=` (a second chat's own address): a page a message links to opens beside it.
       Defaults to `thread:<id>`; Tico's sheet has none (it is always there). */
   chat?: string;
+  /** Actor ids the box's @ list names first (a task's people and agents). */
+  mentionFirst?: readonly string[];
+  /** The only actor ids the box's @ list may name (a direct chat's members). */
+  mentionOnly?: readonly string[];
 }
 
 type Item =
@@ -180,7 +184,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -423,7 +427,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} label={compose} fill={fill} canSend={!!timeline.data} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} label={compose} fill={fill} canSend={!!timeline.data} mentions={!toDm} mentionFirst={mentionFirst} mentionOnly={mentionOnly} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

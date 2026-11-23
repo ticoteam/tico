@@ -134,6 +134,11 @@ const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?
 /** On the person's own task the box is theirs to write on: never "Message <their own name>". */
 const ownTask = (t: Pick<TaskData, 'owner_id'>, me: string | undefined): string | undefined => (me && t.owner_id === me ? 'Add a note' : undefined);
 
+/** Whom a task's @ list names first: who asked, who it is for, who has it, then its roles' people. */
+const onTask = (t: Pick<TaskData, 'requester_id' | 'assignee_id' | 'owner_id' | 'roles'>): string[] => [
+  ...new Set([t.requester_id, t.assignee_id, t.owner_id, ...Object.values(t.roles ?? {}).flat()].filter((x): x is string => !!x)),
+];
+
 function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }) {
   const navigate = useNavigate();
   // The ask a card opened it for (`?ask=`): its tab, at the version it pinned, and its Approve.
@@ -307,6 +312,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         title={owner?.name}
         actor={t.owner_id ?? undefined}
         compose={ownTask(t, me)}
+        mentionFirst={onTask(t)}
         foot={
           <>
             <TaskStatus t={t} />
@@ -424,6 +430,7 @@ export function TaskChat({ task }: TaskChatProps) {
           title={name}
           actor={t.owner_id ?? undefined}
           compose={ownTask(t, me)}
+          mentionFirst={onTask(t)}
           foot={
             <>
               {/* a pinned ❓ already says it needs them: the status line would say it again */}

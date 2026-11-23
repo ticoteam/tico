@@ -255,6 +255,8 @@ export function SupportChat() {
           me={me?.id ?? YOU}
           to={NAME}
           fill={fill}
+          // Tico support reads it, not the teammates an @ would name
+          mentions={false}
           onSend={(text, files) => {
             if (files.length) {
               setError('Files cannot go to Tico support. Attach diagnostics instead.');

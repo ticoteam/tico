@@ -1578,7 +1578,8 @@ def _bot_names(c, actor):
 def _spot(text, name):
     import re
 
-    m = re.search(r"(?<![\w@])@" + re.escape(name) + r"(?![\w-])", text, re.IGNORECASE)
+    # "@ana." ends a sentence; "@ana.lee" is someone else
+    m = re.search(r"(?<![\w@])@" + re.escape(name) + r"(?![\w-]|\.\w)", text, re.IGNORECASE)
     return m.start() if m else None
 
 
