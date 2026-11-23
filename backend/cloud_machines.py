@@ -2098,7 +2098,7 @@ class Manager:
             and current["enroll_by"]
             and at >= current["enroll_by"]
         ):
-            current = count_enrollment_failure(c, key, old_id)
+            current = count_enrollment_failure(c, key, old_id) or current
         fresh_runner = replacement_runner(c, key, old_id)
         if current["runner_id"] and current["runner_id"] != fresh_runner:
             mark_revoked(c, current["runner_id"])
