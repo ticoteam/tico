@@ -470,11 +470,11 @@ def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str)
         return 0
     found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
     named = UNLINKED.format(ref=ref({"id": blocker_id, "number": found[0] if found else None}))
-    said = named if _named_to_all(conn, row, blocker_id) else UNLINKED_UNNAMED
+    said = named if named_to_all(conn, row, blocker_id) else UNLINKED_UNNAMED
     return release_one(conn, task_id, blocker_id, said, tell=row.get("owner_id") != by)
 
 
-def _named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
+def named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
     """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when it is private,
     so may every party and reader of `row`, who read the thread later (as task_wakes.told does for a filed task)."""
     from . import hubdb, task_calls
