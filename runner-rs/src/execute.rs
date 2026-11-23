@@ -2353,6 +2353,7 @@ impl Runner {
         let source_resume = crate::source_resume::apply(&mut attempt);
         let config = attempt["config"].clone();
         let key = session_key(&attempt);
+        let session_fence = attempt["session_fence"].as_i64();
         // Goal continuations count per thread: one task's stuck goal does not pause another's.
         let mut goal = GoalRun {
             chat_goal: attempt["chat_goal"]
@@ -2742,6 +2743,7 @@ impl Runner {
                 started_at = memory_before.clone();
             }
             let mut cleared = false;
+            self.state.fence_session(&bot, &conv, session_fence)?;
             if let Some((conversation_id, epoch)) = clear_epoch(&attempt, &key) {
                 // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread, told
                 // only what came after the clear. A Hub that sends no epoch keeps today's resume.
@@ -2768,12 +2770,14 @@ impl Runner {
                         None => false,
                     };
             }
+            // Legacy keys only hold threads from before computer fences were tracked.
+            let can_adopt = session_fence.unwrap_or_default() == 0 && !(side_run || binding_changed || fresh_chat || release_run);
             let mut previous = if binding_changed || fresh_chat || release_run {
                 None
             } else {
                 self.state.session(&bot, if side_run { &side_conv } else { &conv }, &session_runtime)?
             };
-            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) && conv == key {
+            if previous.is_none() && can_adopt && conv == key {
                 // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
                 if let Some(old) = adopted_key(&key) {
                     previous = self.state.session(&bot, &old, &session_runtime)?;
@@ -2782,7 +2786,7 @@ impl Runner {
                     }
                 }
             }
-            if previous.is_none() && !(side_run || binding_changed || fresh_chat || release_run) {
+            if previous.is_none() && can_adopt {
                 // A Claude plan's thread an older runner saved under the plan's own key is taken over once, unless a
                 // Clear (or a person's change of sign-in) moved its epoch since.
                 if let Some(old) = legacy_conv.as_deref() {
@@ -2894,6 +2898,8 @@ impl Runner {
                 verbosity: hosts::verbosity(&config),
             };
             let mut resumed = false;
+            let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
+                && !cleared && !binding_changed && !fresh_chat && !release_run && continuing.is_empty();
             if side_run && previous.is_none() {
                 session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
             } else if let Some(prev) = &previous {
@@ -2944,7 +2950,7 @@ impl Runner {
                     }
                 }
             } else {
-                let why = if release_run { crate::continuity::FRESH } else { crate::continuity::NONE_SAVED };
+                let why = if release_run { crate::continuity::FRESH } else if moved_session { crate::continuity::NOT_FOUND } else { crate::continuity::NONE_SAVED };
                 session = Some(crate::continuity::Session::new(why, None));
             }
             if thread.is_none() {
@@ -3111,7 +3117,11 @@ impl Runner {
             // is not carried into it, so it is given the conversation's latest messages instead.
             let first_turn = previous.is_none() && !cleared && !binding_changed && !side_run && !fresh_chat && continuing.is_empty()
                 && first_turn_key(&key);
-            let replay = if first_turn { crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS) } else { String::new() };
+            let replay = if moved_session {
+                crate::fallback::moved_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
+            } else if first_turn {
+                crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
+            } else { String::new() };
             let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &seen, &context);
             if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
@@ -3596,6 +3606,7 @@ impl Runner {
                     if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
                         self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
                     }
+                    self.state.fence_session(&bot, &scope, session_fence).map_err(Fail::runtime)?;
                     Some(Fresh {
                         bot: bot.clone(), conversation: scope.clone(), runtime: kept_runtime.clone(), aid: aid.clone(),
                         left: None, told: th.clone(), confirmed: Mutex::new(None),
@@ -3664,6 +3675,7 @@ impl Runner {
                     if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
                         self.state.epoch_moved(&bot, &conversation, &scope, epoch).map_err(Fail::runtime)?;
                     }
+                    self.state.fence_session(&bot, &scope, session_fence).map_err(Fail::runtime)?;
                     keep_session(&self.state, &bot, &scope, &kept_runtime, &saved).await?;
                     source_saved = Some(crate::source_resume::Saved {
                         thread_id: saved, runtime: hop.runtime.clone(), harness: hop.harness.clone(),
@@ -6777,9 +6789,9 @@ mod tests {
             crate::state::State::open(&dir.join("state")).unwrap(),
         ));
         let history = json!([
-            {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Watch the Acme release.", "refs": {}},
-            {"id": "m2", "from_actor": "bot:ops", "body": "Here's the draft. Send it Friday?", "refs": {}},
-            {"id": "m3", "from_actor": "bot:qa", "body": "Release build 41 failed its smoke test.", "refs": {}},
+            {"id": "m1", "created": "2026-10-22T07:59:00Z", "from_actor": "human:ana@acme.example", "body": "Watch the Acme release.", "refs": {}},
+            {"id": "m2", "created": "2026-10-22T08:01:00Z", "from_actor": "bot:ops", "body": "Here's the draft. Send it Friday?", "refs": {}},
+            {"id": "m3", "created": "2026-10-22T08:02:00Z", "from_actor": "bot:qa", "body": "Release build 41 failed its smoke test.", "refs": {}},
             {"id": "m4", "from_actor": "human:ana@acme.example", "body": "Yes, send it Friday", "refs": {}},
             {"id": "m5", "from_actor": "human:ana@acme.example", "body": "/compact", "refs": {"command": "compact"}},
         ]);
@@ -6807,10 +6819,18 @@ mod tests {
                 .as_object_mut()
                 .unwrap()
                 .extend(extra.as_object().cloned().unwrap_or_default());
-            let attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
+            let fence = config.as_object_mut().unwrap().remove("session_fence");
+            let moved_history = config.as_object_mut().unwrap().remove("moved_history");
+            let mut attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
                                  "lease_seconds": 120, "conversation": room, "task": task,
                                  "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
                                  "history": history, "config": config});
+            if let Some(fence) = fence {
+                attempt["session_fence"] = fence;
+            }
+            if let Some(history) = moved_history {
+                attempt["moved_history"] = history;
+            }
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt))
                 .await
                 .expect("the turn did not end")
@@ -6888,6 +6908,62 @@ mod tests {
     fn session_of(completion: &Value) -> (String, Value, Value) {
         let s = &completion["session"];
         (text_of(&s["kind"]), s["why"].clone(), s["detail"].clone())
+    }
+
+    #[tokio::test]
+    async fn a_session_on_a_returning_computer_discards_old_primary_and_fallback_threads() {
+        for task in [true, false] {
+            let mode = if task { "task" } else { "bot" };
+            let turn_config = |fence| {
+                json!({"session": mode, "session_fence": fence,
+                "moved_history": [{"id": "m2", "body": "Here's the draft. Send it Friday?"}]})
+            };
+            let side = |fence| {
+                let mut config = limit_hop("kimi-k3-fallback");
+                config["session_fence"] = json!(fence);
+                config
+            };
+            let mut turns = vec![("m1", json!({}), turn_config(0))];
+            if task {
+                turns.push(("m2", json!({}), side(0)));
+            }
+            turns.push(("m3", json!({}), turn_config(2)));
+            if task {
+                turns.push(("m4", json!({}), side(2)));
+            }
+            // A hub without fences still resumes the thread saved on this computer.
+            turns.push(("m4", json!({}), json!({"session": mode})));
+            let ran = session_turns(task, true, &turns).await;
+            let returned = if task { 2 } else { 1 };
+            assert_ne!(ran.sessions[0], ran.sessions[returned]);
+            assert_eq!(ran.sessions.last(), Some(&ran.sessions[returned]));
+            assert_eq!(session_of(&ran.completions[returned]).1, "not_found");
+            assert!(ran.prompts[returned].contains("Here's the draft. Send it Friday?"));
+            assert!(ran.diagnostics[returned]
+                .iter()
+                .any(|line| line.contains("Started a new session")));
+            if task {
+                assert_ne!(ran.sessions[1], ran.sessions[3]);
+                assert!(ran.prompts[returned].contains("Build 40 green; waiting on build 41."));
+                assert!(!ran.prompts[returned].contains("Watch the Acme release."));
+                assert!(ran.prompts[3].contains("fresh fallback thread"));
+            }
+        }
+        for side in [false, true] {
+            let moved = session_turns(
+                true,
+                true,
+                &[("m4", json!({}), json!({"session_fence": 1, "task_model_fallback": side,
+                    "moved_history": [{"id": "parent-m1", "body": "The parent asked for the revised figures.", "created": "2026-10-22T07:59:30Z"}]}))],
+            )
+            .await;
+            assert_eq!(
+                session_of(&moved.completions[0]).1,
+                if side { "fallback_side" } else { "not_found" }
+            );
+            assert!(moved.prompts[0].contains("The parent asked for the revised figures."));
+            assert!(!moved.prompts[0].contains("Release build 41 failed its smoke test."));
+        }
     }
 
     #[tokio::test]

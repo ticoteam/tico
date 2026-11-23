@@ -181,6 +181,8 @@ def aged(c, settings, loads=None):
         and previous.get('observed_at', '') >= H.shift(at, seconds=-MAX_GAP_SECONDS)
     ]
     _prime(c, due)  # Health asks every refused queue on each poll
+    if loads is not None and (unprimed := set(due) - loads.queued_bots):
+        E.prime_claimables(c, unprimed, first=None, loads=loads)
     default = usage_limits.company(c)  # one pass: every bot's limit check shares its budget and spend reads
     for bot in due:
         previous = previous_of[bot]

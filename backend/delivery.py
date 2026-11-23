@@ -122,11 +122,12 @@ ITEM_CHARS = 1500
 BLOCK_CHARS = 12000
 
 
-def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, current=None):
+def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, current=None, message_ids=None):
     """Settle what the turn being handed out carries: the deferred comments and messages in its session, written out in
     its prompt (the room's history page may not reach back to them), and the deferred notes it takes.
     `current` is the turn's own message, which its prompt already holds. A deadline run (`fired_job`) whose items this
     turn settled is no longer needed and is dropped, unless it is `job`, this turn's own.
+    `message_ids`, when supplied, collects the IDs actually written into the block.
 
     Returns (counts by kind, the written-out lines, how many still wait), for `summary`."""
     H = _H()
@@ -163,6 +164,8 @@ def carried(conn, bot, attempt_id, conversation_ids, notes=(), *, job=None, curr
                     left.append(rid)
                     continue
                 lines.append(line)
+                if message_ids is not None:
+                    message_ids.add(item)
                 size += len(line)
             settle.append(rid)
             counts[kind] = counts.get(kind, 0) + 1

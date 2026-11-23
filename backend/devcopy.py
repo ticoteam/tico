@@ -130,6 +130,7 @@ EMPTY = (
     "bot_sessions",
     "session_epochs",
     "bot_session_epochs",
+    "session_computers",
     "compact_first",
     "model_logins",
     "model_login_cleared",

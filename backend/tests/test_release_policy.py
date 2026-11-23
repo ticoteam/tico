@@ -12,7 +12,7 @@ from backend import updates as U
 from backend import wake_presets as W
 from backend import bot_settings as BS
 from backend.store import H
-from backend.tests.helpers.api import claim, get, headers, post, ready  # noqa: F401  (api is a fixture)
+from backend.tests.helpers.api import assign, claim, get, headers, post, ready, runner  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.task_lanes import new_task, task_bot
 
 DAY = 24 * 3600
@@ -442,6 +442,56 @@ def test_a_runner_that_cannot_fork_starts_fresh_and_the_record_says_so(api):
     assert attempt["job_id"] == routine["id"] and "fork_thread" not in attempt
     [run] = [r for r in get(api, f"tasks/{routine['task_id']}/run-view")["runs"] if r["id"] == attempt["id"]]
     assert run["wake"]["release"]["session"] == "fresh" and run["wake"]["release"]["warm"] is False
+
+
+@pytest.mark.parametrize("returned", [False, True])
+def test_a_released_job_does_not_fork_an_earlier_visit_to_the_computer(api, returned):
+    previous = task_bot(api, lanes=True)
+    other = runner(api, label="Second computer")
+    caps = ["task_lanes_v2", "fork_session_v1", "fresh_session_v1"]
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "session": "bot"})
+
+    def finish(machine, subject, tokens):
+        ready(api, machine, ["ops"], capabilities=caps)
+        task = new_task(api, subject)
+        turn = claim(api, machine)
+        assert turn["task"]["id"] == task["id"]
+        post(api, f"attempts/{turn['id']}/started", {"thread_id": subject}, machine["token"])
+        post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE attempts SET input_tokens=? WHERE id=?", (tokens, turn["id"]))
+        return turn["generation"]
+
+    generation = finish(previous, "Old thread", 100)
+    assign(api, other, "ops", generation=generation)
+    generation = finish(other, "Other computer's thread", 100)
+    assign(api, previous, "ops", generation=generation)
+    ready(api, previous, ["ops"], capabilities=caps)
+    if returned:
+        finish(previous, "New local thread without usage", 0)
+    routine = held(api, session=W.FORK)
+    tick(api, H.now())
+    following = claim(api, previous)
+    assert following["job_id"] == routine["id"]
+    assert following["fresh_session"] and "fork_thread" not in following
+
+
+def test_a_released_job_without_a_fork_candidate_can_resume_on_the_same_computer(api):
+    machine = task_bot(api, lanes=True)
+    caps = ["task_lanes_v2", "fork_session_v1", "fresh_session_v1"]
+    ready(api, machine, ["ops"], capabilities=caps)
+    with api.app.state.store.transaction() as c:
+        BS.write(c, "ops", {**BS.read(c, "ops"), "session": "bot"})
+    new_task(api, "Primary session without a warm fork candidate")
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "primary"}, machine["token"])
+    post(api, f"attempts/{first['id']}/complete", {"outcome": "completed", "last_seq": 0}, machine["token"])
+    routine = held(api, session=W.FORK)
+    tick(api, H.now())
+    following = claim(api, machine)
+    assert following["job_id"] == routine["id"] and following["session_fence"] == 0
+    assert "fresh_session" not in following and "fork_thread" not in following
 
 
 def test_a_job_chained_behind_one_that_never_ends_still_goes_at_its_own_deadline(api):
