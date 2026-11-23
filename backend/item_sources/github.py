@@ -1727,8 +1727,13 @@ def approval_news(conn: "sqlite3.Connection", task_id: str) -> bool:
     row: Row | None = E.task(conn, task_id)
     if not row or row["status"] != "open" or not row.get("visit"):
         return False
-    prs = prs_of(conn, task_id)
-    if not any((p["metadata"] or {}).get("checks_state") == "approval" for p in prs):
+    heads: dict[str, str] = {}
+    waiting = False
+    for p in prs_of(conn, task_id):
+        meta: Row = p["metadata"] or {}
+        heads[pr_ref(str(p["repo"]), int(p["number"]))] = str(meta.get("head_sha") or "")
+        waiting = waiting or meta.get("checks_state") == "approval"
+    if not waiting:
         return False  # no PR of it waits for an approval: nothing to work out
     found = next(
         (s for s in R.standings(conn, row) if s.requirement.get("condition") == "checks_pass" and s.state == R.NOT_MET),
@@ -1739,14 +1744,7 @@ def approval_news(conn: "sqlite3.Connection", task_id: str) -> bool:
     if not named:
         return False
     ref = named.group(1)
-    head = next(
-        (
-            str((p["metadata"] or {}).get("head_sha") or "")
-            for p in prs
-            if pr_ref(str(p["repo"]), int(p["number"])) == ref
-        ),
-        "",
-    )
+    head = heads.get(ref, "")
     what = f"{WAKE_NEWS}:checks:{ref}:{head}:approval"
     if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (f"{task_id}:{row['visit']['id']}:{what}",)).fetchone():
         return False
