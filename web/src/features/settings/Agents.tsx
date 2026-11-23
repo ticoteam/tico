@@ -229,8 +229,8 @@ export function Computers({ open }: { open?: string }) {
 function Defaults() {
   const catalog = useQuery(modelsQuery);
   const providers = useQuery({ ...providersQuery, retry: false });
-  // New agents start on a harness Tico still offers; the current default stays listed.
-  const names = pickable(catalog.data, { managed: true, model: providers.data?.default?.model ?? undefined }).models.map((m) => ({
+  // Only models a harness Tico still offers runs; each selector keeps its own saved value through known().
+  const names = pickable(catalog.data, { managed: true }).models.map((m) => ({
     value: m.id,
     label: modelName(m.label),
   }));

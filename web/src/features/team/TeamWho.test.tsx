@@ -959,6 +959,39 @@ describe('A computer', () => {
     ]));
   });
 
+  it('the All agents row starts with no harness chosen, never offers an external one, and routes each agent on its own', async () => {
+    queryClient.setQueryData(directoryQuery.queryKey, directory([ana, bo, pat, kim]));
+    queryClient.setQueryData(agentsQuery.queryKey, [
+      { ...anaRow, model: 'm-one', harness: 'new' },
+      { id: '0191-bo', slug: 'bo', display_name: 'Bo', revision: 5, model: 'm-one', harness: 'old', machine: { runner_id: 'r1', label: 'Studio', generation: 2 } } as AgentRow,
+    ]);
+    queryClient.setQueryData(computersQuery.queryKey, [{ ...studio, bots: ['0190-ana', '0191-bo'] }]);
+    queryClient.setQueryData(modelsQuery.queryKey, {
+      models: [
+        { id: 'm-one', label: 'Model One', harnesses: ['old', 'new'] },
+        { id: 'm-two', label: 'Model Two', harnesses: ['old', 'new'] },
+        { id: 'm-ext', label: 'Outside', harnesses: ['ext'] },
+      ],
+      harnesses: [
+        { id: 'old', name: 'Old One', offered: false },
+        { id: 'new', name: 'New One' },
+        { id: 'ext', name: 'Outside One', external: true },
+      ],
+    } as never);
+    serve((url, method) => (method === 'POST' && url.includes('/transitions') ? ok({ id: 'tr' }) : undefined));
+    show(<TeamWho who="ana" tab="computer" />, '/team/ana?tab=computer');
+    const on = await screen.findByRole('region', { name: /Agents on this computer/ });
+    fireEvent.click(within(on).getByRole('button', { name: 'Model for all agents' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Model' });
+    expect(within(dialog).queryByRole('radio', { name: 'Outside' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'Model Two' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    await waitFor(() => expect(sent.filter((s) => s.url.includes('/transitions'))).toHaveLength(2));
+    // Both already run on a harness that runs Model Two: each stays on its own.
+    expect((posted('/bots/ana/transitions')?.body as { harness?: string }).harness).toBe('new');
+    expect((posted('/bots/bo/transitions')?.body as { harness?: string }).harness).toBe('old');
+  });
+
   it("says how it is doing in one status line, CPU and memory among it, on the computer's page @s686", async () => {
     onModels();
     serve((url) => (url.includes('/computers/r1/performance') ? ok({ points: [[1, 10, 12, 40, 41, 0.5, 0, 0, 0], [2, 30, 35, 50, 52, 1.25, 0, 0, 1]] }) : undefined));
