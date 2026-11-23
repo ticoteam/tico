@@ -364,16 +364,15 @@ def register_core(
                 return {"execution": None}
             return {"execution": task_execution(c, who, row, bot)}
 
-    # One row per agent on a task: the holder when an agent, every agent with a stamped message or an @mention on its
-    # thread, and every agent with a job there; `last_seq` is the newest message its session view shows.
+    # One row per agent on a task: the holder when an agent, every agent with a stamped message on its thread, and
+    # every agent woken there by an @mention or a reply (its deliveries); `last_seq` is its newest stamped message.
+    # Both parts read indexes only (messages_session_agent, message_deliveries_thread).
     SESSIONS_SQL = (
         "SELECT agent, MAX(seq), MIN(n) FROM ("
-        "SELECT session_agent_id AS agent, seq, 1 AS n FROM messages WHERE conversation_id=? "
-        "AND session_agent_id IS NOT NULL AND deleted_at IS NULL "
-        "UNION ALL SELECT d.recipient, m.seq, 1 FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-        "WHERE d.thread_id=? AND d.reason='mention' AND d.recipient LIKE 'bot:%' AND m.deleted_at IS NULL "
-        "UNION ALL SELECT 'bot:'||j.bot_id, NULL, 1 FROM messages m JOIN jobs j ON j.message_id=m.id "
-        "WHERE m.conversation_id=? "
+        "SELECT session_agent_id AS agent, MAX(seq) AS seq, 1 AS n FROM messages WHERE conversation_id=? "
+        "AND session_agent_id IS NOT NULL AND deleted_at IS NULL GROUP BY session_agent_id "
+        "UNION ALL SELECT DISTINCT recipient, NULL, 1 FROM message_deliveries WHERE thread_id=? "
+        "AND recipient LIKE 'bot:%' AND reason IN ('mention','reply') "
         "UNION ALL SELECT ?, NULL, 0 WHERE ? LIKE 'bot:%'"
         ") GROUP BY agent ORDER BY MIN(n), MAX(seq) DESC, agent"
     )
@@ -385,7 +384,7 @@ def register_core(
         if not cid:
             return []
         owner = row["owner_id"] or ""
-        found = [(r[0], r[1]) for r in c.execute(SESSIONS_SQL, (cid, cid, cid, owner, owner))]
+        found = [(r[0], r[1]) for r in c.execute(SESSIONS_SQL, (cid, cid, owner, owner))]
         unseen = teammate_access.Known(c, who, auth).unseen_of([a for a, _ in found])
         return [{"agent": a, "last_seq": seq} for a, seq in found if a not in unseen]
 
