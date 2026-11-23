@@ -104,7 +104,7 @@ Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: se
 
 When the task reaches Done or is closed, once per task and not every run: add what you learned to `memory/learnings.md`, record durable decisions in `memory/decisions.md`, add any repeated review mistake to `knowledge/patterns.md`, and commit this repository.
 
-Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency, `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's: say done first where the stage asks for it, then stop; their end wakes you.
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency, `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's: where the stage also waits for them (Checks pass), say done first; then stop, and their end wakes you.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person or role on the roster. Merge and Release belong to the Release Owner: leave tags and releases to it. Where {{app_name}}'s merge queue merges a repository, the queue merges: never merge by hand there. Where {{company_name}} merges and releases another way (its own skill or playbook, git-flow, no queue), merge, tag and release as that says. Never merge a pull request with red checks.

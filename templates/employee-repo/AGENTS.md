@@ -99,9 +99,10 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   6. Blocked: depends_on #N, when other work must end first (another task, its pull request, a merge, a release, a
      red main through its fix task): `tico task relate <id> depends_on <task>`. It shows Blocked, with no date,
      and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is a ❓.
-     An optional follow-up never blocks: link it as one (`tico task relate <id> follow_up <task>`).
-  While your own pull request's checks run, the turn is GitHub's: say done first where the stage asks for it, then
-  stop; their end wakes you.
+     An optional follow-up never blocks: link it as one, the new task first
+     (`tico task relate <follow-up id> follow_up <this task id>`).
+  While your own pull request's checks run, the turn is GitHub's: where the stage also waits for them (Checks pass),
+  say done first; then stop, and their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.
 - One open ❓ per task; asking again replaces it. Put every question to a person in one ❓, numbered when there are
   several. You can't mark the task done, move it on or close it while your ❓ is open. Only `tico task ask` asks: a ❓ typed into a reply or a note asks no one. Work for a person that is more than an answer is a sub-task:
