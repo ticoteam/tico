@@ -186,8 +186,8 @@ def file_task(c: Connection, auth: Any, who: Identity, row: Record, bot: str, as
 
 def _personal_for(c: Connection, who: Identity, row: Record, owner: str) -> str | None:
     """The person an Assistant-owned follow-up is the private work of: the owner of the room the call is in (their
-    Assistant chat), when they file it themselves, directly, or the Assistant files it in a lease from this call. None
-    for any other follow-up."""
+    Assistant chat), when they file it themselves, directly, or the Assistant files it in a lease from this call, as
+    itself or as them (auth.assistant_principal: a call that is theirs alone). None for any other follow-up."""
     from . import calls as _calls
 
     calls: Any = _calls
@@ -199,9 +199,10 @@ def _personal_for(c: Connection, who: Identity, row: Record, owner: str) -> str 
     lease = c.execute(
         "SELECT json_extract(m.refs,'$.live_meeting.meeting_id') FROM attempts a JOIN jobs j ON j.id=a.job_id "
         "JOIN messages m ON m.id=j.message_id WHERE a.id=? AND a.bot_id=?",
-        (who.attempt_id, H.actor_id(who.actor)),
+        (who.attempt_id, H.actor_id(owner)),
     ).fetchone()
-    return person if who.role == "bot" and lease and lease[0] == row["live_meeting_id"] else None
+    filer = who.role == "bot" or (who.via == "assistant" and who.actor == person)
+    return person if filer and lease and lease[0] == row["live_meeting_id"] else None
 
 
 def _ready(c: Connection) -> list[Row]:

@@ -630,8 +630,8 @@ class Auth:
 
         Only a turn the person started themselves in their own Assistant room counts: the message that queued the job
         came from the room's owner through /api/v2/assistant/messages (the only door that sets the `assistant`
-        reference). Any other turn of the assistant bot (a Slack route, a meeting delivery, a routine) stays the bot's
-        own.
+        reference), or the Assistant's voice session in a call in that room that is theirs alone. Any other turn of the
+        assistant bot (a Slack route, a meeting delivery, a group call, a routine) stays the bot's own.
 
         Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Owner turn, even one queued
         in the owner's earlier Strategy Owner chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
@@ -653,7 +653,13 @@ class Auth:
             (attempt["job_id"], room_key),
         ).fetchone()
         if not row:
-            return None
+            # The Assistant's voice session in a call in the person's own Assistant chat that is theirs alone, pinned
+            # to them at its claim (rooms.pin_call_lease): their own chat by voice, while the call still qualifies
+            # (rooms.call_person, checked on every request), so nobody else in it is ever heard with their rights.
+            person = rooms.pinned_person(c, attempt["id"])
+            if not person or rooms.call_person(c, attempt["job_id"]) != person:
+                return None
+            return self.chat_person(c, person, attempt["bot_id"], attempt["id"], attempt["runner_id"])
         person = self.chat_person(c, row["owner_id"], attempt["bot_id"], attempt["id"], attempt["runner_id"])
         if person and isinstance((H._json(row["refs"], {}) or {}).get("make_page"), dict):
             # The page request acts with the person's full rights; the attempt still identifies its Assistant.

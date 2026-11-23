@@ -1,6 +1,6 @@
 """A call with the Assistant from its sheet (docs/meet.md, Call the Assistant): in the person's own Assistant chat its
-voice turns run as the Assistant, it gets no prep task, and its follow-ups ask for the person and run as personal
-turns; a private follow-up of the Assistant's anywhere else is refused (#4781)."""
+voice turns act as the person while the call is theirs alone, it gets no prep task, and its follow-ups ask for the
+person and run as personal turns; a private follow-up of the Assistant's anywhere else is refused (#4781)."""
 
 import json
 import uuid
@@ -59,6 +59,15 @@ def _claim(api, worker):
     return attempt
 
 
+def _heard(api, call, session, worker, speaker="human:ana"):
+    """`speaker` says something in the call and the voice session takes it as the question it answers now."""
+    calls = api.app.state.calls
+    join(api, call["id"])
+    calls.ingest(call["id"], speaker, PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    assert calls.settle()
+    return post(api, f"attempts/{session['id']}/inputs", {}, worker["token"])["call_voice"]["turn"]
+
+
 def _filed(api, task_id):
     with api.app.state.store.read() as c:
         row = c.execute("SELECT requester_id,owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -98,7 +107,7 @@ def test_the_assistant_speaks_on_a_resident_runner_using_its_computer_binding(me
     assert [played[0] for played in meet.app.state.call_media.said] == [call["id"]]
 
 
-def test_a_call_in_your_assistant_chat_runs_as_the_assistant_and_its_follow_ups_are_your_personal_work(meet):
+def test_a_call_in_your_assistant_chat_acts_as_you_and_its_follow_ups_are_your_personal_work(meet):
     worker = _resident(meet)
     rid = room(meet)["room_id"]
     call = start_call(meet, rid, bots=["assistant"])
@@ -109,11 +118,15 @@ def test_a_call_in_your_assistant_chat_runs_as_the_assistant_and_its_follow_ups_
     assert _claim(meet, worker) is None  # no prep task in the person's own room
     with meet.app.state.store.read() as c:
         row = c.execute("SELECT * FROM attempts WHERE id=?", (session["id"],)).fetchone()
-        assert meet.app.state.auth.assistant_principal(c, row) is None  # its turns are the Assistant's, never Ana's
+        assert meet.app.state.auth.assistant_principal(c, row).actor == "human:ana"  # as her own chat's turns do
 
+    # Filed while it answers what Ana just said: her spoken words are the turn it cites, as her message is in her chat.
+    refused = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Find it"}, token=session["token"], expected=403)
+    assert refused["error"]["code"] == "confirm_required"  # nothing said yet
+    _heard(meet, call, session, worker)
     by_assistant = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Find the ship date"}, token=session["token"])
     by_ana = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Book the freight"})
-    assert _filed(meet, by_assistant["task_id"]) == ("human:ana", "bot:assistant", "bot:assistant")
+    assert _filed(meet, by_assistant["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
     assert _filed(meet, by_ana["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
     tracked = get(meet, "tasks?requester=human:ana&status=open&exact=true&brief=true")
     assert {by_assistant["task_id"], by_ana["task_id"]} <= {t["id"] for t in tracked["tasks"]}
@@ -422,7 +435,7 @@ def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
         post(meet, f"calls/{call['id']}/end", {})
 
 
-def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_none_once_you_cannot_sign_in(meet):
+def test_the_private_calls_lease_reads_threads_as_you_and_none_once_you_cannot_sign_in(meet):
     from backend import threads
     from backend.store import encode
 
@@ -433,18 +446,12 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
     ):  # a thread of Ana's and Ben's, which the Assistant itself may not read
         ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
         plans = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
-        said = threads.post(c, ana, plans, "Ship on Friday")
+        threads.post(c, ana, plans, "Ship on Friday")
         everyone = threads.create(c, ana, title="All hands", audience="company")["id"]
-    # As on main: threads read and write as the Assistant itself, never as Ana.
-    get(meet, f"threads/{plans}", token, expected=404)
-    assert plans not in json.dumps(get(meet, "threads?limit=200", token))
-    assert get(meet, f"threads/{everyone}", token)["id"] == everyone  # a company thread, as any agent's run reads it
-    for refused in (
-        meet.post(f"/api/v2/threads/{plans}/messages", json={"text": "Hello"}, headers=headers(token)),
-        meet.post(f"/api/v2/threads/{plans}/members", json={"actor": "human:cara"}, headers=headers(token)),
-        meet.put(f"/api/v2/messages/{said['id']}/reactions/👍", json={}, headers=headers(token)),
-    ):
-        assert refused.status_code in (403, 404), refused.text
+    # As her own chat's turns do: threads read as Ana.
+    assert get(meet, f"threads/{plans}", token)["id"] == plans
+    assert plans in json.dumps(get(meet, "threads?limit=200", token))
+    assert get(meet, f"threads/{everyone}", token)["id"] == everyone
     with meet.app.state.store.transaction() as c:  # Ana's sign-in is turned off: the lease reads no thread at all
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in roster["people"]:
@@ -460,3 +467,18 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
         for who in (lease, bot):
             for form in (who, threads.viewer(None, who), threads.viewer(meet.app.state.auth, who)):
                 assert not threads.readable(c, form, everyone)
+
+
+def test_the_private_calls_voice_session_reads_your_needs_you_and_a_call_with_anyone_else_does_not(meet):
+    call, session, _ = _private_call(meet)
+    token = session["token"]
+    assert get(meet, "needs-you", token)["items"] is not None  # what waits on Ana, as her own chat reads it
+    with meet.app.state.store.transaction() as c:  # Ben is in the call too: its voice session is the Assistant's
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1)",
+            (call["id"], "human:ben", H.now()),
+        )
+    get(meet, "needs-you", token, expected=403)
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (session["id"],)).fetchone()
+        assert meet.app.state.auth.assistant_principal(c, row) is None

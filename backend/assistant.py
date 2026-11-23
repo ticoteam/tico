@@ -522,6 +522,28 @@ def edited(c, msg):
     )
 
 
+def call_turn(c, who):
+    """The delegation record for what the person just said aloud, when this is the Assistant's voice session in a call
+    in their own Assistant chat that is theirs alone (rooms.call_person: nobody else has been in it), pinned to them at
+    its claim: the question it is answering now (a voice turn it holds), spoken by them within INSTRUCTION_TTL_S. Else
+    None, and `turn` names the run's message as in their chat."""
+    from . import rooms
+
+    if rooms.pinned_person(c, who.attempt_id) != who.actor:
+        return None
+    turn = c.execute(
+        "SELECT t.id,a.job_id FROM attempts a JOIN jobs j ON j.id=a.job_id JOIN messages m ON m.id=j.message_id "
+        "JOIN live_meeting_turns t ON t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND t.bot=a.bot_id "
+        "AND t.status='claimed' AND t.voice_attempt=a.id "
+        "JOIN live_meeting_chunks k ON k.meeting_id=t.meeting_id AND k.seq=t.transcript_seq AND k.speaker=? "
+        "WHERE a.id=? AND t.created_at>=? ORDER BY t.claimed_at DESC LIMIT 1",
+        (H.actor_id(who.actor), who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
+    ).fetchone()
+    if not turn or rooms.call_person(c, turn["job_id"]) != who.actor:
+        return None
+    return {"for": who.actor, "cited": turn["id"], "run": "asked"}
+
+
 def instruction(c, who, ref):
     """The delegation record (backend/hubdb.py DELEGATION) for the person's own message that asked for this write, or a
     403 saying why it lends nothing. `ref` is the message's id, or `turn`: the message that started this run."""
@@ -534,6 +556,8 @@ def instruction(c, who, ref):
     if who.via != "assistant" or who.confirmed or not who.attempt_id or not H.is_human(who.actor):
         refuse("Only an Assistant run in the person's own chat acts on what they asked")
     message_id = str(ref or "")
+    if message_id == "turn" and (spoken := call_turn(c, who)):
+        return spoken
     if message_id == "turn":
         row = c.execute(
             "SELECT j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?", (who.attempt_id,)
