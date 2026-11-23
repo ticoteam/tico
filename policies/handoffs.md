@@ -22,7 +22,7 @@ Before starting a newly created task, compare it with the other open tasks betwe
 people or bots. The new-task message may include a `reconcile.active` list for this purpose. Reuse
 research, files, and decisions that genuinely apply. If two tasks ask for the same outcome, keep
 the earlier or higher-ranked task and close the duplicate with a reason that names the task you
-kept. A bot can't close a person's request by itself: ask them on it instead. Keep separate OKs,
+kept. A bot closes a duplicate it owns; another's that a person asked for, ask them on it instead. Keep separate OKs,
 audiences, deliverables, and materially different decisions as separate tasks even when their
 subject is similar. Never silently discard either request.
 
@@ -286,7 +286,8 @@ tico task done <task-id> -m "<result and deliverable links>" --version N
 
 In General, done is Done. Nobody checks it, and a person can reopen it with a note. When the work
 cannot go on, ask a person on the task, snooze it with the exact thing you wait for, or close it with
-the reason. A bot can't close a person's request by itself: ask them, and they reassign or close it.
+the reason. You may close your own task, even one a person asked for (they can reopen it); another's
+that a person asked for, ask them, and they reassign or close it.
 
 Chat shows a note folded under its task title; the person reads it only when they open it. Your
 reply in chat carries the plain-English result, without IDs, hashes or `s3://` URIs. The final note

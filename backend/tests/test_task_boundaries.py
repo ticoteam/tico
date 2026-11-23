@@ -110,14 +110,19 @@ def test_a_pipeline_edit_leaves_a_hidden_done_task_as_it_was_and_renames_its_sta
 
 
 def test_comment_delegation_never_authorizes_a_bot_close(api):
+    """Ana's comment lends Ops party rights on Cpo's task: it may work it, never close it (C8: only its owner bot or a
+    person closes a person's request)."""
     token = bot_token(api)
-    row = make_task(api, 'Review the requested packet')
-    for comment in (None, 'Close this.'):
+    row = make_task(api, 'Review the requested packet', owner='cpo')
+    for comment, why in ((None, 'identity'), ('@ops Close this.', 'task_needs_person')):
         if comment:
             post(api, f"tasks/{row['id']}/comments", {'text': comment})
         version = get(api, 'tasks/' + row['id'])['task']['version']
         body = {'to': 'closed', 'why': 'Ana said to close it.', 'version': version}
         refused = api.post(f"/api/v2/tasks/{row['id']}/move", json=body, headers=headers(token))
-        assert refused.status_code >= 400 and refused.json()['error'] == 'task_needs_person', refused.text
+        error = refused.json()['error']
+        assert refused.status_code >= 400 and (error.get('code') if isinstance(error, dict) else error) == why, (
+            refused.text
+        )
     closed = post(api, f"tasks/{row['id']}/move", {'to': 'closed'})
     assert closed['status'] == 'closed' and closed['closed_by_id'] == 'human:ana'

@@ -270,3 +270,244 @@ def test_private_subtask_from_bot_requested_run_is_judged_on_by_default(api, age
         assert c.execute("SELECT count(*) FROM ask_ingest_settings").fetchone()[0] == 0
         assert not c.execute("SELECT 1 FROM tasks WHERE title='Which mailbox should Ops send from?'").fetchone()
         assert not c.execute("SELECT 1 FROM refusals").fetchone()
+
+
+# ------------------------------------------------------------------ a bot ends its own task
+THREAD_PAGE = {"from_page": {"label": "Thread", "page": "thread"}}
+
+
+def _asked_in_its_chat(api, machine, owner="botops", title="Add Raygun access to qa-e2e"):
+    """Ana files a task for `owner`; its first run ends; she writes in the task's chat as the web sends it (POST
+    /threads/{conversation}/messages, the task page's and the Thread page's chat), which starts its next run. Stored
+    as task #35014's reply was: a chat message, no comment, which lends no one's rights."""
+    task = post(api, "tasks", {"owner": owner, "title": title, "body": "x"}, token="ana-test")
+    finish(api, machine, claim(api, machine, owner))
+    said = post(
+        api, f"threads/{task['conversation_id']}/messages", {"text": "You can close for now", "refs": THREAD_PAGE}
+    )
+    return task, said, claim(api, machine, owner)
+
+
+def _seen(api, task_id, body):
+    """`body` with the task's version, as a bot sends a move."""
+    with api.app.state.store.read() as c:
+        return {**body, "version": H.task(c, task_id)["version"]}
+
+
+def _ended(api, task_id):
+    """(status, the last change, who made it): the last not the engine's own (its move on to Done)."""
+    with api.app.state.store.read() as c:
+        row = H.task(c, task_id)
+        acts = c.execute(
+            "SELECT kind, actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND actor_id!=? "
+            "ORDER BY rowid DESC LIMIT 1",
+            (task_id, H.TICO_ACTOR),
+        ).fetchone()
+        return row["status"], acts["kind"], acts["actor_id"]
+
+
+ENDS = [
+    ("done", {"note": "Closed for now"}, "done"),
+    ("move", {"to": "done", "why": "Finished"}, "done"),
+    ("move", {"to": "closed", "why": "Chris said to close it for now"}, "closed"),
+    ("snooze", {"until": "2099-01-01", "why": "Later"}, "open"),
+]
+
+
+def test_agent_ops_ends_its_own_task_with_its_own_rights_when_nothing_lends(api, agent_ops):
+    """Task #35014: Chris's reply in the task's chat lent nothing, and every done, close or snooze was refused ("A person's
+    words inside a task are not a request to Agent Ops"). Ending its own task needs no one's rights, and its owner closes
+    it even though a person asked for it (they can reopen it)."""
+    for op, body, after in ENDS:
+        task, _, attempt = _asked_in_its_chat(api, agent_ops, title=f"{op} {body}")
+        ended = api.post(
+            f"/api/v2/tasks/{task['id']}/{op}", json=_seen(api, task["id"], body), headers=headers(attempt["token"])
+        )
+        assert ended.status_code == 200, (op, body, ended.text)
+        status, kind, actor = _ended(api, task["id"])
+        assert (status, actor) == (after, "bot:botops"), (op, body)
+        assert op != "snooze" or kind == "snooze", (op, body, kind)
+        finish(api, agent_ops, attempt)
+
+
+def test_a_refused_lend_still_reaches_nothing_else(api, agent_ops):
+    """Only ending Agent Ops' own task falls back to its own rights: someone else's task, another move or anything
+    beyond the task is refused as before, and never made with the person's rights."""
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops' own work", "body": "x"}, token="ana-test")
+    task, _, attempt = _asked_in_its_chat(api, agent_ops)
+    for path, body in (
+        (f"tasks/{other['id']}/done", {"note": "x"}),
+        (f"tasks/{other['id']}/move", {"to": "closed", "why": "x"}),
+        (f"tasks/{task['id']}/move", {"to": "next", "why": "x"}),
+        # not the engine's own word for the end: it names a stage (task_engine._target), which may be a work stage
+        (f"tasks/{task['id']}/move", {"to": "Closed", "why": "x"}),
+        # an end that is also a move elsewhere, or that lets someone see the task
+        (f"tasks/{task['id']}/move", {"to": "closed", "to_pipeline": "general", "why": "x"}),
+        (f"tasks/{task['id']}/move", {"to": "closed", "let_see": ["ana"], "why": "x"}),
+        (f"tasks/{task['id']}/owner", {"owner": "ops", "why": "x"}),
+    ):
+        tried = api.post(
+            "/api/v2/" + path, json=_seen(api, path.split("/")[1], body), headers=headers(attempt["token"])
+        )
+        assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", (path, tried.text)
+    tried = api.put(
+        "/api/v2/bots/ops/repositories", json={"mode": "all", "all_access": "write"}, headers=headers(attempt["token"])
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, other["id"])["status"] == "open" and H.task(c, task["id"])["status"] == "open"
+
+
+def test_an_ordinary_bot_ends_its_own_task(api, agent_ops):
+    """Only Agent Ops borrows a requester's rights; any other bot works its own task with its own. Told "You can close
+    for now" in a plain message in the task's chat, it closes its own task, though a person asked for it."""
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    for op, body, after in ENDS:
+        task, _, attempt = _asked_in_its_chat(api, agent_ops, owner="ops", title=f"{op} {body}")
+        ended = api.post(
+            f"/api/v2/tasks/{task['id']}/{op}", json=_seen(api, task["id"], body), headers=headers(attempt["token"])
+        )
+        assert ended.status_code == 200, (op, body, ended.text)
+        assert _ended(api, task["id"])[::2] == (after, "bot:ops"), (op, body)
+        finish(api, agent_ops, attempt)
+
+
+def test_a_body_or_header_citation_of_the_turn_ends_its_own_task_too(api, agent_ops):
+    """The citation is weighed once (agent_ops_act `act_for_requester`): `on_behalf_of: turn` in the body, or the
+    header, falls back to its own rights as no citation does; the route never refuses it again."""
+    for n, (body, cite) in enumerate(
+        (
+            ({"on_behalf_of": "turn"}, {}),
+            ({}, {"X-Tico-On-Behalf-Of": "turn"}),
+            ({"on_behalf_of": "turn"}, {}),
+            ({"on_behalf_of": "turn"}, {}),
+        )
+    ):
+        task, _, attempt = _asked_in_its_chat(api, agent_ops, title=f"cite {n}")
+        op, more = ("move", {"to": "closed", "why": "x"}) if n == 2 else ("done", {"note": "x"})
+        ref = f"%23{task['number']}" if n == 3 else task["id"]  # `#<number>`, as auth.resolve_task reads it
+        ended = api.post(
+            f"/api/v2/tasks/{ref}/{op}",
+            json=_seen(api, task["id"], {**more, **body}),
+            headers={**headers(attempt["token"]), **cite},
+        )
+        assert ended.status_code == 200, (body, cite, ended.text)
+        assert _ended(api, task["id"])[2] == "bot:botops"
+        finish(api, agent_ops, attempt)
+
+
+def test_words_that_lend_nothing_on_one_task_never_end_another(api, agent_ops):
+    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused."""
+    other = post(api, "tasks", {"owner": "botops", "title": "Another task for Agent Ops", "body": "x"})
+    finish(api, agent_ops, claim(api, agent_ops, "botops"))
+    _, _, attempt = _asked_in_its_chat(api, agent_ops)
+    tried = api.post(
+        f"/api/v2/tasks/{other['id']}/done",
+        json=_seen(api, other["id"], {"note": "x"}),
+        headers=headers(attempt["token"]),
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, other["id"])["status"] == "open"
+
+
+def test_a_lending_run_by_task_number_never_errors(api, agent_ops):
+    """Ana's own comment on her task lends Agent Ops her rights. Named by its number (`/tasks/%23<n>/done`), an uncited
+    done runs as on main, as Agent Ops on its own task; a cited one, which would act as Ana through checks that read
+    only plain ids, is refused plainly, never a server error."""
+    for n, cite in enumerate(({}, {"X-Tico-On-Behalf-Of": "turn"})):
+        task = post(api, "tasks", {"owner": "botops", "title": f"Book the venue {n}", "body": "x"})
+        finish(api, agent_ops, claim(api, agent_ops, "botops"))
+        post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and finish it"})
+        attempt = claim(api, agent_ops, "botops")
+        done = api.post(
+            f"/api/v2/tasks/%23{task['number']}/done",
+            json=_seen(api, task["id"], {"note": "Booked"}),
+            headers={**headers(attempt["token"]), **cite},
+        )
+        if cite:
+            assert done.status_code == 403 and done.json()["error"]["code"] == "on_behalf_of", done.text
+        else:
+            assert done.status_code == 200, done.text
+        finish(api, agent_ops, attempt)
+
+
+def test_a_refused_message_citation_on_its_own_task_stays_refused(api, agent_ops):
+    """Only the run's own request (`turn`, or none) falls back: a message Agent Ops cites by id was weighed and refused,
+    and ending its own task with it is refused too."""
+    task, said, attempt = _asked_in_its_chat(api, agent_ops)
+    tried = api.post(
+        f"/api/v2/tasks/{task['id']}/done",
+        json=_seen(api, task["id"], {"note": "x"}),
+        headers={**headers(attempt["token"]), "X-Tico-On-Behalf-Of": said["id"]},
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
+
+
+def _lent(api, task_id, bot):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT count(*) FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
+            (task_id, bot, H.now()),
+        ).fetchone()[0]
+
+
+def test_a_comment_deleted_from_the_chat_takes_back_the_rights_it_lent(api, agent_ops):
+    """Ana's comment @mentions Ops: Ops works the task with her party rights. She deletes it from the task's chat
+    (DELETE /messages/{id}, as the web does), and they end with it, as through DELETE /tasks/{id}/comments/{id}
+    (H.expire_delegations)."""
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    task = post(api, "tasks", {"owner": "botops", "title": "Tidy the launch note", "body": "x"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you check the numbers?"})["comment"]
+    assert _lent(api, task["id"], "bot:ops") == 1
+    gone = api.delete(f"/api/v2/messages/{said['id']}", headers=headers("ana-test"))
+    assert gone.status_code == 200, gone.text
+    assert _lent(api, task["id"], "bot:ops") == 0
+
+
+def test_an_edited_comment_deleted_either_way_takes_back_the_rights_it_lent(api, agent_ops):
+    """Ana's comment @mentions Ops and Finance; Finance is woken through a carrier. An edit drops Finance and another adds
+    it back: its delivery and carrier are new, its grant is on the first. Deleting the comment, from the chat or as a
+    task comment, ends that grant too (H.expire_delegations finds a carrier by what it carries)."""
+    assign(api, agent_ops, "ops")
+    assign(api, agent_ops, "finance")
+    ready(api, agent_ops, ["botops", "ops", "finance"])
+    for n, how in enumerate(("chat", "task")):
+        task = post(api, "tasks", {"owner": "botops", "title": f"Tidy the launch note {n}", "body": "x"})
+        said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops and @finance, check the numbers?"})["comment"]
+        assert _lent(api, task["id"], "bot:finance") == 1
+        for text in ("@ops, check the numbers?", "@ops and @finance, check the numbers again?"):
+            edited = api.patch(f"/api/v2/messages/{said['id']}", json={"text": text}, headers=headers("ana-test"))
+            assert edited.status_code == 200, edited.text
+        assert _lent(api, task["id"], "bot:finance") == 1
+        path = f"messages/{said['id']}" if how == "chat" else f"tasks/{task['id']}/comments/{said['id']}/delete"
+        send = api.delete if how == "chat" else api.post
+        gone = send("/api/v2/" + path, headers=headers("ana-test"), **({} if how == "chat" else {"json": {}}))
+        assert gone.status_code == 200, (how, gone.text)
+        assert _lent(api, task["id"], "bot:finance") == 0, how
+        assert _lent(api, task["id"], "bot:ops") == 0, how
+
+
+def test_a_held_close_of_its_own_task_is_sent_with_its_own_rights(api, agent_ops):
+    """A rule holds Agent Ops' close that cited the turn in its body. The citation lent nothing and was weighed once,
+    so the stored write has none: Send anyway closes the task with Agent Ops' own rights, not the refused lend again."""
+    from backend.tests.helpers.org_rule_check import COLOR, Judge
+    from backend.tests.helpers.org_rules import rule
+
+    api.app.state.judge = Judge(api.app.state.store)
+    rule(
+        api,
+        {"kind": "internal", "text": COLOR, "who": {"bots": ["botops"]}, "if_broken": "escalate", "reviewer": "ben"},
+    )
+    task, _, attempt = _asked_in_its_chat(api, agent_ops)
+    body = _seen(api, task["id"], {"to": "closed", "why": "Our favorite color is gold", "on_behalf_of": "turn"})
+    held = api.post(f"/api/v2/tasks/{task['id']}/move", json=body, headers=headers(attempt["token"]))
+    assert held.status_code == 200 and held.json().get("held"), held.text
+    hold = held.json()["held"]
+    view = get(api, f"rule-holds/{hold['id']}", token="ben-test")
+    post(api, f"rule-holds/{hold['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
+    assert _ended(api, task["id"])[::2] == ("closed", "bot:botops")

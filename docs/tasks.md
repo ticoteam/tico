@@ -36,7 +36,8 @@ The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 - **Move to another pipeline.** The same task, with its number, label, history, comments, files and links, into a
   stage of another pipeline (the first by default). See below.
 
-A bot cannot close a task a person asked for. It asks that person instead.
+A bot closes its own tasks, even one a person asked for; the person can reopen it. Another bot cannot close a task a
+person asked for: it asks that person instead.
 
 A side stage such as **Rejected** sits beside a main stage. Automatic moves skip it. Move a task there or back
 without giving a reason. In a side stage, **Send back** returns the task to the last main stage it visited.

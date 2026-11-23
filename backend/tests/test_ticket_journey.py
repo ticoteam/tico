@@ -317,7 +317,7 @@ def test_the_person_sends_the_spec_back_and_the_owner_writes_it_again(co):
 def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     """The owner ends run after run in Build without doing the work: it is woken again after 15 minutes, 15 minutes
     and an hour (a run that finished is not woken 2 minutes on), then the task goes to the pipeline's Manager, who can
-    reassign it, snooze it, move it on and move it back; a person's request is theirs to close."""
+    reassign it, snooze it, move it on and move it back; a person's request is theirs or its owner's to close."""
     before = co.needs_you()
     task = to_build(co)
     co.handoff(task, "Build", co.owner).end("I could not do it.")
@@ -358,13 +358,15 @@ def test_an_owner_that_keeps_stopping_goes_to_the_manager_who_can_settle_it(co):
     assert co.task(task)["stage"]["name"] == "Review 1", f"the move on did not take. {co.line(task)}"
     settle("move", task, "Build", "-m", "Build it again.")
     assert co.task(task)["stage"]["name"] == "Build", f"the move back did not take. {co.line(task)}"
-    # A person asked for it: the Manager asks them rather than closing it.
+    # A person asked for it and the Manager does not own it: it asks them rather than closing it.
     code, out, err = manager.cli(
         "task", "close", task, "-m", "Duplicate.", "--version", manager.version(task), ok=False
     )
-    assert code != 0 and "only a person can close it" in out + err, f"the Manager closed a person's request: {out}{err}"
+    assert code != 0 and "only a person or its owner can close it" in out + err, (
+        f"the Manager closed a person's request: {out}{err}"
+    )
     manager.end()
-    co.clean(expected=("only a person can close it", "Owner on the team"))
+    co.clean(expected=("only a person or its owner can close it", "Owner on the team"))
 
 
 def test_qa_files_a_product_bug_for_its_areas_feature_owner(co):

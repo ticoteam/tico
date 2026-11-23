@@ -852,6 +852,10 @@ def carried_lends(method, path):
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in CARRIED)
 
 
+# Ending a task: done, a move (to done or closed: `ends_own_task`) or a snooze. On its own task, Agent Ops' own work.
+OWN_TASK_END = re.compile(API + rf"tasks/({_S})/(done|move|snooze)")
+
+
 # A manager bot's report, made, archived or restored by Agent Ops on the manager's ask (backend/report_managers.py).
 LIFECYCLE = _routes(("POST", r"bots"), ("POST", rf"bots/{_S}/archive"), ("POST", rf"bots/{_S}/restore"))
 
@@ -1700,7 +1704,8 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
     def agent_ops_owns_task(path, body=None):
         """A note, comment or status on a task Agent Ops owns is Agent Ops' own work: it needs no one's rights and is Agent Ops'
         words, so it is never recorded as the person who asked (their rights still apply to everyone else's tasks).
-        Closing is the exception: only the requester or a human closes, so a close (a move) keeps the person's rights.
+        Ending it (done, close, snooze) tries the person's rights first, so a close they asked for is theirs; when nothing
+        lends them, Agent Ops ends its own task with its own (`ends_own_task`).
         Its own task's worktrees are its own work too: the route checks the owning bot's repository access, which no
         one's rights change. So is an ask or a sub-task for a person under its own task: the ask grants nothing by
         itself, whoever asked for the task."""
@@ -1749,6 +1754,33 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
             return None
         return replace(who, actor=msg["sender_id"], role="bot", via="botops", task_actor="")
 
+    def ends_own_task(c, who, request):
+        """Whether this call finishes, closes or sets aside the task this run is on, which the caller owns (done, a move
+        to done or closed, a snooze). A bot ends its own task with its own rights (the person can reopen it), so when
+        no one's request lends Agent Ops theirs, it still does: the route checks the owner's own right to work its task,
+        nothing wider. Only the run's own task, the one its claim recorded (execution's claim, `task_wakes.message_task`):
+        words that lend nothing on one task never end another."""
+        # The path as routed (a `#<number>` decoded), which the route resolves as `auth.resolve_task` does.
+        found = OWN_TASK_END.fullmatch(str(request.scope.get("path") or request.url.path))
+        if request.method != "POST" or not found:
+            return False
+        if found.group(2) == "move":
+            body = parse_body(getattr(request, "_body", b""))
+            body = body if isinstance(body, dict) else {}
+            # Exactly the engine's own words for the end (task_engine._target): any other `to` names a stage.
+            if body.get("to") not in ("done", "closed") or body.get("to_pipeline") or body.get("let_see"):
+                return False
+        try:
+            row = H.task(c, auth.resolve_task(c, who, found.group(1)))
+        except Problem:
+            return False
+        run = (
+            c.execute("SELECT task_id FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
+            if who.attempt_id
+            else None
+        )
+        return bool(row and run and run["task_id"] and row["owner_id"] == who.actor and row["id"] == run["task_id"])
+
     def act_for_requester(request, ref):
         """Apply the requester's identity before the route checks its normal permissions."""
         who = request.state.identity
@@ -1779,7 +1811,14 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         token = H.DELEGATION.set(None)
         try:
             with store.read() as c:
-                acting = delegated_identity(c, who, ref, carry=carried_lends(request.method, request.url.path))
+                try:
+                    acting = delegated_identity(c, who, ref, carry=carried_lends(request.method, request.url.path))
+                except Problem as refused:
+                    if refused.status != 403 or ref not in ("turn", "default") or not ends_own_task(c, who, request):
+                        raise
+                    # its own task, ended with its own rights; the route does not weigh a body citation again
+                    request.state.own_rights = True
+                    return None, None
             request.state.delegation = H.DELEGATION.get()
         finally:
             H.DELEGATION.reset(token)
@@ -1800,6 +1839,13 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         """Agent Ops acting for a person: a refusal for a route that hands a secret back, or the Confirm card in their Agent Ops
         chat for one that always needs their own tap (`agent_ops_act.card_for_person`). None when the route runs as them."""
         method, path = request.method, normalize(request.url.path)
+        if not path:
+            # An address its checks cannot read (a `#<number>` or other encoded part): never run as the person unchecked.
+            raise Problem(
+                "on_behalf_of",
+                f"Name it by its id to act for a person (not by #number or an encoded address): {request.url.path}",
+                403,
+            )
         why = person_only(method, path)
         if why:
             raise Problem(

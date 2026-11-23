@@ -117,7 +117,8 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*
 - **C8.** A bot can't close a person's request by itself. It asks "I can't do this because…" and you pick Reassign or
-  Close. Bots can close tasks that bots asked for.
+  Close. Bots can close tasks that bots asked for. *Changed Nov 23: owner bots may close their own tasks; the person can
+  reopen.*
 - **C9.** General has one stage, To do. *No Doing, Waiting or Review stages. The line under the title says what is going
   on.*
 - **C10.** Ideas: nobody is told when Spec has room, in any pipeline. A request a person filed that still waits in
@@ -2319,7 +2320,7 @@ Numbered in order so they can be cited (scenario 1 to 49).
 10. A bot snoozes with no end date: allowed. The task shows On ice, the manager bot is told once, and it is on the
     manager's rail.
 11. A snoozed task in a full stage: its slot goes to the oldest waiting task.
-12. A bot tries to close a person's request: refused, told to ask instead.
+12. A bot tries to close a person's request it does not own: refused, told to ask instead.
 13. A held action with no task: a General task is filed for the person.
 14. A person sends a page back: the task stays in its stage, the bot gets the notes word for word, version 2 comes back
     marked with what changed.

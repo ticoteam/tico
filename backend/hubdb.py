@@ -4651,6 +4651,31 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
     return edited
 
 
+def expire_delegations(conn, message_id, ts):
+    """A message taken back: the task delegations it lent end now (`delegate_woken`), its own and those of the bots it
+    woke beyond the first, each through a carrier (threads.deliver), keyed by the carrier's id. A carrier is found by
+    the message it carries (`refs.carries`), not by today's deliveries: an edit that drops and adds a mention again
+    replaces the delivery and its carrier, while the grant stays on the first. Both deletes call it: a task comment's
+    (`task_comment_delete`) and a thread message's (threads._revise), which is how the chat deletes a comment. Returns
+    the message ids that may have started runs: it and its carriers."""
+    woke = [message_id] + [
+        r[0]
+        for r in conn.execute(
+            "SELECT carrier_id FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (message_id,)
+        )
+    ]
+    # Through messages_refs_carries: no scan of the delegations or of the room's messages.
+    carried = [
+        r[0] for r in conn.execute("SELECT id FROM messages WHERE json_extract(refs,'$.carries')=?", (message_id,))
+    ]
+    woke += [m for m in carried if m not in woke]
+    marks = ",".join("?" * len(woke))
+    conn.execute(
+        f"UPDATE task_delegations SET expires_at=? WHERE message_id IN ({marks}) AND expires_at>?", (ts, *woke, ts)
+    )
+    return woke
+
+
 @private_task_write
 def task_comment_delete(conn, actor, task_id, message_id):
     """The author takes a comment back. Only its metadata stays for the audit trail, excluded from future comment reads: a run it queued and nobody started is canceled, the questions it answered
@@ -4663,17 +4688,8 @@ def task_comment_delete(conn, actor, task_id, message_id):
     )
     reopened = [r["id"] for r in _rows(conn.execute("SELECT id FROM messages WHERE answered_by_id=?", (message_id,)))]
     conn.execute("UPDATE messages SET answered_by_id=NULL WHERE answered_by_id=?", (message_id,))
-    # The bots it woke beyond the first each woke through a carrier (threads.deliver), keyed by the carrier's id.
-    woke = [message_id] + [
-        r[0]
-        for r in conn.execute(
-            "SELECT carrier_id FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (message_id,)
-        )
-    ]
+    woke = expire_delegations(conn, message_id, ts)
     marks = ",".join("?" * len(woke))
-    conn.execute(
-        f"UPDATE task_delegations SET expires_at=? WHERE message_id IN ({marks}) AND expires_at>?", (ts, *woke, ts)
-    )
     canceled = (
         _has_table(conn, "jobs")
         and conn.execute(

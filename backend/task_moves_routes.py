@@ -273,6 +273,10 @@ def register(
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
         spec = writes[operation]
         caller = request.state.identity
+        if getattr(request.state, "own_rights", False) and getattr(body, "on_behalf_of", None):
+            # Agent Ops ends its own task with its own rights: the citation was weighed once (agent_ops_act
+            # `ends_own_task`). Without it, neither this write nor its Send anyway, if a rule holds it, lends again.
+            body = body.model_copy(update={"on_behalf_of": None})
         skip = bool(spec["unchecked"] and spec["unchecked"](caller, params))
         rc = None if skip else check(caller, tid, body, operation, params)
         return work(

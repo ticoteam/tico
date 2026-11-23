@@ -465,8 +465,10 @@ def task_move(api, args):
 @tool(
     "tico_task_close",
     "Close a task, with why: it is never refused for what is missing, and its open sub-tasks "
-    "close with it. A bot cannot close a task a person asked for: it asks that person instead "
-    "(tico_task_ask). Agent Ops closes with the rights of the person who asked it.",
+    "close with it. A bot closes its own tasks, even one a person asked for (they can reopen it); it "
+    "cannot close another's task a person asked for: it asks that person instead (tico_task_ask). Agent Ops "
+    "closes with the rights of the person who asked it; when no one's request lends them, it still closes the "
+    "task its run is on with its own.",
     {"id": TASK_ID, "why": WHY, "version": VERSION, "on_behalf_of": ASKED},
     required=("id",),
     writes=True,

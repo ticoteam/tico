@@ -364,8 +364,8 @@ def task_close(
     *,
     mover: bool | None = None,
 ) -> Row:
-    """Close a task: it will not be done. Its open sub-tasks close with it. A bot gives a reason, and does not close
-    what a person asked for (it asks that person)."""
+    """Close a task: it will not be done. Its open sub-tasks close with it. A bot gives a reason. It closes its own task,
+    even one a person asked for (they can reopen it), never another's that a person asked for (it asks that person)."""
     return task_move(conn, actor, task_id, CLOSED, note or None, seen_version, mover=mover)
 
 

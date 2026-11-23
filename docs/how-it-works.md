@@ -54,7 +54,7 @@ Words are defined in the [Glossary](glossary.md).
   note; a pipeline and a stage in it, a `rank` in its owner's queue, labels, links (a pull request first), the tasks
   it filed, and relations to other tasks (related, duplicates, follow-ups). Status: `open`, `done` or `closed`; what
   an open task waits on is read, never stored ([Whose turn it is](tasks.md#whose-turn-it-is)). The owner says
-  `done`; a bot can't close a person's request by itself. Every task has a comment thread, on the record with the
+  `done`; a bot closes its own tasks (the person can reopen), never another's that a person asked for. Every task has a comment thread, on the record with the
   author.
 - **Message** — one line in a thread. Kinds: `say`, `notice`, `steer`. How it reaches a bot
   is one of three ways ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)): **Steer** goes into the bot's
@@ -84,7 +84,7 @@ Words are defined in the [Glossary](glossary.md).
 The rules for all six live in the backend's write layer, not in prompts: a bot acts only as
 itself; it may message only active bots and humans; at most 20 bot-to-bot messages per
 thread per hour and 10 unsolicited messages per human per bot per day
-(`TICO_UNSOLICITED_PER_DAY`); a bot has one open ask of its own per task; a bot can't close a person's request; an OK
+(`TICO_UNSOLICITED_PER_DAY`); a bot has one open ask of its own per task; a bot can't close a person's request it does not own; an OK
 is optional, given by a person and used once. Bot requests to a human are linted:
 a verb at the front of the title, a nonempty first line and under 120 words outside quoted drafts. A
 problem is a warning: the task or message is written, and the response's `warnings` (also the task's
