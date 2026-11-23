@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import type { TaskRequirement } from '@/api/schema';
@@ -1513,6 +1513,34 @@ describe('an open task reads itself afresh', () => {
     await waitFor(() => expect(reads).toBe(1));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
     expect(reads).toBe(1);
+  });
+
+  it('back from another task the route kept its page for, the page reads itself afresh: a ❓ cleared meanwhile shows no pin @live', async () => {
+    shown = task({ to_leave: [], waits: [asked] } as Partial<TaskData>);
+    let go!: (n: string) => void;
+    function Route() {
+      const [n, setN] = useState('12');
+      go = setN;
+      // the shell's chat card follows the open task too
+      return (
+        <>
+          <TaskPage task={n} pipeline="p1" />
+          <TaskChat task={n} />
+        </>
+      );
+    }
+    show(<Route />, '/tasks/p1/12');
+    expect(await screen.findByRole('region', { name: 'Needs you' })).toBeTruthy();
+    act(() => go('13'));
+    // away on #13: the person answered elsewhere, then the task was renamed; the copy held gets the rename's row
+    shown = task({ to_leave: [], waits: [], version: 4, title: 'Send: Renamed' } as Partial<TaskData>);
+    act(() => dispatch('tasks', [{ seq: 5, id: 't1', kind: 'question', kinds: ['question'] }]));
+    act(() => dispatch('tasks', [{ seq: 6, id: 't1', kind: 'update', kinds: ['update'], task: { ...task(), version: 4, title: 'Send: Renamed', waits: undefined } }]));
+    let reads = 0;
+    reply = (url, method) => (isRead(url, method) && reads++, null);
+    act(() => go('12'));
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
   });
 
   it('a ❓ cleared while the route reads the task: the page opens on a fresh read, and nothing is canceled @live', async () => {

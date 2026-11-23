@@ -76,8 +76,14 @@ function stateOf(error: unknown): PageState {
   return 'fault';
 }
 
-/** One open task: a Document whose pages are the stage's pages and Details (page-types: "A task open"). */
-export function TaskPage({ task, pipeline, tab, file }: TaskPageProps) {
+/** One open task: a Document whose pages are the stage's pages and Details (page-types: "A task open"). Another task
+    is another page, opened afresh (its read with it), never this one's reused: a route that keeps its component (the
+    tab route, moving from one task to the next) would otherwise show a copy changed while it was away. */
+export function TaskPage(props: TaskPageProps) {
+  return <OneTask key={props.task} {...props} />;
+}
+
+function OneTask({ task, pipeline, tab, file }: TaskPageProps) {
   const { t, error, retry } = useTask(task, true);
   if (!t) {
     const path = `/tasks/${pipeline ?? ''}/${task}`;
