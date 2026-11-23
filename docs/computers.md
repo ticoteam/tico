@@ -168,7 +168,7 @@ This counts people with sign-in access, not the number currently online or the A
 For example, four people who can sign in, plus one guest, give a warning at **160** and a stop at **400**.
 One person, or no people with sign-in access, gives **40** and **100**.
 
-Just below the stop, while the count is still at or above the warning, work that waited through the stop keeps first claim on each freed place, in order across computers. Below the warning that list is cleared and each computer starts from its own queue again. Work still waiting for a login, quota or computer remains held for that reason.
+Just below the stop, while the count is still at or above the warning, work that waited through the stop keeps first claim on each freed place, in order across computers. Below the warning that list is cleared and each computer starts from its own queue again. Work still waiting for a login, quota or computer remains held for that reason. A person's own message keeps its place if the computer can admit it under the performance holds described above.
 Below the warning level, Health marks the incident resolved and records the time. Crossing the warning again opens a new incident.
 
 These settings provide the warning record and start limit. See [The turn fixer](#the-turn-fixer) for automatic recovery.
@@ -193,7 +193,8 @@ For example, enter **45** and **110** for four people. After saving, the card sh
 Before a save, it shows the people count and runs in use against the company stop level.
 
 Saved values apply to the current company count. Lowering stop to or below that count holds new turns; running turns continue.
-Raising stop above the count lets eligible waiting work resume. Raising warning above the count resolves an active warning incident.
+Raising stop above the count lets eligible waiting work resume. A computer held for load or missing performance reports
+lets waiters on other computers go ahead. Raising warning above the count resolves an active warning incident.
 To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.

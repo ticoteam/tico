@@ -5279,12 +5279,12 @@ class Execution:
         Another computer's waiter is eligible only while that computer claims: its claimed busy lists are the only
         record of lanes the attempts table does not show, and an empty list from a silent computer is not "free"."""
         from .models import Claim
-        from .performance import load_status
         from .read_cache import one
 
         for queued in c.execute(
-            "SELECT w.job_id,a.runner_id FROM org_turn_waits w JOIN jobs j ON j.id=w.job_id "
-            "JOIN assignments a ON a.bot=j.bot_id WHERE j.state='queued' ORDER BY w.created_at,w.job_id"
+            f"SELECT w.job_id,a.runner_id,{H.in_person_name_sql()} AS person "
+            "FROM org_turn_waits w JOIN jobs j ON j.id=w.job_id JOIN assignments a ON a.bot=j.bot_id "
+            "LEFT JOIN messages m ON m.id=j.message_id WHERE j.state='queued' ORDER BY w.created_at,w.job_id"
         ):
             rid = queued['runner_id']
             remote = rid != runner['id']
@@ -5299,7 +5299,7 @@ class Execution:
                 or not self.awake(target['awake_since'], H.now(), target['platform'])
                 or runner_versions.paused(c, rid)
                 or cloud_machines.held(c, rid)
-                or load_status(c, rid)['overloaded']
+                or start_places.computer_hold(c, rid, row=target, person=bool(queued['person']))
                 or start_places.ready_waiting(c, rid)
                 or sum(start_places.live(c, rid).values()) >= start_places.claim_limit(target, gate)
             ):

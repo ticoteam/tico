@@ -119,7 +119,9 @@ restarts at it as above (event `cloud_machine.grew`). Only a reading taken since
 from before a restart is of the old disk), at most 10 minutes old.
 
 It never grows past Large by itself (a person may still pick XLarge, and an XLarge machine grows on if a bigger size
-is listed), nor past the company's CPU cap at HQ (counting the size other machines are restarting at). At Large it
+is listed), nor past the company's CPU cap at HQ. That count includes booting machines and unanswered create or start
+requests. An unanswered start counts at the size requested from HQ. Other machines count at the larger of their
+current and configured sizes. At Large it
 says what to do instead: "Disk 92% full at Large. Give its busiest bots their own Large machine." for the shared
 machine, "… Free space on it." for a bot's own. When it cannot grow (Large, the largest size, over the cap, a size HQ refused, or a disk that did not grow with its size:
 "disk not resized"), the machine is marked **Disk nearly full** with the reason, on Health, until the disk has room
@@ -161,6 +163,11 @@ computers. HQ saying it did not stop (a 4xx) lets the reservation go at once. An
 answer, one that cannot be read, a 5xx, 402, or 409 `sandbox_stopping`) keeps it two more minutes and asks HQ's list
 at the next look: stopping or stopped there holds the claim from then on, running lets it lapse. A server that died
 mid-stop lets it lapse, and a start clears it.
+
+Before sending a create or start, the server rechecks demand while reserving the request in the same write
+transaction. An unanswered start reserves capacity for up to two minutes, even across a server restart. HQ reporting
+the machine running confirms the start and spends the wake. While HQ reports it starting, the wake stays available.
+After the deadline, the server can ask again if work still waits, even if HQ's list is unavailable.
 
 All three manual deletion routes use the same path. A deletion waits for the manager's current look, including any
 start or stop awaiting HQ and its final write, before it reserves the machine. While it asks HQ, the manager cannot

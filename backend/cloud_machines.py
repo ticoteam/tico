@@ -162,6 +162,7 @@ ENROLL_MINUTES = 15
 ENROLL_GRACE = 60  # past its newest code's expiry, a machine not enrolled yet never will be
 CREATE_HOLD = ENROLL_MINUTES * 60 + ENROLL_GRACE  # give an unanswered create time to enroll before another request
 ENROLL_TRIES = 3  # machines made in a row that never enrolled before it waits for a person
+START_HOLD = 120  # an unanswered start can be retried this late, even without HQ's list
 STOP_HOLD = 120  # a stop's reservation lapses this late: a server that died mid-stop strands no work
 DEAD = ("deleted", "failed")  # HQ's word for an unusable machine: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
@@ -648,6 +649,8 @@ SHOWN = ("state", "problem", "start_asked_at", "runner_id", "mode", "placement")
 
 def save(c, key, **fields):
     fields["updated_at"] = H.now()
+    if "start_asked_at" in fields and fields["start_asked_at"] is None:
+        fields["start_asked_size"] = None
     shown = [k for k in SHOWN if k in fields]
     before = (
         c.execute(f"SELECT {','.join(shown)} FROM cloud_machines WHERE bot=?", (key,)).fetchone() if shown else None
@@ -1037,8 +1040,8 @@ def unresized(current, disk, offered):
 def grow_plan(current, disk, offered, caps, others_cpu, at=0, shared=False):
     """(size, why, full) for a running machine row `current` whose storage grows, from its runner's newest disk reading
     `disk`: `size` the next one with more disk to grow to, or None; `why` the words for a machine that cannot grow (the
-    largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running machines, or a size
-    HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
+    largest offered, or past HQ's CPU cap with `others_cpu` the CPUs of the company's other running or booting machines,
+    or a size HQ refused before and not yet due again, or a disk that did not grow with its size), else None; `full` the disk's
     percent used. (None, None, None) while the disk has room, and while a size is already waiting for the restart. It
     grows only into a size Tico recommends: at RECOMMENDED_TOP `why` says what to do instead, for the `shared` machine
     or a bot's own. Pure: the clock is `at`."""
@@ -1078,15 +1081,24 @@ def cloud_size_name(name):
 
 
 def others_cpu(c, key):
-    """The CPUs of the company's running machines other than `key`: the size HQ last said each has, or the one it
-    restarts at when that is bigger."""
+    """The CPUs of the company's other running and booting machines, including unanswered creates and starts.
+    Count a reserved start at its requested size, otherwise the larger of the reported and configured sizes."""
     by = {s["name"]: s["cpu"] for s in sizes(c)}
+    cutoff = now() - START_HOLD
     return sum(
-        max(by.get(r["machine_size"], 0), by.get(r["size"], 0))
+        by.get(r["reserved_size"], 0) if r["reserved_size"] else max(by.get(r["machine_size"], 0), by.get(r["size"], 0))
         for r in c.execute(
-            "SELECT size,machine_size FROM cloud_machines WHERE bot<>? AND state IN ('starting','running')", (key,)
+            "SELECT size,machine_size,CASE WHEN start_asked_at>? THEN start_asked_size END AS reserved_size "
+            "FROM cloud_machines WHERE bot<>? "
+            "AND (state IN ('starting','running') OR create_asked_at IS NOT NULL OR start_asked_at>?)",
+            (cutoff, key, cutoff),
         )
     )
+
+
+def start_pending(current, at):
+    asked = current.get("start_asked_at")
+    return asked is not None and at < asked + START_HOLD
 
 
 def pause_after(current):
@@ -1689,6 +1701,8 @@ def decide(current, found, at, idle_s):
         if current["enroll_fails"] >= ENROLL_TRIES:
             return None, "no_enroll"  # its last machines never enrolled: a person looks first
         return "create", None
+    if start_pending(current, at):
+        return None, None
     return "start", None
 
 
@@ -1952,7 +1966,11 @@ class Manager:
                             self.plan_failed(c, current, machine, at)
                         gone.update(temporary_create_retry(counted, machine, at))
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
-                    elif machine["state"] in ON and current["start_asked_at"] is not None:
+                    elif machine["state"] == "starting" and current["start_asked_at"] is not None:
+                        # HQ can list its reservation before it starts the machine. Keep the prior state so an
+                        # unanswered request stays retryable even if the list goes away.
+                        continue
+                    elif machine["state"] == "running" and current["start_asked_at"] is not None:
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
                         # Give the start its idle window and spend a new wake, keeping the old guard if none remains.
                         woke_for = wake_for(current, facts(c, self.settings, current, at))[0]
@@ -2145,6 +2163,16 @@ class Manager:
             current = row(c, key)
             if not current:
                 return None
+        if current["start_asked_at"] is not None and not start_pending(current, at):
+            with self.store.transaction() as c:
+                current = row(c, key)
+                if not current:
+                    return None
+                if not start_pending(current, now()):
+                    save(c, key, start_asked_at=None)
+                    current = row(c, key)
+                if not current:
+                    return None
         if (
             current["machine_id"]
             and current["state"] not in DEAD
@@ -2267,62 +2295,30 @@ class Manager:
         key = current["bot"]
         # The stop half of an offline restart (`offline_restart_ready`), or the start that follows it.
         offline_restart = action == "stop" and offline_restart_ready(current, found, at)
-        restarting = action == "start" and current["problem"] == OFFLINE_RESTARTING
-        restarting_since = current["problem_at"] if restarting else None
-        replacing = current.get("deleting") or bool(current["machine_id"] and current["state"] in DEAD)
         code = None
         if action in ("stop", "delete"):
             with self.store.transaction() as c:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return  # a claim came first, or the facts changed: not now
-        resize = current["size"] if action == "start" and current["size"] != current["machine_size"] else None
-        pending_create = False
-        if action == "create" and current["create_asked_at"] is not None:
+        if action in ("create", "start"):
             with self.store.transaction() as c:
-                pending_create = at < current["create_asked_at"] + CREATE_HOLD and not replacement_runner(
-                    c, key, current["machine_id"]
-                )
-                if not pending_create:
-                    save(c, key, create_asked_at=None)
-        if action == "create" and (pending_create or at < self.relist_until and not replacing):
-            # An unreadable list cannot settle an unanswered create, but its hold has a deadline across restarts.
-            if self.list_refused and current["problem"] != "hq:" + self.list_refused:
-                with self.store.transaction() as c:
-                    save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
-            return
-        if action == "create":
-            with self.store.transaction() as c:
-                current = row(c, key)
-                if current["machine_id"] and (
-                    current["state"] == "failed"
-                    or not current["runner_id"]
-                    and current["enroll_by"]
-                    and at >= current["enroll_by"]
-                ):
-                    current = count_enrollment_failure(c, key, current["machine_id"])
-                if current["enroll_fails"] >= ENROLL_TRIES:
-                    save(c, key, problem="no_enroll", problem_at=H.now())
+                live = row(c, key)
+                if not live or live["machine_id"] != current["machine_id"]:
                     return
-                if replacing:
-                    # Keep codes from fresh attempts whose replies may be lost, while retiring unused old codes.
-                    # Consumed old codes let the old runner retry enrollment if HQ cancels an ambiguous delete.
-                    c.execute(
-                        "DELETE FROM enrollments WHERE consumed_at IS NULL AND code_hash IN "
-                        "(SELECT code_hash FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?)",
-                        (key, current["machine_id"]),
-                    )
-                    c.execute(
-                        "DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN "
-                        "(SELECT code_hash FROM enrollments)",
-                        (key,),
-                    )
-                code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
-                save(c, key, start_asked_at=None, create_asked_at=at)
-        elif action == "start":
-            # Persist before HQ is asked: a restart can recover the start even if its answer never arrives.
-            with self.store.transaction() as c:
-                save(c, key, start_asked_at=at)
+                current, at = live, max(at, now())
+                found = facts(c, self.settings, current, at)
+                if decide(current, found, at, pause_after(current))[0] != action:
+                    return
+                if action == "start":
+                    save(c, key, start_asked_at=at, start_asked_size=current["size"])
+                else:
+                    code = self.reserve_create(c, current, at)
+                    if code is None:
+                        return
+        restarting = action == "start" and current["problem"] == OFFLINE_RESTARTING
+        restarting_since = current["problem_at"] if restarting else None
+        resize = current["size"] if action == "start" and current["size"] != current["machine_size"] else None
         try:
             if action == "create":
                 machine = hq.create(key, current["size"], code, self.settings.runner_url)
@@ -2361,6 +2357,9 @@ class Manager:
         except Refused as refused:
             self.refused(current, action, refused, at, restarting=restarting)
             return
+        if action == "start" and machine["state"] == "starting" and machine.get("pending") == "start":
+            self.synced = None
+            return  # HQ acknowledged its reservation; the start is still unanswered
         with self.store.read() as c:
             fenced = action == "create" and deleting(c, machine["id"])
         if action == "create" and (fenced or current["state"] in DEAD and machine["id"] == current["machine_id"]):
@@ -2415,6 +2414,49 @@ class Manager:
                 },
             )
 
+    def reserve_create(self, c, current, at):
+        """Reserve a create once its demand has been checked under the same write lock."""
+        key = current["bot"]
+        replacing = current.get("deleting") or bool(current["machine_id"] and current["state"] in DEAD)
+        asked = current["create_asked_at"]
+        pending = (
+            asked is not None and at < asked + CREATE_HOLD and not replacement_runner(c, key, current["machine_id"])
+        )
+        if asked is not None and not pending:
+            save(c, key, create_asked_at=None)
+        if pending or at < self.relist_until and not replacing:
+            # An unreadable list cannot settle an unanswered create, but its hold has a deadline across restarts.
+            if self.list_refused and current["problem"] != "hq:" + self.list_refused:
+                save(c, key, problem="hq:" + self.list_refused, problem_at=H.now())
+            return None
+        if current["machine_id"] and (
+            current["state"] == "failed"
+            or not current["runner_id"]
+            and current["enroll_by"]
+            and at >= current["enroll_by"]
+        ):
+            current = count_enrollment_failure(c, key, current["machine_id"])
+            if current is None:
+                return None
+        if current["enroll_fails"] >= ENROLL_TRIES:
+            save(c, key, problem="no_enroll", problem_at=H.now())
+            return None
+        if replacing:
+            # Keep codes from fresh attempts whose replies may be lost, while retiring unused old codes.
+            # Consumed old codes let the old runner retry enrollment if HQ cancels an ambiguous delete.
+            c.execute(
+                "DELETE FROM enrollments WHERE consumed_at IS NULL AND code_hash IN "
+                "(SELECT code_hash FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?)",
+                (key, current["machine_id"]),
+            )
+            c.execute(
+                "DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN (SELECT code_hash FROM enrollments)",
+                (key,),
+            )
+        code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
+        save(c, key, start_asked_at=None, create_asked_at=at)
+        return code
+
     def never_enrolled(self, current, c=None):
         """Finish cleanup of an attempt already counted when its code expired, without spending another try."""
         if c is None:
@@ -2463,8 +2505,11 @@ class Manager:
                 self.synced = None
             else:
                 fields["stop_until"] = None  # HQ said it did not: its runner may take work again
-        if action == "start" and 0 < refused.status < 500:
-            fields["start_asked_at"] = None  # a refusal says the start did not happen
+        if action == "start":
+            if 400 <= refused.status < 500 and refused.status != 408:
+                fields["start_asked_at"] = None  # a refusal says the start did not happen
+            else:
+                self.synced = None
         if (
             action == "start"
             and current["machine_size"]

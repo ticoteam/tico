@@ -856,11 +856,11 @@ def test_hq_errors_back_off_with_one_event_and_a_wait_note(cloud):
     enrolled(cloud)
     cloud.tick(400)
     work(cloud, text="More")
-    down = CM.Refused("unreachable")
-    cloud.hq.fail["start"] = [down, down, down]
+    refused = CM.Refused("http_429", 429)
+    cloud.hq.fail["start"] = [refused, refused, refused]
     cloud.hq.calls.clear()
     assert cloud.tick(10) == ["start"]
-    assert cloud.row()["problem"] == "hq:unreachable" and cloud.row()["failures"] == 1
+    assert cloud.row()["problem"] == "hq:http_429" and cloud.row()["failures"] == 1
     with cloud.store.read() as c:
         assert "didn't start" in CM.waiting(c, "ops")
     assert cloud.tick(10) == ["start"]  # inside 15 s: no call
@@ -1709,7 +1709,10 @@ def test_an_ambiguous_first_create_retries_at_the_deadline_without_a_readable_li
     cloud.hq.fail["create"] = [CM.Refused("http_503", 503)]
     cloud.hq.fail["list"] = CM.Refused("oversized")
     cloud.tick()
-    asked = cloud.row()["create_asked_at"]
+    current = cloud.row()
+    asked = current["create_asked_at"]
+    with cloud.store.read() as c:
+        assert CM.others_cpu(c, CM.SHARED) == next(s["cpu"] for s in SIZES if s["name"] == current["size"])
     cloud.tick(CM.CREATE_HOLD - 1)
     assert cloud.hq.actions().count("create") == 1 and cloud.row()["create_asked_at"] == asked
     cloud.tick(1)
@@ -3571,6 +3574,12 @@ def test_a_resume_whose_answer_was_lost_gets_its_idle_window_and_spends_its_wake
 
     monkeypatch.setattr(cloud.hq, "start", lost)
     assert cloud.tick(10) == ["start"] and cloud.row()["problem"] == "hq:unreachable"
+    asked = cloud.row()["start_asked_at"]
+    before = cloud.row()["wake_key"]
+    cloud.hq.machines["m1"]["pending"] = "start"
+    assert cloud.tick(10) == ["start"]  # HQ has only reserved the start
+    assert cloud.row()["start_asked_at"] == asked and cloud.row()["wake_key"] == before
+    cloud.hq.machines["m1"].update(state="running", pending=None)
     cloud.manager.synced = None
     assert cloud.tick(10) == ["start"]  # HQ sees the resume: no immediate idle stop
     current = cloud.row()
@@ -3607,6 +3616,7 @@ def test_a_lost_update_start_that_finishes_before_the_list_keeps_a_spent_job_wak
         current = CM.row(c, "ops")
         assert CM.wake_for(current, CM.facts(c, cloud.store.settings, current, cloud.at[0])) == (None, True)
     cloud.manager.synced = None
+    cloud.hq.machines["m1"]["state"] = "running"
     assert cloud.tick(10) == ["start"]
     current = cloud.row()
     assert (current["wake_key"], current["woke_at"]) == (spent["wake_key"], spent["woke_at"])
@@ -3614,6 +3624,62 @@ def test_a_lost_update_start_that_finishes_before_the_list_keeps_a_spent_job_wak
     assert cloud.tick(300)[-1] == "stop"
     cloud.hq.calls.clear()
     assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == "stuck"
+
+
+@pytest.mark.parametrize("action", ["create", "start"])
+def test_paid_reservation_rechecks_demand(cloud, action):
+    if action == "start":
+        enrolled(cloud)
+        stopped_when_idle(cloud)
+    else:
+        adopt(cloud)
+    work(cloud, text="Needs a paid wake")
+    current = cloud.row()
+    with cloud.store.read() as c:
+        demand = CM.facts(c, cloud.store.settings, current, cloud.at[0])
+        assert CM.decide(current, demand, cloud.at[0], CM.pause_after(current))[0] == action
+    idle(cloud)
+    cloud.hq.calls.clear()
+    cloud.manager.act(cloud.hq, current, action, demand, cloud.at[0])
+    assert not cloud.hq.actions()
+    assert cloud.row()[f"{action}_asked_at"] is None
+
+
+@pytest.mark.parametrize("hq_list", ["missing", "unreadable"])
+def test_an_unanswered_start_reserves_its_requested_size_until_the_deadline(cloud, monkeypatch, hq_list):
+    enrolled(cloud)
+    stopped_when_idle(cloud)
+    work(cloud, text="Needs a resume")
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", size="large")
+    cloud.hq.fail["start"] = [CM.Refused("http_408", 408)]
+    assert cloud.tick(10) == ["start"]
+    assert cloud.hq.calls[-1] == ("start", "m1", "large")
+    current = cloud.row()
+    asked = current["start_asked_at"]
+    assert asked == cloud.at[0]
+    with cloud.store.transaction() as c:
+        CM.save(c, "ops", size=current["machine_size"])
+    with cloud.store.read() as c:
+        assert CM.others_cpu(c, CM.SHARED) == next(s["cpu"] for s in SIZES if s["name"] == "large")
+    assert cloud.tick(10) == ["start"]  # a stopped report before the deadline leaves the reservation alone
+    if hq_list == "unreadable":
+        cloud.hq.fail["list"] = CM.Refused("unreachable")
+    else:
+        listed = cloud.hq.list
+        monkeypatch.setattr(cloud.hq, "list", lambda: {**listed(), "machines": []})
+    restarted = CM.Manager(cloud.store, cloud.store.settings, cloud.manager.execution, client=cloud.hq)
+    cloud.at[0] = asked + CM.START_HOLD - 1
+    restarted.tick()
+    assert cloud.hq.actions() == ["start"]
+    assert cloud.row()["start_asked_at"] == asked
+    cloud.at[0] += 1
+    with cloud.store.read() as c:
+        assert CM.others_cpu(c, CM.SHARED) == 0
+    restarted.tick()
+    assert cloud.hq.actions() == ["start", "start"]
+    assert cloud.hq.calls[-1] == ("start", "m1", None)
+    assert cloud.row()["start_asked_at"] is None
 
 
 @pytest.mark.parametrize(
@@ -3947,7 +4013,8 @@ def test_a_failed_cloud_update_wake_is_on_health_even_without_queued_work(cloud,
     draining(cloud, "ops", 1)  # a paused bot no longer wants the failed machine
     assert health_of(cloud)["waiting"]["status"] == "ok"
     draining(cloud, "ops", 0)
-    assert cloud.tick(CM.BACKOFF)[-1] == "start"
+    assert cloud.tick(CM.BACKOFF) == ["start"]
+    assert cloud.tick(CM.START_HOLD) == ["start", "start"]  # HQ confirms the machine stayed stopped
     assert health_of(cloud)["waiting"]["status"] == "ok"  # the successful retry clears the warning
 
 
