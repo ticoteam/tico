@@ -405,7 +405,7 @@ export const subscriptionsQuery = queryOptions({
   refetchInterval: ({ state }) => {
     let earliest = Infinity;
     for (const { usage } of state.data?.subscriptions ?? []) {
-      for (const end of [usage?.quota_hold_until, usage?.capacity_until]) {
+      for (const end of [usage?.quota_hold_until, usage?.capacity_until, usage?.resets_at]) {
         const at = Date.parse(end ?? '');
         if (at < earliest) earliest = at;
       }
@@ -413,7 +413,9 @@ export const subscriptionsQuery = queryOptions({
     if (earliest === Infinity) return false;
     // If a fresh response still reports a past deadline (for example with clock skew), back off.
     if (earliest <= state.dataUpdatedAt) return QUIET_STALE_MS;
-    return Math.min(2_147_483_647, Math.max(1, earliest - Date.now()));
+    // A failed refresh leaves the deadline in the past: retry no faster than every 5 s.
+    const wait = earliest - Date.now();
+    return wait > 0 ? Math.min(2_147_483_647, wait) : 5_000;
   },
   refetchIntervalInBackground: true,
 });
