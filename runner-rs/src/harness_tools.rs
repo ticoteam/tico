@@ -1865,10 +1865,18 @@ impl Harnesses {
                 ("idle", Some(line)) => line,
                 _ => detail,
             };
+            // A runtime whose login a turn refused reads "rejected" (readiness.rs); a harness row takes only
+            // ready/missing/failed/unknown (backend/models.py HarnessReadiness), so it reads "failed".
             let authenticated = if path.is_some() {
                 row.get("authenticated")
                     .filter(|v| truthy_str(v))
-                    .cloned()
+                    .map(|v| {
+                        if v == "rejected" {
+                            json!("failed")
+                        } else {
+                            v.clone()
+                        }
+                    })
                     .unwrap_or(json!("unknown"))
             } else {
                 json!("missing")
@@ -2610,8 +2618,9 @@ mod tests {
         assert!(
             !agy.capabilities.persistent_session
                 && agy.capabilities.readiness
-                && agy.capabilities.subscription_profiles
-                && agy.capabilities.profile_home == "GEMINI_HOME"
+                // No profile homes until Connect can sign one in (the login plan kind).
+                && !agy.capabilities.subscription_profiles
+                && agy.capabilities.profile_home.is_empty()
                 && agy.capabilities.mcp_transports.is_empty()
         );
         assert_eq!(
@@ -2853,6 +2862,22 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.dir);
         }
+    }
+
+    #[test]
+    fn a_refused_login_reads_failed_on_the_harness_row_and_rejected_only_on_the_runtime() {
+        // A turn refused the sign-in (readiness.rs): the backend takes "rejected" on a runtime row only, so a harness
+        // row that copied it would fail the whole heartbeat.
+        let mut m = Machine::new(false);
+        let runtimes = json!({"claude": {"installed": true, "authenticated": "rejected"}});
+        let report = m.h.report(runtimes.as_object().unwrap());
+        assert_eq!(report["claude-code"]["authenticated"], "failed");
+        assert_eq!(runtimes["claude"]["authenticated"], "rejected");
+        let ready = json!({"claude": {"authenticated": "ready"}});
+        assert_eq!(
+            m.h.report(ready.as_object().unwrap())["claude-code"]["authenticated"],
+            "ready"
+        );
     }
 
     #[test]

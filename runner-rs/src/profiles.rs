@@ -826,7 +826,9 @@ pub async fn report(
                     match status.check.as_str() {
                         "command" | "json" => {
                             if let (Some(exe), false) = (exe, budget.is_zero()) {
-                                let env = profile.environment(runtime, &clean);
+                                let mut env = profile.environment(runtime, &clean);
+                                // The manifest's own variables, as a turn has them (Antigravity's no-self-update).
+                                env.extend(crate::harness_tools::env_for(runtime));
                                 // As the bot user, like readiness and turns: the CLI may write in the profile's home.
                                 let mut cmd = crate::isolation::command(exe);
                                 cmd.args(&status.args)

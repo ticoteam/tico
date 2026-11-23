@@ -25,8 +25,8 @@ AGY_CLI_DISABLE_AUTO_UPDATE = "1"
 
 # What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
 [capabilities]
-subscription_profiles = true
-profile_home = "GEMINI_HOME"
+# Its own sign-in per subscription profile (subscription_profiles, profile_home GEMINI_HOME) waits for Connect, which
+# signs one in: until then a profile's home would hold no login.
 tool_events = true
 mcp_unsupported = "it reads MCP servers only from a config file in the operator's home, which Tico does not touch (the operator's own servers would reach every bot)"
 resume_command = "agy --conversation"
