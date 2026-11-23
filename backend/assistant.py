@@ -561,16 +561,42 @@ def call_turn(c, who):
     return {"for": who.actor, "cited": turn["id"], "run": "asked"}
 
 
-def spoken_words(c, turn_id):
-    """The words of a call turn a voice-authorized change cited (`call_turn`): the question the Assistant was asked, as
-    its turn record keeps it (the resident session's input, or the gathered question its own job carries), or ""."""
+def cited_message(c, cited):
+    """The person's request a delegation cites (its `cited`; a task's `request_id`), as a message: their chat message
+    (H.message), or the call turn they spoke (`call_turn`), read from the records that let it act: the turn, the line
+    the recorder first wrote for it (its speaker is `sender_id`), its words as the Assistant was asked them (the
+    resident session's input, or the gathered question its own job carries), when it was asked (`created_at`), and the
+    chat the call is in (its root, where the Assistant's replies are: `conversation_id`). None for neither. Every reader
+    of a citation takes it from here, so a spoken request quotes, lends and agrees as a typed one does."""
+    if not cited:
+        return None
+    message = H.message(c, cited)
+    if message:
+        return message
+    from .call_voice import GATHERED_SOURCE
+
     row = c.execute(
-        "SELECT t.voice_input,json_extract(m.refs,'$.live_meeting.question') FROM live_meeting_turns t "
+        "SELECT t.id,t.bot,t.created_at,v.authored_by,COALESCE(NULLIF(r.root_id,''),r.id) AS room,t.voice_input,"
+        "json_extract(m.refs,'$.live_meeting.question') AS question FROM live_meeting_turns t "
+        "JOIN live_meeting_chunk_versions v ON v.meeting_id=t.meeting_id AND v.seq=t.transcript_seq AND v.revision=1 "
+        "JOIN calls s ON s.live_meeting_id=t.meeting_id JOIN conversations r ON r.id=s.thread_id "
         "LEFT JOIN jobs j ON j.id=substr(t.claim_owner,5) AND t.claim_owner LIKE 'job:%' "
-        "LEFT JOIN messages m ON m.id=j.message_id WHERE t.id=?",
-        (turn_id,),
+        "LEFT JOIN messages m ON m.id=j.message_id WHERE t.id=? AND t.source_key=?||t.transcript_seq",
+        (cited, GATHERED_SOURCE),
     ).fetchone()
-    return str((row[0] or row[1] or "") if row else "")
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "body": str(row["voice_input"] or row["question"] or ""),
+        "sender_id": row["authored_by"],
+        "recipient_id": "bot:" + row["bot"],
+        "kind": "say",
+        "refs": {"spoken": True},
+        "created_at": row["created_at"],
+        "conversation_id": row["room"],
+        "deleted_at": None,
+    }
 
 
 def instruction(c, who, ref):

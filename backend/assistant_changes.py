@@ -238,13 +238,12 @@ def _json(text):
 def cited_words(c, delegation):
     """The text of the person's message a change acted on, when the change cited one: in a call, the turn they spoke
     (backend/assistant.py call_turn)."""
-    from .assistant import spoken_words
+    from .assistant import cited_message
 
     cited = delegation.get("cited") if isinstance(delegation, dict) else None
     if not isinstance(cited, str) or not cited:
         return ""
-    message = H.message(c, cited)
-    return (message or {}).get("body") or ("" if message else spoken_words(c, cited))
+    return (cited_message(c, cited) or {}).get("body") or ""
 
 
 def move_delegation(c, row):

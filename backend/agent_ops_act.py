@@ -241,7 +241,9 @@ def lend_lapsed(c, task):
     ).fetchone()
     if made and made["actor"] == requester and H._json(made["detail"], {}).get("via") != "assistant":
         spoke.append(task["created_at"])
-    origin = H.message(c, task["request_id"]) if task.get("request_id") else None
+    from .assistant import cited_message
+
+    origin = cited_message(c, task.get("request_id"))  # their message, or the call turn they spoke
     if origin and origin["sender_id"] == requester:
         spoke.append(origin["created_at"])
     comment = c.execute(
@@ -1337,7 +1339,9 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
             ):
                 # The person's own words to their Assistant, checked when it filed this (task_create): Agent Ops acts
                 # as them, as if they had asked it in their Agent Ops chat.
-                origin = H.message(c, (H._json(asked["detail"], {}) or {}).get("cited") or "")
+                from .assistant import cited_message  # their message, or the call turn they spoke
+
+                origin = cited_message(c, (H._json(asked["detail"], {}) or {}).get("cited"))
                 if (
                     not origin
                     or origin.get("deleted_at")

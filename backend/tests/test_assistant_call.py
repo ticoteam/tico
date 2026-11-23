@@ -10,8 +10,8 @@ import pytest
 from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.assistant import room
+from backend.tests.helpers.api import claim, get, headers, post
+from backend.tests.helpers.assistant import asked, room
 from backend.tests.helpers.calls import (
     PCM_ONE_SECOND,
     SILENCE_ONE_SECOND,
@@ -23,6 +23,9 @@ from backend.tests.helpers.calls import (
     thread_texts,
 )
 from backend.tests.helpers.credentials import setup as credential_setup
+from backend.tests.helpers.goal_read_back import goal
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture
+from backend.tests.helpers.strategy_bot_chat import strategy_bot
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
 from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, machine, on, pick
 
@@ -59,11 +62,11 @@ def _claim(api, worker):
     return attempt
 
 
-def _heard(api, call, session, worker, speaker="human:ana"):
+def _heard(api, call, session, worker, speaker="human:ana", start_ms=0):
     """`speaker` says something in the call and the voice session takes it as the question it answers now."""
     calls = api.app.state.calls
     join(api, call["id"])
-    calls.ingest(call["id"], speaker, PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    calls.ingest(call["id"], speaker, PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, start_ms)
     assert calls.settle()
     return post(api, f"attempts/{session['id']}/inputs", {}, worker["token"])["call_voice"]["turn"]
 
@@ -672,3 +675,80 @@ def test_taking_yourself_out_of_your_calls_meeting_and_back_keeps_it_yours(meet)
     post(meet, f"live-meetings/{meeting}/join", {})
     assert get(meet, "needs-you", session["token"])["items"] is not None
     assert _scope(meet, session["id"]) == ("person", "human:ana")
+
+
+# --- What she said counts as her typed words do wherever a citation is read (assistant.cited_message).
+
+
+def _says(monkeypatch, words):
+    """What the recorder hears Ana say next."""
+    from backend import call_media
+
+    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: words)
+
+
+def _answered(api, session, worker, turn):
+    """The voice session answers the turn, so the call's next question can be asked."""
+    events = [{"seq": 1, "kind": "message", "payload": {"voice_turn": turn["id"], "text": "Sure.", "final": True}}]
+    post(api, f"attempts/{session['id']}/events", {"events": events}, worker["token"])
+    assert api.app.state.calls.settle()
+
+
+def test_a_spoken_hand_off_to_agent_ops_quotes_your_words_and_lends_your_rights(meet, agent_ops):
+    from fastapi import Request
+
+    def whose(request: Request):
+        return {"actor": request.state.identity.actor}
+
+    meet.app.add_api_route("/api/v2/qa-call-identity", whose, methods=["GET"])
+    meet.app.router.routes.insert(0, meet.app.router.routes.pop())
+    call, session, worker = _private_call(meet)
+    _heard(meet, call, session, worker)
+    filed = {"owner": "botops", "title": "Add a support inbox bot", "body": "Ana asked.", "request_id": "turn"}
+    post(meet, "tasks", filed, token=session["token"])
+    with meet.app.state.store.read() as c:
+        quoted = c.execute(
+            "SELECT body FROM messages WHERE recipient_id='bot:botops' AND body LIKE '%in their words%'"
+        ).fetchone()
+    assert "> " + SYNTHETIC_SPEECH in quoted["body"]
+    attempt = claim(meet, agent_ops, "botops")
+    lent = meet.get("/api/v2/qa-call-identity", headers=headers(attempt["token"]))
+    assert lent.status_code == 200 and lent.json()["actor"] == "human:ana", lent.text
+
+
+def test_a_spoken_no_turns_a_goal_suggestion_down_as_a_typed_one_does(meet, monkeypatch):
+    strategy_bot(meet)
+    g = goal(meet, "Get 100 companies to try Tico", owner="ops")
+    call, session, worker = _private_call(meet)
+    _says(monkeypatch, "No, leave it without a number.")
+    _heard(meet, call, session, worker)
+    suggestion = {
+        "kind": "goal_kpi",
+        "goal_id": g["id"],
+        "payload": {
+            "kpi": {"name": "Companies that tried Tico"},
+            "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"},
+        },
+        "reason": "A number to aim for, like 100 companies by Nov 28.",
+    }
+    out = asked(meet, "proposals/turned-down", suggestion, session["token"], "turn")["proposal"]
+    assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
+
+
+def test_a_spoken_yes_to_a_goal_read_back_saves_it_as_a_typed_one_does(meet, monkeypatch):
+    strategy_bot(meet)
+    call, session, worker = _private_call(meet)
+    _answered(meet, session, worker, _heard(meet, call, session, worker))  # "set a goal", and its read-back
+    change = {
+        "kind": "goal_create",
+        "title": "Get 100 companies to try Tico",
+        "owner": "ops",
+        "measure": {"name": "Companies that tried Tico"},
+        "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"},
+    }
+    back = post(meet, "goals/read-back", {"changes": [change]}, token=session["token"])
+    _says(monkeypatch, "Yes, save it.")
+    _heard(meet, call, session, worker, start_ms=10_000)
+    step = back["changes"][0]["steps"][0]
+    made = asked(meet, step["path"].removeprefix("/api/v2/"), json.loads(step["body"]), session["token"], "turn")
+    assert made["goal"]["title"] == "Get 100 companies to try Tico"
