@@ -1213,24 +1213,44 @@ read -r _
         let mut env = rig.settings(&[]).env;
         env.insert("HOME".into(), rig.dir.join("home").display().to_string());
         env.insert("GEMINI_API_KEY".into(), "AIza-computer-key".into());
-        let mut got = subs::apply(&rig.dir, &items, &mut env, &mut vec![], &mut Default::default());
+        let mut got = subs::apply(
+            &rig.dir,
+            &items,
+            &mut env,
+            &mut vec![],
+            &mut Default::default(),
+        );
         subs::start(&mut got, "antigravity", &mut env).unwrap();
         let home = PathBuf::from(&env["GEMINI_HOME"]);
-        assert_eq!(std::fs::read_to_string(home.join(subs::AGY_TOKEN)).unwrap(), value);
+        assert_eq!(
+            std::fs::read_to_string(home.join(subs::AGY_TOKEN)).unwrap(),
+            value
+        );
         let told = |env: &crate::env::Env| {
-            let settings = Settings { env: env.clone(), ..rig.settings(&[]) };
+            let settings = Settings {
+                env: env.clone(),
+                ..rig.settings(&[])
+            };
             let (host, _rx) = rig.host();
             let command = host.command(&settings, None, None).unwrap();
             let set: BTreeMap<String, Option<String>> = command
                 .as_std()
                 .get_envs()
-                .map(|(k, v)| (k.to_string_lossy().into(), v.map(|v| v.to_string_lossy().into())))
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into(),
+                        v.map(|v| v.to_string_lossy().into()),
+                    )
+                })
                 .collect();
             set
         };
         let plan = told(&env);
         assert_eq!(plan["SSH_CONNECTION"].as_deref(), Some(subs::OVER_SSH.1));
-        assert!(plan.get("GEMINI_API_KEY").is_none_or(Option::is_none), "{plan:?}");
+        assert!(
+            plan.get("GEMINI_API_KEY").is_none_or(Option::is_none),
+            "{plan:?}"
+        );
         // Tico's own commands in the turn (git) get the turn's environment, which never says SSH.
         assert!(!env.contains_key("SSH_CONNECTION"));
         // On the computer's own sign-in (a Mac's keychain) agy is never told it runs over SSH.
@@ -1239,10 +1259,16 @@ read -r _
         own.insert("GEMINI_API_KEY".into(), "AIza-computer-key".into());
         let computer = told(&own);
         assert!(!computer.contains_key("SSH_CONNECTION"));
-        assert_eq!(computer["GEMINI_API_KEY"].as_deref(), Some("AIza-computer-key"));
+        assert_eq!(
+            computer["GEMINI_API_KEY"].as_deref(),
+            Some("AIza-computer-key")
+        );
         subs::finish(&mut got);
         assert!(!home.exists());
-        assert!(!told(&env).contains_key("SSH_CONNECTION"), "a home let go is no plan's");
+        assert!(
+            !told(&env).contains_key("SSH_CONNECTION"),
+            "a home let go is no plan's"
+        );
     }
 
     async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {

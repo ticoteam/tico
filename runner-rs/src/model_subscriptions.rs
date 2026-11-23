@@ -144,7 +144,9 @@ impl TurnHome {
         for rel in self.links {
             let target = own.join(rel);
             let link = home.join(rel);
-            if std::fs::symlink_metadata(&target).is_err() || std::fs::symlink_metadata(&link).is_ok() {
+            if std::fs::symlink_metadata(&target).is_err()
+                || std::fs::symlink_metadata(&link).is_ok()
+            {
                 continue;
             }
             if let Some(parent) = link.parent() {
@@ -561,7 +563,9 @@ pub fn start(
     if d.home.is_none() || d.file.is_none() {
         return Ok(secrets);
     }
-    secrets.extend(hold(d, env).map_err(|e| format!("The plan's sign-in could not be put in place: {e}"))?);
+    secrets.extend(
+        hold(d, env).map_err(|e| format!("The plan's sign-in could not be put in place: {e}"))?,
+    );
     Ok(secrets)
 }
 
@@ -1418,11 +1422,17 @@ mod tests {
     }
 
     #[test]
-    fn an_antigravity_plan_gets_a_private_home_per_turn_with_the_bots_conversations_and_nothing_else() {
+    fn an_antigravity_plan_gets_a_private_home_per_turn_with_the_bots_conversations_and_nothing_else(
+    ) {
         use std::os::unix::fs::PermissionsExt;
         let state = dir();
         let own = state.join("bot/.gemini");
-        for rel in ["antigravity-cli/conversations/c1.pb", "settings.json", "antigravity-cli/settings.json", "GEMINI.md"] {
+        for rel in [
+            "antigravity-cli/conversations/c1.pb",
+            "settings.json",
+            "antigravity-cli/settings.json",
+            "GEMINI.md",
+        ] {
             std::fs::create_dir_all(own.join(rel).parent().unwrap()).unwrap();
             std::fs::write(own.join(rel), "x").unwrap();
         }
@@ -1441,21 +1451,40 @@ mod tests {
             ]
             .into();
             let mut values = vec![];
-            let mut got = apply(&state, &item(value), &mut env, &mut values, &mut BTreeSet::new());
-            assert!(values.iter().any(|v| v == "ya29.synthetic-access-token-0123456789"));
+            let mut got = apply(
+                &state,
+                &item(value),
+                &mut env,
+                &mut values,
+                &mut BTreeSet::new(),
+            );
+            assert!(values
+                .iter()
+                .any(|v| v == "ya29.synthetic-access-token-0123456789"));
             start(&mut got, "antigravity", &mut env).unwrap();
             assert!(!env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
             let home = PathBuf::from(&env["GEMINI_HOME"]);
             let token = home.join(AGY_TOKEN);
             assert_eq!(std::fs::read_to_string(&token).unwrap(), value);
-            assert_eq!(token.metadata().unwrap().permissions().mode() & 0o777, 0o600);
-            assert!(!std::fs::symlink_metadata(token.parent().unwrap()).unwrap().is_symlink());
+            assert_eq!(
+                token.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert!(!std::fs::symlink_metadata(token.parent().unwrap())
+                .unwrap()
+                .is_symlink());
             assert_eq!(
                 std::fs::read_link(home.join("antigravity-cli/conversations")).unwrap(),
                 own.join("antigravity-cli/conversations")
             );
-            assert_eq!(std::fs::read_link(home.join("GEMINI.md")).unwrap(), own.join("GEMINI.md"));
-            assert!(!home.join("settings.json").exists() && !home.join("antigravity-cli/settings.json").exists());
+            assert_eq!(
+                std::fs::read_link(home.join("GEMINI.md")).unwrap(),
+                own.join("GEMINI.md")
+            );
+            assert!(
+                !home.join("settings.json").exists()
+                    && !home.join("antigravity-cli/settings.json").exists()
+            );
             // Two plans, or a plan and the computer, resume one conversation; a shell of another runtime never runs on it.
             assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
             assert!(!got[0].for_shell());
@@ -1466,16 +1495,26 @@ mod tests {
             finish(&mut got);
             assert!(!home.exists());
         }
-        assert_eq!(std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(), "computer-token");
+        assert_eq!(
+            std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
+            "computer-token"
+        );
         assert!(own.join("antigravity-cli/conversations/c1.pb").exists());
         // A file the runner does not know, or a home it cannot make, never runs the turn on another login.
         let mut env: Env = [("HOME".into(), state.join("bot").display().to_string())].into();
         let bad = json!([{"id": "agyplan", "runtime": "antigravity", "file": "../token", "value": value, "revision": 1}]);
         assert!(apply(&state, &bad, &mut env, &mut vec![], &mut BTreeSet::new()).is_empty());
-        let mut got = apply(&state, &item(value), &mut env, &mut vec![], &mut BTreeSet::new());
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
         let home = got[0].home.clone().unwrap();
         std::fs::create_dir_all(&home).unwrap();
-        std::os::unix::fs::symlink(&own.join("antigravity-cli"), home.join("antigravity-cli")).unwrap();
+        std::os::unix::fs::symlink(own.join("antigravity-cli"), home.join("antigravity-cli"))
+            .unwrap();
         assert!(start(&mut got, "antigravity", &mut env).is_err());
         assert!(!env.contains_key("GEMINI_HOME"));
         // So for a ChatGPT plan's home: no silent fall back to the computer's own sign-in.
@@ -1488,7 +1527,10 @@ mod tests {
         std::os::unix::fs::symlink(&own, &home).unwrap();
         assert!(start(&mut got, "codex", &mut env).is_err());
         assert!(!own.join("auth.json").exists());
-        assert_eq!(std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(), "computer-token");
+        assert_eq!(
+            std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
+            "computer-token"
+        );
         std::fs::remove_dir_all(state).unwrap();
     }
 

@@ -510,7 +510,7 @@ describe('Settings › Providers', () => {
   it('follows a sign-in that queues after the computer wake deadline until the server ends it', async () => {
     vi.useFakeTimers();
     try {
-      queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [plan] });
+      queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [plan] });
       let finishStart!: (reply: Reply) => void;
       const pending = new Promise<Reply>((resolve) => { finishStart = resolve; });
       let expired = false;
@@ -768,7 +768,7 @@ describe('Settings › Providers', () => {
   });
 
   it('shows the empty state inside Your pool and holds Add while the key is saving', async () => {
-    const catalog = { subscriptions: [], kinds: [{ kind: 'anthropic_key' as const, runtime: 'claude' as const, label: 'Anthropic API key', secret_label: 'API key', connect: false, help: '', owned: false }] };
+    const catalog = { subscriptions: [], kinds: [{ kind: 'anthropic_key' as const, runtime: 'claude' as const, label: 'Anthropic API key', secret_label: 'API key', connect: false, help: '', owned: false, paste: true }] };
     let finish!: (reply: Reply) => void;
     const pending = new Promise<Reply>((resolve) => { finish = resolve; });
     queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);

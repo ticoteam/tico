@@ -1023,9 +1023,14 @@ fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
 pub fn sweep_plan_sides() {
     let process: Env = std::env::vars().collect();
     for t in crate::model_subscriptions::TURN_HOMES {
-        let Some(home) = t.own(&process) else { continue };
+        let Some(home) = t.own(&process) else {
+            continue;
+        };
         for entry in std::fs::read_dir(&home).into_iter().flatten().flatten() {
-            if entry.file_name().to_string_lossy().starts_with(".tico-switch-")
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".tico-switch-")
                 && entry.file_type().is_ok_and(|f| f.is_dir())
             {
                 let _ = std::fs::remove_dir_all(entry.path());
@@ -1330,8 +1335,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         }
         env.extend(t.env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
     }
-    let side_home = switch.as_ref().map(|(_, side)| side.display().to_string()).unwrap_or_default();
-    let connect_argv: Vec<String> = login.connect.iter().map(|a| a.replace("{home}", &side_home)).collect();
+    let side_home = switch
+        .as_ref()
+        .map(|(_, side)| side.display().to_string())
+        .unwrap_or_default();
+    let connect_argv: Vec<String> = login
+        .connect
+        .iter()
+        .map(|a| a.replace("{home}", &side_home))
+        .collect();
     let command = if connect && !full {
         &connect_argv
     } else {
@@ -1511,7 +1523,9 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                 _ if !finished && !stopped_after_token => None,
                 Some((_, side)) if full => full_login(side, &real_env),
                 // A sign-in a turn reads from its own home only counts once the CLI says it is signed in there.
-                Some(_) if plan_home.is_some() && !signed_in(&s.runtime, &exe, &env, false).0 => None,
+                Some(_) if plan_home.is_some() && !signed_in(&s.runtime, &exe, &env, false).0 => {
+                    None
+                }
                 Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
                 None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
             };
@@ -2944,7 +2958,10 @@ mod tests {
     fn an_antigravity_connect_signs_in_on_the_side_and_counts_only_what_agy_accepts() {
         const CHILD: &str = "TICO_TEST_AGY_CONNECT";
         let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
-            let root = std::env::temp_dir().join(format!("tico-agy-connect-{}", uuid::Uuid::new_v4().simple()));
+            let root = std::env::temp_dir().join(format!(
+                "tico-agy-connect-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
             std::fs::create_dir_all(root.join("bin")).unwrap();
             crate::util::write_script(
                 &root.join("bin/agy"),
@@ -2998,7 +3015,11 @@ esac
         };
         let own = root.join(".gemini");
         std::fs::create_dir_all(own.join("antigravity-cli")).unwrap();
-        std::fs::write(own.join("antigravity-cli/antigravity-oauth-token"), "computer").unwrap();
+        std::fs::write(
+            own.join("antigravity-cli/antigravity-oauth-token"),
+            "computer",
+        )
+        .unwrap();
         // One a Connect cut off by a stop left: it goes when the runner starts.
         std::fs::create_dir_all(own.join(".tico-switch-old/antigravity-cli")).unwrap();
         sweep_plan_sides();
@@ -3016,10 +3037,19 @@ esac
             if refuses {
                 std::fs::write(root.join("refuses"), "").unwrap();
             }
-            let login = Session::new(&json!({"id": id, "runtime": "antigravity", "kind": "connect"}));
+            let login =
+                Session::new(&json!({"id": id, "runtime": "antigravity", "kind": "connect"}));
             let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
-            let running = std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
-            wait_for(|| login.inner.lock().unwrap().url.starts_with("https://accounts.google.com/o/oauth2/auth"));
+            let running =
+                std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+            wait_for(|| {
+                login
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .url
+                    .starts_with("https://accounts.google.com/o/oauth2/auth")
+            });
             login.submit("4/pasted-code");
             running.join().unwrap();
             let i = login.inner.lock().unwrap();
@@ -3032,9 +3062,20 @@ esac
                 );
             }
         }
-        assert_eq!(std::fs::read_to_string(own.join("antigravity-cli/antigravity-oauth-token")).unwrap(), "computer");
-        let left: Vec<_> = std::fs::read_dir(&own).unwrap().flatten().map(|e| e.file_name()).collect();
-        assert_eq!(left, vec![std::ffi::OsString::from("antigravity-cli")], "no side home stays");
+        assert_eq!(
+            std::fs::read_to_string(own.join("antigravity-cli/antigravity-oauth-token")).unwrap(),
+            "computer"
+        );
+        let left: Vec<_> = std::fs::read_dir(&own)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(
+            left,
+            vec![std::ffi::OsString::from("antigravity-cli")],
+            "no side home stays"
+        );
     }
 
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.

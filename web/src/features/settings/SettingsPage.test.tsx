@@ -260,7 +260,7 @@ describe('A model sign-in @s746', () => {
           ? { status: 200, body: { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] } }
           : { status: 404, body: { detail: 'not_found' } },
     );
-    const kind = { connect: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
+    const kind = { connect: true, paste: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     queryClient.setQueryData(computersQuery.queryKey, []);
     show(<Providers />, '/settings/providers');
@@ -281,7 +281,7 @@ describe('A model sign-in @s746', () => {
       if (url.endsWith('/logins/l1/code')) return pending;
       if (url.endsWith('/logins/l1')) return ok({ ...waiting, code_sent: codeSent });
     });
-    const kind = { connect: true, help: '', kind: 'claude_token' as const, label: 'Claude plan', owned: true, runtime: 'claude' as const, secret_label: 'Setup token' };
+    const kind = { connect: true, paste: true, help: '', kind: 'claude_token' as const, label: 'Claude plan', owned: true, runtime: 'claude' as const, secret_label: 'Setup token' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     show(<Providers />, '/settings/providers');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
