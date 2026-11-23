@@ -220,6 +220,33 @@ def test_rotation_advances_the_tunnel_lease_atomically(api, computers):
         assert MS.model_exit_credential(c, api.app.state.vault, sub) == {"access_token": access(2)}
 
 
+def test_cleanup_prunes_orphaned_attempt_and_connect_bindings(api, computers):
+    from backend.maintenance_steps import clean_up
+
+    exit_runner, _ = computers
+    sid = add(api, "claude_login", full(minutes=30))["id"]
+    generation = select(api, exit_runner)
+    agent_on(api, exit_runner, "ops", sid)
+    attempt_id = turn(api, exit_runner, "ops")
+    [lease] = poll(api, exit_runner, sid)["refreshes"]
+    login_id = post(api, CONNECT, {"subscription": sid, "confirm": True})["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.executemany(
+            "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES(?,?,?)",
+            [("attempt", login_id, generation), ("connect", attempt_id, generation)],
+        )
+
+    clean_up.run(None, {"store": store, "now": H.now()})
+
+    with store.read() as c:
+        assert {tuple(row) for row in c.execute("SELECT kind,ref_id,exit_generation FROM plan_exit_bindings")} == {
+            ("attempt", attempt_id, generation),
+            ("connect", login_id, generation),
+            ("lease", lease["lease"], generation),
+        }
+
+
 def test_setup_token_poll_and_report_fence_legacy_work_and_same_runner_reselection(api, computers, monkeypatch):
     exit_runner, non_exit = computers
     sid = add(api)["id"]

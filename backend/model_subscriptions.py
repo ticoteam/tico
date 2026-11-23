@@ -1038,7 +1038,7 @@ def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
         if route.runner_id != runner_id or not (attempt_id := reading.get("attempt_id")):
             return False
         binding = (
-            "AND s.attempt_id=? AND s.exit_generation=? AND s.delivery<>'model_exit' "
+            "AND s.attempt_id=? AND e.exit_generation=? AND s.delivery<>'model_exit' "
             "AND julianday(a.created_at)<=julianday(?) "
         )
         args = (*args, attempt_id, route.generation, reading["reported_at"])
@@ -1046,6 +1046,7 @@ def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
         c.execute(
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
             "JOIN model_subscriptions m ON m.id=s.subscription_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id "
             "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
             "AND a.created_at>=m.credential_at " + binding + "LIMIT 1",
             args,
@@ -2091,10 +2092,12 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
     )
     if route := plan_exits.routed(c, sub):
         c.execute(
-            "UPDATE attempt_subscriptions SET revision=? WHERE subscription_id=? AND delivery='model_exit' "
-            "AND exit_generation=? AND revision=? AND attempt_id IN (SELECT id FROM attempts "
+            "UPDATE attempt_subscriptions AS s SET revision=? FROM plan_exit_bindings e "
+            "WHERE s.subscription_id=? AND s.delivery='model_exit' AND s.revision=? "
+            "AND e.kind='attempt' AND e.ref_id=s.attempt_id AND e.exit_generation=? "
+            "AND s.attempt_id IN (SELECT id FROM attempts "
             "WHERE state IN ('leased','running') AND stop_requested_at IS NULL AND lease_until>?)",
-            (sub["revision"] + 1, sub["id"], route.generation, sub["revision"], now),
+            (sub["revision"] + 1, sub["id"], sub["revision"], route.generation, now),
         )
 
 
@@ -2616,7 +2619,7 @@ def hand_out(c, attempt_id, chosen):
         route = plan_exits.routed(c, sub)
         c.execute(
             "INSERT OR REPLACE INTO attempt_subscriptions"
-            "(attempt_id,runtime,subscription_id,revision,delivery,parent_grant,exit_generation) VALUES(?,?,?,?,?,?,?)",
+            "(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) VALUES(?,?,?,?,?,?)",
             (
                 attempt_id,
                 item["runtime"],
@@ -2624,9 +2627,13 @@ def hand_out(c, attempt_id, chosen):
                 sub["revision"],
                 delivery,
                 sub.get("payer_parent"),
-                route.generation if route else None,
             ),
         )
+        if route:
+            c.execute(
+                "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES('attempt',?,?)",
+                (attempt_id, route.generation),
+            )
         if item.get("activate"):
             c.execute(
                 "INSERT OR IGNORE INTO pending_subscription_fallbacks(attempt_id,runtime) VALUES(?,?)",
@@ -2987,9 +2994,10 @@ def connect(c, settings, auth, who, body):
     same = claude if kind in claude else (kind,)
     target = c.execute(
         f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=s.login_id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
         f"AND s.subscription_id=? AND s.owner_id=? AND {model_login.ACTIVE_SQL}"
-        " AND s.exit_generation IS ? AND l.runner_id=coalesce(?,l.runner_id)"
+        " AND e.exit_generation IS ? AND l.runner_id=coalesce(?,l.runner_id)"
         + (" AND s.name=?" if name else "")
         + " ORDER BY l.created_at",
         (who.actor, *same, sid, owner, exit_generation, exit_id, *([name] if name else [])),
@@ -3052,10 +3060,15 @@ def connect(c, settings, auth, who, body):
         )
     # The default name is numbered when saved, so concurrent sign-ins still get distinct names.
     c.execute(
-        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id,restart_confirmed,exit_generation) "
-        "VALUES(?,?,?,?,?,?,?)",
-        (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm), exit_generation),
+        "INSERT INTO subscription_connects(login_id,kind,name,subscription_id,owner_id,restart_confirmed) "
+        "VALUES(?,?,?,?,?,?)",
+        (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm)),
     )
+    if route:
+        c.execute(
+            "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES('connect',?,?)",
+            (login["id"], route.generation),
+        )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner, plan_name)
 
@@ -3074,7 +3087,11 @@ def connected(c, vault, settings, auth, who, login_id, body):
         raise Problem("not_found", "That sign-in does not exist", 404)
     if login["state"] not in model_login.ACTIVE:
         raise Problem("state", "That sign-in has ended", 409)
-    target = c.execute("SELECT * FROM subscription_connects WHERE login_id=?", (login_id,)).fetchone()
+    target = c.execute(
+        "SELECT s.*,e.exit_generation FROM subscription_connects s "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=s.login_id WHERE s.login_id=?",
+        (login_id,),
+    ).fetchone()
     state, message, category = "done", "", ""
     if not target:
         state, message, category = "failed", "That sign-in has ended", "ended"

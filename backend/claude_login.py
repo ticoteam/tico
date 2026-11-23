@@ -341,8 +341,8 @@ def _lease(c: Any, sid: str) -> Row:
     return (
         H._one(
             c,
-            "SELECT l.*,i.exit_generation FROM claude_logins l LEFT JOIN claude_login_leases i ON i.id=l.lease_id "
-            "WHERE l.subscription_id=?",
+            "SELECT l.*,e.exit_generation FROM claude_logins l "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='lease' AND e.ref_id=l.lease_id WHERE l.subscription_id=?",
             (sid,),
         )
         or {}
@@ -455,11 +455,21 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> l
                 raise _Write
             lease = {"lease_id": H.new_id(), "lease_revision": sub["revision"]}
             c.execute(
-                "INSERT INTO claude_login_leases(id,subscription_id,runner_id,revision,issued_at,exit_generation) "
-                "VALUES(?,?,?,?,?,?)",
-                (lease["lease_id"], sub["id"], runner_id, sub["revision"], now, route.generation if route else None),
+                "INSERT INTO claude_login_leases(id,subscription_id,runner_id,revision,issued_at) VALUES(?,?,?,?,?)",
+                (lease["lease_id"], sub["id"], runner_id, sub["revision"], now),
             )
-            c.execute("DELETE FROM claude_login_leases WHERE issued_at<?", (H.shift(now, seconds=-KEEP_SECONDS),))
+            if route:
+                c.execute(
+                    "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES('lease',?,?)",
+                    (lease["lease_id"], route.generation),
+                )
+            cutoff = H.shift(now, seconds=-KEEP_SECONDS)
+            c.execute(
+                "DELETE FROM plan_exit_bindings WHERE kind='lease' AND ref_id IN "
+                "(SELECT id FROM claude_login_leases WHERE issued_at<?)",
+                (cutoff,),
+            )
+            c.execute("DELETE FROM claude_login_leases WHERE issued_at<?", (cutoff,))
             _put_lease(
                 c,
                 sub["id"],
@@ -490,7 +500,12 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
     sub = MS.row(c, sid)
     if not sub or sub["kind"] != KIND:
         raise Problem("not_found", "That plan is not a full Claude login", 404)
-    issued = H._one(c, "SELECT * FROM claude_login_leases WHERE id=?", (body.lease,))
+    issued = H._one(
+        c,
+        "SELECT l.*,e.exit_generation FROM claude_login_leases l "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='lease' AND e.ref_id=l.id WHERE l.id=?",
+        (body.lease,),
+    )
     if (
         not issued
         or issued["runner_id"] != runner_id
@@ -646,8 +661,9 @@ def _tokens(c: Any, runner_id: str, live: list[tuple["LiveToken", Row, int | Non
         if sub["kind"] != KIND or sub["status"] == "needs_reconnect" or sub["revision"] <= item.revision:
             continue
         if (generation is None and runner_id not in provider_runners(c, sub)) or not c.execute(
-            "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
-            "AND s.delivery<>'model_exit' AND s.exit_generation IS ? AND a.runner_id=? "
+            "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id "
+            "WHERE s.subscription_id=? AND s.delivery<>'model_exit' AND e.exit_generation IS ? AND a.runner_id=? "
             "AND a.state IN ('leased','running') "
             "AND a.stop_requested_at IS NULL LIMIT 1",
             (sub["id"], generation, runner_id),
@@ -981,9 +997,12 @@ class UsageResult(M.Contract):
 
 # The records of this computer's running turns on a plan that its poll moves up to the revision they hold (`poll`).
 # Capped at the plan's own revision, as the move is: a computer ahead of its hub (a restored database) is not behind.
+# An attempt can also carry a Codex shell payer. Its generation binding belongs to the Claude payer.
 _BEHIND = (
-    "WHERE subscription_id=? AND delivery<>'model_exit' AND exit_generation IS ? "
-    "AND revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND attempt_id IN "
+    "FROM attempt_subscriptions s LEFT JOIN plan_exit_bindings e "
+    "ON e.kind='attempt' AND e.ref_id=s.attempt_id AND s.runtime='claude' "
+    "WHERE s.subscription_id=? AND s.delivery<>'model_exit' AND e.exit_generation IS ? "
+    "AND s.revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND s.attempt_id IN "
     "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))"
 )
 
@@ -1002,14 +1021,14 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
         args = (sub["id"], generation, item.revision, sub["id"], runner_id)
         if not write:
             if c.execute(
-                f"SELECT 1 FROM attempt_subscriptions {_BEHIND} LIMIT 1",
+                f"SELECT 1 {_BEHIND} LIMIT 1",
                 args,
             ).fetchone():
                 raise _Write
             continue
         c.execute(
             "UPDATE attempt_subscriptions SET revision=min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) "
-            + _BEHIND,
+            f"WHERE rowid IN (SELECT s.rowid {_BEHIND})",
             (item.revision, sub["id"], *args),
         )
     tokens: list[Row] = []
