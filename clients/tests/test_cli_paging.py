@@ -91,3 +91,12 @@ def test_task_list_all_asks_for_the_snoozed_tasks_too(calls):
     calls.clear()
     run(["task", "list", "--all", "--snoozed", "only"])
     assert calls[0] == ("GET", "tasks", {"snoozed": "only"})
+
+
+def test_task_list_sends_its_assignee_as_typed_even_empty(calls):
+    """`me` is the caller to the server, and an empty assignee goes too, for the server to refuse: dropped, the list
+    would answer every task instead of none of someone's."""
+    for typed in ("me", ""):
+        calls.clear()
+        run(["task", "list", "--assignee", typed])
+        assert calls[0] == ("GET", "tasks", {"assignee": typed}), typed

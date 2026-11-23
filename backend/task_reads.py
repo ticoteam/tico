@@ -31,6 +31,7 @@ import orjson
 from fastapi.responses import Response
 
 from . import events as E
+from .hubdb_core import is_human
 
 if TYPE_CHECKING:
     import sqlite3
@@ -135,9 +136,9 @@ def around(c, ids):
     return list(dict.fromkeys([*ids, *(row[0] for row in found)]))
 
 
-def gone(c, visible_sql, was, matched):
-    """The changed ids not in `matched` that the caller could have read: now (it left the filters)
-    or under the snapshot the log kept for it (owner, requester, privacy, readers and pipeline)."""
+def gone(c, visible_sql, was, matched, reader):
+    """The changed ids not in `matched` that the caller (`reader`, their actor) could have read: now (it left the
+    filters) or under the snapshot the log kept for it (owner, requester, privacy, readers, pipeline and assignee)."""
     out = []
     missing = [tid for tid in was if tid not in matched]
     if not missing:
@@ -150,7 +151,7 @@ def gone(c, visible_sql, was, matched):
         )
     }
     for tid in missing:
-        if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
+        if tid in readable or any(_could_read(c, visible_sql, tid, ref, reader) for ref in was[tid]):
             out.append(tid)
     return out
 
@@ -266,16 +267,22 @@ def children_text(c, visible_sql, history):
     return history
 
 
-def _could_read(c, visible_sql, tid, ref):
-    """Whether the snapshot `ref` (owner, requester, privacy, readers, pipeline: events.py `_WAS`) let its reader open the
-    task."""
+def _could_read(c, visible_sql, tid, ref, reader):
+    """Whether the snapshot `ref` (owner, requester, privacy, readers, pipeline, status, assignee: events.py `_WAS`) let
+    its reader open the task. A snapshot kept before the assignee was has six parts: no assignee then. `visible_sql`
+    reads `reader`'s tasks as their assignee from the live table (auth.assignee_sql): here the snapshot's assignee
+    answers that clause instead."""
     try:
         parts = json.loads(ref)
     except (TypeError, ValueError):
         return False
     if not isinstance(parts, list):
         return False
-    owner, requester, private, readers, pipeline_id = (parts + [None] * 5)[:5]
+    owner, requester, private, readers, pipeline_id, _status, assignee = (parts + [None] * 7)[:7]
+    if is_human(reader):
+        from .auth import assignee_sql
+
+        visible_sql = visible_sql.replace(assignee_sql(reader), "1" if assignee == reader else "0")
     if isinstance(readers, list):
         readers = json.dumps(readers)
     elif isinstance(readers, str) and readers and not readers.startswith("["):

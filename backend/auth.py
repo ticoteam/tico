@@ -339,6 +339,14 @@ def credential_admins(c, settings):
     return followed_credential_admins(c, owner, access.load_access(c, settings)["admins"])
 
 
+def assignee_sql(actor):
+    """The tasks whose assignee is `actor`, as a visibility clause (Auth.task_sql). Their ids are read once per
+    statement from tasks_assignee, so a list keeps its covering index (tasks_queue_cover) instead of reading every row
+    for the column. A snapshot of a task as it was has no such live row: task_reads._could_read answers this clause
+    from the snapshot's own assignee."""
+    return f"id IN (SELECT id FROM tasks WHERE assignee_id={A.q(actor)})"
+
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -1114,9 +1122,12 @@ class Auth:
         from .meeting_audience import participant_access_sql
 
         participant = participant_access_sql(c, me)
+        # A person assignee reads the task as its requester does (hubdb.task_private_readable); an agent assignee gains
+        # nothing, and nor does anyone's manager.
+        assignee = assignee_sql(who.actor) + " OR " if H.is_human(who.actor) else ""
         # A private task's readers (hubdb.task_reader: by name or through a group) read it as its two parties do.
         audience = (
-            f"(owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
+            f"({assignee}owner_id IN {inherited_private} OR requester_id IN {inherited_private} "
             f"OR (coalesce(private,1)<>0 AND ({reader_sql(c, who.actor)} OR ({participant}) "
             f"OR {call_follow_ups.reader_sql(c, who.actor)})) "
             f"OR (coalesce(private,1)=0 AND (owner_id IN {parties} OR requester_id IN {parties} OR ({clear}))))"
@@ -1476,8 +1487,12 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         me = principals[0] if isinstance(principals, tuple) else principals
         participants = (row["owner_id"], row["requester_id"])
-        if not H.task_participant(c, who.actor, row) and not (
-            H.task_private(c, row) and H.task_private_readable(c, me, row)
+        # A person assignee, like a party, sees it whoever holds it (task_sql).
+        assigned = H.is_human(who.actor) and who.actor == row.get("assignee_id")
+        if (
+            not assigned
+            and not H.task_participant(c, who.actor, row)
+            and not (H.task_private(c, row) and H.task_private_readable(c, me, row))
         ):
             # A party to a task, or a private task's reader, always sees it; anyone else needs Read on every bot it
             # involves.

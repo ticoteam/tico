@@ -1586,8 +1586,13 @@ def refile(
 def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None:
     """Who has the task now comes first, before anyone is woken or anything hears of the move: what follows a new
     owner, its private default among it (task_effects.owner_moved). Nobody is made a reader: a move that would need
-    one is held first (`shut_out`). The caller reads the task again after."""
+    one is held first (`shut_out`). The caller reads the task again after. A new assignee (a pick that owns the task,
+    a refile, a restore) may leave a person assignee unable to read it: their open ❓ on it clear and its agent hears."""
     task_effects.owner_moved(conn, before, after, by)
+    if before.get("assignee_id") != after.get("assignee_id"):
+        from . import question_marks
+
+        question_marks.clear_gone(conn, after["id"])
 
 
 def _close_under(conn: "sqlite3.Connection", task_id: str, by: str, note: str) -> None:

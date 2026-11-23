@@ -2406,8 +2406,8 @@ def task_private(conn, row):
 
 
 def task_private_readable(conn, actor, row):
-    """Private tasks admit their parties, their readers (`tasks.readers`, a group's by its members), bot parties’
-    org-chart managers, meeting participants and the Rules Owner page copies' readers."""
+    """Private tasks admit their parties, a person assignee, their readers (`tasks.readers`, a group's by its members),
+    bot parties’ org-chart managers, meeting participants and the Rules Owner page copies' readers."""
     if not row:
         return False
     row = dict(row)
@@ -2451,7 +2451,7 @@ def task_private_readable(conn, actor, row):
                 conn.rollback()
     if not task_private(conn, row):
         return True
-    if "owner_id" not in row or "requester_id" not in row:
+    if "owner_id" not in row or "requester_id" not in row or "assignee_id" not in row:
         row = task(conn, row["id"])
         if not row:
             return False
@@ -2459,6 +2459,8 @@ def task_private_readable(conn, actor, row):
         return False  # a run of the shared Assistant for nobody (above)
     if actor in (row["owner_id"], row["requester_id"]):
         return True
+    if is_human(actor) and actor == row["assignee_id"]:
+        return True  # a person assignee reads it as its requester does; an agent assignee or a manager gains nothing
     from .task_rights import private_subjects
 
     inherited = private_subjects(conn, actor)

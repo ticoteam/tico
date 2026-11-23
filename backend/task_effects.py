@@ -365,12 +365,12 @@ def owner_moved(conn: "sqlite3.Connection", before: Row, after: Row, by: str) ->
 def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, *, rerank: bool) -> None:
     """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
     owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
-    owner's goal on the task and, with `rerank`, its place at the end of the new owner's queue. Before anything about
-    the change is published or woken."""
+    owner's goal on the task, with `rerank` its place at the end of the new owner's queue, and the ❓ of anyone who
+    can no longer read it. Before anything about the change is published or woken."""
     H = _h()
     task_id = after["id"]
     old, new = before.get("owner_id"), after.get("owner_id")
-    from . import reconnects, task_followers, task_run_models
+    from . import question_marks, reconnects, task_followers, task_run_models
 
     made_private = bool(new and H.private_tasks_default(conn, new) and not H.task_private(conn, before))
     if made_private:
@@ -403,6 +403,9 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
         conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
     reconnects_: Any = reconnects
     reconnects_.moved(conn, task_id, "owner", old, new)
+    # Last, once the owner, the assignee and the privacy are all as they will be: a person who can no longer read the
+    # task has their open ❓ on it cleared, and the agent that asked is woken to ask someone who can.
+    question_marks.clear_gone(conn, task_id)
 
 
 def _publish_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, revision: str | None) -> None:

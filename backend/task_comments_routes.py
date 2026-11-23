@@ -410,17 +410,21 @@ def register(
     def readers_answer(c, who, task_id):
         row = H.task(c, task_id)
         private = H.task_private(c, row)
-        view = teammate_access.Known(c, who, auth).task({**row, "readers": H.task_readers(row) if private else []})
+        known = teammate_access.Known(c, who, auth)
+        view = known.task({**row, "readers": H.task_readers(row) if private else []})
+        assignee = row.get("assignee_id")
         return {
             "private": private,
             "requester_id": view["requester_id"],
             "owner_id": view["owner_id"],
+            # A person assignee reads a private task as its requester does (hubdb.task_private_readable).
+            "assignee_id": assignee if private and H.is_human(assignee) and assignee not in known.people else None,
             "readers": view["readers"],
         }
 
     @app.get("/api/v2/tasks/{tid}/readers")
     def get_task_readers(request: Request, tid: str):
-        """Who can see the task: on a private one its requester, owner and reader list (docs/tasks.md)."""
+        """Who can see the task: on a private one its requester, owner, person assignee and readers (docs/tasks.md)."""
         with store.read() as c:
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)

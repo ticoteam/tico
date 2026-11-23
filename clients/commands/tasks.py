@@ -780,6 +780,9 @@ def _first_stage_picks(api, pipeline):
     {
         "owner": _s("Owner: a bot slug, a human id, or `me`"),
         "requester": _s("Requester: a bot slug, a human id, or `me`"),
+        "assignee": _s(
+            "Who the tasks are for, kept across stage moves (owner is who has them now): `me`, a human id or a bot slug"
+        ),
         "q": _s("Title words or #N"),
         "status": {
             "type": "array",
@@ -839,6 +842,8 @@ def task_list(api, args):
         for name in ("sort", "number", "updated_since", "snoozed", "q", "pipeline", "stage", "link", "entity")
         if args.get(name)
     }
+    if args.get("assignee") is not None:
+        more["assignee"] = args["assignee"]  # `me` too: the server reads it as the caller, and refuses a name it lacks
     if args.get("all") and not args.get("snoozed"):
         more["snoozed"] = "all"  # every task you may see: the snoozed ones too
     if args.get("waiting_on"):
@@ -1348,7 +1353,9 @@ TASK = (
         run=lambda client, f: _call(client, "tico_task_restore", {"id": f["id"]}, unwrapped=True),
     ),
     Group("task readers", "who can see a private task: list, add, remove"),
-    Command("task readers list", "its requester, owner and readers", example="tico task readers list T1"),
+    Command(
+        "task readers list", "its requester, owner, person assignee and readers", example="tico task readers list T1"
+    ),
     Command(
         "task readers add",
         "let them see it: people, bots or group:<id>s",

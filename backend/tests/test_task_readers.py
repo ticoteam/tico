@@ -262,6 +262,7 @@ def test_who_can_see_add_remove_replace_and_history(api):
         "private": True,
         "requester_id": "human:ana",
         "owner_id": "bot:ops",
+        "assignee_id": None,  # an agent assignee reads nothing more
         "readers": [],
     }
     assert readers(api, row["id"]) == {"ana"}
@@ -310,6 +311,7 @@ def test_a_company_task_is_public_and_has_no_reader_list(api):
         "private": False,
         "requester_id": "human:ana",
         "owner_id": "bot:ops",
+        "assignee_id": None,
         "readers": [],
     }
     r = change(api, open_task["id"], {"add": ["ben"]})
