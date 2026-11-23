@@ -16,7 +16,7 @@ import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
-import { flowQuery } from '@/features/tasks/routing';
+import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
 import { onAnswered } from './answered';
@@ -427,18 +427,22 @@ export function TaskChat({ task }: TaskChatProps) {
 }
 
 /** Each ❓ on the task waiting on the person, pinned over the message box they answer it in: the question, and who
-    asked, as their Needs you has it (the agent the server holds for the ❓), else the task's owner. Their reply clears
-    it on the server, whose `question` change reads the task again (live/patch.ts), and the pin goes. Several scroll in
-    a bounded stack, so the message box stays in reach. */
+    asked, as their Needs you has it (the agent the server holds for the ❓; a snoozed one's from the snoozed list),
+    else the task's owner. Their reply clears it on the server, whose `question` change reads the task again
+    (live/patch.ts), and the pin goes. Several scroll in a bounded stack, so the message box stays in reach. */
 function Questions({ t, ids }: { t: TaskData; ids: string[] }) {
-  // Needs you, which the chat's approval cards read already (ThreadCards useApprovalCards): one read for both.
+  // Needs you, which the chat's approval cards read already (ThreadCards useApprovalCards): one read for both. A ❓ the
+  // person snoozed still waits on the task but leaves that list: only then its own short list is read.
   const asks = useQuery({ ...flowQuery, enabled: ids.length > 0 }).data?.asks;
+  const snoozed = !!asks && ids.some((id) => !asks.some((a) => a.id === id));
+  const later = useQuery({ ...flowSnoozedAsksQuery, enabled: snoozed }).data?.items;
+  const by = (id: string) => asks?.find((a) => a.id === id)?.by ?? later?.find((it) => it.id === id)?.from_id ?? t.owner_id;
   const asked = (t.waits ?? []).filter((w) => !!w.requirement_id && ids.includes(w.requirement_id));
   if (!asked.length) return null;
   return (
     <div className="chat-pins">
       {asked.map((w) => (
-        <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={asks?.find((a) => a.id === w.requirement_id)?.by ?? t.owner_id}>
+        <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={by(w.requirement_id ?? '')}>
           <p className="askcard-what">{questionLine(w.line)}</p>
         </AskCard>
       ))}

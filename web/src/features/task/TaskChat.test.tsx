@@ -45,6 +45,7 @@ const task = {
 /** What the server holds: the task's detail and the person's Needs you. */
 let detail: Record<string, unknown> = task;
 let needs: unknown[] = [];
+let snoozed: unknown[] = [];
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
@@ -71,6 +72,7 @@ beforeAll(() => {
 beforeEach(() => {
   detail = task;
   needs = [];
+  snoozed = [];
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const actors = [
@@ -88,7 +90,9 @@ function serveRoom(room: Record<string, unknown>) {
     const u = String(url);
     const body = u.includes('/api/v2/tasks/')
       ? { task: detail, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
-      : u.includes('/api/v2/needs-you')
+      : u.includes('/api/v2/needs-you/snoozed')
+        ? { items: snoozed }
+        : u.includes('/api/v2/needs-you')
         ? { items: needs, version: 'v1', count: needs.length }
         : u.includes('/api/v2/threads/c7')
         ? room
@@ -150,6 +154,14 @@ describe('a question for the person, pinned over the message box', () => {
     expect(within(chat).queryByText('Can Pat check the copy?')).toBeNull();
     // the pin says it needs them: the status line does not say so again
     expect(within(chat).queryByText('Up next')).toBeNull();
+  });
+
+  it('names who asked a ❓ the person snoozed, which still waits on the task but has left their Needs you', async () => {
+    detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
+    snoozed = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null, snoozed_until: '2026-12-01T00:00:00Z' }];
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const pin = await screen.findByRole('region', { name: 'Needs you' });
+    expect(await within(pin).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
   });
 
   it('goes when the server clears the question (the person replied) and the stream says so', async () => {
