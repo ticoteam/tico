@@ -25,7 +25,7 @@ def computer(api, label, platform="linux"):
     return machine
 
 
-def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, **runtime):
+def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, full_login=True, **runtime):
     claude = {"installed": True, **runtime}
     return post(
         api,
@@ -39,7 +39,7 @@ def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, **runtime):
                 "model_subscriptions_v1",
                 "model_connect_v1",
                 "computer_logins_v1",
-                "claude_login_v1",
+                *(["claude_login_v1"] if full_login else []),
                 "plan_usage_v1",
                 "attempt_credentials_v1",
                 "model_exit_v1",
@@ -145,15 +145,39 @@ def test_only_a_successful_result_from_the_issued_runner_survives_the_exit_chang
     select(api, exit_runner)
     [job] = poll(api, exit_runner, sid)["refreshes"]
     select(api, non_exit)
-    assert poll(api, non_exit, sid)["refreshes"] == []
     path = f"runner-claude-logins/{sid}/refreshed"
     result = {"lease": job["lease"], "revision": job["revision"], "state": "succeeded", "value": full(n=2)}
     rejected = {"lease": job["lease"], "revision": job["revision"], "state": "rejected"}
     assert post(api, path, rejected, exit_runner["token"]) == {"stored": False}
+    select(api, exit_runner)
+    assert post(api, path, {**rejected, "state": "failed"}, exit_runner["token"]) == {"stored": False}
     with api.app.state.store.read() as c:
         assert MS.row(c, sid)["status"] != "needs_reconnect"
+        lease = claude_login._lease(c, sid)
+        assert lease["lease_id"] == job["lease"] and lease["failures"] == 0
+        assert lease["lease_runner"] == exit_runner["runner_id"]
+    select(api, non_exit)
+    assert poll(api, non_exit, sid)["refreshes"] == []
     assert post(api, path, result, non_exit["token"]) == {"stored": False}
     assert post(api, path, result, exit_runner["token"]) == {"stored": True, "revision": 2}
+
+
+def test_refresh_failure_releases_the_lease_after_exit_readiness_drops(api, computers):
+    exit_runner, _ = computers
+    sid = add(api, "claude_login", full(minutes=30))["id"]
+    select(api, exit_runner)
+    [job] = poll(api, exit_runner, sid)["refreshes"]
+    heartbeat(api, exit_runner, installed=False)
+
+    result = {"lease": job["lease"], "revision": job["revision"], "state": "failed"}
+    assert post(api, f"runner-claude-logins/{sid}/refreshed", result, exit_runner["token"]) == {"stored": False}
+    with api.app.state.store.read() as c:
+        lease = claude_login._lease(c, sid)
+        assert lease["lease_id"] == lease["lease_runner"] == ""
+        assert lease["lease_until"] is None and lease["failures"] == 1
+        assert lease["retry_at"] > H.now()
+    heartbeat(api, exit_runner)
+    assert poll(api, exit_runner, sid)["refreshes"] == []
 
 
 def test_scheduled_usage_uses_the_exit_even_without_attempts(api, computers):
@@ -165,6 +189,8 @@ def test_scheduled_usage_uses_the_exit_even_without_attempts(api, computers):
         runner_states.save(c, exit_runner["runner_id"], last_seen_at=H.shift(H.now(), hours=-1))
     assert poll(api, non_exit, sid) == EMPTY
     post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["reason"] == "Waiting for the plan's exit computer"
 
     heartbeat(api, exit_runner)
     [plan] = get(api, "model-subscriptions")["subscriptions"]
@@ -356,7 +382,11 @@ def test_routed_turn_windows_require_the_reporting_attempts_current_local_receip
         )
     heartbeat(api, exit_runner, "cpo", profile="own", weekly=reading(45, 5, current_attempt))
     with store.read() as c:
-        assert metadata(c, key)["turn_weekly"]["used_percent"] == 40
+        assert metadata(c, key)["turn_weekly_exit"] == [exit_runner["runner_id"], current]
+        assert metadata(c, key)["turn_weekly"]["used_percent"] == 45
+    assert usage() == 45
+    heartbeat(api, exit_runner, "cpo", profile="own", weekly=reading(95, 4, current_attempt))
+    assert usage() == 45
     heartbeat(api, exit_runner, "cpo", profile="own", weekly=reading(46, 7, current_attempt))
     with store.read() as c:
         assert metadata(c, key)["turn_weekly_exit"] == [exit_runner["runner_id"], current]
@@ -492,6 +522,33 @@ def test_connect_resumes_on_the_same_exit_after_a_readiness_drop(api, computers)
     assert post(api, f"{path}/subscription", {"value": full()}, token)["state"] == "done"
     with api.app.state.store.read() as c:
         assert MS.row(c, sid)["kind"] == "claude_login"
+
+
+def test_setup_token_reconnect_holds_the_code_when_the_exit_loses_full_login_capability(api, computers):
+    exit_runner, _ = computers
+    sid = add(api)["id"]
+    select(api, exit_runner)
+    login = post(api, CONNECT, {"subscription": sid, "confirm": True})
+    lid, rid, token = login["id"], login["runner_id"], exit_runner["token"]
+    path = f"runner-logins/{lid}"
+    code_path = f"computers/{rid}/logins/{lid}/code"
+    code = {"code": "abcdef#ghijkl"}
+    [pending] = get(api, "runner-logins", token)["logins"]
+    assert pending["subscription_kind"] == "claude_login"
+    post(api, f"{path}/report", {"state": "waiting"}, token)
+
+    heartbeat(api, exit_runner, full_login=False)
+    assert post(api, code_path, code, expected=409)["error"]["code"] == "offline"
+    post(api, f"{path}/subscription", {"value": full()}, token, expected=503)
+
+    heartbeat(api, exit_runner)
+    post(api, code_path, code)
+    heartbeat(api, exit_runner, full_login=False)
+    [paused] = get(api, "runner-logins", token)["logins"]
+    assert paused["id"] == lid and "code" not in paused
+    heartbeat(api, exit_runner)
+    [pending] = get(api, "runner-logins", token)["logins"]
+    assert pending["id"] == lid and pending["code"] == code["code"]
 
 
 def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, computers):

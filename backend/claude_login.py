@@ -515,7 +515,7 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
         return {"stored": False}
     route = None
     if body.state != "succeeded":
-        route = plan_exits.routed(c, sub)
+        route = plan_exits.routed(c, sub, require_ready=False)
         if not plan_exits.matches(route, runner_id, issued["exit_generation"]):
             return {"stored": False}
     lease = _lease(c, sid)

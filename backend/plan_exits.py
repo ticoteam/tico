@@ -36,7 +36,7 @@ PAGE_SIZE = 100
 # Upkeep stays dark until turn routing is ready and legacy maintenance jobs have drained.
 UPKEEP_ROUTING = False
 _SELECTIONS = (
-    "SELECT e.person_id,e.generation,r.id,r.platform,r.capabilities,r.readiness FROM plan_exits e "
+    "SELECT e.person_id,e.generation,r.id,r.platform,r.capabilities,r.readiness,r.last_seen_at FROM plan_exits e "
     "LEFT JOIN runners_with_state r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
 
@@ -64,7 +64,9 @@ def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
     return exits.get(person)
 
 
-def routed(c: Connection, sub: Any, exits: Row | None = None, *, require_ready: bool = True) -> Route | None:
+def routed(
+    c: Connection, sub: Any, exits: Row | None = None, *, require_ready: bool = True, connect_kind: str | None = None
+) -> Route | None:
     """A missing route uses legacy upkeep. A route without a runner waits for its exit."""
     exit_runner = selected(c, sub, exits)
     if exit_runner is None:
@@ -73,14 +75,17 @@ def routed(c: Connection, sub: Any, exits: Row | None = None, *, require_ready: 
     if runner_id is None:
         return Route(None, generation)
     if sub["kind"] == "claude_login":
-        from .claude_login import platform_can_refresh, takes_turns
+        from .claude_login import platform_can_refresh
 
         if not platform_can_refresh(exit_runner):
             return None
-        if require_ready and not takes_turns(exit_runner):
-            return Route(None, generation)
     if not require_ready:
         return Route(runner_id, generation)
+    if (connect_kind or sub["kind"]) == "claude_login":
+        from .claude_login import takes_turns
+
+        if not takes_turns(exit_runner):
+            return Route(None, generation)
     ready = readiness(c, runner_id, exit_runner["readiness"])
     runtimes: Row = ready.get("runtimes") or {}
     claude: Row = runtimes.get("claude") or {}

@@ -1081,7 +1081,7 @@ def remember_turn_usage(c, runner_id, runtimes):
             binding = field + "_exit"
             previous = (saved.get(field) or {}).get("reported_at")
             current = list(route) if route else None
-            if not previous or _at(reading["reported_at"]) > _at(previous):
+            if saved.get(binding) != current or not previous or _at(reading["reported_at"]) > _at(previous):
                 if current:
                     saved[binding] = current
                 else:
@@ -1113,7 +1113,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
-    route = plan_exits.routed(c, sub, ctx.get("exits"))
+    exits = ctx.get("exits")
+    route = plan_exits.routed(c, sub, exits)
     # Routed windows use the reading saved after checking its turn receipt at heartbeat ingestion.
     computers = [
         g
@@ -1251,9 +1252,9 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
         return _reason("No percentage from the plan")
     if route:
         return _reason(
-            "Waiting for the plan's exit computer"
-            if route.runner_id is None
-            else "Waiting for the exit's first usage reading"
+            "Waiting for the exit's first usage reading"
+            if route.runner_id and model_login._online(plan_exits.selected(c, sub, exits))
+            else "Waiting for the plan's exit computer"
         )
     if outside:
         return _reason("No usage reported since this subscription was added")
@@ -3104,7 +3105,7 @@ def connected(c, vault, settings, auth, who, login_id, body):
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
         sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
-        route = plan_exits.routed(c, sub)
+        route = plan_exits.routed(c, sub, connect_kind=target["kind"])
         if route and route.runner_id is None:
             raise Problem("offline", model_login.EXIT_NOT_READY, 503, retryable=True)
         try:
