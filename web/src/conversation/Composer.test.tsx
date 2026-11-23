@@ -60,6 +60,17 @@ describe('names after @', () => {
     expect(box().value).toBe('ask @Payroll ');
   });
 
+  it('a list closed in one message does not stay closed in the next', () => {
+    const onSend = mount();
+    type('hi @sa');
+    fireEvent.keyDown(box(), { key: 'Escape' });
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('hi @sa', []);
+    // the next message's @ sits where the closed one did
+    type('yo @sa');
+    expect(names()).toEqual(['Sam Lee']);
+  });
+
   it('a list closed in one conversation does not stay closed in the next one the box shows', () => {
     const onSend = vi.fn();
     const at = (id: string) => (

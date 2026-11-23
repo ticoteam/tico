@@ -119,6 +119,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     const clear = () => {
       setText('');
       setFiles([]);
+      forget();
     };
     const accepted = onSend(text.trim(), files);
     if (!accepted) {

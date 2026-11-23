@@ -427,7 +427,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} label={compose} fill={fill} canSend={!!timeline.data} mentionFirst={mentionFirst} mentionOnly={mentionOnly} onSend={(text, files) => send(text, files)} />}
+      {myId && canPost && <Composer id={draftId ?? id} me={myId} to={name} label={compose} fill={fill} canSend={!!timeline.data} mentions={!toDm} mentionFirst={mentionFirst} mentionOnly={mentionOnly} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 
