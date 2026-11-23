@@ -122,7 +122,7 @@ def test_a_pool_rechecks_soonest_reset_and_strictly_more_than_half_a_percent_eac
     finish(api, m, third)
 
 
-def test_pool_rotation_preserves_the_agents_claude_session(api, readings):
+def test_pool_rotation_restarts_the_agents_session_on_the_new_plan(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
@@ -131,13 +131,31 @@ def test_pool_rotation_preserves_the_agents_claude_session(api, readings):
     pick(api, "ops", "claude", person="ana")
     first = turn(api, m)
     assert signed_with(api, first) == p2
+    assert first["session_fence"] == 0
     finish(api, m, first)
+
     hold(api, p2, days=2, since=H.shift(H.now(), seconds=5))
     second = turn(api, m)
     assert signed_with(api, second) == p3
-    with api.app.state.store.read() as c:
-        session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops' AND runtime='claude'").fetchone()
-    assert session and session["thread_id"] == "t-" + first["id"]
+    assert second["session_fence"] == 1
+    assert "moved_history" in second
+    finish(api, m, second)
+
+    # Another turn on the same plan keeps the new session.
+    third = turn(api, m)
+    assert signed_with(api, third) == p3
+    assert third["session_fence"] == 1
+    assert "moved_history" not in third
+    finish(api, m, third)
+
+    # Rotating back to Plan 2 fences again so its older thread is never resumed.
+    with api.app.state.store.transaction() as c:
+        login_holds.clear(c, "", login_holds.subscription_login(p2), "claude")
+    hold(api, p3, days=3, since=H.shift(H.now(), seconds=5))
+    fourth = turn(api, m)
+    assert signed_with(api, fourth) == p2
+    assert fourth["session_fence"] == 2
+    assert "moved_history" in fourth
 
 
 def test_an_older_runner_waits_instead_of_using_its_own_login_for_a_pool(api):
@@ -182,9 +200,200 @@ def test_a_plan_that_runs_out_in_a_turn_hands_the_held_work_to_the_next_plan_at_
     found = turn(api, m)
     assert signed_with(api, found) == p2
     limit_met(api, m, found)
+    with api.app.state.store.read() as c:
+        assert (H.status(c, "ops") or {}).get("state") == "idle"
+        assert not c.execute("SELECT 1 FROM events WHERE action='job.reset_wait'").fetchone()
     again = claim(api, m)
     assert again and again["job_id"] == found["job_id"]
     assert signed_with(api, again) == p3
+    assert again["session_fence"] == 1
+
+
+def test_mid_turn_pool_quota_fails_over_immediately_and_restarts_fresh_on_next_plan(api, readings):
+    import json
+    from backend.execution import cooling_off
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    _, p2, p3 = three_plans(api, readings)
+    m = machine(
+        api,
+        label="Studio Mac",
+        caps=("model_subscriptions_v1", agent_subscriptions.CAPABILITY, "capacity_continue_v1"),
+    )
+    pick(api, "ops", "claude", person="ana")
+    post(api, "tasks", {"owner": "ops", "title": "Ship the release", "body": "Verify and ship."})
+    first = claim(api, m)
+    assert first and signed_with(api, first) == p2
+    assert first["session_fence"] == 0
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "plan2-thread"}, m["token"])
+    soon = datetime.now(timezone.utc) + timedelta(hours=3)
+    notice = f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
+    post(
+        api,
+        f"attempts/{first['id']}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+                {"seq": 2, "kind": "tool", "payload": {"tool": "Read", "summary": "README.md"}},
+                {"seq": 3, "kind": "error", "payload": {"error": notice, "limit": True}},
+            ]
+        },
+        m["token"],
+    )
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "last_seq": 3, "limited": True, "text": "Checked README; ready to finish."},
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        assert login_holds.holding(c, "", login_holds.subscription_login(p2), "claude") == "held"
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
+        status = H.status(c, "ops") or {}
+        assert status.get("state") == "idle"
+        assert "Plan 2" in status.get("focus", "") and "Plan 3" in status.get("focus", "")
+        saved = json.loads(c.execute("SELECT result FROM attempts WHERE id=?", (first["id"],)).fetchone()[0])
+        assert saved.get("quota_continue") is True
+        assert not saved.get("limit_resets_at")
+        assert not c.execute("SELECT 1 FROM events WHERE action='job.reset_wait'").fetchone()
+        assert c.execute(
+            "SELECT 1 FROM events WHERE action='attempt.limited_failover' AND target=?", (first["id"],)
+        ).fetchone()
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "queued"
+
+    again = claim(api, m)
+    assert again and again["job_id"] == first["job_id"]
+    assert signed_with(api, again) == p3
+    assert "continue_thread" not in again
+    assert again["session_fence"] == 1
+    assert "moved_history" in again
+    assert again["task"]["checkpoint"] == "Checked README; ready to finish."
+    assert "starts a fresh session on a new plan" in again["message"]["body"]
+
+
+def test_exhausted_pool_waits_for_earliest_reset_then_starts_fresh_on_recovered_plan(api, readings, monkeypatch):
+    import json
+    from backend.execution import cooling_off, limit_until, release_limits
+    from backend.tests.helpers.login_holds import at
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    at(monkeypatch, "2026-10-19T01:00:00.000000Z")
+    p1 = add(api, secret=TOKEN, name="Plan 1")["id"]
+    p2 = add(api, secret=OTHER, name="Plan 2")["id"]
+    p3 = add(api, secret=THIRD, name="Plan 3")["id"]
+    readings.update({p1: (50, 1), p2: (50, 2), p3: (100, 1)})
+    # Plan 3 resets at 03:00 UTC (earliest); Plan 2 is held until 08:00 UTC; Plan 1 will hit a limit resetting at 09:00 UTC.
+    with api.app.state.store.transaction() as c:
+        login_holds.record(
+            c, "", login_holds.subscription_login(p3), "claude", H.now(), reset="2026-10-19T03:00:00.000000Z"
+        )
+        login_holds.record(
+            c, "", login_holds.subscription_login(p2), "claude", H.now(), reset="2026-10-19T08:00:00.000000Z"
+        )
+    m = machine(
+        api,
+        label="Studio Mac",
+        caps=("model_subscriptions_v1", agent_subscriptions.CAPABILITY, "capacity_continue_v1"),
+    )
+    pick(api, "ops", "claude", person="ana")
+    post(api, "tasks", {"owner": "ops", "title": "Publish notes", "body": "Draft and publish."})
+    first = claim(api, m)
+    assert first and signed_with(api, first) == p1
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "plan1-thread"}, m["token"])
+    post(
+        api,
+        f"attempts/{first['id']}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+                {"seq": 2, "kind": "tool", "payload": {"tool": "Read", "summary": "notes.md"}},
+                {
+                    "seq": 3,
+                    "kind": "error",
+                    "payload": {"error": "Your usage window resets at 2026-10-19T09:00:00Z", "limit": True},
+                },
+            ]
+        },
+        m["token"],
+    )
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "last_seq": 3, "limited": True, "text": "Read notes.md before limit."},
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        assert cooling_off(c, api.app.state.store.settings, "ops")
+        status = H.status(c, "ops") or {}
+        assert status.get("state") == "limited"
+        assert "03:00 UTC" in status.get("focus", "")
+        assert limit_until(c, "ops", status["changed_at"]) == "2026-10-19T03:00:00.000000Z"
+        saved = json.loads(c.execute("SELECT result FROM attempts WHERE id=?", (first["id"],)).fetchone()[0])
+        assert saved.get("limit_resets_at") == "2026-10-19T03:00:00.000000Z"
+    assert claim(api, m) is None
+
+    # Plan 3 resets first while Plan 1 is still held until 09:00 UTC.
+    at(monkeypatch, "2026-10-19T03:01:00.000000Z", api)
+    readings[p3] = (0, 2)
+    with api.app.state.store.transaction() as c:
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
+        assert limit_until(c, "ops", "2026-10-19T01:00:00.000000Z") == ""
+        release_limits(c, api.app.state.store.settings)
+        assert (H.status(c, "ops") or {}).get("state") == "idle"
+    again = claim(api, m)
+    assert again and again["job_id"] == first["job_id"]
+    assert signed_with(api, again) == p3
+    assert "continue_thread" not in again
+    assert again["session_fence"] == 1
+    assert again["task"]["checkpoint"] == "Read notes.md before limit."
+    assert "starts a fresh session on a new plan" in again["message"]["body"]
+
+
+def test_mid_turn_pool_quota_after_irreversible_action_stays_held_for_review(api, readings):
+    from backend.execution import cooling_off
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    _, p2, p3 = three_plans(api, readings)
+    m = machine(api, label="Studio Mac")
+    pick(api, "ops", "claude", person="ana")
+    post(api, "tasks", {"owner": "ops", "title": "Email customer", "body": "Send the update."})
+    first = claim(api, m)
+    assert first and signed_with(api, first) == p2
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "plan2-acted"}, m["token"])
+    soon = datetime.now(timezone.utc) + timedelta(hours=2)
+    notice = f"You've hit your limit · resets {soon:%-I:%M}{soon:%p} (UTC)".replace("AM", "am").replace("PM", "pm")
+    post(
+        api,
+        f"attempts/{first['id']}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"state": "active", "tool_events": True}},
+                {"seq": 2, "kind": "tool", "payload": {"tool": "send_email", "outside_actions": ["email"]}},
+                {"seq": 3, "kind": "error", "payload": {"error": notice, "limit": True}},
+            ]
+        },
+        m["token"],
+    )
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "failed", "last_seq": 3, "limited": True, "text": "Sent email before hitting limit."},
+        m["token"],
+    )
+    with api.app.state.store.read() as c:
+        assert login_holds.holding(c, "", login_holds.subscription_login(p2), "claude") == "held"
+        assert not cooling_off(c, api.app.state.store.settings, "ops")
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "uncertain"
+        status = H.status(c, "ops") or {}
+        assert status.get("state") == "crashed"
+        assert "saved for review" in status.get("focus", "")
+    assert claim(api, m) is None
 
 
 def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readings):
