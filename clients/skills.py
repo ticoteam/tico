@@ -34,7 +34,7 @@ RESERVED = frozenset(
     }
 )
 MAX_FILES = 100
-MAX_CHARS = 90_000  # the total of every file's text (screening reads a skill too big for one call in parts)
+MAX_CHARS = 90_000  # the total of every file's text, which must fit the screening state (without its diff if need be)
 MAX_PATH = 200
 MAX_DESCRIPTION = 1024
 SKIP_FILES = {".DS_Store"}  # Finder's noise, never part of a skill

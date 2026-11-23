@@ -80,15 +80,16 @@ answers in place of Decide High.
   Its summary and findings (file, line, issue) go on the row.
 - **The risk floor.** A hit for hidden Unicode, a secret read or pipe-to-shell raises a `low` risk to `medium`. So does
   any concern at 50% or more.
-- **Big skills.** A state over 120,000 characters (the most the Gateway reads in one call) is read in parts: the files
-  in order, then the diff, cut on line boundaries. Each part is one call with the name, description and pattern hits.
-  The screen takes the worst part's verdict and risk, each concern at its highest, and every part's summary and findings.
-- **Not screened.** With no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that
-  does not answer in time is `timeout`, and any other failure is `error`. A part that fails fails the whole screen. A proposal is never marked screened without the model's answer, so it
+- **Big changes.** An update whose state with its diff is over 120,000 characters is screened on the whole new skill
+  without its diff.
+- **Not screened.** If the state is still over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
+  no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that does not answer in time is
+  `timeout`, and any other failure is `error`. A proposal is never marked screened without the model's answer, so it
   cannot be approved. **Re-run** (`POST skills/proposals/{id}/rescreen`) sends it back to the queue.
   Every proposal in the API carries the reason as `screen_reason`, what to do about it as `screen_action`, how many
   screens in a row were not screened as `screen_failures`, and the last screen's `judge_call_id` (also on `screening`).
-  The Skills page shows them on the proposal: `cap` means raise the spend cap or wait for it to reset, then Re-run; `unavailable` means connect the Gateway or check its key, then Re-run;
+  The Skills page shows them on the proposal: `oversize` means make the skill smaller and propose it again; `cap` means
+  raise the spend cap or wait for it to reset, then Re-run; `unavailable` means connect the Gateway or check its key, then Re-run;
   `timeout` means Re-run; `error` means Re-run, and if it fails again, send support the judge call id when there is one. After **Re-run**
   the page watches for about a minute and says "Still not screened" with the reason when it fails again.
 - **Cache.** A bundle already screened with the same sha, base and question set version reuses that answer.

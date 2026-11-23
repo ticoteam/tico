@@ -32,12 +32,10 @@ tico repo tick example/product
 tico repo untick example/product
 tico bot repos sales
 tico bot repos sales --all
-tico bot repos sales --chosen example/product example/docs:read      # replaces the whole list
-tico bot repos sales --add example/web:read                              # adds or changes one, keeps the rest
-tico bot repos sales --remove example/docs                               # takes one away, keeps the rest
-tico bot repos release-manager --add example/product:write+actions      # also run workflows there
-tico bot repos builder --add example/product:write+edit                  # also edit workflow files there
-tico bot repos builder --add example/product:write+actions+edit          # both; -actions or -edit turns one off
+tico bot repos sales --chosen example/product example/docs:read
+tico bot repos release-manager --chosen example/product:write+actions   # also run workflows there
+tico bot repos builder --chosen example/product:write+edit               # also edit workflow files there
+tico bot repos builder --chosen example/product:write+actions+edit       # both; -actions or -edit turns one off
 tico bot repos sales --own
 ```
 

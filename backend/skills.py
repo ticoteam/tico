@@ -147,6 +147,7 @@ _PROPOSAL_SQL = (
 
 # What an admin does about each reason a proposal was not screened (the Skills page says the same words).
 SCREEN_REASONS = {
+    "oversize": "The skill is too big to screen (over 120,000 characters). Make it smaller and propose it again.",
     "cap": "The monthly spend cap for model calls is reached. Raise the cap or wait for it to reset, then re-run screening.",
     "unavailable": "No screening model is available: no Gateway, or it refused its key. Connect the Gateway or check its key, then re-run screening.",
     "timeout": "The screening model did not answer in time. Re-run screening.",

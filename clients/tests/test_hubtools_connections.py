@@ -287,7 +287,7 @@ def test_repo_grant_refuses_to_narrow_an_all_repos_bot_and_an_unknown_repository
     hub = Client(live, "ana-test")
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "write"})
     assert tool("tico_repo_grant", hub, repository="acme/web", bot="ops")["changed"] is False
-    with pytest.raises(APIError, match="tico bot repos ops --add acme/web:write\\+actions"):
+    with pytest.raises(APIError, match="tico bot repos ops --chosen acme/web:write"):
         tool("tico_repo_grant", hub, repository="acme/web", bot="ops", run_workflows=True)
     with pytest.raises(APIError, match="tico repo refresh"):
         tool("tico_repo_grant", hub, repository="acme/nope", bot="ops")
@@ -319,7 +319,7 @@ def test_repo_grant_on_another_agents_own_repository_is_never_covered_by_all_tic
     bot(api, "builder")
     hub = Client(live, "ana-test")
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "write"})
-    with pytest.raises(APIError, match="tico bot repos ops --add acme/bot-builder:write"):
+    with pytest.raises(APIError, match="tico bot repos ops --chosen acme/bot-builder:write"):
         tool("tico_repo_grant", hub, repository="acme/bot-builder", bot="ops", tick=True)
     assert repo(hub, "acme/bot-builder")["enabled"] is True, "ticked, yet still not one All ticked repos reaches"
     hub.call("PUT", "bots/ops/repositories", {"mode": "all", "all_access": "read"})

@@ -450,13 +450,10 @@ def repo_grant(api, args):
         if held == "write" or held == access:
             return {**out, "changed": False, "detail": f"{bot} has All ticked repos ({current.get('all_access')})"}
     if current["mode"] == "all" and not reads:
-        options = "".join(
-            ("+" if on else "-") + {"run_workflows": "actions", "edit_workflows": "edit"}[k] for k, on in flags.items()
-        )
         raise APIError(
             "repository_access_all",
-            f"{bot} has All ticked repos ({current.get('all_access')}); to change {name} alone, move it to chosen "
-            f"repositories, keeping what it reaches: tico bot repos {bot} --add {name}:{access}{options}",
+            f"{bot} has All ticked repos ({current.get('all_access')}); to give it {access} on {name} alone, choose "
+            f"its repositories instead: tico bot repos {bot} --chosen {name}:{access} ...",
             409,
         )
     # From All ticked repos at Read it moves to Chosen repos, keeping read on each repository All ticked repos covers
@@ -494,8 +491,8 @@ def repo_revoke(api, args):
     if current["mode"] == "all":
         raise APIError(
             "repository_access_all",
-            f"{bot} has All ticked repos; untick {name} for everyone (tico repo untick {name}) or move it to chosen "
-            f"repositories without this one: tico bot repos {bot} --remove {name}",
+            f"{bot} has All ticked repos; untick {name} for everyone (tico repo untick {name}) or choose its "
+            f"repositories: tico bot repos {bot} --chosen ...",
             409,
         )
     chosen = current.get("chosen") or [] if current["mode"] == "chosen" else []

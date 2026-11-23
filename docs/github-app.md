@@ -59,7 +59,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    (**Organization settings → GitHub Apps → Configure**) and accept the updated permissions.
 2. An Owner or admin ticks **Run workflows** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `tico bot repos <bot> --add owner/repo:write+actions`. See [Repositories](repositories.md).
+   `tico bot repos <bot> --chosen owner/repo:write+actions`. See [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Actions: write. Its other
 repositories keep their own tokens, since GitHub permissions apply to a whole token. Tico asks GitHub for the
@@ -80,7 +80,7 @@ write, which Tico never puts in an ordinary run token. To allow it for one repos
    **Read and write** and save, then accept the updated permissions on the installation, as above.
 2. An Owner or admin ticks **Edit workflow files** on that bot's chosen write grant, or on the repository's row under
    **All repos in use** with write (Settings → bot → Repositories), or runs
-   `tico bot repos <bot> --add owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
+   `tico bot repos <bot> --chosen owner/repo:write+edit` (`:write+actions+edit` to also run workflows). See
    [Repositories](repositories.md).
 
 The bot then gets a separate token for those repositories, with its write permissions plus Workflows: write. A grant

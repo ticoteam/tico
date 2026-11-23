@@ -3,7 +3,7 @@
 (clients/hubcli.py and clients/remotecli.py before these specs)."""
 
 from clients.commands import bots
-from clients.tests.helpers.cli_fixtures import ANSWERS, run_line
+from clients.tests.helpers.cli_fixtures import run_line
 
 
 def test_calendar_add_takes_who_as_comma_separated_attendees_and_sends_all_day_only_when_given(monkeypatch):
@@ -53,53 +53,6 @@ def test_bot_repos_reads_without_a_mode_and_sets_one_without_an_operation_id(mon
     assert bad["exit"] == 2 and '"error": "validation"' in bad["stdout"]
     both = run_line(["bot", "repos", "b", "--all", "--own"], monkeypatch)
     assert both["exit"] != 0 and both["http"] == [] and "not allowed with" in both["stderr"]
-
-
-def test_bot_repos_add_and_remove_keep_the_other_chosen_repositories(monkeypatch):
-    current = {
-        "mode": "chosen",
-        "chosen": [
-            {"full_name": "a/b", "access": "write", "run_workflows": True},
-            {"full_name": "c/d", "access": "read"},
-            {"full_name": "e/f", "access": "read"},
-        ],
-    }
-    monkeypatch.setitem(ANSWERS, "GET bots/b/repositories", current)
-    added = run_line(["bot", "repos", "b", "--add", "g/h:write+actions", "--add", "C/D:write"], monkeypatch)
-    assert added["http"][-2:] == [
-        ["GET", "bots/b/repositories", None],
-        [
-            "PUT",
-            "bots/b/repositories",
-            {
-                "mode": "chosen",
-                "chosen": [  # a kept grant's workflow settings stay as they are: left out, the hub keeps them
-                    {"full_name": "a/b", "access": "write"},
-                    {"full_name": "e/f", "access": "read"},
-                    {"full_name": "g/h", "access": "write", "run_workflows": True},
-                    {"full_name": "C/D", "access": "write"},
-                ],
-            },
-        ],
-    ]
-    removed = run_line(["bot", "repos", "b", "--remove", "e/f", "--add", "g/h:read"], monkeypatch)
-    assert [r["full_name"] for r in removed["http"][-1][2]["chosen"]] == ["a/b", "c/d", "g/h"]
-
-    # From its own repository it starts from none; from All ticked repos, from what that covers at its access.
-    monkeypatch.setitem(ANSWERS, "GET bots/b/repositories", {"mode": "own", "chosen": [current["chosen"][0]]})
-    own = run_line(["bot", "repos", "b", "--add", "g/h"], monkeypatch)
-    assert own["http"][-1][2] == {"mode": "chosen", "chosen": [{"full_name": "g/h", "access": "write"}]}
-    monkeypatch.setitem(
-        ANSWERS, "GET bots/b/repositories", {"mode": "all", "all_access": "read", "all_ticked": ["a/b", "c/d"]}
-    )
-    every = run_line(["bot", "repos", "b", "--remove", "c/d"], monkeypatch)
-    assert every["http"][-1][2] == {"mode": "chosen", "chosen": [{"full_name": "a/b", "access": "read"}]}
-    assert "moves from All ticked repos" in every["stderr"]
-
-    both = run_line(["bot", "repos", "b", "--own", "--add", "g/h"], monkeypatch)
-    assert both["exit"] == 2 and '"error": "validation"' in both["stdout"] and both["http"] == []
-    bad = run_line(["bot", "repos", "b", "--add", "g/h:write+deploy"], monkeypatch)
-    assert bad["exit"] == 2 and bad["http"] == []
 
 
 def test_bot_repos_says_what_a_change_took_away(monkeypatch, capsys):
