@@ -310,18 +310,26 @@ html[data-layout="cards"] .g-lim.is-pool .row-title{grid-area:av / av / name / n
 .provider-pool-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s-1) var(--s-3);padding:var(--s-2h);font-size:var(--t-sm);color:var(--muted)}
 .provider-pool-head .sec-name{color:var(--ink)}
 .provider-pool-count{margin-inline-start:auto}
-.pk-settings .row.g-provider{--g:16px minmax(0,1.25fr) minmax(75px,.7fr) minmax(85px,1fr) minmax(86px,.9fr) 90px 28px;height:auto;min-height:var(--row);padding:var(--s-2h);border-top:1px solid var(--line);border-radius:0}
-.provider-order,.provider-kind,.provider-usage,.provider-agents{font-size:var(--t-sm);color:var(--ink-2)}
+.provider-group-head{margin:0;padding:var(--s-1h) var(--s-2h) var(--s-1);border-top:1px solid var(--line);font-size:var(--t-xs);font-weight:var(--w-strong);color:var(--muted)}
+.pk-settings .row.g-provider{--g:minmax(0,1.4fr) minmax(140px,1.2fr) minmax(90px,auto) 28px;height:auto;min-height:var(--row);padding:var(--s-2) var(--s-2h);border-top:1px solid var(--line);border-radius:0;align-items:center}
+.pk-settings .provider-group-head+.row.g-provider{border-top:0}
+.pk-settings .row.g-provider.has-agents{--g:minmax(0,1.3fr) minmax(120px,1.1fr) minmax(86px,auto) 96px 28px}
+.pk-settings .row.g-provider.has-kind{--g:minmax(0,1.3fr) 72px minmax(110px,1fr) minmax(86px,auto) 28px}
+.pk-settings .row.g-provider.has-kind.has-agents{--g:minmax(0,1.25fr) 72px minmax(90px,1fr) minmax(86px,auto) 96px 28px}
+.provider-kind,.provider-usage,.provider-agents{font-size:var(--t-sm);color:var(--ink-2)}
 .provider-name,.provider-usage{display:grid;gap:var(--s-0);min-width:0}
-.provider-name small,.provider-usage small,.provider-limit{font-size:var(--t-xs);color:var(--muted)}
-.provider-limit{display:block;margin-top:var(--s-1)}
+.provider-usage-missing{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s-1) var(--s-2)}
+.provider-usage-missing .verb{height:auto;margin:0;padding:0 var(--s-1);font-size:var(--t-xs)}
+.provider-name small,.provider-usage small{font-size:var(--t-xs);color:var(--muted)}
 .provider-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .provider-usage .meter{width:100%;max-width:140px}
 .provider-badge .pill{display:inline-block;white-space:normal;line-height:1.35;height:auto}
 .provider-more{justify-self:end}
 
-html[data-layout="cards"] .pk-settings .row.g-provider{--g:16px minmax(0,3fr) minmax(0,2fr) var(--ctl-sm);grid-template-areas:"order name badge more" ". kind agents agents" ". use use .";gap:var(--s-1) var(--s-2);align-items:start}
-html[data-layout="cards"] .provider-order{grid-area:order}
+html[data-layout="cards"] .pk-settings .row.g-provider{--g:minmax(0,1fr) auto var(--ctl-sm);grid-template-areas:"name badge more" "use use .";gap:var(--s-1) var(--s-2);align-items:start}
+html[data-layout="cards"] .pk-settings .row.g-provider.has-agents{grid-template-areas:"name badge more" "use agents ."}
+html[data-layout="cards"] .pk-settings .row.g-provider.has-kind{grid-template-areas:"name badge more" "kind use ."}
+html[data-layout="cards"] .pk-settings .row.g-provider.has-kind.has-agents{grid-template-areas:"name badge more" "kind agents ." "use use ."}
 html[data-layout="cards"] .provider-name{grid-area:name}
 html[data-layout="cards"] .provider-kind{grid-area:kind}
 html[data-layout="cards"] .provider-usage{grid-area:use}

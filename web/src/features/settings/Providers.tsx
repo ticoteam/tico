@@ -19,14 +19,31 @@ import { editSubscriptionName, maxLiveTurns } from './actions';
 import { ConnectPlan } from './ConnectPlan';
 import { GatewayLines } from './Gateway';
 import { Line, Meter, act, agentsWord, usd, useAdmin } from './parts';
-import { limitReset, needsReconnect, providerBadge } from './providerStatus';
+import { limitReset, atUsageLimit, needsReconnect, providerBadge } from './providerStatus';
 import { accessQuery, planExitQuery, SIGN_IN_KINDS, subscriptionsQuery, type SignInKind, type Subscription } from './queries';
 
 const isPlan = (kind: string): kind is SignInKind => (SIGN_IN_KINDS as readonly string[]).includes(kind);
+const DEFAULT_PLAN_NAME = /^(?:.+?'s )?(?:Claude|ChatGPT|Antigravity) plan(?: \d+)?$/i;
+
+function providerGroupLabel(s: Subscription) {
+  if (s.runtime === 'claude') return 'Claude';
+  if (s.runtime === 'codex') return 'ChatGPT';
+  return s.label.replace(/ plan$/i, '');
+}
+
+function planDisplay(s: Subscription, pooled: boolean) {
+  const plan = isPlan(s.kind);
+  const email = plan && s.preview && s.preview.includes('@') ? s.preview : '';
+  const primary = email || s.name;
+  const customName = email && s.name && s.name !== email && !DEFAULT_PLAN_NAME.test(s.name.trim()) ? s.name : '';
+  const tokenPreview = !email ? s.preview : '';
+  const by = !pooled && plan ? (s.owner_id ? s.owner_name || 'A teammate' : `Added by ${s.added_by_name || 'A teammate'}`) : '';
+  return { primary, customName, tokenPreview, by };
+}
 
 type Owner = { id: string; name: string };
 type Adding = ({ sign: SignInKind } | { key: string; label: string }) & { owner?: Owner };
-type Change = 'reconnect' | 'replace' | 'rename' | 'remove';
+type Change = 'reconnect' | 'replace' | 'rename' | 'limit' | 'remove';
 
 function KeyDialog({ kind, label, subscription, owner, onClose }: { kind: string; label: string; subscription?: Subscription; owner?: Owner; onClose: () => void }) {
   const [secret, setSecret] = useState('');
@@ -100,69 +117,115 @@ function RenameDialog({ s, onClose }: { s: Subscription; onClose: () => void }) 
   );
 }
 
-function LiveTurnLimit({ id, limit, manage }: { id: string; limit: number; manage: boolean }) {
-  const [draft, setDraft] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  const value = draft ?? String(limit);
-  const parsed = maxLiveTurns.safeParse(Number(value));
+function MaxLiveTurnsDialog({ s, onClose }: { s: Subscription; onClose: () => void }) {
+  const current = s.max_live_turns ?? 20;
+  const [value, setValue] = useState(String(current));
+  const [busy, setBusy] = useState(false);
+  const trimmed = value.trim();
+  const parsed = maxLiveTurns.safeParse(trimmed === '' ? NaN : Number(trimmed));
   const save = async () => {
-    if (saving || !parsed.success || parsed.data === limit) return;
-    setSaving(true);
+    if (busy || !parsed.success || parsed.data === current) return;
+    setBusy(true);
     try {
-      await act('settings.editSubscription', { subscription: id, max_live_turns: parsed.data });
+      if (await act('settings.editSubscription', { subscription: s.id, max_live_turns: parsed.data })) onClose();
     } finally {
-      setDraft(undefined);
-      setSaving(false);
+      setBusy(false);
     }
   };
-  return manage ? (
-    <div className="set-num provider-limit">
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && !busy && onClose()}
+      title="Max live turns"
+      description={s.preview || s.name}
+      actions={
+        <>
+          <Button variant="quiet" disabled={busy} onClick={onClose}>Cancel</Button>
+          <Button variant="primary" busy={busy} disabled={!parsed.success || parsed.data === current} onClick={save}>Save</Button>
+        </>
+      }
+    >
       <Field
         label="Max live turns"
         type="number"
-        wide={false}
         value={value}
-        onValueChange={setDraft}
-        onCommit={save}
-        disabled={saving}
+        onValueChange={setValue}
+        disabled={busy}
         error={parsed.success ? undefined : '1 to 200'}
+        autoFocus
       />
-    </div>
-  ) : <small className="provider-limit">Max live turns {limit}</small>;
+    </Dialog>
+  );
 }
 
-function Usage({ s }: { s: Subscription }) {
+function Usage({ s, canRefresh }: { s: Subscription; canRefresh: boolean }) {
+  const [refreshing, setRefreshing] = useState(false);
   const u = s.usage;
   if (u?.used_pct != null) {
     const reset = limitReset(s);
     return (
       <span className="provider-usage">
-        <Meter pct={u.used_pct} over={u.used_pct >= 100} />
+        <Meter pct={u.used_pct} over={atUsageLimit(s)} />
         <small>
           {Number(u.used_pct.toFixed(1))}%{u.window ? ` of ${u.window === 'week' ? 'week' : '5 hours'}` : ''}{reset && `, resets ${reset}`}
         </small>
       </span>
     );
   }
-  return <span className="provider-usage">{u?.cost_usd_month != null ? `${usd(u.cost_usd_month)} this month` : u?.reason || '—'}</span>;
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await act('settings.refreshUsage', { subscription: s.id });
+    } finally {
+      setRefreshing(false);
+    }
+  };
+  return (
+    <span className="provider-usage provider-usage-missing">
+      <span>{u?.cost_usd_month != null ? `${usd(u.cost_usd_month)} this month` : u?.reason || '—'}</span>
+      {canRefresh && (
+        <button type="button" className="verb is-quiet" disabled={refreshing} onClick={() => void refresh()}>
+          Refresh
+        </button>
+      )}
+    </span>
+  );
 }
 
-function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean; own: boolean; open: boolean }) {
+function ProviderRow({
+  s,
+  admin,
+  own,
+  open,
+  pooled,
+  grouped,
+}: {
+  s: Subscription;
+  admin: boolean;
+  own: boolean;
+  open: boolean;
+  pooled: boolean;
+  grouped: boolean;
+}) {
   const [changing, setChanging] = useState<Change | null>(null);
   const plan = isPlan(s.kind);
   const agents = s.agents ?? [];
   const badge = providerBadge(s);
-  const expandable = !!badge.detail || agents.length > 0;
-  const by = plan ? (s.owner_id ? s.owner_name || 'A teammate' : `Added by ${s.added_by_name || 'A teammate'}`) : '';
-  const preview = s.preview;
+  const atLimit = atUsageLimit(s) || !!s.usage?.quota_hold_until;
+  const expandable = !!badge.detail || agents.length > 0 || (plan && s.max_live_turns !== undefined);
+  const { primary, customName, tokenPreview, by } = planDisplay(s, pooled);
   const byWhen = s.reconnect_by && !needsReconnect(s) && fmtDate(s.reconnect_by);
   const manage = admin || own;
   const mayRemove = s.can_remove ?? manage;
+  const canRefreshUsage = manage && s.runtime === 'claude' && plan && !needsReconnect(s);
+  const showKind = !grouped;
+  const showAgents = !pooled;
+  const rowClass = ['row', 'g-provider', showKind && 'has-kind', showAgents && 'has-agents', atLimit && 'is-off'].filter(Boolean).join(' ');
   const close = () => setChanging(null);
   return (
     <>
-      <div className="row g-provider" data-target={`subscription:${s.id}`} title={s.name}>
-        <span className="provider-order">{s.order ?? '–'}</span>
+      <div className={rowClass} data-target={`subscription:${s.id}`} title={primary}>
         <div className="provider-name">
           {expandable ? <Link
             className="row-title"
@@ -171,25 +234,38 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
             search={open ? {} : { open: s.id }}
             aria-expanded={open}
           >
-            {s.name}
-          </Link> : <span className="row-title">{s.name}</span>}
+            {primary}
+          </Link> : <span className="row-title">{primary}</span>}
+          {customName && <small title={customName}>{customName}</small>}
           {by && <small title={by}>{by}</small>}
-          {preview && <small title={preview}>{preview}</small>}
+          {tokenPreview && <small title={tokenPreview}>{tokenPreview}</small>}
           {byWhen && <small>Reconnect by {byWhen}</small>}
         </div>
-        <div className="provider-kind">
-          {plan ? s.label : 'API key'}
-          {plan && s.max_live_turns !== undefined && <LiveTurnLimit id={s.id} limit={s.max_live_turns} manage={manage} />}
-        </div>
-        {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? <Usage s={s} /> : <span className="provider-usage" />}
-        <span className="provider-badge"><Pill flag={badge.label === 'Problem' || needsReconnect(s)} title={badge.detail}>{badge.label}</Pill></span>
-        <span className="provider-agents">Picked by {agentsWord(agents.length)}</span>
+        {showKind && (
+          <div className="provider-kind">
+            {plan ? s.label : 'API key'}
+          </div>
+        )}
+        {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? (
+          <Usage s={s} canRefresh={canRefreshUsage} />
+        ) : (
+          <span className="provider-usage" />
+        )}
+        <span className="provider-badge">
+          <Pill flag={badge.label === 'Problem' || needsReconnect(s) || atLimit} title={badge.detail}>
+            {badge.label}
+          </Pill>
+        </span>
+        {showAgents && <span className="provider-agents">Picked by {agentsWord(agents.length)}</span>}
         <span className="provider-more">
           {(manage || mayRemove) && (
-            <Menu trigger={<IconButton icon="more" label={`More for ${s.name}`} size="sm" quiet />}>
+            <Menu trigger={<IconButton icon="more" label={`More for ${primary}`} size="sm" quiet />}>
               {manage && <MenuItem label={plan ? 'Reconnect' : 'Replace key'} onSelect={() => setChanging(plan ? 'reconnect' : 'replace')} />}
-              {manage && s.runtime === 'claude' && plan && !needsReconnect(s) && (
-                <MenuItem label="Check use" onSelect={() => void act('settings.refreshUsage', { subscription: s.id })} />
+              {canRefreshUsage && (
+                <MenuItem label="Refresh usage" onSelect={() => void act('settings.refreshUsage', { subscription: s.id })} />
+              )}
+              {manage && plan && s.max_live_turns !== undefined && (
+                <MenuItem label="Max live turns" meta={String(s.max_live_turns)} onSelect={() => setChanging('limit')} />
               )}
               {manage && <MenuItem label="Rename" onSelect={() => setChanging('rename')} />}
               {mayRemove && <MenuItem label="Remove" onSelect={() => setChanging('remove')} />}
@@ -198,8 +274,9 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
         </span>
       </div>
       {open && expandable && (
-        <Facts label={s.name}>
+        <Facts label={primary}>
           {badge.detail && <Line label="State">{badge.detail}</Line>}
+          {plan && s.max_live_turns !== undefined && <Line label="Max live turns">{s.max_live_turns}</Line>}
           {agents.length > 0 && (
             <Line label="Picked by">
               {agents.map((a, i) => (
@@ -215,6 +292,7 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
       )}
       {changing === 'reconnect' && manage && isPlan(s.kind) && <ConnectPlan kind={s.kind} subscription={s.id} onClose={close} />}
       {changing === 'replace' && manage && <KeyDialog kind={s.kind} label="API key" subscription={s} onClose={close} />}
+      {changing === 'limit' && manage && plan && s.max_live_turns !== undefined && <MaxLiveTurnsDialog s={s} onClose={close} />}
       {changing === 'rename' && manage && <RenameDialog s={s} onClose={close} />}
       {changing === 'remove' && mayRemove && (
         <Dialog
@@ -270,7 +348,25 @@ function ExitPicker({ exit, close }: { exit: PlanExit; close: () => void }) {
   );
 }
 
-function Pool({ name, list, admin, own = false, open, exit, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; own?: boolean; open?: string; exit?: PlanExit; defaultExpanded?: boolean }) {
+function Pool({
+  name,
+  list,
+  admin,
+  own = false,
+  pooled = false,
+  open,
+  exit,
+  defaultExpanded = true,
+}: {
+  name: string;
+  list: Subscription[];
+  admin: boolean;
+  own?: boolean;
+  pooled?: boolean;
+  open?: string;
+  exit?: PlanExit;
+  defaultExpanded?: boolean;
+}) {
   const content = useId();
   const [changingExit, setChangingExit] = useState(false);
   const opened = open?.replace(/^subscription:/, '');
@@ -285,6 +381,13 @@ function Pool({ name, list, admin, own = false, open, exit, defaultExpanded = tr
     keys.length && `${keys.length} ${keys.length === 1 ? 'key' : 'keys'}`,
   ].filter(Boolean).join(', ') || 'empty';
   const sorted = [...plans].sort((a, b) => a.runtime.localeCompare(b.runtime) || (a.order ?? Infinity) - (b.order ?? Infinity));
+  const planGroups: { label: string; items: Subscription[] }[] = [];
+  for (const s of sorted) {
+    const label = providerGroupLabel(s);
+    const prev = planGroups.at(-1);
+    if (prev && prev.label === label) prev.items.push(s);
+    else planGroups.push({ label, items: [s] });
+  }
   return (
     <section className="provider-pool" aria-label={name}>
       <header className="provider-pool-head">
@@ -300,9 +403,28 @@ function Pool({ name, list, admin, own = false, open, exit, defaultExpanded = tr
       </header>
       {changingExit && exit?.can_change && <ExitPicker exit={exit} close={() => setChangingExit(false)} />}
       <div id={content} hidden={!expanded}>
-        {expanded && [...sorted, ...keys].map((s) => (
-          <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} />
-        ))}
+        {expanded && (
+          <>
+            {planGroups.map((group) => (
+              <div key={group.label} className="provider-group">
+                <h4 className="provider-group-head">{group.label}</h4>
+                {group.items.map((s) => (
+                  <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} pooled={pooled} grouped />
+                ))}
+              </div>
+            ))}
+            {keys.length > 0 && (planGroups.length > 0 ? (
+              <div className="provider-group">
+                <h4 className="provider-group-head">API keys</h4>
+                {keys.map((s) => (
+                  <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} pooled={pooled} grouped />
+                ))}
+              </div>
+            ) : keys.map((s) => (
+              <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} pooled={pooled} grouped={false} />
+            )))}
+          </>
+        )}
       </div>
     </section>
   );
@@ -356,9 +478,9 @@ export function Providers({ open }: { open?: string }) {
     <>
       <div className="provider-pools" data-target="setting:subscriptions">
         <SectionHead name="Providers" actions={add} />
-        <Pool name="Your pool" list={mine} admin={admin} own open={open} exit={exits.get(me?.id ?? '')} />
+        <Pool name="Your pool" list={mine} admin={admin} own pooled open={open} exit={exits.get(me?.id ?? '')} />
         {[...other].sort(([, a], [, b]) => a.name.localeCompare(b.name)).map(([id, pool]) => (
-          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} exit={exits.get(id)} defaultExpanded={false} />
+          <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} pooled open={open} exit={exits.get(id)} defaultExpanded={false} />
         ))}
         {ownerless.length > 0 && <Pool name="No owner" list={ownerless} admin={admin} open={open} />}
         {company.length > 0 && <Pool name="Company keys" list={company} admin={admin} open={open} />}
