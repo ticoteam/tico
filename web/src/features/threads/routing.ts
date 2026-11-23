@@ -22,7 +22,7 @@ export {
 
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
 
-export { asksOf, ownTaskOf, type Asks } from './model';
+export { asksOf, type Asks } from './model';
 
 /** A thread's page: the list (the menu's Threads tab) and the open thread. */
 export function loadThreads(qc: QueryClient, o: { thread?: string; preload?: boolean } = {}) {

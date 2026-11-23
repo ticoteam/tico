@@ -1760,14 +1760,15 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         no one's request lends Agent Ops theirs, it still does: the route checks the owner's own right to work its task,
         nothing wider. Only the run's own task, the one its claim recorded (execution's claim, `task_wakes.message_task`):
         words that lend nothing on one task never end another."""
-        found = OWN_TASK_END.fullmatch(normalize(request.url.path) or "")
+        # The path as routed (a `#<number>` decoded), which the route resolves as `auth.resolve_task` does.
+        found = OWN_TASK_END.fullmatch(str(request.scope.get("path") or request.url.path))
         if request.method != "POST" or not found:
             return False
         if found.group(2) == "move":
             body = parse_body(getattr(request, "_body", b""))
             body = body if isinstance(body, dict) else {}
-            to = str(body.get("to") or "").strip().lower()
-            if to not in ("done", "closed") or body.get("to_pipeline") or body.get("let_see"):
+            # Exactly the engine's own words for the end (task_engine._target): any other `to` names a stage.
+            if body.get("to") not in ("done", "closed") or body.get("to_pipeline") or body.get("let_see"):
                 return False
         try:
             row = H.task(c, auth.resolve_task(c, who, found.group(1)))

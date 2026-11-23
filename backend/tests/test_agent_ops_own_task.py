@@ -341,6 +341,8 @@ def test_a_refused_lend_still_reaches_nothing_else(api, agent_ops):
         (f"tasks/{other['id']}/done", {"note": "x"}),
         (f"tasks/{other['id']}/move", {"to": "closed", "why": "x"}),
         (f"tasks/{task['id']}/move", {"to": "next", "why": "x"}),
+        # not the engine's own word for the end: it names a stage (task_engine._target), which may be a work stage
+        (f"tasks/{task['id']}/move", {"to": "Closed", "why": "x"}),
         (f"tasks/{task['id']}/owner", {"owner": "ops", "why": "x"}),
     ):
         tried = api.post(
@@ -374,12 +376,18 @@ def test_a_body_or_header_citation_of_the_turn_ends_its_own_task_too(api, agent_
     """The citation is weighed once (agent_ops_act `act_for_requester`): `on_behalf_of: turn` in the body, or the
     header, falls back to its own rights as no citation does; the route never refuses it again."""
     for n, (body, cite) in enumerate(
-        (({"on_behalf_of": "turn"}, {}), ({}, {"X-Tico-On-Behalf-Of": "turn"}), ({"on_behalf_of": "turn"}, {}))
+        (
+            ({"on_behalf_of": "turn"}, {}),
+            ({}, {"X-Tico-On-Behalf-Of": "turn"}),
+            ({"on_behalf_of": "turn"}, {}),
+            ({"on_behalf_of": "turn"}, {}),
+        )
     ):
         task, _, attempt = _asked_in_its_chat(api, agent_ops, title=f"cite {n}")
         op, more = ("move", {"to": "closed", "why": "x"}) if n == 2 else ("done", {"note": "x"})
+        ref = f"%23{task['number']}" if n == 3 else task["id"]  # `#<number>`, as auth.resolve_task reads it
         ended = api.post(
-            f"/api/v2/tasks/{task['id']}/{op}",
+            f"/api/v2/tasks/{ref}/{op}",
             json=_seen(api, task["id"], {**more, **body}),
             headers={**headers(attempt["token"]), **cite},
         )
@@ -423,6 +431,29 @@ def test_a_comment_deleted_from_the_chat_takes_back_the_rights_it_lent(api, agen
     gone = api.delete(f"/api/v2/messages/{said['id']}", headers=headers("ana-test"))
     assert gone.status_code == 200, gone.text
     assert _lent(api, task["id"], "bot:ops") == 0
+
+
+def test_an_edited_comment_deleted_either_way_takes_back_the_rights_it_lent(api, agent_ops):
+    """Ana's comment @mentions Ops and Finance; Finance is woken through a carrier. An edit drops Finance and another adds
+    it back: its delivery and carrier are new, its grant is on the first. Deleting the comment, from the chat or as a
+    task comment, ends that grant too (H.expire_delegations finds a carrier by what it carries)."""
+    assign(api, agent_ops, "ops")
+    assign(api, agent_ops, "finance")
+    ready(api, agent_ops, ["botops", "ops", "finance"])
+    for n, how in enumerate(("chat", "task")):
+        task = post(api, "tasks", {"owner": "botops", "title": f"Tidy the launch note {n}", "body": "x"})
+        said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops and @finance, check the numbers?"})["comment"]
+        assert _lent(api, task["id"], "bot:finance") == 1
+        for text in ("@ops, check the numbers?", "@ops and @finance, check the numbers again?"):
+            edited = api.patch(f"/api/v2/messages/{said['id']}", json={"text": text}, headers=headers("ana-test"))
+            assert edited.status_code == 200, edited.text
+        assert _lent(api, task["id"], "bot:finance") == 1
+        path = f"messages/{said['id']}" if how == "chat" else f"tasks/{task['id']}/comments/{said['id']}/delete"
+        send = api.delete if how == "chat" else api.post
+        gone = send("/api/v2/" + path, headers=headers("ana-test"), **({} if how == "chat" else {"json": {}}))
+        assert gone.status_code == 200, (how, gone.text)
+        assert _lent(api, task["id"], "bot:finance") == 0, how
+        assert _lent(api, task["id"], "bot:ops") == 0, how
 
 
 def test_a_held_close_of_its_own_task_is_sent_with_its_own_rights(api, agent_ops):

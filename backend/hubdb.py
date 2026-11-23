@@ -4653,15 +4653,27 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
 
 def expire_delegations(conn, message_id, ts):
     """A message taken back: the task delegations it lent end now (`delegate_woken`), its own and those of the bots it
-    woke beyond the first, each through a carrier (threads.deliver), keyed by the carrier's id. Both deletes call it:
-    a task comment's (`task_comment_delete`) and a thread message's (threads._revise), which is how the chat deletes a
-    comment. Returns those message ids."""
+    woke beyond the first, each through a carrier (threads.deliver), keyed by the carrier's id. A carrier is found by
+    the message it carries (`refs.carries`), not by today's deliveries: an edit that drops and adds a mention again
+    replaces the delivery and its carrier, while the grant stays on the first. Both deletes call it: a task comment's
+    (`task_comment_delete`) and a thread message's (threads._revise), which is how the chat deletes a comment. Returns
+    the message ids that may have started runs: it and its carriers."""
     woke = [message_id] + [
         r[0]
         for r in conn.execute(
             "SELECT carrier_id FROM message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL", (message_id,)
         )
     ]
+    # Live grants only (a day at most), each a carrier or the message itself: no scan of the room's messages.
+    lent = [
+        r[0]
+        for r in conn.execute(
+            "SELECT d.message_id FROM task_delegations d JOIN messages m ON m.id=d.message_id "
+            "WHERE d.expires_at>? AND (d.message_id=? OR json_extract(m.refs,'$.carries')=?)",
+            (ts, message_id, message_id),
+        )
+    ]
+    woke += [m for m in lent if m not in woke]
     marks = ",".join("?" * len(woke))
     conn.execute(
         f"UPDATE task_delegations SET expires_at=? WHERE message_id IN ({marks}) AND expires_at>?", (ts, *woke, ts)

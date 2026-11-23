@@ -72,11 +72,6 @@ export function rowsOf(data: ThreadList | undefined): Thread[] {
 /** A task's thread: by its task, or (a row a live `activity` brief added, which has no `task_id`) by its audience or kind. */
 export const isTaskThread = (t: Pick<Thread, 'task_id' | 'audience' | 'kind'>) => !!t.task_id || t.audience === 'task' || t.kind === 'task';
 
-/** The task whose own chat this is (not a sub-thread of it, nor a chat a task was filed into), or undefined: it opens as
-    that task, on its chat, where the person's words are comments on it. */
-export const ownTaskOf = (t: Pick<Thread, 'task_id' | 'audience' | 'parent_id'> | undefined) =>
-  t?.task_id && t.audience === 'task' && !t.parent_id ? String(t.task_id) : undefined;
-
 export const isDm = (t: Pick<Thread, 'audience'> | undefined) => t?.audience === 'personal' || t?.audience === 'participants';
 
 /** Who else is in it: `dm_with`, else the members read with the view. The viewer is left out. */

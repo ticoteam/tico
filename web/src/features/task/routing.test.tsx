@@ -7,8 +7,6 @@ import { Route as flowTask } from '@/routes/flow.$task';
 import { Route as flowIndex } from '@/routes/flow.index';
 import { Route as taskById } from '@/routes/task.$task';
 import { Route as taskIndex } from '@/routes/tasks.$pipeline.$task.index';
-import { Route as thread } from '@/routes/threads.$thread';
-import { threadQuery } from '@/features/threads/routing';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { TaskById } from './TaskPage';
 
@@ -28,7 +26,6 @@ function at(href: string) {
     flowTask.update({ getParentRoute: () => root, id: '/flow/$task', path: '/flow/$task' } as never),
     taskById.update({ getParentRoute: () => root, id: '/task/$task', path: '/task/$task', component: () => null } as never),
     taskIndex.update({ getParentRoute: () => root, id: '/tasks/$pipeline/$task/', path: '/tasks/$pipeline/$task/', component: () => null } as never),
-    thread.update({ getParentRoute: () => root, id: '/threads/$thread', path: '/threads/$thread', component: () => null } as never),
     page('/needs-you'),
     page('/tasks/$pipeline/$task/$tab'),
   ]);
@@ -138,29 +135,5 @@ describe('/tasks/<p>/<n>?tab=chat', () => {
     await router.load();
     await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/spec'));
     expect(new URLSearchParams(router.state.location.searchStr).get('tab')).toBe('chat');
-  });
-});
-
-describe('/threads/<a task’s chat>', () => {
-  const view = (id: string, more: object) => queryClient.setQueryData(threadQuery(id).queryKey, { id, root_id: id, audience: 'task', ...more } as never);
-
-  it('opens as the task, on its chat (task #35014: replied to on the Thread page, it was no comment)', async () => {
-    queryClient.setQueryData(taskRefQuery('t1').queryKey, 't1');
-    queryClient.setQueryData(taskDetailQuery('t1').queryKey, { ...task, conversation_id: 'c1' });
-    view('c1', { task_id: 't1' });
-    const router = at('/threads/c1');
-    await router.load();
-    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/chat'));
-  });
-
-  it('any other thread stays a thread: a sub-thread of a task’s chat, an agent’s Home with a ❓ on a task', async () => {
-    view('s1', { task_id: 't1', parent_id: 'c1' });
-    view('h1', { task_id: 't1', audience: 'home' });
-    view('m1', { audience: 'members' });
-    for (const id of ['s1', 'h1', 'm1']) {
-      const router = at(`/threads/${id}`);
-      await router.load();
-      expect(router.state.location.pathname).toBe(`/threads/${id}`);
-    }
   });
 });
