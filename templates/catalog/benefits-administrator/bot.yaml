@@ -3,8 +3,6 @@ display_name: "Benefits Administrator"
 labels: [owner:benefits-administrator]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 45
-
 routines:
   - id: weekly-benefits-deadlines
     title: Weekly benefits deadlines

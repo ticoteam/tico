@@ -393,7 +393,7 @@ def tick(api, at):
 
 
 def test_silent_run_is_marked_stalled_then_ended_by_the_server_at_its_limit_plus_grace(api):
-    """No heartbeat, no events, no computer answer: the server marks it stalled, and ends it at max_run_minutes (60)
+    """No heartbeat, no events, no computer answer: the server marks it stalled, and ends it at max_run_minutes (the 1440 default)
     plus the five-minute grace, on its own clock. The computer never reports."""
     machine, _, a = start(api)
     t0 = H.now()
@@ -401,16 +401,16 @@ def test_silent_run_is_marked_stalled_then_ended_by_the_server_at_its_limit_plus
     tick(api, H.shift(t0, minutes=6))
     row = listed(api, a['id'])
     assert row['stalled'] and row['stall_minutes'] == 5
-    tick(api, H.shift(t0, minutes=64))
+    tick(api, H.shift(t0, minutes=1444))
     assert listed(api, a['id'])['stalled']
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'running'
-    tick(api, H.shift(t0, minutes=66))
+    tick(api, H.shift(t0, minutes=1446))
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'
     row = listed(api, a['id'])
     assert row['end_reason'].startswith('Ended by the server: no heartbeat for 5 minutes')
-    assert 'max_run_minutes (60 minutes)' in row['end_reason']
+    assert 'max_run_minutes (1440 minutes)' in row['end_reason']
 
 
 def test_server_outage_is_not_the_computers_silence_for_the_cap(api):
@@ -418,7 +418,7 @@ def test_server_outage_is_not_the_computers_silence_for_the_cap(api):
     listening for longer than STALL_MINUTES: the outage is not the computer's silence."""
     machine, _, a = start(api)
     t0 = H.now()
-    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    silent_since(api, a["id"], H.shift(t0, minutes=-(run_diagnostics.MAX_RUN_MINUTES + 10)))
 
     def capped():
         with api.app.state.store.read() as c:
@@ -439,7 +439,7 @@ def test_capped_run_is_not_extended_by_stall_grace_or_a_call_in_flight(api, monk
     computer still in flight extends it."""
     machine, _, a = start(api)
     t0 = H.now()
-    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    silent_since(api, a["id"], H.shift(t0, minutes=-(run_diagnostics.MAX_RUN_MINUTES + 10)))
     far = H.shift(t0, hours=3)
     monkeypatch.setattr(api.app.state.execution, 'stall_recovery', lambda now: ((now, now, far),))
     api.app.state.execution.calls[a['id']] = {object(): (machine['runner_id'], H.now())}
@@ -452,7 +452,7 @@ def test_capped_run_is_not_extended_by_stall_grace_or_a_call_in_flight(api, monk
 def test_a_run_still_heartbeating_past_its_limit_is_left_to_the_runner(api):
     machine, _, a = start(api)
     t0 = H.now()
-    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    silent_since(api, a["id"], H.shift(t0, minutes=-(run_diagnostics.MAX_RUN_MINUTES + 10)))
     post(api, f"attempts/{a['id']}/renew", {}, machine['token'])
     tick(api, H.now())
     with api.app.state.store.read() as c:
@@ -471,7 +471,7 @@ def test_a_server_capped_run_does_not_come_back_on_renewal_and_its_late_result_i
         machine['token'],
     )
     t0 = H.now()
-    silent_since(api, a['id'], H.shift(t0, minutes=-70))
+    silent_since(api, a["id"], H.shift(t0, minutes=-(run_diagnostics.MAX_RUN_MINUTES + 10)))
     tick(api, t0)
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM attempts WHERE id=?', (a['id'],)).fetchone()[0] == 'expired'

@@ -3,8 +3,6 @@ display_name: "Fundraising Manager"
 labels: [owner:fundraising-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 45
-
 routines:
   - id: weekly-raise-review
     title: Weekly raise review

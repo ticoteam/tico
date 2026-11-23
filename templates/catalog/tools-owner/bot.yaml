@@ -3,8 +3,6 @@ display_name: "Tools Owner"
 labels: [owner:tools-owner]
 reads: []                            # other bot repositories this one may clone read-only
 
-max_run_minutes: 30
-
 # The routines this bot starts with. The server seeds each once, when the Tools Owner is built in (a key it never had also at a
 # later start); from then on each is an Automation (docs/routines.md). Set the timezone to the team's own.
 routines:

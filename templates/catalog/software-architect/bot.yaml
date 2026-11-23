@@ -5,8 +5,6 @@ shared: true
 session: task
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 60
-
 # What the Tico AI Gateway gives this bot when nobody picked a model: its group's pick at this level.
 gateway:
   level: high

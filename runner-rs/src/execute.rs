@@ -36,6 +36,9 @@ use crate::wire::{decode, StartPlaceAnswer};
 mod voice;
 use voice::{voice_answer, voice_question};
 
+/// A run with no max_run_minutes of its own may last a day (backend run_diagnostics MAX_RUN_MINUTES), as long as the Gateway
+/// already holds a run to: long builds and reviews finish in one turn. A computer that goes quiet loses its lease in minutes.
+const DEFAULT_RUN_MINUTES: f64 = 24.0 * 60.0;
 const RENEW_INTERVAL: Duration = Duration::from_secs(10);
 const VOICE_CONTEXT_TOKENS: i64 = 24_000;
 const VOICE_INTERRUPT_WAIT: Duration = Duration::from_secs(2);
@@ -2017,15 +2020,17 @@ impl Runner {
         let minutes = config["max_run_minutes"]
             .as_f64()
             .or_else(|| text_of(&config["max_run_minutes"]).parse().ok())
-            .unwrap_or(60.0);
+            .unwrap_or(DEFAULT_RUN_MINUTES);
         let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
         let limit = relay.map_or(requested, |r| r.limit(requested));
-        let name = if limit < requested {
+        // The Gateway's hold is a minute or two under the default day: that is the same limit, not a clamp to report.
+        let clamped = limit < requested && minutes > DEFAULT_RUN_MINUTES;
+        let name = if clamped {
             "Gateway credential lifetime (24 hours)".into()
         } else {
             format!("max_run_minutes ({minutes} minutes)")
         };
-        if limit < requested {
+        if clamped {
             self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
         }
         if limit <= run_clock() {

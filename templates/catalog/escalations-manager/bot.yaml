@@ -3,8 +3,6 @@ display_name: "Escalations Manager"
 labels: [owner:escalations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 45
-
 routines:
   - id: daily-escalation-digest
     title: Daily escalation digest

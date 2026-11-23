@@ -632,10 +632,10 @@ cases.
 
 #### A bot builds for a day
 
-- One run lasts at most 60 minutes. That is today's limit, a setting on the bot.
+- One run lasts at most a day by default (a setting on the bot); before Nov 23, 2026 it was 60 minutes.
 - The run ends with new commits and the stage not finished. Something changed, so no try is counted. The bot is woken
   again 15 minutes later.
-- A day of building is up to 23 runs, back to back. The row shows a spinner. The task's top line says "Builder working".
+- A day of building can be one run, or several when the bot finishes earlier and is woken again. The row shows a spinner. The task's top line says "Builder working".
 - A run that ends with nothing changed is "stopped early", try 1 of 3.
 - At 1 day the task is Late and the Eng Manager gets it. At 3 days it is in your list.
 
@@ -2345,7 +2345,7 @@ Numbered in order so they can be cited (scenario 1 to 49).
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.
 34. A repo with no checks: Checks pass is met after 10 minutes, with the note.
-35. A run hits the 60-minute limit with new commits: the bot is woken again and no try is counted.
+35. A run hits its run limit with new commits: the bot is woken again and no try is counted.
 36. A run is held or cut off: it doesn't count as on it. A new wake goes out with "your last run was cut off".
 37. A bot's fourth snooze of a task in one stage: the task goes to the manager bot.
 38. A sub-task six levels deep: refused.

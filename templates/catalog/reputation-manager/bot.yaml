@@ -5,7 +5,6 @@ reads: []                           # other bot repositories this one may clone 
 slack_channel: "#marketing"
 
 # Public text is written at high effort: every reply this bot drafts is read by a stranger.
-max_run_minutes: 60
 
 # One sweep to start with. A midweek pass earns its place once someone has read a month of these.
 routines:

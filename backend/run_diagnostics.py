@@ -10,7 +10,7 @@ from . import bot_settings as BS
 STALL_MINUTES = 5
 # The server's own cap (cap below): a silent run ends this long past its bot's max_run_minutes, on the server's clock.
 # The runner enforces the limit itself, but a frozen computer cannot, so the server must not wait for it.
-MAX_RUN_MINUTES, MAX_RUN_GRACE_MINUTES = 60, 5
+MAX_RUN_MINUTES, MAX_RUN_GRACE_MINUTES = 24 * 60, 5  # the runner default, runner-rs execute.rs DEFAULT_RUN_MINUTES
 CAP_EVENT = 'attempt.max-run-cap'
 # The computer's own reports that it stopped a turn itself. A restart is a synthetic completion text from the runner's
 # recovery (runner-rs state.rs). A clean stop is never a completion text (that is the model's reply): the runner saves it

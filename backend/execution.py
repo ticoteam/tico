@@ -90,7 +90,7 @@ STALL_MAX = 900
 # How long the sweep waits for a run whose lease lapsed (its runner never said it stopped) before running it again. On
 # Oct 17-18 eight finished turns reached the hub 15 to 76 minutes after their lease lapsed, while their runner was
 # stalled between the model's last word and the hand-in; one sweep resumed at 15 minutes and the request ran twice.
-# 90 minutes covers the slowest seen with room, and outlasts a whole turn (max_run_minutes defaults to 60).
+# 90 minutes covers the slowest seen with room. It counts from the lapse, not the turn's start, so a long turn does not need more.
 RESULT_GRACE = 90 * 60
 # After this long with no decision a held run is a person's: Health and its operator's Needs you name it (Dev 543).
 HELD_UNREVIEWED = 2 * 3600
@@ -6273,7 +6273,12 @@ class Execution:
                     # (backend/updates_chat.py). None for every other turn.
                     "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
                     # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
-                    "config": wire_config,
+                    # A bot with no limit of its own gets the default spelled out, so a runner from before the default
+                    # changed (it fell back to 60 minutes) runs a day too.
+                    "config": {
+                        **wire_config,
+                        "max_run_minutes": wire_config.get("max_run_minutes") or RD.MAX_RUN_MINUTES,
+                    },
                     **({"session_fence": session_fence} if session_fence is not None else {}),
                     # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                     # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).

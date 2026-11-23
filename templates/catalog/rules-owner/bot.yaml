@@ -9,7 +9,6 @@ private_tasks_default: true
 # Each task is judged on its own: no session carries over to the next task, no memory/ is read or kept, and
 # nightly learnings skip it (backend/hubdb.py stateless, STATELESS_BY_TEMPLATE).
 stateless: true
-max_run_minutes: 60
 
 # No routines and no watchers: The Rules Owner only runs on a task (a document added, or a question asked).
 routines: []

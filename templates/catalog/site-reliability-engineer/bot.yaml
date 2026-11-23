@@ -3,8 +3,6 @@ display_name: "Site Reliability Engineer"
 labels: [owner:site-reliability-engineer]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 60
-
 routines:
   - id: weekly-incident-review
     title: Weekly incident review
