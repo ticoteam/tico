@@ -414,6 +414,34 @@ def test_a_moved_subtask_replays_messages_posted_while_the_parent_was_running(ap
     assert f"[{deferred['id']}]" in turn["deferred"]
 
 
+def test_a_moved_run_replays_no_other_agents_session(api):
+    """A run that lands on another computer replays what it missed with the same agent filter as any claim: another
+    agent's session on the task's thread stays out, the comments and its own session come in."""
+    home = roots_runner(api)
+    (parent,) = tasks(api, ("bot:ops", None))
+    first = claim(api, home)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "parent-thread"}, home["token"])
+    store = api.app.state.store
+    with store.transaction() as c:
+        comment = H.task_comment(c, "human:ana", parent, "Include the revised figures.", wake=False)
+        theirs = H.task_comment(c, "human:ana", parent, "Finance only: the bank feed is late.", wake=False)
+        c.execute("UPDATE messages SET session_agent_id='bot:finance' WHERE id=?", (theirs["id"],))
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "The draft is ready."},
+        home["token"],
+    )
+    with store.transaction() as c:
+        H.task_create(c, "human:ana", "Finish the draft", "Finish it.", "bot:ops", parent_id=parent)
+    new = runner(api, label="Second computer")
+    assign(api, new, "ops", generation=first["generation"])
+    ready(api, new, ["ops"], RUNNER_CAPABILITIES)
+    turn = claim(api, new)
+    replayed = {m["id"] for m in turn["moved_history"]}
+    assert comment["id"] in replayed and theirs["id"] not in replayed
+
+
 def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_side_by_side(api):
     machine = roots_runner(api)
     post(

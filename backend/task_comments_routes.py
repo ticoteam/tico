@@ -116,19 +116,19 @@ def register(
             raise Problem("validation", "No agent by that name can read this task", 422)
         return agent
 
-    def addressed_extra(c, who, row, body):
-        """Whom a comment reaches beyond its text's @mentions, for the org rule check's audience: the agent a session
-        message is written to and the author a Reply answers."""
-        out = []
-        if body.to:
-            agent = H.resolve_actor(c, body.to)
-            if agent:
-                out.append(agent)
-        if body.in_reply_to:
-            msg = H.comment_on(c, row, body.in_reply_to)
-            if msg and str(msg.get("sender_id") or "").startswith(("human:", "bot:")):
-                out.append(msg["sender_id"])
-        return [a for a in dict.fromkeys(out) if a != who.actor]
+    def recipients(c, who, row, body, session, replied, asker):
+        """Everyone a comment is written to, once its `to` (`session`), Reply (`replied`) and ❓ answer (`asker`) are
+        checked: that agent, the author it answers, the asker, and whom its text @mentions, agents and people. The org
+        rule check's audience reads this one list in the preflight, the write and Send anyway's replay."""
+        from . import threads
+
+        out = [session, asker]
+        if replied and str(replied.get("sender_id") or "").startswith(("human:", "bot:")):
+            out.append(replied["sender_id"])
+        conv = H.conversation(c, row["conversation_id"]) if row.get("conversation_id") else None
+        if conv and body.text:
+            out += [a for a, _ in threads.mentions(c, conv, body.text, author=who.actor)]
+        return [a for a in dict.fromkeys(out) if a and a != who.actor]
 
     def addressed_bot(c, who, row, text, replied):
         """The first bot a comment addresses (threads.plan): one it @mentions that reads the task, or the bot a
@@ -164,7 +164,7 @@ def register(
         if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
             question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        also = ((ask_to,) if ask_to else ()) + tuple(addressed_extra(c, who, row, body))
+        also = ((ask_to,) if ask_to else ()) + tuple(recipients(c, who, row, body, session, replied, asker))
         audience = rule_comment_audience(c, who, row, body.text, *also) if rc is not None else None
         rule = org_rule_check.apply(
             c,
@@ -331,9 +331,13 @@ def register(
             raise Problem("own_turn", OWN_TURN, 409)
 
     def comment_audience(c, who, tid, body):
-        """A comment's audience as the org rule check's preflight reads it (`comment_write` counts the same)."""
+        """A comment's audience as the org rule check's preflight reads it (`comment_write` counts the same). Its `to`,
+        Reply and ❓ answer are checked first, so a refused one is refused before any rule reads who it names."""
         row = auth.task(c, who, auth.resolve_task(c, who, tid))
-        return rule_comment_audience(c, who, row, body.text, *addressed_extra(c, who, row, body))
+        session = session_target(c, who, row, body)
+        replied = reply_target(c, who, row, body)
+        asker, _ = replying_to(c, who, row["id"], body, session)
+        return rule_comment_audience(c, who, row, body.text, *recipients(c, who, row, body, session, replied, asker))
 
     @org_rule_check.replayer("comment")
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):

@@ -196,7 +196,7 @@ def done_note(conn: "sqlite3.Connection", actor: str, task_id: str, note: str | 
     """An agent's done note is one comment on the task by that agent, written once its done was taken: unstamped (so
     it is in the comments, not its session), its @mentions delivered to nobody. Keyed on the visit the done left
     (`visit_id`, read before the done: `<task>:<visit>:done:<agent>`), so a retry posts nothing more and a done again on
-    that visit updates the comment in place. Only on a task with a thread of its own."""
+    that visit updates the comment in place, or posts nothing once its author deleted it. Only on a task with a thread of its own."""
     H = _h()
     text = str(note or "").strip()
     if not text or not visit_id or not H.is_bot(actor):
@@ -207,7 +207,9 @@ def done_note(conn: "sqlite3.Connection", actor: str, task_id: str, note: str | 
     if not followers.thread_id(conn, H.task(conn, task_id)):
         return
     key = f"{task_id}:{visit_id}:done:{actor}"
-    found = conn.execute("SELECT id FROM messages WHERE wake_key=? AND deleted_at IS NULL", (key,)).fetchone()
+    found = conn.execute("SELECT id, deleted_at FROM messages WHERE wake_key=?", (key,)).fetchone()
+    if found and found[1]:
+        return  # its author took this visit's note back: the deletion stands, and no other note takes its key
     if found:
         H.task_comment_edit(conn, actor, task_id, found[0], text)
         return

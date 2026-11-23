@@ -130,6 +130,20 @@ def test_an_at_mention_runs_the_agent_and_its_answer_nests_under_the_comment(api
     assert sessions(api, row["id"])["bot:finance"] is not None
 
 
+def test_the_sessions_list_names_an_agent_by_its_mentions_not_deleted_and_by_a_run_alone(api):
+    row = ticket(api)
+    asked = comment(api, row["id"], "@finance can you check the May totals?")["comment"]
+    assert sessions(api, row["id"])["bot:finance"] == asked["seq"], "the newest message its view shows"
+    post(api, f"tasks/{row['id']}/comments/{asked['id']}/delete", {})
+    assert "bot:finance" not in sessions(api, row["id"]), "a taken-back mention leaves no session"
+    with api.app.state.store.transaction() as c:  # a run on the task, nothing written yet
+        c.execute(
+            "INSERT INTO attempts (id, bot_id, state, created_at, task_id) VALUES (?, 'cpo', 'running', ?, ?)",
+            (H.new_id(), H.now(), row["id"]),
+        )
+    assert sessions(api, row["id"])["bot:cpo"] is None
+
+
 def test_two_agents_each_have_their_own_session_and_replay_skips_the_other(api):
     row = ticket(api)
     to_ops = comment(api, row["id"], "Ship the fix once the checks pass.", to="ops")["comment"]
@@ -173,6 +187,25 @@ def test_a_session_message_is_refused_to_whoever_may_not_direct_and_for_an_agent
     assert jobs(api, "finance") == []
     assert get(api, "tasks/" + row["id"], token="ben-test")["can_direct"] is False
     assert get(api, "tasks/" + row["id"])["can_direct"] is True
+
+
+def test_the_thread_routes_refuse_to_on_a_tasks_thread(api):
+    """`to` writes to an agent's session only through the task's own route, with its checks: the generic thread post and
+    upload refuse it on a task's thread, and nothing is written or woken."""
+    row = ticket(api)
+    cid = row["conversation_id"]
+    r = api.post(
+        f"/api/v2/threads/{cid}/messages", json={"text": "Ship it.", "to": "bot:ops"}, headers=headers("ben-test")
+    )
+    assert r.status_code == 422 and "task_to" in r.text, r.text
+    r = api.post(
+        f"/api/v2/uploads/threads/{cid}/messages",
+        data={"text": "Ship it.", "to": "bot:ops"},
+        files={"files": ("notes.txt", b"ship notes", "text/plain")},
+        headers=headers("ben-test"),
+    )
+    assert r.status_code == 422 and "task_to" in r.text, r.text
+    assert rows(api, "SELECT 1 FROM messages WHERE body='Ship it.'") == [] and jobs(api, "ops") == []
 
 
 def test_two_agents_answering_each_other_wake_each_other_at_most_once(api):
@@ -256,6 +289,12 @@ def test_a_done_note_is_one_comment_by_the_agent_whose_mentions_reach_nobody(api
         task_calls.done_note(c, "bot:ops", again["id"], "Second pass done, with the fix.", visit)
     said = rows(api, "SELECT body, edited_at FROM messages WHERE body LIKE '%pass done%'")
     assert len(said) == 1 and said[0]["body"] == "Second pass done, with the fix." and said[0]["edited_at"]
+    # Deleted by its author, it stays deleted: done again on that visit posts nothing and raises nothing.
+    with api.app.state.store.transaction() as c:
+        mine = c.execute("SELECT id FROM messages WHERE body LIKE 'Second pass done%'").fetchone()[0]
+        H.task_comment_delete(c, "bot:ops", again["id"], mine)
+        task_calls.done_note(c, "bot:ops", again["id"], "Third pass done.", visit)
+    assert rows(api, "SELECT 1 FROM messages WHERE body LIKE 'Third pass%'") == []
 
 
 def told(api, person):
@@ -289,3 +328,12 @@ def test_a_human_requester_hears_the_end_once_per_completion(api):
         H.task_done(c, "bot:ops", filed["id"], "Refunds checked.", H.task(c, filed["id"])["version"])
     assert rows(api, "SELECT 1 FROM messages WHERE recipient_id='bot:cpo' AND wake_key LIKE '%:result'")
     assert rows(api, "SELECT 1 FROM messages WHERE wake_key LIKE ?", f"{filed['id']}:%:told") == []
+
+
+def test_the_end_line_reaches_only_the_requesters_whoever_the_note_mentions(api):
+    with api.app.state.store.transaction() as c:
+        row = H.task_create(c, "human:ben", "Close the month", "Reconcile May.", "bot:ops", lint=False)
+        H.task_done(c, "bot:ops", row["id"], "May is closed; @ana @cpo please check.", H.task(c, row["id"])["version"])
+    [line] = rows(api, "SELECT id FROM messages WHERE wake_key LIKE ?", f"{row['id']}:%:told")
+    reached = rows(api, "SELECT recipient FROM message_deliveries WHERE message_id=?", line["id"])
+    assert [r["recipient"] for r in reached] == ["human:ben"]

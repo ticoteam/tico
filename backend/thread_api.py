@@ -213,6 +213,16 @@ def _delivery_words(body):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
 
 
+def _no_task_to(c, thread_id, body):
+    """A thread post's `to` on a task's thread is refused: there `to` writes to an agent's session, which only the task's
+    own route does, with its checks (`may_direct`, the agent may read the task) and its delivery. 422, after the
+    caller's write right is checked."""
+    if not getattr(body, "to", None) or not thread_id:
+        return
+    if threads.audience_of(threads.root_of(c, thread_id) or {}) == "task":
+        raise Problem("task_to", "On a task, write to an agent with POST /api/v2/tasks/{task}/comments and its to", 422)
+
+
 def _reply_check(c, auth, who, thread_id, body):
     """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
     reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
@@ -1071,6 +1081,10 @@ def install(app, store, auth, mutate, rule_check):
         if target:
             target = bot_home_merge.named_home(store, target)
         _delivery_words(body)
+        if target and body.to:
+            with store.read() as c:
+                threads.require(c, threads.viewer(auth, who), target, write=True)
+                _no_task_to(c, target, body)
         if target:
             rc = check(who, target, body)
         else:  # the poster's first message to that agent: the DM is made with it, only if it goes
@@ -1442,6 +1456,7 @@ def install(app, store, auth, mutate, rule_check):
             else:
                 with store.read() as c:
                     threads.require(c, threads.viewer(auth, who), target, write=True)
+                    _no_task_to(c, target, body)
             checked["rc"] = check(who, target, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)

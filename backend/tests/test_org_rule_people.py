@@ -650,3 +650,32 @@ def test_a_native_post_to_a_moved_room_is_checked_in_its_home(ruled):
     hold = hold_row(api, got.json()["held"]["id"])
     assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home
     assert not bodies(api, "favorite color is gold")
+
+
+def test_a_task_comments_rule_audience_is_every_one_it_reaches_after_its_to_and_reply_are_checked(ruled, monkeypatch):
+    """The audience the org rules read for a task comment is the one list the write delivers to: the agent it is sent
+    `to`, the author a Reply answers and whom it @mentions, agents too. A `to` or a Reply the writer may not use is
+    refused before any rule reads who it names."""
+    api, _ = ruled
+    block_everyone(api)
+    seen = []
+    real = K.preflight
+
+    def spy(store, judge, who, operation, output, recipients, *rest, **more):
+        seen.append(sorted(recipients))
+        return real(store, judge, who, operation, output, recipients, *rest, **more)
+
+    monkeypatch.setattr(K, "preflight", spy)
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    path = f"/api/v2/tasks/{task['id']}/comments"
+    seen.clear()
+    for body in ({"text": "Hello.", "to": "bot:nosuch"}, {"text": "Hello.", "in_reply_to": "no-such-message"}):
+        r = api.post(path, json=body, headers=headers("ana-test"))
+        assert r.status_code == 422, r.text
+    assert seen == [], "refused before any rule read its audience"
+    bens = post(api, f"tasks/{task['id']}/comments", {"text": "Ben here."}, token="ben-test")["comment"]
+    seen.clear()
+    post(api, f"tasks/{task['id']}/comments", {"text": "@finance please check this.", "to": "ops"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Agreed.", "in_reply_to": bens["id"]})
+    assert "bot:finance" in seen[0] and "bot:ops" in seen[0]
+    assert "human:ben" in seen[1]

@@ -6339,7 +6339,10 @@ class Execution:
             epoch = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (cid,)).fetchone()
             if epoch:
                 since = max(since or "", epoch["updated_at"])
-            page = privacy.page(c, who, cid, since=since, limit=HISTORY_PAGE, max_bytes=64_000)["messages"]
+            # The same agent filter as a claim's replay: another agent's session on a task's thread stays out.
+            page = privacy.page(c, who, cid, since=since, limit=HISTORY_PAGE, max_bytes=64_000, session="bot:" + bot)[
+                "messages"
+            ]
             page = lane_history(c, bot, config, page, room, lane)
             if card_slot.of(job):
                 pending = card_slot.pending(c, bot, [m["id"] for m in page])

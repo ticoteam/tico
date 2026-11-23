@@ -174,8 +174,11 @@ def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | 
         note = str(found[0] or "").strip() if found else ""
     label = "Done" if done else "Closed"
     text = f"{label}: {note[:NOTE_CHARS]}" if note else f"{label}."
-    # Not task news (refs.task), which reaches no person: this line is for the people it names.
-    message = H._write_message(conn, H.TICO_ACTOR, people[0], text, room, "notice", {"told": label.lower()}, None, None)
+    # Not task news (refs.task), which reaches no person: this line is for the people it names, and only them. The
+    # done note it quotes may @mention someone; that makes no mention here (no_mentions).
+    message = H._write_message(
+        conn, H.TICO_ACTOR, people[0], text, room, "notice", {"told": label.lower(), "no_mentions": True}, None, None
+    )
     conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
     from . import threads
 
