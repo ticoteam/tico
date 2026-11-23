@@ -169,7 +169,7 @@ def test_health_claim_checks_read_every_queued_job_together_and_say_the_same(api
     assert total < 320, total
     with monkeypatch.context() as unprimed:
         # Each job read on its own: what the checks read before.
-        unprimed.setattr(execution, "prime_job_checks", lambda c, jobs: None)
+        unprimed.setattr(execution, "prime_job_checks", lambda c, jobs, loads: None)
         alone, slow = counted(api, monkeypatch, "/api/v2/health")
         # The control reads several times the batched total (about 560 against 200).
         assert slow > 2 * total, (total, slow)
@@ -219,14 +219,14 @@ def test_health_reads_the_whole_queue_only_of_bots_it_asks_about_and_says_the_sa
     stuck_company(api, monkeypatch, 8)
     real, primed = execution.prime_claimables, []
 
-    def recorded(c, bots, first=3):
+    def recorded(c, bots, first=3, *, loads=None):
         if first is None:
             primed.append(sorted(bots))
-        return real(c, bots, first=first)
+        return real(c, bots, first=first, loads=loads)
 
-    def everyone(c, bots, first=3):
+    def everyone(c, bots, first=3, *, loads=None):
         every = [r[0] for r in c.execute("SELECT slug FROM bots")] if first is None else bots
-        return real(c, every, first=first)
+        return real(c, every, first=first, loads=loads)
 
     def page(prime):
         with monkeypatch.context() as patched:
@@ -239,6 +239,8 @@ def test_health_reads_the_whole_queue_only_of_bots_it_asks_about_and_says_the_sa
     assert old == page(everyone)
     # A minute on: no queue is old, so none is read, and the page is the one reading them all gives.
     at(monkeypatch, api, "2026-10-24T12:01:00.000000Z")
+    with api.app.state.store.transaction() as c:
+        c.execute("DELETE FROM registry_metadata WHERE key LIKE 'queue-refusal:busy-%'")
     young = page(recorded)
     assert not any(slug.startswith("busy-") for slug in primed[-1]), primed[-1]
     assert young == page(everyone)

@@ -80,10 +80,44 @@ def worktree_task(c, bot, task_id, root):
     return task_id
 
 
-def worktree_homes(c, bot, task_id):
+def worktree_links(c, task_ids):
+    """Each queued task and possible session root, with its worktrees grouped by owner.
+
+    An owner with links on retired computers still has a child worktree to recover, but no home to wait for there.
+    """
+    if not task_ids:
+        return {}
+    found = {}
+    for task_id, owner, computer in c.execute(
+        "WITH RECURSIVE related(id) AS ("
+        " SELECT value FROM json_each(?) UNION "
+        " SELECT tr.to_task FROM related JOIN task_relations tr ON tr.from_task=related.id AND tr.kind='parent'"
+        f") SELECT DISTINCT related.id,CASE WHEN l.task_id IS NOT NULL THEN {WORKTREE_OWNER} END,r.id "
+        "FROM related LEFT JOIN tasks t ON t.id=related.id "
+        "LEFT JOIN task_links l INDEXED BY task_links_task ON l.task_id=t.id "
+        "AND l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
+        "LEFT JOIN runners r ON r.id=l.computer_id AND r.revoked_at IS NULL",
+        (json.dumps(sorted(task_ids)),),
+    ):
+        owners = found.setdefault(task_id, {})
+        if owner is not None:
+            homes = owners.setdefault(owner, set())
+            if computer is not None:
+                homes.add(computer)
+    return found
+
+
+def worktree_homes(c, bot, task_id, root=None, links=None):
     """Computers that still own this bot's task worktrees, including offline registrations."""
     from .read_cache import rows
 
+    owner = 'bot:' + bot
+    if links is not None and task_id in links and (not root or root in links):
+        homes = links[task_id].get(owner)
+        if homes is None and root:
+            homes = links[root].get(owner)
+        return homes if homes is not None else set()
+    task_id = worktree_task(c, bot, task_id, root)
     return {
         row[0]
         for row in rows(
@@ -92,7 +126,7 @@ def worktree_homes(c, bot, task_id):
             "JOIN runners r ON r.id=l.computer_id AND r.revoked_at IS NULL "
             "WHERE l.task_id=? AND l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
             f"AND {WORKTREE_OWNER}=?",
-            (task_id, 'bot:' + bot),
+            (task_id, owner),
         )
     }
 

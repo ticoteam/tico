@@ -1855,23 +1855,30 @@ CONTINUATION_WHERE = (
 )
 CONTINUATION_ORDER = (
     f"ORDER BY CASE WHEN {CONTINUATION_SOURCE} THEN 0 WHEN {CONTINUATION_CAPACITY} THEN 1 ELSE 2 END,"
-    "created_at DESC,rowid DESC"
+    "a.created_at DESC,a.rowid DESC"
 )
-CONTINUATION_FIELDS = f"runner_id,thread_id,CASE WHEN {CONTINUATION_SOURCE} THEN result END AS source"
+CONTINUATION_FIELDS = (
+    f"a.runner_id,thread_id,CASE WHEN {CONTINUATION_SOURCE} THEN result END AS source,"
+    "a.runner_id<>'' AND r.id IS NULL AS retired"
+)
+CONTINUATION_FROM = "FROM attempts a LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL"
 CONTINUATION_SQL = (
-    f"SELECT {CONTINUATION_FIELDS} FROM attempts WHERE job_id=? AND {CONTINUATION_WHERE} {CONTINUATION_ORDER} LIMIT 1"
+    f"SELECT {CONTINUATION_FIELDS} {CONTINUATION_FROM} WHERE job_id=? "
+    f"AND {CONTINUATION_WHERE} {CONTINUATION_ORDER} LIMIT 1"
 )
 
 
-def continuation_run(c, job_id):
+def continuation_run(c, job_id, loads=None):
     from .read_cache import one
 
+    if loads is not None and job_id in loads.continuations:
+        return loads.continuations[job_id]
     return one(c, CONTINUATION_SQL, (job_id,))
 
 
-def source_continuation(c, job_id):
+def source_continuation(c, job_id, loads=None):
     """The actual quota- or capacity-stopped fallback, bound to its job instead of the primary session."""
-    row = continuation_run(c, job_id)
+    row = continuation_run(c, job_id, loads)
     return json.loads(row["source"]).get('source_continuation') if row and row["source"] else None
 
 
@@ -1894,12 +1901,12 @@ def thread_payload(c, conv, msg):
     }
 
 
-def continuation_thread(c, job_id):
+def continuation_thread(c, job_id, loads=None):
     """Require the saved provider session for capacity, quota or safe lease recovery."""
-    source = source_continuation(c, job_id)
+    source = source_continuation(c, job_id, loads)
     if source:
         return source["thread_id"]
-    row = continuation_run(c, job_id)
+    row = continuation_run(c, job_id, loads)
     return row["thread_id"] if row else None
 
 
@@ -2743,7 +2750,7 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, lo
     ready here and not held itself does not wait: its turn runs there (primary_hold marks the job so the runner skips
     the held login). Without `job_id` it answers for the bot: a probe of its own still lets it through, for
     job_refusal's per-job answer."""
-    source = source_continuation(c, job_id) if job_id else None
+    source = source_continuation(c, job_id, loads) if job_id else None
     if source:
         return login_wait(
             c,
@@ -2754,7 +2761,7 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, lo
             job_id,
         )
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx, loads)
-    if why and job_id and continuation_thread(c, job_id):
+    if why and job_id and continuation_thread(c, job_id, loads):
         return why  # only its own thread, on its own login, continues it
     return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx, loads=loads) else why
 
@@ -3221,20 +3228,18 @@ def job_refusal(
     if turn_moved_on(c, job["bot_id"], task_id, refs, live or None):
         return "task_turn_out"
     if runner is not None and job["attempt_id"]:
-        from .worktrees import retired
-
-        saved = continuation_run(c, job["id"])
-        if saved and saved["runner_id"] != runner["id"] and not retired(c, saved["runner_id"]):
+        saved = continuation_run(c, job["id"], loads)
+        if saved and saved["runner_id"] != runner["id"] and not saved["retired"]:
             return "continuation_home"
     if task_id and runner is not None:
-        from .worktrees import worktree_homes, worktree_task
+        from .worktrees import worktree_homes
 
         root = (
             lane.removeprefix("task:")
             if lane.startswith("task:")
             else session_task_id(c, job["bot_id"], config, task_id)
         )
-        homes = worktree_homes(c, job["bot_id"], worktree_task(c, job["bot_id"], task_id, root))
+        homes = worktree_homes(c, job["bot_id"], task_id, root, loads.worktree_links if loads is not None else None)
         if homes and homes != {runner["id"]}:
             if worktree_waits is not None:
                 worktree_waits[job["id"]] = homes
@@ -3671,7 +3676,7 @@ def queued_jobs_sql(bots=None, *, sampled=False):
     )
 
 
-def prime_claimables(c, bots, first=3):
+def prime_claimables(c, bots, first=3, *, loads=None):
     """What bot_claimable reads for each of these bots with queued work, one table at a time: the computer's row, the
     bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. `first`
     None reads every queued job's message: Health walks the whole queue (`queued_reasons`), and the first few are
@@ -3681,7 +3686,9 @@ def prime_claimables(c, bots, first=3):
 
     if cache(c) is None:
         return
-    for part in H.chunks(sorted(set(bots))):
+    bots = set(bots)
+    all_jobs = []
+    for part in H.chunks(sorted(bots)):
         marks = ",".join("?" * len(part))
         found = {
             r["bot"]: r
@@ -3701,28 +3708,41 @@ def prime_claimables(c, bots, first=3):
         waiting = [job["message_id"] for queue in jobs.values() for job in (queue if first is None else queue[:first])]
         privacy.prime_queued(c, H.prime_messages(c, waiting).values())
         if first is None:
-            prime_job_checks(c, [job for queue in jobs.values() for job in queue])
+            all_jobs.extend(job for queue in jobs.values() for job in queue)
+    if first is None:
+        prime_job_checks(c, all_jobs, loads)
+        if loads is not None:
+            loads.queued_bots.update(bots)
 
 
-def prime_job_checks(c, jobs):
-    """What job_refusal reads for each of these queued jobs besides its message and task (prime_queued), one query
-    a table for all of them: the job's fallback continuation (login_refusal) and its task's check model
-    (check_models.prime). A batch row carries its key after the columns
-    the one-row read selects, which are read by position or name only."""
-    from .read_cache import cache, prime
+def prime_job_continuations(c, jobs, loads):
+    """Read exact continuations together, including whether their computer is still registered."""
+    from .read_cache import prime
 
-    if cache(c) is None or not jobs:
+    if not jobs:
         return
     ids = [job["id"] for job in jobs]
-    found = {}
-    for part in H.chunks(ids):
-        for row in c.execute(
-            f"SELECT {CONTINUATION_FIELDS},job_id FROM attempts WHERE job_id IN ({','.join('?' * len(part))}) "
-            f"AND {CONTINUATION_WHERE} {CONTINUATION_ORDER}",
-            part,
-        ):
-            found.setdefault(row["job_id"], row)
-    prime(c, CONTINUATION_SQL, {(job_id,): found.get(job_id) for job_id in ids})
+    found = dict.fromkeys(ids)
+    for row in c.execute(
+        f"SELECT {CONTINUATION_FIELDS},job_id {CONTINUATION_FROM} "
+        f"WHERE job_id IN (SELECT value FROM json_each(?)) AND {CONTINUATION_WHERE} {CONTINUATION_ORDER}",
+        (json.dumps(ids),),
+    ):
+        if found[row["job_id"]] is None:
+            found[row["job_id"]] = row
+    if loads is not None:
+        loads.continuations.update(found)
+    prime(c, CONTINUATION_SQL, {(job_id,): row for job_id, row in found.items()})
+
+
+def prime_job_checks(c, jobs, loads):
+    """Batch the queued jobs' continuation, worktree, check model, session root and snooze reads."""
+    from .read_cache import prime
+    from .worktrees import worktree_links
+
+    if not jobs:
+        return
+    prime_job_continuations(c, jobs, loads)
     pairs = set()
     for job in jobs:
         message = H.message(c, job["message_id"])
@@ -3732,9 +3752,11 @@ def prime_job_checks(c, jobs):
     check_models.prime(c, pairs)
     # The session root each job's lane is keyed on (session_task_id), with every ancestor the walk reaches.
     H.prime_session_roots(c, [task_id for task_id, _ in pairs])
-    tasks = sorted({task_id for task_id, _ in pairs if task_id})
+    tasks = {task_id for task_id, _ in pairs if task_id}
+    if loads is not None:
+        loads.worktree_links.update(worktree_links(c, tasks - loads.worktree_links.keys()))
     snoozed = {}
-    for part in H.chunks(tasks):
+    for part in H.chunks(sorted(tasks)):
         for row in c.execute(
             "SELECT * FROM snoozes WHERE task_id IN (%s) AND ended_at IS NULL ORDER BY rowid"
             % ",".join("?" * len(part)),
@@ -5134,7 +5156,8 @@ class Execution:
         # Readiness, spend and cooldown are checked once per bot, never once per queued job.
         # Keep human chat priority and interrupted-task/conversation fencing in the query.
         candidates = c.execute(
-            "SELECT j.*,a.generation FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
+            "SELECT j.*,a.generation,m.refs AS message_refs,cv.task_id AS room_task_id "
+            "FROM jobs j JOIN assignments a ON a.bot=j.bot_id "
             "JOIN messages m ON m.id=j.message_id JOIN conversations cv ON cv.id=m.conversation_id "
             f"LEFT JOIN tasks qt ON qt.id={H.MESSAGE_TASK_SQL} "
             # A job its wake preset holds waits for its release (backend/wake_presets.py tick).
@@ -5168,6 +5191,20 @@ class Execution:
             ),
         )
         candidates = candidates.fetchall()
+        if loads is not None and len(candidates) > 1:
+            from .worktrees import worktree_links
+
+            prime_job_continuations(c, candidates, loads)
+            tasks = {
+                task_id
+                for row in candidates
+                if (
+                    task_id := work_task_id(
+                        {"refs": H._json(row["message_refs"], {})}, {"task_id": row["room_task_id"]}
+                    )
+                )
+            }
+            loads.worktree_links.update(worktree_links(c, tasks))
         for i, row in enumerate(candidates):
             if failed is not None and failed.full():
                 break  # CLAIM_HOLDS jobs are held by this claim: it picks no more

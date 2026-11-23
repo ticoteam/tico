@@ -1001,7 +1001,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
         and slug not in parked
         and ((oldest and oldest < cutoff) or (asked.get(slug) and asked[slug] < person_cutoff))
     ]
-    prime_claimables(c, aged_bots, first=None)
+    prime_claimables(c, aged_bots, first=None, loads=loads)
     # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
     from .cloud_machines import GOING, STALE, homes, problem_words
 

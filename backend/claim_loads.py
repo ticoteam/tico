@@ -28,6 +28,9 @@ class Loads:
         self.holds = holds  # {(kind, holdable_type, holdable_id, bot_id or ''): open holds row}
         self.payers = payers
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
+        self.continuations = {}  # {job id: its exact continuation, None when none}
+        self.worktree_links = {}  # {task id: {owner: computers that still own its linked trees}}
+        self.queued_bots = set()  # bots whose whole queue Health has primed in this snapshot
 
     def runner_of(self, c, runner_id, live=False):
         """The runners row, or None; `live` leaves out a revoked computer (as the capability reads do)."""
