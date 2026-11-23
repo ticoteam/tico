@@ -1024,11 +1024,14 @@ def handed(c, sender, receiver, task_id, before=None):
     )
 
 
-def _human_set_by_their_side(c, task_id, receiver, before=None):
+HUMAN_CHAIN = 20  # how many parent tasks an inherited Human is traced up before it counts as unproven
+
+
+def _human_set_by_their_side(c, task_id, receiver, before=None, depth=0):
     """Whether the person's side named `receiver` this task's Human: the latest change that made them its Human was a
-    person's or Tico's, or a bot's that named the Human or requester of the task it is filed under (work handed down a
-    chain, such as Engineering work filed from a Product task). Any other Human a bot named opens nothing: otherwise
-    any bot could name anyone as Human and ask them."""
+    person's or Tico's, or a bot's that handed down the parent task's requester, or the parent's Human when the
+    person's side named them there too (traced up the chain). Any other Human a bot named opens nothing: otherwise any
+    bot could name anyone as Human, on a task and its parent alike, and ask them."""
     row = c.execute(
         "SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='human_id' AND new=?"
         + (" AND created_at<?" if before else "")
@@ -1039,20 +1042,25 @@ def _human_set_by_their_side(c, task_id, receiver, before=None):
         return False
     if not H.is_bot(row["actor_id"]):
         return True
-    return (
-        c.execute(
-            "SELECT 1 FROM task_relations r JOIN tasks p ON p.id=r.to_task WHERE r.from_task=? AND r.kind='parent' "
-            "AND (p.human_id=? OR p.requester_id=?) LIMIT 1",
-            (task_id, receiver, receiver),
-        ).fetchone()
-        is not None
-    )
+    if depth >= HUMAN_CHAIN:
+        return False
+    for parent in c.execute(
+        "SELECT p.id, p.human_id, p.requester_id FROM task_relations r JOIN tasks p ON p.id=r.to_task "
+        "WHERE r.from_task=? AND r.kind='parent'",
+        (task_id,),
+    ):
+        if parent["requester_id"] == receiver:
+            return True
+        if parent["human_id"] == receiver and _human_set_by_their_side(c, parent["id"], receiver, before, depth + 1):
+            return True
+    return False
 
 
 def human_of(c, sender, receiver, task_id, before=None):
     """`receiver` is the Human of this exact open task `sender` owns, named by the person's side
-    (_human_set_by_their_side). The wake tells the owner to ask its Human (task_wakes.HUMAN_LINE); this lets it, on
-    that task only."""
+    (_human_set_by_their_side). The wake tells the owner to ask its Human (task_wakes.HUMAN_LINE); this lets it ask
+    them there, and only ask: check(ask=True) is a ❓ on the task or a stage ask, never a chat, a new task or a
+    hand-off."""
     if not task_id:
         return False
     row = c.execute(
@@ -1064,32 +1072,32 @@ def human_of(c, sender, receiver, task_id, before=None):
 
 
 def _human_refused(c, sender, receiver, task_id):
-    """The one sentence a refused ask to a task's Human leads with, so it does not read as the wake's 'ask them' and
-    then a refusal; None when the receiver is not that task's Human or the sender does not own it."""
+    """The whole refusal of an ask to the Human of an open task the bot owns, when a bot named them (human_of): one
+    sentence, so it never reads as the wake's 'ask them' and then an 'ask them' refused. None for anyone else. An
+    ended task never gets here: a ❓ and a stage ask on one are refused first, as before."""
     if not task_id:
         return None
-    row = c.execute("SELECT status, owner_id, human_id FROM tasks WHERE id=?", (task_id,)).fetchone()
-    if not row or row["human_id"] != receiver or row["owner_id"] != sender:
+    row = c.execute(
+        "SELECT 1 FROM tasks WHERE id=? AND status='open' AND owner_id=? AND human_id=?", (task_id, sender, receiver)
+    ).fetchone()
+    if not row:
         return None
-    if row["status"] != "open":
-        return f"This task is {row['status']}, so its Human is no longer asked on it."
     return (
-        "A bot named this task's Human, not a person or the task it is filed under, so naming them does not let it "
-        "ask them."
+        "A bot named this task's Human, not a person, Tico or the task it is filed under, so this task does not let "
+        "it ask them."
     )
 
 
 def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_reply_to=None, before=None):
     """What lets a bot write to a person who is not adjacent to it, and only this: a direct reply to the person's own
-    message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, a write on a
-    task the person handed this bot, or a write on an open task this bot owns whose Human they are (human_of). Being
-    on the task in any other way (reader, former owner, thread member, an ancestor's party) or having given the bot
-    some other task does not count. A person who pinged the bot for questions in the last day (backend/flow_ping.py)
-    asked to be asked: its question tasks for them are answers."""
+    message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, or a write on a
+    task the person handed this bot. Being on the task in any other way (reader, former owner, thread member, an
+    ancestor's party, its Human: that opens only an ask, check(ask=True)) or having given the bot some other task does
+    not count. A person who pinged the bot for questions in the last day (backend/flow_ping.py) asked to be asked: its
+    question tasks for them are answers."""
     return (
         solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True)
         or handed(c, sender, receiver, task_id, before)
-        or human_of(c, sender, receiver, task_id, before)
         or pinged(c, sender, receiver, before)
     )
 
@@ -1235,12 +1243,15 @@ def check(
     ctx=None,
     exclude=None,
     owner=None,
+    ask=False,
 ):
     """Refuse (409, nothing written) a bot's task, hand-off, question or message to a teammate out of its reach. The
     exemptions that need the database are read only when the write would be refused without them: for a bot teammate,
     a task they share or a teammate who came to the bot first; for a person, only person_asked (a reply to them, a
     conversation they wrote in, a task they handed the bot). `owner`: the owner of the task the receiver is being added
-    to as a reader or follower. A bot shares a task it owns with any teammate in the company: that is never refused."""
+    to as a reader or follower. A bot shares a task it owns with any teammate in the company: that is never refused.
+    `ask`: the write is an ask of the person on the task itself (a ❓ there or a stage ask), which also opens the
+    task's Human to its owner (human_of); a refused one names only why its Human is not open."""
     sender = _sender(who)
     receiver = str(receiver or "")
     if not sender or receiver == sender or not receiver.startswith(("bot:", "human:")) or owner == sender:
@@ -1259,7 +1270,9 @@ def check(
         return
     task_id = task_of(c, task_id, _many(conversation_id)[0] if _many(conversation_id) else None)
     if receiver.startswith("human:"):
-        if person_asked(c, sender, receiver, task_id, conversation_id, in_reply_to):
+        if person_asked(c, sender, receiver, task_id, conversation_id, in_reply_to) or (
+            ask and human_of(c, sender, receiver, task_id)
+        ):
             return
     elif (task_id and on_task(c, task_id, sender, receiver)) or solicited(
         c, sender, receiver, conversation_id, in_reply_to
@@ -1271,9 +1284,9 @@ def check(
     wrote = wrote_lately(c, sender, receiver) if found.why == "reach_closed" and receiver.startswith("human:") else None
     if unseen or wrote:
         found = decide(ctx, sender, receiver, kind, count=count, unseen=frozenset(unseen), wrote=wrote)
-    if found.why == "reach_closed" and receiver.startswith("human:"):
+    if ask and found.why == "reach_closed" and receiver.startswith("human:"):
         if why := _human_refused(c, sender, receiver, task_id):
-            found = dataclasses.replace(found, message=f"{why} {found.message}")
+            found = dataclasses.replace(found, message=f"{why} Nothing was sent.", via=None, can_reach=())
     raise Refused(found, receiver)
 
 

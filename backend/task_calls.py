@@ -465,7 +465,7 @@ def task_ask(
         from . import reach as reach_module
 
         reach: Any = reach_module
-        reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id)
+        reach.check(conn, SimpleNamespace(role="bot", actor=actor), target, "task", task_id=task_id, ask=True)
     bring_in(conn, actor, row, target)
     if is_bot(actor) and is_human(target):
         # What a bot puts in front of a person is plain: a first line of one or two short sentences, no ids or paths
