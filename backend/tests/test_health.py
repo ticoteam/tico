@@ -1805,9 +1805,9 @@ def _installed(api):
 
 
 def test_a_company_that_builds_software_with_no_repository_in_use_is_told_where_to_choose_one(environment):
-    """HotMic, Nov 22: GitHub was connected on "All repositories" and a Builder was there, but nothing was In use, so a
+    """Nov 22, Acme: GitHub was connected on "All repositories" and a Builder was there, but nothing was In use, so a
     feature reached In development with nowhere to write, and Health said Fine. The GitHub line now says so, with the
-    one link to Settings › General's Repositories; a company that builds no software keeps its Fine."""
+    one link to Settings › General's Repositories card; a company that builds no software keeps its Fine."""
     api = environment()
     _installed(api)
     assert health_of(api)[1]["github"] == {
@@ -1825,7 +1825,7 @@ def test_a_company_that_builds_software_with_no_repository_in_use_is_told_where_
         "warn",
         "Connected to Acme, but no repository is in use, so the Builder has nowhere to write.",
     )
-    assert check["fixes"] == [{"label": "Choose a repository", "href": "#/settings", "tab": "general", "click": ""}]
+    assert check["fixes"] == [{"label": "Choose a repository", "href": "#/settings/general/set-repos", "tab": "", "click": ""}]
     with api.app.state.store.transaction() as c:  # a bot's own repository is not where the product is built
         c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('Acme/bot-builder',1,1)")
     assert health_of(api)[1]["github"]["status"] == "warn"

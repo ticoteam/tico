@@ -1727,13 +1727,15 @@ def test_the_health_page_feeds_the_lifecycle_lists_findings_and_reads_the_github
     _story(environment, monkeypatch, [_part_warning, _part_lists, _part_github])
 
 
-def test_no_repository_in_use_is_one_agent_ops_task_and_messages_no_person(environment, monkeypatch):
-    """HotMic, Nov 22: a Builder with nothing In use. Health's GitHub line says so (Look), and the maintenance check
-    keeps one Agent Ops task for it by the path every page line takes; no person is messaged."""
+def test_no_repository_in_use_is_one_agent_ops_task_that_hears_the_new_fix_and_messages_no_person(environment, monkeypatch):
+    """Nov 22, Acme: a Builder with nothing In use. While the App is not installed the GitHub line's fix is Open GitHub;
+    once installed with nothing In use it is Choose a repository, under the same id. The one Agent Ops task hears the
+    new fix (the changed-fix path), and no person is messaged."""
     api, _ = built(environment)
     _readers(monkeypatch)
     store = api.app.state.store
-    store.github_app = SimpleNamespace(row=lambda c: {"installation_id": 7, "org": "acme", "administration": 1})
+    app = {"installation_id": None, "org": "acme", "administration": 1, "account_type": None}
+    store.github_app = SimpleNamespace(row=lambda c: app)
     with store.transaction() as c:
         H.sync_registry(c, {"builder": {"name": "Builder", "status": "active"}}, None)
         BS.update(c, "builder", {"template": "builder"})
@@ -1750,8 +1752,15 @@ def test_no_repository_in_use_is_one_agent_ops_task_and_messages_no_person(envir
     before = to_people()
     for _ in range(3):
         run(api)
-    assert finding(api, "page:github")["severity"] == "warn"
     (task,) = [t for t in agent_ops_tasks(api) if "GitHub" in t["title"]]
+    assert said(api, task["id"], "Now:") == []
+    app["installation_id"] = 7  # installed on "All repositories": nothing In use
+    for _ in range(2):
+        run(api)
+    assert finding(api, "page:github")["severity"] == "warn"
+    assert [t["id"] for t in agent_ops_tasks(api) if "GitHub" in t["title"]] == [task["id"]]
+    (now,) = said(api, task["id"], "Now:")
+    assert "no repository is in use" in now and "Choose a repository" in now
     assert task["owner_id"] == "bot:botops" and to_people() == before
 
 

@@ -10,7 +10,7 @@ Those live in the person's `preferences` row, so each person has their own.
 import json
 import sqlite3
 
-from . import cloud_machines, model_login, providers, runner_online, stage_inputs
+from . import cloud_machines, model_login, providers, runner_online
 from .statuses import PARKED_SQL
 from .store import H, Problem, encode, readiness_document
 from . import bot_settings as BS
@@ -214,7 +214,6 @@ def checklist(c, who, settings, github):
         ("bot:" + AGENT_OPS,),
     ).fetchone()
     installed = bool(github and github["installation_id"])
-    nowhere = installed and stage_inputs.builds_code(c) and not stage_inputs.in_use(c)
     waiting = _next_bot(c, settings)
     cloud = cloud_machines.cloud_company(c, settings)
     items = [
@@ -252,14 +251,12 @@ def checklist(c, who, settings, github):
             "models",
             optional=not cloud,
         ),
-        # Installed with nothing In use while the company builds software: the bots would have nowhere to build.
         _item(
             "github",
             "GitHub is connected",
-            installed and not nowhere,
-            "Choose the repository your bots build in." if nowhere else "Bots keep their work in your GitHub.",
-            "#/settings" if nowhere else "#/tools/github",
-            "general" if nowhere else "",
+            installed,
+            "Bots keep their work in your GitHub.",
+            "#/tools/github",
         ),
         _item(
             "botops",

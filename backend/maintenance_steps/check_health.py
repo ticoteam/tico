@@ -321,6 +321,9 @@ def _page_findings(c, ctx, notes, stuck=frozenset()):
                 fix,
                 severity=MH.BAD if check.get("status") == "bad" else MH.WARN,
             )
+            # Its way out: a line whose fix changes under the same id (Connect GitHub, then Choose a repository) tells
+            # the open Agent Ops task the new fix (_task_for).
+            | ({"action": fixes} if fixes else {})
         )
     offline = page.get("offline") or {}
     notes["offline"] = {

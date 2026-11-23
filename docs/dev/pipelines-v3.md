@@ -745,8 +745,8 @@ A task you own with nothing asked of you is not in the list: it is in Tasks.
 - **Answer:** a bot's ❓ in its task's chat. There are no buttons: a reply in the chat answers it.
 - **Do:** a bot can't run and you can fix it, such as Connect Google. One per cause, not one per task. It goes when the
   cause goes. A stage reading PRs with no GitHub App installed is one: **Connect GitHub**, for the company's owner,
-  links to Tools, GitHub (**Choose a repository** once installed with none In use); its tasks wake nobody until then,
-  and each bot is woken once after (docs/github-app.md).
+  links to Tools, GitHub; its tasks wake nobody until then, and each bot is woken once after (docs/github-app.md).
+  Installed with none In use is no Do: the bot is woken and told, and Health files it for Agent Ops.
 - **Let them see:** a private task waits on someone who can't open it. Buttons: Let them see it, Reassign, Move back,
   Close.
 

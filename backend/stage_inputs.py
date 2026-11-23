@@ -71,7 +71,7 @@ _PR_KEYS = (
 # Whether a task's pipeline works on code: a stage of it reads PRs. Its tasks are in the repositories In use.
 _CODE = (
     "SELECT 1 FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id JOIN requirements r ON r.stage_id = s.id "
-    "WHERE t.id=? AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
+    "WHERE t.id=? AND s.retired_at IS NULL AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
 )
 # Whether the company works on code at all: a live pipeline has a stage that reads PRs (_CODE's rule, on every pipeline).
 _ANY_CODE = (
@@ -80,8 +80,8 @@ _ANY_CODE = (
     "AND r.withdrawn_at IS NULL LIMIT 1"
 )
 _IN_USE = "SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0 ORDER BY full_name COLLATE NOCASE"
-# The wake's repository line when a code pipeline's task has nowhere to go (HotMic, Nov 22: a Builder woke with no
-# repository line at all, and nothing said why).
+# Said in the wake of a code pipeline's task while no repository is In use (Nov 22: a Builder woke with no repository
+# line at all, and nothing said why), beside a linked PR's repository line too.
 NOWHERE = (
     "No repository is in use in this company, so there is nowhere to build yet. Health reports it to Agent Ops; "
     "do not build in your own repository."
@@ -353,11 +353,21 @@ def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str
     return found[0] if len(found) == 1 else None
 
 
-def repository_line(repos: list[str], code: bool = False) -> str:
-    """The line a wake opens the work with: the repository and how to get a worktree of it. With none, NOWHERE for a
-    task whose pipeline works on code (`code`: nothing is In use), else ""."""
+def repository_lines(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> list[str]:
+    """The lines a wake opens the work with: the task's repository (`repository_line`), and NOWHERE while its pipeline
+    works on code and no repository is In use, whether or not a PR is linked."""
+    from .item_sources import github as G
+
+    found = [line] if (line := repository_line(repositories(conn, task_id, readable))) else []
+    if works_on_code(conn, task_id) and not G.in_use(conn):
+        found.append(NOWHERE)
+    return found
+
+
+def repository_line(repos: list[str]) -> str:
+    """The line a wake opens the work with: the repository and how to get a worktree of it, or "" with none."""
     if not repos:
-        return NOWHERE if code else ""
+        return ""
     if len(repos) == 1:
         return f"Repository: {repos[0]}. Work on it in a worktree: `tico task worktree add {repos[0]}`."
     return (
