@@ -866,7 +866,8 @@ describe('Details: the facts @s58', () => {
     serve(reads(task({ turn: { state: 'snoozed', who: 'human:bo', line: '\u2753 After the launch', requirement_id: null, since: null, until: '2026-12-01T12:00:00Z', ask: false } } as Partial<TaskData>)));
     details();
     const row = await waitingOn();
-    expect(row.textContent).toMatch(/^Waiting on\u2753 After the launch · until Dec 1/);
+    expect(row.textContent).toMatch(/^Waiting on\u2753 After the launch · until /);
+    expect(row.querySelector('time')?.getAttribute('datetime')).toBe('2026-12-01T12:00:00.000Z');
   });
 
   it('keeps the row and its Fix for an agent with the task whose cloud computer failed to start', async () => {
