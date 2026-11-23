@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
@@ -392,7 +392,7 @@ describe('a proposed change', () => {
     const sent = serve();
     queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
     queryClient.setQueryData(proposalQuery('skp_1').queryKey, {
-      proposal: pending,
+      proposal: { ...pending, screen_status: 'screened' },
       files: [],
       diff: '--- a/SKILL.md\n+++ b/SKILL.md\n@@ -1,3 +1,3 @@\n # Steps\n-Read the mail.\n+Read each new letter first.\n Ask who sent it.',
       stale: false,
@@ -441,6 +441,28 @@ describe('a proposed change', () => {
     created_at: '2026-11-18T00:00:00Z',
     updated_at: '2026-11-18T00:00:00Z',
   };
+
+  it("says where screening is from the proposal's status, never from an older failed screening row", async () => {
+    serve();
+    owner();
+    const failed = { verdict: null, risk: null, summary: null, status: 'not_screened', reason: 'oversize' };
+    const show = (screen_status: string) =>
+      queryClient.setQueryData(proposalQuery('skp_1').queryKey, {
+        proposal: { ...mine, screen_status, screen_action: screen_status === 'not_screened' ? 'Make it smaller.' : null },
+        files: [{ path: 'SKILL.md', content: 'Read it.' }],
+        diff: '',
+        stale: false,
+        screening: failed,
+      } as never);
+    queryClient.setQueryData(skillsQuery.queryKey, []);
+    show('pending');
+    at('/library/skills?proposal=skp_1', <SkillsPage search={{ proposal: 'skp_1' }} />);
+    expect(await screen.findByText('Not done yet')).toBeTruthy();
+    expect(screen.queryByText('Nothing risky')).toBeNull();
+    act(() => show('not_screened'));
+    expect(await screen.findByText('Not screened')).toBeTruthy();
+    expect(screen.getByText('Make it smaller.')).toBeTruthy();
+  });
 
   it('its proposer withdraws it or sends it to screening again from the ⋯ @s783', async () => {
     const detail = { proposal: mine, files: [{ path: 'SKILL.md', content: 'Read it.' }], diff: '', stale: false, screening: null };

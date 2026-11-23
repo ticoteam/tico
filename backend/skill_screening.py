@@ -15,11 +15,13 @@ What the screen is made of:
   with evidence (a summary and findings by file and line). The whole bundle is read, scripts included, each file fenced as
   data, with the diff against the base for an update. No fallback to another model: a lower-quality answer is not a screen.
 
-Unlike screening.py's doors there is no switch, no length bypass, no cut and no fail-open: a bundle too big for the state
-is `not_screened` (`oversize`), and no model, the spend cap, a timeout or an error is `not_screened` with that reason until
-someone screens it again. A proposal is never `screened` without a model answer. A `screened` row for the same sha, base and
-question set version is reused instead of paying again; a new question set version sends pending proposals back to be
-screened (approved versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
+Unlike screening.py's doors there is no switch, no length bypass, no cut and no fail-open: an update too big for the state
+with its diff is screened on the whole new skill without it when the question set allows it (`diff_optional`; the
+Gateway refuses a state over J.MAX_STATE_CHARS), one still too big is `not_screened` (`oversize`), and no model, the
+spend cap, a timeout or an error is `not_screened` with that reason until someone screens it again.
+A proposal is never `screened` without a model answer. A `screened` row for the same sha, base and question set version
+is reused instead of paying again; a new question set version sends pending proposals back to be screened (approved
+versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
 """
 
 import difflib
@@ -158,7 +160,7 @@ def _fenced(path, text):
 
 
 def full_diff(before, after):
-    """The unified diff of every changed file, uncut: the state must hold all of it or the screen is `oversize`."""
+    """The unified diff of every changed file, uncut: a state that cannot hold all of it is screened without it."""
     old = {item["path"]: item["content"] for item in before}
     new = {item["path"]: item["content"] for item in after}
     return "".join(
@@ -365,8 +367,20 @@ def screen(store, row, base_files, engine_for=None):
     hits = kept_hits(every)
     if not qset:
         return _outcome("not_screened", label, hits, "error")
+    state = build_state(row["name"], row["description"], files, base_files, hits)
+    if base_files is not None and qset.get("diff_optional") is True and state_chars(state) > J.MAX_STATE_CHARS:
+        # Too big with its diff: the whole new skill in one call, so the model still sees every file at once. Only a
+        # question set that says it can judge an update without its diff (`diff_optional`): a company's own may not.
+        state = build_state(row["name"], row["description"], files, None, hits)
+    if state_chars(state) > J.MAX_STATE_CHARS:
+        return _outcome("not_screened", label, hits, "oversize")
     with store.read() as c:
         cached = _cached(c, row, label)
+    if cached and base_files is not None:
+        # Reused only when it read what this screen sends, its diff or not: whether it had one follows from its own hits.
+        then = build_state(row["name"], row["description"], files, base_files, _json(cached["patterns"], hits))
+        if (state_chars(then) <= J.MAX_STATE_CHARS) != ("diff" in state):
+            cached = None
     if cached:
         return _outcome(
             "screened",
@@ -379,9 +393,6 @@ def screen(store, row, base_files, engine_for=None):
             judge_call_id=cached["judge_call_id"],
             cached_from=cached["id"],
         )
-    state = build_state(row["name"], row["description"], files, base_files, hits)
-    if state_chars(state) > J.MAX_STATE_CHARS:
-        return _outcome("not_screened", label, hits, "oversize")
     with store.read() as c:
         engine = (engine_for or strict_engine)(store, c)
         at_cap = engine is None and over_spend_cap(c, store.settings)

@@ -80,7 +80,9 @@ answers in place of Decide High.
   Its summary and findings (file, line, issue) go on the row.
 - **The risk floor.** A hit for hidden Unicode, a secret read or pipe-to-shell raises a `low` risk to `medium`. So does
   any concern at 50% or more.
-- **Not screened.** If the state is over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
+- **Big changes.** An update whose state with its diff is over 120,000 characters is screened on the whole new skill
+  without its diff.
+- **Not screened.** If the state is still over 120,000 characters, the row is `not_screened` with the reason `oversize`. With
   no Gateway, the reason is `unavailable`. At the monthly spend cap it is `cap`, a call that does not answer in time is
   `timeout`, and any other failure is `error`. A proposal is never marked screened without the model's answer, so it
   cannot be approved. **Re-run** (`POST skills/proposals/{id}/rescreen`) sends it back to the queue.

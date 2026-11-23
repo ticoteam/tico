@@ -9,6 +9,7 @@ the end-to-end test, which uses test_decide_strict's fake Gateway door (no netwo
 import json
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -174,14 +175,83 @@ def test_no_engine_is_unavailable_or_the_cap_and_nothing_is_asked(api):
     assert latest(api, pid)["reason"] == "cap"
 
 
-def test_an_update_whose_diff_cannot_fit_the_state_is_oversize_and_never_asked(api):
-    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2400))
+MIGRATION = Path(__file__).resolve().parents[2] / "backend/migrations/20261123160959_skill_oversize_rescreen.sql"
+
+
+def test_an_update_too_big_with_its_diff_is_screened_in_one_call_on_the_whole_new_skill(api):
+    # The case a TIDY developer hit: an 81,000-character skill whose diff against its base is about 70,000 more.
+    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2700))
+    head = "---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n"
+    base, newer = bundle(head + lines), bundle(head + lines.replace("alpha steps\n", "gamma steps\n", 1100))
+    publish(api, base)
+    pid = proposal(api, newer)["id"]
+    assert S.state_chars(S.build_state("triage", "Sorts the inbox by urgency", newer, base, [])) > J.MAX_STATE_CHARS
+    engine = Engine()
+    assert drain(api, engine) == ["screened"] and len(engine.calls) == 1
+    state = engine.calls[0]["state"]
+    assert "diff" not in state and S.state_chars(state) <= J.MAX_STATE_CHARS
+    assert state["files"][0]["content"].count("gamma steps") == 1100  # every file of the new skill, whole
+    assert (latest(api, pid)["status"], latest(api, pid)["reason"]) == ("screened", None)
+
+
+def test_a_company_question_set_that_does_not_allow_a_missing_diff_keeps_oversize(api, monkeypatch, tmp_path):
+    shipped = json.loads((Path(J.QUESTIONS_DIR) / "skill-screen.json").read_text())
+    assert shipped["diff_optional"] is True
+    (tmp_path / "questions").mkdir()
+    own = {k: v for k, v in shipped.items() if k != "diff_optional"}
+    (tmp_path / "questions" / "skill-screen.json").write_text(json.dumps(own))
+    monkeypatch.setenv("TICO_REGISTRY_DIR", str(tmp_path))
+    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2700))
     head = "---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n"
     publish(api, bundle(head + lines))
-    pid = proposal(api, bundle(head + lines.replace("alpha", "gamma")))["id"]
+    pid = proposal(api, bundle(head + lines.replace("alpha steps\n", "gamma steps\n", 1100)))["id"]
     engine = Engine()
-    assert drain(api, engine) == ["not_screened"]
-    assert latest(api, pid)["reason"] == "oversize" and engine.calls == []
+    assert drain(api, engine) == ["not_screened"] and engine.calls == []
+    assert latest(api, pid)["reason"] == "oversize"
+
+
+def test_a_screen_made_without_the_diff_is_not_reused_once_the_question_set_needs_it(api, monkeypatch, tmp_path):
+    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2700))
+    head = "---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n"
+    publish(api, bundle(head + lines))
+    pid = proposal(api, bundle(head + lines.replace("alpha steps\n", "gamma steps\n", 1100)))["id"]
+    engine = Engine()
+    assert drain(api, engine) == ["screened"] and "diff" not in engine.calls[0]["state"]
+    decide(api, pid, "rescreen", token="ana-test")
+    assert drain(api, engine) == ["screened"] and len(engine.calls) == 1  # the shipped set: the same inputs, reused
+
+    # The company's own skill-screen@1, the same version, without `diff_optional`: the screen without a diff is no answer.
+    own = json.loads((Path(J.QUESTIONS_DIR) / "skill-screen.json").read_text())
+    del own["diff_optional"]
+    (tmp_path / "questions").mkdir()
+    (tmp_path / "questions" / "skill-screen.json").write_text(json.dumps(own))
+    monkeypatch.setenv("TICO_REGISTRY_DIR", str(tmp_path))
+    decide(api, pid, "rescreen", token="ana-test")
+    assert drain(api, engine) == ["not_screened"] and len(engine.calls) == 1
+    assert latest(api, pid)["reason"] == "oversize"
+
+
+def test_a_skill_too_big_even_without_a_diff_is_oversize_and_a_stuck_one_is_screened_again(api):
+    lines = "\u00e9" * 20 * 3000  # 60,000 characters, but six of JSON for each é
+    pid = proposal(api, bundle("---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n" + lines))["id"]
+    engine = Engine()
+    assert drain(api, engine) == ["not_screened"] and engine.calls == []
+    assert latest(api, pid)["reason"] == "oversize"
+    assert (
+        get(api, f"skills/proposals/{pid}", "ben-test")["proposal"]["screen_action"]
+        == S_SKILLS.SCREEN_REASONS["oversize"]
+    )
+
+    # One left oversize by an older release (a change that fits without its diff) is screened again once, then stays.
+    other = proposal(api, name="billing")["id"]
+    assert drain(api, engine) == ["screened"]
+    with store_of(api).transaction() as c:
+        c.execute("UPDATE skill_proposals SET screen_status='not_screened' WHERE id=?", (other,))
+        c.execute("UPDATE skill_screenings SET status='not_screened', reason='oversize' WHERE proposal_id=?", (other,))
+        c.execute(MIGRATION.read_text())
+    assert (row(api, other)["screen_status"], row(api, pid)["screen_status"]) == ("pending", "pending")
+    assert sorted(drain(api, engine)) == ["not_screened", "screened"]
+    assert latest(api, other)["status"] == "screened"
 
 
 @pytest.mark.parametrize(
