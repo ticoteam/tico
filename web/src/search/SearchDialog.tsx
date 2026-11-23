@@ -19,6 +19,9 @@ export function SearchDialog() {
   return (
     <Dialog.Root open={open} onOpenChange={(next) => !next && closeSearch()}>
       <Dialog.Portal>
+        {/* clear, over the whole app: a click anywhere off the palette closes it. Base UI closes a modal only on a press
+            that lands on its backdrop, and its own unstyled one sits under the shell, which takes every click. */}
+        <Dialog.Backdrop className="pal-off" />
         {/* keyed by each open, so the field starts again from what it was opened with */}
         <Palette key={n} opened={q} />
       </Dialog.Portal>
