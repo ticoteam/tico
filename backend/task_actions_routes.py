@@ -143,11 +143,13 @@ def register_core(
         by_id=False,
         exact=False,
         assignee=None,
+        sees=None,
     ):
         """The filters `GET /api/v2/tasks` takes, checked and resolved: (owner, requester, H.tasks keywords). A bulk
         change (`POST /api/v2/task-bulk`) selects with the same ones. `exact` refuses an owner or requester that names
         nobody, where a list would quietly drop the filter: a bulk change must never widen to every task. An assignee
-        that names nobody is always refused; it is one more `match` fragment, so rows, counts, pages and `gone` agree."""
+        that names nobody, or someone `sees` says the caller may not see, is always refused alike; it is one more `match`
+        fragment, so rows, counts, pages and `gone` agree."""
         found_owner = H.resolve_actor(c, owner) if owner else None
         found_requester = H.resolve_actor(c, requester) if requester else None
         # Given at all, even empty (`requester=`), a name must resolve: dropping it would widen the selection.
@@ -164,7 +166,7 @@ def register_core(
         match = []
         if assignee is not None:
             found_assignee = H.resolve_actor(c, assignee)
-            if not found_assignee:
+            if not found_assignee or sees is not None and not sees(found_assignee):
                 raise Problem("assignee", "assignee is `me`, a person or a bot on the roster", 422)
             match.append(("tasks.assignee_id=?", (found_assignee,)))
         if role and not TRo.role_name(role):

@@ -931,10 +931,10 @@ def redact_bot(row, roster, people_hidden, groups_hidden, team_was=None):
 class Known:
     """Which of the people a payload names one reader may be told about, for REST answers and the stream alike: a
     person they may not see is named only to someone in the same conversation, or a party to the same task (its
-    owner, its requester, or in its conversation). Elsewhere the field reads "" (null for `from_person`). The owner,
+    owner, its requester, its assignee, or in its conversation). Elsewhere the field reads "" (null for `from_person`). The owner,
     the admins and whoever manages that person see them anyway, as everywhere."""
 
-    TASK_FIELDS = ("owner_id", "requester_id", "closed_by_id", "origin_actor")
+    TASK_FIELDS = ("owner_id", "requester_id", "assignee_id", "closed_by_id", "origin_actor")
 
     def __init__(self, c, viewer, auth=None):
         self.c, self.viewer, self.auth = c, viewer, auth
@@ -1109,7 +1109,9 @@ class Known:
         hidden = [r for r in readers if r in self.people]
         if not named and not origin and not hidden:
             return task
-        if self.me in (task.get("owner_id"), task.get("requester_id")) or self.member(task.get("conversation_id")):
+        if self.me in (task.get("owner_id"), task.get("requester_id"), task.get("assignee_id")) or self.member(
+            task.get("conversation_id")
+        ):
             return task
         return {
             **task,

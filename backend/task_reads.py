@@ -31,7 +31,6 @@ import orjson
 from fastapi.responses import Response
 
 from . import events as E
-from .hubdb_core import is_human
 
 if TYPE_CHECKING:
     import sqlite3
@@ -136,9 +135,9 @@ def around(c, ids):
     return list(dict.fromkeys([*ids, *(row[0] for row in found)]))
 
 
-def gone(c, visible_sql, was, matched, reader):
-    """The changed ids not in `matched` that the caller (`reader`, their actor) could have read: now (it left the
-    filters) or under the snapshot the log kept for it (owner, requester, privacy, readers, pipeline and assignee)."""
+def gone(c, visible_sql, was, matched):
+    """The changed ids not in `matched` that the caller could have read: now (it left the filters)
+    or under the snapshot the log kept for it (owner, requester, privacy, readers, pipeline and assignee)."""
     out = []
     missing = [tid for tid in was if tid not in matched]
     if not missing:
@@ -151,7 +150,7 @@ def gone(c, visible_sql, was, matched, reader):
         )
     }
     for tid in missing:
-        if tid in readable or any(_could_read(c, visible_sql, tid, ref, reader) for ref in was[tid]):
+        if tid in readable or any(_could_read(c, visible_sql, tid, ref) for ref in was[tid]):
             out.append(tid)
     return out
 
@@ -267,11 +266,10 @@ def children_text(c, visible_sql, history):
     return history
 
 
-def _could_read(c, visible_sql, tid, ref, reader):
+def _could_read(c, visible_sql, tid, ref):
     """Whether the snapshot `ref` (owner, requester, privacy, readers, pipeline, status, assignee: events.py `_WAS`) let
     its reader open the task. A snapshot kept before the assignee was has six parts: no assignee then. `visible_sql`
-    reads `reader`'s tasks as their assignee from the live table (auth.assignee_sql): here the snapshot's assignee
-    answers that clause instead."""
+    reads a person assignee's tasks from the live table (auth.assignee_sql): here the snapshot's assignee answers it."""
     try:
         parts = json.loads(ref)
     except (TypeError, ValueError):
@@ -279,10 +277,9 @@ def _could_read(c, visible_sql, tid, ref, reader):
     if not isinstance(parts, list):
         return False
     owner, requester, private, readers, pipeline_id, _status, assignee = (parts + [None] * 7)[:7]
-    if is_human(reader):
-        from .auth import assignee_sql
+    from .auth import as_of_assignee
 
-        visible_sql = visible_sql.replace(assignee_sql(reader), "1" if assignee == reader else "0")
+    visible_sql = as_of_assignee(visible_sql, assignee)
     if isinstance(readers, list):
         readers = json.dumps(readers)
     elif isinstance(readers, str) and readers and not readers.startswith("["):

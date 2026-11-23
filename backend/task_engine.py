@@ -1589,8 +1589,8 @@ def _owned(conn: "sqlite3.Connection", before: Row, after: Row, by: str) -> None
     one is held first (`shut_out`). The caller reads the task again after. A new assignee (a pick that owns the task,
     a refile, a restore) may leave a person assignee unable to read it: their open ❓ on it clear and its agent hears."""
     task_effects.owner_moved(conn, before, after, by)
-    if before.get("assignee_id") != after.get("assignee_id"):
-        from . import question_marks
+    if before.get("assignee_id") != after.get("assignee_id") and before.get("owner_id") == after.get("owner_id"):
+        from . import question_marks  # a new owner's (task_effects._follow_owner) clears them already
 
         question_marks.clear_gone(conn, after["id"])
 

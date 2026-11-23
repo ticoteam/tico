@@ -342,9 +342,20 @@ def credential_admins(c, settings):
 def assignee_sql(actor):
     """The tasks whose assignee is `actor`, as a visibility clause (Auth.task_sql). Their ids are read once per
     statement from tasks_assignee, so a list keeps its covering index (tasks_queue_cover) instead of reading every row
-    for the column. A snapshot of a task as it was has no such live row: task_reads._could_read answers this clause
-    from the snapshot's own assignee."""
-    return f"id IN (SELECT id FROM tasks WHERE assignee_id={A.q(actor)})"
+    for the column. `tasks.id`: a caller joins tables of its own that have an `id` too (health._aged_pr_checks). A
+    snapshot of a task as it was has no such live row: `as_of_assignee` answers the clause from the snapshot's own."""
+    return f"tasks.id IN (SELECT id FROM tasks WHERE assignee_id={A.q(actor)})"
+
+
+_ASSIGNEE_CLAUSE = re.compile(r"tasks\.id IN \(SELECT id FROM tasks WHERE assignee_id=('(?:[^']|'')*')\)")
+
+
+def as_of_assignee(visible_sql, assignee):
+    """`visible_sql` (Auth.task_sql) for a task whose assignee was `assignee`: each person's assignee clause in it,
+    whoever's rule it came from (the reader's own, a person an Assistant lease reads as, a sponsor), becomes true or
+    false for that assignee instead of reading the live table (task_reads._could_read)."""
+    mine = A.q(assignee) if assignee else None
+    return _ASSIGNEE_CLAUSE.sub(lambda found: "1" if found.group(1) == mine else "0", visible_sql)
 
 
 class Auth:

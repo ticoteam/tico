@@ -2451,7 +2451,7 @@ def task_private_readable(conn, actor, row):
                 conn.rollback()
     if not task_private(conn, row):
         return True
-    if "owner_id" not in row or "requester_id" not in row or "assignee_id" not in row:
+    if "owner_id" not in row or "requester_id" not in row:
         row = task(conn, row["id"])
         if not row:
             return False
@@ -2459,7 +2459,9 @@ def task_private_readable(conn, actor, row):
         return False  # a run of the shared Assistant for nobody (above)
     if actor in (row["owner_id"], row["requester_id"]):
         return True
-    if is_human(actor) and actor == row["assignee_id"]:
+    if is_human(actor) and (
+        actor == row["assignee_id"] if "assignee_id" in row else row["id"] in assigned_tasks(conn, actor)
+    ):
         return True  # a person assignee reads it as its requester does; an agent assignee or a manager gains nothing
     from .task_rights import private_subjects
 
@@ -2478,6 +2480,20 @@ def task_private_readable(conn, actor, row):
     from . import call_follow_ups
 
     return call_follow_ups.thread_reader(conn, actor, task_id)
+
+
+def assigned_tasks(conn, actor):
+    """The ids of the tasks `actor` is the assignee of, read once per snapshot from tasks_assignee: a partial row
+    (row_clock.PARTIES, task_privacy.STATUS_TASK_COLUMNS, whose covering indexes leave the column out) is checked
+    without reading its whole task."""
+    from . import read_cache
+
+    return read_cache.value(
+        conn,
+        ("assigned_tasks", actor),
+        lambda: frozenset(r[0] for r in conn.execute("SELECT id FROM tasks WHERE assignee_id=?", (actor,))),
+        shared=True,
+    )
 
 
 def stage_read_held(conn, actor, row):

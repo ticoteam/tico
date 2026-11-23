@@ -2475,7 +2475,7 @@ def _tasks(view, rows, task_views, tasks=(), parties=()):
         # now is removed: its id alone, so the row they hold leaves. One they could never open stays silent. A task the
         # viewer can read now is never gone, whatever it was before.
         elif task_id not in visible and any(
-            task_reads._could_read(c, visible_sql, task_id, ref, who.actor) for ref in before.get(task_id, ())
+            task_reads._could_read(c, visible_sql, task_id, ref) for ref in before.get(task_id, ())
         ):
             entry["gone"] = True
         else:
@@ -2498,7 +2498,7 @@ def _was(view, visible_sql, task_id, first):
     if not first:
         return None
     ref, was = first
-    if len(was) < 6 or not task_reads._could_read(view.c, visible_sql, task_id, ref, view.who.actor):
+    if len(was) < 6 or not task_reads._could_read(view.c, visible_sql, task_id, ref):
         return None
     owner = was[0]
     return {"owner": None if owner and view.hidden_actor(owner) else owner, "status": was[5]}

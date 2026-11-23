@@ -318,6 +318,15 @@ def test_an_unknown_filter_is_refused_not_ignored(api):
     for nobody in ("bot:x", ""):
         r = api.get(f"/api/v2/tasks?assignee={nobody}&status=open", headers=headers())
         assert r.status_code == 422 and r.json()["error"]["code"] == "assignee", (nobody, r.text)
+    # Someone the caller may not see is refused as someone who is not there: the filter never says they exist.
+    from backend.tests.helpers.teammate_access import set_access
+
+    only_ana = {"people": ["ana"]}
+    set_access(api, "humans/ben", see=only_ana, read=only_ana, write=only_ana)
+    unseen = api.get("/api/v2/tasks?assignee=human:ben&status=open", headers=headers("cara-test"))
+    nobody = api.get("/api/v2/tasks?assignee=human:nobody&status=open", headers=headers("cara-test"))
+    assert unseen.status_code == 422 and unseen.json()["error"] == nobody.json()["error"], unseen.text
+    assert api.get("/api/v2/tasks?assignee=human:ben&status=open", headers=headers()).status_code == 200
     # A delta read is refused the same way.
     cursor = tasks(api, ACTIVE)["cursor"]
     r = api.get(f"/api/v2/tasks?status=open&changed_after={cursor}&colour=red", headers=headers())

@@ -216,6 +216,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 owner=owner,
                 requester=requester,
                 assignee=who.actor if assignee == "me" else assignee,
+                sees=lambda actor: seen(c, who, actor),
                 status=status,
                 lane=lane,
                 label=label,
@@ -344,7 +345,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     if changed_ids
                     else []
                 )
-                gone = reads.gone(c, visible_sql, was, {row["id"] for row in rows}, who.actor)
+                gone = reads.gone(c, visible_sql, was, {row["id"] for row in rows})
                 result = {"tasks": rows, "gone": gone, "cursor": cursor, "next_offset": None}
             else:
                 # Unchanged anywhere: a 304 without reading a row. Changed elsewhere but not in these rows: a 304
@@ -395,6 +396,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def seen(c, who, actor):
+        """Whether `who` may see this person or bot (teammate_access): one they may not is refused as one that is not
+        there, so a filter never tells them it exists."""
+        if actor == who.actor:
+            return True
+        if H.is_bot(actor):
+            slug = H.actor_id(actor)
+            return bool(auth.bot_accesses(c, who, [slug]).get(slug, {}).get("see"))
+        return actor not in teammate_access.Known(c, who, auth).people
 
     def linked_to(c, ref):
         """The list's `link` filter: a WHERE fragment, with its arguments, keeping the tasks that link the outside item
