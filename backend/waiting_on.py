@@ -116,6 +116,9 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
     engine. Who can see them doesn't change.")."""
     if not said.about or shown(said.about):
         return said
+    if merge_order.is_closed_line(said.line):
+        # the task it merges after closed without merging: what to do is said, not which task
+        return replace(said, line=merge_order.CLOSED_UNNAMED, about=None)
     if isinstance(said, Wait):
         if said.state == TASKS and merge_order.is_order_wait(said.requirement_id):
             return replace(said, who=None, line=merge_order.UNNAMED, about=None)

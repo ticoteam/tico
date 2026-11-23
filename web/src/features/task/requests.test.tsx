@@ -188,6 +188,9 @@ describe('an access request in Needs you', () => {
       // the name keeps the Dot's line, taking its room; on a phone the level is a line of its own under it and the face
       const name = getComputedStyle(within(box).getByText('Growth Manager asks for Meta Ads'));
       expect([name.flexGrow, name.flexBasis]).toEqual(['1', '0px']);
+      // and all of it: no spacer shares the room, the face after the name at the line's end
+      const top = box.querySelector('.askcard-top') as HTMLElement;
+      expect([...top.children].filter((el) => getComputedStyle(el).flexGrow !== '0' && getComputedStyle(el).display !== 'none')).toEqual([within(box).getByText('Growth Manager asks for Meta Ads')]);
       if (layout === 'cards') expect([getComputedStyle(note).order, getComputedStyle(note).flexBasis]).toEqual(['1', '100%']);
     } finally {
       style.remove();

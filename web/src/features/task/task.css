@@ -7,8 +7,11 @@
 .tv-pick:hover{background:var(--hover);color:var(--ink)}
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
-/* who has it: their name beside the face, a long one cut short */
-.tv-pick>.tv-owner{max-width:18ch;overflow:hidden;text-overflow:ellipsis}
+/* a pick is never wider than the head: a long stage's name is cut short (its button says it whole), and a long name of
+   who has it at 18 letters */
+.tv-pick{max-width:100%}
+.tv-pick>span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tv-pick>.tv-owner{max-width:18ch}
 /* the where line wraps rather than run past the head; the task another task blocks it on (Facts.tsx BlockedOn) is
    whole on a line of its own under it, on a computer and a phone, under the quiet line too */
 .tv .pk-where{flex-wrap:wrap;height:auto;row-gap:var(--s-1)}

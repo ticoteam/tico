@@ -2356,7 +2356,7 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
             return Standing(requirement, WAITING, SOURCE, line, about=str(earlier["id"]))
         closed = MO.closed_before(conn, task)
         if closed:
-            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed), about=str(closed["id"]))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 

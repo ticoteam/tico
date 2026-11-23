@@ -377,6 +377,10 @@ describe('one open task', () => {
       if (quiet) return;
       const owner = where.querySelector('[data-target="task-owner:t1"]') as HTMLElement;
       expect([getComputedStyle(owner).flexShrink, getComputedStyle(owner).whiteSpace]).toEqual(['0', 'nowrap']);
+      // a long stage's name is cut short within the head; its button names it whole
+      const stage = screen.getByRole('button', { name: 'Stage: Review' });
+      expect(getComputedStyle(stage).maxWidth).toBe('100%');
+      expect(getComputedStyle(within(stage).getByText('Review')).textOverflow).toBe('ellipsis');
       expect(getComputedStyle(within(owner).getByText('Engineering Manager')).textOverflow).toBe('ellipsis');
       if (layout !== 'cards') return;
       // a press, var(--ctl) high and centered on its 22 high row, reaches (--ctl - 22) / 2 past it each way: rows that far
