@@ -1175,7 +1175,8 @@ def test_a_pr_someone_else_queued_first_still_gets_tico_s_check_so_it_does_not_s
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
     gh.calls.clear()
     assert MQ.run(company, gh) == 1
-    assert [call[0] for call in gh.calls] == ["ready", "post_check", "enqueue"]  # GitHub answers ok: already queued
+    # GitHub answers ok: already queued
+    assert [call[0] for call in gh.calls] == ["read_checks", "ready", "post_check", "enqueue"]
     assert gh.merge_ok_on(REPO, head) is True
     with company.transaction() as c:
         assert effects(c, task_id) == [("act", "done")]

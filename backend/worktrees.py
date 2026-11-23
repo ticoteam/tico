@@ -634,7 +634,7 @@ def holdings(c, owner):
         elif any(
             p['state'] == 'open'
             and p['review_state'] == 'approved'
-            and p['checks'] != 'failing'
+            and p['checks'] not in ('failing', 'approval')
             and p['mergeable'] != 'conflict'
             for p in prs
         ):

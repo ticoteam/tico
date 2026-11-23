@@ -46,7 +46,7 @@ def test_the_merge_stage_posts_the_check_on_the_pinned_head_then_queues_it(compa
     head = gh.prs[(REPO, 1)]["head_sha"]
     gh.calls.clear()
     assert MQ.run(company, gh) == 1
-    assert [call[0] for call in gh.calls] == ["ready", "post_check", "enqueue"]
+    assert [call[0] for call in gh.calls] == ["read_checks", "ready", "post_check", "enqueue"]
     assert posted(gh) == [(head, True)] and gh.merge_ok_on(REPO, head) is True
     assert gh.prs[(REPO, 1)]["queue_state"] == "queued"
     summary = gh.merge_ok[(REPO, head)][-1][1]

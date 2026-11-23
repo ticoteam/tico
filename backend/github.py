@@ -1113,11 +1113,16 @@ def _suite_key(suite, run):
     return ("suite:" + slug[:150] + (f"#{suite['id']}" if suite.get("id") else ""))[:200]
 
 
-def _check_state(result):
-    """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
-    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand. A run that
-    ended `action_required` waits for someone to approve it: not finished, so no "Checks failed" wake sends its owner
-    hunting for a bug; Checks pass says it needs approval (item_sources.github.check_state)."""
+def _check_state(result, description=""):
+    """One check's result as the link keeps it: passing, skipped, pending, approval, cancelled or failing. A cancelled
+    (or stale) run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand. A
+    run waiting for an approval, one that ended `action_required`, and a pending status whose `description` says so
+    (item_sources.github.says_approval) wait for someone to approve them: approval, never "Checks failed", which would
+    send the owner hunting for a bug, and never a finished head (`_finish`); Checks pass says it needs approval."""
+    from .item_sources.github import says_approval
+
+    if result in ("waiting", "action_required") or (result == "pending" and says_approval(str(description or ""))):
+        return "approval"
     return (
         "passing"
         if result in ("success", "neutral")
@@ -1125,11 +1130,7 @@ def _check_state(result):
         if result == "skipped"
         else "cancelled"
         if result in ("cancelled", "stale")
-        else (
-            "pending"
-            if result in ("pending", "queued", "in_progress", "requested", "waiting", "action_required")
-            else "failing"
-        )
+        else ("pending" if result in ("pending", "queued", "in_progress", "requested") else "failing")
     )
 
 
@@ -1183,7 +1184,8 @@ def _counted(checks, suite_runs=None):
 
 
 def _overall(checks, suite_runs=None):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else cancelled if one
+    """A head's checks as one state: failing if any failed, else approval if one waits for someone to approve it, else
+    pending if any is still going, else cancelled if one
     was cancelled with no newer run of its workflow after it (`_counted`), else passing. A head whose every check was
     skipped has not been checked (a draft pull request's run skips every job, and nothing on main requires a check), so
     it reads pending: an all-skipped head never reads green."""
@@ -1191,6 +1193,8 @@ def _overall(checks, suite_runs=None):
     return (
         "failing"
         if "failing" in states
+        else "approval"
+        if "approval" in states
         else "pending"
         if "pending" in states or states <= {"skipped"}
         else "cancelled"
@@ -1266,7 +1270,7 @@ def _kept(checks):
         return dict(checks)
     keys = list(checks)
     chosen = set()
-    for want in ("failing", "pending", None):
+    for want in ("failing", "approval", "pending", None):
         for k in reversed(keys):
             if len(chosen) >= CHECKS_KEPT:
                 break
@@ -1349,6 +1353,10 @@ def _finish(c, task, link, detail, full, checks):
         )
 
     failed, cancelled = named("failing"), named("cancelled")
+    if named("approval") and not failed:
+        # Not finished: a check waits for someone to approve it. Checks pass says so and tells the owner
+        # (item_sources.github.approval_news); a failure beside it still finishes the head as failed.
+        return full, "approval"
     outcome = "fail" if failed else "cancelled" if cancelled else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
@@ -1427,7 +1435,9 @@ def read_checks(service, headers, repo, head):
         if (run.get("check_suite") or {}).get("id"):
             _add_suite_run(suite_runs, _suite_key(run["check_suite"], run), name)
     for status in statuses:
-        checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
+        checks[str(status.get("context") or "Checks")[:200]] = _check_state(
+            status.get("state") or "pending", status.get("description")
+        )
     return ReadChecks(checks, suite_runs) if checks else None
 
 
@@ -1607,7 +1617,10 @@ def pr_signal(c, event, payload):
         if event in ("check_run", "check_suite", "status", "workflow_run"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
-            state = _check_state(signal.get("conclusion") or signal.get("state") or "pending")
+            state = _check_state(
+                signal.get("conclusion") or signal.get("state") or "pending",
+                signal.get("description") if event == "status" else "",
+            )
             checks = detail.get("checks", {})
             name = (
                 _suite_key(signal, signal)

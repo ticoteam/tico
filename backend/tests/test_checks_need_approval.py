@@ -96,9 +96,18 @@ def test_a_run_waiting_action_required_or_a_status_saying_so_needs_approval():
     assert F.status_check({**said, "description": "Build started"})["state"] == "pending"
     assert F.status_check({**said, "description": "No approval required"})["state"] == "pending"
     assert F.status_check({**said, "description": "Does not require approval"})["state"] == "pending"
+    assert F.status_check({**said, "description": "Build running: no further approval required"})["state"] == "pending"
+    assert F.status_check({**said, "description": "this doesn't require approval"})["state"] == "pending"
     assert F.status_check({**said, "state": "failure"})["state"] == "failure"
     assert F.run_check(run("queued"), "tico")["state"] == "pending"
-    assert G._check_state("action_required") == "pending"  # the link never calls it failed
+    # The PR link keeps approval as its own state: never failed, never a finished head, and a failure beside it wins.
+    assert G._check_state("action_required") == G._check_state("waiting") == "approval"
+    assert G._check_state("pending", "Build not triggered: approval required") == "approval"
+    assert G._check_state("pending", "Build running: no further approval required") == "pending"
+    assert G._overall({"build": "approval", "lint": "passing"}) == "approval"
+    assert G._overall({"build": "approval", "unit": "failing"}) == "failing"
+    link = {"title": "acme/app#1", "url": "https://github.com/acme/app/pull/1"}
+    assert G._finish(None, None, link, {}, "h1", {"build": "approval", "lint": "passing"}) == ("h1", "approval")
     assert F._checks_state([{"state": "pending"}, {"state": "approval"}]) == "approval"
     assert F._checks_state([{"state": "failure"}, {"state": "approval"}]) == "failure"  # a failure still wins
 
@@ -149,10 +158,30 @@ def test_the_bot_owner_is_woken_once_per_commit_and_a_snooze_ends(c):
     assert "Checks need approval on acme/app#1: build" in body
     F.save_and_settle(c, REPO, 1, {"checks": waiting}, F.version_now())  # read again: nobody is woken again
     assert len(approval_wakes(c, task_id)) == 1
+    running = [{"name": "build", "state": "pending"}]
+    F.save_and_settle(c, REPO, 1, {"checks": running}, F.version_now())  # approved: it runs
     E.snooze(c, task_id, B, "Waiting for checks", later(90), seen_version=E.task(c, task_id)["version"])
+    F.save_and_settle(c, REPO, 1, {"checks": waiting}, F.version_now())  # the same head needs approval again
+    assert len(approval_wakes(c, task_id)) == 1
+    assert E.task(c, task_id).get("snooze")  # told already: the bot's snooze stands
     F.save_and_settle(c, REPO, 1, {"head_sha": "h2", "checks": waiting}, F.version_now())  # a new commit
     assert len(approval_wakes(c, task_id)) == 2
     assert not E.task(c, task_id).get("snooze")
+
+
+def test_with_two_prs_the_second_ones_approval_is_told_once_it_is_what_checks_pass_stands_on(c):
+    engineering(c)
+    task_id = new(c, 1, 2)
+    waiting = [{"name": "build", "state": "approval"}]
+    F.save_and_settle(c, REPO, 1, {"state": "open", "head_sha": "a1", "checks": waiting}, F.version_now())
+    F.save_and_settle(c, REPO, 2, {"state": "open", "head_sha": "b1", "checks": waiting}, F.version_now())
+    assert [k.split(":checks:")[1] for k in approval_wakes(c, task_id)] == ["acme/app#1:a1:approval"]
+    F.save_and_settle(c, REPO, 1, {"checks": [{"name": "build", "state": "success"}]}, F.version_now())
+    assert line(c, task_id)[2].startswith("Checks need approval on acme/app#2")
+    assert [k.split(":checks:")[1] for k in approval_wakes(c, task_id)] == [
+        "acme/app#1:a1:approval",
+        "acme/app#2:b1:approval",
+    ]
 
 
 def test_a_person_owner_gets_no_message(c):
@@ -168,13 +197,15 @@ def test_a_person_owner_gets_no_message(c):
     assert approval_wakes(c, task_id, X.ANA) == []
 
 
-def _approval_on_head(company, gh, task_id):
-    """The checks on the PR's signed-off head (the one the task came into Merge with) turn to needing approval."""
+def _approval_on_head(company, gh, told=True):
+    """The checks on the PR's signed-off head (the one the task came into Merge with) turn to needing approval on
+    GitHub; `told`: Tico has read it (else what it saved still says they passed: no webhook came yet)."""
     with company.transaction() as c:
         head = F.pr(c, REPO, 1)["head_sha"]
         gh.set_checks(REPO, head, "approval")
-        seen(c, gh)
-        assert F.pr(c, REPO, 1)["checks_state"] == "approval"
+        if told:
+            seen(c, gh)
+        assert F.pr(c, REPO, 1)["checks_state"] == ("approval" if told else "success")
     return head
 
 
@@ -182,7 +213,7 @@ def test_the_first_queue_is_refused_while_the_checks_need_approval(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
-    head = _approval_on_head(company, gh, task_id)
+    head = _approval_on_head(company, gh, told=False)
     F.run(company, gh)
     assert not [call for call in gh.calls if call[0] in ("post_check", "enqueue")]
     assert (REPO, head) not in gh.merge_ok
@@ -197,7 +228,7 @@ def test_queue_again_is_refused_while_the_checks_on_the_signed_off_head_need_app
         task_id = in_merge(c, gh, 1)
     F.run(company, gh)
     gh.drop(REPO, 1, "Taken out by hand")
-    _approval_on_head(company, gh, task_id)
+    _approval_on_head(company, gh)
     F.refresh(company, gh, later())
     with company.transaction() as c:
         version = E.task(c, task_id)["version"]

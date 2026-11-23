@@ -776,11 +776,21 @@ def real_failure(check: object) -> bool:
     return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
 
 
-# What a commit status's description says when its CI waits for someone to approve the build; "no approval required"
-# and "does not require approval" are not that.
-APPROVAL_SAID = re.compile(
-    r"(?<!\bno )approval required|(?<!\bnot )requires? approval|(?<!\bnot )(?<!n't )needs? approval", re.IGNORECASE
-)
+# The words a commit status's description uses when its CI waits for someone to approve the build (`says_approval`).
+APPROVAL_SAID = re.compile(r"approval (?:is )?required|requires? approval|needs? approval", re.IGNORECASE)
+# A word that turns the clause it is in around: "no further approval required", "this doesn't require approval".
+NEGATED = re.compile(r"\b(?:no|not|never|without|nothing)\b|n't\b", re.IGNORECASE)
+
+
+def says_approval(description: str) -> bool:
+    """Whether a commit status's description says, affirmatively, that its build waits for an approval ("Build not
+    triggered: approval required"). Only the clause the words are in counts, so a negation earlier in the sentence
+    ("Build not triggered") does not turn it around, and one in that clause ("no further approval required") does."""
+    for found in APPROVAL_SAID.finditer(description):
+        clause = re.split(r"[.;:,!?]", description[: found.start()])[-1]
+        if not NEGATED.search(clause):
+            return True
+    return False
 
 
 def check_state(status: object, conclusion: object, description: str = "") -> str:
@@ -792,7 +802,7 @@ def check_state(status: object, conclusion: object, description: str = "") -> st
     whose `description` says approval is required are approval: none of them runs until someone approves it."""
     if status == "waiting" or conclusion == "action_required":
         return "approval"
-    if status == "pending" and APPROVAL_SAID.search(description):
+    if status == "pending" and says_approval(description):
         return "approval"
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
@@ -1306,7 +1316,6 @@ WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze (`snooze_news`); the name predates other stages
 CHECKS_DONE = ("success", "failure", "skipped", "cancelled")
-CHECKS_NEWS = (*CHECKS_DONE, "approval")  # a head's checks state the owner hears of once: done, or never by itself
 # "#3417" or "owner/repo#3417" in a snooze's reason: a PR it waits on. A bare number is in the task's own repository.
 PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
@@ -1411,7 +1420,7 @@ def failing_names(metadata: Row, state: str = "failure") -> str:
     return ", ".join(dict.fromkeys(names)) or "a check"
 
 
-NEEDS_APPROVAL = "The checks on {ref} need approval"  # why Tico does not queue such a PR (`requeue`, `refused_first`)
+NEEDS_APPROVAL = "The checks on {ref} need approval"  # why Tico does not queue such a PR (`requeue`, `carry_out`)
 
 
 def approval_line(metadata: Row, ref: str) -> str:
@@ -1684,16 +1693,17 @@ def snooze_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str, 
 
 def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, before: Row | None) -> int:
     """The checks on a PR's newest commit finished (passed, failed, were cancelled or were all skipped), or finished again another way:
-    `snooze_news` for each task that links it. Returns how many were woken."""
+    `snooze_news` for each task that links it. Any change of them may also make checks that need approval, on this PR
+    or another of the task's, what its Checks pass stands on now (`approval_news`). Returns how many were woken."""
     state, head = str(after.get("checks_state") or ""), str(after.get("head_sha") or "")
-    if after["state"] != "open" or state not in CHECKS_NEWS or not head:
+    if after["state"] != "open" or not head:
         return 0
     if before and (before.get("head_sha"), before.get("checks_state")) == (head, state):
         return 0
+    told = sum(approval_news(conn, task_id) for task_id in task_ids)
+    if state not in CHECKS_DONE:
+        return told
     ref = pr_ref(str(after["repo"]), int(after["number"]))
-    if state == "approval":
-        lead = f"{approval_line(after, ref)}."
-        return sum(approval_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
     if state == "success":
         lead = f"The checks on {ref} passed at {head[:12]}."
     elif state == "failure":
@@ -1702,30 +1712,46 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
         lead = f"The checks on {ref} {cancelled_line(after, head[:12])}."
     else:
         lead = f"Every check on {ref} was skipped at {head[:12]}."
-    return sum(snooze_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
+    return told + sum(snooze_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
 
 
-def approval_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str) -> bool:
-    """The checks on a PR's newest commit wait for someone to approve them, so they never finish by themselves and no
-    "checks finished" news comes. Only where the task's own Checks pass stands on it now ("Checks need approval"): a
-    bot's snooze ends, and the owner is told once per visit and `what` (`tell_owner`: a wake on the bot owner's turn, no
-    message to a person). A task on a stage that does not ask for passing checks hears nothing. True when told."""
+def approval_news(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Checks that wait for someone to approve them never finish by themselves, so no "checks finished" news comes.
+    Driven by the task's active Checks pass standing: when it says checks need approval, the owner is told once per
+    visit, PR and head it names (`tell_owner`: a wake on the bot owner's turn, no message to a person), and a bot's
+    snooze ends, but only with that first telling, as `snooze_news` dedupes before it ends one. A task on a stage that
+    does not ask for passing checks hears nothing. True when told."""
     from .. import task_requirements as R
 
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row or row["status"] != "open" or not row.get("visit"):
         return False
-    stands = any(
-        s.requirement.get("condition") == "checks_pass"
-        and s.state == R.NOT_MET
-        and (s.line or "").startswith("Checks need")
-        for s in R.standings(conn, row)
+    prs = prs_of(conn, task_id)
+    if not any((p["metadata"] or {}).get("checks_state") == "approval" for p in prs):
+        return False  # no PR of it waits for an approval: nothing to work out
+    found = next(
+        (s for s in R.standings(conn, row) if s.requirement.get("condition") == "checks_pass" and s.state == R.NOT_MET),
+        None,
     )
-    if not stands:
+    line = str((found.line if found else "") or "")
+    named = re.match(r"Checks need approval on (\S+): ", line)
+    if not named:
         return False
-    _end_bot_snooze(conn, row, lead)
-    return E.tell_owner(conn, task_id, lead, f"{WAKE_NEWS}:{what}") is not None
+    ref = named.group(1)
+    head = next(
+        (
+            str((p["metadata"] or {}).get("head_sha") or "")
+            for p in prs
+            if pr_ref(str(p["repo"]), int(p["number"])) == ref
+        ),
+        "",
+    )
+    what = f"{WAKE_NEWS}:checks:{ref}:{head}:approval"
+    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (f"{task_id}:{row['visit']['id']}:{what}",)).fetchone():
+        return False
+    _end_bot_snooze(conn, row, f"{line}.")
+    return E.tell_owner(conn, task_id, f"{line}.", what) is not None
 
 
 def mergeable_news(conn: "sqlite3.Connection", task_id: str, ref: str, head: str, mergeable: str) -> bool:
@@ -1956,21 +1982,6 @@ def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     return metadata is not None and metadata["state"] == "merged"
 
 
-def refused_first(conn: "sqlite3.Connection", effect: Row) -> str | None:
-    """Why an owed `queue` is not carried out at all, read just before Tico posts `tico/merge-ok` and enqueues: the
-    checks on its pinned head need approval (they would never run in the queue). The action fails with that reason and
-    the owner is told (`gave_up`); `requeue` queues it once they ran. None: carry it out."""
-    if effect["action"] != QUEUE or effect["kind"] != SA.ACT:
-        return None
-    repo, number = _pr_of(effect)
-    metadata = pr(conn, repo, number)
-    if not metadata or metadata["checks_state"] != "approval":
-        return None
-    if effect.get("pinned") and metadata.get("head_sha") != effect["pinned"]:
-        return None
-    return NEEDS_APPROVAL.format(ref=pr_ref(repo, number))
-
-
 def undo_moot(conn: "sqlite3.Connection", effect: Row) -> bool:
     """An `undo` of a visit that left Merge takes the PR out of the queue for good, whoever else queued it: it is moot
     while an open visit (the task's next one, or another task's on the same PR) has queued that PR at the same head
@@ -2020,7 +2031,8 @@ def merge_ok_line(effect: Row, ok: bool) -> str:
 def carry_out(github: "GitHub", effect: Row) -> Row:
     """GitHub's call for one action, no transaction held: queue the PR at its pinned head, or take it out.
 
-    Queueing posts `tico/merge-ok` = success on exactly the pinned head first, the one `enqueue` is about to queue;
+    Queueing reads the pinned head's checks first and refuses (not ok, `NEEDS_APPROVAL`) while they need approval;
+    then it posts `tico/merge-ok` = success on exactly the pinned head, the one `enqueue` is about to queue;
     a post that fails raises, so nothing is queued and the call is tried again like any failed call (then the owner's,
     `gave_up`). Taking it out posts failure on that head after the dequeue, so neither a bot nor GitHub queues it
     again with Tico's success. A release asked for: github_release.carry_out."""
@@ -2029,6 +2041,10 @@ def carry_out(github: "GitHub", effect: Row) -> Row:
     repo, number = _pr_of(effect)
     head = str(effect.get("pinned") or "")
     if effect["kind"] == SA.ACT:
+        # GitHub's own word on the head now, not the saved one a webhook may not have caught up with: checks that need
+        # approval never run in the queue, so Tico neither signs it off nor queues it (`gave_up` tells the owner).
+        if head and _checks_state(github.read_checks(repo, head)) == "approval":
+            return {"ok": False, "reason": NEEDS_APPROVAL.format(ref=pr_ref(repo, number))}
         github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
         github.post_check(repo, head, True, merge_ok_line(effect, True))
         said = github.enqueue(repo, number, head)
