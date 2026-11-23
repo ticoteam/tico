@@ -20,7 +20,6 @@ vi.mock('@/conversation', async () => ({
   ),
   MessageBones: () => <div role="status" aria-label="Loading messages" />,
   SessionLine: (await import('@/conversation/Session')).SessionLine,
-  timelineQuery: (await import('@/conversation/queries')).timelineQuery,
 }));
 
 /* Made-up rows only. */
@@ -43,9 +42,9 @@ const task = {
   links: [],
 };
 
-/** What the server holds: the task's detail and its chat's messages. */
+/** What the server holds: the task's detail and the person's Needs you. */
 let detail: Record<string, unknown> = task;
-let messages: unknown[] = [];
+let needs: unknown[] = [];
 
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
@@ -71,7 +70,7 @@ beforeAll(() => {
 });
 beforeEach(() => {
   detail = task;
-  messages = [];
+  needs = [];
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
   const actors = [
@@ -89,8 +88,8 @@ function serveRoom(room: Record<string, unknown>) {
     const u = String(url);
     const body = u.includes('/api/v2/tasks/')
       ? { task: detail, runs: [], children: [], comments: [], events: [], messages: [], has_more: false }
-      : u.includes('/api/v2/threads/c7/timeline')
-        ? { messages }
+      : u.includes('/api/v2/needs-you')
+        ? { items: needs, version: 'v1', count: needs.length }
         : u.includes('/api/v2/threads/c7')
         ? room
         : {};
@@ -138,8 +137,8 @@ describe('a question for the person, pinned over the message box', () => {
       ...task,
       waits: [asked('m1', 'human:me', '❓ Ship the fix on Friday?'), asked('m2', 'human:pat', 'Can Pat check the copy?'), asked('m3', 'human:me', 'Keep the old page?')],
     };
-    // m1's message is a reviewer's on the task's chat; m3's is not in what was read, so it reads as the owner's.
-    messages = [{ id: 'msg1', sender_id: 'bot:r2', body: '❓ Ship the fix on Friday?', refs: { question: { id: 'm1', to: 'human:me' } } }];
+    // m1 a reviewer asked, as Needs you has it (the server's own record of the ❓); m3 it does not list: the owner's.
+    needs = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null }];
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
     await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Needs you' })).toHaveLength(2));
@@ -149,6 +148,8 @@ describe('a question for the person, pinned over the message box', () => {
     expect(within(second!).getByText('Keep the old page?')).toBeTruthy();
     expect(within(second!).getByRole('img', { name: 'Birch Builder' })).toBeTruthy();
     expect(within(chat).queryByText('Can Pat check the copy?')).toBeNull();
+    // the pin says it needs them: the status line does not say so again
+    expect(within(chat).queryByText('Up next')).toBeNull();
   });
 
   it('goes when the server clears the question (the person replied) and the stream says so', async () => {
@@ -160,6 +161,7 @@ describe('a question for the person, pinned over the message box', () => {
     detail = { ...task, version: 2, waits: [] };
     act(() => dispatch('tasks', [{ seq: 3, id: 't1', kind: 'question', kinds: ['question'] }]));
     await waitFor(() => expect(within(chat).queryByRole('region', { name: 'Needs you' })).toBeNull());
+    expect(within(chat).getByText('Up next')).toBeTruthy();
   });
 });
 

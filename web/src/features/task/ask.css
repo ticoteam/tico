@@ -56,6 +56,10 @@
 .hold-edit{color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .hold-edit:hover{color:var(--ink)}
 
+/* the ❓ pinned over a task chat's message box (TaskPage.tsx Questions): stacked, and scrolled past a few, so the box and
+   every question stay in reach (a phone's keyboard leaves little above it) */
+.chat-pins{display:flex;flex-direction:column;gap:var(--s-2);align-self:stretch;max-height:min(30vh,176px);overflow-y:auto;overscroll-behavior:contain;padding:var(--s-0)}
+
 /* a phone: the card holds the bottom; the ask, what answering does and the face on one line, buttons half the width each */
 :where(html[data-layout="cards"]){
   .answer.askcard{padding:var(--s-0) 0 0 var(--s-1h)}
@@ -64,8 +68,8 @@
   .askcard-field{margin-right:0}
   .tv-lead .answer.askcard{padding:var(--s-2h) var(--s-3) var(--s-3) var(--s-3h)}
   .tv-waits .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
-  /* a ❓ pinned over the task chat's message box (TaskPage.tsx Questions): a card of its own, not the dock's */
-  .chat-foot>.answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
+  /* a pinned ❓ (TaskPage.tsx Questions): a card of its own, not the dock's */
+  .chat-pins>.answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
   .answer.askcard.is-link{padding:var(--s-2h) var(--s-3)}
   .askcard.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
 }

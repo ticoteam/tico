@@ -138,6 +138,34 @@ describe('tasks', () => {
     expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
+  it('a ❓ event that carries the task’s row lands the row, and leaves the task owed its read: a closed task reopens fresh @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    // a task read before and closed since: nothing observes it, so its read waits for the next open
+    queryClient.setQueryData(detail, { ...task('t1'), waits: [{ requirement_id: 'qmark:m1' }] });
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2, title: 'Renamed' }), 'question'));
+    flushFrame();
+    expect(queryClient.getQueryData<{ title: string }>(detail)?.title).toBe('Renamed');
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
+  it('a ❓ event while the task’s first read is in flight reads it again once that read lands @live', async () => {
+    // by its number (taskRefQuery, which seeds the detail when it lands) and by its id: both left before the change
+    const ref = ['tasks', 'ref', '12'];
+    const detail = ['tasks', 'detail', 't1'];
+    const land: (() => void)[] = [];
+    const reading = (value: unknown) => () => new Promise((done) => land.push(() => done(value)));
+    const byNumber = queryClient.fetchQuery({ queryKey: ref, queryFn: reading('t1') });
+    const byId = queryClient.fetchQuery({ queryKey: detail, queryFn: reading(task('t1')) });
+    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
+    flushFrame();
+    await act(async () => {
+      land.splice(0).forEach((go) => go());
+      await Promise.all([byNumber, byId]);
+    });
+    expect(queryClient.getQueryState(ref)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
   it('read a case again when its key date changes even if a later event of the same frame names only the task @live', () => {
     const detail = ['tasks', 'detail', 't1'];
     queryClient.setQueryData(detail, { ...task('t1'), matter: { dates: [{ id: 'd1', done_at: null }] } });

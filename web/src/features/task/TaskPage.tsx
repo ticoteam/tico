@@ -1,9 +1,9 @@
-import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouter, useRouterState, useSearch } from '@tanstack/react-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
-import { Conversation, MessageBones, SessionLine, timelineQuery, type Session } from '@/conversation';
+import { Conversation, MessageBones, SessionLine, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -16,6 +16,7 @@ import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
+import { flowQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
 import { onAnswered } from './answered';
@@ -366,6 +367,7 @@ export function TaskChat({ task }: TaskChatProps) {
   const name = owner?.name ?? (t.owner_id?.startsWith('bot:') ? 'Agent' : 'Person');
   const session: Session | null = !room.data ? null : room.data.task_id === t.id ? { task: t.id, title: t.title } : 'main';
   const sub = session && <SessionLine session={session} />;
+  const asked = questionsFor(t, me);
   return (
     <>
       <header className="side-head">
@@ -404,9 +406,10 @@ export function TaskChat({ task }: TaskChatProps) {
           compose={ownTask(t, me)}
           foot={
             <>
-              <TaskStatus t={t} />
+              {/* a pinned ❓ already says it needs them: the status line would say it again */}
+              {!asked.length && <TaskStatus t={t} />}
               {decision}
-              <Questions t={t} me={me} />
+              <Questions t={t} ids={asked} />
             </>
           }
           canPost={!asking}
@@ -424,24 +427,23 @@ export function TaskChat({ task }: TaskChatProps) {
 }
 
 /** Each ❓ on the task waiting on the person, pinned over the message box they answer it in: the question, and who
-    asked (the marked message's sender, else the task's owner). Their reply clears it on the server, whose `question`
-    change reads the task again (live/patch.ts), and the pin goes. */
-function Questions({ t, me }: { t: TaskData; me: string | undefined }) {
-  const ids = questionsFor(t, me);
+    asked, as their Needs you has it (the agent the server holds for the ❓), else the task's owner. Their reply clears
+    it on the server, whose `question` change reads the task again (live/patch.ts), and the pin goes. Several scroll in
+    a bounded stack, so the message box stays in reach. */
+function Questions({ t, ids }: { t: TaskData; ids: string[] }) {
+  // Needs you, which the chat's approval cards read already (ThreadCards useApprovalCards): one read for both.
+  const asks = useQuery({ ...flowQuery, enabled: ids.length > 0 }).data?.asks;
   const asked = (t.waits ?? []).filter((w) => !!w.requirement_id && ids.includes(w.requirement_id));
-  // The chat's own timeline, which the conversation above already reads: the asker is the marked message's sender.
-  const timeline = useInfiniteQuery({ ...timelineQuery(t.conversation_id ?? ''), enabled: asked.length > 0 && !!t.conversation_id });
-  const messages = timeline.data?.pages.flatMap((p) => p.messages ?? []) ?? [];
-  return asked.map((w) => {
-    // its wait is `qmark:<mark id>`; the marked message carries the mark as `refs.question.id`
-    const mark = w.requirement_id?.replace(/^qmark:/, '');
-    const by = messages.find((m) => (m.refs?.question as { id?: string } | undefined)?.id === mark)?.sender_id ?? t.owner_id;
-    return (
-      <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={by}>
-        <p className="askcard-what">{questionLine(w.line)}</p>
-      </AskCard>
-    );
-  });
+  if (!asked.length) return null;
+  return (
+    <div className="chat-pins">
+      {asked.map((w) => (
+        <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={asks?.find((a) => a.id === w.requirement_id)?.by ?? t.owner_id}>
+          <p className="askcard-what">{questionLine(w.line)}</p>
+        </AskCard>
+      ))}
+    </div>
+  );
 }
 
 /** The chat card beside the page: the decision for the tab the page has open, read from the same tab list
