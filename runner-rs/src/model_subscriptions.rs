@@ -37,7 +37,7 @@
 //! from the system keyring), so a plan turn's GEMINI_HOME is a home of its own holding that file, and its `agy` alone
 //! is told it runs over SSH (hosts/antigravity.rs). The bot's own `~/.gemini` rules, skills and conversations are
 //! linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so a move between
-//! plans, or to the computer's sign-in, resumes the same conversation.
+//! plans resumes the same conversation.
 //!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
@@ -374,7 +374,7 @@ pub fn apply(
             delivered.env = Some(env_name);
         } else {
             let name = text_of(&item["file"]);
-            let mut home_env = text_of(&item["home_env"]);
+            let home_env = text_of(&item["home_env"]);
             let overrides = crate::harness_tools::caps(&runtime).profile_home_overrides;
             let per_turn = turn_home(&runtime);
             let known = match per_turn {
@@ -392,7 +392,8 @@ pub fn apply(
                 continue;
             }
             if let Some(t) = per_turn {
-                home_env = t.var.to_string();
+                // Its home's variable, which a later runtime's start takes out of the environment again.
+                delivered.home_env = Some(t.var.into());
             } else if !home_env.is_empty() {
                 // The CLI ranks a token in its environment above the file.
                 for other in crate::harness_tools::api_key_env(&runtime) {
@@ -1477,6 +1478,16 @@ mod tests {
         std::os::unix::fs::symlink(&own.join("antigravity-cli"), home.join("antigravity-cli")).unwrap();
         assert!(start(&mut got, "antigravity", &mut env).is_err());
         assert!(!env.contains_key("GEMINI_HOME"));
+        // So for a ChatGPT plan's home: no silent fall back to the computer's own sign-in.
+        let codex = json!([{"id": "cxplan", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                            "value": "{\"tokens\":{\"refresh_token\":\"synthetic-refresh-0123456789\"}}",
+                            "revision": 1, "billing": "subscription"}]);
+        let mut got = apply(&state, &codex, &mut env, &mut vec![], &mut BTreeSet::new());
+        let home = got[0].home.clone().unwrap();
+        std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&own, &home).unwrap();
+        assert!(start(&mut got, "codex", &mut env).is_err());
+        assert!(!own.join("auth.json").exists());
         assert_eq!(std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(), "computer-token");
         std::fs::remove_dir_all(state).unwrap();
     }

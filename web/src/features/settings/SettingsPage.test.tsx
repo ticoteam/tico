@@ -298,6 +298,21 @@ describe('A model sign-in @s746', () => {
     finish(ok({ ...waiting, code_sent: true }));
     await waitFor(() => expect(screen.queryByLabelText('Code from the page')).toBeNull());
   });
+
+  it.each([
+    [ok({ id: '', kind: 'connect', runner_id: '', state: 'requested', waking: true, message: 'Installing Antigravity on Ana Mac.' }), 'Installing Antigravity on Ana Mac.'],
+    [{ status: 409, body: { error: { code: 'offline', detail: 'Connect needs a computer online, on the latest Tico, with Antigravity installed' } } }, 'Connect needs a computer online, on the latest Tico, with Antigravity installed'],
+  ] as const)('an Antigravity plan says why it waits and never offers Paste', async (reply, said) => {
+    serve((url, method) => (method === 'POST' && url.endsWith('/connect') ? reply : undefined));
+    const kind = { connect: true, paste: false, help: '', kind: 'antigravity_login' as const, label: 'Antigravity plan', owned: true, runtime: 'antigravity' as const, secret_label: 'Sign-in' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
+    show(<Providers />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Antigravity plan/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Antigravity plan' });
+    expect(await within(dialog).findByText(said)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Paste instead' })).toBeNull();
+  });
 });
 
 describe('Settings › Account › API tokens', () => {
