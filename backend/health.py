@@ -1160,12 +1160,6 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                     refused, first, person = diagnostic[:3]
             # Only fenced work is left: the interrupted run holds it, not the running turn, so that is the reason.
             refused, first, person = _fenced_queue_reason(row, refused, first, person)
-            # An old worktree wait needs a fix even while other jobs on this bot can start.
-            row["queue_reasons"] = queue_reasons(where[0], slug)
-            worktree_wait = next(
-                (g["reason"] for g in row["queue_reasons"] if g.get("worktree_homes") and g["oldest"] < cutoff), None
-            )
-            refused = worktree_wait or refused
             # A running turn only explains this queue when it holds the queued lane. Free task
             # lanes still get the claim's actual refusal, even while another lane runs.
             idle = where[0] not in full and not (refused == 'lane_held' and slug in busy)
@@ -1173,6 +1167,8 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                 if not (first and first < (person_cutoff if person else cutoff)):
                     continue  # the job the claim would take is young: the older ones wait behind it or are held
                 row["oldest_queued"], row["oldest"] = row["oldest"], first
+            # Counts belong to the individual job's task, not the representative oldest job.
+            row["queue_reasons"] = queue_reasons(where[0], slug)
             reason = (
                 "limit"
                 if refused == "limit"
@@ -1189,7 +1185,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
                 | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
             )
-            if (idle or worktree_wait) and not resting:
+            if idle and not resting:
                 stuck.append(
                     {**row, "reason": reason, "runner_id": where[0], "runtime": report.get("runtime") or ""}
                     | (
