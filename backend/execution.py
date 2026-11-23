@@ -3101,7 +3101,7 @@ def failed_starts(c, job_id):
     """Recent missed starts caused by the computer, excluding hub cuts and planned hand-backs.
 
     flag_cut records leased attempts too; cut_by_update requires a started run because it decides resumption.
-    A drain's pause event can arrive before its completion, so it excuses a lapsed lease on its own."""
+    A drain's pause event can arrive before its completion, so expiry can record it as a planned yield."""
     return c.execute(
         "SELECT count(*) FROM attempts a WHERE a.job_id=? AND a.started_at IS NULL "
         "AND a.state='expired' AND a.finished_at>=? AND " + NOT_EXCUSED_SQL,
@@ -3112,12 +3112,42 @@ def failed_starts(c, job_id):
 # A missed start of attempt `a` that its computer caused: not a hub cut (UPDATE_CUT, bound as the one parameter) and
 # not a planned yield. Shared by failed_starts and the expiry's silent-lapse label, so a Tico update is never logged
 # as the computer's fault.
-NOT_EXCUSED_SQL = (
-    "NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) "
-    "AND NOT coalesce(json_extract(a.result,'$.yielded'),0) "
-    "AND NOT EXISTS(SELECT 1 FROM attempt_events e WHERE e.attempt_id=a.id AND e.kind='status' "
-    "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!='')"
+YIELD_EVENT_SQL = (
+    "SELECT 1 FROM attempt_events e WHERE e.attempt_id={aid} AND e.kind='status' "
+    "AND json_type(e.payload,'$.yielded')='text' AND trim(json_extract(e.payload,'$.yielded'))!=''"
 )
+EXCUSED_YIELD_SQL = (
+    "coalesce(json_extract(a.result,'$.planned_hand_back'), "
+    f"(coalesce(json_extract(a.result,'$.yielded'),0) OR EXISTS({YIELD_EVENT_SQL.format(aid='a.id')})))"
+)
+NOT_EXCUSED_SQL = "NOT EXISTS(SELECT 1 FROM events e WHERE e.target=a.id AND e.action=?) AND NOT " + EXCUSED_YIELD_SQL
+
+
+def planned_yield_available(c, row):
+    """Only unstarted turns spend a job's three planned hand-backs, including ones settled on lease expiry."""
+    return (
+        len(
+            c.execute(
+                "SELECT 1 FROM attempts WHERE job_id=? AND id<>? AND started_at IS NULL "
+                "AND json_extract(result,'$.planned_hand_back')=1 LIMIT 3",
+                (row["job_id"], row["id"]),
+            ).fetchall()
+        )
+        < 3
+    )
+
+
+def retry_attempts(c, job_id):
+    return c.execute(
+        "SELECT count(*) FROM attempts WHERE job_id=? AND coalesce(json_extract(result,'$.planned_hand_back'),0)<>1",
+        (job_id,),
+    ).fetchone()[0]
+
+
+def reported_planned_drain(c, aid):
+    return c.execute(
+        YIELD_EVENT_SQL.format(aid="?") + " AND json_type(e.payload,'$.planned_drain')='true' LIMIT 1", (aid,)
+    ).fetchone()
 
 
 def computer_missed(c, aid):
@@ -4286,6 +4316,12 @@ class Execution:
                 )
                 if voice_restart:
                     state = retry_state = "queued"
+                if row["state"] == "leased" and reported_planned_drain(c, row["id"]):
+                    planned = planned_yield_available(c, row)
+                    c.execute(
+                        "UPDATE attempts SET result=json_set(coalesce(result,'{}'),'$.planned_hand_back',?) WHERE id=?",
+                        (int(planned), row["id"]),
+                    )
                 c.execute("UPDATE attempts SET state='expired',finished_at=? WHERE id=?", (H.now(), row["id"]))
                 task_reads.run_moved(c, row["id"])
                 from .performance import stamp_attempt
@@ -4556,7 +4592,7 @@ class Execution:
         H.event(c, H.TICO_ACTOR, event, row["id"], detail)
         return state
 
-    def hand_back(self, c, row, body):
+    def hand_back(self, c, row, body, *, planned=False):
         """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
         stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 Agent Ops's runner lost
         Tico for half a minute before a start, its report was refused as not started, and the lapse showed Agent Ops as
@@ -4564,8 +4600,10 @@ class Execution:
         self.release_undelivered(c, row["id"], body.undelivered)
         now = H.now()
         c.execute(
-            "UPDATE attempts SET state='expired',finished_at=?,lease_until=?,final_text=? WHERE id=?",
-            (now, now, HANDED_BACK + ".", row["id"]),
+            "UPDATE attempts SET state='expired',finished_at=?,lease_until=?,final_text=?,"
+            "result=CASE WHEN ? THEN json_set(coalesce(result,'{}'),'$.planned_hand_back',0) ELSE result END "
+            "WHERE id=?",
+            (now, now, HANDED_BACK + ".", planned, row["id"]),
         )
         task_reads.run_moved(c, row["id"])
         gateway_connection.forget(c, row["id"])
@@ -6131,6 +6169,7 @@ class Execution:
         prior = json.loads(row['result'] or '{}')
         # A late report cannot erase the saved-session decision that already requeued this job.
         for key in (
+            'planned_hand_back',
             'lease_continue',
             'quota_continue',
             'capacity_continue',
@@ -7102,6 +7141,9 @@ class Execution:
         # against the attempt when it is not. Refusing it was how a run that opened three pull
         # requests came back as a phantom interruption.
         late = row["state"] == "expired"
+        planned = not row["started_at"] and body.yielded and bool(reported_planned_drain(c, aid))
+        if planned and (row["stop_requested_at"] or not planned_yield_available(c, row)):
+            body = body.model_copy(update={"yielded": False})
         # The one turn that ends before it starts: a Tico model on a runner that can't run one (clients/gateway.py
         # NOT_ISOLATED). Settled now, so the bot says why once rather than its lease lapsing into a retry.
         # Likewise a turn sent away from a held login (`primary_held`) that found no fallback ready after all: nothing
@@ -7137,7 +7179,7 @@ class Execution:
         )
         # The runner reports a pre-start bailout as interrupted. A failed completion still requires
         # a start or one of the explicit exceptions above; it is not an unused lease being returned.
-        # A planned update yield settles below, without counting as a failed preparation attempt.
+        # A planned yield within the job's budget settles below without counting as a failed start.
         returned = (
             row["state"] == "leased"
             and not unstarted
@@ -7150,7 +7192,7 @@ class Execution:
         if row["last_seq"] != body.last_seq:
             raise Problem("event_gap", "Upload all events before completing the attempt", 409)
         if returned:
-            return self.hand_back(c, row, body)
+            return self.hand_back(c, row, body, planned=planned)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
             held_late = self.forget_late_reply(c, row, rule_check)
             if held_late:
@@ -7469,6 +7511,7 @@ class Execution:
                 encode(
                     {
                         **body.model_dump(exclude={"load_snapshot"}),
+                        **({"planned_hand_back": True} if planned and body.yielded and not skipped else {}),
                         **({'source_pause': 'quota'} if source_pause else {}),
                         **({"token_gap": True, "lease_continue": True} if token_gap and row["thread_id"] else {}),
                         **({"check": check["runtime"]} if check else {}),
@@ -7623,7 +7666,7 @@ class Execution:
         # A continuation already acted in its earlier turn: a quiet missing-session failure is held, never retried.
         if body.outcome == "failed" and not limited and not retryable and not stopped and not continuing:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
-            tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
+            tries = retry_attempts(c, row["job_id"])
             quick = (row["started_at"] or row["created_at"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
             silent = (
                 (kinds <= SILENT_KINDS or notice_only)
@@ -8301,7 +8344,7 @@ class Execution:
             )
         elif silent and tico_code == gateway.UNAVAILABLE:
             hit = H.now()
-            tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
+            tries = retry_attempts(c, row["job_id"])
             retry = H.shift(hit, seconds=GATEWAY_BACKOFF * 2 ** max(tries - 1, 0))
             # The Gateway is down for every Tico turn, not this bot's alone: its one login waits, then one probe.
             login_holds.record(

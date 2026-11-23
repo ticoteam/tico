@@ -13,7 +13,8 @@ use serde_json::{json, Value};
 /// A container stop's own deadline for running turns: Docker kills the container 15 minutes after SIGTERM, so turns
 /// still running are saved and queued to continue well before that.
 pub const STOP_LIMIT_S: u64 = 5 * 60;
-pub const WAITING: &str = "Handed back before starting because the computer is updating or restarting; queued to continue";
+pub const WAITING: &str =
+    "Handed back before starting because the computer is draining; queued to continue";
 pub const CAPPED: &str =
     "Paused at the computer's drain time limit; work and session saved, queued to continue";
 pub const HELD: &str = "Stopped at the computer's drain time limit; this turn cannot be resumed (its harness cannot resume an interrupted turn, or it ran on a fallback whose thread is not kept), so the run is held for review instead of queued to continue";
@@ -28,6 +29,7 @@ enum Turn {
 #[derive(Default)]
 struct Inner {
     since: Option<Instant>,
+    capped_update: bool,
     turns: HashMap<String, Turn>,
     handed_back: usize,
     /// When a container stop began (`stop`): a drain of its own with a fixed STOP_LIMIT_S, that no update's end clears.
@@ -59,7 +61,19 @@ impl Drain {
     }
 
     pub fn begin(&self, now: Instant) {
-        self.inner.lock().unwrap().since.get_or_insert(now);
+        self.begin_update(now, true);
+    }
+
+    pub fn begin_update(&self, now: Instant, capped: bool) {
+        let mut s = self.inner.lock().unwrap();
+        if s.since.is_none() || (capped && !s.capped_update) {
+            s.since = Some(now);
+        }
+        s.capped_update = capped;
+    }
+
+    pub fn claims_closed(&self) -> bool {
+        self.inner.lock().unwrap().active()
     }
 
     /// A container stop: no claim starts again, and running turns are stopped at STOP_LIMIT_S, inside Docker's grace.
@@ -76,13 +90,22 @@ impl Drain {
             Some(Turn::Returning(_)) => return false,
             _ => {}
         }
-        if s.since.is_some() || s.stopping.is_some() {
+        if s.active() {
             s.turns.insert(aid.into(), Turn::Returning(WAITING));
             s.handed_back += 1;
             return false;
         }
         s.turns.insert(aid.into(), Turn::Running);
         true
+    }
+
+    /// A start sent before the drain keeps its place once the hub accepts it.
+    pub fn acknowledged(&self, aid: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .turns
+            .insert(aid.into(), Turn::Running);
     }
 
     pub fn end(&self) {
@@ -117,7 +140,7 @@ impl Drain {
         if let Turn::Returning(line) = turn {
             return Some(line);
         }
-        if s.since.is_none() && s.stopping.is_none() {
+        if !s.active() {
             return None;
         }
         let past = |from: Option<Instant>, limit: Option<Duration>| {
@@ -127,7 +150,7 @@ impl Drain {
         let line = match turn {
             Turn::Waiting => WAITING,
             Turn::Running
-                if past(s.since, self.limit)
+                if (s.capped_update && past(s.since, self.limit))
                     || past(s.stopping, Some(Duration::from_secs(STOP_LIMIT_S))) =>
             {
                 CAPPED
@@ -152,7 +175,13 @@ impl Drain {
 
     pub fn progress(&self) -> Option<Value> {
         let s = self.inner.lock().unwrap();
-        s.since.or(s.stopping).map(|_| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
+        s.active().then(|| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
+    }
+}
+
+impl Inner {
+    fn active(&self) -> bool {
+        self.since.is_some() || self.stopping.is_some()
     }
 }
 
@@ -175,6 +204,24 @@ mod tests {
         assert!(drain.start("next"));
         drain.begin(now);
         assert_eq!(drain.due("next", hours), None);
+    }
+
+    #[test]
+    fn a_planned_update_lets_a_running_turn_finish_with_a_configured_limit() {
+        let drain = Drain::new(Some(Duration::from_secs(60)));
+        drain.register("running");
+        assert!(drain.start("running"));
+        let now = Instant::now();
+        drain.begin_update(now, false);
+        assert_eq!(drain.due("running", now + Duration::from_secs(600)), None);
+        assert!(!drain.start("waiting"));
+        let restart = now + Duration::from_secs(601);
+        drain.begin(restart);
+        assert_eq!(drain.due("running", restart), None);
+        assert_eq!(
+            drain.due("running", restart + Duration::from_secs(60)),
+            Some(CAPPED)
+        );
     }
 
     #[test]

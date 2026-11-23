@@ -1248,7 +1248,7 @@ impl Follower {
 
     /// True while an update is due or under way; starts it once every claim has settled.
     pub async fn blocks_claims(&self, active: bool) -> bool {
-        let (pending, since, drain) = {
+        let (pending, since, drain, planned) = {
             let mut s = self.inner.lock().unwrap();
             s.active = active;
             let drain = s.features["runner_drain"] == true;
@@ -1257,7 +1257,12 @@ impl Follower {
             }
             match &s.pending {
                 None => return false,
-                Some(p) => (p.clone(), s.pending_since, drain),
+                Some(p) => (
+                    p.clone(),
+                    s.pending_since,
+                    drain,
+                    s.features["planned_drain"] == true,
+                ),
             }
         };
         if !active {
@@ -1273,7 +1278,10 @@ impl Follower {
                 t.max(Duration::from_secs(DRAIN_S + DRAIN_WAIT_S))
             }
         });
-        if self.kind != "docker" && since.zip(limit).is_some_and(|(t, l)| t.elapsed() >= l) {
+        if !planned
+            && self.kind != "docker"
+            && since.zip(limit).is_some_and(|(t, l)| t.elapsed() >= l)
+        {
             // Preparation can outlast the turn cap. Give claims back instead of draining without an end.
             let (state, error) = defer_update(
                 &self.directory,
@@ -2399,6 +2407,9 @@ scope['main'](sys.argv[1:])
         assert!(f.draining());
         f.inner.lock().unwrap().pending_since =
             Instant::now().checked_sub(f.drain_timeout.unwrap());
+        f.inner.lock().unwrap().features["planned_drain"] = json!(true);
+        assert!(f.blocks_claims(true).await);
+        f.inner.lock().unwrap().features["planned_drain"] = json!(false);
         assert!(!f.blocks_claims(true).await);
         assert_eq!(read_status(&f.directory)["deferrals"], 1);
         std::fs::remove_dir_all(f.directory).unwrap();

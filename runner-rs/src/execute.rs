@@ -1388,6 +1388,41 @@ impl Runner {
         }
     }
 
+    /// Keep the keyed request alive through a drain so a committed start can finish its turn.
+    async fn acknowledge_start(
+        &self,
+        aid: &str,
+        flags: &Flags,
+        body: &Value,
+        tries: u32,
+    ) -> Result<bool, Fail> {
+        self.check_drain(aid)?;
+        let key = if tries == 0 {
+            format!("started:{aid}")
+        } else {
+            format!("started:{aid}:{tries}")
+        };
+        match self
+            .post_allocated(&format!("attempts/{aid}/started"), body, Some(&key))
+            .await
+        {
+            Ok(_) => {
+                self.drain.acknowledged(aid);
+                flags.start_acknowledged.store(true, Ordering::SeqCst);
+                mark("acknowledged", aid);
+                crate::company_skills::receipt_landed(aid).await;
+                Ok(true)
+            }
+            Err(e) if e.code == "start_wait" => {
+                self.check_drain(aid)?;
+                grant_gone(flags);
+                self.places.lock().unwrap().remove(aid);
+                Ok(false)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// After the `tries`-th `start_wait` in a row: a pause that doubles (1, 2, 4, 8 seconds) before the turn asks for
     /// its place and its start again, and at START_WAIT_TRIES the turn gives up as interrupted. A runner with no
     /// managed start place asked `started` again at once, for ever, while renew kept its lease alive.
@@ -1440,42 +1475,28 @@ impl Runner {
         flags: &Flags,
         thread: &str,
     ) -> Result<(), Fail> {
-        if flags.start_acknowledged.load(Ordering::SeqCst) {
-            return self.wait_start_place(attempt, flags).await;
-        }
         let aid = text_of(&attempt["id"]);
+        if flags.start_acknowledged.load(Ordering::SeqCst) {
+            return self
+                .during_drain(&aid, self.wait_start_place(attempt, flags))
+                .await;
+        }
         let mut tries = 0;
         loop {
-            self.wait_start_place(attempt, flags).await?;
+            self.during_drain(&aid, self.wait_start_place(attempt, flags))
+                .await?;
             let active = self.active.lock().unwrap().len();
             let mut started =
                 crate::perf::with_snapshot(json!({"thread_id": thread}), active).await;
             if flags.harness_allocated.load(Ordering::SeqCst) {
                 started["harness_allocated"] = json!(true);
             }
-            let key = if tries == 0 {
-                format!("started:{aid}")
-            } else {
-                format!("started:{aid}:{tries}")
-            };
-            match self
-                .post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key))
-                .await
-            {
-                Ok(_) => {
-                    flags.start_acknowledged.store(true, Ordering::SeqCst);
-                    mark("acknowledged", &aid);
-                    crate::company_skills::receipt_landed(&aid).await;
-                    return Ok(());
-                }
-                Err(e) if e.code == "start_wait" => {
-                    grant_gone(flags);
-                    self.places.lock().unwrap().remove(&aid);
-                    tries += 1;
-                    self.after_start_wait(tries).await?;
-                }
-                Err(e) => return Err(e.into()),
+            if self.acknowledge_start(&aid, flags, &started, tries).await? {
+                return Ok(());
             }
+            tries += 1;
+            self.during_drain(&aid, self.after_start_wait(tries))
+                .await?;
         }
     }
 
@@ -2977,35 +2998,16 @@ impl Runner {
             let told = fresh.as_ref().map_or(th.as_str(), |f| f.told.as_str());
             let mut started = crate::perf::with_snapshot(json!({"thread_id": told}), active).await;
             if flags.harness_allocated.load(Ordering::SeqCst) { started["harness_allocated"] = json!(true); }
-            self.during_drain(&aid, async {
-                let mut start_try = 0;
-                loop {
-                    let key = if start_try == 0 { format!("started:{aid}") } else { format!("started:{aid}:{start_try}") };
-                    match self.post_allocated(&format!("attempts/{aid}/started"), &started, Some(&key)).await {
-                        Ok(_) => {
-                            flags.start_acknowledged.store(true, Ordering::SeqCst);
-                            break;
-                        },
-                        Err(e) if e.code == "start_wait" => {
-                            drop(cold_guard.take());
-                            grant_gone(&flags);
-                            self.places.lock().unwrap().remove(&aid);
-                            self.after_start_wait(start_try + 1).await?;
-                            if cold { cold_guard = Some(self.wait_cold_start(&attempt, &flags).await?); }
-                            else { self.wait_start_place(&attempt, &flags).await?; }
-                            start_try += 1;
-                        },
-                        Err(e) => return Err(e.into()),
-                    }
+            let mut start_try = 0;
+            while !self.acknowledge_start(&aid, &flags, &started, start_try).await? {
+                drop(cold_guard.take());
+                start_try += 1;
+                self.during_drain(&aid, self.after_start_wait(start_try)).await?;
+                if cold {
+                    cold_guard = Some(self.during_drain(&aid, self.wait_cold_start(&attempt, &flags)).await?);
+                } else {
+                    self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                Ok(())
-            }).await?;
-            mark("acknowledged", &aid);
-            // The skills receipt went out beside `started`; it lands before the harness can use a skill.
-            crate::company_skills::receipt_landed(&aid).await;
-            // A rejected start can wait for another grant; it is still unstarted during that wait.
-            if !self.drain.start(&aid) {
-                return Err(Fail::runtime(crate::drain::WAITING));
             }
             self.state.phase(&aid, "running")?;
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
@@ -3539,8 +3541,7 @@ impl Runner {
                     // The primary never started (its login was held by the server), so this host
                     // acknowledges the turn instead, before it acts.
                     unstopped(&flags)?;
-                    self.during_drain(&aid, self.start_fallback(&attempt, &flags, &th)).await?;
-                    if !self.drain.start(&aid) { return Err(Fail::runtime(crate::drain::WAITING)); }
+                    self.start_fallback(&attempt, &flags, &th).await?;
                     self.state.phase(&aid, "running")?;
                     acked = true;
                 }
@@ -4277,19 +4278,27 @@ impl Runner {
     where
         F: std::future::Future<Output = Result<T, Fail>>,
     {
-        let result = tokio::select! {
+        tokio::select! {
             biased;
-            line = self.drain.wait(aid) => Err(Fail::runtime(line)),
+            line = self.drain.wait(aid) => Err(self.drain_failure(aid, line)),
             result = work => result,
-        };
-        if let Err(e) = &result {
-            if self.drain.returning(aid) {
-                let _ = self
-                    .state
-                    .append(aid, "status", &json!({"yielded": e.text}));
-            }
         }
-        result
+    }
+
+    fn check_drain(&self, aid: &str) -> Result<(), Fail> {
+        match self.drain.due(aid, Instant::now()) {
+            Some(line) => Err(self.drain_failure(aid, line)),
+            None => Ok(()),
+        }
+    }
+
+    fn drain_failure(&self, aid: &str, line: &'static str) -> Fail {
+        let mut payload = json!({"yielded": line});
+        if line == crate::drain::WAITING {
+            payload["planned_drain"] = json!(true);
+        }
+        let _ = self.state.append(aid, "status", &payload);
+        Fail::runtime(line)
     }
 
     /// Resumes the thread this computer saved. A host that refuses is asked once more after a short pause; one that
@@ -5272,6 +5281,45 @@ mod tests {
                 && !requests[3].contains("harness_allocated")
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn planned_drain_resolves_the_in_flight_start_before_deciding_to_hand_back() {
+        for (status, body) in [
+            (200, r#"{"started":true}"#),
+            (
+                409,
+                r#"{"error":{"code":"start_wait","detail":"No start place"}}"#,
+            ),
+        ] {
+            let (url, _) = crate::client::tests::serve(vec![(status, body)]).await;
+            let (runner, dir) = lease_runner(&url, "drain-start-ack");
+            let aid = "a1";
+            runner.state.record(&json!({"id": aid})).unwrap();
+            runner.drain.register(aid);
+            let flags = lease_flags();
+            let started = json!({"thread_id": "t1"});
+            let mut request = std::pin::pin!(runner.acknowledge_start(aid, &flags, &started, 0));
+            // The HTTP request has begun, and this single-threaded test has yet to let the server answer.
+            let first =
+                std::future::poll_fn(|cx| std::task::Poll::Ready(request.as_mut().poll(cx))).await;
+            assert!(first.is_pending());
+            let now = Instant::now();
+            runner.drain.begin_update(now, false);
+            let result = request.await;
+            let events = runner.state.pending(aid).unwrap();
+            if status == 200 {
+                assert!(result.unwrap());
+                assert!(flags.start_acknowledged.load(Ordering::SeqCst));
+                assert_eq!(runner.drain.due(aid, now), None);
+                assert!(events.is_empty());
+            } else {
+                assert_eq!(result.unwrap_err().text, crate::drain::WAITING);
+                assert!(!flags.start_acknowledged.load(Ordering::SeqCst));
+                assert_eq!(events[0]["payload"]["planned_drain"], true);
+            }
+            std::fs::remove_dir_all(dir).unwrap();
+        }
     }
 
     #[tokio::test]

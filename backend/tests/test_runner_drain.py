@@ -1,6 +1,7 @@
 """A runner update returns unstarted claims, then resumes capped turns without publishing partial answers."""
 
-from backend import runner_versions
+from backend import execution, runner_versions
+from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, ready, runner  # noqa: F401
 from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES
 
@@ -133,3 +134,93 @@ def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_
         assert c.execute("SELECT state FROM jobs WHERE id=?", (again["job_id"],)).fetchone()[0] == "canceled"
     turn = next(t for t in get(api, "bots/ops/turns") if t["id"] == again["id"])
     assert turn["end_reason"] == "Canceled by human:ana"
+
+
+def test_only_three_planned_returns_bypass_pre_start_backoff(api):
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    post(api, "tasks", {"owner": "ops", "title": "Check the report", "body": "Use fixture data."})
+    attempt = claim(api, machine, "ops")
+    job_id = attempt["job_id"]
+    aid = attempt["id"]
+    # A lost completion still uses one of the three hand-backs when the runner's yield event reached Tico.
+    post(
+        api,
+        f"attempts/{aid}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "status", "payload": {"yielded": "Draining before start", "planned_drain": True}},
+            ]
+        },
+        machine["token"],
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-120), aid))
+        api.app.state.execution.expire(c, attempt_ids=[aid])
+        assert execution.failed_starts(c, job_id) == 0
+    for failed in (0, 0, 1):
+        again = claim(api, machine, "ops")
+        assert again["job_id"] == job_id and again["id"] != aid
+        aid = again["id"]
+        post(
+            api,
+            f"attempts/{aid}/events",
+            {
+                "events": [
+                    {"seq": 1, "kind": "status", "payload": {"yielded": "Draining before start", "planned_drain": True}}
+                ]
+            },
+            machine["token"],
+        )
+        post(
+            api,
+            f"attempts/{aid}/complete",
+            {"outcome": "interrupted", "yielded": True, "last_seq": 1},
+            machine["token"],
+        )
+        with api.app.state.store.read() as c:
+            assert execution.failed_starts(c, job_id) == failed
+    assert claim(api, machine, "ops") is None
+
+
+def test_legacy_runner_can_keep_yielding_without_spending_the_planned_drain_budget(api):
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    post(api, "tasks", {"owner": "ops", "title": "Check the report", "body": "Use fixture data."})
+    job = None
+    for _ in range(5):
+        attempt = claim(api, machine, "ops")
+        job = job or attempt["job_id"]
+        assert attempt["job_id"] == job
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "interrupted", "yielded": True, "last_seq": 0},
+            machine["token"],
+        )
+    with api.app.state.store.read() as c:
+        assert execution.failed_starts(c, job) == 0
+
+
+def test_stopping_a_planned_hand_back_before_its_lease_expires_preserves_the_reason(api):
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)
+    post(api, "tasks", {"owner": "ops", "title": "Check the report", "body": "Use fixture data."})
+    attempt = claim(api, machine, "ops")
+    aid = attempt["id"]
+    post(
+        api,
+        f"attempts/{aid}/events",
+        {"events": [{"seq": 1, "kind": "status", "payload": {"yielded": "Draining", "planned_drain": True}}]},
+        machine["token"],
+    )
+    post(api, "bots/ops/stop", {"run_id": aid})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.shift(H.now(), seconds=-120), aid))
+        api.app.state.execution.expire(c, attempt_ids=[aid])
+        job_id = attempt["job_id"]
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (job_id,)).fetchone()[0] == "canceled"
+        assert execution.failed_starts(c, job_id) == 0

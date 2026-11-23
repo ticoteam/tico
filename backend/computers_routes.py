@@ -111,6 +111,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "load_snapshot": True,
                 "attempt_thread": True,
                 "runner_drain": True,
+                "planned_drain": True,
                 "capacity_continue": True,
                 "source_continue": True,
                 "run_timings": True,
