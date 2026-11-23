@@ -15,8 +15,9 @@ export interface Steps {
 }
 
 const HOME = '/tasks';
-// An open task: under its pipeline (not the pipeline editor), or by its number alone.
-const TASK = /^\/(tasks\/[^/]+\/(?!edit(\/|$))[^/]+|task\/[^/]+)(\/|$)/;
+// An open task: under its pipeline (not the pipeline editor), by its number alone, or an old Flow link to one (it only
+// passes on to the task, and a cold load notes it before it does).
+const TASK = /^\/(tasks\/[^/]+\/(?!edit(\/|$))[^/]+|task\/[^/]+|flow\/[^/]+)(\/|$)/;
 const BOARD = /^\/tasks\/([^/]+)\/?$/;
 
 let beforeTask: Place | null = null;
@@ -40,7 +41,8 @@ export function notePlace(path: string, searchStr: string, search: Record<string
 export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? {};
 
 /** Closing an open task: back to the board, list or page it was opened from, the history stepping back to it while it
-    is behind. Opened from a link or reloaded, nothing is behind: its pipeline's board, else Tasks. */
+    is behind. Opened from a link or reloaded, nothing is behind: its pipeline's board (`pipeline`, only while that board
+    is there), else Tasks. */
 export function leaveTask(r: Steps, pipeline?: string | null): void {
   const now = stepOf(r.history.location.state);
   const to = beforeTask;
