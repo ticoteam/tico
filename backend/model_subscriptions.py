@@ -1641,10 +1641,13 @@ def owner_of(c, value):
     return "human:" + pid
 
 
-def _default_owner(c, who, body):
-    owner = owner_of(c, who.actor)
-    if body.owner_id is not None and owner_of(c, body.owner_id) != owner:
-        raise Problem("owner", "Add providers to your own pool", 422)
+def _default_owner(c, auth, who, body):
+    mine = owner_of(c, who.actor)
+    owner = mine if body.owner_id is None else owner_of(c, body.owner_id)
+    if owner != mine:
+        auth.sync_access(c)
+        if not _may_manage(auth, who):
+            raise Problem("owner", "Add providers to your own pool", 422)
     return owner
 
 
@@ -1860,7 +1863,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
 
     sub = _manage_provider(c, auth, who, sid) if sid else None
     admin = _may_manage(auth, who)
-    owner = _default_owner(c, who, body) if sub is None else sub["owner_id"]
+    owner = _default_owner(c, auth, who, body) if sub is None else sub["owner_id"]
     if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
         raise Problem("owner", "A provider keeps its owner", 422)
     now = H.now()
@@ -2813,7 +2816,7 @@ def connect(c, settings, auth, who, body):
     elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     # A reconnect keeps its owner; a new one is checked now, before anyone signs in.
-    owner = sub["owner_id"] if sub else _default_owner(c, who, body)
+    owner = sub["owner_id"] if sub else _default_owner(c, auth, who, body)
     if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
         raise Problem("owner", "A provider keeps its owner", 422)
 
@@ -2833,10 +2836,10 @@ def connect(c, settings, auth, who, body):
     target = c.execute(
         f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
-        f"AND s.subscription_id=? AND {model_login.ACTIVE_SQL}"
+        f"AND s.subscription_id=? AND s.owner_id=? AND {model_login.ACTIVE_SQL}"
         + (" AND s.name=?" if name else "")
         + " ORDER BY l.created_at",
-        (who.actor, *same, sid, *([name] if name else [])),
+        (who.actor, *same, sid, owner, *([name] if name else [])),
     ).fetchone()
     if target:
         if body.confirm:
@@ -2984,6 +2987,8 @@ def install(app, store, auth, mutate, settings):
         ),
     )
     def list_subscriptions(request: Request):
+        from .agent_subscriptions import can_assign
+
         who = request.state.identity
         auth.domain(who)
         _reader(who)
@@ -2992,8 +2997,18 @@ def install(app, store, auth, mutate, settings):
             subscriptions = listed(c, settings)
             bots = {agent["id"] for sub in subscriptions for agent in sub["agents"]}
             access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
+            assignable = {}
             for sub in subscriptions:
+                owner = sub["owner_id"]
+                if owner not in assignable:
+                    assignable[owner] = can_assign(auth, who, owner)
+                    if owner and assignable[owner]:
+                        try:
+                            owner_of(c, owner)
+                        except Problem:
+                            assignable[owner] = False
                 sub["can_remove"] = _may_manage_provider(auth, who, sub)
+                sub["can_assign"] = assignable[owner]
                 if not manages and (not owned(sub["kind"]) or sub["owner_id"] != who.actor):
                     sub["preview"] = ""
                     if sub["status_detail"]:
@@ -3006,7 +3021,7 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "addModelSubscription",
-            "Save a plan or API key in your pool. The value is required and never returned.",
+            "Save a plan or API key in your pool. Owners and admins can specify another person. The value is required and never returned.",
             "ModelSubscription",
         ),
     )
@@ -3016,7 +3031,7 @@ def install(app, store, auth, mutate, settings):
 
         def authorize(c, actor):
             auth.sync_access(c)
-            _default_owner(c, actor, body)
+            _default_owner(c, auth, actor, body)
 
         return vault.change(
             who,

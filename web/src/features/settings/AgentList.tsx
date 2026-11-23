@@ -3,7 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router';
 import { useState, type Ref } from 'react';
 import { refusal, run } from '@/actions';
 import { meQuery, useDirectory, type Directory } from '@/data';
-import { ModelPicker } from '@/features/team/exports';
+import { ModelPicker, PaidBy } from '@/features/team/exports';
 import { agentsQuery, computersQuery, effortLabel, modelName, type AgentRow } from '@/features/team/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
@@ -613,6 +613,7 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, limit, onPic
       <ValueButton label={`${a.name}'s model`} disabled={!manage} onClick={edit('model')}>
         {modelWords(r) || 'None'}
       </ValueButton>
+      <PaidBy bot={r?.id ?? slug} runtime={r?.resolved_runtime} fleet />
       {tm?.model || tm?.reasoning_effort ? (
         <ValueButton label={`${a.name}'s tasks`} more={tm.reasoning_effort ? effortLabel(tm.reasoning_effort) : undefined} className="c-tasks" disabled={!manage} onClick={edit('tasks')}>
           {tasks || 'Same'}
@@ -810,6 +811,7 @@ export function AgentList({ open }: { open?: string }) {
             <span />
             <span>Agent</span>
             <span>Model</span>
+            <span className="c-paid-by">Paid by</span>
             <span className="c-tasks">Tasks</span>
             <span className="c-own is-mid">Owner</span>
             <span>Computer</span>

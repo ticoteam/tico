@@ -14,6 +14,7 @@ export type MenuProps = {
   children: ReactNode;
   side?: 'top' | 'bottom' | 'left' | 'right';
   align?: 'start' | 'center' | 'end';
+  className?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 };
@@ -25,7 +26,7 @@ function hasItems(children: ReactNode): boolean {
 
 /** The "⋯" menu: a short list that opens from a button. On a phone it is a sheet from the bottom edge, over a scrim.
     With no items it draws nothing, not even its button. */
-export function Menu({ trigger, children, side = 'bottom', align = 'end', open, onOpenChange }: MenuProps) {
+export function Menu({ trigger, children, side = 'bottom', align = 'end', className = '', open, onOpenChange }: MenuProps) {
   const at = usePlacement();
   if (!hasItems(children)) return null;
   return (
@@ -34,7 +35,7 @@ export function Menu({ trigger, children, side = 'bottom', align = 'end', open, 
       <BaseMenu.Portal>
         {at.sheet && <BaseMenu.Backdrop className={sheetScrim} />}
         <BaseMenu.Positioner className={at.layer} style={at.style} side={side} align={align} sideOffset={6}>
-          <BaseMenu.Popup className={`menu ${at.look}`}>{children}</BaseMenu.Popup>
+          <BaseMenu.Popup className={`menu ${at.look} ${className}`}>{children}</BaseMenu.Popup>
         </BaseMenu.Positioner>
       </BaseMenu.Portal>
     </BaseMenu.Root>
@@ -130,6 +131,15 @@ export function MenuItem({ label, icon, lead, meta, on = false, onSelect, disabl
 /** The rule above the last, destructive item. */
 export function MenuRule() {
   return <BaseMenu.Separator render={<hr />} />;
+}
+
+export function MenuGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <BaseMenu.Group>
+      <BaseMenu.GroupLabel className="menu-group-label">{label}</BaseMenu.GroupLabel>
+      {children}
+    </BaseMenu.Group>
+  );
 }
 
 export type MenuSubProps = {

@@ -98,8 +98,8 @@ TAGS = {
     "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.",
     # Settings > Providers: saved plans, keys and agent payment choices (backend/model_subscriptions.py).
     'Model subscriptions': "Saved plans and keys in people's pools, and each agent's Paid by per runtime. People can "
-    "add their own plans and API keys. The provider's owner or an admin can manage it. A value is sent only to "
-    "add or reconnect a subscription. No answer carries it.",
+    "add their own plans and API keys. Owners and admins can add for a teammate. The provider's owner or an admin "
+    "can manage it. A value is sent only to add or reconnect a subscription. No answer carries it.",
     'Slack links': "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
     "gateway, then active, suspended or refused. Admins only.",
     # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages

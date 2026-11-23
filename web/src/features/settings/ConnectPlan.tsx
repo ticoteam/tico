@@ -20,14 +20,14 @@ function cancelLiveSignIn(login: SignIn | null) {
   }
 }
 
-type ConnectProps = { kind: SignInKind; subscription?: string; onClose: () => void; inline?: boolean };
+type ConnectProps = { kind: SignInKind; subscription?: string; owner?: { id: string; name: string }; onClose: () => void; inline?: boolean };
 
 export function ConnectPlan(props: ConnectProps) {
   const [attempt, setAttempt] = useState(0);
   return <Connection key={attempt} {...props} onRetry={() => setAttempt((n) => n + 1)} />;
 }
 
-function Connection({ kind, subscription, onClose, onRetry, inline }: ConnectProps & { onRetry: () => void }) {
+function Connection({ kind, subscription, owner, onClose, onRetry, inline }: ConnectProps & { onRetry: () => void }) {
   const qc = useQueryClient();
   const [login, setLogin] = useState<SignIn | null>(null);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
@@ -64,7 +64,7 @@ function Connection({ kind, subscription, onClose, onRetry, inline }: ConnectPro
     if (late || !visible || starting || login || error || restart || pasting) return;
     const timer = setTimeout(
       () => {
-        const input = subscription ? { subscription, ...(confirmed && { confirm: true }) } : { kind };
+        const input = subscription ? { subscription, ...(confirmed && { confirm: true }) } : { kind, ...(owner && { owner_id: owner.id }) };
         // A request in flight may queue a sign-in after the wake deadline.
         setStarting(true);
         void run('settings.connect', input, { via: 'click' }).then((r) => {
@@ -89,7 +89,7 @@ function Connection({ kind, subscription, onClose, onRetry, inline }: ConnectPro
       tries === 0 ? 0 : RETRY_MS,
     );
     return () => clearTimeout(timer);
-  }, [kind, subscription, confirmed, restart, pasting, tries, late, visible, starting, login, error]);
+  }, [kind, subscription, owner, confirmed, restart, pasting, tries, late, visible, starting, login, error]);
   // The follow: every 2 s while it runs, paused while the tab is hidden. Its answers (the provider's one-time code and
   // page) stay in this state, never the query cache.
   const [follow, setFollow] = useState<Partial<SignIn> | null>(null);
@@ -177,7 +177,7 @@ function Connection({ kind, subscription, onClose, onRetry, inline }: ConnectPro
   const label = codex ? 'ChatGPT plan' : 'Claude plan';
   const paste = async (confirm = confirmed) => {
     const value = secret.trim();
-    const input = subscription ? { subscription, secret: value, ...(confirm && { confirm: true }) } : { kind: codex ? 'codex_login' : 'claude_token', secret: value };
+    const input = subscription ? { subscription, secret: value, ...(confirm && { confirm: true }) } : { kind: codex ? 'codex_login' : 'claude_token', secret: value, ...(owner && { owner: owner.id }) };
     const r = await run('settings.pastePlan', input, { via: 'click' });
     if (r.ok) {
       const saved = r.out as { name?: string } | undefined;
@@ -195,7 +195,7 @@ function Connection({ kind, subscription, onClose, onRetry, inline }: ConnectPro
     setRestart(null);
     setConfirmed(true);
   };
-  const title = restart ? 'Restart runs?' : `${subscription ? 'Reconnect' : 'Connect'} ${label}`;
+  const title = restart ? 'Restart runs?' : `${subscription ? 'Reconnect' : 'Connect'} ${label}${owner ? ` for ${owner.name}` : ''}`;
   const description = restart ?? (pasting ? error?.message : cancelError ?? ended ?? hostWarning ?? signingIn);
   const actions = (
     <>

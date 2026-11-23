@@ -2992,7 +2992,7 @@ def queued_payer(c, settings, runner, job, followed, message, conversation, task
     return config, agent_subscriptions.for_runner(c, runner, bot, config, loads=loads, job=job["id"])
 
 
-def waiting_payers(c, settings, runner, bot, followed, loads=None):
+def waiting_payers(c, settings, runner, bot, followed, loads=None, *, readable=None):
     """The waiting payer of each tool used by this agent's queued work."""
     tools = agent_subscriptions.loaded_picks(c, bot, loads).keys()
     if not tools:
@@ -3005,6 +3005,8 @@ def waiting_payers(c, settings, runner, bot, followed, loads=None):
         (bot, PRIME_QUEUED),
     ):
         if not (message := H.message(c, job["message_id"])) or not job_message_readable(c, bot, message):
+            continue
+        if readable is not None and not readable(message):
             continue
         room = H.conversation(c, message["conversation_id"])
         task = work_task_id(message, room)

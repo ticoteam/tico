@@ -2922,7 +2922,7 @@ def _prime_claims(c, settings=None):
 
 
 def _payer_waits(c, who, auth, loads, settings):
-    from . import agent_subscriptions, model_subscriptions
+    from . import agent_subscriptions
     from .execution import waiting_payers
     from .shared_bots import follow
 
@@ -2941,12 +2941,7 @@ def _payer_waits(c, who, auth, loads, settings):
         config = follow(c, r["id"], H._json(r["config"], {}) or {})
         picks = agent_subscriptions.loaded_picks(c, r["id"], loads)
         for runtime, payment in waiting_payers(c, settings, runner, r["id"], config, loads):
-            owner = (
-                ("human:" + runner["owner_id"] if runner["owner_id"] else "")
-                if payment.update
-                else picks[runtime]["person"]
-            )
-            fixer = (model_subscriptions._name_of(c, owner) + " or an admin") if owner else "An admin"
+            fixer = agent_subscriptions.wait_fixer(c, runner, picks[runtime], payment)
             fix = (
                 _fix("Open Computers", "#/settings", "devices")
                 if payment.update

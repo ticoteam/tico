@@ -452,6 +452,8 @@ def test_old_runner_admits_only_turns_that_match_its_current_payer(api, mismatch
 
 
 def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(api):
+    from backend.tests.helpers.check_models import finish
+
     setup(api)
     company(api)
     first = add(api)["id"]
@@ -467,9 +469,36 @@ def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(
     health = get(api, "health")
     wait = next(check for check in health["checks"] if check["id"] == "paid_by_wait")
     assert any("next reset" in item["text"] and "admin" in item["text"] for item in wait["items"])
+    detail = get(api, "bots/ops/subscriptions?last_turn=true")
+    assert detail["can_edit"]
+    [blocked] = detail["last_turn"]["waits"]
+    assert "next reset" in blocked["reason"] and "admin" in blocked["fixer"]
+    assert datetime.fromisoformat(blocked["until"]) == soon
+    assert get(api, "bots/ops/subscriptions?last_turn=true", "ben-test")["last_turn"] is None
     with api.app.state.store.transaction() as c:
         reading(c, first, 99.49, soon)
-    assert claim(api, box, "ops")["attempt_credential"]["id"] == first
+    turn = claim(api, box, "ops")
+    assert turn["attempt_credential"]["id"] == first
+    finish(api, box, turn, {"runtime": "claude", "model": "claude-sonnet-5-5", "billing": "subscription"})
+    put(api, "bots/ops/subscriptions", {"subscriptions": {"claude": None}})
+    detail = get(api, "bots/ops/subscriptions?last_turn=true")
+    label = next(s["name"] for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == first)
+    assert detail["last_turn"]["payers"] == [label]
+    assert not detail["last_turn"]["waits"]
+    assert detail["last_turn"]["at"] and not detail["subscriptions"]
+    assert get(api, "bots/ops/subscriptions?last_turn=true", "ben-test")["last_turn"] is None
+
+
+def test_paid_by_catalog_and_agent_report_the_same_assignment_rights_as_writes(api):
+    setup(api)
+    own = add(api, token="cara-test")["id"]
+    other = add(api)["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
+    assert get(api, "bots/ops/subscriptions", "cara-test")["can_edit"]
+    catalog = get(api, "model-subscriptions", "cara-test")
+    assert {s["id"]: s["can_assign"] for s in catalog["subscriptions"]} == {own: True, other: False}
+    assert all(s["can_assign"] for s in get(api, "model-subscriptions", "ben-test")["subscriptions"])
 
 
 def test_legacy_pool_keeps_its_usable_binding_and_rotates_with_scoped_reads(api):

@@ -422,3 +422,22 @@ def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the
     saved = [s for s in get(api, "model-subscriptions")["subscriptions"] if s["kind"] == "claude_token"]
     assert sorted(s["name"] for s in saved) == ["Ana's Claude plan", "Ana's Claude plan 2", "Team Max"]
     assert {s["owner_id"] for s in saved} == {"human:ana"}
+
+
+def test_admin_connect_for_teammate_keeps_the_target_and_rechecks_rights(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    path = "model-subscriptions/connect"
+    start = {"kind": "claude_token", "owner_id": "cara"}
+    login = post(api, path, start, "ben-test")
+    assert post(api, path, start, "ben-test")["id"] == login["id"]
+    post(api, path, {"kind": "claude_token"}, "ben-test", expected=409)
+    assert send(api, m, login)["state"] == "done"
+    [saved] = get(api, "model-subscriptions")["subscriptions"]
+    assert saved["owner_id"] == "human:cara" and saved["added_by"] == "human:ben"
+
+    login = post(api, path, start, "ben-test")
+    post(api, "access/humans/ben", {"role": "member"})
+    assert send(api, m, login, OTHER)["state"] == "failed"
+    assert len(get(api, "model-subscriptions")["subscriptions"]) == 1

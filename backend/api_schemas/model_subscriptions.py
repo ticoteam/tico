@@ -60,6 +60,10 @@ SCHEMAS['ModelSubscription'] = obj(
         'added_by': 's',
         'added_by_name': 's',
         'can_remove': 'b',
+        'can_assign': {
+            'type': 'boolean',
+            'description': 'Whether the viewer may assign this provider to an agent they manage',
+        },
         'owner_id': 's',
         'owner_name': 's',
         'created_at': 's',
@@ -147,6 +151,22 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
 
 SCHEMAS['AgentSubscriptionList'] = obj(
     {
+        'can_edit': 'b',
+        'last_turn': {
+            'anyOf': [
+                obj(
+                    {
+                        'payers': items({'type': 'string'}),
+                        'at': 'n',
+                        'waits': items(
+                            obj({'reason': 's', 'until': 'n', 'fixer': 's'}, required=['reason', 'until', 'fixer'])
+                        ),
+                    },
+                    required=['payers', 'at', 'waits'],
+                ),
+                {'type': 'null'},
+            ]
+        },
         'subscriptions': {
             'type': 'object',
             'additionalProperties': obj(

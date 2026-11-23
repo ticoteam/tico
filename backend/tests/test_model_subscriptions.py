@@ -1252,6 +1252,13 @@ def test_members_save_and_manage_their_own_api_keys(api):
         expected=422,
     )
     assert refused["error"]["code"] == "owner"
+    shared = post(
+        api,
+        "model-subscriptions",
+        {"kind": "openai_key", "secret": "sk-" + "d" * 24, "owner_id": "cara"},
+        "ben-test",
+    )
+    assert shared["owner_id"] == "human:cara" and shared["added_by"] == "human:ben"
     key = f"model-subscriptions/{keys[0]['id']}"
     post(api, key, {"owner_id": "human:ana"}, expected=422)
     post(api, key, {"name": "Rotated", "secret": "sk-ant-replacement-0000000000"}, "cara-test")

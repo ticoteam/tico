@@ -15,7 +15,8 @@ reports an app-salted hash of the OS device identity; the raw identity stays on 
 [Gateway](ai-gateway.md) key and a link to its limits. **Settings → Agents → Defaults** holds the model for new agents
 and the meetings model. Open **Usage → Limits** for the [company turn levels](#change-the-company-turn-levels).
 
-Everyone can see the pools, usage badges and the count of agents they can read. Providers opens **Your pool**
+Everyone can see the pools and usage badges. **Picked by** counts the agents the viewer can read that select
+the provider or its pool. Providers opens **Your pool**
 first and folds other people's pools by default. Older plans appear under **No owner** and shared keys under
 **Company keys**. Plan owners and admins see the plan's account preview and detailed refusal messages. Only admins
 see API key previews in the list. A provider capacity hold shows **Busy** until it ends. **Next** marks an eligible
@@ -23,10 +24,13 @@ spare for an agent currently using another plan from the pool. Old links to Mode
 
 ## Subscriptions
 
-Open **Settings → Providers → Add** to connect a plan or paste a key. The API lets each person save plans and API keys
-in their own pool. The provider's owner or an admin can reconnect, rename, replace or remove it.
+Open **Settings → Providers → Add** to connect a plan or paste a key. Each person can save plans and API keys
+in their own pool. Owners and admins can add for a teammate. The provider's owner or an admin can reconnect,
+rename, replace or remove it.
 
-**Paid by** on an agent's settings picks a person's pool, one plan or one key for each AI tool. New agents
+**Paid by** on an agent's settings picks a person's pool, one plan or one key for each AI tool. The **Paid by**
+column in **Settings → Agents** shows the choice for the agent's current tool. **Last turn** shows the recorded payer
+or the current payer wait with its reason, known reset time and who can fix it. New agents
 start on their human owner's pool for each tool where the owner has a connected plan. The pool's owner or an admin
 can assign it or one of its providers to an agent they manage. Run `tico subscription show <agent>` to read the choice
 and `tico subscription set <agent> <tool> <pool|plan|key|unset> [person or provider id]` to change it.

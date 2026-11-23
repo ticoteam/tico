@@ -189,11 +189,11 @@ div.row{cursor:default}
    rather than push the row past the edge. */
 /* every column at 1440 with the menu open, as t-settings-fleet: the name, the model, the model for tasks, the owner's
    face, the third column, the limit */
-.g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) minmax(120px,168px) minmax(56px,84px) 44px minmax(88px,124px) 44px}
+.g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) minmax(96px,144px) minmax(76px,136px) minmax(50px,78px) 44px minmax(72px,108px) 44px}
 /* the model for tasks is the model alone; its effort is in the picker */
 .g-fleet .c-tasks .dd-more{display:none}
-@container fleet (max-width:600px){
-  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(96px,1fr) minmax(112px,176px) minmax(72px,140px) 34px}
+@container fleet (max-width:640px){
+  .g-bots.g-fleet{--g:16px var(--av-sm) minmax(80px,1fr) minmax(76px,136px) minmax(72px,124px) minmax(56px,112px) 34px}
   .g-fleet .c-tasks,.g-fleet .c-own{display:none}
 }
 /* a row's ⋯: only on a phone, where the model, tasks and limit cells give way */
@@ -257,7 +257,9 @@ html[data-layout="cards"] .g-tok>:nth-child(n+3)>:nth-child(n+3),html[data-layou
 html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
 html[data-layout="cards"] .g-use>:nth-child(n+3):not(.is-strong){display:none}
 html[data-layout="cards"] .g-bots{--g:16px var(--av-sm) minmax(0,1fr) auto}
-html[data-layout="cards"] .g-bots>:nth-child(n+4):not(:last-child){display:none}
+html[data-layout="cards"] .g-bots>:nth-child(n+4):not(:last-child,.c-paid-by){display:none}
+html[data-layout="cards"] .row.g-fleet>.c-paid-by:empty{display:none}
+html[data-layout="cards"] .row.g-fleet>.c-paid-by{grid-column:3;grid-row:2}
 html[data-layout="cards"] .g-mod{--g:minmax(0,1fr) auto}
 html[data-layout="cards"] .g-mod>:nth-child(n+2):not(.is-strong){display:none}
 html[data-layout="cards"] .g-lim{--g:var(--av-sm) minmax(0,1fr) auto auto;grid-template-areas:"av name used of" "bar bar bar per"}
@@ -308,8 +310,7 @@ html[data-layout="cards"] .g-lim.is-pool .row-title{grid-area:av / av / name / n
 .provider-pool-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s-1) var(--s-3);padding:var(--s-2h);font-size:var(--t-sm);color:var(--muted)}
 .provider-pool-head .sec-name{color:var(--ink)}
 .provider-pool-count{margin-inline-start:auto}
-.provider-pool-note{padding:0 var(--s-2h) var(--s-2h);font-size:var(--t-sm);color:var(--muted)}
-.pk-settings .row.g-provider{--g:16px minmax(0,1.25fr) minmax(75px,.7fr) minmax(85px,1fr) minmax(86px,.9fr) 75px 28px;height:auto;min-height:var(--row);padding:var(--s-2h);border-top:1px solid var(--line);border-radius:0}
+.pk-settings .row.g-provider{--g:16px minmax(0,1.25fr) minmax(75px,.7fr) minmax(85px,1fr) minmax(86px,.9fr) 90px 28px;height:auto;min-height:var(--row);padding:var(--s-2h);border-top:1px solid var(--line);border-radius:0}
 .provider-order,.provider-kind,.provider-usage,.provider-agents{font-size:var(--t-sm);color:var(--ink-2)}
 .provider-name,.provider-usage{display:grid;gap:var(--s-0);min-width:0}
 .provider-name small,.provider-usage small{font-size:var(--t-xs);color:var(--muted)}

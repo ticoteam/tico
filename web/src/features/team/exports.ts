@@ -9,6 +9,7 @@ export { BrowserDialog, type BrowserDialogProps } from './BrowserView';
 export { agentsQuery, groupsQuery, computersQuery, type AgentRow } from './queries';
 // The model picker for one agent, and Add agent for Settings' fleet.
 export { ModelPicker } from './ModelPicker';
+export { PaidBy } from './PaidBy';
 export { AddAgentButton, AddTeammate } from './AddTeammate';
 // A team's Access, from the menu's ⋯ on the team (the root holds it open).
 export { TeamAccess } from './dialogs';

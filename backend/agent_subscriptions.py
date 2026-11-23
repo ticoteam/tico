@@ -46,6 +46,14 @@ class ChangePicks(Contract):
     subscriptions: dict[str, Pick | None] = Field(max_length=4)
 
 
+def can_edit(c: Connection, auth: Any, who: Identity, bot: str) -> bool:
+    return not who.support and auth.bot_manager(c, who, bot)
+
+
+def can_assign(auth: Any, who: Identity, person: str) -> bool:
+    return not who.support and (person == who.actor or MS._may_manage(auth, who))
+
+
 PICKS = (
     "SELECT bot,runtime,kind,person,subscription_id,set_by,updated_at "
     "FROM agent_subscriptions WHERE bot=? ORDER BY runtime"
@@ -54,6 +62,11 @@ PICKS = (
 
 def picks(c: Connection, bot: str) -> dict[str, Row]:
     return {r["runtime"]: dict(r) for r in RC.rows(c, PICKS, (bot,))}
+
+
+def wait_fixer(c: Connection, runner: Any, pick: Row, payment: "Payment") -> str:
+    owner = runner["owner_id"] if payment.update else pick["person"]
+    return f"{MS._name_of(c, owner)} or an admin" if owner else "An admin"
 
 
 def loaded_picks(c: Connection, bot: str, loads: Any = None) -> dict[str, Row]:
@@ -127,7 +140,7 @@ def clear_for_move(
 def save(c: Connection, auth: Any, who: Identity, bot: str, changes: dict[str, Pick | None]) -> dict[str, Row]:
     """Patch only the supplied tools, with permission checked on each changed payer."""
     MS._reader(who)
-    if who.support or not auth.bot_manager(c, who, bot):
+    if not can_edit(c, auth, who, bot):
         raise Problem("forbidden", "You may change Paid by only for agents you manage", 403)
     current = picks(c, bot)
     for runtime, pick in changes.items():
@@ -163,7 +176,7 @@ def save(c: Connection, auth: Any, who: Identity, bot: str, changes: dict[str, P
             person = sub["owner_id"]
             if person:
                 person = MS.owner_of(c, person)
-        if person != who.actor and not MS._may_manage(auth, who):
+        if not can_assign(auth, who, person):
             raise Problem("forbidden", "Only the pool's owner or an admin can assign it or one of its providers", 403)
         c.execute(
             "INSERT INTO agent_subscriptions(bot,runtime,kind,person,subscription_id,set_by,updated_at) VALUES(?,?,?,?,?,?,?) "
