@@ -792,7 +792,11 @@ impl AntigravityHost {
                 // agy began another while the prompt is still held: with the whole prompt to give a new one, the turn
                 // starts over there rather than send this turn's part alone into an empty conversation. Once the prompt
                 // went, it never starts over (that would run it twice).
-                if held && stream.staged.is_some() && !stream.confirmed && inner.full_prompt.is_some() {
+                if held
+                    && stream.staged.is_some()
+                    && !stream.confirmed
+                    && inner.full_prompt.is_some()
+                {
                     return Ok(Some(End::Replaced));
                 }
             } else if must_continue {
@@ -1352,14 +1356,20 @@ read -r _
         host.full_prompt(&thread, Some("everything".into()));
         host.start_turn(&thread, "short", None).unwrap();
         let events = turn_events(&mut rx).await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_failed"), "{events:?}");
+        assert!(
+            events.iter().any(|e| e["kind"] == "turn_failed"),
+            "{events:?}"
+        );
         assert_eq!(rig.runs().len(), 2);
         assert!(!host.restored(&thread));
         assert!(host.needs_history(&thread));
         host.stop().await;
         let after = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert_eq!(after, before);
-        assert!(after.contains(SAVED) && after.contains("needs_history"), "{after}");
+        assert!(
+            after.contains(SAVED) && after.contains("needs_history"),
+            "{after}"
+        );
     }
 
     #[tokio::test]
