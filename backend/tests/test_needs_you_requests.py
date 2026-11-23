@@ -31,6 +31,8 @@ def world(api, monkeypatch):
     key(api, crm, OLD)
     ads = tool(api, "Acme Ads", base_url="https://ads.acme.example")["id"]
     key(api, ads, ADS)
+    with api.app.state.store.transaction() as c:  # cpo's own owner cannot grant: Ana and Ben are both asked
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='cpo'")
     asked = post(api, "access-requests", {"resource": ads, "level": "read_write", "for_bot": "cpo", "why": "pause ads"})
     assert asked["state"] == "open"
     assert post(api, f"api-tools/{crm}/check", {})["detail"] == "Key rejected"

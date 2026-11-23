@@ -425,9 +425,12 @@ Tools Owner and people name the bot with `--for`). It never files a task for it.
   a repository the team ticked that is no bot's own, is granted at once. The person who added the tool or the
   repository gets a card saying so, with Take back.
 - Anything else (a write, a tool switched off, an Only listed tool, a database or a key on computers, a bot's
-  repository) is one card for each person who can grant it, the one who added it first, in their chat with the Tools
-  page's owner. The first Grant or Decline decides; the other copies show it and ask nothing.
-- Asking again adds nothing and notifies nobody. One open request per bot, resource and level.
+  repository) is one card for each of the bot's own owners who can see it through (grant it and read the task that
+  asked); when none of them can, for each person who can grant it, the one who added it first, in their chat with
+  the Tools page's owner. The first Grant or Decline decides; the other copies show it and ask nothing.
+- Asking again adds nothing and notifies nobody, except from a task nobody asked can read: then each person who can
+  grant it and read that task (and the task that first asked, if any) gets a card too, and the task waits on theirs.
+  One open request per bot, resource and level.
 - A request closes itself the moment the access exists, whoever gives it and however: the card, Tools, the Tools
   Owner, the API, Everyone can read turning on, Settings > General › Repositories. The task it was asked on waits on it
   (Paused) and is woken once, with "granted" or "declined". An hourly pass closes what no write announced, and old

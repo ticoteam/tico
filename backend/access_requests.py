@@ -6,7 +6,8 @@ A bot asks for itself (`tico access request <resource> --level read|read_write -
 owner and any person or their agent ask for a bot (`--for <bot>`). The answer, in order:
 - The bot already has that level (a grant, Everyone can read, a repository it reaches): answered at once, nothing kept.
 - An open request for the same bot, resource and level: the repeat counts on it and notifies nobody again. A task that
-  asks again waits on the same request.
+  asks again waits on the same request; when nobody asked can read that task, those who can grant it and read it (and
+  the task that first asked) get a card too (`_reach_reader`).
 - Read on a resource whose Read is enforceable is granted at once (`auto_approved`), with an audit event and a notice
   card to the resource's connector, who can take it back in one tap: a Tools tool that every bot could read by default
   (`default_read.enforceable`, Everyone can read on, not Only listed), and a repository the team ticked that is not a
@@ -14,8 +15,9 @@ owner and any person or their agent ask for a bot (`--for <bot>`). The answer, i
   URLs, SSH keys, files on computers) and bot repositories always ask.
 - Otherwise one card per person who can unblock it (`tool_access.may_change_access` for a tool; the Owner and the
   admins for a repository, the Owner alone for a built-in bot), the resource's connector first, each in their chat
-  with the Tools page's owner (Agent Ops when there is none). The first to Grant or Decline resolves it; every other copy
-  of the card shows it resolved and asks nothing.
+  with the Tools page's owner (Agent Ops when there is none). The bot's own owners come first: when any of them can
+  finish it (`_finishes`), only they are asked. The first to Grant or Decline resolves it; every other copy of the card
+  shows it resolved and asks nothing.
 
 A request closes itself the moment the access exists, however it was given: its card, the Tools page, the Tools Owner,
 the API, Everyone can read turning on, a repository change (`settled`, called from those writes, and the hourly
@@ -60,6 +62,8 @@ def _mod(name: str) -> Any:
         from . import api_tools as found
     elif name == "auth":
         from . import auth as found
+    elif name == "bot_access":
+        from . import bot_access as found
     elif name == "credentials":
         from . import credentials as found
     elif name == "default_read":
@@ -290,12 +294,86 @@ def may_unblock(c: Any, who: Any, row: Any, vault: Any, auth: Any) -> Any:
     return bool(auth.bot_admin(who))
 
 
+def _bot_owners(c: Any, subject: Any) -> list[str]:
+    """The bot's owners as actors: its operator, its creator and its co-owners."""
+    owner_ids = _mod("bot_access").owner_ids
+
+    found = c.execute("SELECT owner_id,bot_owners FROM bot_config WHERE bot=?", (H.actor_id(subject),)).fetchone()
+    if not found:
+        return []
+    ids = [found["owner_id"], *owner_ids(found["bot_owners"])]
+    return list(dict.fromkeys("human:" + str(pid).removeprefix("human:") for pid in ids if pid))
+
+
+def _finishes(c: Any, who: Any, row: Any, vault: Any, auth: Any) -> bool:
+    """Whether `who` can see the request through: grant it, and read the task that waits on it (it pauses on them and
+    their Decline wakes it)."""
+    if not may_unblock(c, who, row, vault, auth):
+        return False
+    task = H.task(c, row["task_id"]) if row.get("task_id") else None
+    return not task or bool(H.task_private_readable(c, who.actor, task))
+
+
 def approvers(c: Any, row: Any, vault: Any, auth: Any) -> Any:
-    """Everyone who can unblock the request, the connector first, then the Owner, then the rest by name."""
-    people = [p for p in _people(c, auth) if may_unblock(c, p, row, vault, auth)]
+    """Who is asked: the bot's own owners who can see it through (`_finishes`), read before anyone else; when none can,
+    everyone who can unblock it, the connector first, then the Owner, then the rest by name."""
+    people: list[Any] = []
+    for actor in _bot_owners(c, row["subject"]):
+        try:
+            person = auth.identity_for_actor(c, actor)
+        except Problem:
+            continue
+        if _finishes(c, person, row, vault, auth):
+            people.append(person)
+    return _ranked(c, row, people or [p for p in _people(c, auth) if may_unblock(c, p, row, vault, auth)])
+
+
+def _ranked(c: Any, row: Any, people: list[Any]) -> list[Any]:
+    """The connector first, then the Owner, then the rest by name; at most `MAX_APPROVERS`."""
     first = _connector(c, row)
     people.sort(key=lambda p: (p.actor != first, p.role != "owner"))
     return people[:MAX_APPROVERS]
+
+
+def _reads_and_unblocks(c: Any, auth: Any, actor: Any, row: Any, task: Any, vault: Any) -> bool:
+    """Whether someone already asked still carries the request for this task: they can unblock it and read the task."""
+    try:
+        person = auth.identity_for_actor(c, actor)
+    except Problem:
+        return False
+    return bool(may_unblock(c, person, row, vault, auth)) and bool(H.task_private_readable(c, actor, task))
+
+
+def _reach_reader(c: Any, auth: Any, row: Any, task: Any, vault: Any) -> Any:
+    """A task asks again where nobody asked can still unblock it and read it (the first ask had no task and went to the owner alone): a card
+    too for each person who can unblock it and read the task, and the task that first asked if any (the card carries its
+    why), so the task waits on one of them and their Decline wakes it. The row as it stands after."""
+    asked = json.loads(row["approvers"] or "[]")
+    if not task or any(_reads_and_unblocks(c, auth, actor, row, task, vault) for actor in asked):
+        return row
+    first = H.task(c, row["task_id"]) if row.get("task_id") else None  # the card carries that task's why
+    readers = [
+        p
+        for p in _people(c, auth)
+        if p.actor not in asked
+        and may_unblock(c, p, row, vault, auth)
+        and H.task_private_readable(c, p.actor, task)
+        and (not first or H.task_private_readable(c, p.actor, first))
+    ]
+    cards = json.loads(row["cards"] or "{}")
+    added = {}
+    for person in _ranked(c, row, readers):
+        message_id = _post_card(c, auth, person, row)
+        if message_id:
+            added[person.actor] = message_id
+    if not added:
+        return row
+    c.execute(
+        "UPDATE access_requests SET approvers=?,cards=? WHERE id=?",
+        (json.dumps([*asked, *added]), json.dumps(cards | added), row["id"]),
+    )
+    _mod("events").needs_moved(c, added, "access")
+    return _row(c, row["id"])
 
 
 # ---------------------------------------------------------------------------------------------------- cards
@@ -579,6 +657,7 @@ def ask(c: Any, who: Any, body: Any, vault: Any, auth: Any) -> Any:
     if open_:
         row = dict(open_)
         c.execute("UPDATE access_requests SET repeats=repeats+1 WHERE id=?", (row["id"],))
+        row = _reach_reader(c, auth, row, task, vault)
         _wait(c, row, task, json.loads(row["cards"] or "{}"))
         return view(c, _row(c, row["id"])) | {
             "repeat": True,
