@@ -95,6 +95,8 @@ def computer_login(readiness, runtime):
 
 def local_sign_ins(ready):
     """Exclude a legacy shared key while the runner clears its cached copy."""
+    if not isinstance(ready, dict):
+        return ready
     runtimes = ready.get("runtimes") or {}
     shared = {
         runtime: {**state, "authenticated": "missing"}
