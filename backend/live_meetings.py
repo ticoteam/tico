@@ -2180,8 +2180,9 @@ def install_live_meetings(app, store, auth, write):
                     "(SELECT actor FROM live_meeting_access WHERE meeting_id=?)",
                     (rid, row["owner_actor"], rid),
                 ).rowcount
-            if call and (removed or pruned):
+            if call and (pruned or any(actor != row["owner_actor"] for actor in removed)):
                 # Taken out, they were still in the call's meeting: it stays not one person's alone (rooms.call_person).
+                # The owner taking themselves out is not anyone else.
                 from . import rooms
 
                 H.event(c, who.actor, rooms.CALL_SHARED, call["id"], {"removed": removed, "pruned": pruned})

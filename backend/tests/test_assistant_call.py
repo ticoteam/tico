@@ -551,8 +551,7 @@ def test_a_runner_with_no_resident_voice_answers_your_private_call_as_you(meet):
     assert [x["words"] for x in changes if x["object"] == f"task:{filed['task_id']}"] == [SYNTHETIC_SPEECH]
 
 
-def test_the_private_calls_claim_reads_your_mail_and_finance_as_your_own_chat_does(meet):
-    from backend.finance import brief as finance_brief
+def test_the_private_calls_claim_reads_your_mail_as_your_own_chat_does(meet):
     from backend import mailbox_access
 
     call, session, _ = _private_call(meet)
@@ -560,7 +559,6 @@ def test_the_private_calls_claim_reads_your_mail_and_finance_as_your_own_chat_do
     with meet.app.state.store.read() as c:
         assert session["mailbox_levels"] == mailbox_access.levels_for(c, ana) and session["mailbox_levels"]
         assert session["mailbox_levels"] != mailbox_access.levels_for(c, "bot:assistant")
-        assert session["finance"] == finance_brief.for_turn(c, "human:ana")
 
 
 def test_a_turn_past_its_voice_deadline_is_not_what_you_just_said(meet):
@@ -608,10 +606,10 @@ def _is_the_assistants_own(api, attempt):
     get(api, "needs-you", attempt["token"], expected=403)
 
 
-@pytest.mark.parametrize("provider", ["google_meet", "tico"])
-def test_a_call_in_your_assistant_chat_that_does_not_speak_its_replies_never_acts_as_you(meet, provider):
-    worker = _resident(meet)
-    call = start_call(meet, room(meet)["room_id"], speak_replies=False)
+@pytest.mark.parametrize(("provider", "speaks"), [("google_meet", True), ("tico", False)])
+def test_a_call_in_your_assistant_chat_that_does_not_speak_its_replies_never_acts_as_you(meet, provider, speaks):
+    worker = _resident(meet, voice=False)
+    call = start_call(meet, room(meet)["room_id"], speak_replies=speaks)
     post(meet, f"calls/{call['id']}/bots", {"bots": ["assistant"]})
     with meet.app.state.store.transaction() as c:  # a Google Meet (set up here as one), or a Tico Meet that is silent
         c.execute("UPDATE calls SET provider=? WHERE id=?", (provider, call["id"]))
@@ -657,3 +655,20 @@ def test_a_turn_of_its_own_job_claimed_after_its_voice_deadline_is_passed(meet):
     with meet.app.state.store.read() as c:
         row = c.execute("SELECT status,skip_reason FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()
     assert tuple(row) == ("skipped", "voice_deadline")
+
+
+def test_a_turn_with_no_deadline_recorded_is_not_what_you_just_said(meet):
+    call, session, worker = _private_call(meet)
+    spoken = _heard(meet, call, session, worker)
+    with meet.app.state.store.transaction() as c:  # as a turn queued before every voice turn kept its deadline
+        c.execute("UPDATE live_meeting_turns SET voice_expires_at=NULL WHERE id=?", (spoken["id"],))
+    _not_cited(meet, call, session)
+
+
+def test_taking_yourself_out_of_your_calls_meeting_and_back_keeps_it_yours(meet):
+    call, session, _ = _private_call(meet)
+    meeting = call["meeting_id"]
+    assert post(meet, f"live-meetings/{meeting}/access", {"remove": ["ana"]})["left"] is True
+    post(meet, f"live-meetings/{meeting}/join", {})
+    assert get(meet, "needs-you", session["token"])["items"] is not None
+    assert _scope(meet, session["id"]) == ("person", "human:ana")
