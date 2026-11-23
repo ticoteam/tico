@@ -113,7 +113,7 @@ interface AnswerProps {
 export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
-  const { error, setError, here, refused, moveOn } = useAnswering();
+  const { error, here, refused, moveOn, start } = useAnswering();
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
@@ -139,7 +139,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   }, [asking, onAsking]);
 
   const onApprove = async () => {
-    setError('');
+    start();
     setSeen(key);
     hold?.(r, true);
     const drawn = answerKey(r, t.visit_id); // the version and visit this card shows, never newer ones read since
@@ -170,7 +170,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   };
 
   const onSend = async () => {
-    setError('');
+    start();
     hold?.(r, true);
     const res = await request.run({ task: t.id, requirement: r.requirement_id, note, ...(askedOn && { key: askedOn }) });
     hold?.(res.ok ? null : r);

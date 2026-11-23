@@ -68,7 +68,7 @@ import { usePhoneCards } from '@/shell/phone';
 import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, leaveTask, noteList, notePlace } from '@/lib';
+import { boardSearch, chatAddress, leaveTask, noteList, notePlace, pressListRow } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -262,7 +262,7 @@ function App() {
   if (arrangement === 'task') {
     /* Beside the open task, its pipeline's tasks as its board showed them, the task chosen. A task with no pipeline of
        its own (`all`), or its list closed: the menu stays in its place. */
-    if (task && pipeline && !listShut) list = <PipelineList pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
+    if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -769,10 +769,12 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
   const stages = useMemo(() => (p?.stages ?? []).map((s) => ({ ...s, items: (page?.tasks ?? []).filter((t) => t.stage_id === s.id) })).filter((s) => s.items.length), [p, page]);
-  // the rows in the order drawn, folded stages left out: an answer that leaves the open task with nothing on it for the
-  // person goes on to the row below it (TaskPage)
-  const drawn = useMemo(() => stages.flatMap((g) => (shut.has(g.id) ? [] : g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id), stage: t.stage_id })))), [stages, shut]);
-  useEffect(() => noteList({ pipeline, open, rows: drawn }), [pipeline, open, drawn]);
+  // the rows in the order drawn, folded stages left out, while the list shows (not folded or tucked away): an answer
+  // that leaves the open task with nothing on it for the person goes on to the row below it (TaskPage)
+  const sheet = useSheet();
+  const shows = sheet.state === 'open' || sheet.peek;
+  const drawn = useMemo(() => stages.flatMap((g) => (shut.has(g.id) ? [] : g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id) })))), [stages, shut]);
+  useEffect(() => noteList(shows ? { pipeline, open, rows: drawn } : null), [shows, pipeline, open, drawn]);
   useEffect(() => () => noteList(null), []);
   const name = p?.name ?? 'Tasks';
   return (
@@ -816,7 +818,14 @@ function PipelineRow({ t, pipeline, open, me }: { t: TaskItem; pipeline: string;
   const n = String(t.number ?? t.id);
   const waits = !!me && t.turn?.state === 'person' && t.turn.who === me;
   return (
-    <Link to="/tasks/$pipeline/$task" params={{ pipeline, task: n }} className={n === open || t.id === open ? 'li is-on' : 'li'} title={t.title} data-target={`task:${n}`}>
+    <Link
+      to="/tasks/$pipeline/$task"
+      params={{ pipeline, task: n }}
+      className={n === open || t.id === open ? 'li is-on' : 'li'}
+      title={t.title}
+      data-target={`task:${n}`}
+      onClick={() => pressListRow(pipeline, n)}
+    >
       <span className="li-mark">{waits ? <FlowMark size={10} /> : null}</span>
       <span className="li-main">
         <span className="li-title">{t.title}</span>

@@ -1380,13 +1380,15 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
   });
 
   describe('opened beside its pipeline’s list', () => {
-    const row = (id: string, n: number, stage: string): ListRow => ({ id, n: String(n), stage });
+    const row = (id: string, n: number): ListRow => ({ id, n: String(n) });
     const answered = () => send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
-    // as the shell's list does: its rows in the order drawn, again as an answer moves them (`then`, once it is taken)
-    const approveBeside = async (rows: ListRow[], then?: ListRow[]) => {
+    // as the shell's list does: its rows in the order drawn (`earlier`, then `rows`), again as an answer moves them
+    // (`then`, once it is taken); opened from its board
+    const approveBeside = async (rows: ListRow[], then?: ListRow[], earlier?: ListRow[]) => {
       serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? (then && noteList({ pipeline: 'legal-responses', open: '36461', rows: then }), { body: { task: answered() } }) : null));
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
       await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      if (earlier) noteList({ pipeline: 'legal-responses', open: '36461', rows: earlier });
       noteList({ pipeline: 'legal-responses', open: '36461', rows });
       fireEvent.click(await ready(await decision()));
       return router;
@@ -1394,16 +1396,25 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
 
     it('Approve on its last ask opens the task below it, as its row does; moved on by the answer, it is still the one that was below @approvals', async () => {
       const router = await approveBeside(
-        [row('a1', 36450, 's2'), row('19ca7418', 36461, 's2'), row('a2', 36470, 's2'), row('a3', 36480, 's3')],
-        [row('a1', 36450, 's2'), row('a2', 36470, 's2'), row('a3', 36480, 's3'), row('19ca7418', 36461, 's3')],
+        [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
+        [row('a1', 36450), row('a2', 36470), row('a3', 36480), row('19ca7418', 36461)],
       );
       await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
       expect(router.state.location.search).toEqual({});
       await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     });
 
+    it('moved in the list before it was answered, Approve opens the row below it now @approvals', async () => {
+      const router = await approveBeside(
+        [row('a1', 36450), row('a2', 36470), row('19ca7418', 36461), row('a3', 36480)],
+        [row('a1', 36450), row('a2', 36470), row('a3', 36480)],
+        [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
+      );
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+    });
+
     it('at the last row of its stage goes on into the next stage; at the list’s last row, back to the board @approvals', async () => {
-      const on = await approveBeside([row('19ca7418', 36461, 's2'), row('a3', 36480, 's3')]);
+      const on = await approveBeside([row('19ca7418', 36461), row('a3', 36480)]);
       await waitFor(() => expect(on.state.location.pathname).toBe('/tasks/legal-responses/36480'));
       cleanup();
       const people = [queryClient.getQueryData(['me']), queryClient.getQueryData(['directory'])];
@@ -1412,7 +1423,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       queryClient.setQueryData(['me'], people[0]);
       queryClient.setQueryData(['directory'], people[1]);
       // the row below it left the list before the answer was heard: nothing is below it now
-      const back = await approveBeside([row('a1', 36450, 's2'), row('19ca7418', 36461, 's2'), row('a2', 36470, 's2')], [row('a1', 36450, 's2'), row('19ca7418', 36461, 's2')]);
+      const back = await approveBeside([row('a1', 36450), row('19ca7418', 36461), row('a2', 36470)], [row('a1', 36450), row('19ca7418', 36461)]);
       await waitFor(() => expect(back.state.location.pathname).toBe('/tasks/legal-responses'));
       expect(back.state.location.search).toEqual({ owner: 'bot:lo' });
     });
@@ -1431,7 +1442,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
             : own(url, method);
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
       await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
-      noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461, 's2'), row('a2', 36470, 's2')] });
+      noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461), row('a2', 36470)] });
       const box = (named: string) =>
         waitFor(() => {
           const found = screen.getAllByRole('region', { name: 'The decision' }).find((b) => within(b).queryByText(named));

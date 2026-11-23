@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { forgetPlaces, leaveTask, notePlace } from './places';
+import { forgetPlaces, leaveTask, nextInList, noteList, notePlace } from './places';
 
 /* Closing a task goes back to where it was opened from, never to the task itself. */
 
@@ -53,5 +53,30 @@ describe('leaveTask', () => {
     known('p1');
     await new Promise((done) => setTimeout(done, 0));
     expect(r.navigate).not.toHaveBeenCalled();
+  });
+});
+
+describe('nextInList', () => {
+  const rows = [
+    { id: 't7', n: '7' },
+    { id: 't5', n: '5' },
+  ];
+
+  it('goes on to the row below only for a task opened from its board, not from a thread’s card over the board', () => {
+    // each entry in the history as the router keys it
+    const entry = (n: number, key: string) => ({ ...at(n), __TSR_key: key });
+    notePlace('/tasks/p1', '', {}, entry(0, 'a'));
+    notePlace('/tasks/p1/7', '', {}, entry(1, 'b'));
+    // the address names its tab in place: the same task
+    notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
+    noteList({ pipeline: 'p1', open: '7', rows });
+    expect(nextInList('t7')).toEqual({ pipeline: 'p1', task: '5' });
+    // Back to the board, and the task again from a thread's card over it
+    notePlace('/tasks/p1', '', {}, entry(0, 'a'));
+    notePlace('/tasks/p1/7', '?chat=c1&via=thread', { chat: 'c1', via: 'thread' }, entry(1, 'd'));
+    expect(nextInList('t7')).toBeNull();
+    // Back and Forward to the entry opened from the board: from the board again
+    notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
+    expect(nextInList('t7')).toEqual({ pipeline: 'p1', task: '5' });
   });
 });

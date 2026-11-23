@@ -10,12 +10,12 @@ import type { TaskData } from './queries';
 
 export function StoppedDecision({ t, dock = false }: { t: TaskData; dock?: boolean }) {
   const release = useAction('task.releaseAgent');
-  const { error, setError, refused, moveOn } = useAnswering();
+  const { error, refused, moveOn, start } = useAnswering();
   const agent = t.stopped_agent;
   if (!agent) return null;
 
   const go = async () => {
-    setError('');
+    start();
     const res = await release.run({ task: t.id, agent: agent.id });
     if (!res.ok) return refused(res);
     toast({ text: 'Released', name: agent.name });

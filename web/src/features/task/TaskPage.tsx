@@ -18,7 +18,7 @@ import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { leaveTask, nextInList } from '@/lib';
+import { leaveTask, nextInList, pressListRow } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AskCard } from './AskCard';
@@ -166,9 +166,9 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: TaskSearch) => prev) as never, replace: true });
   }, [known, chatCard, unresolved, first, opened, t, navigate]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
-     the task stays as it is; once nothing does, the task below it in the list beside it opens, as a press on its row
-     does, else it closes, back to the board, list or page it was opened from (its board, while there is one, when
-     nothing is behind it). */
+     the task stays as it is; once nothing does, opened from its board or the list beside it, the task below it in that
+     list opens, as a press on its row does; else it closes, back to the board, list or page it was opened from (its
+     board, while there is one, when nothing is behind it). */
   const router = useRouter();
   const client = useQueryClient();
   const pipeline = t.pipeline_id;
@@ -187,6 +187,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         const next = nextInList(t.id);
         if (!next) return close();
         leaving.current = true;
+        pressListRow(next.pipeline, next.task);
         void navigate({ to: '/tasks/$pipeline/$task', params: next });
       }),
     [t.id, me, client, close, navigate],
