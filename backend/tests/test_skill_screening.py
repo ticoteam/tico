@@ -210,6 +210,27 @@ def test_a_company_question_set_that_does_not_allow_a_missing_diff_keeps_oversiz
     assert latest(api, pid)["reason"] == "oversize"
 
 
+def test_a_screen_made_without_the_diff_is_not_reused_once_the_question_set_needs_it(api, monkeypatch, tmp_path):
+    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2700))
+    head = "---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n"
+    publish(api, bundle(head + lines))
+    pid = proposal(api, bundle(head + lines.replace("alpha steps\n", "gamma steps\n", 1100)))["id"]
+    engine = Engine()
+    assert drain(api, engine) == ["screened"] and "diff" not in engine.calls[0]["state"]
+    decide(api, pid, "rescreen", token="ana-test")
+    assert drain(api, engine) == ["screened"] and len(engine.calls) == 1  # the shipped set: the same inputs, reused
+
+    # The company's own skill-screen@1, the same version, without `diff_optional`: the screen without a diff is no answer.
+    own = json.loads((Path(J.QUESTIONS_DIR) / "skill-screen.json").read_text())
+    del own["diff_optional"]
+    (tmp_path / "questions").mkdir()
+    (tmp_path / "questions" / "skill-screen.json").write_text(json.dumps(own))
+    monkeypatch.setenv("TICO_REGISTRY_DIR", str(tmp_path))
+    decide(api, pid, "rescreen", token="ana-test")
+    assert drain(api, engine) == ["not_screened"] and len(engine.calls) == 1
+    assert latest(api, pid)["reason"] == "oversize"
+
+
 def test_a_skill_too_big_even_without_a_diff_is_oversize_and_a_stuck_one_is_screened_again(api):
     lines = "\u00e9" * 20 * 3000  # 60,000 characters, but six of JSON for each é
     pid = proposal(api, bundle("---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n" + lines))["id"]

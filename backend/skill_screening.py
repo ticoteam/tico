@@ -367,8 +367,20 @@ def screen(store, row, base_files, engine_for=None):
     hits = kept_hits(every)
     if not qset:
         return _outcome("not_screened", label, hits, "error")
+    state = build_state(row["name"], row["description"], files, base_files, hits)
+    if base_files is not None and qset.get("diff_optional") is True and state_chars(state) > J.MAX_STATE_CHARS:
+        # Too big with its diff: the whole new skill in one call, so the model still sees every file at once. Only a
+        # question set that says it can judge an update without its diff (`diff_optional`): a company's own may not.
+        state = build_state(row["name"], row["description"], files, None, hits)
+    if state_chars(state) > J.MAX_STATE_CHARS:
+        return _outcome("not_screened", label, hits, "oversize")
     with store.read() as c:
         cached = _cached(c, row, label)
+    if cached and base_files is not None:
+        # Reused only when it read what this screen sends, its diff or not: whether it had one follows from its own hits.
+        then = build_state(row["name"], row["description"], files, base_files, _json(cached["patterns"], hits))
+        if (state_chars(then) <= J.MAX_STATE_CHARS) != ("diff" in state):
+            cached = None
     if cached:
         return _outcome(
             "screened",
@@ -381,13 +393,6 @@ def screen(store, row, base_files, engine_for=None):
             judge_call_id=cached["judge_call_id"],
             cached_from=cached["id"],
         )
-    state = build_state(row["name"], row["description"], files, base_files, hits)
-    if base_files is not None and qset.get("diff_optional") is True and state_chars(state) > J.MAX_STATE_CHARS:
-        # Too big with its diff: the whole new skill in one call, so the model still sees every file at once. Only a
-        # question set that says it can judge an update without its diff (`diff_optional`): a company's own may not.
-        state = build_state(row["name"], row["description"], files, None, hits)
-    if state_chars(state) > J.MAX_STATE_CHARS:
-        return _outcome("not_screened", label, hits, "oversize")
     with store.read() as c:
         engine = (engine_for or strict_engine)(store, c)
         at_cap = engine is None and over_spend_cap(c, store.settings)
