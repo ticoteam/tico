@@ -11,7 +11,7 @@ from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import claim, get, headers, post
-from backend.tests.helpers.assistant import asked, room
+from backend.tests.helpers.assistant import asked, room, say
 from backend.tests.helpers.calls import (
     PCM_ONE_SECOND,
     SILENCE_ONE_SECOND,
@@ -735,7 +735,7 @@ def test_a_spoken_no_turns_a_goal_suggestion_down_as_a_typed_one_does(meet, monk
     assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
 
 
-def test_a_spoken_yes_to_a_goal_read_back_saves_it_as_a_typed_one_does(meet, monkeypatch):
+def test_no_yes_in_a_call_saves_a_goal_read_back_spoken_or_typed(meet, monkeypatch):
     strategy_bot(meet)
     call, session, worker = _private_call(meet)
     _answered(meet, session, worker, _heard(meet, call, session, worker))  # "set a goal", and its read-back
@@ -750,5 +750,12 @@ def test_a_spoken_yes_to_a_goal_read_back_saves_it_as_a_typed_one_does(meet, mon
     _says(monkeypatch, "Yes, save it.")
     _heard(meet, call, session, worker, start_ms=10_000)
     step = back["changes"][0]["steps"][0]
-    made = asked(meet, step["path"].removeprefix("/api/v2/"), json.loads(step["body"]), session["token"], "turn")
-    assert made["goal"]["title"] == "Get 100 companies to try Tico"
+    path, body = step["path"].removeprefix("/api/v2/"), json.loads(step["body"])
+    # What she says aloud is not read with it (a yes to some by number, a stop), so the yes is hers to type in her chat.
+    refused = asked(meet, path, body, session["token"], "turn", expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "Tico chat" in refused["detail"]
+    said = say(meet, "Yes, save it.")  # typed in her chat while the call is on: the call's session still saves nothing
+    typed = said.get("id") or said["message"]["id"]
+    assert asked(meet, path, body, session["token"], typed, expected=403)["error"]["code"] == "not_agreed"
+    with meet.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM goals WHERE title='Get 100 companies to try Tico'").fetchone()
