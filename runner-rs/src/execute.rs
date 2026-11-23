@@ -6806,7 +6806,9 @@ mod tests {
         });
         for n in limited {
             std::fs::copy(
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(refusal),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures")
+                    .join(refusal),
                 dir.join(format!("fixture-{n}")),
             )
             .unwrap();
@@ -7342,7 +7344,10 @@ mod tests {
     async fn a_turn_whose_tool_ran_never_takes_the_companys_fallback_either() {
         // No fallback of its own, and another provider (codex) is signed in here: a quota refusal with no tool run
         // hops there, one after a tool ran does not.
-        for (fixture, hops) in [("pi/error.jsonl", true), ("pi_tool_then_limit.jsonl", false)] {
+        for (fixture, hops) in [
+            ("pi/error.jsonl", true),
+            ("pi_tool_then_limit.jsonl", false),
+        ] {
             crate::fallback::TEST_CHOICES.with(|c| {
                 *c.borrow_mut() = Some(vec![
                     json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
