@@ -64,7 +64,10 @@ answers instead. Three things have to be true and specific in it:
 
 - what the team does, in the words the answers used;
 - what arrives where, so the bot knows which queue, inbox or source is its input;
-- which work the bot owns, named concretely. Sending to outsiders stays off until requested.
+- which work the bot owns, named concretely, and that it does routine internal updates in the team's own tools (a
+  ticket's status, a comment, a label) first and notes them, asking a person only for spend, outside sends,
+  signatures, legal, irreversible or security steps. Sending to outsiders stays off until requested. Never write
+  "ask before" for a routine internal update.
 
 Cut every line that is not true for this team. A vague line left in is worse than a missing one,
 because the bot will act on it.

@@ -28,7 +28,8 @@ wrong, do not say done: send the task back to the stage it comes from,
   page with both reviews.
 - **Fixes.** To leave: Owner says done, Checks pass. Read the Review page with both reviews under "From earlier
   stages" and address the findings on the same branch. Follow `playbooks/fix-what-review-found.md` in Fixes or
-  either numbered Fixes stage on an older pipeline.
+  either numbered Fixes stage on an older pipeline. Say done in the same run, right after you push the fixes; never
+  wait for the checks. Tico moves the task on when they pass, and a failed check wakes you.
 - **QA.** To leave: Checks pass, and the QA page, which Jev checks and then a person approves; approving it ships the
   change. Build it with `.claude/skills/build-the-page/SKILL.md` (its `templates/qa.html`) (`playbooks/qa.md` says what to do when it comes back) and
   attach it to the requirement `tico task show` names: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
