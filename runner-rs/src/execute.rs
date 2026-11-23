@@ -6780,10 +6780,11 @@ mod tests {
         turns: &[Turn],
         limited: &[usize],
     ) -> Ran {
-        session_turns_playing(task, serves, turns, limited, "error.jsonl", &[]).await
+        session_turns_playing(task, serves, turns, limited, "pi/error.jsonl", &[]).await
     }
 
-    /// `session_turns_limited`, with pi playing fixture `refusal` (tests/fixtures/pi) for each prompt of `limited`,
+    /// `session_turns_limited`, with pi playing fixture `refusal` (under tests/fixtures; one outside pi/, which is
+    /// pi's event fixtures with their expected events) for each prompt of `limited`,
     /// and the runtimes `ready` signed in here for a fallback.
     async fn session_turns_playing(
         task: bool,
@@ -6805,7 +6806,7 @@ mod tests {
         });
         for n in limited {
             std::fs::copy(
-                fixture.with_file_name(refusal),
+                Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(refusal),
                 dir.join(format!("fixture-{n}")),
             )
             .unwrap();
@@ -7315,7 +7316,7 @@ mod tests {
             true,
             &[("m4", json!({}), fallback)],
             &[0],
-            "tool_then_limit.jsonl",
+            "pi_tool_then_limit.jsonl",
             &[],
         )
         .await;
@@ -7341,7 +7342,7 @@ mod tests {
     async fn a_turn_whose_tool_ran_never_takes_the_companys_fallback_either() {
         // No fallback of its own, and another provider (codex) is signed in here: a quota refusal with no tool run
         // hops there, one after a tool ran does not.
-        for (fixture, hops) in [("error.jsonl", true), ("tool_then_limit.jsonl", false)] {
+        for (fixture, hops) in [("pi/error.jsonl", true), ("pi_tool_then_limit.jsonl", false)] {
             crate::fallback::TEST_CHOICES.with(|c| {
                 *c.borrow_mut() = Some(vec![
                     json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
