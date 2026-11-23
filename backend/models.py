@@ -1738,6 +1738,7 @@ class Heartbeat(Contract):
             "attempt_credentials_v1",
             "plan_usage_v1",
             "browser_exit_v1",
+            "model_exit_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
             "claude_login_v1",  # full Claude logins: their turns, refreshes and usage reads (backend/claude_login.py)
@@ -1754,7 +1755,7 @@ class Heartbeat(Contract):
             "push_hints_v1",  # a push to a bot's repository is told to its computer at once (backend/github.py tell_pushed)
             "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
         ]
-    ] = Field(default_factory=list, max_length=33)
+    ] = Field(default_factory=list, max_length=34)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -3307,9 +3308,21 @@ class BotBrowserExit(Contract):
 
 
 class BrowserExitTunnel(Contract):
+    kind: Literal["browser"] = "browser"
     bot: Annotated[str, Field(min_length=1, max_length=128)]
     host: Annotated[str, Field(min_length=1, max_length=253)]
     port: int
+
+
+class ModelExitTunnel(Contract):
+    kind: Literal["model"]
+    attempt_id: ID
+    generation: int = Field(ge=1, le=(1 << 63) - 1)
+
+
+class ModelExitRedemption(Contract):
+    tunnel_id: ID
+    ticket: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class _Sampled(BaseModel):

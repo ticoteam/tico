@@ -469,11 +469,7 @@ async fn start_for_user(
         .await
         .map_err(|e| e.to_string())?;
     let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-    let token = format!(
-        "tico-relay-{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
+    let token = turn_token();
     let retry_at = Arc::new(AtomicU64::new(0));
     let shared = Arc::new(Shared {
         client,
@@ -532,7 +528,7 @@ async fn start_for_user(
 
 /// Match the client's reverse four-tuple, rather than the accepted (supervisor-owned) socket.
 /// Failure to read or match /proc denies access before any bearer token is consumed.
-fn peer_is(socket: &TcpStream, uid: u32) -> bool {
+pub(crate) fn peer_is(socket: &TcpStream, uid: u32) -> bool {
     let (Ok(local), Ok(peer)) = (socket.local_addr(), socket.peer_addr()) else {
         return false;
     };
@@ -565,14 +561,22 @@ fn peer_in_table(table: &str, peer: &str, local: &str, uid: u32) -> bool {
     })
 }
 
-fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+pub(crate) fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 /// The same answer however much of `given` matches `expected`.
-fn same(given: &str, expected: &str) -> bool {
+pub(crate) fn same(given: &str, expected: &str) -> bool {
     let (a, b) = (given.as_bytes(), expected.as_bytes());
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+pub(crate) fn turn_token() -> String {
+    format!(
+        "tico-relay-{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 async fn answer(socket: &mut TcpStream, status: u16, message: &str) -> std::io::Result<()> {

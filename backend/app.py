@@ -2685,7 +2685,7 @@ def _install_features(
     # A bot's browser through another computer's internet (backend/browser_exit.py); the same relay as the screen.
     from .browser_exit import install as install_browser_exit
 
-    install_browser_exit(app, store, auth, mutate, execution, screen_sessions)
+    install_browser_exit(app, store, auth, mutate, execution, screen_sessions, app.state.vault)
 
     web_routes.register(app, settings)  # /next before anything else could answer it (backend/web_routes.py)
     brand_icons.register(app)

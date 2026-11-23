@@ -28,8 +28,15 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
-Heartbeats can carry 33 capabilities. If an older hub refuses more than 32, the runner retries without
-`attempt_credentials_v1` first.
+Heartbeats can carry 34 capabilities. If an older hub refuses the count, the runner drops
+`model_exit_v1` first and then `attempt_credentials_v1` if needed.
+
+Both computers must report `model_exit_v1` to use a model tunnel. The runner-only browser-exit
+tunnel endpoint accepts `kind: "model"` with an attempt ID and the selected exit generation.
+The exit connects on the same WebSocket route with `X-Tico-Exit-Kind: model`. It redeems its
+one-use ticket with its own runner token at `runners/me/browser-exit/tunnels/redeem`. The turn
+computer receives only its attach ticket. The hub returns `model_exit_offline` for a missing
+exit link and `model_exit_stale` for a stale binding, both HTTP 409. Claims do not activate this route.
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
 a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,

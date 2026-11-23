@@ -188,11 +188,22 @@ class RemoteRegistry:
             return self._command("pending", runner_id=runner_id)["sessions"]
 
     # ------------------------------------------------------------------ browser exits (relay-rs/src/exit.rs)
-    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale", "stale exit policy")
+    EXIT_REFUSALS = (
+        "exit_offline",
+        "exit_not_shared",
+        "exit_over_cap",
+        "exit_busy",
+        "exit_stale",
+        "stale exit policy",
+        "model_exit_offline",
+        "model_exit_stale",
+        "model_exit_forbidden",
+    )
 
     def _exit_command(self, op, /, **fields):
         """An exit operation: its answer, or the relay's refusal code as a string. Anything else is the relay
         unavailable (503)."""
+        model = op == "exit_redeem" or fields.get("grant", {}).get("kind") == "model"
         if not self.healthy:
             raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503)
         self.sequence += 1
@@ -210,9 +221,13 @@ class RemoteRegistry:
                 return code
             if code in ("stale permission lease", "stale control sequence"):
                 self.healthy = False
+                if model:
+                    return "model_exit_stale"
             raise Problem("browser_exit_unavailable", "The relay refused the request. Try again shortly.", 503)
         if answer.get("boot") != self.boot:
             self.healthy = False
+            if model:
+                return "model_exit_stale"
             raise Problem("browser_exit_unavailable", "The relay restarted. Try again shortly.", 503)
         return answer
 
@@ -284,6 +299,25 @@ class RemoteRegistry:
         for bot in bots:
             self.push_bot_generation(bot, "browser exit changed")
 
+    def _model_exit_reconcile(self, live, epoch):
+        """Fence changed selections for the owners reported by this heartbeat."""
+        with self.store.read() as c:
+            changed = {
+                owner: generation
+                for owner, generation in c.execute(
+                    "SELECT p.person_id,p.generation FROM json_each(?) live "
+                    "JOIN plan_exits p ON p.person_id=live.key WHERE p.generation>live.value LIMIT 32",
+                    (json.dumps(live),),
+                )
+            }
+        if changed:
+            with self.lock:
+                if self.lease == epoch:
+                    try:
+                        self._command("model_exit_generations", generations=changed)
+                    except Problem:
+                        log.warning("model exit generations not pushed to the relay; retrying")
+
     def exit_grant(self, grant, epoch):
         """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read
         under: after a new lease the relay's generations start again, so an older read is read again (exit_stale)."""
@@ -302,6 +336,19 @@ class RemoteRegistry:
                 return answer.get("closed", 0) if isinstance(answer, dict) else 0
             except Problem:
                 return 0
+
+    def exit_redeem(self, tunnel_id, ticket, runner_id):
+        with self.lock:
+            epoch = self.lease
+            try:
+                result = self._exit_command("exit_redeem", id=tunnel_id, ticket=ticket, runner_id=runner_id)
+            except Problem:
+                raise Problem("model_exit_unavailable", "The relay is unavailable", 503) from None
+        if result == "model_exit_forbidden":
+            raise Problem(result, "This computer cannot redeem that tunnel", 403)
+        if not isinstance(result, dict):
+            raise Problem("model_exit_stale", "The plan exit tunnel is no longer live", 409)
+        return epoch, result["binding"]
 
     @staticmethod
     def _record(c, report):
@@ -349,10 +396,12 @@ class RemoteRegistry:
         # backlog builds up: a relay that stops on its own loses at most about one tick's bytes.
         from . import browser_exit
 
+        answer, epoch = {}, self.lease
         for _ in range(EXIT_BATCHES_PER_TICK):
             with self.lock:
                 answer = self._command("heartbeat", ack=self.acks, exit_ack=self.exit_acks)
                 reports, usage, boot = answer["reports"], answer.get("exit_usage"), self.boot
+                epoch = self.lease
                 self.acks, self.exit_acks = [], []
             # Never take the store lock while holding the control lock: admission takes them in the other order.
             prune = time.monotonic() - self.pruned > 3600
@@ -371,6 +420,8 @@ class RemoteRegistry:
             in_hand = len(usage.get("rows") or []) if isinstance(usage, dict) else 0
             if not recorded or int(answer.get("exit_backlog") or 0) <= in_hand:
                 break
+        if live := answer.get("model_exit_live"):
+            self._model_exit_reconcile(live, epoch)
         self._exit_reconcile()
 
     async def run(self, stop):

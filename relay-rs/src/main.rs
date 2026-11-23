@@ -295,7 +295,15 @@ enum Action {
         policy: exit::Policy,
     },
     ExitGrant {
-        grant: exit::Grant,
+        grant: Value,
+    },
+    ExitRedeem {
+        id: String,
+        runner_id: String,
+        ticket: String,
+    },
+    ModelExitGenerations {
+        generations: HashMap<String, u64>,
     },
     /// Close one bot's tunnels and/or one exit's. With `bot_generation`, the bot's selection changed: only its
     /// tunnels from older generations close, and older grants are refused from now on.
@@ -322,7 +330,7 @@ async fn command(
     }
     let digest = Sha256::digest(serde_json::to_vec(&body).unwrap()).to_vec();
     if body.sequence <= hub.sequence {
-        if body.sequence == hub.sequence {
+        if body.sequence == hub.sequence && !matches!(body.action, Action::ExitRedeem { .. }) {
             if let Some((last, reply)) = &hub.reply {
                 if last == &digest {
                     return Ok(Json(reply.clone()));
@@ -356,7 +364,8 @@ async fn command(
             hub.lease.as_mut().unwrap().1 = Instant::now();
             let usage = hub.exits.usage_batch();
             let answer = json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
-                   "exit_usage": usage, "exit_backlog": hub.exits.backlog()});
+                   "exit_usage": usage, "exit_backlog": hub.exits.backlog(),
+                   "model_exit_live": hub.exits.live_model_owners()});
             if hub.stopping && usage.is_none() {
                 hub.stopping = false;
                 hub.lease = None;
@@ -377,11 +386,28 @@ async fn command(
                 .map_err(|e| error(StatusCode::CONFLICT, e))?;
             json!({"closed": closed})
         }
-        Action::ExitGrant { grant } => {
-            if grant.policy.bots.len() > 1024 {
-                return Err(error(StatusCode::BAD_REQUEST, "invalid exit grant"));
+        Action::ExitGrant { grant } => exit::grant(&app, &mut hub.exits, grant)?,
+        Action::ExitRedeem {
+            id,
+            runner_id,
+            ticket,
+        } => hub.exits.redeem(&id, &runner_id, &ticket)?,
+        Action::ModelExitGenerations { generations } => {
+            if generations.len() > 32
+                || generations.iter().any(|(owner, &generation)| {
+                    owner.is_empty() || owner.len() > 128 || generation == 0
+                })
+            {
+                return Err(error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid model exit generation",
+                ));
             }
-            exit::grant(&app, &mut hub.exits, grant)?
+            let closed: usize = generations
+                .iter()
+                .map(|(owner, &generation)| hub.exits.fence_model(owner, generation))
+                .sum();
+            json!({"closed": closed})
         }
         Action::ExitClose {
             bot,

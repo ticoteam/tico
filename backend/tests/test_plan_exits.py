@@ -111,7 +111,7 @@ def test_enrolling_a_first_personal_computer_fills_the_exit(api):
 
 def test_only_the_owner_and_admin_can_change_the_exit_to_an_eligible_computer(api):
     setup(api)
-    runner(api, operator="cara", label="First Mac")
+    first = runner(api, operator="cara", label="First Mac")["runner_id"]
     add(api, token="cara-test")
     own = runner(api, operator="cara", label="Second Mac")["runner_id"]
     shared = runner(api, label="Shared Mac")["runner_id"]
@@ -121,19 +121,33 @@ def test_only_the_owner_and_admin_can_change_the_exit_to_an_eligible_computer(ap
         c.execute("INSERT INTO humans(id,name,email) VALUES('eve','Eve','eve@acme.example')")
 
     path = f"{EXITS}/cara"
-    for generation, (token, computer) in enumerate((("cara-test", own), ("ben-test", shared)), start=2):
+    changes = (("cara-test", shared), ("ben-test", own), ("cara-test", first))
+    for generation, (token, computer) in enumerate(changes, start=2):
         changed = put(api, path, {"runner_id": computer}, token=token)
         assert (changed["runner_id"], changed["generation"]) == (computer, generation)
         assert put(api, path, {"runner_id": computer}, token=token) == changed
 
     put(api, path, {"runner_id": own}, token="eve-test", expected=403)
-    put(api, path, {"runner_id": private}, token="ben-test", expected=403)
-    assert stored_exit(api, "cara") == (shared, 3)
+    put(api, path, {"runner_id": private}, token="cara-test", expected=403)
+    assert stored_exit(api, "cara") == (first, 4)
     with api.app.state.store.read() as c:
         assert [
             tuple(row)
             for row in c.execute("SELECT actor,target FROM events WHERE action='subscription.plan_exit' ORDER BY rowid")
-        ] == [("human:cara", "cara"), ("human:ben", "cara")]
+        ] == [("human:cara", "cara"), ("human:ben", "cara"), ("human:cara", "cara")]
+
+
+def test_an_admin_cannot_choose_a_shared_computer_for_another_pool_owner(api):
+    setup(api)
+    own = runner(api, operator="cara", label="Her Mac")["runner_id"]
+    add(api, token="cara-test")
+    shared = runner(api, label="Shared Mac")["runner_id"]
+    path = f"{EXITS}/cara"
+    assert [r["id"] for r in get(api, path, token="ben-test")["computers"]] == [own]
+    assert shared in [r["id"] for r in get(api, path, token="cara-test")["computers"]]
+    answer = put(api, path, {"runner_id": shared}, token="ben-test", expected=403)
+    assert answer["error"]["detail"] == "Choose a registered computer owned by the pool owner"
+    assert stored_exit(api, "cara") == (own, 1)
 
 
 def test_exit_computers_are_paged_and_visible_only_to_people_who_can_change_it(api, monkeypatch):
@@ -236,7 +250,8 @@ def test_an_unknown_pool_is_not_found(api):
 def test_an_admin_changes_the_exit_of_someone_whose_sign_in_is_off(api):
     setup(api)
     add(api, token="cara-test")
-    computer = runner(api, label="Office Mac")["runner_id"]
+    runner(api, operator="cara", label="First Mac")
+    computer = runner(api, operator="cara", label="Office Mac")["runner_id"]
     post(api, "access/humans/cara", {"sign_in": False})
     assert put(api, f"{EXITS}/cara", {"runner_id": computer})["runner_id"] == computer
 
