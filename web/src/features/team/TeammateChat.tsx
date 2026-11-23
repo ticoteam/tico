@@ -25,7 +25,8 @@ export function TeammateChat({ who }: { who: string }) {
   if (!other) return null;
   if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
   if (!dm.data) return null;
-  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} />;
+  // A direct chat's @ reaches only its two members (the server refuses anyone else): the list offers just them.
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} mentionOnly={[actor.id]} />;
 }
 
 /** An agent's chat, by its slug. */

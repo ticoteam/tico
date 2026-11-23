@@ -48,6 +48,8 @@ export interface ComposerProps {
   mentions?: boolean;
   /** Actor ids the @ list shows ahead of everyone else (a task's people and agents). */
   mentionFirst?: readonly string[];
+  /** The only actor ids the @ list may name (a direct chat's members: the server refuses an @ of anyone outside). */
+  mentionOnly?: readonly string[];
 }
 
 const NOBODY: readonly string[] = [];
@@ -55,7 +57,7 @@ const allActors = (d: { actors: Actor[] }) => d.actors;
 
 /** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. An @ opens the names of the
     people and agents the viewer may see: arrows move, Enter or Tab picks, Escape closes. */
-export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true, mentions = true, mentionFirst = NOBODY }: ComposerProps) {
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true, mentions = true, mentionFirst = NOBODY, mentionOnly }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -74,7 +76,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
   const asking = at !== null && at.start !== shut;
   // Read only once an @ is typed; the shell has usually read the directory already.
   const everyone = useQuery({ ...directoryQuery, select: allActors, enabled: asking }).data;
-  const names = asking && everyone ? mentionMatches(everyone, at.query, me, mentionFirst) : [];
+  const names = asking && everyone ? mentionMatches(everyone, at.query, me, mentionFirst, mentionOnly) : [];
   const open = names.length > 0;
   const current = Math.min(active, names.length - 1);
 
@@ -145,8 +147,10 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
 
   const pick = (who: Actor) => {
     if (!at || caret === null) return;
-    // The whole @word goes, the part after the caret too; one space follows the name.
-    const rest = text.slice(caret).replace(/^\S*/, '');
+    // The whole @word goes, through a selection and the rest of the word after it (a name's letters, dots and dashes,
+    // never into the next @); one space follows the name.
+    const from = Math.max(caret, box.current?.selectionEnd ?? caret);
+    const rest = text.slice(from).replace(/^[\w.-]*/, '');
     const put = /^\s/.test(rest) ? mentionText(who) : `${mentionText(who)} `;
     const next = text.slice(0, at.start) + put + rest;
     const end = at.start + put.length + (put.endsWith(' ') ? 0 : 1);

@@ -4,7 +4,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { TeammateChat } from './TeammateChat';
 
-vi.mock('@/conversation', () => ({ Conversation: ({ id }: { id: string }) => <div data-testid="conversation">{id}</div> }));
+vi.mock('@/conversation', () => ({
+  Conversation: ({ id, mentionOnly }: { id: string; mentionOnly?: readonly string[] }) => (
+    <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')}>
+      {id}
+    </div>
+  ),
+}));
 
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
@@ -64,7 +70,10 @@ describe('TeammateChat', () => {
     await act(async () => {
       answerMe();
     });
-    expect((await screen.findByTestId('conversation')).textContent).toBe('th-1');
+    const chat = await screen.findByTestId('conversation');
+    expect(chat.textContent).toBe('th-1');
     expect(asked.find((u) => u.includes('/threads/dm'))).toContain('with=bot%3A0190-ana');
+    // its @ list offers the teammate alone: the server refuses an @ of anyone outside a direct chat
+    expect(chat.getAttribute('data-mention-only')).toBe('bot:0190-ana');
   });
 });

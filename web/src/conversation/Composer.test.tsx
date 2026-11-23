@@ -112,6 +112,27 @@ describe('names after @', () => {
     expect(box().value).toBe('Ask @rita tomorrow');
   });
 
+  it('a pick ends the replaced word at the first character no name has, never eating the next @mention', () => {
+    mount();
+    type('@release.@sam then');
+    box().setSelectionRange(4, 4);
+    fireEvent.select(box());
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('@release-owner @sam then');
+    // a selection running past the caret goes too
+    type('Ask @re!');
+    box().setSelectionRange(6, 7);
+    fireEvent.select(box());
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('Ask @release-owner !');
+  });
+
+  it('names only the given members where only they can be reached', () => {
+    mount({ mentionOnly: ['bot:q1'] });
+    type('@');
+    expect(names()).toEqual(['QA']);
+  });
+
   it('keeps the row under the arrow keys in view', () => {
     const seen = vi.fn();
     const own = Element.prototype.scrollIntoView;
