@@ -110,7 +110,7 @@ async fn exit_peer(http: &reqwest::Client, provider: Provider) -> (Peer, JoinHan
     let http = http.clone();
     let exit = tokio::spawn(async move {
         let (ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-        serve_exit_with(&client, ws, "tunnel", TICKET, true, Ok(http)).await;
+        serve_exit_with(&client, ws, "tunnel", TICKET, true, Some(&http)).await;
         let requests = seen.lock().unwrap();
         assert_eq!(requests.len(), 1);
         let req = requests[0].to_ascii_lowercase();
@@ -323,12 +323,9 @@ fn claude_message_targets_allow_only_the_exact_beta_query() {
             let wire = format!("{head}\r\n\r\n{{}}").into_bytes();
             if query.is_empty() || query == "?beta=true" {
                 let local = Request::parse(head.as_bytes(), Provider::Claude, CLAUDE).unwrap();
-                let upstream = upstream_request(
-                    &client,
-                    &credential,
-                    local.canonical(Provider::Claude, b"{}".to_vec()),
-                )
-                .unwrap();
+                let mut canonical = local.canonical_head(Provider::Claude);
+                canonical.extend_from_slice(b"{}");
+                let upstream = upstream_request(&client, &credential, canonical.into()).unwrap();
                 assert_eq!(
                     upstream.url().as_str(),
                     format!("https://{CLAUDE}{path}{query}")
@@ -336,7 +333,7 @@ fn claude_message_targets_allow_only_the_exact_beta_query() {
             } else {
                 assert!(Request::parse(head.as_bytes(), Provider::Claude, CLAUDE).is_none());
                 assert_eq!(
-                    upstream_request(&client, &credential, wire).unwrap_err(),
+                    upstream_request(&client, &credential, wire.into()).unwrap_err(),
                     BAD_REQUEST
                 );
             }
@@ -367,22 +364,55 @@ async fn model_exit_caps_the_body_at_32_mib_including_on_the_wire() {
             length == limit
         );
     }
-    let wire_limit = limit + HEAD_BYTES + 4;
-    let full = wire_limit / FRAME;
-    let tail = wire_limit % FRAME;
+    let head = format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: {CLAUDE}\r\nContent-Length: {limit}\r\nx-pad: "
+    );
+    let head = format!("{head}{}\r\n\r\n", "x".repeat(HEAD_BYTES - head.len()));
+    let head = Bytes::from(head);
     let bytes = Bytes::from(vec![0; FRAME]);
     for extra in [0, 1] {
-        let frames = std::iter::repeat_n(bytes.clone(), full).map(|b| Ok(Message::Binary(b)));
-        let mut ws = futures_util::stream::iter(frames.chain([
-            Ok(Message::Binary(vec![0; tail + extra].into())),
-            Ok(Message::Binary(Bytes::new())),
-        ]));
+        let frames = std::iter::once(head.clone())
+            .chain(std::iter::repeat_n(bytes.clone(), limit / FRAME))
+            .chain([Bytes::from(vec![0; extra]), Bytes::new()]);
+        let mut ws = futures_util::stream::iter(frames.map(|b| Ok(Message::Binary(b))));
+        let result = read_wire(&mut ws, Provider::Claude, &BODY_BUDGET).await;
         if extra == 0 {
-            assert_eq!(read_wire(&mut ws).await.unwrap().len(), wire_limit);
+            assert_eq!(result.unwrap().len(), HEAD_BYTES + 4 + limit);
         } else {
-            assert_eq!(read_wire(&mut ws).await.unwrap_err(), BAD_REQUEST);
+            assert_eq!(result.unwrap_err(), BAD_REQUEST);
         }
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn model_exit_body_budget_refuses_when_full_and_releases_with_the_upload() {
+    static BUDGET: Semaphore = Semaphore::const_new(2);
+    let occupied = reserve_body(&BUDGET, 1).await.unwrap();
+    let head = Bytes::from(format!(
+        "POST /v1/messages HTTP/1.1\r\nHost: {CLAUDE}\r\nContent-Length: 1025\r\n\r\n"
+    ));
+    let mut blocked =
+        futures_util::stream::iter(std::iter::once(Ok(Message::Binary(head.clone()))).chain(
+            std::iter::from_fn(|| panic!("body read before budget reservation")),
+        ));
+    assert_eq!(
+        read_wire(&mut blocked, Provider::Claude, &BUDGET)
+            .await
+            .unwrap_err(),
+        BUSY
+    );
+    drop(occupied);
+    let mut ready = futures_util::stream::iter(
+        [head, Bytes::from(vec![0; 1025]), Bytes::new()].map(|b| Ok(Message::Binary(b))),
+    );
+    let wire = read_wire(&mut ready, Provider::Claude, &BUDGET)
+        .await
+        .unwrap();
+    let upload = wire.slice(wire.len() - 1025..);
+    drop(wire);
+    assert_eq!(BUDGET.available_permits(), 0);
+    drop(upload);
+    assert_eq!(BUDGET.available_permits(), 2);
 }
 
 #[test]
@@ -478,7 +508,8 @@ fn model_exit_replaces_credentials_only_in_the_provider_request() {
     );
     let req = Request::parse(head.as_bytes(), Provider::Codex, address).unwrap();
     assert!(Request::parse(head.as_bytes(), Provider::Codex, CODEX).is_none());
-    let wire = req.canonical(Provider::Codex, b"{}".to_vec());
+    let mut wire = req.canonical_head(Provider::Codex);
+    wire.extend_from_slice(b"{}");
     assert!(!String::from_utf8_lossy(&wire).contains("placeholder"));
     let credential = Credential {
         provider: "codex".into(),
@@ -486,7 +517,7 @@ fn model_exit_replaces_credentials_only_in_the_provider_request() {
         account_id: Some(ACCOUNT.into()),
     };
     let client = http_builder(crate::tls::http_builder()).build().unwrap();
-    let provider = upstream_request(&client, &credential, wire.clone()).unwrap();
+    let provider = upstream_request(&client, &credential, wire.clone().into()).unwrap();
     assert_eq!(
         provider.url().as_str(),
         "https://chatgpt.com/backend-api/codex/responses"
@@ -502,7 +533,7 @@ fn model_exit_replaces_credentials_only_in_the_provider_request() {
     let mut extra = wire;
     extra.extend(b"extra");
     assert_eq!(
-        upstream_request(&client, &credential, extra).unwrap_err(),
+        upstream_request(&client, &credential, extra.into()).unwrap_err(),
         BAD_REQUEST
     );
 }

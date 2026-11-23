@@ -313,7 +313,10 @@ class RemoteRegistry:
         if changed:
             with self.lock:
                 if self.lease == epoch:
-                    self._command("model_exit_generations", generations=changed)
+                    try:
+                        self._command("model_exit_generations", generations=changed)
+                    except Problem:
+                        log.warning("model exit generations not pushed to the relay; retrying")
 
     def exit_grant(self, grant, epoch):
         """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read

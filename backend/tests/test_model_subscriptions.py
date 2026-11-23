@@ -418,25 +418,31 @@ def test_removing_a_pick_confirms_and_unsets_every_agent_selecting_it(api):
     assert post(api, f"attempts/{turn['id']}/renew", {}, m["token"])["stop"] is True
 
 
-def test_a_model_exit_turn_cannot_submit_a_refreshed_chatgpt_login(api):
+@pytest.mark.parametrize(("delivery", "status", "revision"), [("model_exit", 403, 1), ("shell", 200, 2)])
+def test_chatgpt_login_refresh_writeback_depends_on_delivery(api, delivery, status, revision):
     setup(api)
     sid = add(api, "codex_login", codex_file())["id"]
     m, _, turn = setup_attempt(api)
     with api.app.state.store.transaction() as c:
         c.execute(
             "INSERT INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision,delivery) "
-            "VALUES(?,'codex',?,1,'model_exit')",
-            (turn["id"], sid),
+            "VALUES(?,'codex',?,1,?)",
+            (turn["id"], sid, delivery),
         )
-    post(
+    answer = post(
         api,
         "runner-model-subscription-refresh",
         {"attempt": turn["id"], "subscription": sid, "revision": 1, "value": codex_file(refresh="r-2")},
         m["token"],
-        expected=403,
+        expected=status,
     )
+    if delivery == "shell":
+        assert answer == {"stored": True, "revision": 2}
     with api.app.state.store.read() as c:
-        assert MS.row(c, sid)["revision"] == MS.handed(c, turn["id"], "codex")["revision"] == 1
+        sub = MS.row(c, sid)
+        assert sub["revision"] == MS.handed(c, turn["id"], "codex")["revision"] == revision
+        kept = json.loads(MS.value_of(c, api.app.state.vault.cipher, sub))
+        assert kept["tokens"]["refresh_token"] == f"r-{revision}"
 
 
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):

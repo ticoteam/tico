@@ -10,11 +10,11 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{io, time::Duration};
+use std::{io, sync::OnceLock, time::Duration};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{oneshot, Semaphore, SemaphorePermit},
     task::{JoinHandle, JoinSet},
 };
 use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
@@ -22,11 +22,26 @@ use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 pub const CAPABILITY: &str = "model_exit_v1";
 const TIME: Duration = Duration::from_secs(25);
 const BODY: usize = 32 * 1024 * 1024;
+const BUDGET_WAIT: Duration = Duration::from_millis(250);
+// Permits count KiB across all local and exit tunnels in this process.
+static BODY_BUDGET: Semaphore = Semaphore::const_new(256 * 1024);
 const FRAME: usize = 64 * 1024;
 const CLAUDE: &str = "api.anthropic.com";
 const CODEX: &str = "chatgpt.com";
 const BAD_REQUEST: &str = "model_exit_bad_request";
+const BUSY: &str = "model_exit_busy";
 const UNAVAILABLE: &str = "model_exit_unavailable";
+
+async fn reserve_body(
+    budget: &Semaphore,
+    length: usize,
+) -> Result<SemaphorePermit<'_>, &'static str> {
+    let kib = length.div_ceil(1024) as u32;
+    tokio::time::timeout(BUDGET_WAIT, budget.acquire_many(kib))
+        .await
+        .map_err(|_| BUSY)?
+        .map_err(|_| BUSY)
+}
 
 #[derive(Clone, Copy)]
 pub enum Provider {
@@ -212,7 +227,7 @@ impl<'a> Request<'a> {
             .collect()
     }
 
-    fn canonical(&self, provider: Provider, body: Vec<u8>) -> Vec<u8> {
+    fn canonical_head(&self, provider: Provider) -> Vec<u8> {
         let mut wire = format!(
             "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Length: {}\r\n",
             self.path,
@@ -228,33 +243,44 @@ impl<'a> Request<'a> {
             wire.extend_from_slice(b"\r\n");
         }
         wire.extend_from_slice(b"\r\n");
-        wire.extend(body);
         wire
     }
 }
 
 async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
-    let Some(wire) = tokio::time::timeout(TIME, async {
-        let (head, mut body) = read_head(&mut tcp).await?;
-        let req = Request::parse(&head, turn.provider, &turn.authority)?;
+    let request = tokio::time::timeout(TIME, async {
+        let (head, body) = read_head(&mut tcp).await.ok_or(BAD_REQUEST)?;
+        let req = Request::parse(&head, turn.provider, &turn.authority).ok_or(BAD_REQUEST)?;
         let auth = req
             .headers
-            .get("authorization")?
-            .to_str()
-            .ok()?
-            .strip_prefix("Bearer ")?;
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))
+            .ok_or(BAD_REQUEST)?;
         if !same(auth, &turn.token) || body.len() > req.length {
-            return None;
+            return Err(BAD_REQUEST);
         }
-        let read = body.len();
-        body.resize(req.length, 0);
-        tcp.read_exact(&mut body[read..]).await.ok()?;
-        Some(req.canonical(turn.provider, body))
+        let permit = reserve_body(&BODY_BUDGET, req.length).await?;
+        let mut wire = req.canonical_head(turn.provider);
+        wire.reserve_exact(req.length);
+        let total = wire.len() + req.length;
+        wire.extend_from_slice(&body);
+        let read = wire.len();
+        wire.resize(total, 0);
+        tcp.read_exact(&mut wire[read..])
+            .await
+            .map_err(|_| BAD_REQUEST)?;
+        Ok(Bytes::from_owner(BufferedWire {
+            bytes: wire,
+            _permit: permit,
+        }))
     })
     .await
-    .ok()
-    .flatten() else {
-        return local_error(&mut tcp, 400, BAD_REQUEST).await;
+    .unwrap_or(Err(BAD_REQUEST));
+    let wire = match request {
+        Ok(request) => request,
+        Err(BUSY) => return local_error(&mut tcp, 502, BUSY).await,
+        Err(code) => return local_error(&mut tcp, 400, code).await,
     };
     let (mut read, mut write) = tcp.split();
     let mut extra = [0];
@@ -262,17 +288,37 @@ async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
         biased;
         _ = read.read(&mut extra) => Ok(()),
         result = async {
-            let mut ws = match open(turn).await {
+            let ws = match open(turn).await {
                 Ok(ws) => ws,
                 Err(code) => return local_error(&mut write, 502, code).await,
             };
-            for part in wire.chunks(FRAME).chain(std::iter::once(&[][..])) {
-                if ws.send(Message::Binary(part.to_vec().into())).await.is_err() {
-                    return local_error(&mut write, 502, UNAVAILABLE).await;
+            let (mut send, mut receive) = ws.split();
+            let upload = async move {
+                let mut wire = wire;
+                while !wire.is_empty() {
+                    let part = wire.split_to(wire.len().min(FRAME));
+                    send.send(Message::Binary(part)).await?;
                 }
-            }
+                send.send(Message::Binary(Bytes::new())).await
+            };
+            let first = tokio::select! {
+                biased;
+                frame = next_data(&mut receive) => frame,
+                result = upload => {
+                    if result.is_ok() {
+                        next_data(&mut receive).await
+                    } else {
+                        tokio::time::timeout(BUDGET_WAIT, next_data(&mut receive))
+                            .await.ok().flatten()
+                    }
+                }
+            };
+            let Some(first) = first else {
+                return local_error(&mut write, 502, UNAVAILABLE).await;
+            };
+            let mut replies = futures_util::stream::iter([Ok(first)]).chain(receive);
             let mut started = false;
-            while let Some(Ok(message)) = ws.next().await {
+            while let Some(Ok(message)) = replies.next().await {
                 match message {
                     Message::Binary(bytes) => {
                         started = true;
@@ -296,7 +342,7 @@ fn error_code(code: &str) -> &'static str {
     match code {
         "model_exit_offline" => "model_exit_offline",
         "model_exit_stale" => "model_exit_stale",
-        "model_exit_busy" => "model_exit_busy",
+        BUSY => BUSY,
         "model_exit_redirect" => "model_exit_redirect",
         BAD_REQUEST => BAD_REQUEST,
         _ => UNAVAILABLE,
@@ -387,6 +433,16 @@ struct Credential {
     account_id: Option<String>,
 }
 
+impl Credential {
+    fn provider(&self) -> Result<Provider, &'static str> {
+        match self.provider.as_str() {
+            "claude" => Ok(Provider::Claude),
+            "codex" => Ok(Provider::Codex),
+            _ => Err(UNAVAILABLE),
+        }
+    }
+}
+
 fn http_builder(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
         .https_only(true)
@@ -397,8 +453,9 @@ fn http_builder(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
 }
 
 pub(crate) async fn serve_exit(client: &Client, ws: Socket, id: &str, ticket: &str, room: bool) {
-    let http = http_builder(crate::tls::http_builder()).build();
-    serve_exit_with(client, ws, id, ticket, room, http).await;
+    static HTTP: OnceLock<Option<reqwest::Client>> = OnceLock::new();
+    let http = HTTP.get_or_init(|| http_builder(crate::tls::http_builder()).build().ok());
+    serve_exit_with(client, ws, id, ticket, room, http.as_ref()).await;
 }
 
 async fn serve_exit_with(
@@ -407,13 +464,13 @@ async fn serve_exit_with(
     id: &str,
     ticket: &str,
     room: bool,
-    http: Result<reqwest::Client, reqwest::Error>,
+    http: Option<&reqwest::Client>,
 ) {
     let result = async {
         if !room {
-            return Err("model_exit_busy");
+            return Err(BUSY);
         }
-        let http = http.map_err(|_| UNAVAILABLE)?;
+        let http = http.ok_or(UNAVAILABLE)?;
         let mut once = client.clone();
         once.retries = 0;
         let value = once
@@ -428,16 +485,19 @@ async fn serve_exit_with(
         ws.send(Message::Text(r#"{"ok":true}"#.into()))
             .await
             .map_err(|_| UNAVAILABLE)?;
-        let wire = tokio::time::timeout(TIME, read_wire(&mut ws))
-            .await
-            .map_err(|_| BAD_REQUEST)??;
+        let wire = tokio::time::timeout(
+            TIME,
+            read_wire(&mut ws, credential.provider()?, &BODY_BUDGET),
+        )
+        .await
+        .map_err(|_| BAD_REQUEST)??;
         let (mut send, mut receive) = (&mut ws).split();
         tokio::select! {
             biased;
             _ = async {
                 while let Some(Ok(Message::Ping(_) | Message::Pong(_))) = receive.next().await {}
             } => Ok(()),
-            result = forward(&mut send, &http, &credential, wire) => result,
+            result = forward(&mut send, http, &credential, wire) => result,
         }
     }
     .await;
@@ -451,15 +511,59 @@ async fn serve_exit_with(
     let _ = ws.close(None).await;
 }
 
-// The sender terminates the request with an empty binary frame, independently of HTTP framing.
+struct BufferedWire {
+    bytes: Vec<u8>,
+    // Reqwest can retain the upload buffer while it starts delivering a response.
+    _permit: SemaphorePermit<'static>,
+}
+
+impl AsRef<[u8]> for BufferedWire {
+    fn as_ref(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
 async fn read_wire(
     ws: &mut (impl Stream<Item = Result<Message, WsError>> + Unpin),
-) -> Result<Vec<u8>, &'static str> {
+    provider: Provider,
+    budget: &'static Semaphore,
+) -> Result<Bytes, &'static str> {
     let mut wire = Vec::new();
+    let (total, permit) = loop {
+        let Some(Message::Binary(bytes)) = next_data(ws).await else {
+            return Err(BAD_REQUEST);
+        };
+        if bytes.is_empty() || bytes.len() > 2 * FRAME {
+            return Err(BAD_REQUEST);
+        }
+        // Keep only a bounded header prefix until the declared body has a reservation.
+        let head_part = bytes.len().min(HEAD_BYTES + 4 - wire.len());
+        wire.extend_from_slice(&bytes[..head_part]);
+        if let Some(end) = find(&wire, b"\r\n\r\n") {
+            let req = Request::parse(&wire[..end], provider, provider.host()).ok_or(BAD_REQUEST)?;
+            let total = end + 4 + req.length;
+            if wire.len() + bytes.len() - head_part > total {
+                return Err(BAD_REQUEST);
+            }
+            let permit = reserve_body(budget, req.length).await?;
+            wire.reserve_exact(total - wire.len());
+            wire.extend_from_slice(&bytes[head_part..]);
+            break (total, permit);
+        }
+        if wire.len() >= HEAD_BYTES + 4 {
+            return Err(BAD_REQUEST);
+        }
+    };
+    // The empty frame terminates the request independently of HTTP framing.
     while let Some(message) = next_data(ws).await {
         match message {
-            Message::Binary(bytes) if bytes.is_empty() => return Ok(wire),
-            Message::Binary(bytes) if wire.len() + bytes.len() <= HEAD_BYTES + BODY + 4 => {
+            Message::Binary(bytes) if bytes.is_empty() && wire.len() == total => {
+                return Ok(Bytes::from_owner(BufferedWire {
+                    bytes: wire,
+                    _permit: permit,
+                }));
+            }
+            Message::Binary(bytes) if !bytes.is_empty() && wire.len() + bytes.len() <= total => {
                 wire.extend_from_slice(&bytes)
             }
             _ => break,
@@ -471,13 +575,9 @@ async fn read_wire(
 fn upstream_request(
     http: &reqwest::Client,
     credential: &Credential,
-    wire: Vec<u8>,
+    wire: Bytes,
 ) -> Result<reqwest::Request, &'static str> {
-    let provider = match credential.provider.as_str() {
-        "claude" => Provider::Claude,
-        "codex" => Provider::Codex,
-        _ => return Err(UNAVAILABLE),
-    };
+    let provider = credential.provider()?;
     let end = find(&wire, b"\r\n\r\n").ok_or(BAD_REQUEST)?;
     let req = Request::parse(&wire[..end], provider, provider.host()).ok_or(BAD_REQUEST)?;
     if wire.len() - end - 4 != req.length {
@@ -487,7 +587,7 @@ fn upstream_request(
         .post(req.upstream)
         .headers(req.protocol_headers(provider))
         .bearer_auth(&credential.access_token)
-        .body(Bytes::from(wire).slice(end + 4..));
+        .body(wire.slice(end + 4..));
     if matches!(provider, Provider::Codex) {
         let account = credential
             .account_id
@@ -503,7 +603,7 @@ async fn forward(
     send: &mut (impl Sink<Message> + Unpin),
     http: &reqwest::Client,
     credential: &Credential,
-    wire: Vec<u8>,
+    wire: Bytes,
 ) -> Result<(), &'static str> {
     let request = upstream_request(http, credential, wire)?;
     let mut upstream = http.execute(request).await.map_err(|_| UNAVAILABLE)?;

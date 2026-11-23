@@ -2732,7 +2732,7 @@ def refreshed(c, vault, who, body):
     given = c.execute(
         "SELECT s.runtime,s.revision,s.delivery,a.state,a.lease_until,a.stop_requested_at FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id WHERE s.attempt_id=? AND s.subscription_id=? "
-        "AND a.runner_id=? AND s.delivery IN ('','claim','legacy') "
+        "AND a.runner_id=? AND s.delivery<>'model_exit' "
         "AND NOT EXISTS (SELECT 1 FROM pending_subscription_fallbacks p "
         "WHERE p.attempt_id=s.attempt_id AND p.runtime=s.runtime)",
         (body.attempt, body.subscription, who.runner_id),
