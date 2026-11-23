@@ -55,6 +55,8 @@ export function BoardFit({ shape }: { shape: string }) {
       let end = from;
       while (end < cols.length && need(cols.slice(from, end + 1), MIN) <= avail + 0.5) end++;
       end = Math.max(end, from + 1);
+      // a page of folded strips alone would show part of the next column: take that column in
+      while (end < cols.length && !cols.slice(from, end).some(isOpen)) end++;
       const shown = cols.slice(from, end);
       const opens = shown.filter(isOpen).length;
       // capped only when nothing lies past the right edge: a capped column would leave part of the next one showing
