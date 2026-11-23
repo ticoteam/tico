@@ -75,6 +75,10 @@ def replace_retired(c: Connection, runner_id: str) -> None:
         _save(c, person_id, _choose(c, person_id))
 
 
+def clear(c: Connection, person_id: str) -> None:
+    _save(c, person_id, None)
+
+
 def replace_closed(c: Connection, runner_id: str) -> None:
     admins = access.owner_and_admin_emails(c)
     for person_id, email in c.execute(
@@ -105,7 +109,11 @@ def _may_change(auth: Any, who: Identity, person_id: str) -> bool:
 
 def _view(row: Any, auth: Any, who: Identity) -> Row:
     person_id = row["person_id"]
-    visible = row["accepts_member_bots"] or H.actor_id(who.actor) in (person_id, row["owner_id"]) or auth.bot_admin(who)
+    visible = (
+        row["accepts_member_bots"]
+        or who.actor in (f"human:{person_id}", f"human:{row['owner_id']}")
+        or auth.bot_admin(who)
+    )
     return {
         "person_id": person_id,
         "runner_id": row["runner_id"] if visible else None,
@@ -117,6 +125,11 @@ def _view(row: Any, auth: Any, who: Identity) -> Row:
 
 def listed(c: Connection, auth: Any, who: Identity) -> list[Row]:
     return [_view(row, auth, who) for row in c.execute(EXIT_ROWS + " ORDER BY p.person_id")]
+
+
+def _person(value: str) -> str:
+    """A pool is addressed by its owner's id or `human:<id>`; a missing pool is a 404 from `_exit`."""
+    return value.removeprefix("human:") if ":" not in value.removeprefix("human:") else ""
 
 
 def _exit(c: Connection, person_id: str) -> Any:
@@ -139,7 +152,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
     from . import model_subscriptions
 
     subs: Any = model_subscriptions
-    _reader, owner_of = subs._reader, subs.owner_of
+    _reader = subs._reader
 
     path = "/api/v2/model-subscriptions/plan-exits/{person}"
     errors = {"404": error("Personal plan pool not found")}
@@ -158,7 +171,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         who = request.state.identity
         _reader(who)
         with store.read_transaction() as c:
-            person_id = H.actor_id(owner_of(c, person))
+            person_id = _person(person)
             result = _view(_exit(c, person_id), auth, who)
             computers: list[Row] = []
             if result["can_change"]:
@@ -194,11 +207,11 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         def check(c: Connection) -> None:
             auth.sync_access(c)
-            if not _may_change(auth, who, H.actor_id(owner_of(c, person))):
+            if not _may_change(auth, who, _person(person)):
                 raise Problem("forbidden", "Only the pool owner or an admin can change its exit", 403)
 
         def work(c: Connection) -> Row:
-            person_id = H.actor_id(owner_of(c, person))
+            person_id = _person(person)
             _exit(c, person_id)
             eligible, args = _eligible(c, person_id)
             if not c.execute("SELECT 1" + eligible + " AND id=?", (*args, body.runner_id)).fetchone():

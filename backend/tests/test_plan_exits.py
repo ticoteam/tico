@@ -202,14 +202,14 @@ def test_closing_a_shared_exit_rechooses_only_for_members_who_lose_access(api):
 def test_departure_clears_a_plan_exit_and_a_legacy_exit_does_not_block_removal(api):
     person = post(api, "access/humans", {"email": "typo@acme.example"})["person"]
     store = api.app.state.store
+    computer = runner(api, label="Their Mac")["runner_id"]
     with store.transaction() as c:
-        c.execute("INSERT INTO plan_exits(person_id,generation) VALUES(?,1)", (person,))
+        c.execute("INSERT INTO plan_exits(person_id,runner_id,generation) VALUES(?,?,1)", (person, computer))
     post(api, f"humans/{person}", {"left": True})
-    assert stored_exit(api, person) is None
+    # Cleared, not deleted: a later exit after they come back gets a higher generation.
+    assert stored_exit(api, person) == (None, 2)
 
     # Someone marked left before exits were cleared can still be removed.
-    with store.transaction() as c:
-        c.execute("INSERT INTO plan_exits(person_id,generation) VALUES(?,1)", (person,))
     removed = api.delete(f"/api/v2/humans/{person}", headers=headers("ana-test"))
     assert removed.status_code == 200, removed.text
     assert stored_exit(api, person) is None
@@ -225,3 +225,9 @@ def test_model_subscriptions_lists_each_plan_pools_exit(api):
         {"person_id": "ana", "runner_id": computer, "runner_label": "Office Mac", "generation": 1, "can_change": False},
         {"person_id": "cara", "runner_id": None, "runner_label": None, "generation": 0, "can_change": True},
     ]
+
+
+def test_an_unknown_pool_is_not_found(api):
+    setup(api)
+    for person in ("nobody", "bot:ops"):
+        assert api.get(f"/api/v2/{EXITS}/{person}", headers=headers("ana-test")).status_code == 404

@@ -2154,7 +2154,9 @@ def owner_left(c, settings, actor, owner):
     for (sid,) in c.execute("SELECT id FROM model_subscriptions WHERE owner_id=? ORDER BY id", (owner,)).fetchall():
         remove(c, settings, SimpleNamespace(actor=actor), sid, confirm=True)
     c.execute("DELETE FROM computer_subscriptions WHERE person=?", (owner,))
-    c.execute("DELETE FROM plan_exits WHERE person_id=?", (H.actor_id(owner),))
+    from .plan_exits import clear
+
+    clear(c, H.actor_id(owner))  # keeps the generation rising if they come back
     for bot, runtime in lost:
         H.event(c, actor, "agent_subscription.owner_left", bot, {"runtime": runtime, "owner": owner})
 
