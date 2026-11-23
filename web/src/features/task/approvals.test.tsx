@@ -10,7 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, notePlace } from '@/lib';
+import { forgetPlaces, noteList, notePlace, type ListRow } from '@/lib';
 import { useFollow } from '@/live/follow';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
@@ -1377,6 +1377,77 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));
     // the email's own toast follows it through its undo window
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
+  });
+
+  describe('opened beside its pipeline’s list', () => {
+    const row = (id: string, n: number, stage: string): ListRow => ({ id, n: String(n), stage });
+    const answered = () => send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
+    // as the shell's list does: its rows in the order drawn, again as an answer moves them (`then`, once it is taken)
+    const approveBeside = async (rows: ListRow[], then?: ListRow[]) => {
+      serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? (then && noteList({ pipeline: 'legal-responses', open: '36461', rows: then }), { body: { task: answered() } }) : null));
+      const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
+      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      noteList({ pipeline: 'legal-responses', open: '36461', rows });
+      fireEvent.click(await ready(await decision()));
+      return router;
+    };
+
+    it('Approve on its last ask opens the task below it, as its row does; moved on by the answer, it is still the one that was below @approvals', async () => {
+      const router = await approveBeside(
+        [row('a1', 36450, 's2'), row('19ca7418', 36461, 's2'), row('a2', 36470, 's2'), row('a3', 36480, 's3')],
+        [row('a1', 36450, 's2'), row('a2', 36470, 's2'), row('a3', 36480, 's3'), row('19ca7418', 36461, 's3')],
+      );
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
+      expect(router.state.location.search).toEqual({});
+      await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
+    });
+
+    it('at the last row of its stage goes on into the next stage; at the list’s last row, back to the board @approvals', async () => {
+      const on = await approveBeside([row('19ca7418', 36461, 's2'), row('a3', 36480, 's3')]);
+      await waitFor(() => expect(on.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+      cleanup();
+      const people = [queryClient.getQueryData(['me']), queryClient.getQueryData(['directory'])];
+      queryClient.clear();
+      forgetPlaces();
+      queryClient.setQueryData(['me'], people[0]);
+      queryClient.setQueryData(['directory'], people[1]);
+      // the row below it left the list before the answer was heard: nothing is below it now
+      const back = await approveBeside([row('a1', 36450, 's2'), row('19ca7418', 36461, 's2'), row('a2', 36470, 's2')], [row('a1', 36450, 's2'), row('19ca7418', 36461, 's2')]);
+      await waitFor(() => expect(back.state.location.pathname).toBe('/tasks/legal-responses'));
+      expect(back.state.location.search).toEqual({ owner: 'bot:lo' });
+    });
+
+    it('stays on the task while another ask on it waits, and its last answer goes on to the task below @approvals', async () => {
+      const ship = req({ requirement_id: 'rship', line: 'Ship it?', shows: [] });
+      const asking = { ...matter, documents: [], to_leave: [...(matter.to_leave ?? []), ship] } as TaskData;
+      const done = { ...asking, to_leave: [...(matter.to_leave ?? []), { ...ship, met: true, may: ['undo'], answer: { id: 'a9', value: 'ok', by: 'human:me', at: '2026-11-19T10:05:00Z', note: null } }] } as TaskData;
+      serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered() } } : url.endsWith('/asks/rship/answer') ? { body: { task: done } } : null));
+      const own = reply;
+      reply = (url, method) =>
+        method === 'GET' && (url.includes('/api/v2/tasks/%2336461') || url.endsWith('/api/v2/tasks/19ca7418'))
+          ? { body: { task: asking, runs: [], children, can_comment: true, mover: true } }
+          : url.endsWith('/oks/rship')
+            ? { status: 404, body: {} }
+            : own(url, method);
+      const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
+      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461, 's2'), row('a2', 36470, 's2')] });
+      const box = (named: string) =>
+        waitFor(() => {
+          const found = screen.getAllByRole('region', { name: 'The decision' }).find((b) => within(b).queryByText(named));
+          expect(found).toBeTruthy();
+          return found as HTMLElement;
+        });
+      fireEvent.click(await ready(await box('Email to Dana Ruiz')));
+      await waitFor(() => expect(sent.map((x) => x.url)).toEqual([`/api/v2/tasks/b78be168/asks/${rid}/ok`]));
+      await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
+      // Ship it? still waits on the person: the task stays open
+      const last = await box('Ship it?');
+      await act(async () => {});
+      expect(router.state.location.pathname).toMatch(/^\/tasks\/legal-responses\/36461(\/|$)/);
+      fireEvent.click(await ready(last));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
+    });
   });
 
   it('a refused Approve says why, over the email, with Approve there to press again @approvals', async () => {

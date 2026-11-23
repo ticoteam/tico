@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
-import { Fragment, Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
@@ -68,7 +68,7 @@ import { usePhoneCards } from '@/shell/phone';
 import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, leaveTask, notePlace } from '@/lib';
+import { boardSearch, chatAddress, leaveTask, noteList, notePlace } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -768,8 +768,12 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
   const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
   const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
-  const rows = page?.tasks ?? [];
-  const stages = (p?.stages ?? []).map((s) => ({ ...s, items: rows.filter((t) => t.stage_id === s.id) })).filter((s) => s.items.length);
+  const stages = useMemo(() => (p?.stages ?? []).map((s) => ({ ...s, items: (page?.tasks ?? []).filter((t) => t.stage_id === s.id) })).filter((s) => s.items.length), [p, page]);
+  // the rows in the order drawn, folded stages left out: an answer that leaves the open task with nothing on it for the
+  // person goes on to the row below it (TaskPage)
+  const drawn = useMemo(() => stages.flatMap((g) => (shut.has(g.id) ? [] : g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id), stage: t.stage_id })))), [stages, shut]);
+  useEffect(() => noteList({ pipeline, open, rows: drawn }), [pipeline, open, drawn]);
+  useEffect(() => () => noteList(null), []);
   const name = p?.name ?? 'Tasks';
   return (
     <Sheet kind="list" label={name}>

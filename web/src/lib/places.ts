@@ -57,8 +57,42 @@ export function leaveTask(r: Steps, board?: () => string | null | Promise<string
   });
 }
 
+/** A row of the list beside an open task: its task's id, its number as the address names it, and its stage. */
+export interface ListRow {
+  id: string;
+  n: string;
+  stage: string | null;
+}
+
+/* The list beside an open task, as drawn: `rows` in order, the last drawn with the open task where it was first drawn
+   (`stage`, undefined until it is drawn), and `now`, what it draws now. */
+let listed: { pipeline: string; open: string; rows: ListRow[]; stage?: string | null; now: ReadonlySet<string> } | null = null;
+
+/** The list beside an open task (its pipeline, the open task as the address names it), as it draws its rows in order (a
+    folded stage's are not drawn); null once it is not drawn. An answer that moves the open task to another stage, or
+    off the list, keeps the order it was answered in: the row below it stays the one below it. */
+export function noteList(list: { pipeline: string; open: string; rows: ListRow[] } | null): void {
+  if (!list) return void (listed = null);
+  const { pipeline, open, rows } = list;
+  const now = new Set(rows.map((r) => r.id));
+  const at = rows.find((r) => r.n === open || r.id === open);
+  if (listed?.pipeline === pipeline && listed.open === open && listed.stage !== undefined && at?.stage !== listed.stage) return void (listed = { ...listed, now });
+  listed = { pipeline, open, rows, now, ...(at && { stage: at.stage }) };
+}
+
+/** The task below `id` in the list beside it, as a press on its row opens it (its pipeline and number), past rows that
+    have left the list since; null at the list's last row, or with no list drawn. */
+export function nextInList(id: string): { pipeline: string; task: string } | null {
+  if (!listed) return null;
+  const { pipeline, rows, now } = listed;
+  const at = rows.findIndex((r) => r.id === id);
+  const next = at < 0 ? undefined : rows.slice(at + 1).find((r) => r.id !== id && now.has(r.id));
+  return next ? { pipeline, task: next.n } : null;
+}
+
 /** Forgets every place (tests). */
 export function forgetPlaces(): void {
   beforeTask = null;
   boards.clear();
+  listed = null;
 }

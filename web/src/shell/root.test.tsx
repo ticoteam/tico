@@ -11,7 +11,7 @@ import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
 import { pipelineTasksQuery } from '@/features/tasks/routing';
-import { forgetPlaces } from '@/lib';
+import { forgetPlaces, nextInList } from '@/lib';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
 import { foldSheet } from './Frame';
@@ -919,6 +919,25 @@ describe('a task opened from a board', () => {
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
     expect(await screen.findByRole('navigation', { name: 'Engineering' })).toBeTruthy();
+  });
+
+  it('keeps its rows in the order drawn, a folded stage’s left out, so an answer that leaves nothing on the task opens the row below', async () => {
+    lists.eng = [row(7, 'Bulk edit stock', 'review'), row(8, 'Postal codes', 'qa'), row(5, 'Rate fallback', 'review')];
+    await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    await within(list).findByRole('link', { name: /Postal codes/ });
+    // by stage, then as the list read gives them: Review's 7 and 5, then QA's 8
+    expect(nextInList('t7')).toEqual({ pipeline: 'eng', task: '5' });
+    expect(nextInList('t5')).toEqual({ pipeline: 'eng', task: '8' });
+    expect(nextInList('t8')).toBeNull();
+    fireEvent.click(within(list).getByRole('button', { name: /^QA/ }));
+    await waitFor(() => expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull());
+    expect(nextInList('t5')).toBeNull();
+    // with the list closed there is no row below
+    fireEvent.click(within(list).getByRole('button', { name: 'Close the list' }));
+    expect(await screen.findByRole('navigation', { name: 'Main' })).toBeTruthy();
+    expect(nextInList('t7')).toBeNull();
   });
 
 });
