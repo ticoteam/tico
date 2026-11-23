@@ -16,8 +16,8 @@ date. It is a named wait, not a state:
   again: it moves on if everything its stage asks is met (task_engine.advance), else its owner is woken once, "#304 is
   done" or "#304 was closed without doing it" so they re-plan. A deleted task does the same, "#304 was deleted"
   (`deleted`), and so does a dependency someone takes off, "#304 no longer blocks this task" (`unlinked`), except
-  that an owner bot who took it off itself is not woken for it. No poll and no date. Every dependency written or taken off leaves a history row on the waiting task,
-  from which `spans` gives the time it was blocked.
+  that an owner bot who took it off itself is not woken for it. No poll and no date. Every dependency written or taken
+  off leaves a history row on the waiting task, from which `spans` gives the time it was blocked.
 - `check`: the writer must be able to change the waiting task and read the other one (task_relations.relate); a loop,
   or a dependency of or on a task that has ended, is refused.
 
@@ -59,6 +59,7 @@ DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
 UNLINKED = "{ref} no longer blocks this task"
+UNLINKED_UNNAMED = "A task that blocked this one no longer blocks it"
 WAKE = "unblocked"
 UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
 RELEASED_LINE = "Blocked by {task}, done, until production runs its release"
@@ -489,10 +490,31 @@ def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str)
     """`by` took the dependency of `task_id` on `blocker_id` off (task_relations.relate): what the blocker's end does
     (`release_one`), "#304 no longer blocks this task", on the same wake key, so the owner hears of that blocker once a
     visit however it stops blocking. The owner bot that took it off itself is not woken: it knows. 1 when released."""
-    found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
-    said = UNLINKED.format(ref=ref({"id": blocker_id, "number": found[0] if found else None}))
     row: Row | None = _engine().task(conn, task_id)
-    return release_one(conn, task_id, blocker_id, said, tell=not (row and row.get("owner_id") == by))
+    if not row:
+        return 0
+    found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
+    named = UNLINKED.format(ref=ref({"id": blocker_id, "number": found[0] if found else None}))
+    said = named if _named_to_all(conn, row, blocker_id) else UNLINKED_UNNAMED
+    return release_one(conn, task_id, blocker_id, said, tell=row.get("owner_id") != by)
+
+
+def _named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
+    """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when it is private,
+    so may every party and reader of `row`, who read the thread later (as task_wakes.told does for a filed task)."""
+    from . import hubdb, task_calls
+
+    H: Any = hubdb
+    TC: Any = task_calls
+    owner = row.get("owner_id")
+    blocker: Row | None = TC._readable_rows(conn, owner, [blocker_id]).get(blocker_id) if owner else None
+    if not blocker:
+        return False
+    if not H.task_private(conn, blocker):
+        return True
+    full: Row = H.task(conn, str(row["id"])) or {}
+    parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
+    return all(H.task_private_readable(conn, p, blocker) for p in parties)
 
 
 def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str, *, tell: bool = True) -> int:

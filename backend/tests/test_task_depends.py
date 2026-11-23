@@ -288,6 +288,22 @@ def test_taking_the_last_dependency_off_wakes_the_owner_once_as_its_end_would(c)
     assert len(bodies(c, blocked)) == 1
 
 
+def test_the_note_for_a_dependency_taken_off_names_a_private_blocker_only_if_every_reader_may_open_it(c):
+    """The wake is kept in the waiting task's thread: a private blocker one of its readers may not open is "a task",
+    never its number, as the Blocked by line says it to them (waiting_on.unnamed)."""
+    import json
+
+    build(c)
+    blocker, blocked = task(c, "Salary numbers"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([X.ANA]), blocker))
+    c.execute("UPDATE tasks SET readers=? WHERE id=?", (json.dumps(["human:ben"]), blocked))
+    X.settled(c)
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
+    (body,) = bodies(c, blocked)
+    assert D.UNLINKED_UNNAMED in body and ref(c, blocker) not in body
+
+
 def test_taking_one_of_two_dependencies_off_wakes_nobody(c):
     build(c)
     first, second, blocked = task(c, "Part 1"), task(c, "Fix main"), task(c, "Part 2")
@@ -328,6 +344,7 @@ def test_a_person_owner_is_sent_nothing_when_a_dependency_is_taken_off(c):
     blocker = task(c, "Part 1")
     mine = X.new_task(c, X.ANA, "Write the copy", assignee=X.ANA)["id"]
     TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
     sent = c.execute("SELECT count(*) FROM messages").fetchone()[0]
     TR.relate(c, X.ANA, mine, blocker, "depends_on", remove=True)
     assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == sent
