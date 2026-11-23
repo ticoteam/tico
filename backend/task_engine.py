@@ -1278,10 +1278,6 @@ def move(
     # Why its sub-tasks close, kept on each: their readers may not read a private task that filed them, so it is not named.
     named = not H.task_private(conn, row) and row.get("title")
     closed_with = f"Closed with {named or 'the task that filed it'}"
-    if kind in ("back", "closed") or (kind == "side" and is_main_work(row["stage"])):
-        stage_effects.undo(conn, row, by, closed_with)
-    if kind == "closed":
-        _close_under(conn, task_id, by, closed_with)
     how = (
         "side"
         if side
@@ -1289,7 +1285,13 @@ def move(
     )
     if pushed:
         how = "pushed_past"
+    # The visit ends before what it filed closes: a closed sub-task it depends on releases it (task_depends.release),
+    # and a task with an open visit would be moved on from inside this move, opening a second visit (HotMic #95).
     _close_visit(conn, visit, how, by, why, ts)
+    if kind in ("back", "closed") or (kind == "side" and is_main_work(row["stage"])):
+        stage_effects.undo(conn, row, by, closed_with)
+    if kind == "closed":
+        _close_under(conn, task_id, by, closed_with)
     if row.get("snooze"):
         _end_snooze(conn, row["snooze"], by, ts)  # a snooze sets a task aside in one stage: it ends with the visit
     assignee = _feature_owner(row)
