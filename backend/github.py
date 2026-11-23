@@ -1330,11 +1330,13 @@ def _set_dropped(detail, dropped, pending=False):
         detail.pop(DROPPED_PENDING, None)
 
 
-def _still_going(detail):
+def _still_going(detail, *also):
     """Whether the stored copy says a check on the head was still going: one it kept, or one it left out. Tico's own
-    gate is not a check that is going (`_counted`)."""
+    gate is not a check that is going (`_counted`). `also`: kept states that count as going too (a read afresh takes
+    one waiting for approval, as the periodic read does)."""
+    kept = _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
     return (
-        "pending" in _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
+        any(state in kept for state in ("pending", *also))
         or detail.get("checks_dropped") == "pending"
         or bool(detail.get(DROPPED_PENDING))
     )
@@ -1842,12 +1844,17 @@ def refresh_task_prs(service, task_id):
                         # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
                         # a failing link that still holds a running check: this refresh moves the link's updated_at, so
                         # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
+                        # A check waiting for approval is read the same way, for the same reason.
                         checks = None
                         stored = H._json(link.get("detail"), {}) or {}
                         dropped = stored.get("checks_dropped")
                         if (
                             head
-                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and (
+                                link.get("checks") in ("pending", "approval")
+                                or dropped
+                                or _still_going(stored, "approval")
+                            )
                             and pr.get("state") == "open"
                         ):
                             try:
