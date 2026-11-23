@@ -125,8 +125,8 @@ def test_no_checks_counts_as_met_only_on_a_draft_or_a_repo_that_runs_none(c):
     assert line(c, task_id, "checks_pass") == (R.MET, None, "No checks on this repo")  # a draft runs nothing
     F.save_pr(c, REPO, 2, {"draft": False}, 2)  # marked ready: its checks start now
     assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Waiting for checks")
-    age(c, "head_seen_at", H.shift(H.now(), hours=-3), 2)
-    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "No checks on acme/app#2 after 2 hours")
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-16), 2)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "No checks started on acme/app#2 after 15 minutes")
     other = X.new_task(c, X.ANA, "Ship it elsewhere", "eng")["id"]  # a repo none of whose PRs ran checks
     H.task_link(c, X.ANA, other, "https://github.com/acme/no_ci/pull/7")
     F.save_pr(c, "acme/no_ci", 7, {"state": "open", "head_sha": "c"}, 1)

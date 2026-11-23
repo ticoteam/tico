@@ -1,0 +1,158 @@
+"""Checks that wait for someone to approve them never finish by themselves (CI that trusts only an old GitHub App holds
+every agent PR at "Build not triggered: approval required", which Tico read as running for 2 hours). Checks pass says
+they need approval and is the owner's turn at once; a bot owner is woken once per commit, a person gets no message. A
+ready PR on a repo that runs checks, with none started, is the owner's after 15 minutes."""
+
+import pytest
+
+from backend import github as G
+from backend import task_engine as E
+from backend import task_requirements as R
+from backend.item_sources import github as F
+from backend.store import H
+from backend.tests.helpers import engine as X
+from backend.tests.helpers.fake_github import FakeGitHub
+from backend.tests.helpers.github_facts_merge_queue import REPO, RM, B, engineering, in_merge, later, new
+
+NEEDS = (
+    "Checks need approval on acme/app#1: build. Someone with access must approve the run on GitHub, or the CI must "
+    "trust Tico's GitHub app"
+)
+
+
+@pytest.fixture
+def c(company):
+    with company.transaction() as conn:
+        yield conn
+
+
+def line(c, task_id):
+    row = E.task(c, task_id)
+    s = next(s for s in R.standings(c, row) if s.requirement["condition"] == "checks_pass")
+    return (s.state, s.on, s.line)
+
+
+def run(status, conclusion=None, run_id=1):
+    return {
+        "id": run_id,
+        "name": "build",
+        "head_sha": "h1",
+        "status": status,
+        "conclusion": conclusion,
+        "app": {"slug": "github-actions"},
+        "check_suite": {"id": 1},
+    }
+
+
+def approval_wakes(c, task_id, actor=B):
+    return [k for k, _ in X.wakes(c, task_id, actor) if k.endswith(":approval")]
+
+
+def test_a_run_waiting_action_required_or_a_status_saying_so_needs_approval():
+    assert F.run_check(run("waiting"), "tico")["state"] == "approval"
+    assert F.run_check(run("completed", "action_required"), "tico")["state"] == "approval"
+    said = {"context": "ci/jenkins", "state": "pending", "description": "Build not triggered: approval required"}
+    assert F.status_check(said)["state"] == "approval"
+    assert F.status_check({**said, "description": "Build started"})["state"] == "pending"
+    assert F.status_check({**said, "state": "failure"})["state"] == "failure"
+    assert F.run_check(run("queued"), "tico")["state"] == "pending"
+    assert G._check_state("action_required") == "pending"  # the link never calls it failed
+    assert F._checks_state([{"state": "pending"}, {"state": "approval"}]) == "approval"
+    assert F._checks_state([{"state": "failure"}, {"state": "approval"}]) == "failure"  # a failure still wins
+
+
+def test_checks_pass_needs_approval_at_once_and_goes_back_to_running_once_approved(c):
+    engineering(c)
+    task_id = new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": [F.run_check(run("waiting"), "tico")]}, 1)
+    assert line(c, task_id) == (R.NOT_MET, B, NEEDS)
+    assert F.pr(c, REPO, 1)["checks_started_at"] is None
+    F.webhook(c, "check_run", {"check_run": run("completed", "action_required"), "repository": {"full_name": REPO}})
+    assert line(c, task_id) == (R.NOT_MET, B, NEEDS)  # action required is not a failure
+    failed = [{"name": "unit", "state": "failure"}, {"name": "build", "state": "approval"}]
+    F.save_pr(c, REPO, 1, {"checks": failed}, F.version_now())
+    assert line(c, task_id) == (R.NOT_MET, B, "Checks failed on acme/app#1: unit")
+    F.save_pr(c, REPO, 1, {"checks": [F.run_check(run("in_progress", run_id=2), "tico")]}, F.version_now())
+    assert line(c, task_id) == (R.WAITING, "github", "Checks running")  # approved: it runs
+    assert F.pr(c, REPO, 1)["checks_started_at"]
+    F.save_pr(c, REPO, 1, {"checks": [F.run_check(run("completed", "success", 3), "tico")]}, F.version_now())
+    assert line(c, task_id)[0] == R.MET
+
+
+def test_a_commit_status_saying_approval_required_needs_approval(c):
+    engineering(c)
+    task_id = new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": []}, 1)
+    status = {
+        "sha": "h1",
+        "context": "build",
+        "state": "pending",
+        "description": "Build not triggered: approval required",
+    }
+    F.webhook(c, "status", {**status, "repository": {"full_name": REPO}})
+    assert line(c, task_id) == (R.NOT_MET, B, NEEDS)
+    F.webhook(c, "status", {**status, "description": "Build started", "repository": {"full_name": REPO}})
+    assert line(c, task_id) == (R.WAITING, "github", "Checks running")
+
+
+def test_the_bot_owner_is_woken_once_per_commit_and_a_snooze_ends(c):
+    engineering(c)
+    task_id = new(c, 1)
+    waiting = [{"name": "build", "state": "approval"}]
+    F.save_and_settle(c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": waiting}, F.version_now())
+    (key,) = approval_wakes(c, task_id)
+    body = c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
+    assert "Checks need approval on acme/app#1: build" in body
+    F.save_and_settle(c, REPO, 1, {"checks": waiting}, F.version_now())  # read again: nobody is woken again
+    assert len(approval_wakes(c, task_id)) == 1
+    E.snooze(c, task_id, B, "Waiting for checks", later(90), seen_version=E.task(c, task_id)["version"])
+    F.save_and_settle(c, REPO, 1, {"head_sha": "h2", "checks": waiting}, F.version_now())  # a new commit
+    assert len(approval_wakes(c, task_id)) == 2
+    assert not E.task(c, task_id).get("snooze")
+
+
+def test_a_person_owner_gets_no_message(c):
+    X.github_installed(c)
+    X.pipeline(
+        c, "eng", "Engineering", stages=({"name": "Build", "owner": X.ANA, "requirements": [X.github("checks_pass")]},)
+    )
+    task_id = new(c, 1)
+    F.save_and_settle(
+        c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": [{"name": "build", "state": "approval"}]}, 1
+    )
+    assert line(c, task_id)[:2] == (R.NOT_MET, X.ANA)
+    assert approval_wakes(c, task_id, X.ANA) == []
+
+
+def test_queue_again_is_refused_while_the_checks_need_approval(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    F.run(company, gh)
+    gh.drop(REPO, 1, "It conflicts with its base branch")
+    gh.set_checks(REPO, gh.push(REPO, 1), "approval")
+    F.refresh(company, gh, later())
+    with company.transaction() as c:
+        version = E.task(c, task_id)["version"]
+        with pytest.raises(H.Refused) as raised:
+            F.requeue(c, task_id, RM, seen_version=version)
+        assert raised.value.detail == "The checks on acme/app#1 need approval"
+
+
+def test_no_checks_started_on_a_repo_that_runs_them_is_the_owners_after_15_minutes(c):
+    engineering(c)
+    new(c, 3)
+    F.save_pr(c, REPO, 3, {"state": "merged", "head_sha": "a", "merged_sha": "m", "checks": [{"state": "approval"}]}, 1)
+    assert F.runs_checks(c, REPO)  # a PR that needed approval counts as running checks
+    task_id = new(c, 1)
+    F.save_pr(c, REPO, 1, {"state": "open", "head_sha": "b"}, 1)
+    c.execute(
+        "UPDATE item_metadata SET fields=json_set(fields, '$.head_seen_at', ?) WHERE item_key=?",
+        (H.shift(H.now(), minutes=-14), f"{REPO}#1"),
+    )
+    assert line(c, task_id) == (R.WAITING, "github", "Waiting for checks")
+    c.execute(
+        "UPDATE item_metadata SET fields=json_set(fields, '$.head_seen_at', ?) WHERE item_key=?",
+        (H.shift(H.now(), minutes=-16), f"{REPO}#1"),
+    )
+    assert line(c, task_id) == (R.NOT_MET, B, "No checks started on acme/app#1 after 15 minutes")

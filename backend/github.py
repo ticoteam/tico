@@ -1115,7 +1115,9 @@ def _suite_key(suite, run):
 
 def _check_state(result):
     """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
-    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand."""
+    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand. A run that
+    ended `action_required` waits for someone to approve it: not finished, so no "Checks failed" wake sends its owner
+    hunting for a bug; Checks pass says it needs approval (item_sources.github.check_state)."""
     return (
         "passing"
         if result in ("success", "neutral")
@@ -1123,7 +1125,11 @@ def _check_state(result):
         if result == "skipped"
         else "cancelled"
         if result in ("cancelled", "stale")
-        else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+        else (
+            "pending"
+            if result in ("pending", "queued", "in_progress", "requested", "waiting", "action_required")
+            else "failing"
+        )
     )
 
 

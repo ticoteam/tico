@@ -609,7 +609,8 @@ the Assistant or Agent Ops writes for a person does not.
 - **A person's turn:** the task is in their Needs you, once. No reminders.
 - **Jev:** a failed check is retried on the same 3 tries, then goes to a person as "Jev couldn't check this".
 - **GitHub:** the PR is read again if the last read is over 5 minutes old. Checks still running after 2 hours become the
-  owner's turn with the reason; a PR that fell out of the merge queue is the owner's turn at once (Merge).
+  owner's turn with the reason; checks that need someone's approval are the owner's turn at once, and none started on
+  a ready PR of a repo that runs checks after 15 minutes; a PR that fell out of the merge queue is the owner's turn at once (Merge).
 - **Other tasks:** nothing. Those tasks have their own turn. When the last one ends, the owner is woken once with how
   each ended.
 - **Room:** the oldest waiting task takes the next free slot.

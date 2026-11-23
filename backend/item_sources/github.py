@@ -43,11 +43,14 @@ Row = dict[str, Any]
 
 PR_STATES = ("open", "closed", "merged")
 # skipped: every check that counts was skipped. cancelled: the newest run of a check was cancelled (or went stale) with
-# no run after it, and nothing failed: it is re-run, there is no code to fix.
-CHECK_STATES = ("none", "pending", "success", "skipped", "cancelled", "failure")
+# no run after it, and nothing failed: it is re-run, there is no code to fix. approval: a check waits for someone to
+# approve it (`check_state`) and nothing failed: it never runs by itself, so it is never "running" (CI that does not
+# trust Tico's GitHub app holds every agent PR at "approval required").
+CHECK_STATES = ("none", "pending", "success", "skipped", "cancelled", "approval", "failure")
 QUEUE_STATES = ("none", "queued", "auto_merge", "removed")
 QUEUED = ("queued", "auto_merge")  # in GitHub's merge queue, or auto-merge on where the repo has no queue
 NO_CHECKS_AFTER_S = 600  # C13: no checks for a commit 10 minutes after Tico saw it, and Checks pass is met
+NO_CHECKS_STARTED_S = 900  # a ready PR, a repo that runs checks, none 15 minutes after its commit: the owner's turn
 CHECKS_TOO_LONG_S = 7200  # checks still running after 2 hours: the owner's turn
 SILENT_S = 7200  # a wait on GitHub with no word from GitHub for 2 hours (down, refusing, no such PR): the owner's turn
 REREAD_S = 300  # a PR a task waits on is read again when its metadata is older than this
@@ -265,7 +268,8 @@ def save_pr(conn: "sqlite3.Connection", repo: str, number: int, metadata: Row, v
 
 
 def _checks_state(checks: list[Row]) -> str:
-    """failure if any of the checks that count failed, else pending if any runs, else cancelled if one's newest run was
+    """failure if any of the checks that count failed, else approval if one waits for someone to approve it (it never
+    finishes by itself), else pending if any runs, else cancelled if one's newest run was
     cancelled (`latest_checks` already left out a cancel a newer run superseded), else success if at least one passed;
     skipped when every one was skipped (or neutral): nothing ran and passed, so that is not passing. none when there
     are none. Tico's own check runs (`tico`) never count."""
@@ -274,6 +278,8 @@ def _checks_state(checks: list[Row]) -> str:
         return "none"
     if "failure" in states:
         return "failure"
+    if "approval" in states:
+        return "approval"
     if "pending" in states:
         return "pending"
     if "cancelled" in states:
@@ -338,7 +344,7 @@ def status_check(status: Row) -> Row:
     return {
         "name": str(status.get("context") or "Checks")[:200],
         "app": "status",
-        "state": check_state(status.get("state"), status.get("state")),
+        "state": check_state(status.get("state"), status.get("state"), str(status.get("description") or "")),
         "url": status.get("target_url") or "",
         "tico": False,
         "suite": None,
@@ -770,13 +776,22 @@ def real_failure(check: object) -> bool:
     return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
 
 
-def check_state(status: object, conclusion: object) -> str:
-    """A check run's or status's state as metadata keeps it: pending, success, skipped, cancelled or failure. A neutral
-    run is skipped: it fails nothing, and it is not a check that ran and passed. A cancelled (or stale) run failed
-    nothing either: GitHub cancels a duplicate run of a concurrency group, or someone did by hand. A failed or timed-out
-    run is a failure."""
+APPROVAL_SAID = re.compile(r"approval required|requires? approval|needs? approval", re.IGNORECASE)
+
+
+def check_state(status: object, conclusion: object, description: str = "") -> str:
+    """A check run's or status's state as metadata keeps it: pending, success, skipped, cancelled, approval or failure.
+    A neutral run is skipped: it fails nothing, and it is not a check that ran and passed. A cancelled (or stale) run
+    failed nothing either: GitHub cancels a duplicate run of a concurrency group, or someone did by hand. A failed or
+    timed-out run is a failure. A run waiting for an approval (status `waiting`: a deployment protection rule), one that
+    ended `action_required` (a workflow run from an App or fork the repo does not trust), and a pending commit status
+    whose `description` says approval is required are approval: none of them runs until someone approves it."""
+    if status == "waiting" or conclusion == "action_required":
+        return "approval"
     if str(status or "completed") not in ("completed", "success", "failure", "error"):
         return "pending"
+    if status == "pending" and APPROVAL_SAID.search(description):
+        return "approval"
     result = str(conclusion or status or "")
     if result == "success":
         return "success"
@@ -1287,6 +1302,7 @@ WAKE_CHANGED = "changed_after_ok"
 WAKE_REFUSED = "queue_refused"
 WAKE_NEWS = "merge_news"  # GitHub news that ends a bot's snooze (`snooze_news`); the name predates other stages
 CHECKS_DONE = ("success", "failure", "skipped", "cancelled")
+CHECKS_NEWS = (*CHECKS_DONE, "approval")  # a head's checks state the owner hears of once: done, or never by itself
 # "#3417" or "owner/repo#3417" in a snooze's reason: a PR it waits on. A bare number is in the task's own repository.
 PR_NAMED = re.compile(r"(?<![\w/#])(?:([\w.-]+/[\w.-]+))?#(\d+)\b")
 DROPS = 3  # removals in one visit before the task goes up the ladder instead of back to the stage owner
@@ -1391,6 +1407,14 @@ def failing_names(metadata: Row, state: str = "failure") -> str:
     return ", ".join(dict.fromkeys(names)) or "a check"
 
 
+def approval_line(metadata: Row, ref: str) -> str:
+    """What to say of a PR whose checks wait for someone to approve them: they never run by themselves."""
+    return (
+        f"Checks need approval on {ref}: {failing_names(metadata, 'approval')}. Someone with access must approve the run "
+        "on GitHub, or the CI must trust Tico's GitHub app"
+    )
+
+
 def cancelled_line(metadata: Row, at: str = "") -> str:
     """What to say of a PR whose checks were cancelled, not failed: the owner re-runs them instead of fixing code."""
     where = f" at {at}" if at else ""
@@ -1477,6 +1501,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
             refuse("task_requirement", MO.conflict_line(conn, row, ref))
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
+        if metadata["checks_state"] == "approval":
+            refuse("task_requirement", f"The checks on {ref} need approval")
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
         if metadata["checks_state"] == "cancelled":
@@ -1653,11 +1679,14 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
     """The checks on a PR's newest commit finished (passed, failed, were cancelled or were all skipped), or finished again another way:
     `snooze_news` for each task that links it. Returns how many were woken."""
     state, head = str(after.get("checks_state") or ""), str(after.get("head_sha") or "")
-    if after["state"] != "open" or state not in CHECKS_DONE or not head:
+    if after["state"] != "open" or state not in CHECKS_NEWS or not head:
         return 0
     if before and (before.get("head_sha"), before.get("checks_state")) == (head, state):
         return 0
     ref = pr_ref(str(after["repo"]), int(after["number"]))
+    if state == "approval":
+        lead = f"{approval_line(after, ref)}."
+        return sum(approval_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
     if state == "success":
         lead = f"The checks on {ref} passed at {head[:12]}."
     elif state == "failure":
@@ -1667,6 +1696,28 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
     else:
         lead = f"Every check on {ref} was skipped at {head[:12]}."
     return sum(snooze_news(conn, task_id, f"checks:{ref}:{head}:{state}", lead) for task_id in task_ids)
+
+
+def approval_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str) -> bool:
+    """The checks on a PR's newest commit wait for someone to approve them, so they never finish by themselves and no
+    "checks finished" news comes: `snooze_news` for a bot's snooze, else the bot whose turn it is now is woken once per
+    commit (`what`) with `lead`. A person whose turn it is gets no message: it is in their Needs you. True when woken."""
+    from .. import task_wakes
+
+    if snooze_news(conn, task_id, what, lead):
+        return True
+    E = _engine()
+    row: Row | None = E.task(conn, task_id)
+    if not row or row["status"] != "open" or not row.get("visit") or row.get("snooze"):
+        return False
+    key = f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{what}"
+    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
+        return False
+    target, _ = E._turn_of(conn, row)
+    if not target or not E.is_bot(target):
+        return False
+    body = task_wakes.body(conn, row, lead, to=target)
+    return bool(task_wakes.add(conn, row, target, row["visit"], body, wake_key=key))
 
 
 def mergeable_news(conn: "sqlite3.Connection", task_id: str, ref: str, head: str, mergeable: str) -> bool:
@@ -2289,6 +2340,8 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"Checks on {ref} {cancelled_line(metadata)}")
     if state == "skipped":
         return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks ran on {ref}: every check was skipped")
+    if state == "approval":
+        return Standing(requirement, NOT_MET, task.get("owner_id"), approval_line(metadata, ref))
     if state == "pending":
         running = _seconds_since(metadata.get("checks_started_at"))
         if running is not None and running >= CHECKS_TOO_LONG_S:
@@ -2300,20 +2353,23 @@ def _checks_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
             return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
         if metadata.get("draft") or not runs_checks(conn, str(link["repo"])):
             return Standing(requirement, MET, line="No checks on this repo")  # C13
-        # A ready PR on a repo that runs checks: no checks yet is an outage or a skipped run, never a pass.
-        if seen < CHECKS_TOO_LONG_S:
+        # A ready PR on a repo that runs checks: no checks yet is an outage, a skipped run or CI that never started
+        # (one waiting for an approval it does not report), never a pass. It is the owner's after 15 minutes.
+        if seen < NO_CHECKS_STARTED_S:
             return Standing(requirement, WAITING, SOURCE, "Waiting for checks")
-        return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks on {ref} after 2 hours")
+        return Standing(requirement, NOT_MET, task.get("owner_id"), f"No checks started on {ref} after 15 minutes")
     return Standing(requirement, MET, line="Checks pass")
 
 
 def runs_checks(conn: "sqlite3.Connection", repo: str) -> bool:
-    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed, cancelled or skipped), not counting
+    """Whether a repo runs checks: a PR of it Tico has saved had any (running, passed, failed, cancelled, skipped or
+    waiting for approval), not counting
     Tico's own. Read from saved PRs, so it costs no call to GitHub; a repo's first PR has none to go by (C13 then)."""
     prefix = repo.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "#%"
     found = conn.execute(
         "SELECT 1 FROM item_metadata WHERE source=? AND item_type=? AND item_key LIKE ? ESCAPE '\\' AND connection_id='' "
-        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped', 'cancelled') LIMIT 1",
+        "AND json_extract(fields, '$.checks_state') IN ('pending', 'success', 'failure', 'skipped', 'cancelled', 'approval') "
+        "LIMIT 1",
         (SOURCE, PR, prefix),
     ).fetchone()
     return found is not None
