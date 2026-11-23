@@ -310,34 +310,27 @@ def _ended(api, task_id):
 
 
 ENDS = [
-    ("done", {"note": "Closed for now"}),
-    ("move", {"to": "done", "why": "Finished"}),
-    ("snooze", {"until": "2099-01-01", "why": "Later"}),
+    ("done", {"note": "Closed for now"}, "done"),
+    ("move", {"to": "done", "why": "Finished"}, "done"),
+    ("move", {"to": "closed", "why": "Chris said to close it for now"}, "closed"),
+    ("snooze", {"until": "2099-01-01", "why": "Later"}, "open"),
 ]
 
 
 def test_agent_ops_ends_its_own_task_with_its_own_rights_when_nothing_lends(api, agent_ops):
     """Task #35014: Chris's reply in the task's chat lent nothing, and every done, close or snooze was refused ("A person's
-    words inside a task are not a request to Agent Ops"). Ending its own task needs no one's rights."""
-    for op, body in ENDS:
+    words inside a task are not a request to Agent Ops"). Ending its own task needs no one's rights, and its owner closes
+    it even though a person asked for it (owner decision, 2026-11-23: they can reopen it)."""
+    for op, body, after in ENDS:
         task, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True, title=f"{op} {body}")
         ended = api.post(
             f"/api/v2/tasks/{task['id']}/{op}", json=_seen(api, task["id"], body), headers=headers(attempt["token"])
         )
         assert ended.status_code == 200, (op, body, ended.text)
         status, kind, actor = _ended(api, task["id"])
-        assert actor == "bot:botops", (op, body)
-        assert status == "done" if op != "snooze" else kind == "snooze", (op, body, status, kind)
+        assert (status, actor) == (after, "bot:botops"), (op, body)
+        assert op != "snooze" or kind == "snooze", (op, body, kind)
         finish(api, agent_ops, attempt)
-    # Closing a person's request is still a person's (C8, docs/dev/pipelines-v3.md): with its own rights, Agent Ops is
-    # told to ask them, not refused for the rights it tried to borrow.
-    task, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True)
-    closed = api.post(
-        f"/api/v2/tasks/{task['id']}/move",
-        json=_seen(api, task["id"], {"to": "closed", "why": "x"}),
-        headers=headers(attempt["token"]),
-    )
-    assert closed.status_code == 409 and closed.json()["error"] == "task_needs_person", closed.text
 
 
 def test_a_refused_lend_still_reaches_nothing_else(api, agent_ops):
@@ -386,15 +379,16 @@ def test_a_persons_message_in_the_tasks_chat_is_their_comment(api, agent_ops):
     assert _ended(api, task["id"])[::2] == ("closed", "human:ana")
 
 
-def test_an_ordinary_bot_already_ends_its_own_task(api, agent_ops):
-    """Only Agent Ops borrows a requester's rights; any other bot works its own task with its own, so it never met this."""
+def test_an_ordinary_bot_ends_its_own_task(api, agent_ops):
+    """Only Agent Ops borrows a requester's rights; any other bot works its own task with its own. Told "You can close
+    for now" in a plain message in the task's chat, it closes its own task, though a person asked for it."""
     assign(api, agent_ops, "ops")
     ready(api, agent_ops, ["botops", "ops"])
-    task, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True, owner="ops")
-    ended = api.post(
-        f"/api/v2/tasks/{task['id']}/done",
-        json=_seen(api, task["id"], {"note": "x"}),
-        headers=headers(attempt["token"]),
-    )
-    assert ended.status_code == 200, ended.text
-    assert _ended(api, task["id"])[::2] == ("done", "bot:ops")
+    for op, body, after in ENDS:
+        task, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True, owner="ops", title=f"{op} {body}")
+        ended = api.post(
+            f"/api/v2/tasks/{task['id']}/{op}", json=_seen(api, task["id"], body), headers=headers(attempt["token"])
+        )
+        assert ended.status_code == 200, (op, body, ended.text)
+        assert _ended(api, task["id"])[::2] == (after, "bot:ops"), (op, body)
+        finish(api, agent_ops, attempt)

@@ -190,9 +190,9 @@ Who must say why:
 - Reopen: everyone gives a note.
 - Snooze: a bot.
 
-A bot can't close a person's request (C8): `move(..., CLOSED)` by a bot is refused `task_needs_person` when the task's
-requester is a person and no task filed it, and the detail tells it to ask that person, in one sentence, why it can't be
-done (they close it or reassign it). A person closes anything. A bot closes what a bot asked for and what a task filed.
+A bot can't close a person's request it does not own (C8): `move(..., CLOSED)` by a bot other than the task's owner is
+refused `task_needs_person` when the task's requester is a person and no task filed it, and the detail tells it to ask that person, in one sentence, why it can't be
+done (they close it or reassign it). A person closes anything. A bot closes its own tasks, what a bot asked for and what a task filed.
 The engine closing filed tasks with the task above them (`cascade`) is not a bot.
 
 A bot sends `seen_version` with every command that takes one: move, reassign, snooze and add a requirement. A person

@@ -708,14 +708,14 @@ def s11(r: Rig) -> None:
     expect(r.stage_of(tasks[3]) == "On deck", "the newest waiting task jumped the queue")
 
 
-@scenario(12, "A bot tries to close a person's request")
+@scenario(12, "A bot tries to close a person's request it does not own")
 def s12(r: Rig) -> None:
     from backend import task_engine as E
 
     task = r.task(BEN, "Book the flights", assignee=BUILDER)
     version = r.row(task)["version"]
-    out = r.act(BUILDER, lambda c: E.move(c, task, E.CLOSED, BUILDER, "Not possible", version))
-    expect(isinstance(out, Refusal), "a bot closed a person's request (C8)")
+    out = r.act(MANAGER, lambda c: E.move(c, task, E.CLOSED, MANAGER, "Not possible", version))
+    expect(isinstance(out, Refusal), "a bot closed a person's request it does not own (C8)")
     expect("ask" in out.detail.lower(), f"the refusal does not say to ask: {out.detail}")
 
 
@@ -888,7 +888,7 @@ def s18(r: Rig) -> None:
 def s21(r: Rig) -> None:
     from backend import task_engine as E
 
-    # A bot asked for it: a bot may close it (C8 keeps a person's request for a person to close).
+    # A bot asked for it: a bot may close it (C8 keeps a person's request for a person or its owner to close).
     task = r.task(MANAGER, "Spec the export", WORK, assignee=WRITER)
     r.to_deck(task)
     r.check()
