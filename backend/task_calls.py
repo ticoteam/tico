@@ -187,6 +187,29 @@ def may_handle_ask(
     return can_work(conn, actor, row)
 
 
+def done_note(conn: "sqlite3.Connection", actor: str, task_id: str, note: str | None) -> None:
+    """An agent's done note is one comment on the task by that agent: unstamped (so it is in the comments, not its
+    session), its @mentions delivered to nobody. Keyed on the visit it leaves (`<task>:<visit>:done:<agent>`), so a
+    retry posts nothing more and a done again on that visit updates the comment in place."""
+    H = _h()
+    text = str(note or "").strip()
+    if not text or not H.is_bot(actor):
+        return
+    from . import task_engine as E
+
+    row: Row = E.task(conn, task_id) or {}
+    visit: Row = row.get("visit") or {}
+    if row.get("status") != "open" or not visit.get("id") or not row.get("conversation_id"):
+        return
+    key = f"{task_id}:{visit['id']}:done:{actor}"
+    found = conn.execute("SELECT id FROM messages WHERE wake_key=? AND deleted_at IS NULL", (key,)).fetchone()
+    if found:
+        H.task_comment_edit(conn, actor, task_id, found[0], text)
+        return
+    made = H.task_comment(conn, actor, task_id, text, wake=False, extra_refs={"no_mentions": True}, checked=False)
+    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, made["id"]))
+
+
 # ----------------------------------------------------------------------------- moves
 @_task_write()
 def task_done(
@@ -226,6 +249,7 @@ def task_done(
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)  # a bot's own open ❓ here waits for its reply
+        done_note(conn, actor, task_id, note)
     own = next((s for s in R.standings(conn, row) if s.requirement["kind"] == "owner_done" and not s.met), None)
     pipe: Row = row.get("pipeline") or {}
     says = is_human(actor) or actor in (row.get("owner_id"), pipe.get("manager_id"), SYSTEM)
@@ -549,6 +573,7 @@ def task_answer(
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)
+        done_note(conn, actor, task_id, note)
     with task_effects.because(actor):
         return A.answer(
             conn,

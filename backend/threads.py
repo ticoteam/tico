@@ -1794,6 +1794,15 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         exclude=message["id"],
         people_notified=bool(refs.get("send_people")),
     )
+    if _cause(author) == "human" and audience_of(root) == "task" and not system:
+        # Whatever clears an agent's ❓ reaches it (question_marks.replied), plain comment or not: no asker is left
+        # waiting on an answer it never got.
+        from . import question_marks
+
+        named = {r["actor"] for r in reached} | {primary}
+        for bot in question_marks.cleared_askers(c, message["id"]):
+            if bot not in named and bot.startswith("bot:"):
+                reached.append({"actor": bot, "reason": "reply", "mode": "steer", "defer_for": None})
     seq = (message.get("seq") or 1) - 1
     out = []
     entry = next((r for r in reached if r["actor"] == primary), None) if primary else None

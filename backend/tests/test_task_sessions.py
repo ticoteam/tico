@@ -187,3 +187,96 @@ def test_two_agents_answering_each_other_wake_each_other_at_most_once(api):
     settle(api)
     agent_says(api, "bot:finance", row["id"], "Confirmed.", in_reply_to=asked["id"])
     assert len(jobs(api, "ops")) == 1, "an answer to what it asked wakes it"
+
+
+def asks(api, tid, *bots, person="human:ana"):
+    from backend import question_marks
+
+    with api.app.state.store.transaction() as c:
+        marks = [question_marks.ask(c, bot, tid, person, f"{bot}: which bank feed should I use?")["id"] for bot in bots]
+    settle(api)
+    return marks
+
+
+def open_asks(api, tid):
+    return {
+        r["bot_id"] for r in rows(api, "SELECT bot_id FROM question_marks WHERE task_id=? AND cleared_at IS NULL", tid)
+    }
+
+
+def test_the_pinned_answer_settles_its_ask_and_wakes_its_asker(api):
+    row = ticket(api)
+    mark, _ = asks(api, row["id"], "bot:ops", "bot:finance")
+    sent = comment(api, row["id"], "Use the Chase feed.", ask=mark)["comment"]
+    assert open_asks(api, row["id"]) == {"bot:finance"}, "exactly that ask is settled"
+    assert jobs(api, "ops") == [sent["id"]] and jobs(api, "finance") == []
+
+
+def test_a_plain_comment_that_clears_two_agents_asks_reaches_both(api):
+    row = ticket(api)
+    asks(api, row["id"], "bot:ops", "bot:finance")
+    sent = comment(api, row["id"], "Use the Chase feed for both.")["comment"]
+    assert open_asks(api, row["id"]) == set()
+    assert len(jobs(api, "ops")) == 1 and len(jobs(api, "finance")) == 1, "each asker hears the answer"
+    reached = rows(
+        api, "SELECT recipient FROM message_deliveries WHERE message_id=? AND recipient LIKE 'bot:%'", sent["id"]
+    )
+    assert {r["recipient"] for r in reached} == {"bot:ops", "bot:finance"}
+
+
+def test_a_message_in_one_agents_session_clears_only_that_agents_ask(api):
+    row = ticket(api)
+    asks(api, row["id"], "bot:ops", "bot:finance")
+    sent = comment(api, row["id"], "Use the Chase feed.", to="finance")["comment"]
+    assert open_asks(api, row["id"]) == {"bot:ops"}
+    assert jobs(api, "finance") == [sent["id"]] and jobs(api, "ops") == []
+
+
+def test_a_done_note_is_one_comment_by_the_agent_whose_mentions_reach_nobody(api):
+    from backend import task_calls
+
+    row = ticket(api)
+    with api.app.state.store.transaction() as c:
+        for _ in range(2):  # a retry
+            H.task_done(
+                c, "bot:ops", row["id"], "Closed May; @ben please file the report.", H.task(c, row["id"])["version"]
+            )
+    notes = rows(api, "SELECT id, sender_id, session_agent_id, wake_key FROM messages WHERE body LIKE 'Closed May;%'")
+    assert len(notes) == 1 and notes[0]["sender_id"] == "bot:ops" and notes[0]["session_agent_id"] is None
+    assert notes[0]["id"] in view(api, row["id"], comments="true")
+    assert rows(api, "SELECT 1 FROM message_deliveries WHERE message_id=?", notes[0]["id"]) == []
+    # Done again on one visit (after a send back): the same comment, updated in place.
+    again = ticket(api)
+    with api.app.state.store.transaction() as c:
+        task_calls.done_note(c, "bot:ops", again["id"], "First pass done.")
+        task_calls.done_note(c, "bot:ops", again["id"], "Second pass done, with the fix.")
+    said = rows(api, "SELECT body, edited_at FROM messages WHERE body LIKE '%pass done%'")
+    assert len(said) == 1 and said[0]["body"] == "Second pass done, with the fix." and said[0]["edited_at"]
+
+
+def told(api, person):
+    return rows(
+        api,
+        "SELECT m.body FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
+        "WHERE d.recipient=? AND json_extract(m.refs,'$.told') IS NOT NULL ORDER BY m.rowid",
+        person,
+    )
+
+
+def test_a_human_requester_hears_the_end_once_per_completion(api):
+    with api.app.state.store.transaction() as c:
+        row = H.task_create(c, "human:ben", "Close the month", "Reconcile May.", "bot:ops", lint=False)
+        for _ in range(2):  # a retry
+            H.task_done(c, "bot:ops", row["id"], "May is closed.", H.task(c, row["id"])["version"])
+    assert [r["body"] for r in told(api, "human:ben")] == ["Done: May is closed."]
+    with api.app.state.store.transaction() as c:
+        H.task_move(c, "human:ana", row["id"], H.TASK_REOPEN, "One more account", mover=True)
+        H.task_close(c, "human:ana", row["id"], "Moved to June", mover=True)
+    assert [r["body"] for r in told(api, "human:ben")] == ["Done: May is closed.", "Closed: Moved to June"]
+    assert told(api, "human:ana") == []
+    # An agent requester gets only its quiet report, as before.
+    with api.app.state.store.transaction() as c:
+        filed = H.task_create(c, "bot:cpo", "Check the refunds", "For May.", "bot:ops", lint=False)
+        H.task_done(c, "bot:ops", filed["id"], "Refunds checked.", H.task(c, filed["id"])["version"])
+    assert rows(api, "SELECT 1 FROM messages WHERE recipient_id='bot:cpo' AND wake_key LIKE '%:result'")
+    assert rows(api, "SELECT 1 FROM messages WHERE wake_key LIKE ?", f"{filed['id']}:%:told") == []

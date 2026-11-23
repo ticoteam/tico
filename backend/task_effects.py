@@ -144,6 +144,49 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
         conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
 
 
+def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
+    """The people who asked for a task hear once how it ended: one unstamped Tico line in its own thread, delivered to
+    each human requester (`requester_id` and task_requesters) who still reads it, never the one who ended it nor the
+    holder. It says the done note of this cycle (or the close's why), else just Done or Closed. Keyed on the visit the
+    end opened (`<task>:<visit>:told`), so a retry tells nobody again and a reopen starts a new completion. It widens
+    nothing: who may not read the task is left out."""
+    H = _h()
+    visit: Row = after.get("visit") or {}
+    room = H.conversation(conn, after.get("conversation_id")) if after.get("conversation_id") else None
+    if not visit.get("id") or not room or room.get("task_id") != after["id"]:
+        return
+    key = f"{after['id']}:{visit['id']}:told"
+    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
+        return
+    asked = [after.get("requester_id")] + [
+        r[0]
+        for r in conn.execute("SELECT actor FROM task_requesters WHERE task_id=? ORDER BY created_at", (after["id"],))
+    ]
+    people = [
+        p
+        for p in dict.fromkeys(asked)
+        if H.is_human(p) and p not in (actor, after.get("owner_id")) and H.task_private_readable(conn, p, after)
+    ]
+    if not people:
+        return
+    done = after["status"] == "done"
+    note = (why or "").strip()
+    if done and not note:
+        found = conn.execute(_CYCLE_NOTE_SQL, (after["id"],)).fetchone()
+        note = str(found[0] or "").strip() if found else ""
+    label = "Done" if done else "Closed"
+    text = f"{label}: {note[:NOTE_CHARS]}" if note else f"{label}."
+    # Not task news (refs.task), which reaches no person: this line is for the people it names.
+    message = H._write_message(conn, H.TICO_ACTOR, people[0], text, room, "notice", {"told": label.lower()}, None, None)
+    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
+    from . import threads
+
+    thread = threads.thread_row(conn, room["id"])
+    root = threads.root_of(conn, thread)
+    for person in people:  # one message, delivered to each (the first is its recipient)
+        threads._deliver_person(conn, thread, root, message, person, "addressed", True, None)
+
+
 # The latest completion note of this cycle (since the last reopen): the owner's done, a done again after a send back
 # (answers.reopen_sent_back), or a done's note kept on its move (`noting`). What a report back says when the move that
 # ended the task carried no note of its own.
@@ -339,6 +382,7 @@ def moved(
         deliveries: Any = delivery
         deliveries.task_closed(conn, before)
         _tell_requester(conn, after, actor, why)
+        _tell_people(conn, after, actor, why)
         _report_back(conn, after, by, why, revision)
     H.event(conn, actor, "task.close" if new == "closed" else "task.update", after["id"], {"status": new, "note": why})
     H.recount(conn, [after.get("owner_id"), after.get("requester_id"), before.get("owner_id")])

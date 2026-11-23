@@ -43,7 +43,7 @@ def register(
     task_place,
     visual_view,
 ):
-    def replying_to(c, who, task_id, body):
+    def replying_to(c, who, task_id, body, session=None):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
         A person's plain comment on a task where a bot's ❓ waits on them is their reply to it (writing it clears the ❓,
         hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's open ❓ on this task.
@@ -54,10 +54,12 @@ def register(
         if not body.ask:
             if who.role == "bot" or body.public or body.delivery == "goal":
                 return None, False
+            # A message in one agent's session answers only that agent's ❓ (question_marks.replied).
+            only = " AND bot_id=?" if session else ""
             mine = c.execute(
-                "SELECT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL "
-                "ORDER BY created_at LIMIT 1",
-                (task_id, who.actor),
+                "SELECT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL"
+                f"{only} ORDER BY created_at LIMIT 1",
+                (task_id, who.actor, *((session,) if session else ())),
             ).fetchone()
             return (mine[0], True) if mine else (None, False)
         if body.public or body.delivery == "goal":
@@ -141,7 +143,7 @@ def register(
         comment_rights(c, auth, who, task_id)
         session = session_target(c, who, row, body)
         replied = reply_target(c, who, row, body)
-        asker, asked_me = replying_to(c, who, task_id, body)
+        asker, asked_me = replying_to(c, who, task_id, body, session)
         if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
             question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.

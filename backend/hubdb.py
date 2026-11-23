@@ -3841,8 +3841,9 @@ def session_root(conn, bot, task_id, config=None):
     walk goes up through parents the same bot owns and stops at the topmost, so it continues that task's session.
     A subtask the bot filed for itself is new work it planned out, so it is its own root and runs in its own
     session beside its parent; a dozen filed from one turn would otherwise run one after another in that turn's lane.
-    A parent with another owner, or one whose readers differ, ends the walk: a bot-owned subtask under a
-    person's task is its own root, and a session never carries one task's words to people who cannot read it.
+    A parent with another owner, or a private parent or subtask, ends the walk: a bot-owned subtask under a
+    person's task is its own root, and a private ticket has its own provider session (`task:<id>`), so a session never
+    carries one task's words to people who cannot read it.
     `subtask_session: own` in the bot's config keeps every subtask its own session (clients/sessions.py), and a
     subtask on a check model (backend/check_models.py) is always its own: it reads the subtask, not the parent's thread.
     A stateless bot (`stateless`) has no shared session at all: every task is its own."""
@@ -3860,7 +3861,12 @@ def session_root(conn, bot, task_id, config=None):
         if not parent_id or parent_id in seen:
             break
         parent = _one(conn, "SELECT id,owner_id,requester_id,private FROM tasks WHERE id=?", (parent_id,))
-        if not parent or parent["owner_id"] != "bot:" + bot or not _same_readers(conn, current, parent):
+        if (
+            not parent
+            or parent["owner_id"] != "bot:" + bot
+            or task_private(conn, current)
+            or task_private(conn, parent)
+        ):
             break
         seen.add(parent_id)
         root, current = parent_id, parent
@@ -3887,19 +3893,6 @@ def prime_session_roots(conn, task_ids):
         ):
             rows[row["id"]] = row
     prime(conn, SESSION_ROOT_ROW_SQL, {(tid,): rows.get(tid) for tid in met})
-
-
-def _same_readers(conn, one, other):
-    """Whether two tasks may share a session: both public, or both private with every party of each able to
-    read the other, so nothing one session turn says reaches a reader of either task who could not read both."""
-    if task_private(conn, one) != task_private(conn, other):
-        return False
-    return not task_private(conn, one) or all(
-        task_private_readable(conn, who, b)
-        for a, b in ((one, other), (other, one))
-        for who in (a["owner_id"], a["requester_id"])
-        if who
-    )
 
 
 def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
@@ -4615,6 +4608,8 @@ def is_comment(msg):
                 "send_people",
                 "can_wait",
                 "held_by",
+                "no_mentions",  # an agent's done note (task_calls.done_note)
+                "answers_ask",  # a person's pinned answer (question_marks.ANSWERS)
             }
         )
     )

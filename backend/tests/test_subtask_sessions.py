@@ -84,7 +84,7 @@ def test_finishing_the_last_subtask_wakes_its_parent_once_whatever_session_it_ra
         assert filed_wakes(c, since) == [first, second]
 
 
-def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_the_same_readers(api):
+def test_a_private_subtask_or_parent_never_shares_a_session(api):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Plan the private launch", "x", "bot:ops", private=True, lint=False)[
             "id"
@@ -101,9 +101,33 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
             "id"
         ]
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (public,))  # made public later
-        assert H.session_root(c, "ops", shared) == parent
+        assert H.session_root(c, "ops", shared) == shared, "a private sub-ticket has its own session"
         assert H.session_root(c, "ops", apart) == apart
         assert H.session_root(c, "ops", public) == public
+
+
+def test_the_migration_starts_anew_an_open_private_parents_session_that_carried_a_private_subtask(api):
+    import importlib.resources
+
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Plan the private launch", "x", "bot:ops", private=True, lint=False)
+        H.task_create(c, "human:ana", "Draft the private copy", "x", "bot:ops", parent_id=parent["id"], private=True)
+        plain = H.task_create(c, "human:ana", "Plan the public launch", "x", "bot:ops", lint=False)
+        H.task_create(c, "human:ana", "Draft the public copy", "x", "bot:ops", parent_id=plain["id"], lint=False)
+        sql = next(
+            f.read_text()
+            for f in importlib.resources.files("backend.migrations").iterdir()
+            if f.name.endswith("_private_subtask_sessions.sql")
+        )
+        c.execute(sql)
+
+        def epoch(row):
+            found = c.execute(
+                "SELECT epoch FROM session_epochs WHERE conversation_id=?", (row["conversation_id"],)
+            ).fetchone()
+            return found[0] if found else 0
+
+        assert epoch(parent) == 1 and epoch(plain) == 0
 
 
 def roots_runner(api, mode="task"):
