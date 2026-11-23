@@ -415,18 +415,18 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 
 ## Who a task falls to
 
-When no bot can take a task further, or an OK or a page names nobody, it falls to a person: the one the never-stuck
+When no agent can take a task further, or an OK or a page names nobody, it falls to a person: the one the never-stuck
 ladder already brought it to, else its holder when that is a person, else its **assignee** when that is a person (who
 it is for, whoever holds this stage), else its pipeline's owner or manager when a person, else the first person above
-its manager bot on the chart, else the company's owner. Anyone who left, cannot sign in or cannot read a private task is
-passed over. So a review stage a person holds asks that person, and a stage a bot holds asks the person assignee; the
-bot's wake names them, and it may ask them on the task (a ❓ or a stage ask) when no bot named them assignee. A change
-of assignee moves both people's Needs you.
+its manager agent on the chart, else the company's owner. Anyone who left, cannot sign in or cannot read a private task is
+passed over. So a review stage a person holds asks that person, and a stage an agent holds asks the person assignee;
+the agent's wake names them, and it may ask them on the task (a ❓ or a stage ask) unless an agent named them assignee.
+A change of assignee moves both people's Needs you.
 
 A task used to name a **Human** for this; the assignee does that now. Each task's Human became its assignee where it
 was a company task with none, and otherwise its `human` role (a label, see above). Until the upgrade floor passes this
-release, `"human"` on task create and update (`tico task create|update --human <person>`) sets only that role, a person
-who can already read the task; `""` or null takes it off. The task no longer carries `human_id`.
+release, `"human"` on task create and update (the API and the MCP tools) sets only that role, a person who can
+already read the task; `""` or null takes it off. The task no longer carries `human_id`.
 
 ## Files
 

@@ -132,7 +132,7 @@ The refusal is a 409 the bot reads once and acts on, never a retry:
   or that it needs a manager). When the receiver is a person who wrote to the bot (addressed or @mentioning it) in the
   last 7 days, the detail names no manager instead: it says to file the work for them from that message
   (`--for human:<id> --from-message <id>`, so they are its requester) and ask on that task, and `via` is `null`.
-  An ask of the person assignee of an open task the bot owns, refused because a bot named them, gets one sentence saying so
+  An ask of the person assignee of an open task the bot owns, refused because an agent named them, gets one sentence saying so
   instead, and no `via`;
 - `reach_line`: a line blocks the pair (`per_day` 0) or its count for today is used;
 - `reach_cap`: its chats or tasks a day are used; the count starts again at midnight.

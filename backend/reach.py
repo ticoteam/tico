@@ -1068,7 +1068,7 @@ def _assignee_refused(c, sender, receiver, task_id):
     ).fetchone()
     if not row:
         return None
-    return "A bot named this task's assignee, not a person or Tico, so this task does not let it ask them."
+    return "An agent named this task's assignee, not a person or Tico, so this task does not let it ask them."
 
 
 def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_reply_to=None, before=None):

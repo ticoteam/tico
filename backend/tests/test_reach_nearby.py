@@ -962,7 +962,7 @@ def test_only_an_assignee_a_person_or_tico_named_on_this_task_opens_it(api):
     own = _humaned(api, set_by="bot:ops")
     detail = _refused_ask(api, "bot:ops", own["id"])
     assert detail == (
-        "A bot named this task's assignee, not a person or Tico, so this task does not let it ask them. Nothing was sent."
+        "An agent named this task's assignee, not a person or Tico, so this task does not let it ask them. Nothing was sent."
     ), detail
     parent = _humaned(api, set_by="human:ana", chart_too=False)
     child = task(api, "ana-test", "bot:ops", title="Child note")

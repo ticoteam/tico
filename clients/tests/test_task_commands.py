@@ -233,6 +233,24 @@ def test_each_command_and_its_tool_send_the_plans_request_with_the_version_given
     assert "tasks/T1" not in reads or tool[0] == "tico_task_label", "no tool reads the task for a version"
 
 
+def test_the_tools_human_is_the_human_role_and_never_the_retired_field():
+    """A task's Human is retired: the tools' `human` names a person in the `human` role, so a server past the upgrade
+    floor, which no longer reads `human`, still gets it. "" takes the role off; `me` is the caller."""
+    api = Recorder()
+    hubtools.BY_NAME["tico_task_create"]["fn"](
+        api, {"title": "Ship the notes", "human": "me", "roles": {"qa": ["dana"]}}
+    )
+    hubtools.BY_NAME["tico_task_update"]["fn"](api, {"id": "T1", "human": "ana", "version": 3})
+    hubtools.BY_NAME["tico_task_update"]["fn"](api, {"id": "T1", "human": "", "version": 3})
+    sent = [body for _, _, body in api.writes()]
+    assert all("human" not in body for body in sent)
+    assert [body["roles"] for body in sent] == [
+        {"qa": ["dana"], "human": ["bot:ops"]},
+        {"human": ["ana"]},
+        {"human": []},
+    ]
+
+
 @pytest.mark.parametrize(
     "name, args",
     [
