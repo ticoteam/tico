@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from . import claude_login, gateway_connection, login_holds, providers, read_cache
+from . import claude_login, gateway_connection, holds, login_holds, providers, read_cache
 from . import hubdb
 from . import model_subscriptions as model_subs
 from .auth import Identity
@@ -267,7 +267,7 @@ class Inputs:
     parked: set[tuple[str, str]] = field(default_factory=set)
 
 
-def prime(c: Connection, bots: list[str]) -> None:
+def prime(c: Connection, bots: list[str], *, legacy: bool = False) -> None:
     """Share payer inputs across readiness views in this snapshot."""
     values = RC.cache(c)
     if values is None:
@@ -276,6 +276,19 @@ def prime(c: Connection, bots: list[str]) -> None:
     snapshot = read(c, bots)
     for bot in bots:
         values[("agent_subscriptions.inputs", bot)] = snapshot
+    logins = {
+        HOLD._login("", HOLD.subscription_login(sub["id"]), runtime)
+        for (_, runtime), candidates in snapshot.candidates.items()
+        for sub in candidates
+    }
+    if legacy:
+        for (_, runtime), binding in MS._given(c).items():
+            logins.update(
+                HOLD._login("", HOLD.subscription_login(sub["id"]), runtime)
+                for sub in (binding["members"] if binding.get("person") else [binding])
+                if sub["id"]
+            )
+    holds.prime(c, holds.LOGIN_LIMIT, "login", logins)
 
 
 def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
@@ -485,9 +498,8 @@ def provider_runners(c: Connection, sub: Row) -> set[str]:
     for r in rows:
         caps: list[str] = H._json(r["capabilities"], []) or []
         if CAPABILITY in caps or (
-            sub["kind"] == "claude_login"
-            and claude_login.CAPABILITY in caps
-            and "model_subscriptions_v1" in caps
+            "model_subscriptions_v1" in caps
+            and (sub["kind"] != "claude_login" or claude_login.CAPABILITY in caps)
             and (
                 r["bound"] == sub["id"]
                 or (

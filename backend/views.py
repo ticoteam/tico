@@ -574,6 +574,7 @@ def prime_machines(c, slugs):
     assigned = _assigned_rows(c, sorted(set(slugs)))
     read_cache.prime(c, ASSIGNED_SQL, assigned)
     signed_in = []
+    legacy = False
     for (bot,), row in assigned.items():
         if not row or row["revoked_at"]:
             continue
@@ -581,8 +582,11 @@ def prime_machines(c, slugs):
         detail = bot_readiness(document, bot)
         if detail.get("ready") is True and signed_in_by_lapsed_plan(document, detail, {}):
             signed_in.append(bot)
+            if not legacy:
+                caps = H._json(row["capabilities"], []) or []
+                legacy = "model_subscriptions_v1" in caps and agent_subscriptions.CAPABILITY not in caps
     if signed_in:
-        agent_subscriptions.prime(c, signed_in)
+        agent_subscriptions.prime(c, signed_in, legacy=legacy)
 
 
 def _assigned_rows(c, slugs):

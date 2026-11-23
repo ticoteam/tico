@@ -10,6 +10,7 @@ from backend.store import H
 from backend.tests.helpers.api import assign, headers, post, runner
 from backend.tests.helpers.claim_statements import seed, traced
 from backend.tests.helpers.getting_started import heartbeat
+from backend.tests.helpers.model_subscriptions import OTHER, add, company, give, on, pick
 
 OLD = H.shift(H.now(), hours=-5)
 PR_OLD = H.shift(H.now(), hours=-13)
@@ -136,3 +137,39 @@ def test_health_and_status_statements_do_not_grow_with_the_fleet(api):
         assert check(small_body, key) and check(body, key), key
     assert large <= small + 4, (small, large)
     assert large_status <= small_status + 4, (small_status, large_status)
+
+
+def test_status_reads_legacy_bindings_and_payer_holds_once_for_all_agents(api):
+    company(api)
+    machine = seed(api, "paid", 8)
+    bound = add(api)["id"]
+    other = add(api, secret=OTHER, name="Other plan")["id"]
+    give(api, machine, "claude", bound)
+    bots = {}
+    for n in range(8):
+        slug = f"paid-{n:02d}"
+        on(api, slug, "claude", "claude-sonnet-5-5")
+        pick(api, slug, "claude", other if n == 7 else bound)
+        bots[slug] = {"runtime": "claude", "ready": True, "sign_in": "ready"}
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "0.6.221",
+            "platform": "test",
+            "capabilities": ["model_subscriptions_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
+                "bots": bots,
+            },
+        },
+        token=machine["token"],
+    )
+    with traced(api) as seen:
+        response = api.get("/api/status", headers=headers())
+    assert response.status_code == 200, response.text
+    readiness = {r["bot"] for r in response.json()["health_issues"] if r["kind"] == "readiness"}
+    assert readiness.intersection(bots) == {"paid-07"}
+    assert sum("FROM computer_subscriptions g " in sql for sql in seen) == 1
+    assert sum("FROM holds WHERE kind='usage_limit' AND holdable_type='login'" in sql for sql in seen) == 1

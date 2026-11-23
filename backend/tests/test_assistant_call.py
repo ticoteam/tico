@@ -12,10 +12,19 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post
 from backend.tests.helpers.assistant import room
-from backend.tests.helpers.calls import join, meet, start_call, thread  # noqa: F401 - meet installs the call doubles
+from backend.tests.helpers.calls import (
+    PCM_ONE_SECOND,
+    SILENCE_ONE_SECOND,
+    SYNTHETIC_SPEECH,
+    join,
+    meet,  # noqa: F401 - meet installs the call doubles
+    start_call,
+    thread,
+    thread_texts,
+)
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
-from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
+from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, machine, on, pick
 
 DONE = {"outcome": "completed", "last_seq": 0}
 
@@ -28,15 +37,18 @@ def _header_in_time(monkeypatch):
     monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
 
 
-def _resident(api):
+def _resident(api, *, legacy=False):
     """A runner for the Assistant that keeps a resident voice session."""
     credential_setup(api)
     company(api)
     default = get(api, "providers")["default"]
     on(api, "assistant", default["runtime"], default["model"])
-    caps = ("model_subscriptions_v1", PAYER_CAPABILITY, "private_lanes_v1", "voice_sessions_v1")
-    worker = machine(api, signed_in=True, bot="assistant", caps=caps)
-    pick(api, "assistant", default["runtime"], add(api)["id"])
+    caps = ("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1")
+    worker = machine(api, signed_in=not legacy, bot="assistant", caps=caps if legacy else (*caps, PAYER_CAPABILITY))
+    sid = add(api)["id"]
+    if legacy:
+        give(api, worker, default["runtime"], sid)
+    pick(api, "assistant", default["runtime"], sid)
     return worker
 
 
@@ -52,6 +64,38 @@ def _filed(api, task_id):
         row = c.execute("SELECT requester_id,owner_id FROM tasks WHERE id=?", (task_id,)).fetchone()
         creator = c.execute("SELECT actor FROM events WHERE action='task.create' AND target=?", (task_id,)).fetchone()
     return (*row, creator[0])
+
+
+def test_the_assistant_speaks_on_a_resident_runner_using_its_computer_binding(meet):
+    worker = _resident(meet, legacy=True)
+    rid = room(meet)["room_id"]
+    call = start_call(meet, rid, bots=["assistant"])
+    session = _claim(meet, worker)
+    assert session["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+    [sent] = get(meet, "credential-runtime", session["token"])["subscriptions"]
+    assert sent["value"] == TOKEN and session["subscriptions"][0]["source"] == "computer"
+
+    calls = meet.app.state.calls
+    join(meet, call["id"])
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    assert calls.settle()
+    path = f"attempts/{session['id']}"
+    turn = post(meet, f"{path}/inputs", {}, worker["token"])["call_voice"]["turn"]
+    assert turn["text"] == SYNTHETIC_SPEECH
+    reply = "I can help with the review."
+    post(
+        meet,
+        f"{path}/events",
+        {
+            "events": [
+                {"seq": 1, "kind": "message", "payload": {"voice_turn": turn["id"], "text": reply, "final": True}}
+            ]
+        },
+        worker["token"],
+    )
+    assert calls.settle()
+    assert reply in thread_texts(meet, rid)
+    assert [played[0] for played in meet.app.state.call_media.said] == [call["id"]]
 
 
 def test_a_call_in_your_assistant_chat_runs_as_the_assistant_and_its_follow_ups_are_your_personal_work(meet):

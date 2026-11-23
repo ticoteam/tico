@@ -3567,7 +3567,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     from .cloud_machines import resting as resting_machines
 
     resting_ids = resting_machines(c)
-    loads = load_statuses(c, [computer["id"] for computer in computers])  # one read for every computer
+    computer_loads = load_statuses(c, [computer["id"] for computer in computers])  # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])  # and their runner rows, once
     for computer in computers:
         if full or kind == "bot":
@@ -3583,7 +3583,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         # Its last boot's load cannot hold a machine that is asleep on purpose.
         hold = None
         if computer["id"] not in resting_ids:
-            hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
+            hold = computer_hold(c, computer["id"], status=computer_loads[computer["id"]], row=rows.get(computer["id"]))
             if not hold:
                 # Runner-local memory admission still reports a wait when diagnostics are off.
                 local_memory = next(

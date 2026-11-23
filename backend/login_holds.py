@@ -410,10 +410,12 @@ def probing(c, hold, now=None):
 
 
 def _probe_live(c, hold, now):
+    from .read_cache import one
+
     job = hold.get("probe_job")
     if not job:
         return False
-    row = c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()
+    row = one(c, "SELECT state FROM jobs WHERE id=?", (job,))
     if not row:
         return False
     if row["state"] in LIVE_JOB:

@@ -2,12 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from backend import agent_subscriptions, subscription_refresh as SR
 from backend.tests.helpers.api import assign, get, headers, post, runner
-from backend.tests.helpers.model_subscriptions import TOKEN, add, pick
+from backend.tests.helpers.model_subscriptions import TOKEN, add, give, pick
 
 
-def computer(api):
+def computer(api, *, legacy=False):
     """A computer that names its own login (as `beat({})` does) and can read a plan's week."""
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -21,7 +23,7 @@ def computer(api):
                 "model_subscriptions_v1",
                 "computer_logins_v1",
                 SR.PLAN_CAPABILITY,
-                agent_subscriptions.CAPABILITY,
+                *([] if legacy else [agent_subscriptions.CAPABILITY]),
             ],
             "readiness": {
                 "schema_version": 1,
@@ -44,10 +46,13 @@ def reset_in(days):
     return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
 
-def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_plans_reading(api):
+@pytest.mark.parametrize("legacy", [False, True], ids=["per-attempt-payer", "computer-binding"])
+def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_plans_reading(api, legacy):
     sid = add(api)["id"]
     assert post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)["error"]["code"] == "no_computer"
-    m = computer(api)
+    m = computer(api, legacy=legacy)
+    if legacy:
+        give(api, m, "claude", sid)
     pick(api, "ops", "claude", person="human:ana")
     asked = post(api, f"model-subscriptions/{sid}/usage-refresh", {})
     assert asked["state"] == "requested"

@@ -43,7 +43,7 @@ from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.company import company_store
-from backend.tests.helpers.model_subscriptions import add, codex_file, company, give, machine, on, pick
+from backend.tests.helpers.model_subscriptions import TOKEN, add, codex_file, company, give, machine, on, pick
 from backend.tests.helpers.models_preset import connected, on_tico
 from scripts import check_wire_contract
 
@@ -272,6 +272,22 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
     assert _states(meet, call_id) == [("ops", "listening", None)]
 
 
+def test_a_one_to_one_call_can_answer_a_queued_question_using_its_computer_binding(meet):
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    _speak(meet, call["id"], 0)
+    [turn] = _turns(meet, call["meeting_id"])
+    worker = _machine(meet, "ops", resident=True, legacy=True)
+    attempt = _claim(meet, worker, "ops")
+    assert attempt["message"]["refs"]["live_meeting"]["turn_id"] == turn["id"]
+    [sent] = get(meet, "credential-runtime", attempt["token"])["subscriptions"]
+    assert sent["value"] == TOKEN and attempt["subscriptions"][0]["source"] == "computer"
+    reply = "I can take the reliability review."
+    _complete(meet, worker, attempt, reply)
+    assert reply in thread_texts(meet, cid)
+    assert [played[0] for played in meet.app.state.call_media.said] == [call["id"]]
+
+
 def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering_a_task(meet):
     from backend import events
     from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task_bot
@@ -458,12 +474,9 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
     )
 
 
-def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog):
-    credential_setup(meet)
-    company(meet)
-    on(meet, "ops", "claude", "claude-sonnet-5-5")
-    worker = machine(meet, caps=RESIDENT_CAPS)
-    pick(meet, "ops", "claude", add(meet)["id"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["per-attempt-payer", "computer-binding"])
+def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog, legacy):
+    worker = _machine(meet, "ops", resident=True, signed_in=False, legacy=legacy)
     token = worker["token"]
     cid = _dm(meet)
     call = start_call(meet, cid)
@@ -472,6 +485,9 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     path = f"attempts/{attempt['id']}"
     assert attempt["config"]["model"] == "claude-sonnet-5-5"
     assert len(attempt["subscriptions"]) == 1 and attempt["gateway"] is False
+    if legacy:
+        [sent] = get(meet, "credential-runtime", attempt["token"])["subscriptions"]
+        assert sent["value"] == TOKEN and attempt["subscriptions"][0]["source"] == "computer"
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
     heard = threading.Event()
     media = meet.app.state.call_media
@@ -1914,15 +1930,20 @@ def _speak(api, call_id, start_ms, text=None):
             call_media.transcribe = call_media_transcribe
 
 
-def _machine(api, bot, *, resident=False, subscription=True, label="Test Mac"):
+def _machine(api, bot, *, resident=False, subscription=True, label="Test Mac", signed_in=True, legacy=False):
     credential_setup(api)
     company(api)
     default = get(api, "providers")["default"]
     on(api, bot, default["runtime"], default["model"])
     caps = RESIDENT_CAPS if resident else VOICE_CAPS
-    worker = machine(api, signed_in=True, bot=bot, caps=caps, label=label)
+    if legacy:
+        caps = tuple(cap for cap in caps if cap != PAYER_CAPABILITY)
+    worker = machine(api, signed_in=signed_in and not legacy, bot=bot, caps=caps, label=label)
     if subscription:
-        pick(api, bot, default["runtime"], add(api, name=label)["id"])
+        sid = add(api, name=label)["id"]
+        if legacy:
+            give(api, worker, default["runtime"], sid)
+        pick(api, bot, default["runtime"], sid)
     return worker
 
 

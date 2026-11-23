@@ -293,7 +293,8 @@ fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Detai
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
 
 An admin can read a Claude plan's week now. **Check use** in its **⋯** menu on Providers asks a compatible computer
-where an agent picks the plan or its pool. For a setup-token, the computer sends a one-line prompt to Haiku in a
+where an agent picks the plan or its pool. An older runner can read the plan when its computer binding carries it.
+For a setup-token, the computer sends a one-line prompt to Haiku in a
 temporary home, reports the week's percent and reset from the reply, and deletes the home. A setup-token can only run prompts, so
 Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
 is not kept there. One read runs at a time, and a plan can be read again a minute after the last. ChatGPT plans have no
