@@ -26,6 +26,8 @@ Product: Spec → Related input → OK spec → Build → Review → Fixes → Q
   page with both reviews.
 - **Fixes.** To leave: Owner says done, Checks pass. Address the findings from both reviews. If there are none, say
   done at once. Follow `playbooks/fix-what-review-found.md` in Fixes or either numbered Fixes stage on an older pipeline.
+  Say done in the same run, right after you push the fixes; never wait for the checks. Tico moves the task on when they
+  pass, and a failed check wakes you.
 - **QA.** To leave: Checks pass, and the QA report, which the decision model checks: `playbooks/qa.md`.
 - **OK release.** Write the Release report: what is shipping, the PRs it merges and what a person should know before it does (`tico page publish release.html --task <id> --as "Release report"`). Publishing it as the Release report submits it; a person approves it. When they send it back, their notes are in the chat: fix, push, and write the next version.
 - **Merge** is the Release Owner's. When it sends a task back, the reason names what failed in the merge queue: fix it on the same branch and attach a new page.
@@ -102,7 +104,7 @@ Use Haiku 5.5 extra-high-effort subagents whenever possible for simpler work: se
 
 When the task reaches Done or is closed, once per task and not every run: add what you learned to `memory/learnings.md`, record durable decisions in `memory/decisions.md`, add any repeated review mistake to `knowledge/patterns.md`, and commit this repository.
 
-Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency, `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.
+Blocked by other work (another task, its pull request, a merge, a release, a red main): make it a dependency, `tico task relate <id> depends_on <task>`, and stop; you are woken when that task ends. Never snooze for a block: a snooze is only to look again on a date. While your own pull request's checks run, the turn is GitHub's: where the stage also waits for them (Checks pass), say done first; then stop, and their end wakes you.
 
 ## Writing and releasing
 Follow `policies/writing.md`: notes and asks in plain sentences, no raw IDs beyond one link, every ask to a real person or role on the roster. Merge and Release belong to the Release Owner: leave tags and releases to it. Where {{app_name}}'s merge queue merges a repository, the queue merges: never merge by hand there. Where {{company_name}} merges and releases another way (its own skill or playbook, git-flow, no queue), merge, tag and release as that says. Never merge a pull request with red checks.

@@ -16,13 +16,17 @@ and the proof, without running anything.
 2. Run each one at the head commit, where it really runs: the repository's demo or a preview for a screen (Tico: the demo,
    `python3 -m backend.demo`, with the web app built, pictures taken in Playwright; reuse shots from the Review page
    when they are at the head), the tests for logic (name the ones that fail on the old code), the real call or
-   job for a change with no screen.
+   job for a change with no screen. A change that touches a screen or how the product is deployed (storage, CORS,
+   environment, build or hosting config) also gets one run in a real browser on staging, with screenshots at 390
+   and 1280 px on the QA page. With no staging, the row says "not checked on staging: none exists".
 3. Each check gets a result: pass, fail, or not checked with why. A pass has its proof on the page: a screenshot with
    red numbered arrows at 390 and 1280 px, or the command as run and its real output (test names and counts, the call
    and its response, the query and its rows). "Looks good" is not proof, and a check with none is not checked.
 4. A check that fails is yours to fix before the page goes out: fix, push, and run the checks it touches again
    (the bot that wrote the latest Review page reads the new commit before the person is asked). Keep what you found
-   and fixed under the findings. Anything that does not block the change becomes its own task, linked.
+   and fixed under the findings. Anything that does not block the change becomes its own task, a follow-up:
+   `tico task relate <follow-up id> follow_up <this task id>` (never
+   `depends_on`).
 
 ## 2. Build the page
 

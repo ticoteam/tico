@@ -34,7 +34,8 @@ ENDINGS = (
     "5. Closed, with a reason.\n"
     "6. Blocked: depends_on #N (`tico task relate <id> depends_on <task>`). You are woken when #N ends. "
     "Never snooze for a block.\n"
-    "While your own pull request's checks run, the turn is GitHub's: stop, and their end wakes you.\n"
+    "While your own pull request's checks run, the turn is GitHub's: where the stage also waits for them "
+    "(Checks pass), say done first; then stop, and their end wakes you.\n"
     "Anything else counts as stopped early and you are woken again."
 )
 

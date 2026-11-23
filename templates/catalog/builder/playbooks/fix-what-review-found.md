@@ -39,6 +39,7 @@ never a re-run).
 
 ## 5. Leave the stage
 
+Say done right after the push, before the checks finish:
 `tico task done <id> -m "<head sha>: fixed <list>; declined <list with one line each>" --version N`. When there are no
 findings, say done at once and record that result. Once the checks pass at that head, the task moves on. In the
 default lane it moves to QA, where you build the QA page using `playbooks/qa.md`.

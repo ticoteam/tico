@@ -36,9 +36,10 @@ cannot come back unseen. "Could not check" is never written up as a pass.
 Read `knowledge/engineering.md` in your own repository. If it has a "QA" section, skip this. If not, ask the owner
 these in one numbered message and save the answers under "QA" with the date. Work on the defaults meanwhile.
 
-1. How do I start the product from a clean state, and which test accounts and data may I use? Default: use the verify
-   skill in the product's repository; if there is none, write one (step 2) from the README and CI config. Use test
-   accounts only, never a real customer's.
+1. How do I start the product from a clean state, which test accounts and data may I use, and where does staging run?
+   Default: use the verify skill in the product's repository; if there is none, write one (step 2) from the README and
+   CI config. Use test accounts only, never a real customer's. Find staging in the deploy and CI config; ask only when
+   none is found.
 2. Which three to five customer flows must never break? Default: sign up and sign in, the main thing the product is
    for, and paying. Work the list out from the product's menus and docs, save it, and show it to the owner.
 3. Which screen sizes and browsers count? Default: phone at 390 px wide and desktop at 1280 px wide, in Chromium.
