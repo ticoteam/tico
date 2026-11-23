@@ -1154,26 +1154,19 @@ def opens(key):
 def enrolled(c, execution, runner_id, key):
     """Machine `key`'s runner is in: it becomes that machine's computer (a machine made again after its disk was
     deleted replaces the old one), and each bot set to run there is assigned to it now, or by the manager's next look
-    if it is busy. A computer that replaces one that is gone takes the plans the old one was given (`replaced`)."""
-    from . import model_subscriptions as MS
+    if it is busy. Each bot keeps its own Paid by choices across an automatic replacement."""
 
     current = row(c, key)
     old = current.get("runner_id")
     if old and old != runner_id:
         c.execute("UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (H.now(), old))
-    gone = replaced(c, key, old, runner_id)
+    replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
-    for source in gone:
-        MS.carry_over(c, source, runner_id)
     c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):
         bind(c, execution, bot)
-    for bot in hosted(c, key):  # a new computer, even while its bot's last turn is still out elsewhere
-        chooser = (row(c, bot) or {}).get("changed_by") or ""
-        if MS.may_grant(c, execution.auth, chooser):
-            lend_plans(c, execution, bot, runner_id, chooser, new=True)
 
 
 def left(c, key):
@@ -1304,48 +1297,7 @@ def check_host(c, bot, runner_id):
             "That computer is another bot's own cloud machine. Choose the shared cloud machine or another computer",
             409,
         )
-
-
-def lend_order(c):
-    """(the shared machine's computer id or None, the other cloud machines' computer ids by bot): the order a company
-    plan is lent to cloud machines' computers in (model_subscriptions.lend, .spread)."""
-    shared = (row(c, SHARED) or {}).get("runner_id")
-    others = [
-        r["runner_id"]
-        for r in c.execute(
-            "SELECT runner_id FROM cloud_machines WHERE runner_id IS NOT NULL AND bot<>? ORDER BY bot", (SHARED,)
-        )
-    ]
-    return shared, others
-
-
-def lend_plans(c, execution, bot, runner_id, chooser, new=False):
-    """An admin's choice put `bot` on its cloud machine's computer: `chooser` is that admin, already checked. Called at
-    only two moments, an admin's request (`change`) and a new computer's enrollment (`enrolled`), and never from a look,
-    so nothing a member does later brings back a plan an admin took off. That computer takes the company's plan for each
-    runtime the bot runs there when it has no plan or sign-in of its own (model_subscriptions.lend). On a computer that
-    isn't `new`, a runtime another bot there already runs is left: its first bot decided. No other computer is touched.
-    The shared machine's computer is first in the order a plan is picked from."""
-    from . import model_subscriptions as MS
-
-    if (home(c, bot) or {}).get("runner_id") != runner_id:
-        return
-    settings = execution.store.settings
-    shared, others = lend_order(c)
-    fellows = (
-        []
-        if new
-        else [
-            r["bot"]
-            for r in c.execute(
-                "SELECT bot FROM assignments WHERE runner_id=? AND bot<>? ORDER BY bot", (runner_id, bot)
-            )
-        ]
-    )
-    taken = {runtime for fellow in fellows for runtime in MS.bot_runtimes(c, settings, fellow)}
-    for runtime in MS.bot_runtimes(c, settings, bot):
-        if runtime not in taken:
-            MS.lend(c, runner_id, runtime, chooser, shared, others)
+    return found is not None
 
 
 def placed(c, bot, runner_id, actor):
@@ -2982,16 +2934,17 @@ def change(
     after = row(c, bot)
     if after["mode"] == "cloud" and after["placement"] == "shared":
         ensure_shared(c)
+    cleared = []
     if after["mode"] == "cloud":
-        moving = unplaced(c, bot)
+        from .agent_subscriptions import clear_for_move
+
         chose = mode is not None or placement is not None
+        destination_changed = bool({"mode", "placement"} & fields.keys())
+        if chose and (destination_changed or unplaced(c, bot)):
+            first = c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() is None
+            cleared = clear_for_move(c, auth, who, bot, seed_runner_owner="" if first else None)
         # onto a machine that is there already; else when it is made. A person's choice of a machine hears a lasting refusal.
         bind(c, execution, bot, lasting=chose)
-        from . import model_subscriptions as MS
-
-        target = (home(c, bot) or {}).get("runner_id")
-        if moving and target and chose and MS.is_admin(auth, who):
-            lend_plans(c, execution, bot, target, who.actor)
     H.event(
         c,
         who.actor,
@@ -3003,7 +2956,8 @@ def change(
             if after[key] != before[key]
         },
     )
-    return view(c, bot, execution.store.settings)
+    result = view(c, bot, execution.store.settings)
+    return {**result, "paid_by_cleared": cleared} if cleared and result is not None else result
 
 
 def size_fields(c, before, size, grow_storage):

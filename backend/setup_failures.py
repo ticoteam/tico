@@ -35,7 +35,7 @@ WRITES = (
     "/api/v2/bots/{bot}/cloud-machine",
     "/api/v2/cloud-machines/shared",
     "/api/v2/model-subscriptions",
-    "/api/v2/computer-subscriptions",
+    "/api/v2/bots/{bot}/subscriptions",
     "/api/v2/enrollments",
     "/api/v2/runners/enroll",
     "/api/v2/computers/{rid}/logins",

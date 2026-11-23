@@ -21,6 +21,14 @@ place, without calling `/start-place` or acknowledging the same start again.
 
 ## Supported skew
 
+For a turn with **Paid by**, the server can send `attempt_credential_required` and `attempt_credential`
+when the runner advertises `attempt_credentials_v1`. The runner requires a credential matching the
+attempt's provider, revision and runtime and stops the turn if it cannot install that credential. Older runners
+with `model_subscriptions_v1` read the payer from `credential-runtime` when it matches the computer's current binding.
+A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
+and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
+credential disappears before use, the job returns to the queue without a failed start.
+
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
 a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,
 0.6.0-rc.1) pauses any runner below it, so 0.5 runners are paused, not served, and the supported window starts at

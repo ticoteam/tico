@@ -146,11 +146,17 @@ fn choose(
     }
     let primary = text_of(&config["runtime"]);
     let primary_on_gateway = crate::hosts::pi::is_gateway(Some(&text_of(&config["model"])));
+    let blocked = config["blocked_fallback_runtimes"].as_array();
     choices.iter().find_map(|row| {
         let (runtime, model) = (text_of(&row["runtime"]), text_of(&row["model"]));
         if runtime.is_empty()
             || model.is_empty()
             || tried.iter().any(|t| *t == slot(&runtime, &model))
+            || blocked.is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool.as_str() == Some(runtime.as_str()))
+            })
         {
             return None;
         }
@@ -816,6 +822,9 @@ mod tests {
         assert!(default_choice(&off, &choices, &none, |_| true).is_none());
         off["fallback"] = json!({"harness": "gemini", "model": "g"});
         assert!(default_choice(&off, &choices, &none, |_| true).is_none());
+        let mut blocked = config.clone();
+        blocked["blocked_fallback_runtimes"] = json!(["claude"]);
+        assert!(default_choice(&blocked, &choices, &none, |_| true).is_none());
         assert!(default_choice(&config, &choices, &none, |r| r == "codex").is_none());
         assert_eq!(diagnostic("claude", &Hop { runtime: "codex".into(), harness: "codex".into(), ..hop.clone() }, true),
                    "claude hit its usage limit; running this turn on codex (no fallback set; another provider signed in here)");

@@ -708,6 +708,9 @@ class SettingsAdmin:
             ),
         )
         BS.write(c, bot_id, config, now)
+        from .agent_subscriptions import seed_owner_pool
+
+        seed_owner_pool(c, bot_id, operator, who.actor, now)
         if body.moved_from.strip():
             from .repositories import note_chosen
 
@@ -742,7 +745,7 @@ class SettingsAdmin:
                 c, who, bot_id, SimpleNamespace(runner_id=runner["id"], expected_generation=0)
             )
         elif body.status == "active" and harness not in EXTERNAL_HARNESSES:
-            if placement.auto_place(c, self.execution, bot_id, who.actor):
+            if placement.auto_place(c, self.execution, bot_id, who):
                 assignment = dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot_id,)).fetchone())
             elif not note:
                 note = (
@@ -1043,6 +1046,9 @@ class SettingsAdmin:
 
     def _restored(self, c, who, bot, status):
         """The restore once its status is chosen: the bot's status back, its shared room and the event."""
+        from .agent_subscriptions import clear_for_move
+
+        clear_for_move(c, self.auth, who, bot)
         self.update_bot(
             c, who, bot, M.BotDefinitionUpdate(status=status, expected_revision=self._config(c, bot)["revision"])
         )
@@ -1075,7 +1081,7 @@ class SettingsAdmin:
         previous = H.bot(c, bot)["state"]
         c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
         try:
-            placement.auto_place(c, self.execution, bot, who.actor)
+            placement.auto_place(c, self.execution, bot, who)
         finally:
             c.execute("UPDATE bots SET state=? WHERE id=?", (previous, bot))
         if bot == H.RELATIONSHIP_WORKER:

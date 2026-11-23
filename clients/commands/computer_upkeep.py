@@ -257,60 +257,44 @@ def cloud_replace(api, args):
 # ----------------------------------------------------------------------------- subscriptions
 @tool(
     "tico_subscription_list",
-    "The company's AI subscriptions (a person): each one's name, kind, runtime, status, a preview of its value (never "
-    "the value), who added it and owns it and the computers given it; each computer given a person's plans for a tool "
-    "(`people_plans`: whose, the plan in use and why); and the computers that cannot take one until they update. "
-    "Adding one or pasting a value is the person's own, in Settings > Providers. Example: tico subscription list",
+    "Plans and API keys in the team's provider pools. Add or replace your own in Settings > Providers, "
+    "and assign one under Paid by on an agent. Example: tico subscription list",
     {},
 )
 def subscription_list(api, args):
-    person = _as_person(api)
-    subs = person.get("model-subscriptions")
-    given = person.get("computer-subscriptions")
-    labels = {r.get("id"): r.get("label") for r in _computers(person)}
-    capable = set(given.get("capable") or [])
-    return {
-        "subscriptions": [
-            {
-                **{
-                    k: s.get(k)
-                    for k in ("id", "name", "kind", "label", "runtime", "status", "status_detail", "preview")
-                },
-                "computers": [labels.get(r, r) for r in s.get("computers") or []],
-                "added_by": s.get("added_by_name") or s.get("added_by"),
-                **({"owner": s.get("owner_name")} if s.get("owner_name") else {}),
-            }
-            for s in subs.get("subscriptions") or []
-        ],
-        "people_plans": [
-            {
-                "computer": labels.get(a.get("runner_id"), a.get("runner_id")),
-                "tool": a.get("runtime"),
-                "plans": f"{(a.get('set') or {}).get('person_name')}'s plans",
-                "count": (a.get("set") or {}).get("plans"),
-                "on": (a.get("set") or {}).get("on_name"),
-                "why": _set_why((a.get("set") or {}).get("why") or {}),
-            }
-            for a in given.get("assignments") or []
-            if a.get("person")
-        ],
-        "cannot_take_one": [label for rid, label in labels.items() if rid not in capable],
-        "detail": "Give one, or a person's plans (`person`), to a computer: tico settings set models.computer_subscription",
-    }
+    return _as_person(api).get("model-subscriptions")
 
 
-def _set_why(why):
-    """Why a computer given a person's plans is on the plan it is on, in a line (backend model_subscriptions.set_state)."""
-    kind, plan, until = why.get("kind"), why.get("plan"), why.get("until")
-    if kind == "held":
-        return f"{plan} at its limit until {until}"
-    if kind == "reconnect":
-        return f"{plan} needs reconnecting"
-    if kind == "all_held":
-        return f"all at their limit, next reset {until}: the computer's own login, the Gateway or waiting"
-    if kind == "none":
-        return "the person owns no plan for this tool"
-    return "soonest reset with usage left"
+@tool(
+    "tico_subscription_show",
+    "Read an agent's Paid by per AI tool. Example: tico subscription show ops",
+    {"bot": _s("Agent slug or id")},
+    required=("bot",),
+)
+def subscription_show(api, args):
+    return _as_person(api).get(f"bots/{_path(args['bot'])}/subscriptions")
+
+
+@tool(
+    "tico_subscription_set",
+    "Change an agent's Paid by for one AI tool. Example: tico subscription set ops claude pool ana",
+    {
+        "bot": _s("Agent slug or id"),
+        "runtime": _s("AI tool", enum=["claude", "codex", "cursor", "musecode"]),
+        "kind": _s("Paid by choice", enum=["pool", "plan", "key", "unset"]),
+        "target": _s("Pool owner's person id, plan id or key id. Omit for unset."),
+    },
+    required=("bot", "runtime", "kind"),
+    writes=True,
+)
+def subscription_set(api, args):
+    kind, target = args["kind"], args.get("target")
+    if bool(target) == (kind == "unset"):
+        raise APIError("validation", "Supply the person or provider id for Paid by, or omit it for unset", 422)
+    pick = None if kind == "unset" else {"kind": kind, ("person" if kind == "pool" else "subscription_id"): target}
+    return _as_person(api).call(
+        "PUT", f"bots/{_path(args['bot'])}/subscriptions", {"subscriptions": {args["runtime"]: pick}}, key=_key(args)
+    )
 
 
 # ----------------------------------------------------------------------------- registration
@@ -319,7 +303,14 @@ AUDIENCE = {
     **{t["name"]: ADMINS for t in MINE},
     **{
         name: OWNER_ONLY
-        for name in ("tico_upgrade_status", "tico_upgrade_check", "tico_upgrade_start", "tico_subscription_list")
+        for name in (
+            "tico_upgrade_status",
+            "tico_upgrade_check",
+            "tico_upgrade_start",
+            "tico_subscription_list",
+            "tico_subscription_show",
+            "tico_subscription_set",
+        )
     },
 }
 
@@ -356,7 +347,14 @@ UPKEEP = (
     Group("subscription", "the company's AI subscriptions"),
     Command(
         "subscription list",
-        "each subscription, its status and the computers given it; values never shown (a person)",
+        "list the team's plans and API keys",
         example="tico subscription list",
+    ),
+    Command("subscription show", "read an agent's Paid by", example="tico subscription show ops"),
+    Command(
+        "subscription set",
+        "change Paid by for one AI tool",
+        args=(Arg("target", positional=True, nargs="?"),),
+        example="tico subscription set ops claude pool ana",
     ),
 )

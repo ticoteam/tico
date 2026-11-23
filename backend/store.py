@@ -833,6 +833,7 @@ class Store:
         self.new_file = path is not None and (not path.exists() or not path.stat().st_size)
         # The server's file reader, set by the app once it has one (backend/media.py); None until then.
         self.blobs = None
+        self.credential_vault = None
         # The flight recorder (backend/flight.py) times every statement and write transaction when one is given.
         self.recorder = recorder
         self.factory = sqlite3.Connection
@@ -1164,6 +1165,9 @@ class Store:
         # The server's file reader as the app has it configured now (media.install_media): work that holds only the
         # connection reads a company page's logo through it, so one saved in the company's own places is found.
         c.blobs = self.blobs
+        c.credential_cipher = (  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
+            self.credential_vault.cipher if self.credential_vault else None
+        )
         c.read_cache = {}
         c.provenance_cache = self.provenance_cache
         c.roster_rows = self.roster_rows

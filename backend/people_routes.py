@@ -430,7 +430,7 @@ def register_profile(app, auth, delegated_identity, mutate, settings, store, vis
                 if body.reports_to is not None:
                     row = {**row, "reports_to": body.reports_to.strip()}
                 if body.left:
-                    row = Access.leave(c, people, row)
+                    row = Access.leave(c, people, row, actor=who.actor, settings=settings)
                 people[i] = row
                 roster = {**roster, "people": people}
                 from .report_order import roster_saved

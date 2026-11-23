@@ -108,6 +108,7 @@ def test_a_route_declares_its_place_in_the_contract_once():
 
 # PUTs whose handlers never pass through Store.mutate, so they accept a write without the key (api_v2's KEYLESS).
 PUT_WITHOUT_KEY = {
+    "/api/v2/computer-subscriptions",
     "/api/v2/bots/{bot}/github-repos",
     "/api/v2/bots/{bot}/repositories",
     "/api/v2/finance/bills-address",

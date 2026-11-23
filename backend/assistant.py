@@ -269,7 +269,6 @@ NEVER = [
         (None, r"/api/v2/computers/[^/]+/(shared-key|logins(/.*)?|logouts(/.*)?|keys(/.*)?)"),
         (None, r"/api/v2/runner-logins/[^/]+/(report|subscription)"),
         (None, r"/api/v2/model-subscriptions(/.*)?"),
-        (None, r"/api/v2/computer-subscriptions"),
         (None, r"/api/v2/runner-model-subscription-refresh"),
         (None, r"/api/v2/runner-claude-logins(/.*)?"),
         # A browser's push subscription is the person's own tap in that browser (backend/web_push.py).

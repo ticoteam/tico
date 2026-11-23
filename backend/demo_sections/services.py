@@ -480,7 +480,7 @@ def _models(b):
 
 
 def _subscription(b):
-    """One company Claude subscription, given to Ana's MacBook for the Claude runtime."""
+    """One plan from Ana's pool, selected by the agents on her MacBook."""
     b.at(days=6.2)
     sub = CONTENT["subscription"]
     made = b.call(
@@ -488,11 +488,14 @@ def _subscription(b):
         "model-subscriptions",
         {"name": sub["name"], "kind": sub["kind"], "secret": "sk-ant-" + _derived("claude", 48)},
     )
-    b.call(
-        "PUT",
-        "computer-subscriptions",
-        {"runner_id": b.mac["runner_id"], "runtime": sub["runtime"], "subscription": made["id"], "confirm": True},
-    )
+    with b.store.read() as c:
+        agents = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (b.mac["runner_id"],))]
+    for agent in agents:
+        b.call(
+            "PUT",
+            f"bots/{agent}/subscriptions",
+            {"subscriptions": {sub["runtime"]: {"kind": "plan", "subscription_id": made["id"]}}},
+        )
 
 
 def _connectors(b):
@@ -635,6 +638,7 @@ def _runners(b):
                 "version": RUNNER_VERSION,
                 "platform": platform,
                 "capacity": 4,
+                "capabilities": ["attempt_credentials_v1", "model_subscriptions_v1"],
                 "readiness": readiness,
                 "checkout": {
                     "head": SEED_SHA,

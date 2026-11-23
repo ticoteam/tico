@@ -181,7 +181,7 @@ def _find(people, ref):
     return None
 
 
-def apply(c, actor, source, p, roster, now=None):
+def apply(c, actor, source, p, roster, now=None, *, settings=None):
     """Write a plan to the roster in the caller's transaction; returns the counts applied."""
     people = [dict(x) for x in roster["people"]]
     index = {x["id"]: i for i, x in enumerate(people)}
@@ -239,7 +239,7 @@ def apply(c, actor, source, p, roster, now=None):
         i = index.get(lv["id"])
         if i is None or people[i]["hidden"]:
             continue
-        row = Access.leave(c, people, people[i])
+        row = Access.leave(c, people, people[i], actor=actor, settings=settings)
         people[i] = {**row, "directory_left": True}
         H.event(
             c,
@@ -533,7 +533,7 @@ class Directory:
                     }
                     save(c, cfg)
                     return {**described, "applied": False}
-                done, touched = apply(c, actor, source, found, live)
+                done, touched = apply(c, actor, source, found, live, settings=self.settings)
                 cfg["confirmed"] = cfg["confirmed"] or bool(confirm)
                 cfg["last"] = {
                     "at": H.now(),

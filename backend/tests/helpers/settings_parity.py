@@ -83,12 +83,8 @@ SAMPLES = {
     "inbound.phone_request.cancel": {},
     "bot.budget": lambda o: {"turns_per_hour": 10, "expected_revision": o.get("bot-revision", 1)},
     "storage.move": {"expect_bytes": 0},
-    # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
-    "models.computer_subscription": lambda o: {
-        "runner_id": o.get("computers", ""),
-        "runtime": "claude",
-        "subscription": o.get("model-subscriptions", ""),
-        "confirm": False,
+    "models.agent_subscription": lambda o: {
+        "subscriptions": {"claude": {"kind": "pool", "person": o.get("acting-person", "ana")}}
     },
 }
 
@@ -275,14 +271,15 @@ def ask(api, attempt, e, objects, person, token):
     """`tico settings set` as Agent Ops does it for the person: the plan, then the request the plan says to make. A card,
     from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
     until then, so this is where the route says whether that person may."""
-    if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":
+    if e.route.startswith("model-subscriptions/"):
         _saved_subscription(api, objects)
     # The bot's revision as it is now: an earlier entry may have changed it, and a stale one is a 409, not the setting.
     objects["bot-revision"] = get(api, "bots/finance", token)["revision"]
-    if "{computer}" in e.route or e.route == "computer-subscriptions":
+    if "{computer}" in e.route:
         # A computer an earlier entry revoked (computer.revoke) is not found by the next one: each gets its own.
         objects["computers"] = runner(api)["runner_id"]
     target = _target(e, objects, person)
+    objects["acting-person"] = person
     planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e, objects), **target})
     if planned.status_code == 200 and "run" in planned.json():
         run = planned.json()["run"]

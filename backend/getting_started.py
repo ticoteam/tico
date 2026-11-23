@@ -74,29 +74,17 @@ def change_state(c, who, body):
 _wanted_runtimes = providers.wanted_runtimes
 
 
-def _covered(c, runner, name):
-    """Whether the company's plan or key given to this computer signs `name` in (model_subscriptions.in_effect)."""
-    from .model_subscriptions import in_effect
-
-    return c is not None and in_effect(c, runner["id"], name) is not None
-
-
 def _signed_in_runtime(runners, wanted, c=None):
     """A wanted runtime an online computer is signed in to: by its own login, or (with `c`) the company's plan."""
     for runner in runners:
         for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
-            if (
-                name in wanted
-                and row.get("installed")
-                and (row.get("authenticated") == "ready" or _covered(c, runner, name))
-            ):
+            if name in wanted and row.get("installed") and row.get("authenticated") == "ready":
                 return name
     return ""
 
 
 def _login_target(runners, wanted, c=None):
-    """A computer that has a wanted runtime installed but not signed in, nor (with `c`) given the company's plan for
-    it, and that the browser can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
+    """A computer with a wanted runtime installed that the browser can sign in."""
     for runner in runners:
         for name, row in sorted((readiness_document(runner["readiness"]).get("runtimes") or {}).items()):
             if (
@@ -104,7 +92,6 @@ def _login_target(runners, wanted, c=None):
                 and name in model_login.RUNTIMES
                 and row.get("installed")
                 and row.get("authenticated") != "ready"
-                and not _covered(c, runner, name)
             ):
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
     return None
@@ -114,7 +101,7 @@ def _plan_signed_in(c):
     """Whether a Claude or ChatGPT plan is signed in on one of the company's computers: the computer's own login for
     that tool, when it is not an API key, or a company plan given to the computer that bills by subscription
     (backend/model_subscriptions.py). A computer that is offline keeps its last report, so its sign-in still counts."""
-    from .model_subscriptions import KINDS, in_effect
+    from .model_subscriptions import KINDS
     from .readiness import api_key_login, computer_login
 
     # The tools a plan signs in to: the ones a subscription kind names (Claude and Codex today).
@@ -124,9 +111,6 @@ def _plan_signed_in(c):
         for runtime in plan_runtimes:
             login = computer_login(readiness, runtime)
             if login.get("installed") and login.get("authenticated") == "ready" and not api_key_login(login):
-                return True
-            given = in_effect(c, runner["id"], runtime)
-            if given and KINDS.get(given["kind"], {}).get("billing") == "subscription":
                 return True
     return False
 

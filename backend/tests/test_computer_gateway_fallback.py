@@ -1,17 +1,14 @@
-"""A computer's own "Fall back to Tico Gateway" (backend/models_preset.py computer_falls_back, plans_out): off for every
-computer until an admin turns it on. When every plan given to a computer for a tool is used up and it has no login of
-its own, its turns run on the Gateway only where that switch is on; elsewhere they wait for a plan. The company's
-Gateway switch keeps only its other job, running turns until a computer is signed in.
-Spec: "Gateway fallback is a setting of each computer" (task #465)."""
+"""Gateway fallback is available for unset agents; a selected payer waits when it cannot pay."""
 
 import pytest
 
 from backend import login_holds, models_preset
-from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import assign, get, post, runner
-from backend.tests.helpers.model_subscriptions import add, give, on
-from backend.tests.helpers.models_preset import CLAUDE, choose, connected
+from backend.tests.helpers.model_subscriptions import add, on, pick
+from backend.tests.helpers.credentials import setup
+from backend.tests.helpers.gateway_connection import KEY
+from backend.tests.helpers.models_preset import CLAUDE, choose
 
 
 def computer(api, bot="ops", signed_in=False, label="Studio Mac", bot_ready=None):
@@ -27,7 +24,7 @@ def computer(api, bot="ops", signed_in=False, label="Studio Mac", bot_ready=None
         {
             "version": "test",
             "platform": "test",
-            "capabilities": ["model_subscriptions_v1"],
+            "capabilities": ["model_subscriptions_v1", "attempt_credentials_v1"],
             "readiness": {
                 "schema_version": 1,
                 "isolated": True,
@@ -83,54 +80,48 @@ def turn(api, m, bot="ops"):
 
 @pytest.fixture
 def gateway_company(api, monkeypatch):
-    connected(api, monkeypatch)
+    setup(api)
+    monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
     choose(api, models_preset.RECOMMENDED)
     on(api, "ops", "claude", CLAUDE["model"])
 
 
-def test_a_computer_whose_plans_ran_out_waits_unless_its_own_switch_is_on(api, gateway_company):
+def test_a_held_pick_waits_even_when_gateway_fallback_is_enabled(api, gateway_company):
     m = computer(api)
     sid = add(api)["id"]
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     used_up(api, sid)
-    # AC-1: never changed, the switch is off. AC-2: the turn waits; no Gateway turn runs.
     assert listed(api, m)["gateway_fallback"] is False
     assert turn(api, m) is None
-    with api.app.state.store.read() as c:
-        assert c.execute("SELECT state FROM jobs WHERE bot_id='ops'").fetchone()[0] == "queued"
-    # AC-3: an admin turns it on; the next claim runs it on the Gateway.
     assert switch(api, m, True, token="ben-test") == {"gateway_fallback": True}
     assert listed(api, m)["gateway_fallback"] is True
-    got = post(api, "jobs/claim", {"bot": "ops"}, token=m["token"])["attempt"]
-    assert (got["config"]["runtime"], got["config"]["model"]) == ("pi", "tico-medium-1.0")
-    assert got["gateway"] is True
+    assert post(api, "jobs/claim", {"bot": "ops"}, token=m["token"])["attempt"] is None
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE bot_id='ops'").fetchone()[0] == "queued"
 
 
-def test_only_the_computer_that_falls_back_runs_on_the_gateway(api, gateway_company):
+def test_an_unset_agent_can_use_gateway_while_an_agent_with_a_held_pick_waits(api, gateway_company):
     on(api, "cpo", "claude", CLAUDE["model"])
-    waits, falls = computer(api, "ops", label="Off Mac"), computer(api, "cpo", label="On Mac")
-    for m in (waits, falls):
-        sid = add(api, name="Plan for " + m["runner_id"])["id"]
-        give(api, m, "claude", sid)
-        used_up(api, sid)
-    switch(api, falls, True)
-    # AC-4: both plans are used up; only the bot on the computer that falls back runs, on the Gateway.
+    waits, falls = computer(api, "ops", label="Pool Mac"), computer(api, "cpo", label="Unset Mac")
+    sid = add(api)["id"]
+    pick(api, "ops", "claude", sid)
+    used_up(api, sid)
+    switch(api, waits, True)
     assert turn(api, waits, "ops") is None
     got = turn(api, falls, "cpo")
-    assert got and got["config"]["runtime"] == "pi"
+    assert got and got["config"]["runtime"] == "pi" and got["gateway"]
 
 
 def test_a_plan_with_usage_left_runs_whatever_the_switch_says(api, gateway_company):
     m = computer(api, bot_ready=True)
     sid = add(api)["id"]
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     for allowed in (False, True):
         switch(api, m, allowed)
         got = turn(api, m)
         # AC-5: on the plan, never the Gateway as its main model.
         assert got["config"]["model"] == CLAUDE["model"]
-        # The Gateway is the last hop when the plan runs out mid-turn only where the computer falls back to it.
-        assert ("gateway_fallback" in got["config"]) is allowed
+        assert "gateway_fallback" not in got["config"] and got["config"]["fallback"] == {"off": True}
         post(api, f"attempts/{got['id']}/started", {"thread_id": "t-" + got["id"]}, m["token"])
         post(
             api, f"attempts/{got['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"]
@@ -155,19 +146,14 @@ def test_only_an_admin_changes_the_switch_and_everyone_reads_it(api, gateway_com
     assert row and '"on": true' in row[0]
 
 
-def test_a_persons_set_with_no_plan_left_is_not_signed_in_and_runs_on_the_gateway(api, gateway_company):
-    from backend.tests.helpers.api import headers, put
+def test_removing_the_last_pool_plan_unsets_the_pick_and_allows_gateway(api, gateway_company):
+    from backend.tests.helpers.api import headers
 
     m = computer(api)
     sid = add(api)["id"]
-    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": "ana"})
-    # The person removes their only Claude plan; the set stays on the computer with nothing in it. That is a computer
-    # not signed in, not plans used up: AC-6, "Use until a computer is signed in" runs it on the Gateway.
-    api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=headers("ana-test"))
-    with api.app.state.store.read() as c:
-        assert (
-            c.execute("SELECT person FROM computer_subscriptions WHERE runner_id=?", (m["runner_id"],)).fetchone()[0]
-            == "human:ana"
-        )
+    pick(api, "ops", "claude", person="ana")
+    response = api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=headers("ana-test"))
+    assert response.status_code == 200
+    assert "claude" not in get(api, "bots/ops/subscriptions")["subscriptions"]
     got = turn(api, m)
     assert got and got["config"]["runtime"] == "pi" and got["config"]["waiting_for_sign_in"] == "claude"

@@ -240,6 +240,7 @@ def record(c, runner_id, profiles, readiness=None):
     if profiles is None:
         return
     valid = {}
+    default_profile = readiness_document(readiness).get("computer_profile") or ""
     for row in profiles[:100]:
         try:
             profile = M.ComputerProfile.model_validate(row)
@@ -267,6 +268,8 @@ def record(c, runner_id, profiles, readiness=None):
                 value.pop('account', None)
             runtimes[runtime] = value
         valid[profile.name] = encode(runtimes)
+        if default_profile == profile.name and valid[profile.name] != encode(previous):
+            model_subscriptions.remember_turn_usage(c, runner_id, runtimes)
     hosted = [row['bot'] for row in c.execute('SELECT bot FROM assignments WHERE runner_id=?', (runner_id,))]
     blocks = refusals(c, runner_id, hosted)
     for bot in hosted:

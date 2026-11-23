@@ -9,10 +9,13 @@ import threading
 from contextlib import contextmanager
 import time
 from datetime import timezone
+from types import SimpleNamespace
 
 from clients import gateway, sessions
 
+from . import readiness as runner_readiness
 from . import (
+    agent_subscriptions,
     card_slot,
     start_places,
     org_turns,
@@ -2087,6 +2090,16 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     limit's notice still ahead), or a fallback it names is ready here and has not failed in this hold ("fallback")."""
     if model_changed_since(c, bot, finished):
         return "model"
+    paid = c.execute(
+        "SELECT a.handed_runtime,a.handed_model FROM attempts a JOIN attempt_subscriptions s ON s.attempt_id=a.id "
+        "AND s.runtime=a.handed_runtime WHERE a.id=? AND s.delivery IN ('claim','agent','legacy')",
+        (attempt_id,),
+    ).fetchone()
+    if (
+        paid
+        and (payment := agent_subscriptions.resolve(c, bot, paid["handed_runtime"], paid["handed_model"])) is not None
+    ):
+        return "reset" if payment.subscription else None
     now = H.now()
     hold = own_login_hold(c, settings, bot)
     named = [login_holds.reset_from_text(error, finished) for error in limit_errors(c, attempt_id)]
@@ -2171,7 +2184,21 @@ def cooling_off(c, settings, bot, loads=None):
         return False
     runner = loads.runner_of(c, place["runner_id"]) if loads is not None else one(c, RUNNER_SQL, (place["runner_id"],))
     config = follow(c, bot, json.loads(row["config"] or "{}"))
-    if runner is not None and gateway_waits(c, settings, runner, config, loads):
+    if (
+        runner is not None
+        and (
+            payment := agent_subscriptions.for_runner(
+                c,
+                runner,
+                bot,
+                providers.fill(loads.record if loads else providers.load(c, settings), config),
+                loads=loads,
+            )
+        )
+        is not None
+    ):
+        return payment.subscription is None
+    if runner is not None and gateway_waits(c, settings, runner, config, loads, bot=bot):
         return bool(gateway_wait(c, runner["id"], bot, loads))
     return bool(login_refusal(c, settings, place["runner_id"], bot, config, loads=loads))
 
@@ -2194,14 +2221,15 @@ def gateway_admit(c, runner_id, config, job_id):
     return config
 
 
-def gateway_waits(c, settings, runner, config, loads=None):
+def gateway_waits(c, settings, runner, config, loads=None, *, bot=""):
     """Whether the claim runs the bot's next turn on the Gateway because its subscription is not signed in on `runner`
     yet (models_preset.waiting), and its plans there have not run out: _claim_refusal's `waits`."""
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
-    ready = readiness_document(runner["readiness"])
-    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled, loads))
-    return models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
+    if bot and filled.get("runtime") in agent_subscriptions.loaded_picks(c, bot, loads):
+        return False
+    ready = runner_readiness.local_sign_ins(readiness_document(runner["readiness"]))
+    return models_preset.waiting(record, ready, filled)
 
 
 def gateway_wait(c, runner_id, bot, loads=None, strict=False):
@@ -2216,10 +2244,19 @@ def gateway_wait(c, runner_id, bot, loads=None, strict=False):
     return why
 
 
+def _limits_login(c, settings, runner, bot, config):
+    """Login a person can retry for this agent, including a held provider selected by Paid by."""
+    local = login_key(c, settings, runner, bot, config)
+    runtime, model = providers.bot_choice(c, settings, config)
+    payment = agent_subscriptions.resolve(c, bot, runtime, model)
+    if payment is None:
+        return local
+    sid = payment.subscription["id"] if payment.subscription else payment.held_subscription
+    return ("", login_holds.subscription_login(sid), runtime) if sid else None
+
+
 def clear_limits(c, settings, actor, bot):
-    """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
-    runtime on the same computer, since they share the subscription a person has just renewed.
-    Returns how many bots it cleared."""
+    """Try the selected login again, and relieve other limited agents sharing that login here."""
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     from .shared_bots import follow
 
@@ -2227,32 +2264,28 @@ def clear_limits(c, settings, actor, bot):
         row = c.execute(BS.ONE_SQL, (slug,)).fetchone()
         return follow(c, slug, json.loads(row[0]) if row and row[0] else {})
 
-    def runtime(slug):
-        return providers.bot_choice(c, settings, config(slug))[0]
-
-    mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    primary = config(bot)
+    runtime = providers.bot_choice(c, settings, primary)[0]
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    runner_id = place["runner_id"] if place else None
+    runner = c.execute(RUNNER_SQL, (runner_id,)).fetchone() if runner_id else None
     bots = [bot]
-    if place and place["runner_id"] and mine:
+    if runner and (login := _limits_login(c, settings, runner_id, bot, primary)):
         bots += [
-            r[0]
-            for r in c.execute(
+            row[0]
+            for row in c.execute(
                 "SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
                 "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
-                (place["runner_id"], bot),
+                (runner_id, bot),
             )
-            if runtime(r[0]) == mine
+            if _limits_login(c, settings, runner_id, row[0], config(row[0])) == login
         ]
-    runner = c.execute(RUNNER_SQL, (place["runner_id"],)).fetchone() if place and place["runner_id"] else None
+        login_holds.try_now(c, *login)
     for slug in bots:
-        if runner:
-            # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
-            # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, runner["id"], slug, config(slug)))
-            if gateway_waits(c, settings, runner, config(slug)):
-                # Its turns run on the Gateway until its subscription is signed in here: that is the login to try.
-                login_holds.try_now(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
+        if runner and gateway_waits(c, settings, runner, config(slug), bot=slug):
+            login_holds.try_now(c, runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
         relieve(c, settings, actor, slug, "Try now")
-        H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": mine})
+        H.event(c, actor, "limit.cleared", slug, {"from": bot, "runtime": runtime})
     return len(bots)
 
 
@@ -2266,7 +2299,8 @@ def own_login_hold(c, settings, bot):
     if not place or not place["runner_id"] or not row:
         return {}
     config = follow(c, bot, json.loads(row[0] or "{}"))
-    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, config))
+    login = _limits_login(c, settings, place["runner_id"], bot, config)
+    return login_holds.get(c, *login) if login else {}
 
 
 def _github_app(c):
@@ -2504,6 +2538,7 @@ def _claim_refusal(
     this one rule, so Health never calls work the claim holds on purpose a Tico bug. `held_bots`: bots the runner
     says are busy (a lane runner sends only the bots whose worktrees it is maintaining) and, for a runner without
     lanes, every bot with a running turn. `ready` is the computer's readiness document. `loads`: see claim_refusal."""
+    ready = runner_readiness.local_sign_ins(ready)
     if draining:
         return ("moving" if draining == 2 else "draining"), None
     # The company pause, a locked Tico Cloud company, and the bot's failed runs: held, or waiting out a back-off that a
@@ -2529,13 +2564,14 @@ def _claim_refusal(
         return "login_upgrade", None
     record = loads.record if loads is not None else providers.load(c, settings)
     filled = providers.fill(record, config)
-    # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    covers = {} if relationship else model_subscriptions.covered_runtimes(c, runner, filled, loads)
-    ready = model_subscriptions.covered(ready, covers)
-    # Its plans here ran out and the computer does not fall back to the Gateway: it waits for a plan, as if the
-    # company's choice did not run the Gateway before sign-in (backend/models_preset.py plans_out). Read the same way
-    # as gateway_waits.
-    waits = models_preset.waiting(record, ready, filled) and not models_preset.plans_out(c, runner["id"], filled, loads)
+    if not relationship and agent_subscriptions.loaded_picks(c, bot, loads):
+        # Jobs can use their task or check model. Common fences run here and payer/readiness checks run per job.
+        mine = loads.limit_of(c, bot) if loads is not None else None
+        if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default, mine=mine):
+            return "limit", None
+        return None, config
+    covers = {}
+    waits = models_preset.waiting(record, ready, filled)
     access = loads.access if loads is not None else cloud_access.access(c)
     if cloud_access.frozen(c, access) and (gateway_connection.is_tico(filled.get("model")) or waits):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
@@ -2616,7 +2652,9 @@ def signed_in_by_lapsed_plan(ready, check, covers):
     # another profile signed out would read as this login missing.
     own = (row.get("profiles") or {}).get("")
     row = own if isinstance(own, dict) else row
-    return check.get("sign_in") == "ready" and row.get("authenticated") == "missing"
+    return row.get("authenticated") == "missing" and (
+        check.get("sign_in") == "ready" or (row.get("key") or {}).get("source") == "shared"
+    )
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
@@ -2638,7 +2676,7 @@ def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None, lo
     why = primary_hold(c, settings, runner_id, bot, config, job_id, ctx, loads)
     if why and job_id and continuation_thread(c, job_id):
         return why  # only its own thread, on its own login, continues it
-    return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx) else why
+    return None if why and fallback_choice(c, settings, runner_id, bot, config, job_id, ctx, loads=loads) else why
 
 
 def primary_hold(c, settings, runner_id, bot, config, job_id=None, ctx=None, loads=None):
@@ -2662,7 +2700,37 @@ def login_wait(c, runner_id, profile, runtime, bot, job_id=None, loads=None):
     return why
 
 
-def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
+def fallback_uses_primary_login(config, named, primary):
+    from .harnesses import harness_caps, runtime_of
+
+    return (
+        named.get("harness")
+        and named.get("model")
+        and runtime_of(named["harness"]) == primary
+        and harness_caps(config.get("harness"), primary).get("api_keys") != "bot"
+        and harness_caps(named["harness"]).get("api_keys") != "bot"
+    )
+
+
+def restrict_fallbacks(config, paid_tools, caps):
+    """Keep a turn on unset tools when it starts on an unset tool."""
+    from .harnesses import runtime_of
+
+    config = {**config, "blocked_fallback_runtimes": sorted(paid_tools)}
+    fallback = config.get("fallback")
+    named = fallback if isinstance(fallback, dict) else {}
+    if named.get("harness") and runtime_of(named["harness"]) in paid_tools:
+        config.pop("fallback")
+        named = {}
+    if agent_subscriptions.CAPABILITY not in caps and (
+        not named.get("harness") or fallback_uses_primary_login(config, named, config.get("runtime"))
+    ):
+        # Older runners get automatic hops from the company config and cannot filter them per turn.
+        config["fallback"] = {"off": True}
+    return config
+
+
+def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, *, loads=None):
     """Where a turn of `bot` held off its own login runs on this computer, as (profile, runtime), or None to wait. It
     is the runner's own choice (runner-rs/src/fallback.rs `configured`, `default_choice`): the fallback the bot names,
     else the first of the company's providers on another installed runtime signed in locally or by an effective
@@ -2670,21 +2738,26 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
     That login's hold having just ended, the turn is its one probe. With another job's probe out on it the bot waits
     rather than the runner picking it anyway. The Gateway counts when the turn would be handed it (models_preset.with_gateway_fallback). A fallback
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
-    from .harnesses import harness_caps, runtime_of
+    from .harnesses import runtime_of
 
-    named = config.get("fallback") if isinstance(config.get("fallback"), dict) else {}
+    paid_tools = agent_subscriptions.loaded_picks(c, bot, loads)
+    if paid_tools:
+        record = loads.record if loads is not None else providers.load(c, settings)
+        runner = (
+            loads.runner_of(c, runner_id, live=True)
+            if loads is not None
+            else c.execute(model_subscriptions.RUNNER_CAPABILITIES_SQL, (runner_id,)).fetchone()
+        )
+        caps = H._json(runner["capabilities"], []) if runner else []
+        config = restrict_fallbacks(providers.fill(record, config), paid_tools, caps or [])
+    fallback = config.get("fallback")
+    named = fallback if isinstance(fallback, dict) else {}
     if named.get("off"):
         return None
     _, own, primary = login_key(c, settings, runner_id, bot, config, ctx)
     # The runner ignores a named model on this same spent login and continues through the company list.
     # Match it here, so the claim admits that next provider, or holds the job when there is none.
-    if (
-        named.get("harness")
-        and named.get("model")
-        and runtime_of(named["harness"]) == primary
-        and harness_caps(config.get("harness"), primary).get("api_keys") != "bot"
-        and harness_caps(named["harness"]).get("api_keys") != "bot"
-    ):
+    if fallback_uses_primary_login(config, named, primary):
         named = {}
     hold = login_holds.get(c, runner_id, own, primary)
     if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
@@ -2706,6 +2779,8 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
             if r["runtime"] != primary and (gateway or not providers.gateway_model(r["model"]))
         ]
     for choice in rows:
+        if choice["runtime"] in paid_tools:
+            continue
         if providers.gateway_model(choice["model"]):
             # Signs in with the turn's relay, on the company's Gateway login, only where bots run as their own user (a
             # company row is listed only then; one the bot names is checked here).
@@ -2716,8 +2791,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
                 continue
             return None if why else (login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME)
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
-        subscribed = model_subscriptions.in_effect(c, runner_id, choice["runtime"])
-        if signed.get("installed") is not True or (not subscribed and signed.get("authenticated") != "ready"):
+        if signed.get("installed") is not True or signed.get("authenticated") != "ready":
             continue
         login = login_holds.canonical(c, runner_id, "", choice["runtime"])
         why = login_wait(c, runner_id, login, choice["runtime"], bot, job_id)
@@ -2735,10 +2809,6 @@ def login_key(c, settings, runner_id, bot, config, ctx=None, loads=None):
     if gateway_connection.is_tico(model):
         return runner_id, login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME
     login = login_holds.canonical(c, runner_id, "", runtime, loads=loads)
-    if not login.startswith(login_holds.SUBSCRIPTION):
-        # A held plan passed over for a computer login (its own, or the default home it names) that is not signed in:
-        # the turn waits on the plan's hold.
-        login = model_subscriptions.held_plan(c, runner_id, runtime, loads, profile=login) or login
     return runner_id, login, runtime
 
 
@@ -2867,12 +2937,94 @@ def job_message_readable(c, bot, message):
     return privacy.message_readable(c, privacy.make_page_actor(c, "bot:" + bot, message), message)
 
 
-def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None, loads=None):
+def turn_meeting(msg, bot):
+    ref = (msg.get("refs") or {}).get("live_meeting")
+    if isinstance(ref, dict) and msg["sender_id"] == H.TICO_ACTOR and msg["recipient_id"] == "bot:" + bot:
+        return ref
+    return None
+
+
+def meeting_model(c, settings, config, bot, runner_id, job_id, ref, *, preview=False):
+    if not ref:
+        return config
+    from .live_meetings import turn_config
+
+    return turn_config(
+        c, settings, config, bot, ref.get("meeting_id"), runner_id, job_id, ref.get("turn_id"), preview=preview
+    )
+
+
+def job_model(c, settings, config, bot, runner_id, job_id, task_id, conversation_id, check, loads=None):
+    config, note = task_models.pick(
+        c,
+        settings,
+        bot,
+        config,
+        task_id,
+        session_task_id(c, bot, config, task_id) if task_id else None,
+        conversation_id,
+        runner_id,
+        job_id,
+        check,
+        loads=loads,
+    )
+    return check_models.apply(config, check), note
+
+
+def continuation_payer(c, runner, bot, source, job, loads=None):
+    if source and agent_subscriptions.for_runner(c, runner, bot, source, loads=loads, job=job) is not None:
+        # The saved session names a computer sign-in, with no proof it uses the selected payer.
+        tool = model_subscriptions.RUNTIME_LABELS.get(source["runtime"], source["runtime"])
+        return agent_subscriptions.Payment(None, f"Paid by: clear the {tool} selection to resume its saved session")
+    return None
+
+
+def queued_payer(c, settings, runner, job, followed, message, conversation, task_id, check, loads=None):
+    bot = job["bot_id"]
+    ref = turn_meeting(message, bot)
+    base = meeting_model(c, settings, followed, bot, runner["id"], job["id"], ref, preview=True)
+    config, _ = job_model(c, settings, base, bot, runner["id"], job["id"], task_id, conversation["id"], check, loads)
+    record = loads.record if loads is not None else providers.load(c, settings)
+    config = providers.fill(record, config)
+    if agent_subscriptions.loaded_picks(c, bot, loads) and (source := source_continuation(c, job["id"])):
+        if held := continuation_payer(c, runner, bot, source, job["id"], loads):
+            return source, held
+    return config, agent_subscriptions.for_runner(c, runner, bot, config, loads=loads, job=job["id"])
+
+
+def waiting_payers(c, settings, runner, bot, followed, loads=None):
+    """The waiting payer of each tool used by this agent's queued work."""
+    tools = agent_subscriptions.loaded_picks(c, bot, loads).keys()
+    if not tools:
+        return
+    if loads is None:
+        loads = claim_loads.read(c, settings, {runner["id"]: runner}, [bot])
+    found = set()
+    for job in c.execute(
+        "SELECT * FROM jobs WHERE bot_id=? AND state='queued' AND held=0 ORDER BY created_at,id LIMIT ?",
+        (bot, PRIME_QUEUED),
+    ):
+        if not (message := H.message(c, job["message_id"])) or not job_message_readable(c, bot, message):
+            continue
+        room = H.conversation(c, message["conversation_id"])
+        task = work_task_id(message, room)
+        check = check_models.of(c, task, bot, loads=loads)
+        config, payment = queued_payer(c, settings, runner, job, followed, message, room, task, check, loads)
+        runtime = config["runtime"]
+        if payment and not payment.subscription and runtime not in found:
+            found.add(runtime)
+            yield runtime, payment
+            if found == tools:
+                break
+
+
+def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None, loads=None, settings=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
     turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in; `loads`
     the claim's reads (claim_loads), whose open holds answer a job's own wait with no statement. A job waiting out its
     claim error is never asked (claim_waiting)."""
+    ready = runner_readiness.local_sign_ins(ready)
     message = H.message(c, job["message_id"])
     if not message or not job_message_readable(c, job["bot_id"], message):
         return "unreadable"
@@ -2895,12 +3047,73 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
     refs = message.get("refs") or {}
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
     # it when the turn moves on (backend/task_wakes.py), so the claim does not judge a task's waits again.
-    wanted = check_models.of(c, task_id, job["bot_id"])
-    if wanted and runner is not None:
-        # A check runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-        ready = model_subscriptions.covered(
-            ready, model_subscriptions.covered_runtimes(c, runner, check_models.apply(followed, wanted))
-        )
+    wanted = check_models.of(c, task_id, job["bot_id"], loads=loads)
+    config = check_models.apply(followed, wanted)
+    if runner is not None and settings is not None:
+        bot = job["bot_id"]
+        choices = agent_subscriptions.loaded_picks(c, bot, loads) if bot != relationship_runs.BOT else {}
+        if choices:
+            config, payment = queued_payer(
+                c, settings, runner, job, followed, message, conversation, task_id, wanted, loads
+            )
+            record = loads.record if loads is not None else providers.load(c, settings)
+            machine = bot_readiness(ready, bot)
+            runtime = config["runtime"]
+            state = (ready.get("runtimes") or {}).get(runtime) or {}
+            if payment is not None:
+                if not payment.subscription:
+                    return "payer_update" if payment.update else "payer_wait"
+                if bot not in (ready.get("bots") or {}):
+                    return "readiness_unknown"
+                if not state.get("installed") or (
+                    machine.get("ready") is not True
+                    and (
+                        machine.get("repository_present") is not True or machine.get("configuration_valid") is not True
+                    )
+                ):
+                    return "not_ready"
+                ready = model_subscriptions.covered(ready, [runtime])
+            else:
+                gateway = gateway_connection.is_tico(config.get("model"))
+                waits = models_preset.waiting(record, ready, config)
+                if (gateway or waits) and cloud_access.frozen(c, loads.access if loads else cloud_access.access(c)):
+                    return "out_of_credit"
+                if gateway and not models_preset.runs_gateway(ready):
+                    return "not_isolated" if ready.get("isolated") is False else "isolation_unknown"
+                if bot not in (ready.get("bots") or {}):
+                    return "readiness_unknown"
+                if waits:
+                    if (
+                        machine.get("repository_present") is not True
+                        or machine.get("configuration_valid") is not True
+                        or not ((ready.get("runtimes") or {}).get(models_preset.GATEWAY_RUNTIME) or {}).get("installed")
+                    ):
+                        return "not_ready"
+                    if gateway_wait(c, runner["id"], bot, loads, strict=True):
+                        return "cooling_off"
+                else:
+                    if machine.get("ready") is not True and (
+                        machine.get("repository_present") is not True or machine.get("configuration_valid") is not True
+                    ):
+                        return "not_ready"
+                    if (gateway or runtime != machine.get("runtime") or machine.get("ready") is not True) and (
+                        not state.get("installed")
+                        or (not gateway and state.get("authenticated") not in ("ready", True))
+                    ):
+                        return "not_ready"
+                if not gateway and signed_in_by_lapsed_plan(ready, {**machine, "runtime": runtime}, {}):
+                    return "sign_in_missing"
+                if (
+                    not gateway
+                    and state.get("authenticated") == "rejected"
+                    and not machine.get("profile")
+                    and machine.get("sign_in") != "ready"
+                ):
+                    return "sign_in_rejected"
+                if not waits and login_refusal(c, settings, runner["id"], bot, config, job["id"], loads=loads):
+                    return "cooling_off"
+        elif login_refusal(c, settings, runner["id"], bot, config, job["id"], loads=loads):
+            return "cooling_off"
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     if wanted and not H.in_person_name(message) and check_models.dropped(c, task_id):
@@ -2912,7 +3125,6 @@ def job_refusal(c, job, followed, ready, busy, live=frozenset(), *, runner=None,
         and login_holds.holding(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, job["id"])
     ):
         return "cooling_off"  # a check on a Tico model waits on the Gateway's hold and its one probe
-    config = check_models.apply(followed, wanted)
     # A hub upgrade leaves active meeting attempts on the lane they were leased with.
     if (
         (job["bot_id"], job_lane(c, job["bot_id"], config, message, conversation)) in busy
@@ -3334,7 +3546,7 @@ CLAIM_CONFIG_SQL = (
 )
 
 
-def queued_jobs_sql(bots=None):
+def queued_jobs_sql(bots=None, *, sampled=False):
     """A bot's queued jobs in the order its claim takes them, each with whether the interrupted-work fence and a claim
     scope let it through and whether it is first in its relationship lane. With `bots`, the same rows for all of them
     at once (prime_claimables)."""
@@ -3347,7 +3559,11 @@ def queued_jobs_sql(bots=None):
         "AND j.state='queued' AND j.held=0 "
         # A turn refused while its full Claude login was being refreshed waits for the new token (claude_login.gap).
         f"AND NOT {claude_login.PARKED_SQL} "
-        f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,lane_head DESC,j.id"
+        + (
+            "AND j.id IN (SELECT value FROM json_each(?)) ORDER BY j.created_at,j.id"
+            if sampled
+            else f"ORDER BY j.redirect DESC,CASE WHEN {H.in_person_name_sql()} THEN 0 ELSE 1 END,j.created_at,lane_head DESC,j.id"
+        )
     )
 
 
@@ -3493,7 +3709,9 @@ def bot_claimable(
     return result(refused[1], refused[0] if oldest else None, refused[2], refused[3]) if refused else result(None)
 
 
-def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, loads=None, ignore_refusals=()):
+def queued_reasons(
+    c, settings, runner_id, bot, default=None, *, oldest=False, loads=None, ignore_refusals=(), sample=None
+):
     """Each queued job with its own claim reason; common bot fences are read once. `ignore_refusals`: last-boot holds
     to look past, as bot_claimable takes it."""
     from .read_cache import one, rows
@@ -3503,6 +3721,8 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
     row = one(c, CLAIM_CONFIG_SQL, (bot,))
     if not runner:
         return
+    if loads is None and agent_subscriptions.picks(c, bot):
+        loads = claim_loads.read(c, settings, {runner_id: runner}, [bot])
     held_bots, held_lanes = claimed_busy(runner_id)
     ready = readiness_document(runner["readiness"])
     why, config = (
@@ -3522,7 +3742,11 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, l
         if row
         else ("config", {})
     )
-    queue = rows(c, queued_jobs_sql(), (bot,))
+    queue = (
+        rows(c, queued_jobs_sql(), (bot,))
+        if sample is None
+        else c.execute(queued_jobs_sql(sampled=True), (bot, json.dumps(sample)))
+    )
     if oldest:
         queue = sorted(queue, key=lambda j: (j["created_at"], j["id"]))
     if why:
@@ -3555,11 +3779,7 @@ def job_reason(c, settings, runner, job, followed, ready, busy, live, loads):
         return "lane_held"
     if claim_waiting(c, job, loads):
         return holds.CLAIM_HELD
-    return job_refusal(c, job, followed, ready, busy, live, runner=runner, loads=loads) or (
-        "cooling_off"
-        if login_refusal(c, settings, runner["id"], job["bot_id"], followed, job["id"], loads=loads)
-        else None
-    )
+    return job_refusal(c, job, followed, ready, busy, live, runner=runner, loads=loads, settings=settings)
 
 
 # Stop and redirect (Execution._redirect_job) reads the caller's own job in this turn's conversation. jobs.message_id is
@@ -3798,6 +4018,8 @@ class Execution:
                     row[window] = reading
                 else:
                     row.pop(window, None)
+        if encode(readiness.get("runtimes") or {}) != encode(readiness_document(stored[3]).get("runtimes") or {}):
+            model_subscriptions.remember_turn_usage(c, who.runner_id, readiness.get("runtimes") or {})
         if readiness.get('worktrees') is None:
             readiness.pop('worktrees', None)
         if not readiness.get('harnesses'):
@@ -3959,6 +4181,7 @@ class Execution:
 
         # Every hosted bot's configuration and its original's, read once (shared_bots.follow, bot_repository).
         configs = {}
+        payers = agent_subscriptions.read(c, [row["bot"] for row in rows])
 
         def load(slugs):
             for part in H.chunks(slugs):
@@ -4014,7 +4237,7 @@ class Execution:
                     'mail_agent': bool(P.inbox_person(row['bot'], people)),
                     # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
                     **(
-                        model_subscriptions.assignment_fields(c, runner, config)
+                        model_subscriptions.assignment_fields(c, runner, config, bot=row["bot"], inputs=payers)
                         if row["bot"] != relationship_runs.BOT
                         else {}
                     ),
@@ -4022,7 +4245,7 @@ class Execution:
             )
         return result
 
-    def assign(self, c, who, bot, body):
+    def assign(self, c, who, bot, body, *, placement_requester=None):
         bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         from .shared_bots import check_runner
 
@@ -4067,7 +4290,7 @@ class Execution:
             raise Problem("forbidden", "This machine's operator is not authorized to host this bot", 403)
         from . import cloud_machines
 
-        cloud_machines.check_host(c, bot, body.runner_id)
+        cloud_host = cloud_machines.check_host(c, bot, body.runner_id)
         old = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
         generation = old["generation"] if old else 0
         if body.expected_generation != generation:
@@ -4093,6 +4316,17 @@ class Execution:
                 )
             if old and (blocked := stranded(c, self.store.settings, bot, old["runner_id"], body.runner_id)):
                 raise Problem("repository_unpublished", blocked, 409)
+        cleared = (
+            agent_subscriptions.clear_for_move(
+                c,
+                self.auth,
+                placement_requester or who,
+                bot,
+                seed_runner_owner=(("" if cloud_host else runner["owner_id"] or None) if not old else None),
+            )
+            if not old or old["runner_id"] != body.runner_id
+            else []
+        )
         self.expire(c)
         c.execute(
             "INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET "
@@ -4114,7 +4348,8 @@ class Execution:
         if old and old["runner_id"] != body.runner_id:
             forget_report(c, old["runner_id"], bot)
         cloud_machines.placed(c, bot, body.runner_id, who.actor)
-        return dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
+        result = dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
+        return {**result, "paid_by_cleared": cleared} if cleared else result
 
     def grace_leases(self):
         """After a restart, leases that lapsed while the API was away get one more lease
@@ -4515,7 +4750,7 @@ class Execution:
             c.execute("ROLLBACK TO held_notice")
         c.execute("RELEASE held_notice")
 
-    def settle_unstarted(self, c, row, summary, event="attempt.expired"):
+    def settle_unstarted(self, c, row, summary, event="attempt.expired", *, excused=False):
         """A run its computer took and never started, its attempt already `expired`: its lease lapsed, or its
         computer handed it back (hand_back). Nothing ran, so nothing is held for review and the bot is not crashed:
         the job waits in the queue again and the bot's status line says so softly (last_stop). After PRE_START_TRIES
@@ -4528,7 +4763,7 @@ class Execution:
         tries = failed_starts(c, row["job_id"])
         bot = H.bot(c, row["bot_id"])
         stuck = RD.stuck(c, row) if event == "attempt.returned" else ""
-        if tries >= PRE_START_TRIES or stuck:
+        if not excused and (tries >= PRE_START_TRIES or stuck):
             computer = c.execute("SELECT label FROM runners WHERE id=?", (row["runner_id"],)).fetchone()
             label = (computer["label"] if computer else None) or "its Computer"
             name = (
@@ -4568,7 +4803,7 @@ class Execution:
             "UPDATE jobs SET state=? WHERE attempt_id=? AND state IN ('leased','running','input') RETURNING id",
             (state, row["id"]),
         ).fetchall()
-        for job in requeued if state == "queued" else ():
+        for job in requeued if state == "queued" and not excused else ():
             wait_unstarted(c, job["id"], row["bot_id"], row["id"])
         H.turn_finish(
             c,
@@ -4592,7 +4827,14 @@ class Execution:
         H.event(c, H.TICO_ACTOR, event, row["id"], detail)
         return state
 
-    def hand_back(self, c, row, body, *, planned=False):
+    def return_payer_claim(self, c, runner_id, aid):
+        row = c.execute(
+            "SELECT * FROM attempts WHERE id=? AND runner_id=? AND state='leased'", (aid, runner_id)
+        ).fetchone()
+        if row:
+            self.hand_back(c, row, SimpleNamespace(undelivered=[], outcome="interrupted"), payer=True)
+
+    def hand_back(self, c, row, body, *, planned=False, payer=False):
         """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
         stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 Agent Ops's runner lost
         Tico for half a minute before a start, its report was refused as not started, and the lapse showed Agent Ops as
@@ -4607,7 +4849,15 @@ class Execution:
         )
         task_reads.run_moved(c, row["id"])
         gateway_connection.forget(c, row["id"])
-        state = self.settle_unstarted(c, row, HANDED_BACK, event="attempt.returned")
+        if payer:
+            c.execute("UPDATE attempts SET result=? WHERE id=?", ('{"yielded":true}', row["id"]))
+        state = self.settle_unstarted(
+            c,
+            row,
+            model_subscriptions.PAYER_UNAVAILABLE if payer else HANDED_BACK,
+            event="attempt.payer_unavailable" if payer else "attempt.returned",
+            excused=payer,
+        )
         return {"attempt_id": row["id"], "outcome": body.outcome, "job_state": state, "message": None}
 
     @staticmethod
@@ -4707,6 +4957,7 @@ class Execution:
                 {runner["id"]: runner},
                 [row["bot"] for row in assigned],
                 narrow=job_id is not None,
+                job=job_id,
             )
             if assigned
             else None
@@ -4808,22 +5059,19 @@ class Execution:
                 part = candidates[i : i + PRIME_QUEUED]
                 privacy.prime_queued(c, H.prime_messages(c, [job["message_id"] for job in part]).values())
             try:
-                why = job_refusal(c, row, followed[row["bot_id"]], ready, busy, live, runner=runner, loads=loads)
+                why = job_refusal(
+                    c,
+                    row,
+                    followed[row["bot_id"]],
+                    ready,
+                    busy,
+                    live,
+                    runner=runner,
+                    loads=loads,
+                    settings=self.store.settings,
+                )
                 if why is None:
-                    # The job's own login hold: an error reading it holds this job alone. The bot's login as a whole is
-                    # checked once per bot, in claim_refusal, where an error passes the bot over.
-                    waiting = login_refusal(
-                        c,
-                        self.store.settings,
-                        runner["id"],
-                        row["bot_id"],
-                        followed[row["bot_id"]],
-                        row["id"],
-                        subscription_context,
-                        loads=loads,
-                    )
-                    if not waiting:
-                        return row
+                    return row
             except Exception as exc:
                 # Storage errors and a team's check fail the claim. A bot's check is not this job's: the claim passes
                 # the bot over, and its other runs wait for the check. This job's own error is logged once, and the
@@ -4906,6 +5154,18 @@ class Execution:
                 return rid, found
         return None
 
+    def empty_claim(self, c, runner, bot):
+        """A runner asking for a particular agent can see why that agent is waiting."""
+        if bot and agent_subscriptions.picks(c, bot):
+            from .shared_bots import follow
+
+            row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
+            if row:
+                config = follow(c, bot, H._json(row[0], {}) or {})
+                for _, payment in waiting_payers(c, self.store.settings, runner, bot, config):
+                    return {"attempt": None, "waiting": payment.reason}
+        return {"attempt": None}
+
     def idle_claim(self, c, who, body, key=None, selected=None, failed=None):
         """The answer to a claim that changes nothing, from a read-only connection, or None when
         the claim has something to write or to hand out and must run in the write transaction.
@@ -4978,7 +5238,7 @@ class Execution:
             return self.held_answer(c, who.runner_id)
         if row is not None and selected is not None:
             selected.append(row)
-        return None if row else {"attempt": None}
+        return None if row else self.empty_claim(c, runner, body.bot)
 
     def stamp(self, c, who, runner, now):
         """Record contact: `last_seen_at`, at most every CONTACT_EVERY, and a new waking period after a silence."""
@@ -5136,7 +5396,7 @@ class Execution:
             return self.held_answer(c, who.runner_id)
         self.hold_failed(c, failed)
         if not row:
-            return {"attempt": None}
+            return self.empty_claim(c, runner, body.bot)
         # The job's preparation runs in a savepoint of its own. An error rolls back its writes: a check of one bot
         # passes that bot over, and a job's own error holds the job. The claim takes the next candidate until
         # CLAIM_HOLDS jobs are held. A team's check and a storage error fail the claim, as they always did. A job the
@@ -5165,13 +5425,17 @@ class Execution:
                 if not row:
                     return {"attempt": None}
                 continue
+            payer_wait = answer.pop("payer_wait", "")
+            if payer_wait:
+                c.execute("ROLLBACK TO claim_start")
+                answer["waiting"] = payer_wait
             c.execute("RELEASE claim_start")
-            if answer.pop("dropped", False) and dropped < CLAIM_PICKS:
+            if (answer.pop("dropped", False) or payer_wait) and dropped < CLAIM_PICKS:
                 dropped += 1
                 passed.append(row["id"])
                 row = self.pick(c, who, body, runner, now, people_only=people_only, failed=failed, passed=passed)
                 if not row:
-                    return {"attempt": None}
+                    return answer
                 continue
             if answer.get("attempt"):
                 # The run is handed out: a retry that starts clears its hold, and its bot's check back-off and Health
@@ -5216,13 +5480,7 @@ class Execution:
                 return {"attempt": None}  # held for failed runs and its next try is not due, or another took it
         if finance_run_hold(c, row["bot_id"], row["id"]):
             return {"attempt": None}  # a Finance budget at its cutoff refuses the run (usage_limits holds the bot)
-        live_ref = (msg.get("refs") or {}).get("live_meeting")
-        if (
-            not isinstance(live_ref, dict)
-            or msg["sender_id"] != H.TICO_ACTOR
-            or msg["recipient_id"] != "bot:" + row["bot_id"]
-        ):
-            live_ref = None
+        live_ref = turn_meeting(msg, row["bot_id"])
         voice_call = live_ref.get("voice_call") if live_ref else None
         caps = json.loads(runner["capabilities"] or "[]")
         if voice_call:
@@ -5254,45 +5512,36 @@ class Execution:
         from .shared_bots import follow
 
         followed = follow(c, row["bot_id"], json.loads(c.execute(BS.ONE_SQL, (row["bot_id"],)).fetchone()[0]))
-        if live_ref:
-            # A live-meeting reply runs on its meeting's model (backend/live_meetings.py turn_config), not the bot's.
-            from .live_meetings import turn_config
-
-            followed = turn_config(
-                c,
-                self.store.settings,
-                followed,
-                row["bot_id"],
-                live_ref.get("meeting_id"),
-                who.runner_id,
-                row["id"],
-                live_ref.get("turn_id"),
-            )
-        # A check subtask's turns run on its own model, in its own session (backend/check_models.py).
-        check = check_models.of(c, task["id"], row["bot_id"]) if task else None
-        # Starting a run does not change the task: it is being worked on while the run is live (task_wakes.live_run).
-        # A turn in a task's own session runs on the bot's task model when it has one, or on its own model when that
-        # cannot run here; a check keeps its check model (backend/task_models.py).
-        followed, model_record = task_models.pick(
-            c,
-            self.store.settings,
-            row["bot_id"],
-            followed,
-            task["id"] if task else None,
-            session_task_id(c, row["bot_id"], followed, task["id"]) if task else None,
-            conv["id"],
-            who.runner_id,
-            row["id"],
-            check,
+        followed = meeting_model(c, self.store.settings, followed, row["bot_id"], who.runner_id, row["id"], live_ref)
+        task_id = task["id"] if task else None
+        check = check_models.of(c, task_id, row["bot_id"]) if task_id else None
+        followed, model_record = job_model(
+            c, self.store.settings, followed, row["bot_id"], who.runner_id, row["id"], task_id, conv["id"], check
         )
-        followed = check_models.apply(followed, check)
         # What really runs this turn: the task's or check's model, or the bot's own after a fallback. A change to
         # the bot's model while the turn is out is told from an effort change by these (ran_another_model).
         handed = providers.bot_choice(c, self.store.settings, followed)
         record = providers.load(c, self.store.settings)
         config = providers.fill(record, followed)
+        bot = row["bot_id"]
+        paid_tools = agent_subscriptions.picks(c, bot) if bot != relationship_runs.BOT else {}
+        source = source_continuation(c, row["id"])
+        if paid_tools and (held := continuation_payer(c, runner, bot, source, row["id"])):
+            return {"attempt": None, "payer_wait": held.reason}
+        payment = (
+            None
+            if bot == relationship_runs.BOT
+            else agent_subscriptions.for_runner(c, runner, bot, config, job=row["id"])
+        )
+        subscribed = []
+        if payment is not None:
+            if not payment.subscription:
+                return {"attempt": None, "payer_wait": payment.reason}
+            config = dict(config, fallback={"off": True})
+            for key in ("gateway_fallback", "automatic_fallbacks", "primary_held"):
+                config.pop(key, None)
+            subscribed = [agent_subscriptions.claim_entry(str(handed[0]), payment)]
         voice_reply = False
-        subscribed = [] if row["bot_id"] == relationship_runs.BOT else None
         if live_ref and call_sessions.is_voice(c, live_ref.get("meeting_id")):
             spec = call_sessions.model_spec(handed[1])
             if voice_call and spec and not call_sessions.accepts_runner(spec, caps):
@@ -5309,7 +5558,6 @@ class Execution:
                 "fallback": {"off": True},
                 "voice_requires_subscription": True,
             }
-            subscribed = model_subscriptions.for_claim(c, runner, config, bot=row["bot_id"])
             if (
                 not spec
                 or gateway_connection.is_tico(handed[1])
@@ -5338,7 +5586,7 @@ class Execution:
             return {"attempt": None, "dropped": True}
         token = secrets.token_urlsafe(32)
         until = H.shift(H.now(), seconds=self.store.settings.lease_seconds)
-        woke, source = run_triggers.of_message(msg)
+        woke, trigger_source = run_triggers.of_message(msg)
         turn = H.turn_start(
             c,
             H.TICO_ACTOR,
@@ -5349,7 +5597,7 @@ class Execution:
             # message's task's, even in another task's conversation, so it is counted for that task.
             task_id=task_wakes.message_task(c, msg["id"]) or (task["id"] if task else None),
             trigger_kind=woke,
-            trigger_source=source,
+            trigger_source=trigger_source,
             purpose=run_triggers.purpose_of(msg, row["bot_id"], woke),
             rule_id=wake_rule_engine.claimed_rule(
                 msg, c.execute("SELECT wake_class FROM jobs WHERE id=?", (row["id"],)).fetchone()
@@ -5394,8 +5642,14 @@ class Execution:
         thread_bot_digest.grant(c, aid, msg)
         task_models.handed(c, aid, task["id"] if task else None, model_record)
         held = None
-        source = source_continuation(c, row["id"])
-        if source:
+        if payment is not None:
+            assert payment.subscription
+            login_holds.take_probe(
+                c, "", login_holds.subscription_login(payment.subscription["id"]), config["runtime"], row["id"]
+            )
+            if check and task:
+                check_models.handed(c, aid, task["id"], check)
+        elif source:
             login_holds.take_probe(
                 c,
                 who.runner_id,
@@ -5414,7 +5668,8 @@ class Execution:
             held = login_holds.get(c, *login_key(c, self.store.settings, who.runner_id, row["bot_id"], followed))
             moved = fallback_choice(c, self.store.settings, who.runner_id, row["bot_id"], followed, row["id"])
             if moved:
-                login_holds.take_probe(c, who.runner_id, *moved, row["id"])
+                profile, runtime = moved
+                login_holds.take_probe(c, who.runner_id, profile, runtime, row["id"])
         else:
             # After a hold on the bot's login ends, the first job to start on it is the window's one probe.
             login_holds.take_probe(
@@ -5422,25 +5677,26 @@ class Execution:
             )
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
-        here = readiness_document(runner["readiness"])
+        here = runner_readiness.local_sign_ins(readiness_document(runner["readiness"]))
         if relationship:
             here = relationship_readiness(here)
-        # The computer's subscription for this runtime signs the turn in, so a missing or
-        # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
-        if subscribed is None:
-            subscribed = model_subscriptions.for_claim(c, runner, config, bot=row["bot_id"])
-        # A computer given a person's plans moves to the next one here, between turns (Claude's sessions resume there).
-        model_subscriptions.settle(c, self.store.settings, runner["id"], subscribed)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
+        if bot != relationship_runs.BOT and config["runtime"] != "codex" and agent_subscriptions.CAPABILITY in caps:
+            shell = agent_subscriptions.resolve(c, bot, "codex", "")
+            if shell and shell.subscription and model_subscriptions.for_shell(shell.subscription):
+                subscribed.append({"runtime": "codex", "subscription": shell.subscription, "delivery": "shell"})
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         # The Gateway when its plans here run out only where this computer falls back to it (its own switch).
-        plans_out = models_preset.plans_out(c, runner["id"], config)
-        if not voice_reply:
+        plans_out = False
+        if payment is None and not voice_reply:
+            config = models_preset.main_config(record, here, config, tier, plans_out)
+            if paid_tools:
+                config = restrict_fallbacks(config, paid_tools, caps)
             config = models_preset.with_gateway_fallback(
                 record,
                 here,
-                models_preset.main_config(record, here, config, tier, plans_out),
+                config,
                 tier,
                 falls_back=models_preset.computer_falls_back(c, runner["id"]),
             )
@@ -5612,7 +5868,7 @@ class Execution:
             msg = self.fold_behind(c, row, aid, msg, task["id"], followed, lane)
         # The model's capacity stopped this job's turn after it acted: the runner continues that same thread, or holds
         # the run for review when it no longer has it (runner-rs/src/execute.rs CONTINUE_LOST).
-        continue_thread = continuation_thread(c, row['id'])
+        continue_thread = continuation_thread(c, row['id']) if not (source and payment is not None) else ""
         if continue_thread:
             msg = {
                 **msg,
@@ -5739,6 +5995,7 @@ class Execution:
                     else None,
                     "computer_label": runner["label"],
                     "computer_logins_v1": True,
+                    "local_model_keys_only": True,
                     # The computer the bot's browser reaches the web through, or None (backend/browser_exit.py).
                     "browser_exit": browser_exit.for_turn(c, row["bot_id"]),
                     # A starter bot's chat while it is `needs_setup` is its setup (runner prompt).
@@ -5756,9 +6013,13 @@ class Execution:
                         ("bot:" + row["bot_id"],),
                     ).fetchone()
                     is not None,
-                    # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
-                    # reads from credential-runtime (backend/model_subscriptions.py).
+                    # The claim receipt records only the providers' ids and kinds.
                     **({"subscriptions": subscriptions} if subscriptions else {}),
+                    **(
+                        {"attempt_credential_required": True}
+                        if payment is not None and agent_subscriptions.CAPABILITY in caps
+                        else {}
+                    ),
                     # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
                     # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                     "gateway": gateway_connection.wanted(config),
@@ -5791,7 +6052,7 @@ class Execution:
                     **({"fork_thread": fork_thread} if fork_thread else {}),
                     # A job the release policy let go to run in a session of its own (session `fresh`).
                     **({"fresh_session": True} if fresh_session else {}),
-                    **({"source_continuation": source} if source and not relationship else {}),
+                    **({"source_continuation": source} if source and not relationship and payment is None else {}),
                     # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
                     "worktrees": worktrees.attached(c, task["id"], who.runner_id, row["bot_id"]) if task else [],
                     "history": history,
@@ -6400,6 +6661,16 @@ class Execution:
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        payer = c.execute(
+            "SELECT delivery FROM attempt_subscriptions WHERE attempt_id=? AND runtime=?",
+            (aid, row["handed_runtime"]),
+        ).fetchone()
+        if payer and not model_subscriptions.payer_ready(c, row["runner_id"], aid, payer["delivery"]):
+            self.return_payer_claim(c, row["runner_id"], aid)
+            return {
+                "started": False,
+                "refused": {"code": "payer_wait", "detail": model_subscriptions.PAYER_UNAVAILABLE},
+            }
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
         if start_refused(c, aid):
             return {"started": False, "refused": {"code": "start_wait", "detail": "This turn's start was refused"}}
@@ -8105,6 +8376,7 @@ class Execution:
         elif (
             limited
             and check
+            and not model_subscriptions.handed(c, aid, check["runtime"])
             and not body.profile_used
             and (
                 moved := check_models.move_on(
@@ -8303,10 +8575,6 @@ class Execution:
                     **({"source": {k: v for k, v in src.items() if k != "notice"}} if src else {}),
                 },
             )
-            # A computer given a person's plans moves on to the next plan with usage left: the work this limit held
-            # until the spent plan's reset runs now, on that plan (its claim moves the set, model_subscriptions.settle).
-            if model_subscriptions.moves_on(c, row["runner_id"], runtime):
-                lift_limited_on_computer(c, self.store.settings, H.TICO_ACTOR, row["runner_id"], runtime)
         elif busy_acted or repeated_capacity:
             when = "again on its continued thread" if repeated_capacity else "after the run had acted"
             settle_status(

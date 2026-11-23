@@ -49,6 +49,11 @@ CUTOVER_PREREQUISITES = {
         "20261117061243_computer_keys_to_subscriptions.py",
         "20261117085930_drop_computer_keys.py",
     ),
+    "20261122220441_agent_subscriptions": (
+        "20261118012154_credential_adders.py",
+        "20261117085930_drop_computer_keys.py",
+        "20261122215020_plan_display_names.py",
+    ),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this

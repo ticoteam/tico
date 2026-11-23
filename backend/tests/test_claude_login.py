@@ -7,14 +7,16 @@ import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 
+import pytest
+
 from backend import claude_login as CL
 from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, put, runner
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, on
+from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, on, pick
 
-FULL = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "claude_login_v1"]
+FULL = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "claude_login_v1", "attempt_credentials_v1"]
 OLD = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"]
 
 
@@ -127,6 +129,9 @@ def test_a_full_login_is_named_for_its_owner_and_connecting_the_same_account_aga
     assert send(api, m, again, full(n=2))["state"] == "done"
     [same] = listed(api)
     assert same["id"] == sub["id"] and sub_row(api, sub["id"])["revision"] == 2
+    foreign = post(api, "model-subscriptions/connect", {"kind": "claude_token"}, "cara-test")
+    assert send(api, m, foreign, full(n=3))["state"] == "failed"
+    assert sub_row(api, sub["id"])["revision"] == 2
     # Another account is a plan of its own; reconnecting one plan with the other's account is refused.
     other = post(api, "model-subscriptions/connect", {"kind": "claude_token"})
     send(api, m, other, full("ben@acme.example", n=3))
@@ -141,7 +146,7 @@ def test_a_setup_token_plan_reconnected_with_a_full_login_keeps_its_owner_comput
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = computer(api, bot="ops")
     sid = add(api)["id"]
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     before = [s for s in listed(api) if s["id"] == sid][0]
     login = post(api, "model-subscriptions/connect", {"subscription": sid, "confirm": True})
     assert asked(api, m)[0]["subscription_kind"] == "claude_login"
@@ -161,9 +166,7 @@ def test_a_setup_token_plan_reconnected_with_a_full_login_keeps_its_owner_comput
             ).fetchone()[0]
             == 1
         )
-        assert (
-            c.execute("SELECT count(*) FROM computer_subscriptions WHERE subscription_id=?", (sid,)).fetchone()[0] == 1
-        )
+        assert c.execute("SELECT count(*) FROM agent_subscriptions WHERE subscription_id=?", (sid,)).fetchone()[0] == 1
     # The emergency path back: a pasted setup-token makes it a setup-token plan again, still the same plan.
     post(api, f"model-subscriptions/{sid}", {"secret": TOKEN, "confirm": True})
     assert [(s["id"], s["kind"]) for s in listed(api)] == [(sid, "claude_token")]
@@ -201,7 +204,7 @@ def test_a_kept_key_reconnected_as_a_full_login_is_retired_and_never_hands_out_t
         c.execute("UPDATE model_subscriptions SET credential_id=? WHERE id=?", (cid, sid))
     with api.app.state.store.read() as c:
         before, _ = MS.keys_for(c, api.app.state.vault, m["runner_id"], "claude")
-    assert [k["value"] for k in before["credentials"]] == [TOKEN]
+    assert before["credentials"] == []
     post(api, f"model-subscriptions/{sid}", {"kind": "claude_login", "secret": full(), "confirm": True})
     row = sub_row(api, sid)
     assert (row["kind"], row["credential_id"]) == ("claude_login", MS.CREDENTIAL + sid)
@@ -217,17 +220,20 @@ def test_a_kept_key_reconnected_as_a_full_login_is_retired_and_never_hands_out_t
         )
 
 
-def test_a_setup_token_plan_becomes_a_full_login_only_when_every_computer_running_it_can(api):
+def test_upgrading_a_plan_preserves_its_pick_and_old_computers_wait_for_an_update(api):
     setup(api)
     company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    old = computer(api, caps=OLD, label="Old box", bot="ops")
     sid = add(api)["id"]
-    give(api, computer(api), "claude", sid)
-    give(api, computer(api, caps=OLD, label="Old box"), "claude", sid)
-    refused = post(
-        api, f"model-subscriptions/{sid}", {"kind": "claude_login", "secret": full(), "confirm": True}, expected=409
-    )
-    assert refused["error"]["code"] == "update_computers" and "Old box" in json.dumps(refused["error"])
-    assert sub_row(api, sid)["kind"] == "claude_token"
+    pick(api, "ops", "claude", sid)
+    updated = post(api, f"model-subscriptions/{sid}", {"kind": "claude_login", "secret": full(), "confirm": True})
+    assert updated["kind"] == "claude_login"
+    assert get(api, "bots/ops/subscriptions")["subscriptions"]["claude"]["subscription_id"] == sid
+    post(api, "chat/ops", {"text": "Check the account."})
+    assert claim(api, old) is None
+    wait = next(check for check in get(api, "health")["checks"] if check["id"] == "paid_by_wait")
+    assert "Update Old box" in str(wait["items"])
 
 
 def test_a_turn_gets_only_an_access_token_in_its_own_file_and_an_older_runner_none(api):
@@ -236,33 +242,38 @@ def test_a_turn_gets_only_an_access_token_in_its_own_file_and_an_older_runner_no
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(), name=None)["id"]
     m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
-    [handed] = turn["subscriptions"]
+    handed = turn["attempt_credential"]
     assert handed["id"] == sid and handed["file"] == ".credentials.json" and handed["home_env"] == "CLAUDE_CONFIG_DIR"
-    [got] = get(api, "credential-runtime", turn["token"])["subscriptions"]
+    got = handed
+    assert not get(api, "credential-runtime", turn["token"]).get("subscriptions")
     assert (got["file"], got["home_env"]) == (".credentials.json", "CLAUDE_CONFIG_DIR")
     value = json.loads(got["value"])
     assert value["claudeAiOauth"]["accessToken"] == access(1)
     assert "refreshToken" not in value["claudeAiOauth"] and refresh(1) not in got["value"]
     assert "oauthAccount" not in value
-    old = computer(api, caps=OLD, label="Old")
-    give(api, old, "claude", sid)
-    with api.app.state.store.read() as c:
-        assert MS.in_effect(c, old["runner_id"], "claude") is None
-        assert MS.in_effect(c, m["runner_id"], "claude")["id"] == sid
+    old = computer(api, caps=OLD, label="Old", bot="cpo")
+    on(api, "cpo", "claude", "claude-sonnet-5-5")
+    pick(api, "cpo", "claude", sid)
+    post(api, "chat/cpo", {"text": "Check the account."})
+    assert claim(api, old) is None
 
 
-def test_one_computer_refreshes_the_login_and_the_others_turns_get_the_new_token(api):
+@pytest.mark.parametrize("legacy", [False, True])
+def test_one_computer_refreshes_the_login_and_the_others_turns_get_the_new_token(api, legacy):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
-    m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
-    spare = computer(api, label="Spare")
-    give(api, spare, "claude", sid)
+    caps = [*OLD, "claude_login_v1"] if legacy else FULL
+    m = computer(api, caps, bot="ops")
+    pick(api, "ops", "claude", sid)
+    spare = computer(api, caps, label="Spare", bot="cpo")
+    pick(api, "cpo", "claude", sid)
+    if legacy:
+        give(api, m, "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-1"}, m["token"])
@@ -280,7 +291,11 @@ def test_one_computer_refreshes_the_login_and_the_others_turns_get_the_new_token
     assert row["revision"] == 2 and row["refreshed_at"] and row["access_expires_at"] > at(hours=7)
     assert row["credential_at"] == sub_row(api, sid)["credential_at"]
     # A computer with a turn on revision 1 gets the new access token, never the refresh token.
-    [token] = poll(api, m, [(sid, 1)])["tokens"]
+    post(api, f"model-subscriptions/{sid}/usage-refresh", {})
+    answer = poll(api, m, [(sid, 1)])
+    [usage] = answer["usage"]
+    assert usage["subscription"] == sid and usage["token"] == access(2)
+    [token] = answer["tokens"]
     assert token["revision"] == 2 and json.loads(token["value"])["claudeAiOauth"]["accessToken"] == access(2)
     assert refresh(2) not in token["value"]
     assert poll(api, m, [(sid, 2)])["tokens"] == []
@@ -296,14 +311,73 @@ def test_one_computer_refreshes_the_login_and_the_others_turns_get_the_new_token
     assert poll(api, m, [(sid, 2)])["refreshes"] == [] and poll(api, spare)["refreshes"] == []
 
 
+def test_legacy_pool_refreshes_the_rotated_login_after_it_expires_without_a_live_turn(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    m = computer(api, [*OLD, "claude_login_v1"], bot="ops")
+    original = add(api, "claude_token", TOKEN)["id"]
+    rotated = add(api, "claude_login", full(n=2), name=None)["id"]
+    unused = add(api, "claude_login", full("other@acme.example", n=3), name=None)["id"]
+    pick(api, "ops", "claude", person="ana")
+    store = api.app.state.store
+    with store.transaction() as c:
+        MS._set(c, m["runner_id"], "claude", original, "human:ana", "human:ana")
+        c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (original,))
+        c.execute("UPDATE claude_logins SET access_expires_at=? WHERE subscription_id=?", (at(minutes=-1), unused))
+    post(api, "chat/ops", {"text": "Run after rotating to the next plan."})
+    turn = claim(api, m)
+    assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == rotated
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "rotated"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0}, m["token"])
+    with store.transaction() as c:
+        c.execute("UPDATE claude_logins SET access_expires_at=? WHERE subscription_id=?", (at(minutes=-1), rotated))
+    [lease] = poll(api, m)["refreshes"]
+    assert lease["subscription"] == rotated
+    pick(api, "ops", "claude")
+    assert poll(api, m)["refreshes"] == []
+
+
+@pytest.mark.parametrize("change", ["move", "clear"])
+def test_maintenance_credentials_stop_when_the_computer_loses_the_pick(api, change):
+    setup(api)
+    company(api)
+    m = computer(api, bot="ops")
+    other = computer(api, label="Other box")
+    refreshing = add(api, "claude_login", full(minutes=30))["id"]
+    usage = add(api, "claude_login", full("other@acme.example"))["id"]
+    pick(api, "ops", "claude", person="ana")
+    answer = poll(api, m)
+    [lease] = answer["refreshes"]
+    [request] = answer["usage"]
+    assert lease["subscription"] == refreshing and request["subscription"] == usage
+    if change == "move":
+        assign(api, other, "ops", generation=1)
+    else:
+        put(api, "bots/ops/subscriptions", {"subscriptions": {"claude": None}})
+    rejection = {"lease": lease["lease"], "revision": lease["revision"], "state": "rejected"}
+    assert post(api, f"runner-claude-logins/{refreshing}/refreshed", rejection, m["token"]) == {"stored": False}
+    assert sub_row(api, refreshing)["status"] != "needs_reconnect"
+    old_result = {"id": request["id"], "state": "limited", "retry_after": 3600}
+    post(api, f"runner-claude-logins/{usage}/usage", old_result, m["token"], expected=404)
+    with api.app.state.store.transaction() as c:
+        CL._put_lease(c, refreshing, lease_until=at(minutes=-1))
+    answer = poll(api, m)
+    assert answer["refreshes"] == answer["usage"] == []
+    with api.app.state.store.read() as c:
+        assert CL._lease(c, refreshing)["lease_runner"] == ""
+        assert CL._lease(c, refreshing)["lease_until"] < H.now()
+        assert not CL._usage_meta(c, usage).get("request")
+
+
 def test_a_lease_whose_computer_went_quiet_is_not_handed_over_while_the_old_token_works(api):
     setup(api)
     company(api)
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
-    first = computer(api, label="A")
-    give(api, first, "claude", sid)
-    second = computer(api, label="B")
-    give(api, second, "claude", sid)
+    first = computer(api, label="A", bot="ops")
+    pick(api, "ops", "claude", sid)
+    second = computer(api, label="B", bot="cpo")
+    pick(api, "cpo", "claude", sid)
     # Each computer's turn in rotation: whichever is chosen takes the lease.
     jobs = {"A": poll(api, first)["refreshes"], "B": poll(api, second)["refreshes"]}
     [holder] = [k for k, v in jobs.items() if v]
@@ -347,10 +421,10 @@ def test_a_refresh_result_counts_only_from_the_computer_its_lease_went_to(api):
     setup(api)
     company(api)
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
-    m = computer(api)
-    give(api, m, "claude", sid)
-    other = computer(api, label="Other")
-    give(api, other, "claude", sid)
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
+    other = computer(api, label="Other", bot="cpo")
+    pick(api, "cpo", "claude", sid)
     [job] = poll(api, m)["refreshes"] + poll(api, other)["refreshes"]
     if not poll(api, m)["refreshes"]:
         m, other = other, m  # the lease went to the other one: name them by it
@@ -389,7 +463,7 @@ def test_a_turn_refused_during_a_refresh_waits_for_the_new_token_and_is_handed_i
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
     m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     [job] = poll(api, m, [(sid, 1)])["refreshes"]
@@ -400,7 +474,7 @@ def test_a_turn_refused_during_a_refresh_waits_for_the_new_token_and_is_handed_i
     done = {"lease": job["lease"], "revision": 1, "state": "succeeded", "value": full(n=2)}
     post(api, f"runner-claude-logins/{sid}/refreshed", done, m["token"])
     again = claim(api, m)
-    assert again and again["subscriptions"][0]["revision"] == 2
+    assert again and again["attempt_credential"]["revision"] == 2
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM changes WHERE kind='work' AND subject_id=?", (m["runner_id"],)).fetchone()
 
@@ -411,7 +485,7 @@ def test_a_refused_turn_waits_five_minutes_at_most_and_a_second_refusal_is_a_fai
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
     m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     poll(api, m, [(sid, 1)])  # a lease goes out, and its upload stalls
@@ -420,7 +494,7 @@ def test_a_refused_turn_waits_five_minutes_at_most_and_a_second_refusal_is_a_fai
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE claude_login_parks SET until=? WHERE subscription_id=?", (at(minutes=-1), sid))
     again = claim(api, m)
-    assert again and again["subscriptions"][0]["revision"] == 1
+    assert again and again["attempt_credential"]["revision"] == 1
     state, result = refused_turn(api, m, again, "t-park-2")
     assert state == "failed" and not result.get("token_gap")
     assert sub_row(api, sid)["status"] == "needs_reconnect"
@@ -432,7 +506,7 @@ def test_a_turn_refused_while_its_login_rotated_resumes_instead_of_failing(api):
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
     m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-gap"}, m["token"])
@@ -468,12 +542,12 @@ def test_a_turn_refused_while_its_login_rotated_resumes_instead_of_failing(api):
     assert sub_row(api, sid)["status"] == "needs_reconnect"
 
 
-def test_usage_is_read_on_a_schedule_waits_out_a_429_and_orders_a_plan_near_its_limit_last(api):
+def test_usage_is_read_on_a_schedule_waits_out_a_429_and_reports_all_windows(api):
     setup(api)
     company(api)
     sid = add(api, "claude_login", full(), name=None)["id"]
-    m = computer(api)
-    give(api, m, "claude", sid)
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
     [job] = poll(api, m)["usage"]
     assert job["subscription"] == sid and job["token"] == access(1)
     # Refused (429): it waits as long as it was told, and the plan never goes to Reconnect.
@@ -504,8 +578,6 @@ def test_usage_is_read_on_a_schedule_waits_out_a_429_and_orders_a_plan_near_its_
     usage = sub["usage"]
     assert (usage["window"], usage["used_pct"], usage["weekly_used_pct"]) == ("5h", 96, 40)
     assert usage["near"] is True and usage["models"][0]["model"] == "Opus"
-    row = sub_row(api, sid)
-    assert MS.pick_key(row, usage) > MS.pick_key(row, {**usage, "near": False})
     # A read asked before the plan was reconnected with another account is not kept.
     with api.app.state.store.transaction() as c:
         meta = CL._usage_meta(c, sid)
@@ -527,8 +599,8 @@ def test_a_new_login_tells_its_computers_to_read_its_usage_now(api):
     setup(api)
     company(api)
     sid = add(api, "claude_login", full(), name=None)["id"]
-    m = computer(api)
-    give(api, m, "claude", sid)
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
 
     def told():
         with api.app.state.store.read() as c:
@@ -580,7 +652,7 @@ def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_writ
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, "claude_login", full(minutes=30), name=None)["id"]
     m = computer(api, bot="ops")
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-1"}, m["token"])
@@ -634,60 +706,21 @@ def test_a_poll_with_nothing_to_write_is_answered_off_the_write_lock_as_the_writ
     assert modes == [False, False] and vault.cipher.cached is not None
 
 
-def test_the_plans_next_in_line_are_read_once_per_poll_and_are_the_ones_each_plan_asked_for(api, monkeypatch):
-    """A plan's usage is read on its schedule when it is next in line in a person's set: the sets and the plans'
-    readings are read once for the poll, not once for each plan, and name the same plans as asking each plan did."""
+def test_every_due_plan_in_a_selected_pool_can_refresh_its_usage(api):
     setup(api)
     company(api)
     plans = [add(api, "claude_login", full(f"p{n}@acme.example", n=n), name=None)["id"] for n in range(4)]
-    m = computer(api)
-    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": "ana"})
-    store = api.app.state.store
-    # Every plan read a while ago and due again.
-    with store.transaction() as c:
-        for sid in plans:
+    unrelated = add(api, "claude_login", full("other@acme.example"), token="ben-test")["id"]
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", person="ana")
+    with api.app.state.store.transaction() as c:
+        for sid in [*plans, unrelated]:
             CL._save_usage_meta(c, sid, {"schedule": {"read_at": at(minutes=-20), "next_at": at(minutes=-1)}})
-
-    def asked_each(c, sid):  # the rule as each plan asked it before
-        for (_, runtime), entry in MS._given(c).items():
-            if entry.get("id") == sid:
-                return True
-            if entry.get("person"):
-                ready = [x for x in entry.get("members") or [] if MS.available(c, x, runtime)]
-                if sid in [x["id"] for x in MS._ordered(c, ready, runtime)[:2]]:
-                    return True
-        return False
-
-    with store.read_transaction() as c:
-        line = CL._Line(c)
-        expected = {sid for sid in plans if asked_each(c, sid)}
-        assert {sid for sid in plans if sid in line} == expected and 2 <= len(expected) < len(plans)
-    listings = []
-    real = MS._listing
-
-    def counted(c, sid=None):
-        listings.append(sid)
-        return real(c, sid)
-
-    monkeypatch.setattr(MS, "_listing", counted)
     jobs = poll(api, m)["usage"]
-    assert {j["subscription"] for j in jobs} == expected
-    assert len(listings) <= 2  # at most once on the read snapshot and once more under the write lock
-    # A second computer given the same person's set picks from it alike: the pick is made once for both.
-    other = computer(api, label="Second box")
-    put(api, "computer-subscriptions", {"runner_id": other["runner_id"], "runtime": "claude", "person": "ana"})
-    picks = []
-    real_ordered = MS._ordered
-
-    def ordered(c, subs, runtime, ctx=None):
-        picks.append(runtime)
-        return real_ordered(c, subs, runtime, ctx)
-
-    monkeypatch.setattr(MS, "_ordered", ordered)
-    with store.read_transaction() as c:
-        shared = CL._Line(c)
-        assert {sid for sid in plans if sid in shared} == expected
-    assert picks == ["claude"]
+    assert {job["subscription"] for job in jobs} == set(plans)
+    other = computer(api, label="Second box", bot="cpo")
+    pick(api, "cpo", "claude", person="ana")
+    assert poll(api, other)["usage"] == []  # the first computer already owns the outstanding reads
 
 
 def test_a_usage_read_that_works_tries_a_plan_past_due_at_once(api):
@@ -699,8 +732,8 @@ def test_a_usage_read_that_works_tries_a_plan_past_due_at_once(api):
     setup(api)
     company(api)
     sid = add(api, "claude_login", full(), name=None)["id"]
-    m = computer(api)
-    give(api, m, "claude", sid)
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
     login = login_holds.subscription_login(sid)
     with api.app.state.store.transaction() as c:
         login_holds.record(c, "", login, "claude", H.now(), error=PAST_DUE)

@@ -69,13 +69,11 @@ SCHEMAS['ModelSubscription'] = obj(
         'available': {'type': 'boolean', 'description': 'Whether the credential can be selected now'},
         'next_in_rotation': {
             'type': 'boolean',
-            'description': "At least one computer using this person's other plans can switch to this plan next",
+            'description': "An agent using another plan from this pool can use this plan next",
         },
         'agents': {
             **items(obj({'id': 's', 'name': 's', 'fallback': 'b'}, required=['id', 'name', 'fallback'])),
-            'description': "The bots it serves that the viewer can read, by name: those on a computer given it "
-            "(from a person's plans, the computers using it now) whose turns, tasks or named fallback run its "
-            'runtime; `fallback` when only the fallback does',
+            'description': "Agents the viewer can read whose Paid by selects this provider or its pool for the tool",
         },
         'expired': 'b',
         'reconnect_by': 'n',
@@ -138,6 +136,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
                     'subscription_id': 's',
                     'person': 's',
                     'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
+                    'mixed': 'b',
                 }
             )
         ),
@@ -146,13 +145,21 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
     }
 )
 
-SCHEMAS['ComputerSubscriptionResult'] = obj(
+SCHEMAS['AgentSubscriptionList'] = obj(
     {
-        'runner_id': 's',
-        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
-        'subscription_id': 'n',
-        'person': 's',
-        'stopped': 'i',
-        'sessions_reset': 'i',
+        'subscriptions': {
+            'type': 'object',
+            'additionalProperties': obj(
+                {
+                    'bot': 's',
+                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'kind': {'enum': ['pool', 'plan', 'key']},
+                    'person': 's',
+                    'subscription_id': 's',
+                    'set_by': 's',
+                    'updated_at': 's',
+                }
+            ),
+        },
     }
 )

@@ -49,6 +49,7 @@ pub const CAPABILITIES: &[&str] = &[
     // A previous hub release can still send the retired meeting lane (sessions.rs).
     "private_lanes_v1",
     "model_subscriptions_v1",
+    "attempt_credentials_v1",
     "model_subscription_activation_v1",
     // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
     "browser_exit_v1",
@@ -145,6 +146,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
+    "attempt_credentials_v1",
     RELAY_HINTS,
     VOICE_INPUTS,
     VOICE_SESSION_RESUME,

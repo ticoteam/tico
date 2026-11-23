@@ -363,9 +363,10 @@ Settings > Providers ([Computers](computers.md#company-subscriptions)) is sealed
 bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. **Connect**
 gets the same value from a sign-in on a computer, which sends it once in its own request, outside the sign-in relay and
 any request receipt; the browser never holds it. Bots, the
-Assistant or Agent Ops acting for a person, and support sessions cannot save one. Only a run its claim handed the
-subscription (its computer's, recorded in `attempt_subscriptions`) reads the value, from `credential-runtime` with its
-run token, while that run is live; each read is recorded (`subscription.sent_to_computer`).
+Assistant or Agent Ops acting for a person, and support sessions cannot save one. The hub records the turn's payer in
+`attempt_subscriptions` and sends its value with the claim to current runners. Older runners read it from
+`credential-runtime` with the live run token while the computer's binding matches the turn's payer. The hub records
+each of those reads as `subscription.sent_to_computer`.
 
 **A pairing's agent credential is not in the vault.** From approval until the Hermes or OpenClaw profile collects it, the
 minted credential waits in `agent_pairings.token` sealed to a public key derived from the pairing secret, which only the

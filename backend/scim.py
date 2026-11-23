@@ -266,7 +266,7 @@ def install_scim(app, settings, store):
                             "",
                             {"email": x["email"], "reason": x.get("reason")},
                         )
-                D.apply(c, lock_actor, "scim", found, live)
+                D.apply(c, lock_actor, "scim", found, live, settings=settings)
                 person = next((p for p in roster_of(c)["people"] if p["email"] == email), None)
                 cfg = D.load(c)
                 cfg["last"] = {"at": H.now(), "ok": True, "auto": True, "source": "scim", "held": False}

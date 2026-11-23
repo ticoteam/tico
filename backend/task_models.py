@@ -194,7 +194,7 @@ def readiness(c, bot, choice, runner_id=None):
     return can
 
 
-def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
+def why_not(c, settings, bot, choice, runner_id, job_id=None, kept="", loads=None):
     """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. A no from
     `readiness` is a reason (not installed, not signed in). Its "don't know" is not: Grok's sign-in can't be checked
     without starting it (`check = "none"`) and Antigravity reports no readiness, so a "don't know" would keep them off
@@ -219,6 +219,11 @@ def why_not(c, settings, bot, choice, runner_id, job_id=None, kept=""):
         )
     except providers.ProviderError as exc:
         return str(exc).replace("default model", "task model")
+    from .agent_subscriptions import loaded_picks
+
+    if choice["runtime"] in loaded_picks(c, bot, loads):
+        # The claim checks the selected payer before starting this model.
+        return ""
     can = readiness(c, bot, choice, runner_id)
     if can.get("can_run") is False:
         return can.get("problem") or f"{choice['runtime']} cannot run on this bot's computer"
@@ -349,7 +354,20 @@ def _effort_on(model, effort):
     return applied, ("" if applied else effort or "")
 
 
-def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, runner_id, job_id=None, check=None):
+def pick(
+    c,
+    settings,
+    bot,
+    followed,
+    task_id,
+    session_task_id,
+    conversation_id,
+    runner_id,
+    job_id=None,
+    check=None,
+    *,
+    loads=None,
+):
     """(config, record) for a claimed turn. `record` is None for a turn the task settings do not cover; otherwise it
     says what the turn was handed and why: `task` (a task model, or the bot's own model with the task effort or
     context length), `fallback` (a task model could not run; the next one, or the bot's own model, ran), or `check` (a
@@ -410,7 +428,7 @@ def pick(c, settings, bot, followed, task_id, session_task_id, conversation_id, 
         }
     failed = []
     for cand in [x for x in (mine, choice) if x]:
-        why = why_not(c, settings, bot, cand, runner_id, job_id, kept=choice["model"] if choice else "")
+        why = why_not(c, settings, bot, cand, runner_id, job_id, kept=choice["model"] if choice else "", loads=loads)
         if not why:
             return _on_task_model(c, settings, bot, followed, cand, cand is mine, compact_at, failed)
         failed.append((cand, why))

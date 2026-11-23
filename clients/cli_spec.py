@@ -72,7 +72,7 @@ class Arg:
     nargs: str | None = None
     default: Any = _SCHEMA
     type: Callable[[str], Any] | None = None
-    action: str | None = None
+    action: str | type[argparse.Action] | None = None
     const: Any = None
     metavar: str | None = None
     choices: tuple[str, ...] | None = None  # the words it takes when they are not the property's values (on, off)

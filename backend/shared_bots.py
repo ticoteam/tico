@@ -211,8 +211,10 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
             ),
         )
         BS.write(c, bot_id, config, now)
+        from .agent_subscriptions import seed_owner_pool
         from .report_order import arrive
 
+        seed_owner_pool(c, bot_id, person, who.actor, now)
         arrive(c, "bot:" + bot_id, config["reports_to"])  # a new bot goes last among its manager's reports
         from .finance import actions as FA
 

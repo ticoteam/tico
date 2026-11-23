@@ -70,6 +70,7 @@ pub struct Delivered {
     pub kind: String,
     pub revision: i64,
     pub billing: &'static str,
+    attempt_only: bool,
     /// The variable an environment subscription is set in.
     pub env: Option<String>,
     /// The CLI's own home (CODEX_HOME) for a home subscription, and its sign-in file there.
@@ -123,9 +124,7 @@ impl Delivered {
     /// running another runtime, so a bot on Claude can run `codex exec` on its computer's ChatGPT plan. Never an API
     /// key (that spends per use), and never a runtime whose home is HOME (it would move the running CLI's own home).
     fn for_shell(&self) -> bool {
-        self.home.is_some()
-            && self.billing == "subscription"
-            && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
+        self.attempt_only && self.runtime == "codex" && self.home.is_some()
     }
 }
 
@@ -239,6 +238,7 @@ pub fn apply(
             kind: text_of(&item["kind"]),
             revision: item["revision"].as_i64().unwrap_or(0),
             billing: billing(&item["billing"]),
+            attempt_only: item["source"] == "attempt",
             env: None,
             home: None,
             home_env: None,
@@ -284,7 +284,7 @@ pub fn apply(
             let plan = crate::isolation::bot_state(state_dir)
                 .join("subscriptions")
                 .join(&id);
-            let home = if name == CREDENTIALS {
+            let home = if name == CREDENTIALS || delivered.attempt_only {
                 plan.join(TURNS)
                     .join(uuid::Uuid::new_v4().simple().to_string())
                     .join(&runtime)
@@ -482,6 +482,25 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         return Ok(secrets);
     }
     if let Some(var) = crate::profiles::home_var(&d.runtime) {
+        if d.attempt_only {
+            // Codex resumes from the plan's session directory, with a separate auth.json per attempt.
+            let plan = home
+                .ancestors()
+                .nth(3)
+                .ok_or("Missing provider home")?
+                .join(&d.runtime);
+            let sessions = plan.join("sessions");
+            crate::isolation::mkdir(&sessions, 0o700)
+                .map_err(|_| "Cannot create provider sessions")?;
+            let link = home.join("sessions");
+            if !link.is_symlink() {
+                std::os::unix::fs::symlink(sessions, link)
+                    .map_err(|_| "Cannot link provider sessions")?;
+            }
+            for key in crate::harness_tools::api_key_env(&d.runtime) {
+                env.remove(&key);
+            }
+        }
         for key in crate::harness_tools::caps(&d.runtime, "").profile_home_overrides {
             env.remove(&key);
         }
@@ -732,10 +751,11 @@ fn release(d: &mut Delivered) -> Vec<String> {
     let mut homes = homes();
     if let Some(now) = changed(d) {
         secrets.extend(secrets_in(&now));
-        if homes
-            .live
-            .get(&home)
-            .is_some_and(|l| l.revision == d.revision)
+        if !d.attempt_only
+            && homes
+                .live
+                .get(&home)
+                .is_some_and(|l| l.revision == d.revision)
         {
             homes.kept.insert(home.clone(), (d.revision, now.clone()));
         }
@@ -848,6 +868,36 @@ mod tests {
         let d = std::env::temp_dir().join(format!("tico-subs-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[test]
+    fn attempt_only_codex_uses_a_private_auth_file_and_never_keeps_it() {
+        let state = dir();
+        let items = |token| {
+            json!([{
+                "id": "plan", "runtime": "codex", "kind": "codex_login", "billing": "subscription",
+                "file": "auth.json", "revision": 1, "source": "attempt", "value": token,
+            }])
+        };
+        let mut first = turn(&state, &items("{\"tokens\":\"attempt one\"}"), "codex");
+        let mut second = turn(&state, &items("{\"tokens\":\"attempt two\"}"), "codex");
+        let one = first[0].file.clone().unwrap();
+        let two = second[0].file.clone().unwrap();
+        assert_ne!(one, two);
+        assert!(std::fs::read_to_string(&one)
+            .unwrap()
+            .contains("attempt one"));
+        assert!(std::fs::read_to_string(&two)
+            .unwrap()
+            .contains("attempt two"));
+        std::fs::write(&one, "{\"tokens\":\"refreshed\"}").unwrap();
+        finish(&mut first);
+        assert!(!one.exists() && two.exists());
+        assert!(first[0].refreshed.is_some());
+        assert!(!homes().kept.contains_key(first[0].home.as_ref().unwrap()));
+        finish(&mut second);
+        assert!(!two.exists());
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     /// A turn handed `items` whose `runtime` process starts.

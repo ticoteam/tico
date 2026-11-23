@@ -197,7 +197,7 @@ def _instant(text):
     return when.astimezone(timezone.utc) if when.tzinfo else None
 
 
-def plan_key(sid):
+def plan_key(sid: str) -> str:
     return PLAN_PREFIX + sid
 
 
@@ -224,6 +224,12 @@ def _can_read_plan(runner):
     return model_login._online(runner) and PLAN_CAPABILITY in (H._json(runner['capabilities'], []) or [])
 
 
+def _plan_computers(c, sub):
+    from .agent_subscriptions import provider_runners
+
+    return provider_runners(c, sub)
+
+
 def request_plan_read(c, sid, actor):
     """Ask a computer that has the plan to read its week now: one read at a time, and not again within COOLDOWN.
     The route admits admins only. Returns the plan's refresh (`view`)."""
@@ -245,11 +251,17 @@ def request_plan_read(c, sid, actor):
         )
     if sub['status'] == 'needs_reconnect':
         raise Problem('signed_out', 'Sign in again before reading this plan', 409)
-    ctx = MS._listing(c, sid)
-    grants = [g for g in ctx['grants'].get(sid, []) if g['runtime'] == 'claude' and g['runner_id'] in ctx['runners']]
-    if not grants:
-        raise Problem('no_computer', 'Give this plan to a computer first', 409)
-    ready = [g['runner_id'] for g in grants if _can_read_plan(ctx['runners'][g['runner_id']])]
+    computers = _plan_computers(c, sub)
+    if not computers:
+        raise Problem('no_computer', 'Choose this plan or its pool for an agent on a computer first', 409)
+    ready = [
+        runner
+        for runner in sorted(computers)
+        if (
+            row := c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner,)).fetchone()
+        )
+        and _can_read_plan(row)
+    ]
     if not ready:
         raise Problem('offline', 'Its computers are offline or not yet updated to read usage', 409)
     value = metadata(c, plan_key(sid)) or {}
@@ -305,10 +317,7 @@ def plan_with_value(c, vault, runner, item):
 
     sid = item['subscription']
     sub = MS.row(c, sid)
-    given = any(
-        g['runner_id'] == runner and g['runtime'] == 'claude' for g in MS._listing(c, sid)['grants'].get(sid, [])
-    )
-    if not sub or sub['status'] == 'needs_reconnect' or not given:
+    if not sub or sub['status'] == 'needs_reconnect' or runner not in _plan_computers(c, sub):
         return item
     value = MS.value_of(c, vault.cipher, sub)
     if value is None:

@@ -31,7 +31,7 @@ TAGS = {
     "Team": "This installation's names and settings.",
     "Repositories": "Team repositories, the company's GitHub App connection (the Owner), product-repository creation "
     "(the Owner, or a bot with Create product repositories), and bot repository access.",
-    "Subscriptions": "Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it.",
+    "Subscriptions": "Provider logins and usage for a computer's own sign-in.",
     "Team chart": "Humans and bots, and who reports to whom.",
     "Bots": "The bots a person can see, and their live status.",
     "Computers": "The computers that run bots: what each one runs at once.",
@@ -96,9 +96,10 @@ TAGS = {
     'Webhooks': "Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log (docs/webhooks.md).",
     'Cards and pins': "Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot "
     "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.",
-    # Settings > Providers: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
-    'Model subscriptions': "The company's saved model logins and keys, given to computers per runtime. A value is "
-    "sent only to add or reconnect one; no answer carries it.",
+    # Settings > Providers: saved plans, keys and agent payment choices (backend/model_subscriptions.py).
+    'Model subscriptions': "Saved plans and keys in people's pools, and each agent's Paid by per runtime. People can "
+    "add their own plans and API keys. The provider's owner or an admin can manage it. A value is sent only to "
+    "add or reconnect a subscription. No answer carries it.",
     'Slack links': "A thread's link to a Slack channel, both ways (docs/slack.md): asked for by an admin, checked by the "
     "gateway, then active, suspended or refused. Admins only.",
     # Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages

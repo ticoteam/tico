@@ -193,6 +193,31 @@ def test_the_retired_packet_capability_is_still_accepted_on_a_heartbeat(api):
     post(api, "runners/heartbeat", body, token=computer["token"])
 
 
+def test_claim_keeps_attempt_credentials_behind_the_advertised_capability(api):
+    from backend.tests.helpers.api import put
+    from backend.tests.helpers.credentials import setup
+    from backend.tests.helpers.model_subscriptions import add, company, on
+
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    computer = runner(api)
+    assign(api, computer, "ops")
+    body = heartbeat_body("ops")
+    body["capabilities"].append("attempt_credentials_v1")
+    body["readiness"]["runtimes"]["claude"] = {"installed": True, "authenticated": "missing"}
+    body["readiness"]["bots"]["ops"]["runtime"] = "claude"
+    assert not W.errors(body, ref("Heartbeat"), REQUESTS)
+    post(api, "runners/heartbeat", body, token=computer["token"])
+    sid = add(api)["id"]
+    put(api, "bots/ops/subscriptions", {"subscriptions": {"claude": {"kind": "plan", "subscription_id": sid}}})
+    post(api, "chat/ops", {"text": "Check the provider."})
+    answer = post(api, "jobs/claim", CLAIM, token=computer["token"])
+    assert not W.errors(answer, ref("ClaimAnswer"), WIRE)
+    assert answer["attempt"]["attempt_credential_required"]
+    assert answer["attempt"]["attempt_credential"]["id"] == sid
+
+
 def test_todays_runner_no_longer_advertises_or_gates_the_retired_packet_capability():
     """The packet path is gone from runner-rs: its capability is neither advertised (lanes.rs CAPABILITIES) nor listed
     under the contract's `gated` (what today's runner may send), so the server accepts it only from older runners."""

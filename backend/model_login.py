@@ -9,14 +9,9 @@ What is stored is a link, a one-time code, a few redacted CLI message lines and 
 at most `LIFETIME` seconds. A code the person pastes back is held only until the runner has
 taken it, then dropped.
 
-The same relay signs a login out, switches it to another account, and puts the key the computer is given
-back (`kind`). A computer's own login that a person signed out stays signed out (`model_login_cleared`):
-the server stops handing that computer the key it is given from Settings > Providers for it, and the runner keeps its
-own mark, until a person signs in again or chooses to use the shared key (`use_shared_key`, the one job that lifts a
-v0.6.0-rc.1 runner's own marks). A key deleted in Settings > Providers or Credentials clears it the same way
-(`mark_key_cleared`).
-
-A model key is a subscription, added in Settings > Providers and assigned to computers with the CLI.
+The same relay signs a local login out or switches it to another account. The legacy `use_shared_key` job lifts a
+sign-out marker on the runner. Portable model keys are saved in Settings > Providers and selected under Paid by
+on the agent.
 The Settings > Computers key jobs (Add, Replace and Clear key, Switch to subscription, Switch to API key) are gone: a
 page or client that still asks is told where keys are changed now (`MOVED`).
 
@@ -84,10 +79,7 @@ LEGACY_VERDICTS = {
 VERDICTS.update(LEGACY_VERDICTS)
 MAX_LINES, MAX_LINE = 12, 200
 # What a page drawn before D11-5, or a client, is told when it asks for a key job from Settings > Computers.
-MOVED = (
-    "Add or replace model keys in Settings > Providers. Assign or unassign them with "
-    "`tico settings set models.computer_subscription`. After removing a key, sign the computer in."
-)
+MOVED = "Add or replace model keys in Settings > Providers. Choose the key under Paid by on the agent."
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
 
 # The runner redacts before it reports; this is the same rule again because the server does not
@@ -561,17 +553,28 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
     return view(row)
 
 
+def _login_for_person(c, who, rid, lid, auth, *, cancel=False):
+    row = _login(c, rid, lid)
+    if row["kind"] == "connect":
+        from .model_subscriptions import _may_manage, _person_secret
+
+        _person_secret(who)
+        if row["requested_by"] != who.actor and not (cancel and auth and _may_manage(auth, who)):
+            raise Problem("forbidden", "Only the person who started this Connect can open it", 403)
+    else:
+        _operator(c, who, rid, auth)
+    return row
+
+
 def read(c, who, rid, lid, auth=None, swept=True):
-    _operator(c, who, rid, auth)
     if swept:
         sweep(c)
-    return view(_login(c, rid, lid))
+    return view(_login_for_person(c, who, rid, lid, auth))
 
 
 def submit_code(c, who, rid, lid, code, auth=None):
-    _operator(c, who, rid, auth)
     sweep(c)
-    row = _login(c, rid, lid)
+    row = _login_for_person(c, who, rid, lid, auth)
     if row["runtime"] not in PASTE_RUNTIMES:
         raise Problem("kind", "This sign-in does not take a pasted code", 422)
     if row["state"] != "waiting":
@@ -586,9 +589,8 @@ def submit_code(c, who, rid, lid, code, auth=None):
 
 
 def cancel(c, who, rid, lid, auth=None):
-    _operator(c, who, rid, auth)
     sweep(c)
-    row = _login(c, rid, lid)
+    row = _login_for_person(c, who, rid, lid, auth, cancel=True)
     if row["state"] == "finishing":
         if row["kind"] == "remove":
             raise Problem("state", "It is already being removed, so it can't be canceled now", 409)

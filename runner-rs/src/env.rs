@@ -380,6 +380,37 @@ pub async fn environment_with(
     environment_from(ctx, attempt, vault, granted, None).await
 }
 
+pub const PAYER_UNAVAILABLE: &str = "The attempt’s provider credential is unavailable";
+
+fn matching_credential(
+    credential: &Value,
+    expected: &Value,
+    runtime: &Value,
+) -> Result<Value, String> {
+    if !credential.is_object()
+        || expected["source"] != "agent"
+        || &credential["runtime"] != runtime
+        || ["id", "runtime", "kind", "revision"]
+            .iter()
+            .any(|key| credential[*key] != expected[*key])
+    {
+        return Err(PAYER_UNAVAILABLE.into());
+    }
+    let mut entry = credential.clone();
+    entry["source"] = Value::String("attempt".into());
+    Ok(entry)
+}
+
+fn attempt_subscription(attempt: &Value) -> Result<Value, String> {
+    let credential = &attempt["attempt_credential"];
+    let expected = attempt["subscriptions"].get(0).unwrap_or(&Value::Null);
+    let mut entry = matching_credential(credential, expected, &attempt["config"]["runtime"])?;
+    if let Some(fields) = entry.as_object_mut() {
+        fields.remove("shell");
+    }
+    Ok(serde_json::json!([entry]))
+}
+
 async fn environment_from(
     ctx: &EnvContext<'_>,
     attempt: &Value,
@@ -391,6 +422,11 @@ async fn environment_from(
     let token = attempt["token"].as_str().unwrap_or_default();
     let mut env = process_environment();
     let mut vault_keys = BTreeSet::new();
+    let attempt_subscription = if attempt["attempt_credential_required"] == true {
+        Some(attempt_subscription(attempt)?)
+    } else {
+        None
+    };
     if crate::util::truthy(attempt.get("credential_vault")) || granted.is_some() {
         let granted = match granted {
             Some(g) => g,
@@ -510,14 +546,47 @@ async fn environment_from(
         for line in problems {
             crate::util::diagnostic(&format!("Tico runner: {bot}: {line}"));
         }
-        // A company subscription the claim handed this turn: after the grants, so it decides how the runtime signs in.
+        if attempt_subscription.is_none() {
+            vault.subscriptions = crate::model_subscriptions::apply(
+                ctx.state_dir,
+                &granted["subscriptions"],
+                &mut env,
+                &mut vault.values,
+                &mut vault_keys,
+            );
+        }
+    }
+    if let Some(subscription) = attempt_subscription {
         vault.subscriptions = crate::model_subscriptions::apply(
             ctx.state_dir,
-            &granted["subscriptions"],
+            &subscription,
             &mut env,
             &mut vault.values,
             &mut vault_keys,
         );
+        if vault.subscriptions.len() != 1 {
+            return Err(PAYER_UNAVAILABLE.into());
+        }
+    }
+    if let Some(shell) = attempt["attempt_credential"].get("shell") {
+        let expected = attempt["subscriptions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|entry| entry["runtime"] == "codex")
+            .unwrap_or(&Value::Null);
+        let entry = matching_credential(shell, expected, &Value::String("codex".into()))?;
+        let delivered = crate::model_subscriptions::apply(
+            ctx.state_dir,
+            &Value::Array(vec![entry]),
+            &mut env,
+            &mut vault.values,
+            &mut vault_keys,
+        );
+        if delivered.len() != 1 {
+            return Err(PAYER_UNAVAILABLE.into());
+        }
+        vault.subscriptions.extend(delivered);
     }
     // 1Password references among the grants are read now (crate::op), with the token from `_shared.env`.
     let mut refs: BTreeMap<String, String> = vault_keys
@@ -656,6 +725,24 @@ async fn environment_from(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn attempt_credential_requires_the_claims_payer() {
+        let mut attempt = serde_json::json!({
+            "config": {"runtime": "claude"},
+            "subscriptions": [{"source": "agent", "id": "one", "kind": "claude_token", "runtime": "claude"}],
+        });
+        assert!(attempt_subscription(&attempt).is_err());
+        attempt["attempt_credential"] = serde_json::json!({
+            "id": "other", "kind": "claude_token", "runtime": "claude", "value": "synthetic",
+        });
+        assert!(attempt_subscription(&attempt).is_err());
+        attempt["attempt_credential"]["id"] = serde_json::json!("one");
+        assert_eq!(
+            attempt_subscription(&attempt).unwrap()[0]["source"],
+            "attempt"
+        );
+    }
 
     thread_local! {
         /// This thread's stand-in for the operator's HOME (`operator_home`, and the HOME a turn inherits), so a test

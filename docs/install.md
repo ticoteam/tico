@@ -635,27 +635,14 @@ In the app open **Settings > Computers > Add computer** (or step 4 of the Finish
 runs your bots"), pick the kind of computer, and copy the commands it shows. The one-time code works once and
 expires after 15 minutes. Adding a computer never assigns bots to it: choose it for each bot afterwards.
 
-**A new computer signs in to your model by itself when your team has given it a model key.** Add the key once in
-**Settings > Providers** and give it to the computers that should use it ([API keys on a Computer](computers.md#api-keys-on-a-computer)).
-Only a credential administrator can do this. From then on, when a new computer joins or gets its first job and its model is not
-signed in, the runner (the software on the computer) asks the server for that key as itself, saves it in its own secrets folder
-and signs in the way it would with a key you had typed there. Nobody copies a key between computers, and the key is in no log.
-Tool Credentials need a grant per bot; `tico_credential_grant` targets a bot.
+For an agent using a saved plan or key, add the provider in **Settings → Providers** and select it under
+**Paid by** on the agent. The runner receives the credential for that turn. Tool Credentials use a separate grant
+for each bot through `tico_credential_grant`.
 
-Only that model credential comes this way: a bot's own credentials stay with that bot, and a computer never receives them.
-
-A subscription login (a ChatGPT or Claude plan) cannot be copied. If that is how your team signs in, Settings > General > Health > Details shows
-"*computer name*: sign in to Codex" (or Claude Code) for each new computer that needs it. Sign it in from Settings > Computers, or ask
-Agent Ops to start it, then finish the sign-in in your browser.
-
-To change the account a computer uses, open it in Settings > Computers and choose **Switch account** on its connection: the new account is
-signed in on the side, and the old one keeps working until that finishes (or if you cancel). **Sign out** names the bots
-that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
-it is given until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
-
-A computer can also run on a model API key, with no terminal: add the key in **Settings > Providers** and give it to the
-computer there. Taking it off the computer there makes the computer delete its copy at its next key fetch (an offline
-computer when it is next online). See [Computers](computers.md#api-keys-on-a-computer).
+For an agent using the computer's own login, open the agent's **Computer** tab and sign in to the tool there,
+or ask Agent Ops to start the sign-in and finish it in your browser. **Settings → Health** links to the agent's
+**Computer** tab when its login needs attention. **Switch account** keeps the old sign-in working until the new one
+is verified. **Sign out** shows the affected bots before it runs. See [Computers](computers.md#signing-out-and-switching-accounts).
 
 ### Linux or cloud server (Docker)
 

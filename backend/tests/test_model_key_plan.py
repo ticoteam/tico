@@ -1,6 +1,6 @@
 """Every runner polls `GET runner-model-credentials` (backend/model_subscriptions.py keys_for) and every claim reads the
-bot's own key grants (model_subscriptions.for_claim): since D11-4 both read the key from computer_subscriptions ->
-model_subscriptions -> credentials, and each step must seek by key, whatever sqlite_stat1 says. The Computers page reads
+agent's selected payer (model_subscriptions.for_claim). Lookups by computer or agent must seek by key, whatever
+sqlite_stat1 says. The Computers page reads
 every computer's key in one pass (key_listing). Timings before and after: scripts/benchmark_model_keys.py."""
 
 import importlib
@@ -12,7 +12,7 @@ from backend import model_subscriptions
 from backend.config import Settings
 from backend.credentials import Vault
 from backend.store import Store
-from scripts.benchmark_model_keys import NOW, seed
+from scripts.benchmark_model_keys import NOW, seed, seed_agent_payers
 
 MOVE = importlib.import_module("backend.migrations.20261117061243_computer_keys_to_subscriptions")
 DROP = importlib.import_module("backend.migrations.20261117085930_drop_computer_keys")
@@ -39,6 +39,7 @@ def hub(tmp_path, stats):
         runners, bots = seed(c, vault, computers=10, subscriptions=20, bots=20)
         MOVE.up(c, NOW)
         DROP.up(c, NOW)
+        seed_agent_payers(c, runners, bots)
     with sqlite3.connect(path) as c:
         c.execute("ANALYZE")
         if stats is not None:
@@ -58,7 +59,7 @@ def plans(c, call):
         c.set_trace_callback(None)
     return {
         sql: [r[3] for r in c.execute("EXPLAIN QUERY PLAN " + sql, ("x",) * sql.count("?"))]
-        for sql in dict.fromkeys(s for s in seen if s.lstrip().upper().startswith("SELECT"))
+        for sql in dict.fromkeys(s for s in seen if s.lstrip().upper().startswith(("SELECT", "WITH")))
     }
 
 
@@ -78,12 +79,17 @@ def test_the_key_poll_seeks_the_computers_key_and_scans_nothing(tmp_path, stats)
 
 
 @pytest.mark.parametrize("stats", [None, STALE], ids=["analysed", "stale"])
-def test_a_bots_key_grants_and_a_keys_subscription_are_sought_by_index(tmp_path, stats):
+def test_a_bots_payer_is_sought_by_agent_and_provider_indexes(tmp_path, stats):
     c, _, runners, bots = hub(tmp_path, stats)
-    found = plans(c, lambda: model_subscriptions.for_claim(c, {"id": runners[0]}, {"runtime": "claude"}, bot=bots[1]))
-    [grants] = [p for sql, p in found.items() if "FROM credential_grants g" in sql]
-    assert any(p.startswith("SEARCH g USING INDEX credential_grants_subject (subject=?)") for p in grants), grants
-    assert not [p for p in grants if p.startswith("SCAN")], grants
+    runner = {"id": runners[0], "capabilities": '["attempt_credentials_v1"]'}
+    config = {"runtime": "claude"}
+    assert model_subscriptions.for_claim(c, runner, config, bot=bots[1])[0]["subscription"]["kind"] == "anthropic_key"
+    found = plans(c, lambda: model_subscriptions.for_claim(c, runner, config, bot=bots[1]))
+    [payers] = [p for sql, p in found.items() if "WITH chosen AS MATERIALIZED" in sql]
+    assert any(p.startswith("SEARCH p USING INDEX sqlite_autoindex_agent_subscriptions_1") for p in payers), payers
+    assert any(p.startswith("SEARCH s USING INDEX sqlite_autoindex_model_subscriptions_1") for p in payers), payers
+    assert any(p.startswith("SEARCH s USING COVERING INDEX model_subscriptions_pool") for p in payers), payers
+    assert not [p for p in payers if p.startswith(("SCAN p", "SCAN s"))], payers
     by_key = c.execute("EXPLAIN QUERY PLAN SELECT id FROM model_subscriptions WHERE credential_id=?", ("x",))
     assert [r[3] for r in by_key] == [
         "SEARCH model_subscriptions USING INDEX model_subscriptions_credential (credential_id=?)"
@@ -91,18 +97,15 @@ def test_a_bots_key_grants_and_a_keys_subscription_are_sought_by_index(tmp_path,
 
 
 @pytest.mark.parametrize("stats", [None, STALE], ids=["analysed", "stale"])
-def test_the_computers_page_reads_every_key_in_one_pass(tmp_path, stats):
-    """One read for every computer's key, whatever the number of computers: a scan of the given rows (the page lists
-    them all), each joined by key, and the sign-out mark sought per row."""
+def test_the_computers_page_reads_every_local_key_in_one_pass(tmp_path, stats):
+    """One read for the computers' local keys, with each provider and credential sought by id."""
     c, _, runners, _ = hub(tmp_path, stats)
     found = plans(c, lambda: model_subscriptions.key_listing(c))
     listing = model_subscriptions.key_listing(c)
-    assert set(listing) == set(runners)
+    assert set(listing) == set(runners[: len(runners) * 4 // 5])
     [key] = [p for sql, p in found.items() if "FROM computer_subscriptions g" in sql]
     assert any(p.startswith("SEARCH s USING INDEX sqlite_autoindex_model_subscriptions_1") for p in key), key
     assert any(p.startswith("SEARCH cr USING INDEX sqlite_autoindex_credentials_1") for p in key), key
-    assert any(p.startswith("SEARCH r USING INDEX sqlite_autoindex_runners_1") for p in key), key
-    assert any(p.startswith("SEARCH m USING COVERING INDEX sqlite_autoindex_model_login_cleared_1") for p in key), key
     assert [p for p in key if p.startswith("SCAN")] in (
         ["SCAN g"],
         ["SCAN g USING INDEX sqlite_autoindex_computer_subscriptions_1"],

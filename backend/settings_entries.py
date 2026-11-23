@@ -740,8 +740,8 @@ ENTRIES = TEAM_RULES + [
         value="json",
         card=_card("models", "settings-gateway-card"),
     ),
-    # Company subscriptions (backend/model_subscriptions.py): a value is pasted only in Settings; giving one to a
-    # computer, or removing one in use, restarts that computer's runs on that runtime.
+    # Provider pools (backend/model_subscriptions.py): a value is pasted only in Settings, and an agent's Paid by
+    # choice applies at its next turn.
     S(
         "models.subscription.add",
         "Add a subscription",
@@ -780,17 +780,17 @@ ENTRIES = TEAM_RULES + [
         card=_card("models", "settings-subs"),
     ),
     S(
-        "models.computer_subscription",
-        "A computer's subscription",
-        PROVIDERS,
-        "admin",
-        "confirm",
+        "models.agent_subscription",
+        "Paid by",
+        BOTS,
+        "bot",
+        "direct",
         "PUT",
-        "computer-subscriptions",
+        "bots/{bot}/subscriptions",
         value="json",
-        card=_card("models", "settings-subs"),
-        read="computer-subscriptions",
-        words="give assign subscription computer claude codex person plans failover next plan reset",
+        card=_card("bots"),
+        read="bots/{bot}/subscriptions#subscriptions",
+        words="give assign provider pool subscription claude codex person plans key next plan reset",
     ),
     # Bots
     S(

@@ -203,6 +203,7 @@ def test_every_setup_route_records_its_refusals(api):
         "GET /api/v2/bots/{bot}/github-repos",
         "GET /api/v2/model-subscriptions",
         "GET /api/v2/computer-subscriptions",
+        "PUT /api/v2/computer-subscriptions",  # retired; tells the caller where to write
         "GET /api/v2/cloud-machines",
         "GET /api/v2/cloud-machines/support",
         # A setting, not a setup step: its refusals are HQ's current answer and the page reads them back.

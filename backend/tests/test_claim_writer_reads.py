@@ -49,15 +49,14 @@ def test_the_claims_recheck_under_the_write_lock_reads_no_whole_hold_or_grant_ta
     inside = locked(seen)
     assert inside, "the claim wrote"
     assert EVERY_HOLD not in inside
-    # The recheck read this computer's grants only. The hand-out's own read of the plans it gives the turn
-    # (model_subscriptions.for_claim) still reads every computer's: once, and no more.
-    assert any("g.runner_id IN" in s for s in inside)
-    every_grant = [
+    # The chosen agent's payer follows it, so a narrow recheck never needs the whole legacy binding table.
+    payer_reads = [s for s in inside if s.startswith("SELECT * FROM agent_subscriptions WHERE bot IN")]
+    assert payer_reads and all(answer["attempt"]["bot"] in s for s in payer_reads)
+    assert not [
         s
         for s in inside
         if "FROM computer_subscriptions g LEFT JOIN" in s and "g.runner_id IN" not in s and not s.startswith("SELECT 1")
     ]
-    assert len(every_grant) == 1, every_grant
 
 
 def test_a_narrow_read_answers_its_keys_as_the_whole_read_does_and_reads_the_whole_for_any_other(api):

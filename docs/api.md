@@ -30,6 +30,16 @@ software: a web frontend your team builds, a script, another service. This page 
   `201`. The spec gives each route's code.
 - **Errors:** `{"error": {"code", "detail", "retryable"}}`. See [errors](custom-frontend.md#errors).
 
+### Computer subscriptions cutover
+
+Use `GET /api/v2/bots/{bot}/subscriptions` to read an agent's **Paid by** and `PUT` on the same route
+to change selected AI tools. Send a `subscriptions` map keyed by runtime. Each value selects a pool
+by `person`, a plan or key by `subscription_id`, or `null` to clear the choice.
+
+As an exception to v2 compatibility, `PUT /api/v2/computer-subscriptions` returns 410. Its GET remains
+for one release as a read-only view of the agents on each computer. For a mixed selection it returns
+`mixed: true` with empty `subscription_id` and `person` and a null `set`.
+
 ## What the spec covers
 
 The operation groups below are generated from the spec's tags (`TAGS` in `backend/openapi_v2.py`). After changing a
@@ -41,7 +51,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Session | Who is calling, and how a frontend signs in ([guide](custom-frontend.md)). |
 | Team | This installation's names and settings. |
 | Repositories | Team repositories, the company's GitHub App connection (the Owner), product-repository creation (the Owner, or a bot with Create product repositories), and bot repository access. |
-| Subscriptions | Provider logins on Computers. Every bot runs each AI tool on its Computer's one login for it. |
+| Subscriptions | Provider logins and usage for a computer's own sign-in. |
 | Team chart | Humans and bots, and who reports to whom. |
 | Bots | The bots a person can see, and their live status. |
 | Computers | The computers that run bots: what each one runs at once. |
@@ -84,7 +94,7 @@ tag, run `python3 scripts/build_api_docs.py`; `--check` verifies the guide match
 | Outbound actions | The outbound gate ([guide](outbound-actions.md)): one queue for sends and outside writes, each decided by the company's policy per channel and audience, approved once where it asks first, and settled from the provider's answer. |
 | Webhooks | Outgoing webhooks: endpoints a person owns, the events Tico sends them, and each send's log ([guide](webhooks.md)). |
 | Cards and pins | Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks ([guide](overview.md)). A card shows each reader only what they may see. |
-| Model subscriptions | The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it. |
+| Model subscriptions | Saved plans and keys in people's pools, and each agent's Paid by per runtime. People can add their own plans and API keys. The provider's owner or an admin can manage it. A value is sent only to add or reconnect a subscription. |
 | Slack links | A thread's link to a Slack channel, both ways ([guide](slack.md)): asked for by an admin, checked by the gateway, then active, suspended or refused. Admins only. |
 | Threads | Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages in a thread. A thread the viewer may not read answers 404, never 403. |
 | Feedback | A person's 👍 or 👎 on a message, task or approval a bot or another person made, with an optional reason: a 👎 on a bot's work can tell the bot (a note for its next run in that conversation) or become an org rule. Every answer leaves out feedback on what the caller cannot read. |

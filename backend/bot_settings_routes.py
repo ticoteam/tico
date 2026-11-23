@@ -3,6 +3,7 @@
 import json
 from fastapi import Request
 from . import (
+    agent_subscriptions,
     bot_settings as BS,
     company_billing,
     company_pause,
@@ -39,6 +40,52 @@ def register(
     store,
     reset_bot_sessions,
 ):
+    def payer_bot(c, who, bot):
+        auth.domain(who)
+        model_subscriptions._reader(who)
+        found = H.resolve_bot(c, bot)
+        if not found:
+            raise Problem("not_found", "Agent not found", 404)
+        auth.require(c, who, found["id"], "read")
+        return found["id"]
+
+    @app.get(
+        "/api/v2/bots/{bot}/subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "getBotSubscriptions",
+            "An agent's Paid by per AI tool",
+            "AgentSubscriptionList",
+            responses={"403": error("This person cannot read Paid by"), "404": error("Agent not found")},
+        ),
+    )
+    def get_bot_subscriptions(request: Request, bot: str):
+        with store.read() as c:
+            target = payer_bot(c, request.state.identity, bot)
+            return {"subscriptions": agent_subscriptions.picks(c, target)}
+
+    @app.put(
+        "/api/v2/bots/{bot}/subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "setBotSubscriptions",
+            "Change Paid by for the supplied AI tools. Use null to clear a tool. Changes apply at the next turn.",
+            "AgentSubscriptionList",
+            responses={
+                "403": error("Only a pool owner or admin managing the agent can assign its payer"),
+                "404": error("Agent or provider not found"),
+            },
+        ),
+    )
+    def set_bot_subscriptions(request: Request, bot: str, body: agent_subscriptions.ChangePicks):
+        who = request.state.identity
+
+        def work(c):
+            target = payer_bot(c, who, bot)
+            return {"subscriptions": agent_subscriptions.save(c, auth, who, target, body.subscriptions)}
+
+        return mutate(request, body, work, check=lambda c: payer_bot(c, who, bot))
+
     @app.post("/api/v2/bots/{bot}/placement")
     def placement(request: Request, bot: str, body: M.BotPlacement):
         caller = request.state.identity

@@ -554,7 +554,7 @@ def _meeting_run(c, settings, bot, model, runner_id, job_id):
     return (None, why) if why else (choice, "")
 
 
-def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None):
+def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=None, *, preview=False):
     """Voice calls keep the bot's own model at medium effort with concise output (warm, medium costs about 0.1 s more
     than low). For another live-meeting reply, use the meeting's model (its own, else the company's meeting model) at
     low effort, on that model's harness and runtime, as a task model is applied. Any other turn and a meeting that sets
@@ -575,7 +575,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
     from . import calls
 
     if calls.voice_call(c, rid):
-        if turn_id:
+        if turn_id and not preview:
             model = providers.bot_choice(c, settings, config)[1]
             c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (model or None, turn_id))
         return {
@@ -584,7 +584,9 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
             "output_style": "Concise",
         }
     turn = c.execute("SELECT retries FROM live_meeting_turns WHERE id=? AND meeting_id=?", (turn_id, rid)).fetchone()
-    ran_on = lambda name: turn and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
+    ran_on = lambda name: (
+        turn and not preview and c.execute("UPDATE live_meeting_turns SET ran_model=? WHERE id=?", (name, turn_id))
+    )
     model = row[0] if row[0] is not None else providers.load(c, settings)["meeting_model"]
     if not model or turn and turn["retries"] >= 2:
         # A second empty reply on the meeting model: the last try runs on the bot's own model (_retry_empty).
@@ -602,7 +604,7 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
             why = "OpenRouter is off for this company"
     if why:
         steps.append({"model": model, "reason": why})
-    if steps:
+    if steps and not preview:
         ran = choice["model"] if choice else (config.get("model") or "")
         said = {
             "model": steps[0]["model"],
