@@ -3676,7 +3676,7 @@ def queued_jobs_sql(bots=None, *, sampled=False):
     )
 
 
-def prime_claimables(c, bots, first=3, *, loads=None):
+def prime_claimables(c, bots, first: int | None = 3, *, loads=None):
     """What bot_claimable reads for each of these bots with queued work, one table at a time: the computer's row, the
     bot's configuration, its queued jobs and (for the first few of each) their messages, rooms and tasks. `first`
     None reads every queued job's message: Health walks the whole queue (`queued_reasons`), and the first few are
