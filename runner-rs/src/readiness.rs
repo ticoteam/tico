@@ -860,15 +860,16 @@ pub fn unsupported(entry: &Value) -> Vec<String> {
     needs
 }
 
-/// Whether a bot.yaml still declares the Antigravity pick it had when Antigravity ran on the Gemini runtime (runtime
-/// gemini, with harness antigravity or Neon or Flash) for the bot the server moved to runtime antigravity (migration
-/// 20261123184253: Flash became Hydrogen). Any other difference is still drift.
+/// Whether a bot.yaml still declares the Antigravity pick it had when Antigravity ran on the Gemini runtime, for the bot
+/// the server moved to runtime antigravity: exactly what migration 20261123184253 moved (runtime gemini with harness
+/// antigravity, or Neon with no harness), Flash there now Hydrogen. Any other difference is still drift.
 fn legacy_antigravity(declared: &Map<String, Value>, expected: &Value) -> bool {
     const NEON: &str = "gemini-4-neon";
     const FLASH: &str = "gemini-3.8-flash";
     let said = |key: &str| declared.get(key).map(text_of).unwrap_or_default();
     let model = said("model");
-    let was_agy = said("harness") == "antigravity" || model == NEON || model == FLASH;
+    let harness = said("harness");
+    let was_agy = harness == "antigravity" || (harness.is_empty() && model == NEON);
     let now = text_of(&expected["model"]);
     let same_model =
         model.is_empty() || model == now || (model == FLASH && now == "gemini-4-hydrogen");
@@ -1443,10 +1444,21 @@ mod tests {
                 &hydrogen,
                 true,
             ),
+            // A bare Flash, or an explicit Gemini CLI, was never Antigravity's.
             (
                 "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
                 &hydrogen,
-                true,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: gemini\nmodel: gemini-4-neon\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                false,
             ),
             (
                 "name: ops\nruntime: gemini\nmodel: gemini-4-neon\n",

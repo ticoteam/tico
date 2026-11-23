@@ -376,3 +376,14 @@ def test_a_runner_without_the_antigravity_runtime_is_never_handed_a_named_antigr
     # Any other named fallback stays where it is.
     codex = {"runtime": "claude", "fallback": {"harness": "codex", "model": "gpt-6-sol"}}
     assert without_unknown_fallback(codex, old) == codex
+
+
+def test_a_paid_by_bot_on_an_older_runner_keeps_its_fallbacks_off_once_its_antigravity_one_is_dropped():
+    # The claim drops the named Antigravity fallback first, so restrict_fallbacks sees a bot with none of its own on a
+    # runner that cannot filter hops per turn: automatic hops stay off, never onto the paid-by tool.
+    from backend.execution import restrict_fallbacks, without_unknown_fallback
+
+    config = {"runtime": "claude", "fallback": {"harness": "antigravity", "model": "gemini-4-neon"}}
+    older = {"runtimes": {"claude": {"installed": True}, "codex": {"installed": True}}}
+    out = restrict_fallbacks(without_unknown_fallback(config, older), {"codex"}, [])
+    assert out["fallback"] == {"off": True} and out["blocked_fallback_runtimes"] == ["codex"]

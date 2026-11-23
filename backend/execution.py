@@ -2844,6 +2844,10 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
     from .harnesses import runtime_of
 
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness"]) if row else {}
+    # The fallbacks the claim hands this computer (without_unknown_fallback), so admission waits on the same ones.
+    config = without_unknown_fallback(config, ready)
     paid_tools = agent_subscriptions.loaded_picks(c, bot, loads)
     if paid_tools:
         record = loads.record if loads is not None else providers.load(c, settings)
@@ -2866,8 +2870,6 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
     hold = login_holds.get(c, runner_id, own, primary)
     if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
         return None
-    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    ready = readiness_document(row["readiness"]) if row else {}
     if named.get("harness"):
         if not named.get("model"):
             return None
@@ -5862,6 +5864,8 @@ class Execution:
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         # The Gateway when its plans here run out only where this computer falls back to it (its own switch).
         plans_out = False
+        # First, so the paid-by and Gateway fallbacks below see only fallbacks this computer's runner can run.
+        config = without_unknown_fallback(config, readiness_document(runner["readiness"]))
         if payment is None and not voice_reply:
             config = models_preset.main_config(record, here, config, tier, plans_out)
             if paid_tools:
@@ -5877,7 +5881,6 @@ class Execution:
             # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
             # Gateway's one probe.
             login_holds.take_probe(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, row["id"])
-        config = without_unknown_fallback(config, readiness_document(runner["readiness"]))
         config = gateway_admit(c, runner["id"], config, row["id"])
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).
