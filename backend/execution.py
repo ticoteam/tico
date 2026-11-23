@@ -6112,6 +6112,9 @@ class Execution:
         # for a person's own Assistant turn, exactly that person's. `mailboxes` is the list older runners read.
         from . import mailbox_access
 
+        # The Assistant's voice session in a call that is its person's alone, or its turn's own job on a runner with no
+        # resident voice, is pinned to them first, so the whole claim (mail, Finance, its snapshot) reads as them.
+        call_pinned = bool(live_ref and rooms.pin_call_lease(c, aid, row["id"]))
         attempt_row = c.execute("SELECT * FROM attempts WHERE id=?", (aid,)).fetchone()
         acting = self.auth.assistant_principal(c, attempt_row) if attempt_row else None
         if making_page and acting is None:
@@ -6247,8 +6250,7 @@ class Execution:
                     **(
                         {"personal": True}
                         if rooms.personal_run(c, self.store.settings.assistant_bot, row["bot_id"], conv, task)
-                        # The Assistant's voice session in a call that is its person's alone: pinned to them now.
-                        or (voice_call and rooms.pin_call_lease(c, aid, row["id"]))
+                        or call_pinned  # a private call's voice session or turn job, pinned to its person above
                         else {}
                     ),
                     "task": wire_task,

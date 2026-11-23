@@ -164,7 +164,7 @@ def assistant_room(c, thread_id):
 
 def alone_with_assistant(c, thread_id, slugs):
     """A call in a person's own Assistant chat takes no agent but the Assistant, by either attach route and for its
-    whole life, before or after the Assistant leaves it: its voice session reads as that person (rooms.call_person)."""
+    whole life, before or after the Assistant leaves it: its voice session acts as that person (rooms.call_person)."""
     assistant = H.actor_id(H.assistant_actor(c))
     if any(slug != assistant for slug in slugs) and assistant_room(c, thread_id):
         raise Problem("assistant_alone", "A call in an Assistant chat takes no agent but the Assistant", 409)

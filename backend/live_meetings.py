@@ -2135,7 +2135,7 @@ def install_live_meetings(app, store, auth, write):
             from . import calls
 
             call = c.execute(
-                "SELECT thread_id FROM calls WHERE live_meeting_id=? AND state IN ('live','scheduled')", (rid,)
+                "SELECT id,thread_id FROM calls WHERE live_meeting_id=? AND state IN ('live','scheduled')", (rid,)
             ).fetchone()
             if call and (body.add or body.visibility == "team") and calls.assistant_room(c, call["thread_id"]):
                 # A live or booked call in a person's Assistant chat is theirs alone: its meeting widens to nobody.
@@ -2172,13 +2172,20 @@ def install_live_meetings(app, store, auth, write):
             visibility = body.visibility or row["visibility"]
             if visibility != row["visibility"]:
                 c.execute("UPDATE live_meetings SET visibility=?,updated_at=? WHERE id=?", (visibility, H.now(), rid))
+            pruned = 0
             if visibility == "private":
                 # Implicit team participation cannot expand the newly private audience.
-                c.execute(
+                pruned = c.execute(
                     "DELETE FROM live_meeting_humans WHERE meeting_id=? AND actor<>? AND actor NOT IN "
                     "(SELECT actor FROM live_meeting_access WHERE meeting_id=?)",
                     (rid, row["owner_actor"], rid),
-                )
+                ).rowcount
+            if call and (pruned or any(actor != row["owner_actor"] for actor in removed)):
+                # Taken out, they were still in the call's meeting: it stays not one person's alone (rooms.call_person).
+                # The owner taking themselves out is not anyone else.
+                from . import rooms
+
+                H.event(c, who.actor, rooms.CALL_SHARED, call["id"], {"removed": removed, "pruned": pruned})
             from . import meeting_audience
 
             meeting_audience.revoke_live(c, rid)

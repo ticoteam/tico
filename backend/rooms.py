@@ -63,20 +63,29 @@ def assistant_room_owner(root):
 
 
 CALL_LEASE = "attempt.call_personal"  # event: target the attempt, detail {"person"}; written once, at its claim
+# event: target the call; someone was taken out of its meeting (live_meetings change_access), so it was not one person's
+# alone, whatever its meeting's rows say after (`call_person`).
+CALL_SHARED = "call.meeting_shared"
 
 
 def call_person(c, job_id):
     """The person the shared Assistant's voice session (job `job_id`) may be claimed for, or "". Only a job Tico
-    dispatched itself counts: the call's `voice_job`, which call_sessions.ensure writes, never a ref a message carries
-    (the ref only says where to look: the job's own meeting row must name the job). Its call is live, in that person's
-    own Assistant room (or a sub-thread of it), which grants no other person or group a read, nobody else has been in
-    the call and no other agent is attached. Read by primary keys: an ordinary job stops at its own message."""
+    dispatched itself counts: the call's `voice_job`, which call_sessions.ensure writes, or, on a runner with no resident
+    voice, a turn's own job (live_meetings._dispatch_turn) in the meeting's conversation that holds that turn's claim;
+    never a ref a message carries (the ref only says where to look: the meeting's own rows must name the job). Its call
+    is a live Tico Meet one that speaks its replies (as call_sessions.ensure and calls.voice_call require), in that
+    person's own Assistant room (or a sub-thread of it), which grants no other person or group a read, nobody else has
+    been in the call or its meeting (one taken out of the meeting since still counts: `CALL_SHARED`) and no other agent
+    is attached. Read by primary keys: an ordinary job stops at its own message."""
     bot = H.actor_id(H.assistant_actor(c))
     row = c.execute(
         "SELECT s.id,s.thread_id,s.live_meeting_id FROM jobs j JOIN messages m ON m.id=j.message_id "
         "JOIN live_meeting_bots b ON b.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND b.bot=? "
-        "AND b.voice_job=j.id "
+        "AND (b.voice_job=j.id OR m.conversation_id=b.conversation_id AND EXISTS (SELECT 1 FROM live_meeting_turns t "
+        "WHERE t.id=json_extract(m.refs,'$.live_meeting.turn_id') AND t.meeting_id=b.meeting_id AND t.bot=b.bot "
+        "AND t.claim_owner='job:'||j.id)) "
         "JOIN calls s ON s.live_meeting_id=b.meeting_id AND s.state='live' AND s.ending_at IS NULL "
+        "AND s.provider='tico' AND s.speak_replies<>0 "
         "WHERE j.id=? AND j.bot_id=? AND m.sender_id=?",
         (bot, job_id, bot, H.TICO_ACTOR),
     ).fetchone()
@@ -96,7 +105,8 @@ def call_person(c, job_id):
         "UNION ALL SELECT 1 FROM live_meeting_bots WHERE meeting_id=? AND bot<>? "
         "UNION ALL SELECT 1 FROM live_meeting_access WHERE meeting_id=? AND actor<>? "
         "UNION ALL SELECT 1 FROM live_meeting_humans WHERE meeting_id=? AND actor<>? "
-        "UNION ALL SELECT 1 FROM live_meetings WHERE id=? AND (visibility<>'private' OR owner_actor<>?) LIMIT 1",
+        "UNION ALL SELECT 1 FROM live_meetings WHERE id=? AND (visibility<>'private' OR owner_actor<>?) "
+        "UNION ALL SELECT 1 FROM events WHERE action=? AND target=? LIMIT 1",
         (
             root["id"],
             room["id"],
@@ -112,6 +122,8 @@ def call_person(c, job_id):
             person,
             meeting,
             person,
+            CALL_SHARED,
+            row["id"],
         ),
     ).fetchone()
     return "" if others else person

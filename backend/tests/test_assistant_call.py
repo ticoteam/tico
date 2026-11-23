@@ -1,6 +1,6 @@
 """A call with the Assistant from its sheet (docs/meet.md, Call the Assistant): in the person's own Assistant chat its
-voice turns run as the Assistant, it gets no prep task, and its follow-ups ask for the person and run as personal
-turns; a private follow-up of the Assistant's anywhere else is refused (#4781)."""
+voice turns act as the person while the call is theirs alone, it gets no prep task, and its follow-ups ask for the
+person and run as personal turns; a private follow-up of the Assistant's anywhere else is refused (#4781)."""
 
 import json
 import uuid
@@ -10,8 +10,8 @@ import pytest
 from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.auth import Identity
 from backend.store import H
-from backend.tests.helpers.api import get, headers, post
-from backend.tests.helpers.assistant import room
+from backend.tests.helpers.api import claim, get, headers, post
+from backend.tests.helpers.assistant import asked, room, say
 from backend.tests.helpers.calls import (
     PCM_ONE_SECOND,
     SILENCE_ONE_SECOND,
@@ -23,6 +23,9 @@ from backend.tests.helpers.calls import (
     thread_texts,
 )
 from backend.tests.helpers.credentials import setup as credential_setup
+from backend.tests.helpers.goal_read_back import goal
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401 - fixture
+from backend.tests.helpers.strategy_bot_chat import strategy_bot
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
 from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, machine, on, pick
 
@@ -37,13 +40,13 @@ def _header_in_time(monkeypatch):
     monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
 
 
-def _resident(api, *, legacy=False):
-    """A runner for the Assistant that keeps a resident voice session."""
+def _resident(api, *, legacy=False, voice=True):
+    """A runner for the Assistant that keeps a resident voice session (not `voice`: each turn is a job of its own)."""
     credential_setup(api)
     company(api)
     default = get(api, "providers")["default"]
     on(api, "assistant", default["runtime"], default["model"])
-    caps = ("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1")
+    caps = ("model_subscriptions_v1", "private_lanes_v1", *(("voice_sessions_v1",) if voice else ()))
     worker = machine(api, signed_in=not legacy, bot="assistant", caps=caps if legacy else (*caps, PAYER_CAPABILITY))
     sid = add(api)["id"]
     if legacy:
@@ -57,6 +60,15 @@ def _claim(api, worker):
     if attempt:
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "synthetic-call"}, token=worker["token"])
     return attempt
+
+
+def _heard(api, call, session, worker, speaker="human:ana", start_ms=0):
+    """`speaker` says something in the call and the voice session takes it as the question it answers now."""
+    calls = api.app.state.calls
+    join(api, call["id"])
+    calls.ingest(call["id"], speaker, PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, start_ms)
+    assert calls.settle()
+    return post(api, f"attempts/{session['id']}/inputs", {}, worker["token"])["call_voice"]["turn"]
 
 
 def _filed(api, task_id):
@@ -98,7 +110,7 @@ def test_the_assistant_speaks_on_a_resident_runner_using_its_computer_binding(me
     assert [played[0] for played in meet.app.state.call_media.said] == [call["id"]]
 
 
-def test_a_call_in_your_assistant_chat_runs_as_the_assistant_and_its_follow_ups_are_your_personal_work(meet):
+def test_a_call_in_your_assistant_chat_acts_as_you_and_its_follow_ups_are_your_personal_work(meet):
     worker = _resident(meet)
     rid = room(meet)["room_id"]
     call = start_call(meet, rid, bots=["assistant"])
@@ -109,12 +121,19 @@ def test_a_call_in_your_assistant_chat_runs_as_the_assistant_and_its_follow_ups_
     assert _claim(meet, worker) is None  # no prep task in the person's own room
     with meet.app.state.store.read() as c:
         row = c.execute("SELECT * FROM attempts WHERE id=?", (session["id"],)).fetchone()
-        assert meet.app.state.auth.assistant_principal(c, row) is None  # its turns are the Assistant's, never Ana's
+        assert meet.app.state.auth.assistant_principal(c, row).actor == "human:ana"  # as her own chat's turns do
 
+    # Filed while it answers what Ana just said: her spoken words are the turn it cites, as her message is in her chat.
+    refused = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Find it"}, token=session["token"], expected=403)
+    assert refused["error"]["code"] == "confirm_required"  # nothing said yet
+    _heard(meet, call, session, worker)
     by_assistant = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Find the ship date"}, token=session["token"])
     by_ana = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Book the freight"})
-    assert _filed(meet, by_assistant["task_id"]) == ("human:ana", "bot:assistant", "bot:assistant")
+    assert _filed(meet, by_assistant["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
     assert _filed(meet, by_ana["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
+    # Her Assistant's changes show the words it acted on: what she said, from the turn that let it act.
+    changes = get(meet, "assistant/changes")["changes"]
+    assert [x["words"] for x in changes if x["object"] == f"task:{by_assistant['task_id']}"] == [SYNTHETIC_SPEECH]
     tracked = get(meet, "tasks?requester=human:ana&status=open&exact=true&brief=true")
     assert {by_assistant["task_id"], by_ana["task_id"]} <= {t["id"] for t in tracked["tasks"]}
 
@@ -422,7 +441,7 @@ def test_a_call_whose_meeting_names_anyone_else_gets_no_snapshot(meet):
         post(meet, f"calls/{call['id']}/end", {})
 
 
-def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_none_once_you_cannot_sign_in(meet):
+def test_the_private_calls_lease_reads_threads_as_you_and_none_once_you_cannot_sign_in(meet):
     from backend import threads
     from backend.store import encode
 
@@ -433,18 +452,12 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
     ):  # a thread of Ana's and Ben's, which the Assistant itself may not read
         ana = threads.viewer(meet.app.state.auth, meet.app.state.auth.identity_for_actor(c, "human:ana"))
         plans = threads.create(c, ana, title="Plans", audience="members", members=["human:ben"])["id"]
-        said = threads.post(c, ana, plans, "Ship on Friday")
+        threads.post(c, ana, plans, "Ship on Friday")
         everyone = threads.create(c, ana, title="All hands", audience="company")["id"]
-    # As on main: threads read and write as the Assistant itself, never as Ana.
-    get(meet, f"threads/{plans}", token, expected=404)
-    assert plans not in json.dumps(get(meet, "threads?limit=200", token))
-    assert get(meet, f"threads/{everyone}", token)["id"] == everyone  # a company thread, as any agent's run reads it
-    for refused in (
-        meet.post(f"/api/v2/threads/{plans}/messages", json={"text": "Hello"}, headers=headers(token)),
-        meet.post(f"/api/v2/threads/{plans}/members", json={"actor": "human:cara"}, headers=headers(token)),
-        meet.put(f"/api/v2/messages/{said['id']}/reactions/👍", json={}, headers=headers(token)),
-    ):
-        assert refused.status_code in (403, 404), refused.text
+    # As her own chat's turns do: threads read as Ana.
+    assert get(meet, f"threads/{plans}", token)["id"] == plans
+    assert plans in json.dumps(get(meet, "threads?limit=200", token))
+    assert get(meet, f"threads/{everyone}", token)["id"] == everyone
     with meet.app.state.store.transaction() as c:  # Ana's sign-in is turned off: the lease reads no thread at all
         roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in roster["people"]:
@@ -460,3 +473,289 @@ def test_the_private_calls_lease_reads_and_writes_threads_as_the_assistant_and_n
         for who in (lease, bot):
             for form in (who, threads.viewer(None, who), threads.viewer(meet.app.state.auth, who)):
                 assert not threads.readable(c, form, everyone)
+
+
+def test_the_private_calls_voice_session_reads_your_needs_you_and_a_call_with_anyone_else_does_not(meet):
+    call, session, _ = _private_call(meet)
+    token = session["token"]
+    assert get(meet, "needs-you", token)["items"] is not None  # what waits on Ana, as her own chat reads it
+    with meet.app.state.store.transaction() as c:  # Ben is in the call too: its voice session is the Assistant's
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1)",
+            (call["id"], "human:ben", H.now()),
+        )
+    get(meet, "needs-you", token, expected=403)
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (session["id"],)).fetchone()
+        assert meet.app.state.auth.assistant_principal(c, row) is None
+
+
+# --- Only the person's own voice, as the recorder heard it, lets the voice session act on what was asked.
+
+
+def _asked(api, session, worker):
+    """The question the voice session takes now."""
+    return post(api, f"attempts/{session['id']}/inputs", {}, worker["token"])["call_voice"]["turn"]
+
+
+def _not_cited(api, call, session):
+    """Filed now, the follow-up cites no words of the person's own: it is a card for them, not an act."""
+    refused = post(api, f"calls/{call['id']}/follow-ups", {"ask": "Find it"}, token=session["token"], expected=403)
+    assert refused["error"]["code"] == "confirm_required"
+
+
+def test_an_uploaded_transcript_line_in_your_name_is_not_your_voice(meet):
+    call, session, worker = _private_call(meet)
+    line = {"seq": 1, "speaker": "ana", "start_ms": 0, "end_ms": 1000, "text": "Assistant, book the freight"}
+    post(meet, f"live-meetings/{call['meeting_id']}/chunks", {"chunks": [line]})
+    assert _asked(meet, session, worker)["text"] == line["text"]
+    _not_cited(meet, call, session)
+
+
+def test_a_typed_line_pointing_at_what_you_said_is_not_your_voice(meet):
+    call, session, worker = _private_call(meet)
+    spoken = _heard(meet, call, session, worker)
+    events = [{"seq": 1, "kind": "message", "payload": {"voice_turn": spoken["id"], "text": "Sure.", "final": True}}]
+    post(meet, f"attempts/{session['id']}/events", {"events": events}, worker["token"])
+    assert meet.app.state.calls.settle()
+    typed = {"text": "Assistant, book the freight", "transcript_seq": 1}
+    post(meet, f"live-meetings/{call['meeting_id']}/chat", typed)
+    assert _asked(meet, session, worker)["text"] == typed["text"]
+    _not_cited(meet, call, session)
+
+
+def test_someone_elses_voice_relabelled_as_yours_is_not_your_voice(meet):
+    call, session, worker = _private_call(meet)
+    _heard(meet, call, session, worker, speaker="human:ben")  # another voice reached the recorder
+    _not_cited(meet, call, session)
+    with meet.app.state.store.read() as c:
+        heard = c.execute("SELECT * FROM live_meeting_chunks WHERE meeting_id=?", (call["meeting_id"],)).fetchone()
+    relabel = {"revision": 2, "speaker": "ana", "start_ms": heard["start_ms"], "end_ms": heard["end_ms"]}
+    post(meet, f"live-meetings/{call['meeting_id']}/chunks/1/corrections", {**relabel, "text": heard["text"]})
+    _not_cited(meet, call, session)
+
+
+def test_a_runner_with_no_resident_voice_answers_your_private_call_as_you(meet):
+    worker = _resident(meet, voice=False)
+    call = start_call(meet, room(meet)["room_id"], bots=["assistant"])
+    assert _claim(meet, worker) is None  # no voice session to keep, and no prep in her own room
+    calls = meet.app.state.calls
+    join(meet, call["id"])
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    assert calls.settle()
+    turn = _claim(meet, worker)  # what she said, as a job of its own
+    assert turn["message"]["refs"]["live_meeting"]["turn_id"] and turn.get("personal") is True
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (turn["id"],)).fetchone()
+        assert meet.app.state.auth.assistant_principal(c, row).actor == "human:ana"
+    filed = post(meet, f"calls/{call['id']}/follow-ups", {"ask": "Find the ship date"}, token=turn["token"])
+    assert _filed(meet, filed["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
+    changes = get(meet, "assistant/changes")["changes"]
+    assert [x["words"] for x in changes if x["object"] == f"task:{filed['task_id']}"] == [SYNTHETIC_SPEECH]
+
+
+def test_the_private_calls_claim_reads_your_mail_as_your_own_chat_does(meet):
+    from backend import mailbox_access
+
+    call, session, _ = _private_call(meet)
+    ana = Identity("human:ana", "human", "ana@acme.example")
+    with meet.app.state.store.read() as c:
+        assert session["mailbox_levels"] == mailbox_access.levels_for(c, ana) and session["mailbox_levels"]
+        assert session["mailbox_levels"] != mailbox_access.levels_for(c, "bot:assistant")
+
+
+def test_a_turn_past_its_voice_deadline_is_not_what_you_just_said(meet):
+    call, session, worker = _private_call(meet)
+    spoken = _heard(meet, call, session, worker)
+    with meet.app.state.store.transaction() as c:  # left claimed by a restart, its answer no longer wanted
+        c.execute(
+            "UPDATE live_meeting_turns SET voice_expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), spoken["id"])
+        )
+    _not_cited(meet, call, session)
+
+
+def test_once_anyone_else_is_in_the_call_its_voice_session_writes_nothing_of_yours(meet):
+    call, session, worker = _private_call(meet)
+    errand = _anas_errand(meet)
+    _heard(meet, call, session, worker)
+    post(meet, f"tasks/{errand}/comments", {"text": "Found the ship date"}, token=session["token"])
+    with meet.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1)",
+            (call["id"], "human:ben", H.now()),
+        )
+    refused = meet.post(
+        f"/api/v2/tasks/{errand}/comments", json={"text": "Book the freight"}, headers=headers(session["token"])
+    )
+    assert refused.status_code in (403, 404), refused.text
+
+
+# --- Only a Tico Meet call that speaks its replies, and that only ever had the person in it, is theirs alone.
+
+
+def _line(api, meeting_id, text, speaker="External guest"):
+    """A transcript line uploaded to the meeting by its connector (Ana)."""
+    with api.app.state.store.read() as c:
+        seq = c.execute("SELECT seq FROM live_meetings WHERE id=?", (meeting_id,)).fetchone()[0] + 1
+    line = {"seq": seq, "speaker": speaker, "start_ms": seq * 1000, "end_ms": seq * 1000 + 500, "text": text}
+    post(api, f"live-meetings/{meeting_id}/chunks", {"chunks": [line]})
+
+
+def _is_the_assistants_own(api, attempt):
+    assert not attempt.get("personal") and "Needs you" not in (attempt.get("run_header") or "")
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert api.app.state.auth.assistant_principal(c, row) is None
+    get(api, "needs-you", attempt["token"], expected=403)
+
+
+@pytest.mark.parametrize(("provider", "speaks"), [("google_meet", True), ("tico", False)])
+def test_a_call_in_your_assistant_chat_that_does_not_speak_its_replies_never_acts_as_you(meet, provider, speaks):
+    worker = _resident(meet, voice=False)
+    call = start_call(meet, room(meet)["room_id"], speak_replies=speaks)
+    post(meet, f"calls/{call['id']}/bots", {"bots": ["assistant"]})
+    with meet.app.state.store.transaction() as c:  # a Google Meet (set up here as one), or a Tico Meet that is silent
+        c.execute("UPDATE calls SET provider=? WHERE id=?", (provider, call["id"]))
+    _line(meet, call["meeting_id"], "Assistant, what is waiting on Ana?")  # a guest the call does not name
+    turn = _claim(meet, worker)
+    assert turn["message"]["refs"]["live_meeting"]["turn_id"]
+    _is_the_assistants_own(meet, turn)
+
+
+def test_a_call_someone_else_was_in_never_becomes_yours_alone_once_they_are_taken_out(meet):
+    worker = _resident(meet)
+    rid = room(meet)["room_id"]
+    with meet.app.state.store.transaction() as c:  # Ben is a member of Ana's room, as a migrated room may grant
+        c.execute("UPDATE conversations SET audience='personal' WHERE id=?", (rid,))
+        c.execute(
+            "INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
+            "VALUES(?,?,'human:ben','member','human:ana',?,?)",
+            (str(uuid.uuid4()), rid, H.now(), H.now()),
+        )
+    call = start_call(meet, rid, bots=["assistant"])
+    post(meet, f"live-meetings/{call['meeting_id']}/join", {}, token="ben-test")  # Ben is in its meeting
+    with meet.app.state.store.transaction() as c:  # then taken out of the room, and of the meeting
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:ben'", (rid,))
+    post(meet, f"live-meetings/{call['meeting_id']}/access", {"remove": ["ben"]})
+    session = _claim(meet, worker)
+    assert session["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+    _is_the_assistants_own(meet, session)
+
+
+def test_a_turn_of_its_own_job_claimed_after_its_voice_deadline_is_passed(meet):
+    worker = _resident(meet, voice=False)
+    call = start_call(meet, room(meet)["room_id"], bots=["assistant"])
+    calls = meet.app.state.calls
+    join(meet, call["id"])
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    assert calls.settle()
+    with meet.app.state.store.transaction() as c:  # a restart, and a minute passes before a runner claims it
+        [turn] = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=?", (call["meeting_id"],)).fetchall()
+        assert turn["voice_expires_at"], "its answer deadline is kept"
+        late = H.shift(turn["voice_expires_at"], seconds=-60)
+        c.execute("UPDATE live_meeting_turns SET voice_expires_at=? WHERE id=?", (late, turn["id"]))
+    assert _claim(meet, worker) is None
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT status,skip_reason FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()
+    assert tuple(row) == ("skipped", "voice_deadline")
+
+
+def test_a_turn_with_no_deadline_recorded_is_not_what_you_just_said(meet):
+    call, session, worker = _private_call(meet)
+    spoken = _heard(meet, call, session, worker)
+    with meet.app.state.store.transaction() as c:  # as a turn queued before every voice turn kept its deadline
+        c.execute("UPDATE live_meeting_turns SET voice_expires_at=NULL WHERE id=?", (spoken["id"],))
+    _not_cited(meet, call, session)
+
+
+def test_taking_yourself_out_of_your_calls_meeting_and_back_keeps_it_yours(meet):
+    call, session, _ = _private_call(meet)
+    meeting = call["meeting_id"]
+    assert post(meet, f"live-meetings/{meeting}/access", {"remove": ["ana"]})["left"] is True
+    post(meet, f"live-meetings/{meeting}/join", {})
+    assert get(meet, "needs-you", session["token"])["items"] is not None
+    assert _scope(meet, session["id"]) == ("person", "human:ana")
+
+
+# --- What she said counts as her typed words do wherever a citation is read (assistant.cited_message).
+
+
+def _says(monkeypatch, words):
+    """What the recorder hears Ana say next."""
+    from backend import call_media
+
+    monkeypatch.setattr(call_media, "transcribe", lambda base, key, audio, **kw: words)
+
+
+def _answered(api, session, worker, turn):
+    """The voice session answers the turn, so the call's next question can be asked."""
+    events = [{"seq": 1, "kind": "message", "payload": {"voice_turn": turn["id"], "text": "Sure.", "final": True}}]
+    post(api, f"attempts/{session['id']}/events", {"events": events}, worker["token"])
+    assert api.app.state.calls.settle()
+
+
+def test_a_spoken_hand_off_to_agent_ops_quotes_your_words_and_lends_your_rights(meet, agent_ops):
+    from fastapi import Request
+
+    def whose(request: Request):
+        return {"actor": request.state.identity.actor}
+
+    meet.app.add_api_route("/api/v2/qa-call-identity", whose, methods=["GET"])
+    meet.app.router.routes.insert(0, meet.app.router.routes.pop())
+    call, session, worker = _private_call(meet)
+    _heard(meet, call, session, worker)
+    filed = {"owner": "botops", "title": "Add a support inbox bot", "body": "Ana asked.", "request_id": "turn"}
+    post(meet, "tasks", filed, token=session["token"])
+    with meet.app.state.store.read() as c:
+        quoted = c.execute(
+            "SELECT body FROM messages WHERE recipient_id='bot:botops' AND body LIKE '%in their words%'"
+        ).fetchone()
+    assert "> " + SYNTHETIC_SPEECH in quoted["body"]
+    attempt = claim(meet, agent_ops, "botops")
+    lent = meet.get("/api/v2/qa-call-identity", headers=headers(attempt["token"]))
+    assert lent.status_code == 200 and lent.json()["actor"] == "human:ana", lent.text
+
+
+def test_a_spoken_no_turns_a_goal_suggestion_down_as_a_typed_one_does(meet, monkeypatch):
+    strategy_bot(meet)
+    g = goal(meet, "Get 100 companies to try Tico", owner="ops")
+    call, session, worker = _private_call(meet)
+    _says(monkeypatch, "No, leave it without a number.")
+    _heard(meet, call, session, worker)
+    suggestion = {
+        "kind": "goal_kpi",
+        "goal_id": g["id"],
+        "payload": {
+            "kpi": {"name": "Companies that tried Tico"},
+            "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"},
+        },
+        "reason": "A number to aim for, like 100 companies by Nov 28.",
+    }
+    out = asked(meet, "proposals/turned-down", suggestion, session["token"], "turn")["proposal"]
+    assert (out["status"], out["decision_note"]) == ("rejected", "No, leave it without a number.")
+
+
+def test_no_yes_in_a_call_saves_a_goal_read_back_spoken_or_typed(meet, monkeypatch):
+    strategy_bot(meet)
+    call, session, worker = _private_call(meet)
+    _answered(meet, session, worker, _heard(meet, call, session, worker))  # "set a goal", and its read-back
+    change = {
+        "kind": "goal_create",
+        "title": "Get 100 companies to try Tico",
+        "owner": "ops",
+        "measure": {"name": "Companies that tried Tico"},
+        "target": {"kind": "improve", "target": 100, "deadline": "2026-11-28"},
+    }
+    back = post(meet, "goals/read-back", {"changes": [change]}, token=session["token"])
+    _says(monkeypatch, "Yes, save it.")
+    _heard(meet, call, session, worker, start_ms=10_000)
+    step = back["changes"][0]["steps"][0]
+    path, body = step["path"].removeprefix("/api/v2/"), json.loads(step["body"])
+    # What she says aloud is not read with it (a yes to some by number, a stop), so the yes is hers to type in her chat.
+    refused = asked(meet, path, body, session["token"], "turn", expected=403)["error"]
+    assert refused["code"] == "not_agreed" and "Tico chat" in refused["detail"]
+    said = say(meet, "Yes, save it.")  # typed in her chat while the call is on: the call's session still saves nothing
+    typed = said.get("id") or said["message"]["id"]
+    assert asked(meet, path, body, session["token"], typed, expected=403)["error"]["code"] == "not_agreed"
+    with meet.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM goals WHERE title='Get 100 companies to try Tico'").fetchone()

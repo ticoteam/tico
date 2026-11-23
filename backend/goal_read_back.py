@@ -236,7 +236,17 @@ def _newest_read_back(c, room, sender, at, *, after=False):
 def answered(c, who, cited):
     """The read-back the owner's cited message agrees to, with the numbers it covers: the newest read-back in the chat
     before their message (anything said in between keeps it), as long as no newer read-back has replaced it and the
-    owner has not said stop since."""
+    owner has not said stop since. Only in their chat: a call's voice session (rooms.pin_call_lease) saves nothing on
+    a yes, spoken or typed, since what they say aloud (a yes to some by number, a stop) is not read with it."""
+    from . import rooms
+
+    if who.attempt_id and rooms.pinned_person(c, who.attempt_id):
+        raise Problem(
+            "not_agreed",
+            "A goal read-back is saved only on the owner's yes in their Tico chat, not in a call; nothing was saved. "
+            "Ask them to say yes to it there",
+            403,
+        )
     msg = H.message(c, cited) or {}
     room, at = msg.get("conversation_id"), str(msg.get("created_at") or "")
     newest = msg.get("sender_id") == who.actor and _newest_read_back(c, room, who.task_actor, at)
@@ -310,7 +320,9 @@ _STOP_OPENING = re.compile(rf"\s*(?!{_NO_YES})(?:no|nope|nah|don'?t|do not)\b", 
 def turned_down_words(c, cited):
     """The owner's words for their "no" (the reason the suggestion is stored with): 403 unless the cited message opens
     with a no; "" when it is only a no."""
-    msg = H.message(c, cited) or {}
+    from .assistant import cited_message  # their message, or the call turn they spoke
+
+    msg = cited_message(c, cited) or {}
     text = " ".join(str(msg.get("body") or "").split())
     if not _NO_OPENING.match(text):
         raise Problem(

@@ -863,7 +863,7 @@ def register_core(
                 H.event(c, who.actor, "botops.asked_via_assistant", row["id"], asked_agent_ops)
             else:
                 H.event(c, who.actor, "assistant.asked_helper", row["id"], {**asked_agent_ops, "helper": owner})
-            words = (H.message(c, request_id) or {}).get("body") or ""
+            words = (assistant_mod.cited_message(c, request_id) or {}).get("body") or ""
             name = (H.human(c, H.actor_id(who.actor)) or {}).get("name") or H.actor_id(who.actor)
             H._write_message(
                 c,
