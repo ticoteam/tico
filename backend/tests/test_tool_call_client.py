@@ -135,6 +135,12 @@ def test_the_shell_check_it_suggests_prints_names_never_a_value_even_one_over_se
     line = tool_call.names_command("CLOSE_CRM").replace("python3", sys.executable, 1)
     out = subprocess.run(["sh", "-c", line], env=environ, capture_output=True, text=True, check=True).stdout
     assert out.split() == ["CLOSE_API_KEY", "CLOSE_CRM_URL"] and "s3cret" not in out
+    # A tool named after Tico itself never counts Tico's own variables as its key, as own_variables does not.
+    environ["TICO_TOOL_JIRA_URL"] = "https://acme.example/api/v2/tool-proxy/jira"
+    line = tool_call.names_command("TICO_DOCS").replace("python3", sys.executable, 1)
+    assert (
+        subprocess.run(["sh", "-c", line], env=environ, capture_output=True, text=True, check=True).stdout.split() == []
+    )
 
 
 def test_a_tool_id_with_two_words_falls_back_to_its_first_word():

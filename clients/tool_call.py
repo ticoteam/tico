@@ -67,9 +67,13 @@ def own_variables(tool, environ):
 def names_command(stem):
     """The shell line that lists the variables named after a tool, names only. It reads the names themselves: text
     tools over `env` would print a line of a multi-line value that starts with the prefix. The first word's prefix covers
-    the full id's too (own_variables' fallback)."""
+    the full id's too (own_variables' fallback), and Tico's own variables are left out as there."""
     first = stem.split("_", 1)[0] or stem
-    return "python3 -c 'import os; print(*sorted(k for k in os.environ if k.startswith(\"" + first + "_\")))'"
+    return (
+        "python3 -c 'import os; print(*sorted(k for k in os.environ if k.startswith(\""
+        + first
+        + "_\") and not k.startswith(\"TICO_\")))'"
+    )
 
 
 def not_proxied(tool, environ, shell=True):
