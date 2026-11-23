@@ -49,7 +49,9 @@ def task_context(api, args):
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
             "picks one"
         ),
-        "title": _s("Task title: plain words, no reference numbers or all-caps"),
+        "title": _s(
+            "Task title: the outcome or the question, at most 60 characters; no name prefixes, ticket codes or all-caps"
+        ),
         "message": _s("The first message on its chat: what you ask, if the title doesn't say it all", default=""),
         "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
@@ -591,9 +593,10 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. A new ❓ "
-    "replaces yours, so put every question in one, numbered when there are several; options and why go in it. While it "
-    "is open you can't mark the task done or close it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. Prefer "
+    "one question, its first line the question itself. A new ❓ replaces yours, so number several in one; options and "
+    "why go in it. While it is open you can't mark the task done or close it. An OK: `kind` ok with `show`. "
+    "`withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
