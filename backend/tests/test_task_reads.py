@@ -753,3 +753,41 @@ def test_a_persons_private_ticket_stays_theirs_past_in_progress_and_leaves_when_
     with store.read() as c:
         assert Q.get(c, mark["id"])["cleared_reason"] == "addressee_gone"
         assert len(X.wakes(c, tid, qa)) == woken + 1  # told at once, not at the next never-stuck pass
+
+
+def test_a_person_assignee_opens_a_company_ticket_held_by_an_agent_they_cannot_read_by_any_name(api):
+    """A person assignee reads a ticket as its requester does: a company ticket held by an agent whose activity they
+    may not read opens for both, by its id, its #number and in a list, while for anyone else it stays shut."""
+    from backend.tests.helpers.api import as_member
+
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:cara", "Fix the login page", "What.", "bot:ops", private=False, lint=False)
+        other = H.task_create(c, "human:cara", "Fix the signup page", "What.", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (made["id"],))
+        restrict(c, "ops", people=["ana"])
+    as_member(api, "ben@acme.example")
+    for token in ("ben-test", "cara-test"):
+        for path in (made["id"], f"%23{made['number']}"):
+            assert api.get(f"/api/v2/tasks/{path}", headers=headers(token)).status_code == 200, (token, path)
+        assert made["id"] in {t["id"] for t in tasks(api, "status=open", token)["tasks"]}, token
+    assert api.get(f"/api/v2/tasks/%23{other['number']}", headers=headers("ben-test")).status_code in (403, 404)
+    assert other["id"] not in {t["id"] for t in tasks(api, "status=open", "ben-test")["tasks"]}
+
+
+def test_an_agent_assignee_is_not_told_a_hidden_teammate_a_person_assignee_would_be(api):
+    """Someone the reader may not see shows as "" on a task, except to its parties. A person assignee is one; an agent
+    assignee is not."""
+    from backend import teammate_access as TA
+    from backend.tests.helpers.teammate_access import set_access
+
+    only_ana = {"people": ["ana"]}
+    set_access(api, "humans/ben", see=only_ana, read=only_ana, write=only_ana)
+    auth = api.app.state.auth
+    row = {"id": "t1", "owner_id": "human:ana", "requester_id": "human:ben", "readers": []}
+    with api.app.state.store.read() as c:
+        agent = TA.Known(c, Identity("bot:ops", "bot"), auth)
+        assert "human:ben" in agent.people
+        assert agent.task({**row, "assignee_id": "bot:ops"})["requester_id"] == ""
+        person = TA.Known(c, api.app.state.store.settings.test_identities["cara-test"], auth)
+        assert "human:ben" in person.people
+        assert person.task({**row, "assignee_id": "human:cara"})["requester_id"] == "human:ben"

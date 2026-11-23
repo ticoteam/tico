@@ -1498,8 +1498,11 @@ class Auth:
             raise Problem("not_found", "Task not found", 404)
         me = principals[0] if isinstance(principals, tuple) else principals
         participants = (row["owner_id"], row["requester_id"])
-        # A person assignee, like a party, sees it whoever holds it (task_sql).
-        assigned = H.is_human(who.actor) and who.actor == row.get("assignee_id")
+        # A person assignee, like a party, sees it whoever holds it (task_sql). A partial row (resolve_task's by number,
+        # label or prefix) is checked against their assigned tasks.
+        assigned = H.is_human(who.actor) and (
+            who.actor == row["assignee_id"] if "assignee_id" in row else row["id"] in H.assigned_tasks(c, who.actor)
+        )
         if (
             not assigned
             and not H.task_participant(c, who.actor, row)

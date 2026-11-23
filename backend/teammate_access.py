@@ -1109,7 +1109,9 @@ class Known:
         hidden = [r for r in readers if r in self.people]
         if not named and not origin and not hidden:
             return task
-        if self.me in (task.get("owner_id"), task.get("requester_id"), task.get("assignee_id")) or self.member(
+        # A person assignee is a party; an agent assignee is not (it reads the task only as its holder or a reader).
+        assignee = task.get("assignee_id") if H.is_human(self.me) else None
+        if self.me in (task.get("owner_id"), task.get("requester_id"), assignee) or self.member(
             task.get("conversation_id")
         ):
             return task
