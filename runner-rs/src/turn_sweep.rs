@@ -1060,7 +1060,10 @@ mod tests {
     }
 
     async fn exercise_codex_sweep(restart: bool) {
-        let dir = std::env::temp_dir().join(format!("turn-sweep-codex-{}", uuid::Uuid::new_v4()));
+        // The bot owns the work folder, but the supervisor owns its parent: in sticky /tmp only a folder's
+        // owner (or CAP_FOWNER, which the runner container drops) may remove it.
+        let root = std::env::temp_dir().join(format!("turn-sweep-codex-{}", uuid::Uuid::new_v4()));
+        let dir = root.join("work");
         std::fs::create_dir_all(&dir).unwrap();
         #[cfg(target_os = "linux")]
         if let Some((uid, gid)) = crate::isolation::identity() {
@@ -1175,7 +1178,7 @@ for line in sys.stdin:
         let other_stayed = other.try_wait().unwrap().is_none();
         let _ = other.kill();
         let _ = other.wait();
-        std::fs::remove_dir_all(dir).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         assert!(
             before_replacement.is_empty(),
             "old processes survived replacement: {before_replacement:?}"
