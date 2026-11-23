@@ -241,7 +241,8 @@ function Defaults() {
   const owner = me.data?.role === 'owner';
   const model = v.default.model ?? '';
   const meeting = v.meeting_model ?? '';
-  const known = (id: string) => (id && !names.some((n) => n.value === id) ? [{ value: id, label: id }] : []);
+  const known = (id: string) =>
+    id && !names.some((n) => n.value === id) ? [{ value: id, label: modelName(catalog.data?.models.find((m) => m.id === id)?.label) || id }] : [];
   return (
     <Section name="Defaults" target="setting:defaults">
       <Facts label="Defaults">

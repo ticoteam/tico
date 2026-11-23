@@ -48,9 +48,13 @@ export function ModelPicker({
 
   // A harness no longer offered stays listed only when every agent being changed is on it (older rows: their runtime).
   const own = (a: AgentRow) => a.harness || a.resolved_runtime || '';
-  const shared = [agent, ...also].every((a) => own(a) === own(agent));
+  const all = [agent, ...also];
+  const modelOf = (a: AgentRow) => a.model || a.resolved_model || '';
   // A batch moves the computer's agents Tico runs, so it never offers an external harness.
-  const keep = shared ? { harness: own(agent), model: agent.model || agent.resolved_model } : {};
+  const keep = {
+    ...(all.every((a) => own(a) === own(agent)) ? { harness: own(agent) } : {}),
+    ...(all.every((a) => modelOf(a) === modelOf(agent)) ? { model: modelOf(agent) } : {}),
+  };
   const { models: usable, harnesses } = pickable(data, { ...keep, managed: also.length > 0 });
   const models = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const chosen = models.find((m) => m.id === model);
