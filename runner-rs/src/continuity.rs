@@ -220,12 +220,6 @@ pub fn side_key(thread: &str) -> String {
     format!("side:{thread}")
 }
 
-/// The key under which the state remembers that this thread's harness moved it to a new conversation after a turn had
-/// begun (hosts::Host::lost_history), so its next turns are told everything again until one completes.
-pub fn refresh_key(thread: &str) -> String {
-    format!("refresh:{thread}")
-}
-
 /// The key under which the state remembers that this thread's last turn was interrupted.
 pub fn interrupted_key(thread: &str) -> String {
     format!("interrupted:{thread}")

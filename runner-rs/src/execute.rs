@@ -713,8 +713,9 @@ pub(crate) fn replacement_prompt(
     after: Option<&str>,
     bot: &str,
     key: &str,
+    replay: &str,
 ) -> String {
-    let text = crate::prompt::prompt(attempt, names, after, false);
+    let text = crate::prompt::replayed(attempt, names, after, false, replay);
     let checkpoint = truthy(Some(&attempt["task"]["checkpoint"]));
     let stateless = crate::continuity::stateless(&attempt["config"]);
     let mut notes = String::new();
@@ -1047,6 +1048,9 @@ pub(crate) struct Flags {
     pub(crate) granted: Mutex<Option<Instant>>,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
+    /// A tool ran in this turn, on the primary or a hop (set by the drive as it sees one): kept outside the drive's
+    /// own result, so a drive that fails after it still keeps the turn from any fallback.
+    pub(crate) tool_ran: AtomicBool,
 }
 
 pub(crate) struct Drove {
@@ -1110,6 +1114,13 @@ impl Drove {
         };
         (ended, Some(why))
     }
+}
+
+/// Whether a turn may still go to a fallback once it has run: never after a tool ran (in its result, or seen by the
+/// drive before the drive failed: `Flags::tool_ran`), nor after a failure once its turn had started
+/// (`failed_after_start`), when what the harness did is not known.
+fn tools_settled(drove: &Drove, flags: &Flags, failed_after_start: bool) -> bool {
+    !drove.tool_ran && !flags.tool_ran.load(Ordering::SeqCst) && !failed_after_start
 }
 
 /// Whether a turn's start failed because the server will not start it, or it was stopped, before it started: the
@@ -2378,6 +2389,7 @@ impl Runner {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         });
         let wake = Arc::new(Notify::new());
         // On the lease thread, so blocking work on this runtime's two workers cannot starve it (Dev 242).
@@ -3064,10 +3076,10 @@ impl Runner {
                 }).await?;
                 return Ok(());
             }
-            // A resumed thread that its harness moved to a new conversation after its last turn had begun (Antigravity:
-            // Host::lost_history) holds none of what came before: it is told everything again, as a new one is, until a
-            // turn has completed with it.
-            let refresh = resumed && self.state.repo_rules(&crate::continuity::refresh_key(&th), None)?.is_some_and(|v| !v.is_empty());
+            // A resumed thread that its harness moved to a new conversation after a turn's model work had begun
+            // (Antigravity: Host::needs_history, kept in agy's own record beside the id) holds none of what came before:
+            // it is told everything again, as a new one is, until a turn has completed with it.
+            let refresh = resumed && h.needs_history(&th);
             let told = resumed && !refresh;
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
             // compaction first may have taken them out.
@@ -3150,12 +3162,18 @@ impl Runner {
             let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
-            // last turn with its own replies, and the new-session note.
+            // last turn with its own replies, and the new-session note. A new Antigravity conversation also gets the
+            // conversation's history, as a fresh one does: agy has no transcript of its own to carry over.
             h.full_prompt(&th, resumed.then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
-                replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
+                let replay = if runtime == "antigravity" {
+                    crate::fallback::first_turn_pack(&replacing, crate::fallback::REPLAY_TOKENS)
+                } else {
+                    String::new()
+                };
+                replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key, &replay)
             }));
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
@@ -3204,9 +3222,9 @@ impl Runner {
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
             // A thread told everything again (`refresh`) holds it once this turn has completed with it, unless agy moved
-            // it to a new conversation again (marked below, outside this future).
-            if refresh && drove.outcome == "completed" && !h.lost_history(&th) {
-                self.state.repo_rules(&crate::continuity::refresh_key(&th), Some(""))?;
+            // it to a new conversation again during the turn (the host keeps that mark then).
+            if refresh && drove.outcome == "completed" {
+                h.history_told(&th);
             }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
@@ -3229,14 +3247,6 @@ impl Runner {
         // future, before a fallback can stop this host or settlement applies the interrupt-resume capability.
         if let (Some(h), Some(th)) = (&host, &thread) {
             let saved = h.session_id(th);
-            if h.lost_history(th) {
-                // The new conversation agy moved the thread to holds this turn only: the next turn is told everything
-                // again (continuity::refresh_key). Marked here, beside the id agy saved, so a drain that cancels the
-                // drive cannot leave the one without the other.
-                let _ = self
-                    .state
-                    .repo_rules(&crate::continuity::refresh_key(th), Some("1"));
-            }
             if session
                 .as_ref()
                 .is_some_and(|s| s.why == Some(crate::continuity::FORKED))
@@ -3360,8 +3370,11 @@ impl Runner {
         };
         // A turn whose tools ran is never taken again by a fallback, named or the company's: it may already have
         // changed things.
-        let fallback_allowed =
-            !paid_by && !voice_reply && !native_control && continuing.is_empty() && !drove.tool_ran;
+        let fallback_allowed = !paid_by
+            && !voice_reply
+            && !native_control
+            && continuing.is_empty()
+            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some());
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
@@ -3604,8 +3617,7 @@ impl Runner {
                 let note = crate::fallback::prompt_note(&because, &primary, &hop);
                 let fresh_text = crate::prompt::before_header(&attempt, &crate::prompt::replayed(&attempt, &names, None, false, &replay), &format!("\n\n{note}"));
                 // A side session agy moved to a new conversation holds only its last hop: told everything again, once.
-                let side_refresh = side_resumed
-                    && self.state.repo_rules(&crate::continuity::refresh_key(&th), None).map_err(Fail::runtime)?.is_some_and(|v| !v.is_empty());
+                let side_refresh = side_resumed && h.needs_history(&th);
                 let text = if side_resumed && !side_refresh {
                     // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
                     // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
@@ -3666,14 +3678,9 @@ impl Runner {
                     // Its confirmed thread belongs to the job, never to the primary conversation.
                     fresh: fallback_fresh.as_ref(),
                 };
-                let driven = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await;
-                // Marked before a drain's cancellation can return, beside the id agy saved (as for the primary).
-                if h.lost_history(&th) {
-                    let _ = self.state.repo_rules(&crate::continuity::refresh_key(&th), Some("1"));
-                }
-                drove = driven?;
-                if side_refresh && drove.outcome == "completed" && !h.lost_history(&th) {
-                    let _ = self.state.repo_rules(&crate::continuity::refresh_key(&th), Some(""));
+                drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if side_refresh && drove.outcome == "completed" {
+                    h.history_told(&th);
                 }
                 if side_resumed && h.restored(&th) {
                     // Claude Code finds out only as the turn runs that the saved session is gone: it began a new one.
@@ -3754,7 +3761,7 @@ impl Runner {
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
             if drove.limited
-                && !drove.tool_ran
+                && tools_settled(&drove, &flags, false)
                 && hop.default
                 && !native_control
                 && spent < 2
@@ -5079,6 +5086,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         runner
             .active
@@ -5147,6 +5155,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -5766,6 +5775,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         runner.places.lock().unwrap().insert("a1".into());
         runner
@@ -7340,6 +7350,17 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_tool_the_drive_saw_before_it_failed_keeps_the_turn_from_any_fallback() {
+        // The drive failed (an event write, say), so its result never came: what the flags kept still counts, and a
+        // failure after the turn started leaves its tools unknown.
+        let f = lease_flags();
+        assert!(tools_settled(&Drove::interrupted(), &f, false));
+        assert!(!tools_settled(&Drove::interrupted(), &f, true));
+        f.tool_ran.store(true, Ordering::SeqCst);
+        assert!(!tools_settled(&Drove::interrupted(), &f, false));
+    }
+
     #[tokio::test]
     async fn a_turn_whose_tool_ran_never_takes_the_companys_fallback_either() {
         // No fallback of its own, and another provider (codex) is signed in here: a quota refusal with no tool run
@@ -7397,7 +7418,8 @@ mod tests {
     }
 
     /// An `agy` for execute's tests (argv: this script, its folder). It names its conversation before it reads its
-    /// input, as agy does: the `--conversation` it was given, unless `agy-lose-<n>` is there (then one it began). It keeps
+    /// input, as agy does: the `--conversation` it was given, unless `agy-lose-<n>` is there (then one it began). With
+    /// `agy-late-<n>` there it names the one it was given first and one it began only after its first step. It keeps
     /// each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone
     /// once the turn ends (as on a computer that lost them).
     const FAKE_AGY: &str = r#"#!/usr/bin/env python3
@@ -7412,11 +7434,16 @@ line = sys.stdin.readline()
 if not line:
     sys.exit(0)
 open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
-for event in (
+late = []
+if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
+    conv = str(uuid.uuid4())
+    late = [{"event": "step_update", "step_update": {"conversation_id": conv}}]
+for event in [
     {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Done."}},
+] + late + [
     {"event": "result", "result": {"status": "SUCCESS", "response": "Done.", "conversation_id": conv,
                                    "usage": {"input_tokens": 1, "output_tokens": 1}}},
-):
+]:
     print(json.dumps(event), flush=True)
 sys.stdin.read()
 if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
@@ -7476,12 +7503,15 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
     #[tokio::test]
     async fn after_agy_moves_a_thread_to_a_new_conversation_the_next_turn_is_told_everything_once()
     {
-        // Turn 2's agy ran its prompt in a conversation it began in place of the saved one: that one holds turn 2
-        // only. Turn 3 resumes it and is given the conversation's history; turn 4, after turn 3 completed, is not.
+        // Turn 1's agy names a conversation it began in place of the saved one before it has the prompt: that process
+        // is closed unprompted and a new one is given everything, the conversation's history included, so turn 2 is
+        // not. Turn 3's agy moves to a new conversation only after it did its work: that one holds turn 3 only, so
+        // turn 4 is given the history; turn 5, after turn 4 completed, is not.
         let folder =
             std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("agy-lose-1"), "").unwrap();
+        std::fs::write(folder.join("agy-late-3"), "").unwrap();
         fake_agy_in(&folder);
         let agy =
             json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
@@ -7490,7 +7520,9 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
             true,
             &[
                 ("m1", json!({}), agy.clone()),
-                ("m1", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
                 ("m4", json!({}), agy.clone()),
                 ("m4", json!({}), agy),
             ],
@@ -7502,13 +7534,19 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         let prompt =
             |n: usize| std::fs::read_to_string(folder.join(format!("agy-prompt-{n}"))).unwrap();
         let replayed = "latest messages before the current one are replayed here";
-        assert!(!prompt(1).contains(replayed), "{}", prompt(1));
-        let told = prompt(2);
+        let told = prompt(1);
         assert!(
             told.contains(replayed) && told.contains("Watch the Acme release."),
             "{told}"
         );
-        assert!(!prompt(3).contains(replayed), "told once: {}", prompt(3));
+        assert!(!prompt(2).contains(replayed), "told once: {}", prompt(2));
+        assert!(!prompt(3).contains(replayed), "{}", prompt(3));
+        let told = prompt(4);
+        assert!(
+            told.contains(replayed) && told.contains("Watch the Acme release."),
+            "{told}"
+        );
+        assert!(!prompt(5).contains(replayed), "told once: {}", prompt(5));
         let _ = std::fs::remove_dir_all(&folder);
     }
 
@@ -8354,7 +8392,7 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
             "_repo_rules_changed": false, "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},
             "task": {"id": "t1", "title": "Ship", "checkpoint": "Half done", "checkpoint_at": "2026-10-29T08:00:00Z"},
             "history": [{"id": "m1", "from_actor": "bot:ops", "body": "Started", "refs": {}}, {"id": "m2", "from_actor": "human:ana", "body": "Thanks", "refs": {}}]});
-        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot");
+        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot", "");
         assert!(
             text.starts_with(&crate::prompt::prompt(&attempt, &names, Some("m0"), false)),
             "{text}"
@@ -8380,7 +8418,7 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         let attempt = json!({"id": "a1", "bot": "ops", "_replaced": true, "run_header": header,
             "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},
             "task": {"id": "t1", "title": "Ship", "checkpoint": "Half done"}, "history": []});
-        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot");
+        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot", "");
         assert!(text.ends_with(&format!("\n\n{header}")), "{text}");
         let note = text
             .find("New session: your previous session")
@@ -9233,6 +9271,7 @@ for line in sys.stdin:
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         let wake = Notify::new();
         let d = Drive {

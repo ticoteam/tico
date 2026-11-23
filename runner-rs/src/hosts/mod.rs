@@ -1405,7 +1405,8 @@ impl Host {
     }
 
     /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
-    /// new session in its place (Claude Code, Gemini and Antigravity find out only when the turn runs).
+    /// new session in its place (Claude Code and Gemini find out only when the turn runs; Antigravity when its process
+    /// names its conversation, before it reads the prompt).
     pub fn restored(&self, thread_id: &str) -> bool {
         match self {
             Host::Claude(h) => h.restored(thread_id),
@@ -1415,13 +1416,21 @@ impl Host {
         }
     }
 
-    /// Whether the harness moved `thread_id` to a new conversation after the turn's prompt had gone to the old one, so
-    /// the new one holds only this turn (Antigravity: it names its conversation only once it runs). The next turn is
-    /// told everything again (crate::continuity::refresh_key).
-    pub fn lost_history(&self, thread_id: &str) -> bool {
+    /// Whether `thread_id`'s saved conversation lacks the conversation's history (Antigravity: agy began a new one in
+    /// place of the saved one after the model had worked in it, so it holds only that turn). Its record says so, saved
+    /// with the new id; the thread's turns are told everything again until one completes (`history_told`).
+    pub fn needs_history(&self, thread_id: &str) -> bool {
         match self {
-            Host::Antigravity(h) => h.restored(thread_id),
+            Host::Antigravity(h) => h.needs_history(thread_id),
             _ => false,
+        }
+    }
+
+    /// A turn told `thread_id` everything again and completed: its record no longer asks for the history (unless agy
+    /// moved it to a new conversation again during that turn).
+    pub fn history_told(&self, thread_id: &str) {
+        if let Host::Antigravity(h) = self {
+            h.history_told(thread_id);
         }
     }
 
@@ -1454,8 +1463,10 @@ impl Host {
     /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
     /// harness starts a new one in its place (`restored`): a new session's whole prompt.
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
-        if let Host::Claude(h) = self {
-            h.full_prompt(thread_id, text);
+        match self {
+            Host::Claude(h) => h.full_prompt(thread_id, text),
+            Host::Antigravity(h) => h.full_prompt(thread_id, text),
+            _ => {}
         }
     }
 

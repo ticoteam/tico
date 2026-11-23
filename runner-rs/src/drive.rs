@@ -532,7 +532,11 @@ impl Runner {
                     // Proof the turn reached the model and may have changed something outside this computer.
                     acted = true;
                 }
-                tool_ran |= kind == "tool";
+                if kind == "tool" {
+                    tool_ran = true;
+                    // Kept on the turn's flags too, so a drive that fails after this still says a tool ran.
+                    d.flags.tool_ran.store(true, Ordering::SeqCst);
+                }
                 if kind == "background_kept" {
                     // Watched after the run; a command still running at the run's time limit is killed then.
                     let deadline = crate::util::epoch_s()
@@ -958,6 +962,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now()),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -2066,11 +2071,12 @@ mod tests {
         tx.send(json!({"kind": "tool", "thread_id": "th-1", "turn_id": "turn-1", "name": "ls"}))
             .unwrap();
         tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "completed"})).unwrap();
+        let f = flags(true);
         let (drove, _, _) = drive_with(
             &runner,
             &host,
             &mut rx,
-            &flags(true),
+            &f,
             "th-1",
             "claude",
             None,
@@ -2081,6 +2087,8 @@ mod tests {
             panic!("the drain's write should have failed the drive")
         };
         assert!(e.text.starts_with("runner.sqlite:"), "{}", e.text);
+        // The tool it saw before the write failed is still known: no fallback may run the turn again.
+        assert!(f.tool_ran.load(Ordering::SeqCst));
         let kinds: Vec<String> = stored_rows(&runner, "acme-late")
             .into_iter()
             .map(|(_, kind, _)| kind)
