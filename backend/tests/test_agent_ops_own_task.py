@@ -392,3 +392,77 @@ def test_an_ordinary_bot_ends_its_own_task(api, agent_ops):
         assert ended.status_code == 200, (op, body, ended.text)
         assert _ended(api, task["id"])[::2] == (after, "bot:ops"), (op, body)
         finish(api, agent_ops, attempt)
+
+
+def test_a_body_or_header_citation_of_the_turn_ends_its_own_task_too(api, agent_ops):
+    """The citation is weighed once (agent_ops_act `act_for_requester`): `on_behalf_of: turn` in the body, or the
+    header, falls back to its own rights as no citation does; the route never refuses it again."""
+    for n, (body, cite) in enumerate(
+        (({"on_behalf_of": "turn"}, {}), ({}, {"X-Tico-On-Behalf-Of": "turn"}), ({"on_behalf_of": "turn"}, {}))
+    ):
+        task, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True, title=f"cite {n}")
+        op, more = ("move", {"to": "closed", "why": "x"}) if n == 2 else ("done", {"note": "x"})
+        ended = api.post(
+            f"/api/v2/tasks/{task['id']}/{op}",
+            json=_seen(api, task["id"], {**more, **body}),
+            headers={**headers(attempt["token"]), **cite},
+        )
+        assert ended.status_code == 200, (body, cite, ended.text)
+        assert _ended(api, task["id"])[2] == "bot:botops"
+        finish(api, agent_ops, attempt)
+
+
+def test_words_that_lend_nothing_on_one_task_never_end_another(api, agent_ops):
+    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused."""
+    other = post(api, "tasks", {"owner": "botops", "title": "Another task for Agent Ops", "body": "x"})
+    finish(api, agent_ops, claim(api, agent_ops, "botops"))
+    _, _, attempt = _asked_in_its_chat(api, agent_ops, plain=True)
+    tried = api.post(
+        f"/api/v2/tasks/{other['id']}/done",
+        json=_seen(api, other["id"], {"note": "x"}),
+        headers=headers(attempt["token"]),
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
+    with api.app.state.store.read() as c:
+        assert H.task(c, other["id"])["status"] == "open"
+
+
+def _lent(api, task_id, bot):
+    with api.app.state.store.read() as c:
+        return c.execute(
+            "SELECT count(*) FROM task_delegations WHERE task_id=? AND delegate=? AND expires_at>?",
+            (task_id, bot, H.now()),
+        ).fetchone()[0]
+
+
+def test_a_task_chat_message_taken_back_takes_back_the_rights_it_lent(api, agent_ops):
+    """Ana @mentions Ops in her task's chat: Ops works the task with her party rights. She deletes the message (DELETE
+    /messages/{id}, as the chat does), and they end with it, as a deleted task comment's do (H.expire_delegations)."""
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    task = post(api, "tasks", {"owner": "botops", "title": "Tidy the launch note", "body": "x"})
+    said = post(api, f"threads/{task['conversation_id']}/messages", {"text": "@ops can you check the numbers?"})
+    assert _lent(api, task["id"], "bot:ops") == 1
+    gone = api.delete(f"/api/v2/messages/{said['id']}", headers=headers("ana-test"))
+    assert gone.status_code == 200, gone.text
+    assert _lent(api, task["id"], "bot:ops") == 0
+
+
+def test_a_reader_who_may_not_direct_the_task_defers_in_its_chat_as_with_a_comment(api, agent_ops):
+    """As POST /tasks/{id}/comments: a reader not on the task waits for the bot's next turn here. It wakes no one,
+    lends nothing and starts no new count of runs."""
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the release note", "body": "x"})
+    finish(api, agent_ops, claim(api, agent_ops, "ops"))
+    with api.app.state.store.read() as c:
+        from backend.chat_goals import may_direct
+
+        cara = api.app.state.store.settings.test_identities["cara-test"]
+        assert not may_direct(c, cara, H.task(c, task["id"]))
+    said = post(api, f"threads/{task['conversation_id']}/messages", {"text": "Looks good to me"}, token="cara-test")
+    with api.app.state.store.read() as c:
+        refs = H.message(c, said["id"])["refs"]
+        assert refs["comment"] is True and refs["send_way"] == "defer"
+        assert not c.execute("SELECT 1 FROM jobs WHERE message_id=?", (said["id"],)).fetchone()
+    assert _lent(api, task["id"], "bot:ops") == 0

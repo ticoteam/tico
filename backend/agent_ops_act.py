@@ -1755,9 +1755,11 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         return replace(who, actor=msg["sender_id"], role="bot", via="botops", task_actor="")
 
     def ends_own_task(c, who, request):
-        """Whether this call finishes, closes or sets aside a task the caller owns (done, a move to done or closed, a
-        snooze). A bot ends its own task with its own rights (owner decision, 2026-11-23), so when no one's request lends
-        Agent Ops theirs, it still does: the route checks the owner's own right to work its task, nothing wider."""
+        """Whether this call finishes, closes or sets aside the task this run is on, which the caller owns (done, a move
+        to done or closed, a snooze). A bot ends its own task with its own rights (owner decision, 2026-11-23), so when
+        no one's request lends Agent Ops theirs, it still does: the route checks the owner's own right to work its task,
+        nothing wider. Only the run's own task (its attempt's, or the one the message that started it is on): words
+        that lend nothing on one task never end another."""
         found = OWN_TASK_END.fullmatch(normalize(request.url.path) or "")
         if request.method != "POST" or not found:
             return False
@@ -1771,7 +1773,17 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
             row = H.task(c, auth.resolve_task(c, who, found.group(1)))
         except Problem:
             return False
-        return bool(row and row["owner_id"] == who.actor)
+        run = (
+            c.execute(
+                "SELECT a.task_id, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
+                (who.attempt_id,),
+            ).fetchone()
+            if who.attempt_id
+            else None
+        )
+        start = H.message(c, run["message_id"]) if run else None
+        on = {run["task_id"] if run else None, H.message_task_id(start) if start else None}
+        return bool(row and row["owner_id"] == who.actor and row["id"] in on)
 
     def act_for_requester(request, ref):
         """Apply the requester's identity before the route checks its normal permissions."""
@@ -1808,7 +1820,9 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
                 except Problem as refused:
                     if refused.status != 403 or ref not in ("turn", "default") or not ends_own_task(c, who, request):
                         raise
-                    return None, None  # its own task, ended with its own rights
+                    # its own task, ended with its own rights; the route does not weigh a body citation again
+                    request.state.own_rights = True
+                    return None, None
             request.state.delegation = H.DELEGATION.get()
         finally:
             H.DELEGATION.reset(token)

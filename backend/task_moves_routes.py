@@ -125,10 +125,14 @@ def register(
     """`task_rules` is the org rule check of a task write (backend/task_rule_gate.py): every route here that carries
     words goes through it (`checked`), and Send anyway replays the same write (`replays`)."""
 
-    def acting(c: Any, caller: Any, body: Any) -> Any:
-        """Who the change is made as: the caller, or the person whose request Agent Ops carries (`on_behalf_of`)."""
+    def acting(c: Any, caller: Any, body: Any, request: Request | None = None) -> Any:
+        """Who the change is made as: the caller, or the person whose request Agent Ops carries (`on_behalf_of`). Not
+        when the request's citation was already weighed and Agent Ops kept its own rights to end its own task
+        (agent_ops_act `ends_own_task`)."""
         ref = getattr(body, "on_behalf_of", None)
-        return delegated_identity(c, caller, ref) if ref else caller
+        if not ref or (request is not None and getattr(request.state, "own_rights", False)):
+            return caller
+        return delegated_identity(c, caller, ref)
 
     def answer(c: Any, who: Any, task_id: str, **more: Any) -> dict[str, Any]:
         return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who), **more}
@@ -140,7 +144,7 @@ def register(
         caller: Any = request.state.identity
 
         def write(c: Any) -> dict[str, Any]:
-            who = acting(c, caller, body)
+            who = acting(c, caller, body, request)
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             more: Any = call(c, who, task_id) or {}

@@ -153,10 +153,11 @@ describe('/threads/<a task’s chat>', () => {
     await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/chat'));
   });
 
-  it('any other thread, a sub-thread of a task’s chat too, stays a thread', async () => {
+  it('any other thread stays a thread: a sub-thread of a task’s chat, an agent’s Home with a ❓ on a task', async () => {
     view('s1', { task_id: 't1', parent_id: 'c1' });
+    view('h1', { task_id: 't1', audience: 'home' });
     view('m1', { audience: 'members' });
-    for (const id of ['s1', 'm1']) {
+    for (const id of ['s1', 'h1', 'm1']) {
       const router = at(`/threads/${id}`);
       await router.load();
       expect(router.state.location.pathname).toBe(`/threads/${id}`);

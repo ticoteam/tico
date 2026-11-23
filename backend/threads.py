@@ -4515,6 +4515,7 @@ def _revise(c, message, actor, *, body=None, deleted=False, revision=None, purge
                 "message_deliveries WHERE message_id=? AND carrier_id IS NOT NULL)",
                 (message["id"],),
             )
+        H.expire_delegations(c, message["id"], now)  # the task rights it lent end with it
         c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM message_reactions WHERE message_id=?", (message["id"],))
         c.execute("DELETE FROM message_routes WHERE message_id=?", (message["id"],))
