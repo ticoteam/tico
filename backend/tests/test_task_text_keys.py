@@ -396,8 +396,13 @@ def test_a_bot_s_turn_reply_with_a_key_no_grant_covers_is_stored_as_a_mark(api):
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE ?", ("%" + KEY + "%",)).fetchone()
         [kept] = c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        # (its done note, "Reviewed.", is a comment of its own: not the reply)
         posted = [
-            r[0] for r in c.execute("SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%'")
+            r[0]
+            for r in c.execute(
+                "SELECT body FROM messages WHERE sender_id='bot:ops' AND body LIKE 'Reviewed.%' "
+                "AND coalesce(wake_key, '') NOT LIKE '%:done:%'"
+            )
         ]
     assert kept == "Reviewed. The diff hard-codes " + K.MARK + "\u2026 so rotate it \u00b2 \ufb01x."
     assert posted == [kept], "the reply is posted with the mark, the rest as written"

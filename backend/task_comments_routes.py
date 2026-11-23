@@ -109,7 +109,7 @@ def register(
         found = H.bot(c, H.actor_id(agent)) if agent and H.is_bot(agent) else None
         if (
             not found
-            or found.get("state") != "active"
+            or found.get("state") not in ("active", "paused", "quarantined")  # a held agent gets it on release
             or teammate_access.Known(c, who, auth).unseen_of([agent])
             or not H.task_private_readable(c, agent, row)
         ):

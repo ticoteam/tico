@@ -160,7 +160,9 @@ def _manager_comment_wakes_owner_without_mention(api, bot_manager):
         config = BS.read(c, 'ops')
         config['bot_contact'] = 'tasks'
         BS.write(c, 'ops', config)
-    result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the work.'}, token=token)
+    result = post(
+        api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the work.', 'to': 'bot:ops'}, token=token
+    )
     assert result['woke'], result
     assert result['comment']['sender_id'] == actor
     with api.app.state.store.read() as c:
@@ -172,7 +174,9 @@ def _manager_comment_wakes_owner_without_mention(api, bot_manager):
 def _requester_manager_comment_wakes_owner_with_requester_permissions(api, bot_manager):
     token, actor = bot_manager
     task = make(api, owner='bot:cmo', requester='bot:ops')
-    result = post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.'}, token=token)
+    result = post(
+        api, 'tasks/' + task['id'] + '/comments', {'text': 'Please continue the packet.', 'to': 'bot:cmo'}, token=token
+    )
     assert result['woke'] and result['comment']['sender_id'] == actor
     with api.app.state.store.read() as c:
         message = H.message(c, result['comment']['id'])

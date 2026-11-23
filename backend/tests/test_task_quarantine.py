@@ -487,7 +487,7 @@ def test_one_tasks_refusals_stop_only_its_turn_and_other_work_claims_and_runs(ap
     stopped = post(api, f"attempts/{bad['id']}/renew", {}, machine["token"])
     assert stopped["stop"] and stopped["stop_reason"].startswith("Quarantined: 10 repeated refusals today")
     assert not post(api, f"attempts/{good['id']}/renew", {}, machine["token"]).get("stop")
-    post(api, f"tasks/{task['id']}/comments", {"text": "Please check it again."})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Please check it again.", "to": "bot:ops"})
     assert post(api, f"attempts/{bad['id']}/inputs", {}, machine["token"])["messages"] == []
     refused = post(api, "messages", {"to": "finance", "text": "Keep trying."}, bad["token"], expected=403)
     assert refused["error"]["code"] == "quarantined"
@@ -1017,7 +1017,7 @@ def _held_notes(api, machine, source, n):
                 c.execute("UPDATE messages SET refs=? WHERE id=?", (H._dump({"task": " \t\u2003"}), message["id"]))
         else:
             task = H.task_create(c, "bot:finance", f"Check the export {n}", "Check the report.", "bot:ops")
-            message = H.task_comment(c, "bot:finance", task["id"], "The export is ready to check.")
+            message = H.task_comment(c, "bot:finance", task["id"], "The export is ready to check.", session="bot:ops")
             scope = "task:" + task["id"]
             if source != "task":
                 refs = {k: v for k, v in message["refs"].items() if k != "task"}

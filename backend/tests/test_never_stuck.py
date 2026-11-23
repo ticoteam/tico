@@ -463,7 +463,7 @@ def test_a_persons_comment_that_wakes_the_owner_starts_the_count_again_so_a_run_
     later(minutes=20)
     mark = H.BY_TOKEN.set(True) if via else None
     try:
-        H.task_comment(c, ANA, task_id, "pytest is there now, carry on")
+        H.task_comment(c, ANA, task_id, "pytest is there now, carry on", session=BUILDER)
     finally:
         if mark:
             H.BY_TOKEN.reset(mark)
@@ -489,7 +489,7 @@ def test_a_comment_the_assistant_writes_or_one_that_wakes_no_bot_or_on_a_persons
     before = _ladder(c, task_id)
     mark = H.VIA.set("assistant") if who == "assistant" else None
     try:
-        H.task_comment(c, ANA, task_id, "A note for later", wake=who != "quiet")
+        H.task_comment(c, ANA, task_id, "A note for later", wake=who != "quiet", session=BUILDER)
     finally:
         if mark:
             H.VIA.reset(mark)

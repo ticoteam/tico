@@ -252,7 +252,7 @@ def test_a_task_session_becomes_the_tasks_one_primary_session_and_a_shared_threa
     assert turn(task, "old") == {"session:ops/old": True}
     # Someone linked the next thread before it ran: it becomes the one primary, the old one an alternate.
     post(api, f"tasks/{task['id']}/links", {"url": "ops/new", "kind": "session"})
-    post(api, f"tasks/{task['id']}/comments", {"text": "Check it again"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Check it again", "to": "bot:ops"})
     assert turn(task, "new") == {"session:ops/old": False, "session:ops/new": True}
 
 

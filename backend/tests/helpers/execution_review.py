@@ -189,7 +189,7 @@ def busy_folded_run(api):
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
-    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.'})
+    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.', 'to': 'bot:ops'})
     carried = post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']
     post(api, f"attempts/{attempt['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
     post(
@@ -204,7 +204,9 @@ def busy_folded_run(api):
         {'outcome': 'interrupted', 'last_seq': 1, 'text': 'Runner restarted during execution'},
         machine['token'],
     )
-    post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})  # waits behind the held run
+    post(
+        api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.', 'to': 'bot:ops'}
+    )  # waits behind the held run
     rival(api, machine, attempt)
     issue = stopped_issue(api)
     print("ISSUE", issue)

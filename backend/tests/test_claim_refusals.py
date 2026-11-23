@@ -97,8 +97,8 @@ def test_a_turn_running_when_its_bot_is_limited_takes_in_only_work_inside_the_li
         {"action": "scope", "task_id": task["id"], "expected_revision": get(api, "bots/ops")["revision"]},
     )
     with api.app.state.store.transaction() as c:  # follow-ups to both turns, after the limit is set
-        outside = H.task_comment(c, "human:ana", other["id"], "Use the new numbers.")
-        inside = H.task_comment(c, "human:ana", task["id"], "Check the March total too.")
+        outside = H.task_comment(c, "human:ana", other["id"], "Use the new numbers.", session="bot:ops")
+        inside = H.task_comment(c, "human:ana", task["id"], "Check the March total too.", session="bot:ops")
     poll = lambda t: [
         m["id"]
         for m in post(api, f"attempts/{turns['task:' + t['id']]['id']}/inputs", {}, machine["token"])["messages"]
@@ -164,7 +164,7 @@ def test_work_fenced_behind_an_interrupted_run_on_its_task(api):
         c.execute(
             "UPDATE jobs SET state='uncertain' WHERE id=(SELECT job_id FROM attempts WHERE id=?)", (attempt["id"],)
         )
-    post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?"})
+    post(api, "tasks/" + task["id"] + "/comments", {"text": "Is the first part done?", "to": "bot:ops"})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='ops' AND state='queued'").fetchone()[0] == 1
     says(api, machine, "uncertain")

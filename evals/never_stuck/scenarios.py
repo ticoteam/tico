@@ -114,14 +114,16 @@ class Rig:
         )
 
     def reply_jobs(self, task: str, bot: str) -> int:
-        """Jobs queued for a bot's run on a person's comment in the task's chat (a reply to its ❓ is one)."""
+        """Jobs queued for a bot's run on a person's comment in the task's chat: on the comment, or on the line that
+        carries it to a bot it does not name (a reply that clears the bot's ❓ reaches it so, threads.deliver)."""
         return int(
             self.w.read(
                 lambda c: c.execute(
                     "SELECT COUNT(*) FROM jobs j JOIN messages m ON m.id = j.message_id JOIN tasks t ON t.conversation_id "
-                    "= m.conversation_id WHERE j.state='queued' AND t.id=? AND m.recipient_id=? AND m.sender_id LIKE "
-                    "'human:%'",
-                    (task, bot),
+                    "= m.conversation_id WHERE j.state='queued' AND t.id=? AND 'bot:' || j.bot_id=? AND (m.sender_id "
+                    "LIKE 'human:%' OR m.id IN (SELECT d.carrier_id FROM message_deliveries d JOIN messages p ON "
+                    "p.id = d.message_id WHERE d.recipient=? AND p.sender_id LIKE 'human:%'))",
+                    (task, bot, bot),
                 ).fetchone()[0]
             )
         )
@@ -1055,8 +1057,8 @@ def s39(r: Rig) -> None:
     expect(r.reply_jobs(task, BUILDER) >= 1, "nothing was queued for the bot")
     seen = r.row(task)["version"]
     r.ok(ANA, lambda c: E.reassign(c, task, WRITER, ANA, "Writer knows the client"), "Ana reassigns")
-    # Ben's reply is a comment the old owner may still read as a follower: it is not a wake of the task's own, so
-    # the reassign does not drop it (only the owner's wakes keyed to the visit and owner go).
+    # Ben's reply reaches the old owner because it clears its ❓: it is not a wake of the task's own, so the
+    # reassign does not drop it (only the owner's wakes keyed to the visit and owner go).
     expect(r.queued(task, BUILDER) == 0, "the old owner's queued wake was not dropped")
     rid = r.requirement(task, "owner_done")
     r.refused(

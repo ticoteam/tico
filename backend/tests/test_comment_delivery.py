@@ -1,6 +1,7 @@
-"""A task comment's delivery (docs/tasks.md, Conversation; backend/delivery.py): steer reaches the bot's running turn
-now, queue runs right after it, defer waits for the bot's next turn on the task or its deadline, goal sets the task
-session's goal. The API, the tico CLI and the MCP tool share one rule, tested here."""
+"""A task comment's delivery (docs/tasks.md, Conversation; backend/delivery.py), to the session of the agent it is
+sent `to`: steer reaches the agent's running turn now, queue runs right after it, defer waits for its next turn on the
+task or its deadline, goal sets the task session's goal. A plain comment wakes nobody. The API, the tico CLI and the
+MCP tool share one rule, tested here."""
 
 import pytest
 
@@ -27,6 +28,9 @@ def world(api, goals=True):
     )
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     return machine, task["id"]
+
+
+OPS = "bot:ops"
 
 
 def job_state(api, message_id):
@@ -63,39 +67,48 @@ def test_steer_joins_the_running_turn_queue_follows_it_and_defer_rides_along(api
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "plan"}, machine["token"])
 
     # Steer wakes the bot now: its job is queued in the task's room, and the running turn takes it in.
-    steered = post(api, f"tasks/{tid}/comments", {"text": "Use the August numbers.", "delivery": "steer"})
+    steered = post(api, f"tasks/{tid}/comments", {"text": "Use the August numbers.", "delivery": "steer", "to": OPS})
     assert steered["woke"] is True and job_state(api, steered["comment"]["id"]) == "queued"
     assert steered["sent_as"] == {"delivery": "steer", "until": None}
     assert steered["comment"]["id"] in inputs(api, machine, attempt)
 
     # Queue wakes the bot too, but after this turn: its job waits and the running turn does not take it in.
-    queued = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue"})
+    queued = post(
+        api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue", "to": OPS}
+    )
     assert queued["woke"] is True and job_state(api, queued["comment"]["id"]) == "queued"
     assert queued["sent_as"] == {"delivery": "queue", "until": None}
     assert queued["comment"]["id"] not in inputs(api, machine, attempt)
 
     # A defer sent while the bot works this task rides along: it goes right after the turn, as a queue.
-    rides = post(api, f"tasks/{tid}/comments", {"text": "And the FAQ.", "delivery": "defer"})
+    rides = post(api, f"tasks/{tid}/comments", {"text": "And the FAQ.", "delivery": "defer", "to": OPS})
     assert rides["sent_as"]["delivery"] == "queue" and job_state(api, rides["comment"]["id"]) == "queued"
     assert rides["comment"]["id"] not in inputs(api, machine, attempt) and deferrals(api, rides["comment"]["id"]) == []
 
-    # Omitted, a person's comment on a task they gave a bot steers, as it always has.
-    plain = post(api, f"tasks/{tid}/comments", {"text": "Also the API page."})
-    assert plain["sent_as"]["delivery"] == "steer" and plain["comment"]["id"] in inputs(api, machine, attempt)
+    # Omitted, a message to the agent's session steers.
+    said = post(api, f"tasks/{tid}/comments", {"text": "Also the API page.", "to": OPS})
+    assert said["sent_as"]["delivery"] == "steer" and said["comment"]["id"] in inputs(api, machine, attempt)
+    # A plain comment is the task's log: it reaches nobody, so the running turn does not take it in.
+    plain = post(api, f"tasks/{tid}/comments", {"text": "Noted for the record."})
+    assert plain["woke"] is False and plain["comment"]["id"] not in inputs(api, machine, attempt)
 
 
 def test_defer_wakes_nobody_and_keeps_a_deadline(api):
     machine, tid = world(api)
     before = H.now()
-    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first.", "delivery": "defer"})
+    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first.", "delivery": "defer", "to": OPS})
     assert held["woke"] is False and job_state(api, held["comment"]["id"]) is None
     [row] = deferrals(api, held["comment"]["id"])
     assert row["kind"] == "comment" and row["task_id"] == tid and row["due_at"] >= H.shift(before, hours=24)
     assert held["sent_as"] == {"delivery": "defer", "until": row["due_at"]}
 
-    timed = post(api, f"tasks/{tid}/comments", {"text": "Then the docs.", "delivery": "defer", "defer_for": "30m"})
+    timed = post(
+        api, f"tasks/{tid}/comments", {"text": "Then the docs.", "delivery": "defer", "defer_for": "30m", "to": OPS}
+    )
     assert deferrals(api, timed["comment"]["id"])[0]["due_at"] < H.shift(before, hours=1)
-    never = post(api, f"tasks/{tid}/comments", {"text": "Some day.", "delivery": "defer", "defer_for": "never"})
+    never = post(
+        api, f"tasks/{tid}/comments", {"text": "Some day.", "delivery": "defer", "defer_for": "never", "to": OPS}
+    )
     assert deferrals(api, never["comment"]["id"])[0]["due_at"] is None and never["sent_as"]["until"] is None
 
 
@@ -112,7 +125,9 @@ def test_a_comment_queued_mid_turn_runs_right_after_it(api):
     machine, tid = world(api)
     first = claim(api, machine)
     post(api, f"attempts/{first['id']}/started", {"thread_id": "plan"}, machine["token"])
-    queued = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue"})
+    queued = post(
+        api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "queue", "to": OPS}
+    )
     post(
         api,
         f"attempts/{first['id']}/complete",
@@ -133,10 +148,10 @@ def test_a_deferred_comment_reaches_the_bots_next_prompt_once(api):
         {"outcome": "completed", "text": "Plan drafted.", "last_seq": 0},
         machine["token"],
     )
-    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "defer"})
+    held = post(api, f"tasks/{tid}/comments", {"text": "Billing first, then the docs.", "delivery": "defer", "to": OPS})
     assert held["woke"] is False
 
-    later = post(api, f"tasks/{tid}/comments", {"text": "Also the API page."})
+    later = post(api, f"tasks/{tid}/comments", {"text": "Also the API page.", "to": OPS})
     second = claim(api, machine)
     assert second["message"]["id"] == later["comment"]["id"]
     assert "Billing first, then the docs." in forwarded(second, first["message"]["id"])
@@ -154,7 +169,7 @@ def test_a_deferred_comment_reaches_the_bots_next_prompt_once(api):
     )
 
     # Delivered once: the next turn's prompt starts after the second turn's own trigger, so the comment is gone.
-    again = post(api, f"tasks/{tid}/comments", {"text": "Then the launch note."})
+    again = post(api, f"tasks/{tid}/comments", {"text": "Then the launch note.", "to": OPS})
     third = claim(api, machine)
     assert third["message"]["id"] == again["comment"]["id"]
     assert "Billing first, then the docs." not in forwarded(third, second["message"]["id"])
@@ -182,16 +197,23 @@ def test_the_send_says_which_ways_a_reader_may_deliver(api):
 @pytest.mark.parametrize("way", ["steer", "queue"])
 def test_only_someone_on_the_task_may_wake_its_bot(api, way):
     machine, tid = world(api)
-    # Ben is not on Ana's task: his comment waits for the bot's next turn there, with no deadline.
+    # Ben is not on Ana's task: he may not write to its agent's session.
     cd = get(api, f"tasks/{tid}", "ben-test")["comment_delivery"]
     assert cd["default"] == "defer" and cd["default_for"] == "never" and cd["steer"] is False and cd["queue"] is False
     r = api.post(
-        f"/api/v2/tasks/{tid}/comments", json={"text": "Do mine first.", "delivery": way}, headers=headers("ben-test")
+        f"/api/v2/tasks/{tid}/comments",
+        json={"text": "Do mine first.", "delivery": way, "to": OPS},
+        headers=headers("ben-test"),
     )
     assert r.status_code == 403 and "delivery" in r.text, r.text
     assert all(c["body"] != "Do mine first." for c in get(api, f"tasks/{tid}")["comments"])
+    r = api.post(
+        f"/api/v2/tasks/{tid}/comments", json={"text": "When you can.", "to": OPS}, headers=headers("ben-test")
+    )
+    assert r.status_code == 403, r.text
+    # His plain comment is in the log and wakes nobody.
     held = post(api, f"tasks/{tid}/comments", {"text": "When you can."}, token="ben-test")
-    assert held["woke"] is False and held["sent_as"] == {"delivery": "defer", "until": None}
+    assert held["woke"] is False and "sent_as" not in held
 
 
 def test_only_someone_on_the_task_may_set_its_goal(api):
@@ -297,7 +319,9 @@ def test_a_delivery_that_cannot_apply_is_refused_and_nothing_is_saved(api):
 def test_mcp_and_the_hub_cli_send_the_same_delivery(api):
     machine, tid = world(api)
     is_error, payload = call(
-        api, "tico_task_comment", {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h"}
+        api,
+        "tico_task_comment",
+        {"id": tid, "text": "Pick the venue.", "delivery": "defer", "defer_for": "4h", "to": OPS},
     )
     assert is_error is False and payload["woke"] is False and payload["sent_as"]["delivery"] == "defer"
     # One of the ways at most, on the command line too.

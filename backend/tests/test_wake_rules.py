@@ -63,9 +63,8 @@ def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_b
     r = setup(api)
     with api.app.state.store.transaction() as c:
         task, _ = parked_task(c)
-        bot_comment = H.task_comment(c, "bot:ops", task["id"], "Scope add: log every skip.")
         with as_cause("bot:ops"):
-            notices = [news(c, task, f"Relation added: Docs {i}") for i in range(50)]
+            notices = [news(c, task, f"Relation added: Docs {i}") for i in range(51)]
         # Tico's own urgent note (a lifted quarantine's) still comes first, though it is the newest.
         urgent = H.new_id()
         c.execute(
@@ -73,11 +72,11 @@ def test_held_news_reaches_the_run_in_arrival_order_whoever_sent_it_across_the_b
             (urgent, H.TICO_ACTOR, "bot:cpo", "Back from quarantine", H.now()),
         )
         assert jobs(c, "cpo") == 0
-        H.task_comment(c, "human:ana", task["id"], "Please start this today.")
+        H.task_comment(c, "human:ana", task["id"], "Please start this today.", session="bot:cpo")
     first = claim(api, r, "cpo")
     assert first["notes"][0]["id"] == urgent
     carried = [n["message"] for n in first["notes"] if n.get("message")]
-    held = [bot_comment["id"], *(m["id"] for m in notices)]
+    held = [m["id"] for m in notices]
     assert carried == held[: len(carried)] and len(first["notes"]) == 50
     finish(api, r, first)
     second = claim(api, r, "cpo")
@@ -129,8 +128,8 @@ def test_woke_means_a_bot_job_was_queued_and_delivered_means_a_person_got_it(api
     assert told["woke"] is False and told["delivered"] is True
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == before
-    # a person comments to a bot owner: one job
-    asked = post(api, f"tasks/{mine['id']}/comments", {"text": "Please start this today."})
+    # a person writes to the bot holding the task: one job
+    asked = post(api, f"tasks/{mine['id']}/comments", {"text": "Please start this today.", "to": "bot:cpo"})
     assert asked["woke"] is True and asked["delivered"] is False
     with api.app.state.store.read() as c:
         assert jobs(c, "cpo") == before + 1
@@ -191,7 +190,7 @@ def test_t4_a_persons_message_and_comment_always_wake_a_parked_bot(api):
         task, _ = parked_task(c)
         H.say(c, "human:ana", "bot:cpo", "Can you look at the roadmap today?")
         assert jobs(c, "cpo") == 1
-        H.task_comment(c, "human:ana", task["id"], "Is this still blocked?")
+        H.task_comment(c, "human:ana", task["id"], "Is this still blocked?", session="bot:cpo")
         assert jobs(c, "cpo") == 2
         # A Tico notice of a person's own act on the task (they moved it) wakes it too.
         with as_cause("human:ana"):
@@ -290,6 +289,6 @@ def test_the_request_says_whose_write_it_is_and_the_tico_sweeps_are_nobodys(api,
 
     monkeypatch.setattr(W, "gate", spy)
     post(api, f"tasks/{task['id']}/comments", {"text": "@ops outline drafted."}, token=attempt["token"])
-    post(api, f"tasks/{task['id']}/comments", {"text": "Looks good, carry on."})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Looks good, carry on.", "to": "bot:cpo"})
     assert ("bot:cpo", "bot:ops", "bot:cpo") in seen and ("human:ana", "bot:cpo", "human:ana") in seen
     assert W.CAUSE.get() == ""

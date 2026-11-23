@@ -114,7 +114,7 @@ def test_a_bots_comment_to_a_bot_on_a_task_waits_and_that_tasks_fresh_session_ge
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
     before = jobs(api, "cpo")
     with api.app.state.store.transaction() as c:
-        msg = H.task_comment(c, "bot:ops", t["id"], "QA: groups 1-3 pass on the candidate.")
+        msg = H.task_comment(c, "bot:ops", t["id"], "QA: groups 1-3 pass on the candidate.", session="bot:cpo")
     assert jobs(api, "cpo") == before and msg["refs"][B.MARK] == B.RULE
     with api.app.state.store.transaction() as c:
         notes = H._rows(c.execute("SELECT * FROM notes WHERE message_id=?", (msg["id"],)))
@@ -176,7 +176,14 @@ def test_a_bots_comment_flagged_needs_action_wakes_the_task_owner(api):
     with api.app.state.store.transaction() as c:
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
         before = c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0]
-        H.task_comment(c, "bot:ops", t["id"], "The release is blocked on your fix.", extra_refs={"needs_action": True})
+        H.task_comment(
+            c,
+            "bot:ops",
+            t["id"],
+            "The release is blocked on your fix.",
+            extra_refs={"needs_action": True},
+            session="bot:cpo",
+        )
         assert c.execute("SELECT count(*) FROM jobs WHERE bot_id='cpo'").fetchone()[0] == before + 1
 
 
@@ -280,9 +287,14 @@ def test_needs_action_wakes_the_owner_of_a_snoozed_task_where_a_plain_comment_do
         t = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
         H.task_snooze(c, "bot:cpo", t["id"], "The vendor replies in two days.", H.shift(H.now(), days=2), t["version"])
         c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
-    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged."}, token=token)
+    plain = post(api, f"tasks/{t['id']}/comments", {"text": "FYI: docs merged.", "to": "bot:cpo"}, token=token)
     assert plain["woke"] is False and jobs(api, "cpo") == 0
-    flagged = post(api, f"tasks/{t['id']}/comments", {"text": "Blocked on you.", "needs_action": True}, token=token)
+    flagged = post(
+        api,
+        f"tasks/{t['id']}/comments",
+        {"text": "Blocked on you.", "needs_action": True, "to": "bot:cpo"},
+        token=token,
+    )
     assert flagged["woke"] is True and jobs(api, "cpo") == 1
     with api.app.state.store.transaction() as c:
         direct = H.task_comment(c, "bot:ops", t["id"], "Still blocked.", wake=False, extra_refs={"needs_action": True})
@@ -297,12 +309,17 @@ def test_a_held_message_or_comment_tells_its_sender_how_to_wake_the_bot_now(api)
         t = H.task_create(c, "bot:ops", "Open the window", "x", "bot:cpo")
         c.execute("DELETE FROM jobs WHERE bot_id='cpo'")
     dm = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z"}, token=token)
-    comment = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z"}, token=token)
+    comment = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "to": "bot:cpo"}, token=token)
     for sent in (dm, comment):
         assert sent["woke"] is False and jobs(api, "cpo") == 0
         assert "held for cpo's next run" in sent["held"] and "--needs-action" in sent["held"]
     flagged = post(api, "messages", {"to": "cpo", "text": "Deadline 14:10Z", "needs_action": True}, token=token)
-    woke = post(api, f"tasks/{t['id']}/comments", {"text": "Deadline 14:10Z", "needs_action": True}, token=token)
+    woke = post(
+        api,
+        f"tasks/{t['id']}/comments",
+        {"text": "Deadline 14:10Z", "needs_action": True, "to": "bot:cpo"},
+        token=token,
+    )
     assert "held" not in flagged and "held" not in woke and woke["woke"] is True
     assert "held" not in post(api, "messages", {"to": "cpo", "text": "Morning"})  # a person's always wakes
 

@@ -1173,7 +1173,9 @@ def test_a_held_company_task_involving_a_bot_the_reader_cannot_read_stays_unname
     )
     expire(api, attempt['id'])
     assert claim(api, machine) is None
-    post(api, f"tasks/{task_id}/comments", {'text': 'Cite the new clause.'})  # waits behind the stopped run
+    post(
+        api, f"tasks/{task_id}/comments", {'text': 'Cite the new clause.', 'to': 'bot:ops'}
+    )  # waits behind the stopped run
 
     def held_for(token):
         return ' '.join(
@@ -1937,7 +1939,7 @@ def test_a_stopped_run_that_holds_queued_work_is_agent_ops_and_says_what_waits(a
     issue = stopped_issue(api)
     assert issue['needs_person'] is False and 'saved 1 stopped run for later' in issue['title']
     for text in ('Priya says the old bots can go.', 'Also archive the test bot.'):
-        post(api, f"tasks/{task_id}/comments", {'text': text})
+        post(api, f"tasks/{task_id}/comments", {'text': text, 'to': 'bot:ops'})
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None  # the claim's fence holds both behind the stopped run
     issue = stopped_issue(api)
@@ -1988,7 +1990,7 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     task_id = task.get('task', task).get('id') or task['refs']['task']
     attempt = claim(api, machine)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'drained'}, machine['token'])
-    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.'})
+    post(api, f"tasks/{task_id}/comments", {'text': 'Also rebase on main.', 'to': 'bot:ops'})
     carried = post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']
     assert len(carried) == 1
     post(api, f"attempts/{attempt['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
@@ -2004,7 +2006,9 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
         {'outcome': 'interrupted', 'last_seq': 1, 'text': 'Runner restarted during execution'},
         machine['token'],
     )
-    post(api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.'})  # waits behind the held run
+    post(
+        api, f"tasks/{task_id}/comments", {'text': 'And tell me when it is up.', 'to': 'bot:ops'}
+    )  # waits behind the held run
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
@@ -2185,7 +2189,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     ready(api, machine, ['ops'])
     again = claim(api, machine)
     post(api, f"attempts/{again['id']}/started", {'thread_id': 'twice-again'}, machine['token'])
-    post(api, f"tasks/{private_id}/comments", {'text': 'Also include the weekly numbers.'})
+    post(api, f"tasks/{private_id}/comments", {'text': 'Also include the weekly numbers.', 'to': 'bot:ops'})
     carried = post(api, f"attempts/{again['id']}/inputs", {}, machine['token'])['messages']
     assert len(carried) == 1
     post(api, f"attempts/{again['id']}/inputs/{carried[0]['id']}/ack", {}, machine['token'])
@@ -2201,7 +2205,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (carried[0]['id'],)).fetchone()[0] == 'uncertain'
-    post(api, f"tasks/{private_id}/comments", {'text': 'One more thing for you.'})  # waits behind it
+    post(api, f"tasks/{private_id}/comments", {'text': 'One more thing for you.', 'to': 'bot:ops'})  # waits behind it
     ready(api, machine, ['ops'])
     assert claim(api, machine) is None
     ana = stopped_issue(api)
@@ -2414,7 +2418,9 @@ def test_a_busy_bots_stopped_run_records_dependency_until_task_and_lane_free(api
         {'outcome': 'interrupted', 'last_seq': 2, 'text': 'Runner restarted during execution'},
         machine['token'],
     )
-    post(api, f"tasks/{stopped['id']}/comments", {'text': 'Any news?', 'needs_action': True})  # fenced behind it
+    post(
+        api, f"tasks/{stopped['id']}/comments", {'text': 'Any news?', 'needs_action': True, 'to': 'bot:ops'}
+    )  # fenced behind it
     busy = post(api, 'tasks', {'owner': 'ops', 'title': 'Something else', 'body': 'Do something else.'})
     other = claim(api, machine)
     post(api, f"attempts/{other['id']}/started", {'thread_id': 'busy'}, machine['token'])

@@ -53,7 +53,7 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
         assert c.execute("SELECT state FROM jobs WHERE message_id=?", (said["id"],)).fetchone()[0] == "queued"
         H.note_create(c, "bot:ops", "bot:cpo", "The roadmap label needs an approval.")
         c.execute("UPDATE tasks SET requester_id='bot:ops' WHERE id=?", (task["id"],))
-        comment = H.task_comment(c, "bot:ops", task["id"], "Leave the label to a person.")
+        comment = H.task_comment(c, "bot:ops", task["id"], "Leave the label to a person.", session="bot:cpo")
         assert comment["recipient_id"] == "bot:cpo"
     # Any other bot's message waits too (a refused one quarantined the sender in turn), but its note does not.
     with api.app.state.store.transaction() as c:

@@ -36,7 +36,7 @@ def test_once_a_task_session_takes_in_another_private_task_it_never_checkpoints_
         post(
             api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": text}, r["token"]
         )
-        post(api, f"tasks/{task['id']}/comments", {"text": "Next?"})
+        post(api, f"tasks/{task['id']}/comments", {"text": "Next?", "to": "bot:ops"})
 
     turn("Sections 1-2 done.")
     monkeypatch.setattr(execution, "checkpoint_safe", lambda *a: False)

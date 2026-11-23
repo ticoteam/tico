@@ -54,6 +54,8 @@ CUTOVER_PREREQUISITES = {
         "20261117085930_drop_computer_keys.py",
         "20261122215020_plan_display_names.py",
     ),
+    # `messages` columns in one order whichever runs first: outside_intake adds four, this one adds one after them.
+    "20261123191939_messages_session_agent": ("20261122133157_outside_intake.sql",),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this

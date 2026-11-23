@@ -290,7 +290,7 @@ def test_claim_reselects_when_private_task_is_reassigned_after_the_read(api, mon
     ready(api, machine, ["ops"])
     task = post(api, "tasks", {"owner": "ops", "title": "Review private work", "body": "x", "private": True})
     finish(api, machine, claim(api, machine, "ops"))
-    post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Continue this private request.'})
+    post(api, 'tasks/' + task['id'] + '/comments', {'text': 'Continue this private request.', 'to': 'bot:ops'})
     store, execution = api.app.state.store, api.app.state.execution
     idle = execution._idle_claim
     selected = []
