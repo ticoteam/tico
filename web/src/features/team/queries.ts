@@ -87,12 +87,20 @@ export const agentsQuery = queryOptions({
 });
 
 const paidByPath = (bot: string) => `/api/v2/bots/${at(bot)}/subscriptions` as const;
-const paidByKey = (bot: string) => ['team', 'paid-by', bot] as const;
 export const paidByQuery = (bot: string, lastTurn = false) =>
-  queryOptions({
-    queryKey: [...paidByKey(bot), lastTurn] as const,
+  queryOptions<AgentSubscriptionList>({
+    queryKey: [...keys.team.paidBy(), bot, lastTurn] as const,
     queryFn: ({ signal }) => api.get<AgentSubscriptionList>(`${paidByPath(bot)}${lastTurn ? '?last_turn=true' : ''}`, { signal }),
-    ...(lastTurn && { staleTime: 0 }),
+    ...(lastTurn && {
+      staleTime: 0,
+      refetchInterval: ({ state }) => {
+        const read = Math.max(state.dataUpdatedAt, state.errorUpdatedAt);
+        const resets = (state.data?.last_turn?.waits ?? []).map((wait) => Date.parse(wait.until ?? ''));
+        const next = Math.min(...resets.filter((at) => at > read));
+        return Number.isFinite(next) ? Math.min(2_147_483_647, Math.max(1, next - Date.now())) : false;
+      },
+      refetchIntervalInBackground: true,
+    }),
   });
 
 export type PayerPick = SetBotSubscriptionsBody['subscriptions'][string];
@@ -113,6 +121,7 @@ export const setPaidBy = (bot: string, runtime: string, pick: PayerPick) =>
     send: (idempotencyKey) => api.put<AgentSubscriptionList>(paidByPath(bot), { subscriptions: { [runtime]: pick } }, { idempotencyKey }),
   }).then(() => {
     void queryClient.invalidateQueries({ queryKey: ['settings', 'subscriptions'] });
+    void queryClient.invalidateQueries({ queryKey: paidByQuery(bot, true).queryKey }, { cancelRefetch: false });
   });
 
 /** One agent (GET /api/v2/bots/{slug}): what it is on, why it cannot run, who it reports to. */

@@ -4831,7 +4831,8 @@ class Execution:
 
     def return_payer_claim(self, c, runner_id, aid):
         row = c.execute(
-            "SELECT * FROM attempts WHERE id=? AND runner_id=? AND state='leased'", (aid, runner_id)
+            "SELECT * FROM attempts WHERE id=? AND runner_id=? AND state='leased' AND stop_requested_at IS NULL",
+            (aid, runner_id),
         ).fetchone()
         if row:
             self.hand_back(c, row, SimpleNamespace(undelivered=[], outcome="interrupted"), payer=True)
@@ -6667,7 +6668,11 @@ class Execution:
             "SELECT delivery FROM attempt_subscriptions WHERE attempt_id=? AND runtime=?",
             (aid, row["handed_runtime"]),
         ).fetchone()
-        if payer and not model_subscriptions.payer_ready(c, row["runner_id"], aid, payer["delivery"]):
+        if (
+            not row["stop_requested_at"]
+            and payer
+            and not model_subscriptions.payer_ready(c, row["runner_id"], aid, payer["delivery"])
+        ):
             self.return_payer_claim(c, row["runner_id"], aid)
             return {
                 "started": False,

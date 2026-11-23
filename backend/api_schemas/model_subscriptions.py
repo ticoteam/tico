@@ -30,7 +30,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'description': 'What a person must fix on a plan that still counts, in a few words ("Payment past due"), '
             'else empty',
         },
-        'preview': {'type': 'string', 'description': 'Visible to admins and, for a plan, its owner'},
+        'preview': {'type': 'string', 'description': 'Visible to the provider owner and admins'},
         'revision': 'i',
         'computers': items({'type': 'string'}),
         'usage': {
@@ -60,6 +60,10 @@ SCHEMAS['ModelSubscription'] = obj(
         'added_by': 's',
         'added_by_name': 's',
         'can_remove': 'b',
+        'removal_agents': {
+            'type': 'integer',
+            'description': "Readable agents whose Paid by would be cleared by removal, for viewers who can remove it",
+        },
         'can_assign': {
             'type': 'boolean',
             'description': 'Whether the viewer may assign this provider to an agent they manage',
@@ -181,5 +185,6 @@ SCHEMAS['AgentSubscriptionList'] = obj(
                 }
             ),
         },
-    }
+    },
+    required=['subscriptions'],
 )

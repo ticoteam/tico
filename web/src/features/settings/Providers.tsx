@@ -121,7 +121,7 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
   const badge = providerBadge(s);
   const expandable = !!badge.detail || agents.length > 0;
   const by = plan ? (s.owner_id ? s.owner_name || 'A teammate' : `Added by ${s.added_by_name || 'A teammate'}`) : '';
-  const preview = plan || admin ? s.preview : '';
+  const preview = s.preview;
   const byWhen = s.reconnect_by && !needsReconnect(s) && fmtDate(s.reconnect_by);
   const manage = admin || own;
   const mayRemove = s.can_remove ?? manage;
@@ -186,6 +186,7 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
           onOpenChange={(o) => !o && close()}
           alert
           title={`Remove ${s.name}?`}
+          description={s.removal_agents === undefined ? undefined : `${agentsWord(s.removal_agents)} will lose Paid by.`}
           actions={
             <>
               <Button variant="quiet" onClick={close}>Cancel</Button>

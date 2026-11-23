@@ -7,6 +7,7 @@ import { Menu, MenuGroup, MenuItem, MenuRule } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { ValueButton } from '@/kit/ValueButton';
 import { fmtWhen } from '@/lib';
+import { useFollow } from '@/live/follow';
 import { paidByQuery, setPaidBy, type PayerPick } from './queries';
 
 const TOOLS = { claude: 'Claude', codex: 'Codex', cursor: 'Cursor', musecode: 'Muse Code' };
@@ -68,7 +69,7 @@ function Picker({ bot, tool, payer, pools, editable, showTool }: {
               {allowPool && <MenuItem
                 label={poolLabel(name)}
                 meta={`${plans.length} ${TOOLS[tool]} ${plans.length === 1 ? 'plan' : 'plans'}`}
-                disabled={!editable || !plans.some((s) => s.can_assign)}
+                disabled={!editable || !providers.some((s) => s.can_assign)}
                 on={payer?.kind === 'pool' && payer.person === id}
                 onSelect={() => void save({ kind: 'pool', person: id })}
               />}
@@ -113,7 +114,9 @@ function LastTurn({ turn }: { turn: AgentSubscriptionList['last_turn'] }) {
 export function PaidBy({ bot, runtime, fleet = false }: { bot: string; runtime?: string; fleet?: boolean }) {
   const { data: me } = useQuery(meQuery);
   const active = runtime && isTool(runtime) ? runtime : undefined;
-  const { data } = useQuery({ ...paidByQuery(bot, !fleet), enabled: !fleet || !!active });
+  const payerQuery = paidByQuery(bot, !fleet);
+  useFollow(fleet ? null : { topic: 'runs' }, [payerQuery.queryKey]);
+  const { data } = useQuery({ ...payerQuery, enabled: !fleet || !!active });
   const { data: catalog } = useQuery({ ...subscriptionsQuery, enabled: !fleet || !!active });
   if (!data?.subscriptions || !catalog?.subscriptions) return fleet ? <span className="c-paid-by" /> : null;
   const pools = poolsOf(catalog.subscriptions, me?.id);

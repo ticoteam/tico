@@ -65,7 +65,8 @@ def _last_turn(c, settings, auth, who, bot, chosen):
     for turn in c.execute(
         "SELECT a.id,a.settled_at,m.conversation_id FROM attempts a "
         "LEFT JOIN jobs j ON j.id=a.job_id LEFT JOIN messages m ON m.id=j.message_id "
-        "WHERE a.bot_id=? AND a.settled_at IS NOT NULL ORDER BY a.settled_at DESC,a.id DESC LIMIT 50",
+        "WHERE a.bot_id=? AND a.started_at IS NOT NULL AND a.settled_at IS NOT NULL "
+        "ORDER BY a.settled_at DESC,a.id DESC LIMIT 50",
         (bot,),
     ):
         if not reads_room(turn["conversation_id"]) or not privacy.attempt_readable(c, actor, turn["id"]):

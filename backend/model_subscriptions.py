@@ -2987,15 +2987,20 @@ def install(app, store, auth, mutate, settings):
         ),
     )
     def list_subscriptions(request: Request):
-        from .agent_subscriptions import can_assign
+        from .agent_subscriptions import can_assign, for_removal
 
         who = request.state.identity
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            manages = _may_manage(auth, who)
             subscriptions = listed(c, settings)
+            removal = {}
+            for sub in subscriptions:
+                sub["can_remove"] = _may_manage_provider(auth, who, sub)
+                if sub["can_remove"]:
+                    removal[sub["id"]] = {bot for bot, _ in for_removal(c, sub)}
             bots = {agent["id"] for sub in subscriptions for agent in sub["agents"]}
+            bots.update(bot for affected in removal.values() for bot in affected)
             access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
             assignable = {}
             for sub in subscriptions:
@@ -3007,9 +3012,10 @@ def install(app, store, auth, mutate, settings):
                             owner_of(c, owner)
                         except Problem:
                             assignable[owner] = False
-                sub["can_remove"] = _may_manage_provider(auth, who, sub)
                 sub["can_assign"] = assignable[owner]
-                if not manages and (not owned(sub["kind"]) or sub["owner_id"] != who.actor):
+                if sub["can_remove"]:
+                    sub["removal_agents"] = sum(access[bot]["read"] for bot in removal[sub["id"]])
+                else:
                     sub["preview"] = ""
                     if sub["status_detail"]:
                         sub["status_detail"] = "The provider refused it"

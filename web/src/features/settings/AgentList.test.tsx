@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { run } from '@/actions/run';
-import { queryClient } from '@/data';
+import { keys, queryClient } from '@/data';
 import { agentsQuery, computersQuery as teamComputers, PaidBy } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { dragTo } from '@/test/drag';
@@ -240,12 +240,11 @@ describe('Settings › Providers', () => {
     const mine = { ...plan, owner_name: 'Zoe', can_assign: true };
     const catalog = { kinds: [claude], subscriptions: [
       { ...plan, id: 'other', owner_id: 'human:p2', owner_name: 'Abe', name: 'Other plan', can_assign: false },
-      { ...mine, id: 'mine', name: 'My plan' },
       { ...mine, id: 'key', name: 'My key', kind: 'anthropic_key' as const },
       { ...mine, id: 'codex', name: 'Codex plan', runtime: 'codex' as const, kind: 'codex_login' as const },
     ] };
     queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
-    let subscriptions: Record<string, unknown> = {
+    let subscriptions: Record<string, { kind: string; person?: string; subscription_id?: string } | null> = {
       claude: { kind: 'pool', person: 'human:p2' },
       codex: { kind: 'plan', subscription_id: 'codex' },
     };
@@ -256,11 +255,17 @@ describe('Settings › Providers', () => {
       if (!url.startsWith(payerPath)) return ok({});
       if (method === 'PUT') {
         await saved;
-        const { subscriptions: changed } = sent.at(-1)!.body as { subscriptions: Record<string, unknown> };
+        const { subscriptions: changed } = sent.at(-1)!.body as { subscriptions: typeof subscriptions };
         subscriptions = { ...subscriptions, ...changed };
         if (!subscriptions.claude) delete subscriptions.claude;
       }
-      return ok({ can_edit: true, subscriptions });
+      return ok({
+        can_edit: true,
+        subscriptions,
+        ...(method === 'GET' && {
+          last_turn: { payers: [subscriptions.claude?.kind === 'key' ? 'New payer' : 'Old payer'], at: null, waits: [] },
+        }),
+      });
     });
     show(<PaidBy bot="a1" />, '/team/alpha?tab=settings');
     const picker = await screen.findByRole('button', { name: 'Paid by for Claude' });
@@ -269,6 +274,8 @@ describe('Settings › Providers', () => {
     const own = await screen.findByRole('menuitem', { name: /^Zoe's pool/ });
     const foreign = screen.getByRole('menuitem', { name: /^Abe's pool/ });
     expect(own.compareDocumentPosition(foreign)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(own.textContent).toContain('0 Claude plans');
+    expect(own.getAttribute('aria-disabled')).not.toBe('true');
     expect(foreign.getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('menuitem', { name: /^Other plan/ }).getAttribute('aria-disabled')).toBe('true');
     expect(screen.queryByRole('menuitem', { name: /Codex plan/ })).toBeNull();
@@ -278,6 +285,7 @@ describe('Settings › Providers', () => {
     }]));
     expect(screen.queryByRole('dialog')).toBeNull();
     await act(async () => resolveSave());
+    expect(await screen.findByText('New payer')).toBeTruthy();
     const select = () => screen.getByRole('button', { name: 'Paid by for Claude' });
     await waitFor(() => expect(select().textContent).toBe('My key'));
     fireEvent.click(select());
@@ -285,6 +293,24 @@ describe('Settings › Providers', () => {
     await waitFor(() => expect(select().textContent).toBe('Not set'));
     expect(sent.at(-1)?.body).toEqual({ subscriptions: { claude: null } });
     expect(screen.getByRole('button', { name: 'Paid by for Codex' }).textContent).toBe('Codex plan');
+  });
+
+  it('shows the removal impact before confirming and refreshes cached agent picks', async () => {
+    const catalog = { kinds: [], subscriptions: [{ ...plan, removal_agents: 1 }] };
+    const payer = [...keys.team.paidBy(), 'a1', false];
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    queryClient.setQueryData(payer, { subscriptions: { claude: { kind: 'plan', subscription_id: plan.id } } });
+    serve((url, method) => url === '/api/v2/model-subscriptions'
+      ? ok(sent.some((s) => s.method === 'DELETE') ? { ...catalog, subscriptions: [] } : catalog)
+      : method === 'DELETE' ? ok({ deleted: true }) : undefined);
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove Work plan?', description: '1 agent will lose Paid by.' });
+    expect(sent).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(queryClient.getQueryState(payer)?.isInvalidated).toBe(true));
+    expect(sent).toEqual([{ url: `/api/v2/model-subscriptions/${plan.id}?confirm=1`, method: 'DELETE', body: null }]);
   });
 
   it('shows who paid the last turn independently of the selected pool', async () => {

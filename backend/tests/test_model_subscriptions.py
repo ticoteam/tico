@@ -1736,7 +1736,8 @@ def test_each_subscription_lists_only_visible_agents_that_pick_it_even_when_brok
     on(api, "cpo", "codex", "gpt-6.2-sol")
     m = machine(api)
     assign(api, m, "cpo")
-    plan, spare = add(api, name="Plan A")["id"], add(api, secret=OTHER, name="Plan B")["id"]
+    plan = add(api, name="Plan A", token="cara-test")["id"]
+    spare = add(api, secret=OTHER, name="Plan B", token="cara-test")["id"]
     chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     pick(api, "ops", "claude", plan)
     pick(api, "cpo", "codex", chatgpt)
@@ -1760,9 +1761,15 @@ def test_each_subscription_lists_only_visible_agents_that_pick_it_even_when_brok
     member_rows = {s["id"]: s for s in listed(api, "cara-test")}
     assert ops in {a["id"] for a in member_rows[plan]["agents"]}
     assert all(a["id"] != cpo for s in member_rows.values() for a in s["agents"])
+    assert member_rows[plan]["removal_agents"] == 1
+    pick(api, "ops", "claude", person="cara")
+    member_rows = {s["id"]: s for s in listed(api, "cara-test")}
+    assert member_rows[plan]["removal_agents"] == member_rows[spare]["removal_agents"] == 0
+    assert api.delete(f"/api/v2/model-subscriptions/{spare}", headers=headers("cara-test")).status_code == 200
+    assert next(s for s in listed(api, "cara-test") if s["id"] == plan)["removal_agents"] == 1
 
 
-def test_only_the_plan_owner_and_admins_see_its_preview_and_refusal_detail(api):
+def test_only_provider_owners_and_admins_see_previews_and_refusal_details(api):
     setup(api)
     company(api)
     email = "cara@acme.example"
@@ -1791,12 +1798,20 @@ def test_only_the_plan_owner_and_admins_see_its_preview_and_refusal_detail(api):
         c.execute("UPDATE humans SET name=email WHERE id='ana'")
     assert add(api, name=None)["name"] == "Claude plan"
     key = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")
+    personal_key = add(api, "anthropic_key", secret="sk-ant-api-" + "d" * 24, token="cara-test")
+    with api.app.state.store.transaction() as c:
+        MS._status(c, personal_key["id"], "needs_reconnect", refusal)
+    for token in ("cara-test", "ana-test"):
+        row = next(s for s in listed(api, token) if s["id"] == personal_key["id"])
+        assert row["preview"] == personal_key["preview"] and row["status_detail"] == refusal
     for token in ("ben-test", "ana-test"):
         rows = {s["id"]: s for s in listed(api, token)}
         assert rows[plan["id"]]["owner_name"] == rows[plan["id"]]["added_by_name"] == "A teammate"
         assert rows[key["id"]]["preview"] == (key["preview"] if token == "ana-test" else "")
         if token == "ben-test":
             assert email not in json.dumps(rows[plan["id"]])
+            assert rows[personal_key["id"]]["preview"] == ""
+            assert rows[personal_key["id"]]["status_detail"] == "The provider refused it"
 
 
 def test_the_migration_renames_legacy_login_emails_with_or_without_an_owner(api):

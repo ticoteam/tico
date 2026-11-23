@@ -23,7 +23,7 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { configQuery, pageOwnersQuery, queryClient, quietRoot, QUIET_STALE_MS, write, type PageOwnerRow, type PageOwners } from '@/data';
+import { configQuery, keys, pageOwnersQuery, queryClient, quietRoot, QUIET_STALE_MS, write, type PageOwnerRow, type PageOwners } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
@@ -429,6 +429,9 @@ export const removeSubscription = (id: string) =>
     optimistic: (v: ModelSubscriptionList | undefined) => v && { ...v, subscriptions: v.subscriptions.filter((x) => x.id !== id) },
     // The person has said yes already, so runs on it stop and start fresh without a second question.
     send: (idempotencyKey) => api.delete(`/api/v2/model-subscriptions/${enc(id)}?confirm=1`, { idempotencyKey }),
+  }).then((result) => {
+    void queryClient.invalidateQueries({ queryKey: keys.team.paidBy() });
+    return result;
   });
 
 export const refreshSubscription = (id: string) => api.post(`/api/v2/model-subscriptions/${enc(id)}/usage-refresh`, {});

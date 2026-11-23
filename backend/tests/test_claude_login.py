@@ -3,7 +3,6 @@ plan per account; turns get only an access token in their own file; one computer
 the login and the others get the new token; usage is read on a schedule from Claude's usage endpoint."""
 
 import json
-import time
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
 
@@ -13,36 +12,12 @@ from backend import claude_login as CL
 from backend import model_subscriptions as MS
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, put, runner
+from backend.tests.helpers.claude_login import access, full, refresh
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import TOKEN, add, company, give, on, pick
 
 FULL = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "claude_login_v1", "attempt_credentials_v1"]
 OLD = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"]
-
-
-def access(n):
-    return f"sk-ant-oat01-access-{n}-" + "x" * 24
-
-
-def refresh(n):
-    return f"sk-ant-ort01-refresh-{n}-" + "y" * 24
-
-
-def full(email="ana@acme.example", n=1, minutes=8 * 60, days=29):
-    now = int(time.time() * 1000)
-    return json.dumps(
-        {
-            "claudeAiOauth": {
-                "accessToken": access(n),
-                "refreshToken": refresh(n),
-                "expiresAt": now + minutes * 60_000,
-                "refreshTokenExpiresAt": now + days * 86_400_000,
-                "scopes": ["user:inference", "user:profile"],
-                "subscriptionType": "max",
-            },
-            "oauthAccount": {"emailAddress": email, "organizationUuid": "org-acme"},
-        }
-    )
 
 
 def computer(api, caps=FULL, label="Linux box", bot=None, operator="ana"):

@@ -18,8 +18,8 @@ and the meetings model. Open **Usage → Limits** for the [company turn levels](
 Everyone can see the pools and usage badges. **Picked by** counts the agents the viewer can read that select
 the provider or its pool. Providers opens **Your pool**
 first and folds other people's pools by default. Older plans appear under **No owner** and shared keys under
-**Company keys**. Plan owners and admins see the plan's account preview and detailed refusal messages. Only admins
-see API key previews in the list. A provider capacity hold shows **Busy** until it ends. **Next** marks an eligible
+**Company keys**. Provider owners and admins see credential previews and detailed refusal messages.
+A provider capacity hold shows **Busy** until it ends. **Next** marks an eligible
 spare for an agent currently using another plan from the pool. Old links to Models or Subscriptions open Providers.
 
 ## Subscriptions
@@ -45,9 +45,10 @@ fallback on an unset tool. It skips automatic fallbacks for agents with a **Paid
 
 Changing **Paid by** takes effect at the next turn. Current runners install the turn's own credential and stop if
 installation fails. A placement or move by an agent manager clears selections owned by someone else
-unless that manager is an admin. The automatic placement sweep keeps existing choices and clears a foreign pool choice
-if the destination belongs to someone other than the agent's owner or the pool's owner. Removing a provider
-clears exact picks and any pool picks it empties for that tool, and restarts affected turns.
+unless that manager is an admin. The automatic placement sweep keeps existing choices and skips a computer if it
+belongs to someone other than the agent's owner or a selected payer's owner. The Remove confirmation counts the
+readable agents whose Paid by will be cleared. Removing a provider clears exact picks and any pool picks it empties
+for that tool, and restarts affected turns.
 When someone leaves, Tico removes their providers, cancels their pending
 Connect attempts and shows an admin the agents whose selections became unset.
 

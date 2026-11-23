@@ -12,6 +12,7 @@ from backend.models import Claim
 from backend.gateway_connection import MODEL_PREFIX
 from backend.store import H, Problem, encode
 from backend.tests.helpers.api import assign, claim, get, headers, post, put, runner
+from backend.tests.helpers.claude_login import full
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import TOKEN, add, codex_file, company, machine, on
 
@@ -480,6 +481,18 @@ def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(
     turn = claim(api, box, "ops")
     assert turn["attempt_credential"]["id"] == first
     finish(api, box, turn, {"runtime": "claude", "model": "claude-sonnet-5-5", "billing": "subscription"})
+    post(api, "chat/ops", {"text": "Lease another turn without starting it."})
+    unstarted = claim(api, box, "ops")
+    assert unstarted["attempt_credential"]["id"] == first
+    post(api, "bots/ops/stop", {"run_id": unstarted["id"]})
+    refused = post(api, f"attempts/{unstarted['id']}/started", {"thread_id": "stopped"}, box["token"], expected=409)
+    assert refused["error"]["code"] == "start_wait"
+    post(
+        api, f"attempts/{unstarted['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, box["token"]
+    )
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (unstarted["job_id"],)).fetchone()[0] == "canceled"
+        assert c.execute("SELECT settled_at FROM attempts WHERE id=?", (unstarted["id"],)).fetchone()[0]
     put(api, "bots/ops/subscriptions", {"subscriptions": {"claude": None}})
     detail = get(api, "bots/ops/subscriptions?last_turn=true")
     label = next(s["name"] for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == first)
@@ -689,27 +702,32 @@ def test_first_placement_by_comanager_only_keeps_default_pool_on_owners_computer
         assert bool(paid_by.picks(c, "ops")) == (runner_owner == "ana")
 
 
-@pytest.mark.parametrize("runner_owner", ["cara", "ana", "ben"])
-def test_placement_sweep_keeps_explicit_picks_except_a_foreign_pool_on_a_third_party_computer(api, runner_owner):
+@pytest.mark.parametrize(
+    ("kind", "runner_owner"), [("pool", "ben"), ("plan", "ben"), ("key", "ben"), ("key", "ana"), ("plan", "cara")]
+)
+def test_placement_sweep_preserves_foreign_picks_and_skips_third_party_computers(api, kind, runner_owner):
     from backend import placement
     from backend.tests.helpers.model_subscriptions import pick
 
     setup(api)
-    add(api)
-    key = add(api, "openai_key", "sk-acme-fake-test-key-654321", token="cara-test")["id"]
+    tool = "codex" if kind == "key" else "claude"
+    sid = add(api, "openai_key", "sk-acme-fake-test-key-654321")["id"] if kind == "key" else add(api)["id"]
     box = runner(api, operator=runner_owner)
     store = api.app.state.store
     with store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara' WHERE bot='ops'")
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (box["runner_id"],))
-    pick(api, "ops", "claude", person="ana")
-    pick(api, "ops", "codex", key, kind="key", token="cara-test")
+    if kind == "pool":
+        pick(api, "ops", tool, person="ana")
+    else:
+        pick(api, "ops", tool, sid, kind=kind)
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE id='ops'")
-        assert dict(placement.sweep(c, api.app.state.execution))["ops"]["runner_id"] == box["runner_id"]
-        choices = paid_by.picks(c, "ops")
-        assert choices["codex"]["subscription_id"] == key
-        assert (choices.get("claude") or {}).get("person") == (None if runner_owner == "ben" else "human:ana")
+        placed = dict(placement.sweep(c, api.app.state.execution)).get("ops")
+        assert (placed or {}).get("runner_id") == (None if runner_owner == "ben" else box["runner_id"])
+        choice = paid_by.picks(c, "ops")[tool]
+        assert choice["kind"] == kind and choice["person"] == "human:ana"
+        assert choice["subscription_id"] == ("" if kind == "pool" else sid)
 
 
 def test_member_restore_checks_a_foreign_plan_before_placing_the_agent(api):
@@ -805,8 +823,6 @@ def test_pool_prefers_measured_plan_and_uses_the_latest_reading(api):
 
 
 def test_claim_batches_payer_and_refresh_park_rows_across_queued_agents(api):
-    from backend.tests.test_claude_login import full
-
     setup(api)
     company(api)
     plan = add(api, "claude_login", full())["id"]
@@ -1048,6 +1064,8 @@ def test_revoking_a_converted_parent_fences_a_lease_even_after_the_pick_changes(
         c.execute("UPDATE credential_grants SET revoked_at=? WHERE id='old-parent'", (H.now(),))
         paid_by.revoke_parent(c, "human:ana", "old-parent")
     assert claim(api, box, "ops", key="parent-grant-attempt") is None
+    assert post(api, f"attempts/{turn['id']}/renew", {}, box["token"])["stop"]
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 0}, box["token"])
     with store.read() as c:
         assert c.execute("SELECT state FROM jobs WHERE id=?", (turn["job_id"],)).fetchone()[0] == "queued"
         assert not paid_by.picks(c, bot)

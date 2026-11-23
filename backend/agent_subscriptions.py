@@ -107,25 +107,27 @@ def clear_for_move(
     if MS._may_manage(auth, who):
         return []
     if who.role == "system":
-        if not seed_runner_owner:
-            return []  # The sweep can keep existing picks on company cloud.
-        # A sweep keeps existing assignments of payers except foreign pools going to a third party's computer.
-        condition = (
-            "kind='pool' AND person<>'human:'||? AND NOT EXISTS ("
-            "SELECT 1 FROM bot_config WHERE bot=? AND (owner_id=? OR person='human:'||owner_id))"
-        )
-        args = (seed_runner_owner, bot, seed_runner_owner)
-    else:
-        # The default pool may go to its owner's computer (or company cloud) on first placement.
-        condition = (
-            "person<>? AND NOT ("
-            "? IS NOT NULL AND kind='pool' AND (?='' OR person='human:'||?) "
-            "AND person=(SELECT 'human:'||owner_id FROM bot_config WHERE bot=?) "
-            "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.target=agent_subscriptions.bot "
-            "AND e.action IN ('agent_subscription.changed','bot.archived','bot.assigned') "
-            "AND (e.action<>'agent_subscription.changed' OR json_extract(e.detail,'$.runtime')=agent_subscriptions.runtime)))"
-        )
-        args = (who.actor, seed_runner_owner, seed_runner_owner, seed_runner_owner, bot)
+        if (
+            seed_runner_owner
+            and c.execute(
+                "SELECT 1 FROM agent_subscriptions p JOIN bot_config b ON b.bot=p.bot "
+                "WHERE p.bot=? AND p.person NOT IN ('','human:'||?,'human:'||coalesce(b.owner_id,'')) "
+                "AND coalesce(b.owner_id,'')<>? LIMIT 1",
+                (bot, seed_runner_owner, seed_runner_owner),
+            ).fetchone()
+        ):
+            raise Problem("payer_placement", "Choose a computer approved for this agent's Paid by", 409)
+        return []
+    # The default pool may go to its owner's computer (or company cloud) on first placement.
+    condition = (
+        "person<>? AND NOT ("
+        "? IS NOT NULL AND kind='pool' AND (?='' OR person='human:'||?) "
+        "AND person=(SELECT 'human:'||owner_id FROM bot_config WHERE bot=?) "
+        "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.target=agent_subscriptions.bot "
+        "AND e.action IN ('agent_subscription.changed','bot.archived','bot.assigned') "
+        "AND (e.action<>'agent_subscription.changed' OR json_extract(e.detail,'$.runtime')=agent_subscriptions.runtime)))"
+    )
+    args = (who.actor, seed_runner_owner, seed_runner_owner, seed_runner_owner, bot)
     removed = [
         row[0]
         for row in c.execute(
