@@ -645,6 +645,46 @@ def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_person
     assert claim(api, computer, 'finance') is not None
 
 
+@pytest.mark.parametrize('hold', ['memory', 'not reporting'])
+@pytest.mark.parametrize('person', [False, True], ids=['bot-message', 'person-message'])
+def test_company_waiter_honors_the_computers_hold_for_that_job(api, hold, person):
+    import time
+
+    from backend.tests.helpers.org_turns import one_person
+
+    one_person(api)
+    post(api, 'settings/turn-levels', {'warning_per_person': 1, 'stop_per_person': 2})
+    older = waiters(api, n=0, running=2)
+    younger = runner(api)
+    for computer, bot in [(older, 'finance'), (younger, 'doc-updater')]:
+        assign(api, computer, bot)
+        ready(api, computer, [bot])
+        post(api, 'chat/' + bot, {'text': 'Waiting for company capacity'})
+        assert claim(api, computer, bot) is None
+    store = api.app.state.store
+    with store.transaction() as c:
+        if not person:
+            c.execute(
+                "UPDATE messages SET sender_id='bot:ops' WHERE id IN (SELECT message_id FROM jobs WHERE bot_id='finance')"
+            )
+        c.execute(
+            "UPDATE org_turn_waits SET created_at=? WHERE job_id IN (SELECT id FROM jobs WHERE bot_id='finance')",
+            (H.shift(H.now(), minutes=-1),),
+        )
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-0'")
+        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-0'")
+    assert claim(api, younger, 'doc-updater') is None  # the older waiter goes first while its computer can start
+    if hold == 'memory':
+        memory(api, older, 0.9)
+    else:
+        memory(api, older, 0.3, at=int(time.time()) // 60 * 60 - 300)
+    if person:
+        assert claim(api, younger, 'doc-updater') is None
+        assert claim(api, older, 'finance') is not None
+    else:
+        assert claim(api, younger, 'doc-updater') is not None
+
+
 def test_stale_sample_admits_again_once_diagnostics_are_off(api):
     """Diagnostics off keeps the start rules as they were: a stale sample holds nothing."""
     import time
