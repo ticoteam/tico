@@ -136,7 +136,7 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
 
 /** A file open in the page sheet (more.js fileBar): back to Details, its name, which of the task's files it is, and its
     ⋯ (Download, its versions, Compare, Remove). The address keeps the version (`v`) and the one compared with (`vs`). */
-export function FileView({ t, file, full, flow }: { t: TaskData; file: string; full?: string; flow: boolean }) {
+export function FileView({ t, file, full }: { t: TaskData; file: string; full?: string }) {
   const files = useQuery(taskFilesQuery(t.id));
   const me = useQuery(meQuery);
   const search = useSearch({ strict: false }) as TaskSearch;
@@ -145,9 +145,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const list = (files.data ?? []).filter((f) => !f.archived);
   const i = list.findIndex((f) => f.id === file);
   const f = (files.data ?? []).find((x) => x.id === file);
-  const details = tabAddress(t, DETAILS, flow);
-  const at = (id: string) => (flow ? { tab: DETAILS, file: id } : { file: id });
-  const back = flow ? { tab: DETAILS } : {};
+  const details = tabAddress(t, DETAILS);
   const current = f && currentOf(f);
   const v = (search.v && f?.versions.find((x) => x.n === search.v)) || current;
   const versions = [...(f?.versions ?? [])].sort((a, b) => b.n - a.n);
@@ -167,7 +165,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   const step = (d: number, label: string, flip: boolean) => {
     const to = list[i + d];
     return to ? (
-      <Go to={details.to} search={at(to.id)} className="ib ib-sm" aria-label={label} title={label}>
+      <Go to={details} search={{ file: to.id }} className="ib ib-sm" aria-label={label} title={label}>
         <Icon name="chevdown" className={flip ? 'flip' : undefined} />
       </Go>
     ) : (
@@ -181,7 +179,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
     const r = await run('task.archiveFile', { task: t.id, file: x.id, archived: true }, { via: 'click' });
     if (!r.ok) return void toast(failedToast(r));
     toast({ text: 'Removed', name: x.title || x.name, action: { label: 'Undo', run: () => void run('task.archiveFile', { task: t.id, file: x.id, archived: false }, { via: 'click' }).then((u) => u.ok || toast(failedToast(u))) } });
-    void navigate({ to: details.to as never, search: back as never });
+    void navigate({ to: details as never });
   };
   // Restore clears each flag that archived it, a page's own and its file's; the server says who may.
   const mayRestore = !!f?.can_restore;
@@ -224,7 +222,7 @@ export function FileView({ t, file, full, flow }: { t: TaskData; file: string; f
   return (
     <>
       <div className="fv-bar">
-        <Go to={details.to} search={back} className="ib ib-sm" aria-label="Back to Details" title="Back to Details">
+        <Go to={details} className="ib ib-sm" aria-label="Back to Details" title="Back to Details">
           <Icon name="chevron" className="flip" />
         </Go>
         <b>{f ? f.title || f.name : 'File'}</b>

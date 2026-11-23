@@ -1,17 +1,9 @@
-import { createFileRoute } from '@tanstack/react-router';
-import { TaskPage } from '@/features/task/exports';
-import { loadTask, taskSearch } from '@/features/task/routing';
+import { createFileRoute, redirect } from '@tanstack/react-router';
 
-/* `/flow/<n>`: the task inside Flow, with Flow's previous and next. The tab is in the search: `?tab=details`. */
+/* An old Flow link to a task: the task's own address, with its tab, ask, version and chat. */
 export const Route = createFileRoute('/flow/$task')({
-  validateSearch: taskSearch,
-  loaderDeps: ({ search }) => ({ tab: search.tab }),
-  loader: ({ params, deps, location, preload, context: { queryClient } }) => loadTask(queryClient, params.task, deps.tab, !preload && !('chat' in location.search)),
-  component: FlowTaskRoute,
+  beforeLoad: ({ params, search }) => {
+    throw redirect({ to: '/task/$task', params, search: search as never, replace: true });
+  },
+  component: () => null,
 });
-
-function FlowTaskRoute() {
-  const { task } = Route.useParams();
-  const { tab, file } = Route.useSearch();
-  return <TaskPage task={task} tab={tab} file={file} flow />;
-}

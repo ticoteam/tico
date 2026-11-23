@@ -51,14 +51,14 @@ describe('Frame', () => {
 
   it('on a 1440 laptop, opening a task shows the task: Tico collapses to its edge, the task’s chat stays', () => {
     resize(1440);
-    render(<Frame {...slots} arrangement="task" chat={<Sheet kind="chat" label="The task's chat" />} list={<nav className="pane nav list" aria-label="Flow" />} />);
+    render(<Frame {...slots} arrangement="task" chat={<Sheet kind="chat" label="The task's chat" />} list={<nav className="pane nav list" aria-label="Engineering" />} />);
     const place = (id: string) => document.querySelector<HTMLElement>(`[data-sheet="${id}"]`)!;
     expect(place('page').dataset.shut).toBeUndefined();
     expect(screen.getByRole('main', { name: 'Tasks' })).toBeTruthy();
     expect(place('tico').dataset.shut).toBe('true');
     expect(screen.getByRole('button', { name: 'Open Tico' })).toBeTruthy();
     expect(screen.getByRole('complementary', { name: "The task's chat" })).toBeTruthy();
-    expect(screen.getByRole('navigation', { name: 'Flow' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Engineering' })).toBeTruthy();
     expect(['tico', 'list', 'chat', 'page'].map(id => place(id).style.zIndex)).toEqual(['4', '3', '2', '1']);
   });
 

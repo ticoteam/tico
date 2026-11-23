@@ -55,15 +55,21 @@ export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<bool
   return found.some(Boolean);
 }
 
-/** Whether anything on a task waits on the person now, from what is already read: its own ask, or an email's OK hung
-    on it whose email is still to go out. */
-export function waitsNow(client: QueryClient, id: string): boolean {
+/** Whether a ❓ on the task waits on `me` (its wait is `qmark:<id>`, naming them). */
+const questionFor = (t: Pick<TaskData, 'waits'>, me: string | undefined): boolean =>
+  !!me && !!t.waits?.some((w) => w.state === 'person' && w.who === me && !!w.requirement_id?.startsWith('qmark:'));
+
+/** What on a task waits on the person `me` now, from what is already read: an ask (its own, or an email's OK hung on it
+    whose email is still to go out), else a ❓ to them, else nothing. */
+export function waitsNow(client: QueryClient, id: string, me: string | undefined): 'ask' | 'question' | null {
   const t = client.getQueryData(taskDetailQuery(id).queryKey);
-  if (!t) return false;
-  if (decisionOf(t)) return true;
-  return sendTasksOf(t).some((sid) => {
-    const sub = client.getQueryData(taskDetailQuery(sid).queryKey);
-    const send = sub && emailOf(decisionOf(sub));
-    return !!sub && !!send && sendToGo(sub, send);
-  });
+  if (!t) return null;
+  const asks =
+    !!decisionOf(t) ||
+    sendTasksOf(t).some((sid) => {
+      const sub = client.getQueryData(taskDetailQuery(sid).queryKey);
+      const send = sub && emailOf(decisionOf(sub));
+      return !!sub && !!send && sendToGo(sub, send);
+    });
+  return asks ? 'ask' : questionFor(t, me) ? 'question' : null;
 }

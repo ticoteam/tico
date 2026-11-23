@@ -1,13 +1,13 @@
-import { keepPreviousData, queryOptions, useQuery, type QueryKey } from '@tanstack/react-query';
+import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-query';
 import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
-import { flowQuery, pipelinesQuery, useFlowGroups } from '@/features/tasks/routing';
+import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
    and pages it shows (under the detail key, re-read when the stream says its files changed), the stages it can move
-   to, and what waits on the person (Flow's next and previous). Every change is a write shown first. */
+   to. Every change is a write shown first. */
 
 quietRoot('flow');
 quietRoot('pipelines');
@@ -107,17 +107,6 @@ export const retiredStagesQuery = (id: string) =>
     queryFn: async ({ signal }) => (await api.get<PipelineSettingsResult>(`/api/v2/pipelines/${enc(id)}`, { signal })).pipeline.stages,
   });
 
-/** The tasks that wait on the person, in Flow's order: Flow's next and previous. The same read as Flow's list (GET
-    /api/v2/needs-you, one of the slowest), so a task opened from Flow does not read it a second time. */
-export function useWaitingTasks(enabled: boolean) {
-  const waiting = useQuery({ ...flowQuery, enabled });
-  const groups = useFlowGroups(enabled ? waiting.data?.items ?? [] : []);
-  return {
-    rows: groups.flatMap((g) => g.items.map(({ id, number, pipeline_id }) => ({ id, number, pipeline_id }))),
-    read: waiting.isSuccess,
-  };
-}
-
 /* ---------------------------------------------------------------- writes */
 
 type Fields = Partial<TaskData>;
@@ -196,7 +185,7 @@ export const snoozeTask = (id: string, until: string | null) =>
     ? change(id, { snoozed: true }, (idem) => post(`${taskPath(id)}/snooze`, { until }, idem))
     : change(id, { snoozed: false, snooze: null }, (idem) => post(`${taskPath(id)}/unsnooze`, {}, idem));
 
-/** Approve or ask changes on one requirement. The row leaves Flow at once and comes back if the server refuses.
+/** Approve or ask changes on one requirement. The row leaves Needs you at once and comes back if the server refuses.
     `shown` is the hash of what the person was shown (decisionShownQuery): an OK bound to it is given with it; null
     answers a stage's own OK, which has no grant, with the page version it was asked on (ui/app/decide.ts). */
 /** The id an answer shows under while it is sent: the server's own takes its place (answeringOf). */
@@ -214,7 +203,7 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     const f = cur as { count?: number; items?: { id: string }[]; requests?: unknown[] } | undefined;
     if (!f?.items) return cur;
     const items = f.items.filter((w) => w.id !== id);
-    // Flow's requests (access, key, key-drop) count too: answering a task's ask leaves them waiting.
+    // Needs you's requests (access, key, key-drop) count too: answering a task's ask leaves them waiting.
     return { ...f, items, count: items.length + (f.requests?.length ?? 0) };
   };
   const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
@@ -317,11 +306,11 @@ export const decisionShownQuery = (task: string, rid: string, version: number, s
   });
 
 /** Request changes (plan/approvals.html): the request is answered `no` with the person's words, which marks it Changes
-    asked and takes it out of Flow until a new version. The server posts the words in the task's chat ("<Name> sent
+    asked and takes it out of Needs you until a new version. The server posts the words in the task's chat ("<Name> sent
     this back: <note>"), so the agent hears them once. */
 export const requestChanges = (id: string, rid: string, note: string, key?: AnswerKey): Promise<TaskResult> => answerAsk(id, rid, 'no', note, undefined, key);
 
-/** Take an answer back (POST /api/v2/answers/{aid}/undo): the task is read again, and Flow with it. */
+/** Take an answer back (POST /api/v2/answers/{aid}/undo): the task is read again, and Needs you with it. */
 export async function undoAnswer(id: string, answer: string): Promise<TaskResult> {
   const r = await api.post<TaskResult>(`/api/v2/answers/${enc(answer)}/undo`, {});
   queryClient.setQueryData(keys.tasks.detail(id), settled(id)(queryClient.getQueryData(keys.tasks.detail(id)), r));
@@ -784,9 +773,9 @@ export const wordQuery = (url: string) =>
 /* ---------------------------------------------------------------- requests in Needs you */
 
 /** Answer an access request, a key card or a key-drop proposal from Needs you, through its own route: the row stays,
-    busy, until the server has taken it, then leaves Flow; every other copy of it settles on the server. */
+    busy, until the server has taken it, then leaves Needs you; every other copy of it settles on the server. */
 function answerRequest<T>(item: string, send: (idem: string) => Promise<T>, taken: (out: T) => boolean = () => true): Promise<T> {
-  // Read Flow again once answered, refused or not: one answer can settle other cards too (another copy, a Read request).
+  // Read Needs you again once answered, refused or not: one answer can settle other cards too (another copy, a Read request).
   // A grant or a key changes Tools as well: its list, a vendor's access lists and the tool's own page (all under
   // `tools`).
   const again = () => {

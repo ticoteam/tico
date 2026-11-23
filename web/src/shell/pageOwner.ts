@@ -4,7 +4,7 @@ import { usePref } from '@/prefs';
    (backend/page_owners.py check_from), and who answers in the shell's Agent bar:
    - 'page': a company page, owned by backend/page_owners.py PAGES[page] (an item's own owner first, then the page's,
      then the General Manager);
-   - 'tico': a personal page (Calendar, Mail, Needs you, Learned, Account, Flow, your threads): its chat is Tico itself;
+   - 'tico': a personal page (Calendar, Mail, Needs you, Learned, Account, your threads): its chat is Tico itself;
    - null: the page is a chat already (a teammate's page, a thread, a task, a call) or not a page (the style guide).
    Every route maps here; web/src/shell/pageOwner.test.ts walks them all. */
 
@@ -74,8 +74,8 @@ function mapped(path: string): PageAt {
       return page('tasks', 'Tasks', { kind: 'pipeline', id: a });
     case 'task':
       return a ? chat('task', 'Task', { kind: 'task', id: a }) : page('tasks', 'Tasks');
-    case 'flow':
-      return a ? chat('task', 'Task', { kind: 'task', id: a }) : tico('flow', 'Needs you');
+    case 'needs-you':
+      return tico('needs-you', 'Needs you');
     case 'roadmap':
       return page('roadmap', 'Roadmap');
     case 'updates':

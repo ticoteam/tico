@@ -10,7 +10,6 @@ import { Pill } from '@/kit/Pill';
 import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { askOf, changesAskedOf, decisionName, decisionOf, effectOf, emailOf, failedToast, heldUntil, personOf, reviewOf, sendTitle } from './model';
-import { answered } from './answered';
 import { AskCard, Docked, useAnswering } from './AskCard';
 import { HeldDecision, isRuleReview } from './Held';
 import { StoppedDecision } from './Stopped';
@@ -24,8 +23,6 @@ import { Facts, LabelValue } from '@/kit/LabelValue';
 
 export interface DecisionProps {
   t: TaskData;
-  /** Opened from Flow: once approved, the next task that waits on the person opens. */
-  flow: boolean;
   /** The page's own dock (a phone's bottom); on a computer the box is in the task's chat. */
   dock?: boolean;
   /** Told while "What should change?" is open: the chat's own message box steps aside, so there is one place to type. */
@@ -40,7 +37,7 @@ export interface DecisionProps {
 /** The decision while something waits on the person, or "Changes asked" once they asked for changes. An answer is shown
     first, which takes the request away; the box is held through the send, and after a refusal until the task's truth
     is back, so it can still say why. */
-export function Decision({ t, flow, dock = false, onAsking, email, requirement }: DecisionProps) {
+export function Decision({ t, dock = false, onAsking, email, requirement }: DecisionProps) {
   const me = useQuery(meQuery).data?.id;
   const [held, setHeld] = useState<{ r: TaskRequirement; sending: boolean } | null>(null);
   const live = requirement && !email ? askOf(t, requirement) : decisionOf(t, email);
@@ -52,12 +49,12 @@ export function Decision({ t, flow, dock = false, onAsking, email, requirement }
   // waits on its Release (Stopped.tsx). An email tab shows only that email's own decision.
   if (!r && !asked) {
     if (typeof email === 'string') return null;
-    if (isRuleReview(t)) return <HeldDecision t={t} flow={flow} dock={dock} />;
+    if (isRuleReview(t)) return <HeldDecision t={t} dock={dock} />;
     // Only while the notice is open: Tico's own release closes it, and the stream says so before the task is read again.
-    return t.stopped_agent && t.status === 'open' ? <StoppedDecision t={t} flow={flow} dock={dock} /> : null;
+    return t.stopped_agent && t.status === 'open' ? <StoppedDecision t={t} dock={dock} /> : null;
   }
   const box = r ? (
-    <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} flow={flow} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
+    <Answer key={`${t.id}:${r.requirement_id}`} t={t} r={r} onAsking={onAsking} hold={(x, sending = false) => setHeld(x && { r: x, sending })} />
   ) : (
     <Asked t={t} r={asked as TaskRequirement} />
   );
@@ -107,17 +104,16 @@ const pageKey = (r: TaskRequirement) =>
 interface AnswerProps {
   t: TaskData;
   r: TaskRequirement;
-  flow: boolean;
   onAsking?: (asking: boolean) => void;
   /** Told which requirement is being answered (`sending` while it is sent), and null once the answer is taken. */
   hold?: (r: TaskRequirement | null, sending?: boolean) => void;
 }
 
 /** The decision itself: the thing's name, who asks, what Approve does, then Request changes and Approve. */
-export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
+export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   const approve = useAction('task.approve');
   const request = useAction('task.requestChanges');
-  const { error, setError, here, nextUp, refused, moveOn } = useAnswering(t, flow);
+  const { error, setError, here, refused, moveOn } = useAnswering();
   const shown = useQuery(decisionShownQuery(t.id, r.requirement_id, t.version, emailOf(r), !!r.shows?.some((s) => s.startsWith('outbound:'))));
   const { name, effect, send, recipients, files } = useNamed(t, r);
   const [asking, setAsking] = useState(false);
@@ -145,7 +141,6 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
   const onApprove = async () => {
     setError('');
     setSeen(key);
-    const next = nextUp();
     hold?.(r, true);
     const drawn = answerKey(r, t.visit_id); // the version and visit this card shows, never newer ones read since
     const res = await approve.run({ task: t.id, requirement: r.requirement_id, shown: preview?.hash ?? null, ...(drawn && { key: drawn }) });
@@ -171,7 +166,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
           },
         }),
       });
-    moveOn(next);
+    moveOn();
   };
 
   const onSend = async () => {
@@ -182,7 +177,7 @@ export function Answer({ t, r, flow, onAsking, hold }: AnswerProps) {
     if (!res.ok) return refused(res);
     setAsking(false);
     setNote('');
-    if (!flow && here.current) answered();
+    moveOn();
   };
 
   return (
@@ -330,7 +325,7 @@ function ActionShown({ action }: { action: BoundAction }) {
   );
 }
 
-/** Changes asked: the request waits on the agent's new version, and is out of the person's Flow until then. */
+/** Changes asked: the request waits on the agent's new version, and is out of the person's Needs you until then. */
 function Asked({ t, r }: { t: TaskData; r: TaskRequirement }) {
   const { name } = useNamed(t, r);
   const at = clock(r.answer?.at);

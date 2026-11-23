@@ -11,7 +11,7 @@ import { forgetPlaces, notePlace } from '@/lib';
 import { holdName } from './Held';
 import type { Hold } from './holds';
 import type { TaskData } from './queries';
-import { TaskChat, TaskPage } from './TaskPage';
+import { TaskChat } from './TaskPage';
 
 /* A rule's review task ("Held by: <rule>"): the decision box shows what the rule held and is answered with Send anyway
    or Keep blocked (POST /api/v2/rule-holds/<id>/send and /keep). Made-up rows only; every answer is stubbed. */
@@ -195,14 +195,6 @@ describe('a held message on its review task', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/rule-holds/h2/send', body: { nonce: 'n-2' } }));
   });
 
-  it('in Flow, opens the next item once the last hold is decided', async () => {
-    reply = (url, method) => (method === 'POST' && url.endsWith('/rule-holds/h1/keep') ? { body: opened({ state: 'kept' }) } : null);
-    const router = show(<TaskPage task="12" flow />, '/flow/12');
-    const box = await loaded();
-    holds = [summary({ state: 'kept' })];
-    fireEvent.click(within(box).getByRole('button', { name: 'Keep blocked' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
-  });
 });
 
 describe('Send anyway is only drawn over what the person can read', () => {

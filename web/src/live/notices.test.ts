@@ -95,11 +95,11 @@ describe('asks', () => {
     expect(FakeNote.shown).toHaveLength(0);
   });
 
-  it('a click opens the task in Flow', async () => {
+  it('a click opens the task', async () => {
     list = [ask('a1')];
     await needs('a1');
     FakeNote.shown[0]!.onclick!();
-    await vi.waitFor(() => expect(go).toHaveBeenCalledWith('shell.goTo', { to: '/flow/12' }, { via: 'click' }));
+    await vi.waitFor(() => expect(go).toHaveBeenCalledWith('shell.goTo', { to: '/task/12' }, { via: 'click' }));
   });
 });
 
@@ -144,7 +144,7 @@ describe('in the desktop app', () => {
     await needs('a1');
     expect(titles()).toEqual(['Fernhill · Needs you']);
     FakeNote.shown[0]!.onclick!();
-    await vi.waitFor(() => expect(order).toEqual(['switch co1', 'go /flow/12']));
+    await vi.waitFor(() => expect(order).toEqual(['switch co1', 'go /task/12']));
   });
 
   it('one company: the title alone', async () => {

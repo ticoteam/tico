@@ -11,11 +11,11 @@ import { TaskRow } from '@/kit/Row';
 import { useFollow } from '@/live/follow';
 import { List, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
-import { Blocks, Face, FlowButton } from './parts';
-import { flowCountQuery, flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useFlowGroups, type FlowItem, type FlowRequest } from './queries';
+import { Blocks, Face } from './parts';
+import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useFlowGroups, type FlowItem, type FlowRequest } from './queries';
 import './tasks.css';
 
-const TABS = [{ label: 'Mine', to: '/flow' }, { label: 'All', to: '/flow', search: { view: 'all' } }] as const;
+const TABS = [{ label: 'Mine', to: '/needs-you' }, { label: 'All', to: '/needs-you', search: { view: 'all' } }] as const;
 
 function OriginDetails({ it }: { it: FlowItem }) {
   const origin = useQuery(flowOriginQuery(it.id));
@@ -43,7 +43,7 @@ function FlowRow({ it, mine }: { it: FlowItem; mine: boolean }) {
     <div className="flow-row">
       <TaskRow
         title={title}
-        href={`/${mine ? 'flow' : 'task'}/${it.number ?? encodeURIComponent(it.id)}`}
+        href={`/task/${it.number ?? encodeURIComponent(it.id)}`}
         target={`task:${it.number ?? it.id}`}
         mark={mine && <FlowMark />}
         late={it.late}
@@ -119,7 +119,7 @@ function SnoozedAsk({ id, title, href, until }: { id: string; title: string; hre
 function SnoozedAsks() {
   const read = useQuery(flowSnoozedAsksQuery);
   if (read.isPending) return <p className="flow-shelf-state" role="status">Loading asks</p>;
-  if (read.isError) return <Button variant="quiet" onClick={() => void read.refetch()}>Retry loading asks</Button>;
+  if (read.isError) return <Button variant="quiet" onClick={() => void read.refetch()}>Try again</Button>;
   if (!read.data.items.length) return null;
   return (
     <Section name="Asks" count={read.data.items.length}>
@@ -159,19 +159,19 @@ function Mine() {
   );
 }
 
-export function FlowPage() {
+/** Needs you: what waits on you (Mine), or every task anyone could claim (All). A row opens the task, and closing it
+    comes back here. */
+export function NeedsYouPage() {
   useFollow({ allTasks: true });
   const all = useLocation({ select: (l) => (l.search as { view?: string }).view === 'all' });
-  const { data: count = 0 } = useQuery(flowCountQuery);
   const me = useQuery(meQuery).data?.id;
   const read = useFlowList(undefined, 'open', all);
   const [hideArchive, setHideArchive] = useState(false);
 
   return (
     <List
-      title="Tasks"
-      path="/flow"
-      actions={<FlowButton on count={count} />}
+      title="Needs you"
+      path="/needs-you"
       tabs={TABS}
       tabsAfter={<Button variant="quiet" onClick={() => setHideArchive(!hideArchive)}>{hideArchive ? 'Show archive' : 'Hide archive'}</Button>}
       state={all && read.isPending ? 'loading' : all && read.isLoadingError ? 'fault' : 'ready'}

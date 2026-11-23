@@ -67,11 +67,6 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
       if (top === 'tasks' && a && a !== 'all') add(n.pipelines?.find((p) => p.id === a)?.name ?? '', at('tasks', a));
       if (top === 'tasks' && b === 'edit') add('Edit', at('tasks', a!, 'edit'));
       break;
-    case 'flow':
-      add('Flow', '/flow');
-      // Flow's own page is Tasks with Flow pressed: its h1 says Tasks
-      if (!a) page = '';
-      break;
     case 'roadmap':
       add('Tasks', '/tasks');
       add('Roadmap', '/roadmap');

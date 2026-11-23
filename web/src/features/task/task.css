@@ -154,11 +154,6 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
   .dt-kv{grid-template-columns:0 104px minmax(0,1fr);min-height:var(--row);padding:var(--s-3) var(--s-2)}
   .dt .task .row-sub{grid-area:pills;display:flex;align-items:center;gap:var(--s-2)}
   .task.has-stage .row-stage{order:-1}
-  /* in Flow the row over the head holds back and the steps (parts.css .tv-top) */
-  .tv.is-flow .pk-head .pk-back,.tv.is-flow .pk-head .pk-acts{display:none}
-  .tv-n{display:inline-flex;align-items:center;gap:var(--s-2)}
-  /* the row sits outside the head's padding: back and "⋯" (at its end) stand a control's inset in from the page margin */
-  .tv-top{margin:0 calc(var(--page-x) - var(--s-3))}
 }
 
 /* ---------- Details' facts and meetings (s58; more.css dKv, dMeet) ---------- */

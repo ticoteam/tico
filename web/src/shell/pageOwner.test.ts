@@ -21,8 +21,9 @@ const ROUTES: Record<string, [path: string, page: string, owner: 'page' | 'tico'
   'company.strategy.tsx': ['/company/strategy', 'strategy', 'page'],
   'company.strategy_.$tab.tsx': ['/company/strategy/goals', 'goals', 'page'],
   'company.usage.tsx': ['/company/usage', 'usage', 'page'],
-  'flow.$task.tsx': ['/flow/t1', 'task', null],
-  'flow.index.tsx': ['/flow', 'flow', 'tico'],
+  // old Flow links: they only pass on, to the task and to Needs you
+  'flow.$task.tsx': ['/flow/t1', 'flow', null],
+  'flow.index.tsx': ['/flow', 'flow', null],
   'index.tsx': ['/', 'tasks', 'page'],
   'learned.tsx': ['/learned', 'learned', 'tico'],
   'library.$doc.tsx': ['/library/d1', 'docs', 'page'],
@@ -32,6 +33,7 @@ const ROUTES: Record<string, [path: string, page: string, owner: 'page' | 'tico'
   'library.index.tsx': ['/library', 'docs', 'page'],
   'library.skills.tsx': ['/library/skills', 'skills', 'page'],
   'library.tools.tsx': ['/library/tools', 'tools', 'page'],
+  'needs-you.tsx': ['/needs-you', 'needs-you', 'tico'],
   'roadmap.tsx': ['/roadmap', 'roadmap', 'page'],
   'settings.$section.tsx': ['/settings/agents', 'settings', 'page'],
   'settings.index.tsx': ['/settings', 'settings', 'page'],
@@ -69,7 +71,7 @@ describe('the page map', () => {
   });
 
   it('names the personal pages Tico’s, and Settings › Account and Computers by their own keys', () => {
-    for (const path of ['/calendar', '/threads/mail', '/flow', '/learned', '/settings/account']) expect(pageAt(path).owner).toBe('tico');
+    for (const path of ['/calendar', '/threads/mail', '/needs-you', '/learned', '/settings/account']) expect(pageAt(path).owner).toBe('tico');
     expect(pageAt('/settings/computers').page).toBe('computers');
     expect(pageAt('/settings/changelog').page).toBe('changelog');
   });

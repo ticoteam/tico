@@ -18,11 +18,11 @@ import './Menu.css';
    Team is the org chart and your DMs; Threads every other conversation. No counts there: bold is new, and the Dot on
    a row marks a conversation that asks you (never on a tab or a folded row). */
 
-export type MenuRowId = 'tasks' | 'calendar' | 'company' | 'library';
+export type MenuRowId = 'tasks' | 'needs-you' | 'calendar' | 'company' | 'library';
 export type MenuTalk = 'team' | 'threads';
 
 export interface MenuCounts {
-  /* what waits on you, shown in the Dot's shape on Tasks */
+  /* what waits on you, shown in the Dot's shape on Needs you */
   flow?: number;
   /* the next meeting's time, beside Calendar ("2:30 PM") */
   next?: string;
@@ -103,6 +103,7 @@ export interface MenuProps {
 
 const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
+  { id: 'needs-you', label: 'Needs you', icon: 'inbox' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   { id: 'company', label: 'Company', icon: 'company' },
   { id: 'library', label: 'Library', icon: 'library' },
@@ -264,7 +265,7 @@ export function Menu(p: MenuProps) {
   }
 
   const right = (id: MenuRowId, hasKids: boolean, expanded: boolean) => {
-    if (id === 'tasks' && c.flow)
+    if (id === 'needs-you' && c.flow)
       return (
         <span className="nav-flow">
           <FlowMark />

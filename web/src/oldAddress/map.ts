@@ -198,8 +198,8 @@ export const ROWS: readonly Row[] = [
   { page: 'File review', path: /^#\/file\/([^/]+)$/, to: ([id], q) => at('/library/files', { file: dec(id), v: version(q) }) },
   // Settings with a recruit handoff (a title and brief from outside): Add agent is in Agents; the handoff is not carried.
   { page: 'Settings, recruit handoff', path: /^#\/settings$/, when: (q) => q.has('recruit'), to: () => '/settings/agents' },
-  // Decide, then Needs you: Flow now. A link naming a task opens it inside Flow.
-  { page: 'Decide', path: /^#\/decide$/, to: (_m, q) => (q.get('task') ? `/flow/${seg(q.get('task') ?? '')}` : '/flow') },
+  // Decide, then Needs you. A link naming a task opens it.
+  { page: 'Decide', path: /^#\/decide$/, to: (_m, q) => (q.get('task') ? `/task/${seg(q.get('task') ?? '')}` : '/needs-you') },
 
   /* redesignRoute (ui/app/redesign.ts), asked before the router's own list */
   // Goals moved under Strategy; one goal opens in its panel. Same for #/strategy/goals below.
@@ -334,8 +334,8 @@ export const ROWS: readonly Row[] = [
     to: (_m, q) => at('/library/skills', { connect: SKILL_CODE.test(q.get('code') ?? '') ? q.get('code') : 'setup' }),
   },
   { page: 'Person', path: /^#\/person\/([^/]+)(?:\/([^/]+))?(?:\/.*)?$/, to: ([id, tab]) => at(`/team/${seg(id)}`, { tab: tab === 'settings' ? tab : null }) },
-  // Tasks; Needs you (view=foryou) is Flow. The old filters were across pipelines and Tasks is one pipeline now: dropped.
-  { page: 'Tasks', path: /^#\/tasks$/, to: (_m, q) => (q.get('view') === 'foryou' ? '/flow' : '/tasks') },
+  // Tasks; Needs you (view=foryou). The old filters were across pipelines and Tasks is one pipeline now: dropped.
+  { page: 'Tasks', path: /^#\/tasks$/, to: (_m, q) => (q.get('view') === 'foryou' ? '/needs-you' : '/tasks') },
   {
     page: 'Updates',
     path: /^#\/updates$/,

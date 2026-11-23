@@ -1,6 +1,6 @@
-/* An answer the person gave outside Flow (Approve, or Request changes): the open task's page hears it and decides
-   whether to stay, on what still waits on them there, or to close, back to where the task was opened from. One page
-   is open at a time, so one listener. */
+/* An answer the person gave (Approve, Request changes, a hold decided, a Release): the open task's page hears it and
+   decides whether to stay, on what still waits on them there, or to close, back to where the task was opened from. One
+   page is open at a time, so one listener. */
 
 type Hand = () => void;
 let hand: Hand | null = null;

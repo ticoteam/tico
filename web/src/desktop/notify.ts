@@ -10,7 +10,7 @@ export interface Notice {
   body?: string;
   /** One per item: a notice with the same tag replaces the last one. */
   tag: string;
-  /** The app address a click opens, like `/flow/12`. */
+  /** The app address a click opens, like `/task/12`. */
   url: string;
 }
 

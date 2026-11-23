@@ -23,7 +23,7 @@ const extOf = (name: string) => /\.([a-z0-9]{1,5})$/i.exec(name)?.[1]?.toUpperCa
 /** A file read as a document (a letter): a PDF, a Word file or a web page. */
 const isDoc = (f: EmailFile) => isWord(f.name, f.type) || /^(application\/pdf|text\/html)\b/i.test(f.type ?? '') || /\.(pdf|html?)$/i.test(f.name);
 
-export function Email({ task, send, part, at, lead }: { task: string; send: string; part?: number; at: { to: string; search: { tab?: string } }; lead?: ReactNode }) {
+export function Email({ task, send, part, at, lead }: { task: string; send: string; part?: number; at: string; lead?: ReactNode }) {
   const q = useQuery(emailSendQuery(task, send));
   if (q.isError || q.data?.preview_complete === false)
     return (
@@ -39,7 +39,7 @@ export function Email({ task, send, part, at, lead }: { task: string; send: stri
     return (
       <>
         <div className="fv-bar">
-          <Go to={at.to} search={at.search} className="ib ib-sm" aria-label="Back to the email" title="Back to the email">
+          <Go to={at} className="ib ib-sm" aria-label="Back to the email" title="Back to the email">
             <Icon name="chevron" className="flip" />
           </Go>
           <b>{f.name}</b>
@@ -94,7 +94,7 @@ export function Email({ task, send, part, at, lead }: { task: string; send: stri
         {files.length > 0 && (
           <div className="ap-atts">
             {files.map((x) => (
-              <Go key={x.part} to={at.to} search={{ ...at.search, part: x.part }} className="ap-att" title={`Open ${x.name}`}>
+              <Go key={x.part} to={at} search={{ part: x.part }} className="ap-att" title={`Open ${x.name}`}>
                 <span className="ap-ft" aria-hidden="true">
                   <i>{extOf(x.name)}</i>
                 </span>

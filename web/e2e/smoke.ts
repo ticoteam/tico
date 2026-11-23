@@ -416,16 +416,16 @@ async function responsive(browser: Browser) {
     await ctx.close();
   }
 
-  const mobile = await open(browser, true, '/flow', true);
+  const mobile = await open(browser, true, '/needs-you', true);
   try {
-    await mobile.page.locator('main a[href^="/flow/"]').first().click();
-    const back = mobile.page.getByRole('link', { name: 'Back to Flow' });
+    await mobile.page.locator('main a[href^="/task/"]').first().click();
+    const back = mobile.page.locator('main .pk-head').getByRole('button', { name: 'Back' });
     await back.waitFor();
     const fits = await back.evaluate((el) => {
       const rect = el.getBoundingClientRect();
       return rect.left >= 0 && rect.right <= innerWidth;
     });
-    assert(fits, 'the Flow back button is clipped at 390');
+    assert(fits, 'the task back button is clipped at 390');
 
     // an agent's Model dialog, a sheet at 390: nothing runs off its side, the radios are 16px rings in full-width rows
     await mobile.page.goto(`${APP}/settings/agents`);
@@ -445,7 +445,7 @@ async function responsive(browser: Browser) {
   } finally {
     await mobile.ctx.close();
   }
-  ok('P&L, Calendar, Flow and the Model dialog fit their sheets');
+  ok('P&L, Calendar, a task opened from Needs you and the Model dialog fit their sheets');
 }
 
 async function dev(browser: Browser) {

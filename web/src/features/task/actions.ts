@@ -78,7 +78,7 @@ export const move = defineAction({
   target: (i) => ({ kind: 'task-stage', id: i.task }),
 });
 
-/** Flow's Move back: to a stage before the one it is in. */
+/** Move back: to a stage before the one it is in. */
 export const moveBack = defineAction({
   id: 'task.moveBack',
   title: 'Move a task back',
@@ -305,8 +305,8 @@ export const sendHold = defineAction({
 
 /* ---------------------------------------------------------------- what the open page shows */
 
-/** A task's page or Details is on screen: under its pipeline, or inside Flow. */
-const onTask = (path: string) => /^\/(tasks\/[^/]+\/[^/]+|flow\/[^/]+)/.test(path);
+/** A task's page or Details is on screen, under its pipeline. */
+const onTask = (path: string) => /^\/tasks\/[^/]+\/[^/]+/.test(path);
 const version = z.int().check(z.minimum(1));
 
 /** The address keeps it, so Back and a shared link come back to the same version. */
@@ -478,8 +478,7 @@ export const remove = defineAction({
   run: async ({ router, queryClient }, i) => {
     const held = queryClient.getQueryData<{ pipeline_id: string | null }>(['tasks', 'detail', i.task]);
     await said(deleteTask(i.task));
-    if (router.state.location.pathname.startsWith('/flow/')) await router.navigate({ to: '/flow' });
-    else await router.navigate({ to: `/tasks/${encodeURIComponent(held?.pipeline_id ?? 'all')}` });
+    await router.navigate({ to: `/tasks/${encodeURIComponent(held?.pipeline_id ?? 'all')}` });
   },
   did: () => 'Deleted',
 });

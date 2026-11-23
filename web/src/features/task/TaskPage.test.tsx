@@ -5,7 +5,6 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
-import { flowQuery } from '@/features/tasks/routing';
 import { useFollow } from '@/live/follow';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask } from './routing';
@@ -300,7 +299,7 @@ describe('one open task', () => {
     expect(within(due).getByRole('button', { name: 'None' })).toBeTruthy();
   });
 
-  it('uses one pipeline list and skips the Flow ordering read on a regular task', async () => {
+  it('uses one pipeline list and reads no Needs you list', async () => {
     serve(base);
     details();
     fireEvent.click(await screen.findByRole('button', { name: 'Stage: Review' }));
@@ -320,16 +319,6 @@ describe('one open task', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Stage: Done' }));
     expect(await screen.findByRole('menuitem', { name: 'Build' })).toBeTruthy();
     expect(calls).toContain('GET /api/v2/pipelines/p1');
-  });
-
-  it('inside Flow, keeps the tab in the search @s126', async () => {
-    serve(base);
-    await queryClient.prefetchQuery(flowQuery);
-    show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
-    const tabs = await screen.findByRole('navigation', { name: 'Fix the sign-in page pages' });
-    expect(within(tabs).getByRole('link', { name: /Spec/ }).getAttribute('href')).toBe('/flow/12?tab=spec');
-    expect(screen.queryByRole('link', { name: 'Flow' })).toBeNull();
-    expect(calls.filter((url) => url === 'GET /api/v2/needs-you?limit=200')).toHaveLength(1);
   });
 
   it('shows an approval at once and takes it back with the server’s reason when refused @s109', async () => {
@@ -693,13 +682,6 @@ describe('a page’s versions, a new page and a picture', () => {
 });
 
 describe('the task’s More menu', () => {
-  const flowServe = () =>
-    serve((url, method) => {
-      if (url.includes('/needs-you'))
-        return { status: 200, body: { items: [{ task: { id: 't1', number: 12, pipeline_id: 'p1' } }, { task: { id: 't9', number: 13, pipeline_id: 'p1' } }] } };
-      if (method === 'POST') return { status: 200, body: { task: task() } };
-      return base(url);
-    });
   it('snoozes the task until a day the person picks @s51', async () => {
     serve((url, method) => (method === 'POST' ? { status: 200, body: { task: task() } } : base(url)));
     details();
@@ -710,29 +692,6 @@ describe('the task’s More menu', () => {
     await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/snooze'));
     const until = new Date(String(sent.at(-1)?.body.until));
     expect(until.getTime()).toBeGreaterThan(Date.now());
-  });
-
-  it('in Flow, Give to hands the task over and goes on to the next one @s113', async () => {
-    people([{ id: 'bot:b2', kind: 'agent', name: 'Reviewer' }]);
-    flowServe();
-    const router = show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
-    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
-    await more();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Give to' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Reviewer' }));
-    await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks/t1/owner', body: { owner: 'bot:b2' } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
-  });
-
-  it('in Flow, Move back sends it to an earlier stage and goes on to the next one @s114', async () => {
-    flowServe();
-    const router = show(<TaskPage task="12" tab="details" flow />, '/flow/12?tab=details');
-    await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' });
-    await more();
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Move back' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Build' }));
-    await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks/t1/move', body: { to: 's1' } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
   });
 
   it('asks before deleting, then deletes and goes to the pipeline @s58', async () => {

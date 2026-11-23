@@ -5,11 +5,11 @@ import { usePageName } from '@/tico/pageName';
 export interface MenuLipProps {
   /** The company's name. */
   company: string;
-  /** The Flow count the menu shows on Tasks: what waits on the person. Nothing when none. */
+  /** The count the menu shows on Needs you: what waits on the person. Nothing when none. */
   flow?: number;
 }
 
-/** The menu's lip at rest (phone/phone.js menuLip): the company, the page open behind, and what waits on you in Flow.
+/** The menu's lip at rest (phone/phone.js menuLip): the company, the page open behind, and what waits on you.
     Jade is the Flow mark's alone; the count stays in ink. */
 export function MenuLip({ company, flow }: MenuLipProps) {
   const where = usePageName();

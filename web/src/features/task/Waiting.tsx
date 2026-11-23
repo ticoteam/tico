@@ -41,17 +41,17 @@ export function useWaiting(t: TaskData | undefined): { items: Waiting[]; settled
 
 /** An email that waits on the person, as a pointer on the matter's other pages: the email is not on screen there, so
     there is no Approve; Open goes to the Email tab, where the decision sits over the email itself. */
-function Pointer({ sub, to, search }: { sub: TaskData; send: string; to: string; search?: object }) {
+function Pointer({ sub, to }: { sub: TaskData; send: string; to: string }) {
   const navigate = useNavigate();
   const r = decisionOf(sub);
   if (!r) return null;
   // Named from the OK task's title ("Send: <subject> → <to>"): reading the email's preview counts as showing it.
   const who = sendTitle(sub.title)?.to;
-  return <AskCard name={decisionName(sub, r, who ? personOf(who) : undefined)} label="Waits on you" end={<Button onClick={() => navigate({ to: to as never, search: search as never })}>Open</Button>} />;
+  return <AskCard name={decisionName(sub, r, who ? personOf(who) : undefined)} label="Waits on you" end={<Button onClick={() => navigate({ to: to as never })}>Open</Button>} />;
 }
 
 /** At the top of a task's other pages: each email that waits on the person, pointing to its Email tab. */
-export function WaitingOnYou({ items }: { items: { sub: TaskData; send: string; to: string; search?: object }[] }) {
+export function WaitingOnYou({ items }: { items: { sub: TaskData; send: string; to: string }[] }) {
   if (!items.some((x) => decisionOf(x.sub))) return null;
   return (
     <div className="tv-waits">
@@ -64,14 +64,14 @@ export function WaitingOnYou({ items }: { items: { sub: TaskData; send: string; 
 
 /** At the top of a task's other pages: each email whose OK waits on the person on this task itself, pointing to its
     Email tab. Named without reading the email: a read of its preview counts as showing it to them. */
-export function EmailPointers({ t, items }: { t: TaskData; items: { send: string; to: string; search?: object }[] }) {
+export function EmailPointers({ t, items }: { t: TaskData; items: { send: string; to: string }[] }) {
   const navigate = useNavigate();
   if (!items.length) return null;
   return (
     <div className="tv-waits">
       {items.map((x) => {
         const r = decisionOf(t, x.send);
-        return r ? <AskCard key={x.send} name={decisionName(t, r)} label="Waits on you" end={<Button onClick={() => navigate({ to: x.to as never, search: x.search as never })}>Open</Button>} /> : null;
+        return r ? <AskCard key={x.send} name={decisionName(t, r)} label="Waits on you" end={<Button onClick={() => navigate({ to: x.to as never })}>Open</Button>} /> : null;
       })}
     </div>
   );
@@ -118,7 +118,7 @@ export function MatterBrief({ t, send }: { t: TaskData; send: string }) {
   if (!matter || !m) return null;
   return (
     <>
-      <Brief note={m.note} title={m.title} to={tabAddress(m, undefined, false).to} />
+      <Brief note={m.note} title={m.title} to={tabAddress(m)} />
       <MatterDates matter={m.matter} />
     </>
   );
@@ -164,7 +164,7 @@ export function useMatterOf(t: TaskData, send: string): { id: string; title: str
   const id = mail.data?.send.task_id;
   const other = !own && id && id !== t.id ? id : undefined;
   const src = useQuery({ ...taskDetailQuery(other), enabled: !!other, retry: false });
-  const byId = (x: { id: string; title: string }, at?: TaskData) => ({ id: x.id, title: x.title, to: at ? tabAddress(at, undefined, false).to : `/task/${encodeURIComponent(x.id)}` });
+  const byId = (x: { id: string; title: string }, at?: TaskData) => ({ id: x.id, title: x.title, to: at ? tabAddress(at) : `/task/${encodeURIComponent(x.id)}` });
   if (!sendTask) return byId(t, t);
   if (own) return byId(own);
   const s = src.data?.id === other ? src.data : undefined;

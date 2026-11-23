@@ -59,13 +59,26 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
   }
 }
 
+/** Where `/task/<n>` goes: the task under its pipeline, on the tab its address names (`?tab=`) or the one loadTask
+    opens, with the address's other words (an ask, a version, a thread beside it). Null when the task did not load. */
+export async function ownAddress(client: QueryClient, param: string, search: Record<string, unknown>, openChat = false) {
+  const { tab: named, ...rest } = search;
+  const loaded = await loadTask(client, param, typeof named === 'string' && named ? named : undefined, openChat);
+  if (!loaded) return null;
+  const { task, tab } = loaded;
+  return {
+    to: '/tasks/$pipeline/$task/$tab' as const,
+    params: { pipeline: task.pipeline_id ?? 'all', task: String(task.number ?? task.id), tab },
+    search: rest,
+  };
+}
+
 /**
- * What a task's address may carry: a file opened from Details (`full` shows a picture full size), in Flow the open
- * tab, the version of the open page (`v`) with the one its changes are marked against (`vs`), and an email's file
- * opened from its Email tab (`part`).
+ * What a task's address may carry: a file opened from Details (`full` shows a picture full size), the version of the
+ * open page (`v`) with the one its changes are marked against (`vs`), and an email's file opened from its Email tab
+ * (`part`).
  */
 export interface TaskSearch {
-  tab?: string;
   file?: string;
   full?: string;
   v?: number;
@@ -84,7 +97,6 @@ const n = (x: unknown): number | undefined => {
 /** `validateSearch` for the task routes: keeps the words it knows, drops anything else. */
 export function taskSearch(raw: Record<string, unknown>): TaskSearch {
   const out: TaskSearch = {};
-  if (typeof raw.tab === 'string' && raw.tab) out.tab = raw.tab;
   if (typeof raw.file === 'string' && raw.file) out.file = raw.file;
   if (typeof raw.full === 'string' && raw.full) out.full = raw.full;
   if (typeof raw.ask === 'string' && raw.ask) out.ask = raw.ask;

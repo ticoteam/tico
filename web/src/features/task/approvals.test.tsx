@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,8 @@ import { forgetPlaces, notePlace } from '@/lib';
 import { useFollow } from '@/live/follow';
 import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
-import { taskFilesQuery, type TaskData } from './queries';
+import { pipelinesQuery } from '@/features/tasks/routing';
+import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -696,11 +697,109 @@ describe('the decision', () => {
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/answer', body: { value: 'ok', page_version: 'f9@2', visit_id: 'v4' } }));
   });
 
-  it('in Flow, opens the next item once approved @approvals', async () => {
-    reply = (url, method) => (method === 'POST' && url.endsWith('/asks/r1/ok') ? { body: { task: task({ to_leave: [req({ met: true, may: [] })] }) } } : null);
-    const router = show(<TaskPage task="12" flow />, '/flow/12');
+  /** The task, drawn only while the address is the task's: the list it was opened from is another page. */
+  function OnTask() {
+    const path = useLocation({ select: (l) => l.pathname });
+    return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+  }
+  const approved = (more: Partial<TaskData> = {}) => {
+    reply = (url, method) => (method === 'POST' && url.endsWith('/asks/r1/ok') ? { body: { task: task({ to_leave: [req({ met: true, may: [] })], ...more }), answer_id: 'a9' } } : null);
+  };
+  const question = { state: 'person', who: 'human:me', requirement_id: 'qmark:m1', line: 'Which carrier?', ask: true, since: null, until: null };
+
+  it('opened from Needs you, Approve closes the task once nothing on it waits on the person: back to the list as it was, Undo offered @approvals', async () => {
+    approved();
+    const router = show(<OnTask />, '/needs-you?view=all');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/flow/13'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+    expect(router.state.location.search).toEqual({ view: 'all' });
+    // stepped back, not pushed: the list is where it was in the history
+    expect(router.history.canGoBack()).toBe(false);
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+  });
+
+  it('Approve stays on the task while a question on it still waits on the person @approvals', async () => {
+    approved({ waits: [question] } as Partial<TaskData>);
+    const router = show(<OnTask />, '/needs-you');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(await ready(await decision()));
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+    await act(async () => {});
+    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+  });
+
+  it('a question for someone else does not hold the task open @approvals', async () => {
+    approved({ waits: [{ ...question, who: 'human:ana' }] } as Partial<TaskData>);
+    const router = show(<OnTask />, '/needs-you');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(await ready(await decision()));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+  });
+
+  it('Back closes the task: to the list it was opened from, else its board @approvals', async () => {
+    const router = show(<OnTask />, '/needs-you?view=all');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(router.state.location.href).toBe('/needs-you?view=all'));
+    expect(router.history.canGoBack()).toBe(false);
+    cleanup();
+    forgetPlaces();
+    // a link opened straight to the task, or a reload: nothing behind it, so its board
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Legal', stages: [] }] as never);
+    const direct = show(<OnTask />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(direct.state.location.pathname).toBe('/tasks/p1'));
+  });
+
+  it('Back from a link before the pipelines are read waits for them to pick the board @approvals', async () => {
+    let give!: () => void;
+    const list = new Promise<Reply>((done) => (give = () => done({ body: { pipelines: [{ id: 'p1', name: 'Legal', stages: [] }] } })));
+    reply = (url, method) => (method === 'GET' && url.endsWith('/api/v2/pipelines') ? list : null);
+    const router = show(<OnTask />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    await act(async () => {});
+    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    give();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
+  });
+
+  it('Back from a link to a task whose pipeline is retired goes to Tasks, not a board that is gone @approvals', async () => {
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
+    const router = show(<OnTask />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+  });
+
+  it('opened from a thread, ✕ closes the task back to that thread, even after another tab was opened @approvals', async () => {
+    const router = show(<OnTask />, '/team/lo');
+    await act(() => router.navigate({ href: '/tasks/p1/12/email?chat=agent%3Alo&via=thread' }));
+    await decision();
+    await act(() => router.navigate({ href: '/tasks/p1/12/details?chat=agent%3Alo&via=thread' }));
+    await waitFor(() => expect(document.querySelector('.pk-head .pk-close')).toBeTruthy());
+    fireEvent.click(document.querySelector('.pk-head .pk-close') as HTMLElement);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/team/lo'));
+    expect(router.history.canGoBack()).toBe(false);
+  });
+
+  it('staying for a question, an approval that arrives later does not move the person off the page @approvals', async () => {
+    shown = task({ to_leave: [req({ shows: [], line: 'Ship it?' })] });
+    approved({ waits: [question] } as Partial<TaskData>);
+    const router = show(<OnTask />, '/needs-you');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(await ready(await decision()));
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    // a page to approve arrives with the stream
+    const page = req({ requirement_id: 'r2', kind: 'page', line: 'Review page', shows: [], approval: { document: 'Review page', file_id: 'd1', version: 1, visit_id: 'v1', unchecked: false } } as Partial<TaskRequirement>);
+    act(() =>
+      queryClient.setQueryData(taskDetailQuery('t1').queryKey, (cur) =>
+        cur && ({ ...cur, documents: [{ file_id: 'd1', name: 'Review page', kind: 'markdown', version: 1 }], to_leave: [page] } as TaskData),
+      ),
+    );
+    expect(await screen.findByRole('link', { name: /Review page/ })).toBeTruthy();
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe('/tasks/p1/12/details');
   });
 
   it('Request changes is a message to the agent in its chat, and marks the request Changes asked @approvals', async () => {
@@ -1182,13 +1281,14 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
   it('Approve answers the sub-task’s ask with the hash of the email as shown, and says so @approvals', async () => {
     const answered = send(req({ requirement_id: rid, met: true, may: ['undo'], answer: { id: 'a7', value: 'ok', by: 'human:me', at: '2026-11-19T10:00:00Z', note: null } } as Partial<TaskRequirement>));
     serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? { body: { task: answered } } : null));
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'legal-responses', name: 'Legal responses', stages: [] }] as never);
     const router = open();
     fireEvent.click(await ready(await decision()));
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/ok`, body: { shown_hash: 'h-mail' } }]));
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
-    // nothing else on it waits on the person: the task closes (opened from nowhere here, so to Tasks)
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+    // nothing else on it waits on the person: the task closes (opened from nowhere here, so to its board)
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
   });
 
   it('opened from a board, Approve closes the task once nothing on it waits: back to the board as it was, Undo offered @approvals', async () => {
@@ -1245,6 +1345,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
 
   it('Request changes answers the sub-task’s ask @approvals', async () => {
     serve((url) => (url.endsWith(`/asks/${rid}/answer`) ? { body: { task: send(req({ requirement_id: rid, may: ['undo'], answer: { id: 'a8', value: 'no', by: 'human:me', at: '2026-11-19T10:14:00Z', note: 'Shorter' } } as Partial<TaskRequirement>)) } } : null));
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'legal-responses', name: 'Legal responses', stages: [] }] as never);
     const router = open();
     const box = await decision();
     fireEvent.click(within(box).getByRole('button', { name: 'Request changes' }));
@@ -1252,8 +1353,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     fireEvent.click(within(box).getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/answer`, body: { value: 'no', note: 'Shorter' } }]));
     expect(await screen.findByText(/^Changes asked/)).toBeTruthy();
-    // nothing else on it waits on the person: the task closes too
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+    // nothing else on it waits on the person: the task closes too, to its board
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
   });
 });
 

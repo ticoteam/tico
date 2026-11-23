@@ -16,14 +16,13 @@ import { Select } from '@/kit/Select';
 import { PageMore } from '@/pagekinds';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { DETAILS, earlierStages, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
-import { FlowMark } from '@/kit/FlowMark';
-import { Face, Go, Mark } from './parts';
-import { retiredStagesQuery, useWaitingTasks, type TaskData } from './queries';
+import { DETAILS, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
+import { Face, Mark } from './parts';
+import { retiredStagesQuery, type TaskData } from './queries';
 import { TaskStatus } from './StatusLine';
 
-/* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), Flow's previous
-   and next, and "⋯" with the rest. */
+/* The head's controls: the where line (pipeline › stage pick, owner pick, time in the stage, Late), and "⋯" with the
+   rest. */
 
 const failed = (r: Result, action?: { label: string; run: () => void }) => toast({ ...failedToast(r), ...(action && { action }) });
 
@@ -192,10 +191,10 @@ function MoveAnyway({ t, held, onClose }: { t: TaskData; held: Held; onClose: ()
 }
 
 /** Give to: someone the person may give work to. A stage rule that refuses them can be passed by a person. */
-function useGive(t: TaskData, then?: () => void) {
+function useGive(t: TaskData) {
   return async function give(owner: string, setAnyway?: boolean): Promise<void> {
     const r = await run('task.give', { task: t.id, owner, ...(setAnyway && { setAnyway }) }, { via: 'click' });
-    if (r.ok) return then?.();
+    if (r.ok) return;
     // A stage rule refused this owner: a person may give it anyway (ui/app/task-api.ts taskReassign).
     failed(r, r.error?.startsWith('task_stage_rule') ? { label: 'Give anyway', run: () => void give(owner, true) } : undefined);
   };
@@ -241,79 +240,12 @@ export function OwnerPick({ t }: { t: TaskData }) {
   );
 }
 
-/** Flow's order: the tasks that wait on the person, and where Flow goes once this one is off their hands. */
-function useFlowOrder(t: TaskData, enabled = true) {
-  const { rows, read } = useWaitingTasks(enabled);
-  const navigate = useNavigate();
-  const i = rows.findIndex((w) => w.id === t.id);
-  const next = () => {
-    const to = rows[i + 1] ?? rows[i - 1];
-    void navigate(to ? { to: tabAddress(to, undefined, true).to as never } : { to: '/flow' as never });
-  };
-  return { rows, i, next, read };
-}
-
-/** Flow's previous and next: the tasks that wait on the person, in Flow's order. */
-function FlowSteps({ t }: { t: TaskData }) {
-  const { rows, i } = useFlowOrder(t);
-  const step = (d: number, label: string, flip: boolean) => {
-    const to = i >= 0 ? rows[i + d] : undefined;
-    const ico = <Icon name="chevdown" className={flip ? 'flip' : undefined} />;
-    if (!to)
-      return (
-        <button className="ib" type="button" aria-label={label} title={label} disabled>
-          {ico}
-        </button>
-      );
-    const a = tabAddress(to, undefined, true);
-    return (
-      <Go to={a.to} search={a.search} className="ib" aria-label={label} title={label}>
-        {ico}
-      </Go>
-    );
-  };
-  return (
-    <>
-      {step(-1, 'Previous', true)}
-      {step(1, 'Next', false)}
-    </>
-  );
-}
-
-/** A phone's row over a task in Flow (more.js tv-top, 48 high): back to Flow, where this task is in Flow ("1 of 7",
-    plan/approvals.html; how many wait when it is not in the list), previous and next, then the task's "⋯". */
-export function FlowTop({ t, more }: { t: TaskData; more?: ReactNode }) {
-  const { rows, i, read } = useFlowOrder(t);
-  return (
-    <div className="tv-top">
-      <Go to="/flow" className="ib" aria-label="Back to Flow" title="Back to Flow">
-        <Icon name="chevron" className="flip" />
-      </Go>
-      {read && (
-        <span className="tv-n" title={`${rows.length} wait${rows.length === 1 ? 's' : ''} on you`}>
-          <FlowMark size={18} play />
-          {i >= 0 ? (
-            <span>
-              <b>{i + 1}</b> of {rows.length}
-            </span>
-          ) : (
-            <b>{rows.length}</b>
-          )}
-        </span>
-      )}
-      <span className="grow" />
-      <FlowSteps t={t} />
-      {more}
-    </div>
-  );
-}
-
 type Asking = 'move' | 'reopen' | 'delete' | null;
 
-/** "⋯": snooze, done (the due date and tags edit in Details); in Flow, Give to and Move back, after which Flow goes on to the next task. Then the rest:
+/** "⋯": snooze, done (the due date and tags edit in Details). Then the rest:
     watch the agent's session, copy the link, move to another pipeline, reopen with a reason, delete. Reopen and Delete
     ask first. */
-export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; flow?: boolean; details?: boolean }) {
+export function MoreMenu({ t, details = false }: { t: TaskData; details?: boolean }) {
   const [asking, setAsking] = useState<Asking>(null);
   const [why, setWhy] = useState('');
   const [to, setTo] = useState<{ pipeline: string; name: string; stage: string | null } | null>(null);
@@ -326,9 +258,6 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
   const mayDelete = t.mover || (!!me && t.requester_id === me);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const order = useFlowOrder(t, flow && t.status === 'open');
-  const give = useGive(t, order.next);
-  const back = earlierStages(useStages(t), t.stage_id);
 
   const open = (what: Exclude<Asking, null>) => {
     setError('');
@@ -345,11 +274,6 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
   const snooze = async (until: string | null) => {
     const r = await run('task.snooze', { task: t.id, until }, { via: 'click' });
     if (!r.ok) failed(r);
-  };
-  const moveBack = async (to: string) => {
-    const r = await run('task.moveBack', { task: t.id, to }, { via: 'click' });
-    if (r.ok) order.next();
-    else failed(r);
   };
   const close = () => setAsking(null);
   const copyLink = async () => {
@@ -375,25 +299,9 @@ export function MoreMenu({ t, flow = false, details = false }: { t: TaskData; fl
               label="Details"
               icon="list"
               onSelect={() => {
-                const a = tabAddress(t, DETAILS, flow);
-                void navigate({ to: a.to as never, search: a.search as never });
+                void navigate({ to: tabAddress(t, DETAILS) as never });
               }}
             />
-            <MenuRule />
-          </>
-        )}
-        {flow && t.status === 'open' && (
-          <>
-            <MenuSub label="Give to" icon="people">
-              <ActorItems current={t.owner_id} onPick={(id) => void give(id)} />
-            </MenuSub>
-            <MenuSub label="Move back" icon="reply">
-              {back.length ? (
-                back.map((s) => <MenuItem key={s.id} label={s.name} onSelect={() => void moveBack(s.id)} />)
-              ) : (
-                <MenuItem label="No earlier stage" disabled onSelect={() => undefined} />
-              )}
-            </MenuSub>
             <MenuRule />
           </>
         )}

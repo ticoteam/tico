@@ -21,7 +21,7 @@ import { tabTitle, useTabTitle } from './title';
    desktop app's small call window, and what the page tells the desktop app. */
 
 const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
-  /** The ❓ questions and asks agents put to Maya that wait (Flow's `asks`, from Needs you's items). */
+  /** The ❓ questions and asks agents put to Maya that wait (`asks`, from Needs you's items). */
   asks: [] as { id: string; kind?: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[],
   gate: { screen: null as string | null, setup: false },
   /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
@@ -89,7 +89,6 @@ vi.mock('@/features/library/routing', () => ({ useFileOpen: () => false, takeHel
 vi.mock('@/features/tasks/routing', async () => {
   const real = await vi.importActual<typeof TasksRouting>('@/features/tasks/routing');
   return {
-  useFlowGroups: real.useFlowGroups,
   useFlowCountRefresh: real.useFlowCountRefresh,
   flowCountQuery: real.flowCountQuery,
   // the real address checks: the list beside a task reads its pipeline with the filters its board had
@@ -151,8 +150,8 @@ function show(at: string, browser = false) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
   const calendar = createRoute({ getParentRoute: () => root, path: '/calendar', component: () => <main className="pane page"><h1>Calendar page</h1></main> });
-  const task = createRoute({ getParentRoute: () => root, path: '/flow/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
-  const flow = createRoute({ getParentRoute: () => root, path: '/flow', component: () => <main className="pane page"><h1>Flow page</h1></main> });
+  const task = createRoute({ getParentRoute: () => root, path: '/task/$task', component: () => <main className="pane page"><h1>A task</h1></main> });
+  const needs = createRoute({ getParentRoute: () => root, path: '/needs-you', component: () => <main className="pane page"><h1>Needs you page</h1></main> });
   const editor = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/edit', component: () => <main className="pane page"><h1>Edit pipeline</h1></main> });
   // a board whose card opens task 7 as the board's own card does: under its pipeline
   const board = createRoute({
@@ -167,7 +166,7 @@ function show(at: string, browser = false) {
   });
   const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, flow, editor, board, open, finance]),
+  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, needs, editor, board, open, finance]),
     context: { queryClient },
     // the window's own history where a test needs what the phone's cards push onto it (shell/phone PhoneCards)
     history: browser ? (window.history.replaceState(null, '', at), createBrowserHistory()) : createMemoryHistory({ initialEntries: [at] }),
@@ -618,8 +617,8 @@ describe('the Agent bar @4857', () => {
     at(1440);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa' };
-    show('/flow');
-    expect(await screen.findByRole('heading', { name: 'Flow page' })).toBeTruthy();
+    show('/needs-you');
+    expect(await screen.findByRole('heading', { name: 'Needs you page' })).toBeTruthy();
     expect(screen.queryByRole('complementary', { name: 'Chat with QA Owner' })).toBeNull();
     expect(document.querySelector('.shell-frame')?.getAttribute('data-arrangement')).toBe('page');
   });
@@ -665,54 +664,22 @@ describe('an open task', () => {
       Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
       window.dispatchEvent(new Event('resize'));
     });
-  const item = (n: number, title: string, stage: string, late = false) => ({ id: `t${n}`, number: n, title, pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', late, stuck: false, since: '2026-11-18T09:00:00Z' });
   afterEach(() => at(1024));
-
-  it('in Flow groups what waits on you by relationship, with the open task chosen @s135', async () => {
-    at(1600);
-    people(MAYA, QA);
-    queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null }]);
-    const acme = { entity_id: 'organization/acme' };
-    const lookup = vi.spyOn(api, 'post').mockResolvedValue({ names: { [acme.entity_id]: 'Acme' } });
-    queryClient.setQueryData(['flow'], { count: 3, items: [
-      { ...item(7, 'Bulk edit stock', 'qa', true), ...acme },
-      item(5, 'Rate fallback', 'review'),
-      { ...item(9, 'Postal codes', 'inbox'), pipeline_id: 'support', ...acme },
-    ] });
-    show('/flow/7');
-    const list = await screen.findByRole('navigation', { name: 'Flow' });
-    expect((await within(list).findByRole('button', { name: /Acme/ })).textContent).toBe('Acme2');
-    expect(within(list).getByRole('button', { name: /Other/ }).textContent).toBe('Other1');
-    const open = within(list).getByRole('link', { name: /Bulk edit stock/ });
-    expect(open.classList.contains('is-on')).toBe(true);
-    expect(open.getAttribute('href')).toBe('/flow/7');
-    expect(within(open).getByText('Late')).toBeTruthy();
-    expect(within(list).getByRole('link', { name: /Postal codes/ }).classList.contains('is-on')).toBe(false);
-    // it says it is Flow, plainly
-    expect(within(list).getByRole('button', { name: 'Flow' })).toBeTruthy();
-    expect(within(list).getByText('Flow · 4')).toBeTruthy();
-    expect(within(list).getByRole('button', { name: 'Exit Flow' }).getAttribute('title')).toBe('Exit Flow');
-    expect(await screen.findByText('task chat')).toBeTruthy();
-    fireEvent.click(within(list).getByRole('button', { name: /Acme/ }));
-    expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
-    expect(within(list).getByRole('link', { name: /Rate fallback/ })).toBeTruthy();
-    lookup.mockRestore();
-  });
 
   it('opened from a thread, keeps that thread beside it in place of the task’s own chat (plan/layers.html)', async () => {
     at(1600);
     people(MAYA, QA);
-    show('/flow/7?chat=agent%3Aqa&via=thread');
+    show('/task/7?chat=agent%3Aqa&via=thread');
     const sheet = await screen.findByRole('complementary', { name: 'Chat with QA Owner' });
     expect(await within(sheet).findByText('a teammate chat')).toBeTruthy();
     expect(screen.queryByText('task chat')).toBeNull();
   });
 
-  it('the pipeline editor is a page, not a task: no task chat and no Flow list', async () => {
+  it('the pipeline editor is a page, not a task: no task chat and no task list', async () => {
     show('/tasks/eng/edit');
     expect(await screen.findByRole('heading', { name: 'Edit pipeline' })).toBeTruthy();
     expect(screen.queryByText('task chat')).toBeNull();
-    expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull();
+    expect(screen.queryByRole('navigation', { name: 'Engineering' })).toBeNull();
   });
 });
 
@@ -739,23 +706,22 @@ describe('a task opened from a board', () => {
     return router;
   };
 
-  it('opens in place: beside it the same pipeline, as its board was filtered, the task chosen, never Flow; Back is the board again', async () => {
+  it('opens in place: beside it the same pipeline, as its board was filtered, the task chosen, no count in its head; Back is the board again', async () => {
     const router = await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
     expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/tasks/eng/7');
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
-    expect(screen.queryByRole('navigation', { name: 'Flow' })).toBeNull();
     expect(within(list).getByRole('button', { name: 'Engineering' })).toBeTruthy();
-    expect(within(list).queryByRole('button', { name: 'Exit Flow' })).toBeNull();
     const open = await within(list).findByRole('link', { name: /Bulk edit stock/ });
     expect(open.classList.contains('is-on')).toBe(true);
     expect(open.getAttribute('href')).toBe('/tasks/eng/7');
     expect(within(list).getByRole('link', { name: /Rate fallback/ }).classList.contains('is-on')).toBe(false);
     expect(within(list).getAllByRole('button', { name: /^(Review|QA)/ }).map((b) => b.textContent)).toEqual(['Review1', 'QA1']);
     expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ owner: 'bot:qa' }));
-    // Flow is there to enter, not entered
-    expect(within(list).getByRole('link', { name: 'Flow' }).getAttribute('aria-pressed')).toBe('false');
+    // what waits on you is the menu's Needs you, not a count over the list: the head is the crumb and ×
+    expect(within(list).queryByRole('link', { name: 'Flow' })).toBeNull();
+    expect(list.querySelector('.li-head')?.textContent).toBe('TasksEngineering');
     expect(await screen.findByText('task chat')).toBeTruthy();
     act(() => router.history.back());
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
@@ -800,51 +766,6 @@ describe('a task opened from a board', () => {
     expect(await screen.findByRole('navigation', { name: 'Engineering' })).toBeTruthy();
   });
 
-  it('enters Flow only from its own play mark, and Escape leaves Flow for the task it was entered from', async () => {
-    const router = await board();
-    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
-    const list = await screen.findByRole('navigation', { name: 'Engineering' });
-    fireEvent.click(within(list).getByRole('link', { name: 'Flow' }));
-    expect(await screen.findByRole('heading', { name: 'Flow page' })).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/flow');
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
-    expect(router.state.location.pathname).toBe('/tasks/eng/7');
-  });
-
-  it('in Flow, × (Exit Flow) and Escape go back to the board it was entered from; Escape while typing stays', async () => {
-    const router = await board();
-    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
-    const list = await screen.findByRole('navigation', { name: 'Flow' });
-    expect(within(list).getByText('Flow · 4')).toBeTruthy();
-    fireEvent.click(within(list).getByRole('button', { name: 'Exit Flow' }));
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
-
-    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
-    await screen.findByRole('navigation', { name: 'Flow' });
-    const field = document.body.appendChild(document.createElement('input'));
-    fireEvent.keyDown(field, { key: 'Escape' });
-    await act(async () => {});
-    expect(router.state.location.pathname).toBe('/flow/9');
-    field.remove();
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
-    // off Flow, Escape goes nowhere
-    fireEvent.keyDown(document.body, { key: 'Escape' });
-    await act(async () => {});
-    expect(router.state.location.pathname).toBe('/tasks/eng');
-  });
-
-  it('Back from Flow is the board as it was', async () => {
-    const router = await board();
-    await act(() => router.navigate({ to: '/flow/$task', params: { task: '9' } }));
-    await screen.findByRole('navigation', { name: 'Flow' });
-    act(() => router.history.back());
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
-  });
 });
 
 describe('the desktop app', () => {
@@ -861,7 +782,7 @@ describe('the desktop app', () => {
     expect(t.companies.reportSelf).toHaveBeenCalledTimes(1);
   });
 
-  it('refreshes the Dock and shell Flow badges at snooze expiry outside Flow', async () => {
+  it('refreshes the Dock badge and the menu’s Needs you count at snooze expiry', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     const t = fakeDesktop();
     queryClient.setQueryData(['flow', 'count'], { count: 4, wakeAt: 60_000 });

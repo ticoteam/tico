@@ -1,13 +1,11 @@
-import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { FlowMark } from '@/kit/FlowMark';
 import { Link } from '@/kit/Link';
 import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
 import { answered } from './answered';
-import { failedToast, reasonOf, tabAddress } from './model';
+import { failedToast, reasonOf } from './model';
 import { Face } from './parts';
-import { useWaitingTasks, type TaskData } from './queries';
 import './ask.css';
 
 /* One ask card (master plan P1): whatever waits on a person draws in this one frame, its body by its kind. One line
@@ -88,11 +86,8 @@ export const Docked = ({ dock, children }: { dock: boolean; children: ReactNode 
   );
 
 /** Around a card's answer: a refusal is said in the card, or in a toast once the card has gone (never silent). After
-    the answer, in Flow, the next task that waits on the person opens (`nextUp`, picked before answering: the answered
-    row leaves the list at once); outside Flow the open task's page decides, not once the person has moved on. */
-export function useAnswering(t: Pick<TaskData, 'id'>, flow: boolean) {
-  const { rows } = useWaitingTasks(flow);
-  const navigate = useNavigate();
+    the answer the open task's page decides whether to stay or close, not once the person has moved on. */
+export function useAnswering() {
   const [error, setError] = useState('');
   const here = useRef(true);
   useEffect(() => {
@@ -101,18 +96,10 @@ export function useAnswering(t: Pick<TaskData, 'id'>, flow: boolean) {
       here.current = false;
     };
   }, []);
-  const nextUp = () => {
-    const i = rows.findIndex((w) => w.id === t.id);
-    return (i >= 0 ? (rows[i + 1] ?? rows[i - 1]) : rows[0]) ?? null;
-  };
   const refused = (res: { error?: string; why?: string }) => {
     if (!here.current) toast(failedToast(res));
     setError(reasonOf(res.error));
   };
-  const moveOn = (next: ReturnType<typeof nextUp>) => {
-    if (!flow) return void (here.current && answered());
-    const to = next ? tabAddress(next, undefined, true) : { to: '/flow', search: {} };
-    void navigate({ to: to.to as never, search: to.search as never });
-  };
-  return { error, setError, here, nextUp, refused, moveOn };
+  const moveOn = () => void (here.current && answered());
+  return { error, setError, here, refused, moveOn };
 }

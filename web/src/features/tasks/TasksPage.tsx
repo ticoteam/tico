@@ -27,9 +27,8 @@ import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { NewTask } from './NewTask';
-import { Blocks, Face, FlowButton, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
+import { Blocks, Face, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
-  flowCountQuery,
   isFiltered,
   listParams,
   loadMore,
@@ -208,7 +207,7 @@ function PipelinePick({ pipelines, current }: { pipelines: readonly Pipeline[]; 
   );
 }
 
-/** What a phone's "⋯" adds first, since its head keeps only Flow and "⋯" (list.js phoneMore). */
+/** What a phone's "⋯" adds first, since its head keeps only "⋯" (list.js phoneMore). */
 interface PhoneMore {
   view: 'board' | 'list';
   search: TasksSearch;
@@ -267,8 +266,8 @@ function TaskFind({ search }: { search: TasksSearch }) {
   );
 }
 
-/** Filter, the view switch, New task, Flow (list.js head; the pipeline's agent is in the Agent bar). A phone keeps only
-    Flow; the rest is under "⋯". Archived keeps the filter. */
+/** Filter, the view switch, New task (list.js head; the pipeline's agent is in the Agent bar). A phone has them under
+    "⋯". Archived keeps the filter. */
 function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view: View; search: TasksSearch; onNew?: () => void }) {
   const setView = useAction('tasks.setView');
   return (
@@ -288,14 +287,8 @@ function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view
         </span>
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
-      {view !== 'archived' && <OpenFlowButton />}
     </>
   );
-}
-
-function OpenFlowButton() {
-  const { data = 0 } = useQuery(flowCountQuery);
-  return <FlowButton on={false} count={data} />;
 }
 
 /** The filters that are set, one chip each, then Clear. */
