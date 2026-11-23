@@ -321,7 +321,9 @@ impl AntigravityHost {
         }
         if let Some(cid) = inner.provider.clone() {
             if let Err(e) = self.save(&mut inner, &cid, false) {
-                log(&format!("Antigravity: the conversation record was not updated: {e}"));
+                log(&format!(
+                    "Antigravity: the conversation record was not updated: {e}"
+                ));
             }
         }
     }
@@ -789,9 +791,12 @@ impl AntigravityHost {
             .as_str()
             .is_some_and(|t| !t.is_empty() && t != "user_input");
         if crate::util::truthy(step.get("conversation_id")) {
-            if let Some(end) =
-                self.named(inner, stream, &text_of(&step["conversation_id"]), must_continue)?
-            {
+            if let Some(end) = self.named(
+                inner,
+                stream,
+                &text_of(&step["conversation_id"]),
+                must_continue,
+            )? {
                 return Ok(Some(end));
             }
         }
@@ -841,9 +846,12 @@ impl AntigravityHost {
         // A refusal before any work names no conversation the thread should move to: the saved one stays.
         if result["status"] == "SUCCESS" || stream.worked {
             if crate::util::truthy(result.get("conversation_id")) {
-                if let Some(end) =
-                    self.named(inner, stream, &text_of(&result["conversation_id"]), must_continue)?
-                {
+                if let Some(end) = self.named(
+                    inner,
+                    stream,
+                    &text_of(&result["conversation_id"]),
+                    must_continue,
+                )? {
                     return Ok(Some(end));
                 }
             }
@@ -1251,7 +1259,10 @@ read -r _
         assert_eq!(runs.len(), 1, "never started again");
         assert!(runs[0].ends_with(&format!("--conversation {SAVED}")));
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(record.contains(OTHER) && record.contains("needs_history"), "{record}");
+        assert!(
+            record.contains(OTHER) && record.contains("needs_history"),
+            "{record}"
+        );
     }
 
     #[tokio::test]
@@ -1276,9 +1287,16 @@ read -r _
         assert!(runs[0].ends_with(&format!("--conversation {SAVED}")));
         assert!(!runs[1].contains("--conversation"), "{}", runs[1]);
         let prompts = std::fs::read_to_string(rig.dir.join("args.log.prompts")).unwrap();
-        assert_eq!(prompts.lines().count(), 1, "the first process never had the prompt: {prompts}");
+        assert_eq!(
+            prompts.lines().count(),
+            1,
+            "the first process never had the prompt: {prompts}"
+        );
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(record.contains(OTHER) && !record.contains("needs_history"), "{record}");
+        assert!(
+            record.contains(OTHER) && !record.contains("needs_history"),
+            "{record}"
+        );
     }
 
     #[tokio::test]
@@ -1406,7 +1424,10 @@ read -r _
         assert_eq!(rig.runs().len(), 1, "nothing is replayed after a step");
         assert!(host.needs_history(&thread));
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(record.contains(OTHER) && record.contains("needs_history"), "{record}");
+        assert!(
+            record.contains(OTHER) && record.contains("needs_history"),
+            "{record}"
+        );
         // Told everything in the very turn agy moved it in is not told it in the new conversation: the mark stays.
         host.history_told(&thread);
         assert!(host.needs_history(&thread));
