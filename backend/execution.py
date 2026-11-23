@@ -2846,6 +2846,9 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
 
     row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
     ready = readiness_document(row["readiness"]) if row else {}
+    # The fallback the bot names, as `complete` remembers it failed (`failed_fallback`): taken before any filtering, so
+    # one the claim drops here still matches the mark and the bot waits out the hold.
+    mark = fallback_mark(config)
     # The fallbacks the claim hands this computer (without_unknown_fallback), so admission waits on the same ones.
     config = without_unknown_fallback(config, ready)
     paid_tools = agent_subscriptions.loaded_picks(c, bot, loads)
@@ -2868,7 +2871,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
     if fallback_uses_primary_login(config, named, primary):
         named = {}
     hold = login_holds.get(c, runner_id, own, primary)
-    if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
+    if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == mark:
         return None
     if named.get("harness"):
         if not named.get("model"):

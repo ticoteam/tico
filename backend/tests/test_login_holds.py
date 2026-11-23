@@ -302,6 +302,44 @@ def test_a_same_login_named_fallback_uses_the_next_company_row_or_waits_without_
             assert H.status(c, "ops")["state"] == "limited"
 
 
+def test_an_empty_fallback_the_claim_dropped_still_waits_out_the_hold(api, monkeypatch):
+    # The bot names an Antigravity fallback this older runner cannot run, so the claim drops it and offers the
+    # company's next row. Once that hop ended empty (`failed_fallback`, saved from the bot's own config), the bot waits.
+    from backend.execution import fallback_choice, fallback_mark, own_login_hold
+
+    view = get(api, "providers")
+    api.put(
+        "/api/v2/providers",
+        json={"enabled": ["openai", "anthropic"], "model": "gpt-6-luna", "expected_revision": view["revision"]},
+        headers={**headers(), "Idempotency-Key": "dropped-fallback"},
+    ).raise_for_status()
+    at(monkeypatch, "2026-10-19T01:46:47.000000Z")
+    machine = runner(api)
+    assign(api, machine, "ops")
+    config = {
+        "runtime": "codex",
+        "harness": "codex",
+        "model": "gpt-6-luna",
+        "fallback": {"harness": "antigravity", "model": "gemini-4-neon"},
+    }
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", config)
+    signed_in(api, machine, ["ops"], ["codex", "claude"])
+    post(api, "tasks", {"owner": "ops", "title": "Dropped fallback work", "body": "Please do it."})
+    limit(api, machine, claim(api, machine))
+    at(monkeypatch, "2026-10-19T01:50:00.000000Z", api)
+    settings = api.app.state.store.settings
+    with api.app.state.store.read() as c:
+        assert fallback_choice(c, settings, machine["runner_id"], "ops", config) == ("", "claude")
+    with api.app.state.store.transaction() as c:
+        hold = own_login_hold(c, settings, "ops")
+        assert hold
+        hold.setdefault("failed_fallback", {})["ops"] = fallback_mark(config)
+        login_holds._save(c, hold)
+    with api.app.state.store.read() as c:
+        assert fallback_choice(c, settings, machine["runner_id"], "ops", config) is None
+
+
 def test_a_bot_whose_fallback_is_off_or_not_signed_in_waits_out_the_hold(api, monkeypatch):
     at(monkeypatch, "2026-10-19T01:46:47.000000Z")
     machine = runner(api)
