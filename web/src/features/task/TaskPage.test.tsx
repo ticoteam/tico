@@ -308,7 +308,7 @@ describe('one open task', () => {
     show(<TaskPage task="12" pipeline="p1" />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
     const who = await waitFor(() => document.querySelector('[data-target="task-owner:t1"]') as HTMLElement);
-    expect(who.getAttribute('aria-label')).toBe('Who has it');
+    expect(await screen.findByRole('button', { name: 'Who has it: Builder' })).toBe(who);
     expect(within(who).getByText('Builder')).toBeTruthy();
   });
 
