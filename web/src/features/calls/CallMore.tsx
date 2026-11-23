@@ -9,7 +9,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuSub } from '@/kit/Menu';
 import { Face, press, useNameOf, type InCall } from './parts';
-import { attachScreen, canShare, type CallState } from './session';
+import { attachScreen, type CallState } from './session';
 
 /* What a call does beyond mute and leave (old thread-call-live.ts callBarDraw, call-window.ts cwPop): share a screen,
    bring an agent in, and End for whoever started it. */
@@ -71,12 +71,11 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
   const stage = c?.stage;
   const stoppable = s.sharing || (!!stage && (stage.by === (s.me ?? me) || c?.connector === (s.me ?? me)));
   const word = s.sharing ? 'Sharing' : 'Share';
-  // a phone's browser cannot send a screen: with nothing to stop either, there is no control
-  if (!canShare() && !stoppable) return null;
-  // sharing a screen does not work yet: say so, and still let a screen already out be stopped
+  // sharing a screen does not work yet: say so where a screen could be sent (the desktop app included; a phone's
+  // browser cannot), and still let a screen already out be stopped
   if (!stoppable)
-    return (
-      <button type="button" className="cc" aria-label="Share screen, coming soon" title="Coming soon" disabled>
+    return typeof navigator === 'undefined' || typeof navigator.mediaDevices?.getDisplayMedia !== 'function' ? null : (
+      <button type="button" className="cc cc-soon" aria-label="Share screen, coming soon" title="Coming soon" disabled>
         <Icon name="share" />
         <span className="cc-l">Coming soon</span>
       </button>
@@ -92,7 +91,7 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
         </button>
       }
     >
-      {stoppable && <MenuItem label="Stop sharing" icon="close" onSelect={() => void press('calls.stopShow', { id: room })} />}
+      <MenuItem label="Stop sharing" icon="close" onSelect={() => void press('calls.stopShow', { id: room })} />
     </Menu>
   );
 }

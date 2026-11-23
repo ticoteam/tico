@@ -428,3 +428,6 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 .shot{flex:1;min-height:0;display:flex;flex-direction:column;border-radius:var(--r-card);background:var(--well);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
 .shot>video{flex:1;min-height:0;width:100%;object-fit:contain}
 .shot>.lib{flex:1;min-height:0;overflow:auto}
+/* Share is not ready yet: a quiet, unpressable "Coming soon" that keeps its words even where the bar is compact */
+.cc.cc-soon,.cc.cc-soon:hover{background:var(--well);color:var(--ink-3);cursor:default;width:auto;display:inline-flex;align-items:center;gap:var(--s-2);padding:0 var(--s-3h) 0 var(--s-3)}
+.cc.cc-soon .cc-l{display:inline;font-size:var(--t-sm);white-space:nowrap}
