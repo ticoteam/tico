@@ -10,9 +10,9 @@ export function mentionAt(text: string, caret: number): { start: number; query: 
 }
 
 /** A pick as written in the message: the name `mentions` in backend/threads.py reads, an agent's slug or a person's id
-    (a person whose id would not read as one word goes by full name). */
+    (an agent with no slug, or a person whose id would not read as one word, goes by name). */
 export function mentionText(a: Actor): string {
-  if (a.kind === 'agent') return `@${a.slug ?? a.id.slice(a.id.indexOf(':') + 1)}`;
+  if (a.kind === 'agent') return `@${a.slug || a.name}`;
   const id = a.id.slice(a.id.indexOf(':') + 1);
   return /^[\w.-]+$/.test(id) ? `@${id}` : `@${a.name}`;
 }

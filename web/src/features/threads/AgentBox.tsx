@@ -42,6 +42,8 @@ export function AgentBox({ agent, from, draftId }: AgentBoxProps) {
       to={who?.name ?? 'the agent'}
       // a message with files cannot carry its page: the agent would not know which conversation it is about
       attach={false}
+      // it goes to the sender's own chat with this one agent: an @ of anyone else reaches no one
+      mentions={false}
       onSend={async (text) => {
         const at = here();
         let sent;

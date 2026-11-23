@@ -91,3 +91,15 @@ def test_a_sidebar_mention_clears_when_its_delivery_is_moot(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE message_deliveries SET state='moot' WHERE message_id=?", (said["id"],))
     assert attention_mentions(api) == needs_you_mentions(api) == []
+
+
+def test_a_mention_of_a_dotted_id_names_only_that_person_and_a_trailing_full_stop_still_names_the_first(api):
+    """The @ list writes a person's id, so @ana.lee must not also @ ana (on a private task it would widen who reads)."""
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO humans (id, name, email, slack_id, teams) VALUES (?,?,?,?,?)",
+            ("ana.lee", "Ana Lee", "ana.lee@acme.example", None, "[]"),
+        )
+        assert threads.mentions(c, None, "@ana.lee can you check?") == [("human:ana.lee", "mention")]
+        assert threads.mentions(c, None, "Ask @ana.") == [("human:ana", "mention")]
+        assert threads.names(c, "human:ana", "cc @ana.lee") is False

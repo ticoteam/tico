@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor, type Directory } from '@/data';
 import { Composer } from './Composer';
 
@@ -12,9 +12,11 @@ const actors: Actor[] = [
   { id: 'bot:r1', kind: 'agent', name: 'Release Owner', slug: 'release-owner' },
   { id: 'bot:q1', kind: 'agent', name: 'QA', slug: 'qa' },
   { id: 'bot:old', kind: 'agent', name: 'Retired Relay', slug: 'relay', lifecycle: 'archived' },
+  { id: 'bot:9f2c', kind: 'agent', name: 'Payroll' },
 ];
 
-const box = () => screen.getByRole('textbox', { name: 'Message Tico' }) as HTMLTextAreaElement;
+// by its label: the box is a combobox while its names are open, a text box otherwise
+const box = () => screen.getByLabelText('Message Tico') as HTMLTextAreaElement;
 // each row's name, without the avatar's initials
 const names = () => screen.queryAllByRole('option').map((o) => o.querySelector(':scope > span:not(.av)')?.textContent);
 const type = (value: string) => fireEvent.change(box(), { target: { value } });
@@ -40,12 +42,39 @@ describe('names after @', () => {
     type('hi there');
     expect(screen.queryByRole('listbox')).toBeNull();
     type('hi @');
-    expect(names()).toEqual(['QA', 'Release Owner', 'Rita Relish', 'Sam Lee']);
+    expect(names()).toEqual(['Payroll', 'QA', 'Release Owner', 'Rita Relish', 'Sam Lee']);
+    expect(box().getAttribute('role')).toBe('combobox');
+    expect(box().getAttribute('aria-expanded')).toBe('true');
     type('hi @rel');
     // a name or handle starting with it comes before a word inside one
     expect(names()).toEqual(['Release Owner', 'Rita Relish']);
     type('mail me at me@rel');
     expect(screen.queryByRole('listbox')).toBeNull();
+    expect(screen.getByRole('textbox', { name: 'Message Tico' })).toBe(box());
+  });
+
+  it('an agent with no slug is written by its name, which the server also reads', () => {
+    mount();
+    type('ask @pay');
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(box().value).toBe('ask @Payroll ');
+  });
+
+  it('a list closed in one conversation does not stay closed in the next one the box shows', () => {
+    const onSend = vi.fn();
+    const at = (id: string) => (
+      <QueryClientProvider client={queryClient}>
+        <Composer id={id} me={ME} to="Tico" onSend={onSend} />
+      </QueryClientProvider>
+    );
+    localStorage.clear();
+    const { rerender } = render(at('c1'));
+    type('hi @sa');
+    fireEvent.keyDown(box(), { key: 'Escape' });
+    rerender(at('c2'));
+    type('yo @sa');
+    // the @ at the same place in the other conversation is not the one closed in the first
+    expect(names()).toEqual(['Sam Lee']);
   });
 
   it('Enter picks the highlighted name in the form the server reads as a mention, and does not send', () => {
@@ -67,10 +96,34 @@ describe('names after @', () => {
     box().setSelectionRange(3, 3);
     fireEvent.select(box());
     fireEvent.keyDown(box(), { key: 'Tab' });
-    expect(box().value).toBe('@qa  then more');
+    expect(box().value).toBe('@qa then more');
+    expect(box().selectionStart).toBe(4);
     type('ping @release');
     fireEvent.click(screen.getByRole('option', { name: 'Release Owner' }));
     expect(box().value).toBe('ping @release-owner ');
+  });
+
+  it('a pick with the caret inside an @word replaces the whole word', () => {
+    mount();
+    type('Ask @release tomorrow');
+    box().setSelectionRange(8, 8);
+    fireEvent.select(box());
+    fireEvent.click(screen.getByRole('option', { name: 'Rita Relish' }));
+    expect(box().value).toBe('Ask @rita tomorrow');
+  });
+
+  it('keeps the row under the arrow keys in view', () => {
+    const seen = vi.fn();
+    const own = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = seen;
+    onTestFinished(() => {
+      Element.prototype.scrollIntoView = own;
+    });
+    mount();
+    type('@');
+    fireEvent.keyDown(box(), { key: 'ArrowUp' });
+    expect(seen.mock.contexts.at(-1)).toBe(screen.getByRole('option', { name: 'Sam Lee' }));
+    expect(seen).toHaveBeenLastCalledWith({ block: 'nearest' });
   });
 
   it('Escape closes the list and leaves the text; Enter then sends it', () => {
@@ -88,7 +141,7 @@ describe('names after @', () => {
   it('puts the given people and agents first', () => {
     mount({ mentionFirst: ['human:sam', 'bot:q1'] });
     type('@');
-    expect(names()).toEqual(['Sam Lee', 'QA', 'Release Owner', 'Rita Relish']);
+    expect(names()).toEqual(['Sam Lee', 'QA', 'Payroll', 'Release Owner', 'Rita Relish']);
   });
 
   it('shows no list where mentions are off', () => {

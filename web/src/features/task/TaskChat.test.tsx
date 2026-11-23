@@ -13,8 +13,8 @@ vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 // The conversation itself is tested in its own folder: here, only which one the task's chat opens.
 vi.mock('@/conversation', async () => ({
-  Conversation: ({ id, title, foot }: { id: string; title: string; foot?: ReactNode }) => (
-    <section aria-label={`Chat with ${title}`} data-conversation={id}>
+  Conversation: ({ id, title, foot, mentionFirst }: { id: string; title: string; foot?: ReactNode; mentionFirst?: readonly string[] }) => (
+    <section aria-label={`Chat with ${title}`} data-conversation={id} data-mention-first={mentionFirst?.join(' ')}>
       {foot}
     </section>
   ),
@@ -108,6 +108,13 @@ describe('a task’s chat', () => {
     expect(chat.getAttribute('data-conversation')).toBe('c7');
     // The name goes to the owner's page.
     expect(screen.getByRole('link', { name: 'Birch Builder' }).getAttribute('href')).toBe('/team/a1');
+  });
+
+  it('lists who asked, who it is for, who has it and its roles’ people first after an @, each once', async () => {
+    detail = { ...task, requester_id: 'human:ana', assignee_id: 'bot:r2', roles: { reviewer: ['human:ben', 'bot:a1'] } };
+    show(<TaskChat task="12" />, '/tasks/p1/12');
+    const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
+    expect(chat.getAttribute('data-mention-first')).toBe('human:ana bot:r2 bot:a1 human:ben');
   });
 
   it('says under the name that this is the task’s own chat, or its owner’s main chat', async () => {

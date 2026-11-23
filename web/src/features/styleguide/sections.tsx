@@ -623,12 +623,12 @@ export function ChatArea() {
         <Specimens>
           <Sp name="Empty">
             <div className="sg-foot">
-              <Composer id="style-guide:empty" me={ME} to="Tico" onSend={noop} />
+              <Composer id="style-guide:empty" me={ME} to="Tico" onSend={noop} mentions={false} />
             </div>
           </Sp>
           <Sp name="Ready to send">
             <div className="sg-foot">
-              <Composer id="style-guide:ready" me={ME} to="Tico" onSend={noop} fill={READY} />
+              <Composer id="style-guide:ready" me={ME} to="Tico" onSend={noop} fill={READY} mentions={false} />
             </div>
           </Sp>
         </Specimens>

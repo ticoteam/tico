@@ -84,15 +84,30 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     placeAt.current = null;
   });
 
+  // The row under the arrow keys stays in view when the list scrolls (a phone's rows are taller).
+  useLayoutEffect(() => {
+    if (open) document.getElementById(`${listId}-${current}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [open, current, listId]);
+
+  // New words in the box (another conversation's draft, words put back): no @ list until the caret is placed again.
+  const forget = () => {
+    setCaret(null);
+    setShut(null);
+    setActive(0);
+  };
   // Another conversation in the same box: its own draft.
   if (shownFor !== `${me}:${id}`) {
     setShownFor(`${me}:${id}`);
     setText(readDraft(me, id));
     setFiles([]);
+    forget();
   }
   if (fill !== filled) {
     setFilled(fill);
-    if (fill) setText(fill.text);
+    if (fill) {
+      setText(fill.text);
+      forget();
+    }
   }
 
   const ready = canSend && (text.trim().length > 0 || files.length > 0);
@@ -130,9 +145,11 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
 
   const pick = (who: Actor) => {
     if (!at || caret === null) return;
-    const put = `${mentionText(who)} `;
-    const next = text.slice(0, at.start) + put + text.slice(caret);
-    const end = at.start + put.length;
+    // The whole @word goes, the part after the caret too; one space follows the name.
+    const rest = text.slice(caret).replace(/^\S*/, '');
+    const put = /^\s/.test(rest) ? mentionText(who) : `${mentionText(who)} `;
+    const next = text.slice(0, at.start) + put + rest;
+    const end = at.start + put.length + (put.endsWith(' ') ? 0 : 1);
     type(next, end);
     setShut(at.start);
     placeAt.current = end;
@@ -188,9 +205,12 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onBlur={() => setCaret(null)}
           onKeyDown={onKey}
+          // A combobox while its names are open (as @github/combobox-nav does), a plain text box otherwise.
+          role={open ? 'combobox' : undefined}
           aria-autocomplete={mentions ? 'list' : undefined}
+          aria-haspopup={open ? 'listbox' : undefined}
           aria-controls={open ? listId : undefined}
-          aria-expanded={mentions ? open : undefined}
+          aria-expanded={open ? true : undefined}
           aria-activedescendant={open ? `${listId}-${current}` : undefined}
         />
         {open && (
