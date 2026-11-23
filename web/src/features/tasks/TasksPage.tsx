@@ -352,6 +352,9 @@ function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
   return out;
 }
 
+/** Shown order only: what waits on you leads its stage, so a long stage never hides it below the cap. Bulk moves keep the stage's own order. */
+const yoursFirst = (list: readonly TaskItem[], me: string | undefined) => [...list.filter((t) => waitsOnMe(t, me)), ...list.filter((t) => !waitsOnMe(t, me))];
+
 /** In Select, the box in the mark's place. */
 const Pick = ({ on }: { on: boolean }) => (
   <span className={on ? 'check is-on' : 'check'} aria-hidden="true">
@@ -465,7 +468,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
             }
           >
             <Capped
-              list={list}
+              list={yoursFirst(list, me)}
               cap={COL_CAP}
               show={COL_SHOW}
               more={more}
@@ -522,7 +525,7 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
               }
             >
               <Capped
-                list={list}
+                list={yoursFirst(list, me)}
                 cap={LIST_CAP}
                 show={LIST_SHOW}
                 more={more}

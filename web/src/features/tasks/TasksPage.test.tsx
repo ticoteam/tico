@@ -282,6 +282,30 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(screen.getByRole('heading', { name: /Inbox/ }).closest('.stage-line')).toBeTruthy();
   });
 
+  it('what waits on you leads its stage past the cap, on the board and in the list; a bulk move keeps the stage order', async () => {
+    serve(() => ({ status: 200, body: { batch_id: 'b', moved: [], moved_unseen: 0, skipped: [] } }));
+    const turn = (who: string) => ({ state: 'person' as const, who, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false });
+    const many = Array.from({ length: 13 }, (_, i) => task(`a${i + 1}`, i + 1, `Task ${i + 1}`, 's1'));
+    many[11] = task('a12', 12, 'Ana approves', 's1', { turn: turn('human:ana') });
+    many[12] = task('a13', 13, 'You approve', 's1', { turn: turn(ME) });
+    const titles = () => screen.getAllByTitle(/^(Task \d+|Ana approves|You approve)$/).map((el) => el.getAttribute('title'));
+    for (const view of ['board', 'list'] as const) {
+      seed(many);
+      show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
+      await screen.findByTitle('You approve');
+      // Only yours leads: a turn that is someone else's keeps its place.
+      expect(titles().slice(0, 2)).toEqual(['You approve', 'Task 1']);
+      expect(titles()).not.toContain('Ana approves'); // still past the cap, behind "more"
+      cleanup();
+    }
+    seed(many);
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close all' }));
+    await waitFor(() => expect(posts.length).toBe(1));
+    expect(posts[0].body).toEqual({ ids: many.map((x) => x.id), to: 'closed' });
+  });
+
   it('a card and a row say which tasks they block', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([task('a1', 7, 'Fix the export', 's1', { blocks: [{ id: 'b1', number: 613, label: 'E613' }, { id: 'b2', number: 633, label: null }] })]);
