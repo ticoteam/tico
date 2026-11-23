@@ -332,7 +332,7 @@ cannot. The task merged into stays. In one change (if any part is refused, nothi
 | Open sub-tasks | Move under the kept task, before the close, so they stay open |
 | Comments | Stay on the merged task. The kept task's note says how many |
 | Open asks, OKs and ❓ | End with it. The kept task's note lists each one, so its owner can ask again |
-| Followers and requesters | Added to the kept task. Teammates who asked for the merged task also follow the kept one, so they hear when it is done |
+| Requesters | Added to the kept task, so they hear when it is done |
 | Labels and related links | Added to the kept task. Its own stage, due date and pipeline stay; the other's due date is in the note |
 | The task itself | Closed with "Archiving this one as a duplicate of #N; its details were added there.", related as `duplicate_of` |
 
@@ -381,18 +381,40 @@ task once when the PR's checks finish, a review approves or asks for changes, or
 
 ## Conversation
 
-Every task has its own thread. A comment is a post there and reaches the task's [followers](#followers) and whoever it
-@mentions. A comment to a bot says how it arrives ([Steer, queue or defer](using-tico.md#steer-queue-or-defer)):
+Every task has its own thread, and its comments are a log: a plain comment wakes and notifies nobody, not even the
+agent holding the task. It reaches only whom it addresses:
+
+- **@someone**: a person is notified; an agent is woken in its own session, and its answer shows as a reply under the
+  comment.
+- **Reply** (`in_reply_to` in `POST /api/v2/tasks/{id}/comments`, `tico task comment <id> "..." --reply-to <comment>`):
+  a person's Reply reaches the comment's author as an @mention would, with nothing added to the text. Replies show
+  one level deep, under the comment they answer. A bot's reply to a bot waits for that bot's next turn unless what it
+  answers asked for an answer (needs-action, or a wait).
+- **A session message** (`to: <agent>`, `--to <agent>`): a message in that agent's session, which wakes it. Only
+  someone who may direct the task sends one (`can_direct` on the task read); `to` must be an active agent you may see
+  that can read the task, and goes without `public`, `ask`, `goal` or `in_reply_to`.
+
+Each agent on a task has its own **session view**: its messages in the task's one thread (its runs' replies, its stage
+wakes and the messages written to it, stamped `session_agent_id`) and those that @mention it. The task read lists them
+in `sessions` (`[{agent, last_seq}]`, the holder first); `GET /api/v2/threads/{thread}/timeline?session=<agent>` and
+`GET /api/v2/tasks/{id}/comments?session=<agent>` read one, `comments=true` reads the comments (unstamped messages, with
+each agent's answer to one), and `GET /api/v2/tasks/{id}/execution?agent=<agent>` is that agent's run. An agent's turn
+reads the comments and its own session, never another agent's. Old messages are comments.
+
+How a comment reaches the agents it addresses says how it arrives
+([Steer, queue or defer](using-tico.md#steer-queue-or-defer)):
 
 ```sh
-tico task comment <id> "Use the August numbers." --steer
-tico task comment <id> "For later." --defer 4h
+tico task comment <id> "@build use the August numbers." --steer
+tico task comment <id> "For later." --to build --defer 4h
 ```
 
-A comment that names a bot's open OK on the task (`ask`: its requirement id, in `POST
-/api/v2/tasks/{id}/comments`) is a reply to it: it is written to the bot that asked and wakes it, even when that bot is
-not the one the task's comments go to first, and the OK stays open. The person the OK waits on may wake the bot this
-way. A bot's ❓ is answered by a reply in its chat, not by a comment.
+When an agent finishes its stage, its done note is one comment on the task. When the task is done or closed, each
+person who asked for it and can still read it gets one line saying so, once per completion.
+
+A comment that names a bot's open ❓ on the task (`ask`, in `POST /api/v2/tasks/{id}/comments`: the pinned answer)
+settles exactly that ❓ and wakes the bot that asked. Any other comment of yours on the task clears your open ❓s there
+(a message in one agent's session, only that agent's), and every agent whose ❓ it clears gets it.
 
 A comment is talk. It is not progress: a bot that only comments has still stopped early.
 
@@ -476,17 +498,9 @@ each OK or send back given while it counted.
 
 ## Followers
 
-A task's **followers** are the people and bots who follow its thread, each at a level: `live` (everything),
-`mentions`, `digest` or `muted`.
-
-- The owner follows, at `live`. A new owner follows. The old owner keeps following if they are still the assignee,
-  chose to follow, or were @mentioned.
-- Filing or commenting on a task does not follow it. An @mention does. `tico task create --follow` follows the task you
-  file.
-- Only someone who can see the task follows it.
-- `tico task followers <id>`; `tico task follow <id> [--level live|mentions|digest|muted] [--who X]`;
-  `tico task unfollow <id> [--who X]`.
-- API: `GET /api/v2/tasks/{id}/followers`; `PUT` with `{"actor"?: X, "following": true|false, "notify"?: level}`.
+Nobody follows a task: its comments are a log (see [Conversation](#conversation)). Until the upgrade floor passes the
+release that made it so, older clients keep working: `follow` on create is accepted and ignored, `GET
+/api/v2/tasks/{id}/followers` lists nobody, and following or unfollowing answers and changes nothing.
 
 ## Company and private tasks
 

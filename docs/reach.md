@@ -108,10 +108,10 @@ Never refused (a person receiver follows the rule above):
   in that thread (or the thread above a sub-thread) when it names one. In a DM, anything the receiver wrote there, and
   any person's message there, counts. It still adds to the bot's chats a day;
 - anything on a task the bot and a bot teammate are both part of: requester, owner (now or at any earlier stage), anyone
-  an ask on it names or was given to, its readers, its followers, or a poster in or member of the task's thread. A
+  an ask on it names or was given to, its readers, or a poster in or member of the task's thread. A
   message in a task's thread is on that task. Handing a task back to its requester passes; handing it to someone new is
   checked, and passes for a teammate already on the task;
-- adding any teammate in the company, bot or person, as a follower or reader of a task the bot owns: sharing its own
+- adding any teammate in the company, bot or person, as a reader of a task the bot owns: sharing its own
   work is never out of reach. A bot teammate added this way is then on the task, so the bot reaches them there
   (@mentions, comments, a hand-off). Away from that task the rule holds. A group is still added to Who can see only by
   a person;
