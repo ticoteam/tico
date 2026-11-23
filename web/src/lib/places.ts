@@ -41,13 +41,14 @@ export function notePlace(path: string, searchStr: string, search: Record<string
 export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? {};
 
 /** Closing an open task: back to the board, list or page it was opened from, the history stepping back to it while it
-    is behind. Opened from a link or reloaded, nothing is behind: its pipeline's board (`pipeline`, only while that board
-    is there), else Tasks. */
-export function leaveTask(r: Steps, pipeline?: string | null): void {
+    is behind. Opened from a link or reloaded, nothing is behind: the board `board` names (its pipeline, read only then,
+    null when there is none), else Tasks. */
+export function leaveTask(r: Steps, board?: () => string | null | Promise<string | null>): void {
   const now = stepOf(r.history.location.state);
   const to = beforeTask;
-  if (to?.at !== undefined && now !== undefined && to.at < now) r.history.go(to.at - now);
-  else void r.navigate({ href: to?.href ?? (pipeline ? `/tasks/${encodeURIComponent(pipeline)}` : HOME) });
+  if (to?.at !== undefined && now !== undefined && to.at < now) return r.history.go(to.at - now);
+  if (to) return void r.navigate({ href: to.href });
+  void Promise.resolve(board?.() ?? null).then((p) => r.navigate({ href: p ? `/tasks/${encodeURIComponent(p)}` : HOME }));
 }
 
 /** Forgets every place (tests). */

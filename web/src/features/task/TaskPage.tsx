@@ -165,8 +165,10 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const pipeline = t.pipeline_id;
   const close = useCallback(() => {
     leaving.current = true;
-    const board = client.getQueryData(pipelinesQuery.queryKey)?.some((p) => p.id === pipeline);
-    leaveTask(router, board ? pipeline : null);
+    leaveTask(router, async () => {
+      const live = await client.ensureQueryData(pipelinesQuery).catch(() => []);
+      return live.some((p) => p.id === pipeline) ? pipeline : null;
+    });
   }, [router, client, pipeline]);
   const [seek, setSeek] = useState(0);
   const sought = useRef(0);

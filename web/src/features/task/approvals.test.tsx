@@ -752,6 +752,18 @@ describe('the decision', () => {
     await waitFor(() => expect(direct.state.location.pathname).toBe('/tasks/p1'));
   });
 
+  it('Back from a link before the pipelines are read waits for them to pick the board @approvals', async () => {
+    let give!: () => void;
+    const list = new Promise<Reply>((done) => (give = () => done({ body: { pipelines: [{ id: 'p1', name: 'Legal', stages: [] }] } })));
+    reply = (url, method) => (method === 'GET' && url.endsWith('/api/v2/pipelines') ? list : null);
+    const router = show(<OnTask />, '/tasks/p1/12');
+    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
+    await act(async () => {});
+    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    give();
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
+  });
+
   it('Back from a link to a task whose pipeline is retired goes to Tasks, not a board that is gone @approvals', async () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
     const router = show(<OnTask />, '/tasks/p1/12');
