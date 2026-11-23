@@ -761,11 +761,15 @@ def parser():
     s = task.add_parser(
         "ask",
         help="ask a person on this task: the message is posted on the task's chat marked ❓ (needs their reply); "
-        "prefer one question, its first line the question itself (a new ❓ replaces yours, so number several in one); "
         "with --kind ok and --show, an OK of what it shows",
     )
     s.add_argument("id")
-    s.add_argument("line", nargs="?", help="the message: a short first line that reads on its own, then any detail")
+    s.add_argument(
+        "line",
+        nargs="?",
+        help="the message: prefer one question, its first line the question itself, then any detail; a new ❓ "
+        "replaces yours, so number several in one",
+    )
     s.add_argument("--to", help="the person you ask: their id")
     s.add_argument(
         "--kind",

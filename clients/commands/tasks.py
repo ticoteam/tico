@@ -13,8 +13,8 @@ from clients.commands._shared import ASKED, VERSION, _model_id, _seen
 
 # A task title as every create and file tool asks for it (backend/hubdb_text.py lint_title, lint_human_title).
 TITLE = (
-    'Task title, at most 60 characters: what is to be done, verb first ("Approve the Friday launch"); no name '
-    "prefixes, ticket codes or all-caps"
+    "Task title, at most 60 characters: the outcome or the question; one for a person starts with a verb "
+    '("Approve the Friday launch?"); no name prefixes, ticket codes or all-caps'
 )
 from clients.commands._requester import ON_BEHALF_OF, _as_person, _asked
 
@@ -211,7 +211,7 @@ def task_create(api, args):
     {
         "parent": TASK_ID,
         "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
-        "title": _s("What to do"),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat", default=""),
         "check_model": _s(
             "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.2-sol`; `auto` for "
