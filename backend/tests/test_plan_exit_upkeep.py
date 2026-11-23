@@ -165,10 +165,10 @@ def test_scheduled_usage_uses_the_exit_even_without_attempts(api, computers):
         runner_states.save(c, exit_runner["runner_id"], last_seen_at=H.shift(H.now(), hours=-1))
     assert poll(api, non_exit, sid) == EMPTY
     post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)
-    [plan] = get(api, "model-subscriptions")["subscriptions"]
-    assert plan["usage"]["reason"] == "Waiting for the plan's exit computer"
 
     heartbeat(api, exit_runner)
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["reason"] == "Waiting for the exit's first usage reading"
     [job] = poll(api, exit_runner, sid)["usage"]
     assert job["subscription"] == sid and job["token"] == access(1)
     idle = add(api, "claude_login", full(n=2, email="idle@acme.example"), name="Idle")["id"]
@@ -372,6 +372,8 @@ def test_waiting_routes_never_send_upkeep_to_legacy_computers(api, computers, mo
     for sid in (full_sid, token_sid):
         post(api, CONNECT, {"subscription": sid, "confirm": True}, expected=409)
         post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)
+    for plan in get(api, "model-subscriptions")["subscriptions"]:
+        assert plan["usage"]["reason"] == "Waiting for the plan's exit computer"
 
 
 def test_legacy_runner_can_pick_from_a_personal_pool_with_routing_on(api, computers):
@@ -406,12 +408,11 @@ def test_a_legacy_connect_cannot_poll_or_receive_a_code_after_routing_activates(
     assert post(api, CONNECT, request)["runner_id"] == exit_runner["runner_id"]
 
 
-def test_pasted_setup_token_invalidates_the_old_full_login_connect(api, computers):
-    _, linux = computers
-    mac = computer(api, "Mac exit", "darwin")
-    sid = add(api, "claude_login", full())["id"]
-    select(api, mac)
-    heartbeat(api, linux)
+@pytest.mark.parametrize("old_kind,new_kind", [("claude_login", "claude_token"), ("claude_token", "claude_login")])
+def test_pasting_a_different_plan_kind_invalidates_connect_on_the_same_exit(api, computers, old_kind, new_kind):
+    linux, _ = computers
+    sid = add(api, old_kind, full() if old_kind == "claude_login" else TOKEN)["id"]
+    generation = select(api, linux)
     request = {"subscription": sid, "confirm": True}
     login = post(api, CONNECT, request)
     lid, rid = login["id"], login["runner_id"]
@@ -420,16 +421,48 @@ def test_pasted_setup_token_invalidates_the_old_full_login_connect(api, computer
     post(api, f"runner-logins/{lid}/report", {"state": "waiting"}, linux["token"])
     post(api, code_path, {"code": "abcdef#ghijkl"})
 
-    post(api, f"model-subscriptions/{sid}", {"kind": "claude_token", "secret": TOKEN})
+    secret = full(n=2) if new_kind == "claude_login" else TOKEN
+    post(api, f"model-subscriptions/{sid}", {"kind": new_kind, "secret": secret})
     with api.app.state.store.read() as c:
         assert tuple(c.execute("SELECT state,pending_code FROM model_logins WHERE id=?", (lid,)).fetchone()) == (
             "failed",
             None,
         )
+        sub = MS.row(c, sid)
+        assert sub["kind"] == new_kind
+        assert plan_exits.routed(c, sub) == (rid, generation)
     post(api, code_path, {"code": "other#code"}, expected=409)
-    post(api, f"runner-logins/{lid}/subscription", {"value": full(n=2)}, linux["token"], expected=409)
+    post(api, f"runner-logins/{lid}/subscription", {"value": full(n=3)}, linux["token"], expected=409)
     assert get(api, "runner-logins", linux["token"])["logins"] == []
-    assert post(api, CONNECT, request)["runner_id"] == mac["runner_id"]
+    current = post(api, CONNECT, request)
+    assert current["id"] != lid and current["runner_id"] == rid
+
+
+def test_connect_resumes_on_the_same_exit_after_a_readiness_drop(api, computers):
+    exit_runner, _ = computers
+    sid = add(api)["id"]
+    select(api, exit_runner)
+    request = {"subscription": sid, "confirm": True}
+    login = post(api, CONNECT, request)
+    lid, rid, token = login["id"], login["runner_id"], exit_runner["token"]
+    path = f"runner-logins/{lid}"
+    login_path = f"computers/{rid}/logins/{lid}"
+    post(api, f"{path}/report", {"state": "waiting"}, token)
+
+    heartbeat(api, exit_runner, installed=False)
+    get(api, "runner-logins", token, expected=503)
+    post(api, f"{login_path}/code", {"code": "abcdef#ghijkl"}, expected=409)
+    post(api, f"{path}/subscription", {"value": full()}, token, expected=503)
+    assert get(api, login_path)["state"] == "waiting"
+
+    heartbeat(api, exit_runner)
+    assert post(api, CONNECT, request)["id"] == lid
+    post(api, f"{login_path}/code", {"code": "abcdef#ghijkl"})
+    [pending] = get(api, "runner-logins", token)["logins"]
+    assert pending["id"] == lid and pending["code"] == "abcdef#ghijkl"
+    assert post(api, f"{path}/subscription", {"value": full()}, token)["state"] == "done"
+    with api.app.state.store.read() as c:
+        assert MS.row(c, sid)["kind"] == "claude_login"
 
 
 def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, computers):

@@ -64,7 +64,7 @@ def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
     return exits.get(person)
 
 
-def routed(c: Connection, sub: Any, exits: Row | None = None) -> Route | None:
+def routed(c: Connection, sub: Any, exits: Row | None = None, *, require_ready: bool = True) -> Route | None:
     """A missing route uses legacy upkeep. A route without a runner waits for its exit."""
     exit_runner = selected(c, sub, exits)
     if exit_runner is None:
@@ -77,8 +77,10 @@ def routed(c: Connection, sub: Any, exits: Row | None = None) -> Route | None:
 
         if not platform_can_refresh(exit_runner):
             return None
-        if not takes_turns(exit_runner):
+        if require_ready and not takes_turns(exit_runner):
             return Route(None, generation)
+    if not require_ready:
+        return Route(runner_id, generation)
     ready = readiness(c, runner_id, exit_runner["readiness"])
     runtimes: Row = ready.get("runtimes") or {}
     claude: Row = runtimes.get("claude") or {}

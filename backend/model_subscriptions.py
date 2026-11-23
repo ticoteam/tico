@@ -1249,7 +1249,11 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     if percent_missing:
         return _reason("No percentage from the plan")
     if route:
-        return _reason("Waiting for the plan's exit computer")
+        return _reason(
+            "Waiting for the plan's exit computer"
+            if route.runner_id is None
+            else "Waiting for the exit's first usage reading"
+        )
     if outside:
         return _reason("No usage reported since this subscription was added")
     if not any(model_login._online(runners[g["runner_id"]]) for g in readers):
@@ -1911,7 +1915,7 @@ def default_name(c, kind, owner=""):
     return name
 
 
-def save(c, vault, settings, auth, who, body, sid=None):
+def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
     its usage-limit hold as Try now does, and a name renames it. Returns its view.
 
@@ -1943,7 +1947,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
             if not sid and taken["owner_id"] == owner:
                 # A second Connect of the same account reconnects its owner's plan.
                 body = body.model_copy(update={"name": None, "owner_id": None})
-                return save(c, vault, settings, auth, who, body, taken["id"])
+                return save(c, vault, settings, auth, who, body, taken["id"], completing_login_id=completing_login_id)
             label = f" as {taken['name']}" if sid and _may_manage_provider(auth, who, taken) else ""
             raise Problem("account", f"This Claude account is already connected{label}", 409)
     if sid and sub:
@@ -1996,8 +2000,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
                 # A setup-token plan becomes a full login, the same plan: owner, computers and history stay. Its readings
                 # and asked reads were the token's, and the login may be another account: they go.
                 c.execute("UPDATE model_subscriptions SET kind=? WHERE id=?", (body.kind, sid))
-                if plan_exits.UPKEEP_ROUTING:
-                    model_login.invalidate_connects(c, owner)
+                model_login.invalidate_plan_connects(c, sid, completing_login_id)
                 claude_login.reset_usage(c, sid)
                 H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
             if kind == "claude_login" and _kept_key(sub):
@@ -3083,11 +3086,13 @@ def connected(c, vault, settings, auth, who, login_id, body):
             confirm=bool(target["restart_confirmed"]),
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
+        sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
+        route = plan_exits.routed(c, sub)
+        if route and route.runner_id is None:
+            raise Problem("offline", model_login.EXIT_NOT_READY, 503, retryable=True)
         try:
-            sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
-            route = plan_exits.routed(c, sub)
             if not plan_exits.matches(route, who.runner_id, target["exit_generation"]):
-                raise Problem("stale_exit", "The plan's exit changed. Reconnect again on the current exit.", 409)
+                raise Problem("stale_exit", model_login.CONNECT_CHANGED, 409)
             auth.sync_access(c)
             requester = auth.identity_for_actor(c, login["requested_by"])
             save(
@@ -3098,6 +3103,7 @@ def connected(c, vault, settings, auth, who, login_id, body):
                 requester,
                 write,
                 target["subscription_id"] or None,
+                completing_login_id=login_id,
             )
         except Problem as problem:
             # A fixed word for the history: never the value, nor what the provider said about it.

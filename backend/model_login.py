@@ -81,6 +81,8 @@ VERDICTS.update(LEGACY_VERDICTS)
 MAX_LINES, MAX_LINE = 12, 200
 # What a page drawn before D11-5, or a client, is told when it asks for a key job from Settings > Computers.
 MOVED = "Add or replace model keys in Settings > Providers. Choose the key under Paid by on the agent."
+CONNECT_CHANGED = "This plan changed. Start the connect again."
+EXIT_NOT_READY = "The plan's exit is temporarily unavailable. Try again shortly."
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
 
 # The runner redacts before it reports; this is the same rule again because the server does not
@@ -159,8 +161,9 @@ def clean_user_code(code):
     return code if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 \-]{2,30}", code) else ""
 
 
-def _stale_connects(c, runner_id=None, owner=None):
+def _stale_connects(c, runner_id=None, owner=None, *, require_ready=False):
     from . import plan_exits
+    from .read_cache import rows
 
     if not plan_exits.UPKEEP_ROUTING:
         return []
@@ -168,29 +171,48 @@ def _stale_connects(c, runner_id=None, owner=None):
     if owner:
         where += " AND coalesce(m.owner_id,s.owner_id)=?"
         args = (*args, owner)
-    rows = c.execute(
+    connects = rows(
+        c,
         "SELECT s.login_id,s.exit_generation,l.runner_id,coalesce(m.kind,s.kind) AS kind, "
         "coalesce(m.owner_id,s.owner_id) AS owner_id,s.subscription_id<>'' AND m.id IS NULL AS missing "
         "FROM subscription_connects s JOIN model_logins l ON l.id=s.login_id "
         "LEFT JOIN model_subscriptions m ON m.id=s.subscription_id "
         f"WHERE l.runtime='claude' AND l.{ACTIVE_SQL}" + where,
         args,
-    ).fetchall()
+    )
     return [
         row["login_id"]
-        for row in rows
-        if row["missing"] or not plan_exits.matches(plan_exits.routed(c, row), row["runner_id"], row["exit_generation"])
+        for row in connects
+        if row["missing"]
+        or not plan_exits.matches(
+            plan_exits.routed(c, row, require_ready=require_ready), row["runner_id"], row["exit_generation"]
+        )
     ]
 
 
-def invalidate_connects(c: Connection, owner: str | None = None) -> None:
+def _fail_connects(c, login_ids):
     c.executemany(
         "UPDATE model_logins SET state='failed', message=?, url='', user_code='', pending_code=NULL, updated_at=? "
         "WHERE id=?",
-        [
-            ("The plan's exit changed. Reconnect again on the current exit.", H.now(), lid)
-            for lid in _stale_connects(c, owner=owner)
-        ],
+        [(CONNECT_CHANGED, H.now(), lid) for lid in login_ids],
+    )
+
+
+def invalidate_connects(c: Connection, owner: str | None = None) -> None:
+    _fail_connects(c, _stale_connects(c, owner=owner))
+
+
+def invalidate_plan_connects(c, subscription_id, completing_login_id):
+    _fail_connects(
+        c,
+        (
+            lid
+            for (lid,) in c.execute(
+                "SELECT l.id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+                f"WHERE s.subscription_id=? AND l.id IS NOT ? AND l.{ACTIVE_SQL}",
+                (subscription_id, completing_login_id),
+            )
+        ),
     )
 
 
@@ -620,6 +642,8 @@ def submit_code(c, who, rid, lid, code, auth=None):
         raise Problem("kind", "This sign-in does not take a pasted code", 422)
     if row["state"] != "waiting":
         raise Problem("state", "This sign-in is not waiting for a code", 409)
+    if row["kind"] == "connect" and lid in _stale_connects(c, rid, require_ready=True):
+        raise Problem("offline", EXIT_NOT_READY, 409)
     code = str(code or "").strip()
     if not PASTE_RE.fullmatch(code):
         raise Problem("kind", "That does not look like the code the sign-in page showed", 422)
@@ -650,6 +674,9 @@ def pending(c, runner_id, swept=True):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
     if swept:
         sweep(c)
+    if _stale_connects(c, runner_id, require_ready=True):
+        # A successful poll without the Connect tells the runner to cancel its live session.
+        raise Problem("offline", EXIT_NOT_READY, 503, retryable=True)
     rows = c.execute(
         f"SELECT l.*, s.kind AS subscription_kind FROM model_logins l LEFT JOIN subscription_connects s "
         f"ON s.login_id=l.id WHERE l.runner_id=? AND l.{ACTIVE_SQL} "
