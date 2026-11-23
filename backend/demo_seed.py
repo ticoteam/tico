@@ -121,9 +121,7 @@ def write_registry(settings):
             }
         )
     (registry / "employees.yaml").write_text(
-        yaml.safe_dump(
-            {"defaults": {"reasoning_effort": "high"}, "employees": employees}, sort_keys=False
-        )
+        yaml.safe_dump({"defaults": {"reasoning_effort": "high"}, "employees": employees}, sort_keys=False)
     )
     people = [dict(person, **({"inbox_bot": "inbox-manager"} if person["id"] == "ben" else {})) for person in D.PEOPLE]
     (registry / "people.yaml").write_text(
