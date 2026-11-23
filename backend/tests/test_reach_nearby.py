@@ -15,6 +15,7 @@ from backend import reach
 from backend.auth import Identity
 from backend.store import H, encode
 from backend.tests.helpers.api import get, headers, post  # noqa: F401  (the api fixture)
+from backend.tests.helpers.counsel import store_file
 from backend.tests.helpers.reach_nearby import chart, nearby_default  # noqa: F401  (the shipped reach default)
 from backend.tests.helpers.task_caps import as_bot
 import pytest
@@ -844,3 +845,191 @@ def test_a_deleted_newest_message_does_not_hide_an_older_one_and_filing_from_it_
         from_message=older["id"],
     )
     assert filed["requester_id"] == "human:ben", filed
+
+
+# ---------------------------------------------------------------- a task's Human (#3041, the HotMic stall)
+def _humaned(api, set_by="human:ana", chart_too=True):
+    """ops, two levels down, owns a task Ana asked for; `set_by` names Ben its Human. Ben is outside ops's reach and
+    is not the task's requester, so only being its Human can open him."""
+    if chart_too:
+        two_levels_down(api)
+    own = task(api, "ana-test", "bot:ops", title=f"Write the launch note ({set_by})")
+    if set_by == "human:ana":
+        r = api.post(
+            f"/api/v2/tasks/{own['id']}", json={"version": own["version"], "human": "ben"}, headers=headers("ana-test")
+        )
+        assert r.status_code == 200, r.text
+    else:  # a bot or Tico named him: set as data with its history row, as hubdb.task_update writes it
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE tasks SET human_id='human:ben' WHERE id=?", (own["id"],))
+            H._task_event(c, own["id"], set_by, "human_id", None, "human:ben", "")
+    return own
+
+
+def _ask(api, sender, task_id, person="human:ben"):
+    with api.app.state.store.transaction() as c:
+        return question_marks.ask(c, sender, task_id, person, "Which launch date do you want?")
+
+
+def _refused_ask(api, sender, task_id):
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(reach.Refused) as refused:
+            question_marks.ask(c, sender, task_id, "human:ben", "Which launch date do you want?")
+    assert refused.value.code == "reach_closed"
+    return refused.value.detail
+
+
+def _needs(api, token, kind):
+    r = api.get("/api/v2/needs-you", headers=headers(token))
+    assert r.status_code == 200, r.text
+    view = r.json()
+    return [i for i in (view["items"] if isinstance(view, dict) else view) if i["kind"] == kind]
+
+
+def test_the_owning_bot_asks_its_tasks_human_on_it_once_in_needs_you_and_with_no_ping(api):
+    """AC-1, AC-3: a ❓ from the owner to the Human a person named is posted, is one Needs you item, and sends Ben
+    nothing anywhere else."""
+    own = _humaned(api)
+    with api.app.state.store.read() as c:
+        elsewhere = c.execute(
+            "SELECT count(*) FROM messages WHERE conversation_id IS NOT ? AND (recipient_id='human:ben' OR "
+            "sender_id='bot:ops')",
+            (H.task(c, own["id"])["conversation_id"],),
+        ).fetchone()[0]
+    mark = _ask(api, "bot:ops", own["id"])
+    [item] = _needs(api, "ben-test", "question")
+    assert item["id"] == "qmark:" + mark["id"], item
+    with api.app.state.store.read() as c:  # no DM, no chat line, nothing but the task's own thread
+        assert (
+            c.execute(
+                "SELECT count(*) FROM messages WHERE conversation_id IS NOT ? AND (recipient_id='human:ben' OR "
+                "sender_id='bot:ops')",
+                (H.task(c, own["id"])["conversation_id"],),
+            ).fetchone()[0]
+            == elsewhere
+        )
+
+
+def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_human_once_in_needs_you(api):
+    """AC-2: a real stage ask (POST /asks, an OK of a page) from the owner to its task's Human goes through and is one
+    Needs you item for Ben."""
+    own = _humaned(api)
+    file_id, _ = store_file(api, "The launch note.", title="Launch note")
+    with api.app.state.store.read() as c:
+        version = H.task(c, own["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/asks",
+        json={
+            "to": "ben",
+            "line": "OK the launch note?",
+            "kind": "ok",
+            "show": [f"page:{file_id}"],
+            "version": version,
+        },
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 200, r.text
+    [item] = _needs(api, "ben-test", "ask")
+    assert (item["requirement_id"], item["task_id"]) == (r.json()["requirement_id"], own["id"]), item
+
+
+def test_a_tasks_human_opens_only_an_ask_never_a_chat_a_new_task_or_a_hand_off(api):
+    """AC-8 and the spec's 'no chat ping': being the Human opens the ❓ and the stage ask on the task, nothing else
+    through the shared gate: a message naming the task, a sub-task filed for him and handing him the task stay
+    refused."""
+    own = _humaned(api)
+    said = message(api, "ops-test", "human:ben", "A word on the note.", expected=409, refs={"task": [own["id"]]})
+    assert said["error"]["code"] == "reach_closed", said
+    task(api, "ops-test", "human:ben", title="Sub-task for Ben", expected=409, parent=own["id"])
+    with api.app.state.store.read() as c:
+        version = H.task(c, own["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/owner", json={"owner": "human:ben", "version": version}, headers=headers("ops-test")
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    other = task(api, "ana-test", "bot:ops", title="Another note")  # another task of ops's
+    _refused_ask(api, "bot:ops", other["id"])
+    _ask(api, "bot:ops", own["id"])  # the ask on its own task still goes through
+
+
+def _set_human(api, task_id, who, actor):
+    """`actor` makes `who` the task's Human: set as data with its history row, as hubdb.task_update writes it."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET human_id=? WHERE id=?", (who, task_id))
+        H._task_event(c, task_id, actor, "human_id", None, who, "")
+
+
+def test_only_a_human_a_person_or_tico_named_on_this_task_opens_it(api):
+    """AC-4, AC-5, AC-9: a Human ops named itself is refused with the one sentence alone, also when a person named the
+    same Human on its parent (no other task is read) and when ops names him again after a person did (the latest change
+    counts). Named by Tico on the task itself, he is open."""
+    own = _humaned(api, set_by="bot:ops")
+    detail = _refused_ask(api, "bot:ops", own["id"])
+    assert detail == (
+        "A bot named this task's Human, not a person or Tico, so this task does not let it ask them. Nothing was sent."
+    ), detail
+    parent = _humaned(api, set_by="human:ana", chart_too=False)
+    child = task(api, "ana-test", "bot:ops", title="Child note")
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_relations(from_task,to_task,kind,created_by,created_at) VALUES(?,?,'parent',NULL,?)",
+            (child["id"], parent["id"], H.now()),
+        )
+    _set_human(api, child["id"], "human:ben", "bot:ops")
+    _refused_ask(api, "bot:ops", child["id"])
+    _set_human(api, parent["id"], "human:cara", "bot:ops")  # ops moves it off Ben and back: now its own pick
+    _set_human(api, parent["id"], "human:ben", "bot:ops")
+    _refused_ask(api, "bot:ops", parent["id"])
+    _ask(api, "bot:ops", _humaned(api, set_by="keeper", chart_too=False)["id"])
+
+
+def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_first(api):
+    """Only a ❓ and a stage ask open the Human: an OK for an action (POST /oks, a grant the bot then uses) is refused
+    as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""
+    own = _humaned(api)
+    with api.app.state.store.read() as c:
+        version = H.task(c, own["id"])["version"]
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/oks",
+        json={
+            "to": "ben",
+            "line": "OK to post this?",
+            "subject": "hq_reply:note-1",
+            "content": {"text": "We ship on Friday."},
+            "version": version,
+        },
+        headers=headers("ops-test"),
+    )
+    assert r.status_code == 409 and r.json()["error"]["code"] == "reach_closed", r.text
+    r = api.post(
+        f"/api/v2/tasks/{own['id']}/move",
+        json={"to": "closed", "why": "Not needed", "version": version},
+        headers=headers("ana-test"),
+    )
+    assert r.status_code == 200, r.text
+    with api.app.state.store.transaction() as c:
+        with pytest.raises(H.Refused) as ended:
+            H.task_ask(c, "bot:ops", own["id"], "human:ben", "OK the launch note?", kind="ok", seen_version=None)
+    assert "The task has ended: a stage ask is for an open task." in str(ended.value), ended.value
+
+
+def test_a_tasks_human_is_not_asked_once_it_ends_or_by_another_bot(api):
+    """AC-6, AC-7: an earlier owner and a closed task stay refused."""
+    own = _humaned(api)
+
+    def as_ana(path, body):
+        with api.app.state.store.read() as c:
+            version = H.task(c, own["id"])["version"]
+        r = api.post(
+            f"/api/v2/tasks/{own['id']}/{path}", json={**body, "version": version}, headers=headers("ana-test")
+        )
+        assert r.status_code == 200, r.text
+
+    as_ana("owner", {"owner": "bot:finance"})  # ops is now an earlier owner, finance the owner
+    _refused_ask(api, "bot:ops", own["id"])
+    as_ana("owner", {"owner": "bot:ops"})
+    _ask(api, "bot:ops", own["id"])  # its owner again: open
+    as_ana("move", {"to": "closed", "why": "Not needed"})
+    with api.app.state.store.read() as c:
+        with pytest.raises(reach.Refused):
+            reach.check(c, Identity("bot:ops", "bot", agent="test"), "human:ben", "task", task_id=own["id"], ask=True)
