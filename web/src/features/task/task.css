@@ -7,6 +7,11 @@
 .tv-pick:hover{background:var(--hover);color:var(--ink)}
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
+/* the task another task blocks it on (Facts.tsx BlockedOn), last on the where line: cut short on a computer, whole on
+   hover; on a phone, whole on a line of its own under it */
+.tv .pk-where .tv-wait{min-width:0;margin-left:var(--s-1);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+html[data-layout="cards"] .tv .pk-where:has(>.tv-wait){flex-wrap:wrap;height:auto;row-gap:var(--s-1)}
+html[data-layout="cards"] .tv .pk-where>.tv-wait{flex-basis:100%;margin-left:0;white-space:normal}
 
 /* ---------- the head on a computer (parts.css .tv-head): where it stands, then the title, which wraps, balanced, at
    most 620 wide; "⋯" keeps the top right corner. An approval's head puts the title first (approvals.html .tv-head). ---------- */

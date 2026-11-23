@@ -25,6 +25,7 @@ import { AskCard } from './AskCard';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
+import { BlockedOn } from './Facts';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
@@ -317,7 +318,15 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       className={['tv', details && 'is-details', quiet && 'is-quiet'].filter(Boolean).join(' ')}
       title={quiet ? (sendTitle(t.title)?.subject ?? t.title) : t.title}
       path={address}
-      sub={quiet ? <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine> : <WhereLine t={t} />}
+      sub={
+        quiet ? (
+          <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine>
+        ) : (
+          <WhereLine t={t}>
+            <BlockedOn t={t} />
+          </WhereLine>
+        )
+      }
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}
       more={moreMenu}

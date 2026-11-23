@@ -11,6 +11,10 @@ import { RequestCard } from './Requests';
    key, then Save) and a key-drop proposal (Grant selected). Each press goes to the kind's own route, and once the
    server takes it the card leaves Flow. Made-up rows only; every answer is stubbed. */
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 
 const ACCESS: FlowRequest = {
@@ -158,6 +162,30 @@ describe('an access request in Needs you', () => {
     expect((await within(box).findByRole('alert')).textContent).toBe('You can’t grant this');
     expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
   });
+  it('on a phone in Needs you, shows who asks, for what and at which level whole above Grant, never cut short', async () => {
+    const style = document.createElement('style');
+    style.textContent = ['../../styles/parts.css', './ask.css', '../tasks/tasks.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    document.head.append(style);
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <div className="flow-requests">
+            <RequestCard it={ACCESS} />
+          </div>
+        </QueryClientProvider>,
+      );
+      const box = await card('Access request');
+      for (const text of ['Growth Manager asks for Meta Ads', 'Read and write']) {
+        const css = getComputedStyle(within(box).getByText(text));
+        expect([css.whiteSpace, css.overflow]).toEqual(['normal', 'visible']);
+      }
+    } finally {
+      style.remove();
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
   it('a grant that did not take effect yet keeps the card and says so', async () => {
     reply = () => ({ body: { state: 'open', level: 'read_write' } });
     show();

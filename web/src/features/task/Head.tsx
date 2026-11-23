@@ -17,7 +17,7 @@ import { PageMore } from '@/pagekinds';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { DETAILS, failedToast, reasonOf, refusalOf, tabAddress, type Refusal } from './model';
-import { Face, Mark } from './parts';
+import { Face, Mark, NameOf } from './parts';
 import { retiredStagesQuery, type TaskData } from './queries';
 import { TaskStatus } from './StatusLine';
 
@@ -34,8 +34,9 @@ function useStages(t: TaskData) {
   return stages.data ?? retired.data ?? [];
 }
 
-/** The where line (parts-kit.js where): the stage, who has it, how long, Late. Where the task sits is the trail. */
-export function WhereLine({ t }: { t: TaskData }) {
+/** The where line (parts-kit.js where): the stage, who has it, how long, Late, then what the page adds (the task it
+    waits on). Where the task sits is the trail. */
+export function WhereLine({ t, children }: { t: TaskData; children?: ReactNode }) {
   return (
     <>
       <StagePick t={t} />
@@ -43,6 +44,7 @@ export function WhereLine({ t }: { t: TaskData }) {
       {t.stage_since && <Ago at={t.stage_since} className="row-age" />}
       {t.late && <LatePill />}
       <TaskStatus t={t} />
+      {children}
     </>
   );
 }
@@ -234,6 +236,11 @@ export function OwnerPick({ t }: { t: TaskData }) {
       trigger={
         <button className="tv-pick" type="button" aria-label="Who has it" data-target={`task-owner:${t.id}`}>
           <Face id={t.owner_id} decorative />
+          {t.owner_id && (
+            <span>
+              <NameOf id={t.owner_id} />
+            </span>
+          )}
         </button>
       }
     />

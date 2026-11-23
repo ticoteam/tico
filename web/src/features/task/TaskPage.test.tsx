@@ -298,6 +298,32 @@ describe('one open task', () => {
     expect(within(said).getByRole('link', { name: 'Fix' }).getAttribute('href')).toBe('/settings/computers');
   });
 
+  it('names who has it beside their face in the head, on a page tab too', async () => {
+    people([{ id: 'bot:a1', kind: 'agent', name: 'Builder' }]);
+    serve(reads(task({ to_leave: [] })));
+    show(<TaskPage task="12" pipeline="p1" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+    const who = await waitFor(() => document.querySelector('[data-target="task-owner:t1"]') as HTMLElement);
+    expect(who.getAttribute('aria-label')).toBe('Who has it');
+    expect(within(who).getByText('Builder')).toBeTruthy();
+  });
+
+  it('says the task another task blocks it on in the head, on a page tab too, linked and never by its id', async () => {
+    const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
+    const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
+    const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
+    serve(reads(task({ to_leave: [], relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
+    show(<TaskPage task="12" pipeline="p1" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+    const link = within(document.querySelector('.pk-where') as HTMLElement).getByRole('link', { name: 'Blocked by Matches cause check, in To do' });
+    const head = link.closest('header') as HTMLElement;
+    expect(head).toBeTruthy();
+    expect(link.getAttribute('href')).toBe(`/task/${id}`);
+    expect(head.textContent).not.toContain(id);
+    // a page tab, not Details
+    expect(screen.queryByText('Waiting on')).toBeNull();
+  });
+
   it('draws Details: what it needs to leave its stage, with what is met folded @s58', async () => {
     serve(base);
     details();

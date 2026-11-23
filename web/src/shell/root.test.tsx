@@ -537,6 +537,21 @@ describe('the Agent bar @4857', () => {
     await waitFor(() => expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: true } }));
   });
 
+  it('on a phone keeps the board up when a question from the owner waits on you: the ask stays behind the Agent icon', async () => {
+    at(390);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa', own: true };
+    asks.push({ id: 'n2', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' });
+    show('/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    const icon = await screen.findByRole('button', { name: 'QA Owner' });
+    await waitFor(() => expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('none'));
+    expect(icon.getAttribute('aria-current')).toBeNull();
+    // raised by hand, the line to the question is there
+    fireEvent.click(icon);
+    expect(await screen.findByRole('link', { name: 'A question waits on you' })).toBeTruthy();
+  });
+
   it("on a phone follows each page's own fold as you move between pages, both ways @4857-S3", async () => {
     at(390);
     people(MAYA, QA);
