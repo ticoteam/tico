@@ -55,9 +55,12 @@ export async function waitsOnYou(client: QueryClient, t: TaskData): Promise<bool
   return found.some(Boolean);
 }
 
-/** Whether a ❓ on the task waits on `me` (its wait is `qmark:<id>`, naming them). */
-const questionFor = (t: Pick<TaskData, 'waits'>, me: string | undefined): boolean =>
-  !!me && !!t.waits?.some((w) => w.state === 'person' && w.who === me && !!w.requirement_id?.startsWith('qmark:'));
+/** The ❓s on the task that wait on `me` (each wait `qmark:<id>`, naming them): their requirement ids. */
+export const questionsFor = (t: Pick<TaskData, 'waits'>, me: string | undefined): string[] =>
+  (me && t.waits?.flatMap((w) => (w.state === 'person' && w.who === me && w.requirement_id?.startsWith('qmark:') ? [w.requirement_id] : []))) || [];
+
+/** Whether a ❓ on the task waits on `me`. */
+export const questionFor = (t: Pick<TaskData, 'waits'>, me: string | undefined): boolean => questionsFor(t, me).length > 0;
 
 /** What on a task waits on the person `me` now, from what is already read: an ask (its own, or an email's OK hung on it
     whose email is still to go out), else a ❓ to them, else nothing. */

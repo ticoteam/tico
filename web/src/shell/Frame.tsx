@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
-import { PhoneCards, type PhoneCard, type PhoneCardsProps } from '@/shell/phone';
+import { PhoneCards, type PhoneCard } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
@@ -35,13 +35,24 @@ export interface FrameProps {
   widgets?: ReactNode;
   /* a call's chat, transcript and people */
   side?: ReactNode;
-  /* on the phone: what a card's lip shows at rest (the menu's: the company and its Needs you count) */
-  lips?: PhoneCardsProps['lips'];
-  /* on the phone: a control on a card's lip that is not its tap target (search beside Tico's box, mute on a call's) */
-  lipActs?: PhoneCardsProps['lipActs'];
+  /* the menu's mark (the company's, with its Needs you mark) on its tucked edge and the phone's Company icon; the open
+     chat's face on the phone's Agent icon */
+  marks?: { menu?: ReactNode; chat?: ReactNode };
+  /* on the phone: the chat is where the page waits on the person, so it comes up (PhoneCards raiseChat) */
+  raiseChat?: boolean;
+  /* on the phone: the ❓s that wait on the person in the chat (PhoneCards asked) */
+  asked?: string;
+  /* on the phone: the chat has no Agent icon yet (an open task's own, until its read shows it has one) */
+  chatLater?: boolean;
+  /* on the phone: what sets the chat card again when it changes (an open task and the chat its address names) */
+  chatKey?: string;
+  /* on the phone: search, from the bar */
+  onSearch?: () => void;
+  /* on the phone, on an open task: back to where it was opened from (the Company icon) */
+  onLeave?: () => void;
   /* on a desktop: a control on a tucked sheet's edge that is not its tap target (search under Tico's Dot) */
   edgeActs?: Partial<Record<SheetId, ReactNode>>;
-  /* the trail (Trail.tsx): on the ground over the sheets, on a phone over the page; a page's head reads it too */
+  /* the trail (Trail.tsx): on the ground over the sheets; a page's head reads it too (on a phone, only that) */
   trail?: readonly TrailPart[];
   /* by default the address decides */
   arrangement?: Arrangement;
@@ -357,21 +368,15 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   });
 
   if (cards || !stretch) {
-    // a call takes the screen in the chat's place (phone/notes.md)
-    const call = p.arr === 'call';
-    // a teammate's own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to
-    // the page: they wait as a lip, so the page's head is free, unless the address asks for the chat.
+    // the phone: no trail (each page's head has its one way back) and a call is the page (phone/notes.md). A teammate's
+    // own page: their page at the back, their chat the card over it. Theirs and a task's chat belong to the page: they
+    // wait behind the Agent icon, so the page shows, unless the address asks for the chat.
     const tucked = p.arr === 'agent' || p.arr === 'task';
-    const trailed = (page: ReactNode) => (
-      <>
-        {p.trail ? <Trail parts={p.trail} /> : null}
-        {page}
-      </>
-    );
-    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={trailed(p.widgets)} tico={p.tico} menu={p.menu} chat={p.page} tucked lips={p.lips} lipActs={p.lipActs} />;
-    // the page's Agent bar rests as a lip with its owner's name, folded or open as the page's fold says (a phone is never
-    // wide), and comes up when an ask from them waits on you. Raising it or putting it down (a tap, a drag, Back) is
-    // kept as that fold; what the fold or an ask did by itself is not.
+    const bar = { faces: { company: p.marks?.menu, chat: p.marks?.chat }, onSearch: p.onSearch } as const;
+    if (p.arr === 'agent' && p.widgets) return <PhoneCards page={p.widgets} tico={p.tico} menu={p.menu} chat={p.page} tucked {...bar} />;
+    // the page's Agent bar waits behind the Agent icon with its owner's face, folded or open as the page's fold says (a
+    // phone is never wide), and comes up when an ask from them waits on you. Raising it or putting it down is kept as
+    // that fold; what the fold or an ask did by itself is not.
     const owner = p.bar && p.chat ? p.bar : null;
     const lip = !!owner && barFolded(owner.fold, owner.ask, false);
     const onCard = (next: PhoneCard) => {
@@ -383,24 +388,19 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     };
     return (
       <PhoneCards
-        page={call ? null : trailed(p.page)}
+        page={p.page}
         tico={p.tico}
         menu={p.menu}
-        chat={call ? undefined : p.chat}
-        call={
-          call ? (
-            <>
-              {p.trail ? <Trail parts={p.trail} direct /> : null}
-              {p.page}
-            </>
-          ) : undefined
-        }
+        chat={p.arr === 'call' || p.chatLater ? undefined : p.chat}
         tucked={tucked || lip}
-        chatKey={owner?.address}
+        raiseChat={p.raiseChat}
+        asked={p.asked}
+        chatKey={owner?.address ?? p.chatKey}
         onCardChange={onCard}
         labels={owner ? { chat: owner.name } : undefined}
-        lips={p.lips}
-        lipActs={p.lipActs}
+        faces={{ ...bar.faces, ...(owner && { chat: owner.face }) }}
+        onSearch={p.onSearch}
+        onLeave={p.arr === 'task' ? p.onLeave : undefined}
       />
     );
   }
@@ -428,7 +428,7 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   // a task's list place holds the menu when there is no list (closed, or a task with no pipeline): its edge is the menu's
   const shown = (id: SheetId): SheetId => (id === 'list' && !p.list ? 'menu' : id);
   const mark = (id: SheetId) =>
-    id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'chat' && bar ? bar.face : id === 'menu' && p.lips?.menu ? <span className="shell-edge-lip">{p.lips.menu}</span> : <Icon name={EDGE_ICON[id]} />;
+    id === 'tico' ? <Dot size={TICO_MARK} /> : id === 'chat' && bar ? bar.face : id === 'menu' && p.marks?.menu ? <span className="shell-edge-lip">{p.marks.menu}</span> : <Icon name={EDGE_ICON[id]} />;
   const top = sheets.length + 1; // the handles sit over every sheet
   const openIds = sheets.filter(s => s.state === 'open').map(s => s.id).join(' ');
 

@@ -364,7 +364,7 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
 
 /* ---------- a phone ---------- */
 :where(html[data-layout="cards"]){
-  .cl-body{padding:var(--s-1h) var(--s-2) calc(var(--cards-h) + var(--s-5))}
+  .cl-body{padding:var(--s-1h) var(--s-2) var(--s-5)}
   /* the views, then the range, then the days as a strip with the chosen day under it (cal.css phone) */
   .cv-views{display:flex}
   .cv-views .seg{flex:1}
@@ -382,7 +382,7 @@ button.act-text{padding:0;border:0;background:none;color:inherit;font-family:inh
   .cl-row,.cl-row.is-live{grid-template-columns:62px 16px minmax(0,1fr) auto;padding:0 var(--s-2)}
   .cl-row .row-pills,.cl-kept,.cl-len,.er-who{display:none}
   .cv{--gut:66px;padding-right:var(--s-2)}
-  .cv-scroll{padding-bottom:calc(var(--cards-h) + var(--s-5))}
+  .cv-scroll{padding-bottom:var(--s-5)}
   .cv.is-day .cv-ad{grid-template-columns:repeat(2,minmax(0,1fr));padding-bottom:var(--s-1)}
   .cv-allday .mi,.cv-allday .mi-more{height:28px;line-height:28px}
 

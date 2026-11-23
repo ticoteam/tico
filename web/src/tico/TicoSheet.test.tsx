@@ -29,11 +29,10 @@ describe("Tico's Dot", () => {
     expect(page.querySelectorAll('.tico-head .dw')).toHaveLength(1);
   });
 
-  it('sits once on the phone card: the card draws it, the head has none of its own', async () => {
+  it('sits once on a phone: on the bar’s Tico icon, the card’s head has none of its own', async () => {
     const page = await show(() => <PhoneCards page={<p>Tasks</p>} tico={<TicoSheet />} menu={null} />);
-    const card = page.querySelector('.ly-tico')!;
-    expect(card.querySelectorAll('.dw')).toHaveLength(1);
-    expect(card.querySelectorAll('.tico-head .dw')).toHaveLength(0);
+    expect(page.querySelectorAll('.dw')).toHaveLength(1);
+    expect(page.querySelectorAll('.tabbar .tab-tico .dw')).toHaveLength(1);
   });
 });
 

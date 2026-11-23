@@ -78,11 +78,14 @@ export function CallPage({ room }: CallPageProps) {
   const isTico = inTicoRoom && !!ticoBot && c.bots.some((b) => (b.startsWith('bot:') ? b : `bot:${b}`) === ticoBot);
   const kind = small ? 'pane cw cw-small' : cards ? 'pane pc cw' : 'pane cw is-full';
 
+  const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
   if (call.isError && !c) {
-    // No call behind the address (or not this person's): said plainly, with nothing to try again.
+    // No call behind the address (or not this person's): said plainly, with nothing to try again. A phone keeps its
+    // way back (it has no trail).
     const status = call.error instanceof ApiError ? call.error.status : 0;
     return (
       <main className={kind}>
+        {lead && <header className="cw-head">{lead}</header>}
         {status === 404 ? (
           <Empty title="No such call" icon="call" />
         ) : status === 403 ? (
@@ -96,7 +99,6 @@ export function CallPage({ room }: CallPageProps) {
     );
   }
 
-  const lead = cards ? <IconButton icon="chevdown" label="Back to the app" onClick={back} /> : null;
   const head = small ? (
     <Head c={c} live={on} lead={null}>
       {desktop() ? (

@@ -165,8 +165,9 @@ function show(at: string, browser = false) {
     ),
   });
   const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
+  const tab = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task/$tab', component: () => <main className="pane page"><h1>An open task</h1></main> });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
-  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, needs, editor, board, open, finance]),
+  const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, needs, editor, board, open, tab, finance]),
     context: { queryClient },
     // the window's own history where a test needs what the phone's cards push onto it (shell/phone PhoneCards)
     history: browser ? (window.history.replaceState(null, '', at), createBrowserHistory()) : createMemoryHistory({ initialEntries: [at] }),
@@ -351,31 +352,17 @@ describe('the root', () => {
     }
   });
 
-  it('on a phone, heads the call’s card with the trail back up, whose Calendar goes to the calendar the call was opened from', async () => {
+  it('on a phone, a call is the page: no card of its own, no trail over it, the bar under it', async () => {
     Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
     window.dispatchEvent(new Event('resize'));
-    // the window's own history: the call's card is a step on it (shell/phone PhoneCards), which a step back would only lower
-    let router: ReturnType<typeof show> | undefined;
     try {
-      router = show('/calendar', true);
-      expect((await screen.findAllByText('Calendar page')).length).toBeGreaterThan(0);
-      const at = router;
-      await act(() => at.navigate({ to: '/call/$room', params: { room: 'abc' } }));
-      expect((await screen.findAllByText('call page')).length).toBeGreaterThan(0);
-      await waitFor(() => expect(document.documentElement.dataset.layout).toBe('cards'));
-      const trail = await waitFor(() => {
-        const t = document.querySelector<HTMLElement>('.ly-chat .shell-trail');
-        if (!t) throw new Error('no trail on the call card');
-        return t;
-      });
-      expect(within(trail).getByRole('link', { name: 'Fernhill' }).getAttribute('href')).toBe('/');
-      expect(within(trail).getByRole('link', { name: 'Calendar' }).getAttribute('href')).toBe('/calendar');
-      fireEvent.click(within(trail).getByRole('link', { name: 'Calendar' }));
-      await waitFor(() => expect(at.state.location.pathname).toBe('/calendar'));
+      show('/call/abc');
+      const call = (await screen.findAllByText('call page')).find((el) => el.closest('.phone > .pg'));
+      expect(call).toBeTruthy();
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
+      expect(within(screen.getByRole('navigation', { name: 'Bar' })).getByRole('button', { name: 'Company' }).getAttribute('aria-current')).toBe('true');
     } finally {
-      cleanup();
-      router?.history.destroy();
-      window.history.replaceState(null, '', '/');
       Object.defineProperty(window, 'innerWidth', { value: 1024, configurable: true });
       window.dispatchEvent(new Event('resize'));
     }
@@ -507,8 +494,8 @@ describe('the Agent bar @4857', () => {
     await waitFor(() => expect(edge()).toBeTruthy());
     expect(document.documentElement.dataset.layout).toBe('sheets');
     fireEvent.click(edge()!);
-    const lip = () => document.querySelector('button.lip[aria-label="Open QA Owner"]');
-    await waitFor(() => expect(lip()?.getAttribute('aria-expanded')).toBe('true'));
+    const lip = () => document.querySelector('.tabbar button[aria-label="QA Owner"]');
+    await waitFor(() => expect(lip()?.getAttribute('aria-current')).toBe('true'));
     expect(document.documentElement.dataset.layout).toBe('cards');
     expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: false } });
     // a reload: the card is up from the saved fold, with nothing pressed
@@ -516,7 +503,7 @@ describe('the Agent bar @4857', () => {
     queryClient.clear();
     people(MAYA, QA);
     show('/tasks/eng');
-    await waitFor(() => expect(lip()?.getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(lip()?.getAttribute('aria-current')).toBe('true'));
   });
 
   it("is the pipeline's first agent that is set up and on the team, never a planned or gone one, before the page's owner @4857-S7", async () => {
@@ -536,14 +523,14 @@ describe('the Agent bar @4857', () => {
     expect(await screen.findByRole('complementary', { name: 'Chat with Ops' })).toBeTruthy();
   });
 
-  it("on a phone is a lip that keeps the page's fold: raising it and putting it down are kept @4857-S3", async () => {
+  it("on a phone is the Agent icon, with the page's fold: raising it and putting it down are kept @4857-S3", async () => {
     at(390);
     people(MAYA, QA);
     owners.tasks = { bot: 'bot:qa' };
     show('/tasks/eng');
-    const lip = await screen.findByRole('button', { name: 'Open QA Owner' });
-    expect(lip.getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(lip);
+    const icon = await screen.findByRole('button', { name: 'QA Owner' });
+    expect(icon.getAttribute('aria-current')).toBeNull();
+    fireEvent.click(icon);
     await waitFor(() => expect(JSON.parse(localStorage.getItem('tico-next:owner-bar.v1') ?? '{}')).toEqual({ 'human:maya': { tasks: false } }));
     expect(await screen.findByText('a teammate chat')).toBeTruthy();
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
@@ -557,14 +544,14 @@ describe('the Agent bar @4857', () => {
     owners.finance = { bot: 'bot:qa' };
     localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false, finance: true } }));
     const router = show('/tasks/eng');
-    const lip = () => document.querySelector('button.lip[aria-label="Open QA Owner"]')!;
-    await waitFor(() => expect(lip().getAttribute('aria-expanded')).toBe('true'));
+    const lip = () => document.querySelector('.tabbar button[aria-label="QA Owner"]')!;
+    await waitFor(() => expect(lip().getAttribute('aria-current')).toBe('true'));
     act(() => void router.navigate({ to: '/company/finance' as never }));
     await screen.findByRole('heading', { name: 'Finance' });
-    await waitFor(() => expect(lip().getAttribute('aria-expanded')).toBe('false'));
+    await waitFor(() => expect(lip().getAttribute('aria-current')).toBeNull());
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'eng' } as never }));
     await screen.findByRole('heading', { name: 'Board' });
-    await waitFor(() => expect(lip().getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(lip().getAttribute('aria-current')).toBe('true'));
   });
 
   it("on a phone sets the card again moving from one pipeline's board to another's, one page in the fold @4857-S3", async () => {
@@ -573,13 +560,16 @@ describe('the Agent bar @4857', () => {
     owners.tasks = { bot: 'bot:qa' };
     localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false } }));
     const router = show('/tasks/eng');
-    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
-    fireEvent.click(lip('Open Menu'));
-    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    const lip = (name: string) => document.querySelector(`.tabbar button[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
+    // the menu up over the page, by way of Tico: the fold stays as it was
+    fireEvent.click(lip('Tico'));
+    fireEvent.click(lip('Company'));
+    fireEvent.click(lip('Company'));
+    await waitFor(() => expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('menu'));
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'ops' } as never }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/ops'));
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
   });
 
   it('on a phone sets the card again when only the search of the address changes @4857-S3', async () => {
@@ -588,13 +578,16 @@ describe('the Agent bar @4857', () => {
     owners.tasks = { bot: 'bot:qa' };
     localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false } }));
     const router = show('/tasks/eng');
-    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
-    fireEvent.click(lip('Open Menu'));
-    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    const lip = (name: string) => document.querySelector(`.tabbar button[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
+    // the menu up over the page, by way of Tico: the fold stays as it was
+    fireEvent.click(lip('Tico'));
+    fireEvent.click(lip('Company'));
+    fireEvent.click(lip('Company'));
+    await waitFor(() => expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('menu'));
     act(() => void router.navigate({ to: '/tasks/$pipeline' as never, params: { pipeline: 'eng' } as never, search: { view: 'list' } as never }));
     await waitFor(() => expect(router.state.location.searchStr).toContain('view=list'));
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
   });
 
   it('on a phone sets the card again on every page change, when both pages keep the same fold @4857-S3', async () => {
@@ -604,13 +597,16 @@ describe('the Agent bar @4857', () => {
     owners.finance = { bot: 'bot:qa' };
     localStorage.setItem('tico-next:owner-bar.v1', JSON.stringify({ 'human:maya': { tasks: false, finance: false } }));
     const router = show('/tasks/eng');
-    const lip = (name: string) => document.querySelector(`button.lip[aria-label="${name}"]`)!;
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
-    fireEvent.click(lip('Open Menu'));
-    await waitFor(() => expect(lip('Open Menu').getAttribute('aria-expanded')).toBe('true'));
+    const lip = (name: string) => document.querySelector(`.tabbar button[aria-label="${name}"]`)!;
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
+    // the menu up over the page, by way of Tico: the fold stays as it was
+    fireEvent.click(lip('Tico'));
+    fireEvent.click(lip('Company'));
+    fireEvent.click(lip('Company'));
+    await waitFor(() => expect(document.querySelector('.phone')?.getAttribute('data-card')).toBe('menu'));
     act(() => void router.navigate({ to: '/company/finance' as never }));
     await screen.findByRole('heading', { name: 'Finance' });
-    await waitFor(() => expect(lip('Open QA Owner').getAttribute('aria-expanded')).toBe('true'));
+    await waitFor(() => expect(lip('QA Owner').getAttribute('aria-current')).toBe('true'));
   });
 
   it('is not drawn on a personal page, whose chat is Tico, nor where no owner is set', async () => {
@@ -680,6 +676,111 @@ describe('an open task', () => {
     expect(await screen.findByRole('heading', { name: 'Edit pipeline' })).toBeTruthy();
     expect(screen.queryByText('task chat')).toBeNull();
     expect(screen.queryByRole('navigation', { name: 'Engineering' })).toBeNull();
+  });
+});
+
+describe('an open task on a phone', () => {
+  const at = (w: number) =>
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    });
+  const bar = () => screen.getByRole('navigation', { name: 'Bar' });
+  const icon = (name: string) => within(bar()).getByRole('button', { name });
+  // a task as its route read it: with a chat, and the ❓s in it that wait on Maya
+  const read = (n: number, ...questions: string[]) => {
+    queryClient.setQueryData(['tasks', 'ref', String(n)], `t${n}`);
+    queryClient.setQueryData(['tasks', 'detail', `t${n}`], {
+      id: `t${n}`, number: n, pipeline_id: 'eng', owner_id: 'bot:qa', conversation_id: `c${n}`,
+      waits: questions.map((q) => ({ state: 'person', who: 'human:maya', requirement_id: `qmark:${q}` })),
+    });
+  };
+  beforeEach(() => {
+    at(390);
+    people(MAYA, QA);
+    read(7);
+  });
+  afterEach(() => at(1024));
+
+  it('a link to its chat comes up on it: Agent, the task under it', async () => {
+    show('/tasks/eng/7/chat');
+    const card = await screen.findByRole('dialog', { name: 'Agent' });
+    expect(await within(card).findByText('task chat')).toBeTruthy();
+    expect(icon('Agent').getAttribute('aria-current')).toBe('true');
+    expect(within(bar()).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Search', 'Tico', 'Company', 'Agent', 'Task']);
+  });
+
+  it('so does a link by its number that names the chat (`?tab=chat`)', async () => {
+    show('/task/7?tab=chat');
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('task chat')).toBeTruthy();
+  });
+
+  it('opened from its board, its chat stays down; Company goes back to the board and the task’s icons leave', async () => {
+    const router = show('/tasks/eng');
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    fireEvent.click(screen.getAllByRole('link', { name: 'Bulk edit stock' })[0]!);
+    expect((await screen.findAllByRole('heading', { name: 'An open task' })).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(icon('Task').getAttribute('aria-current')).toBe('true');
+    fireEvent.click(icon('Company'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(within(bar()).queryByRole('button', { name: 'Task' })).toBeNull();
+    expect(icon('Company').getAttribute('aria-current')).toBe('true');
+  });
+
+  it('a side thread it was opened from is its Agent, with a link to the task’s own chat in its place; Back brings the thread up again', async () => {
+    const router = show('/tasks/eng/7?chat=agent%3Aqa&via=thread');
+    const card = await screen.findByRole('dialog', { name: 'Agent' });
+    expect(await within(card).findByText('a teammate chat')).toBeTruthy();
+    fireEvent.click(within(card).getByRole('link', { name: 'Task chat' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/chat'));
+    expect(await within(screen.getByRole('dialog', { name: 'Agent' })).findByText('task chat')).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.search).toEqual({ chat: 'agent:qa', via: 'thread' }));
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('a teammate chat')).toBeTruthy();
+  });
+
+  it('a ❓ to the person in a task’s chat brings it up on each task it opens, Back and Forward too; put down, it stays down there', async () => {
+    read(7, 'q7');
+    read(8, 'q8');
+    const router = show('/tasks/eng/7');
+    expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(() => router.navigate({ to: '/tasks/eng/8' as never }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy());
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7'));
+    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
+  });
+
+  it('a new ❓ brings the chat up again after it was put down, on the chat’s own address too', async () => {
+    show('/tasks/eng/7/chat');
+    expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => read(7, 'q1'));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy());
+    fireEvent.click(icon('Task'));
+    act(() => read(7, 'q1'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a link to the chat of a task that did not load (gone, not theirs) raises nothing over its error; a thread the address names still comes up', async () => {
+    const router = show('/tasks/eng/9/chat');
+    expect((await screen.findAllByRole('heading', { name: 'An open task' })).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(bar()).queryByRole('button', { name: 'Agent' })).toBeNull();
+    expect(screen.queryByText('task chat')).toBeNull();
+    await act(() => router.navigate({ to: '/tasks/eng/9' as never, search: { chat: 'agent:qa' } as never }));
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('a teammate chat')).toBeTruthy();
+  });
+
+  it('`?tab=chat` on a task’s own address brings its chat up too', async () => {
+    show('/tasks/eng/7/spec?tab=chat');
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('task chat')).toBeTruthy();
   });
 });
 

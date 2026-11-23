@@ -291,7 +291,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-who .row-age{font-size:var(--t-xs);min-width:27px}
 
 /* the task sheet: where it stands, its title, its pages. Nothing else sits above a page. */
-.dock,.doc-tab.tab-chat{display:none}
+.dock{display:none}
 .tv-head{flex:none;position:relative;display:flex;flex-direction:column;padding:20px 60px 0 var(--pad-task)}
 .tv-where{display:flex;align-items:center;gap:5px;height:22px;font-size:var(--t-sm);color:var(--muted)}
 .tv-where>.ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
@@ -399,8 +399,8 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   .composer .ib{width:36px;height:36px}
 
 
-  /* a task on a phone: one column. Back and the place in the run, the title, where it stands, then one row of tabs
-     where Chat sits beside the pages. The answer is one slim row docked above the bar. */
+  /* a task on a phone: one column. Back and the place in the run, the title, where it stands, then one row of tabs.
+     The answer is one slim row docked above the bar. */
   .app-task,.app-flow{display:block}
   .tv-head{padding:0 16px}
   .tv-more{right:4px;top:2px}
@@ -408,12 +408,11 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
   .tv-where{order:2;margin-top:8px}
   .tv-tabs{margin-top:2px;padding:0 0 0 16px}
   .tv-expand{display:none}
-  .doc-tab.tab-chat{display:inline-flex}
   .doc-tab{height:44px}
   .frame,.frame.is-inset:not(.is-themed){padding:0;background:none;box-shadow:none;border-top:1px solid var(--line)}
   .frame.is-inset:not(.is-themed) iframe{border-radius:0;box-shadow:none}
   .tv-chat{border-top:1px solid var(--line)}
-  /* the bottom of the screen: the answer, and on the Chat tab the message box under it. No main bar here. */
+  /* the bottom of the page, right above the bar: the answer */
   .dock,.tv.is-bare .chat-foot{--surface:var(--raised);flex:none;display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:8px 10px calc(8px + max(env(safe-area-inset-bottom),20px));
     background:var(--raised);border-top:1px solid var(--line)}
   .dock .answer{padding:0 0 0 8px;border-radius:0;background:none;box-shadow:none}

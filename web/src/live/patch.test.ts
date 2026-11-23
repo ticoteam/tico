@@ -130,6 +130,14 @@ describe('tasks', () => {
     expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
+  it('read a task again when a ❓ on it is put or cleared: who it waits on is in its waits, not the row @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    queryClient.setQueryData(detail, task('t1'));
+    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
+    flushFrame();
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
   it('read a case again when its key date changes even if a later event of the same frame names only the task @live', () => {
     const detail = ['tasks', 'detail', 't1'];
     queryClient.setQueryData(detail, { ...task('t1'), matter: { dates: [{ id: 'd1', done_at: null }] } });

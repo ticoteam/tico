@@ -7,7 +7,7 @@ import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { useFollow } from '@/live/follow';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
-import { loadTask } from './routing';
+import { loadTask, useLoadedTask } from './routing';
 import { TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
@@ -142,22 +142,37 @@ afterEach(() => {
 });
 
 describe('task route loading', () => {
-  it('on a phone, a ❓ for the person in its chat opens Chat; on a computer, its page; another person’s ❓ does not', async () => {
-    const turn = { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true };
-    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn } as unknown as Partial<TaskData>);
+  it('a ❓ for the person in its chat opens on its page, on a phone too, and the shell reads it from what loaded to raise the chat', async () => {
+    // the turn shows an approval the person shares (it goes first, backend/waiting_on.py); their ❓ is in the waits
+    const turn = { state: 'person', who: 'human:me', line: 'Approve the plan?', requirement_id: 'r1', ask: true };
+    const waits = [turn, { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true }];
+    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn, waits } as unknown as Partial<TaskData>);
     serve((url) => (url.endsWith('/tasks/%2312') || url.endsWith('/tasks/t1') ? { status: 200, body: detail(asked) } : url.endsWith('/files?all=1') ? { status: 200, body: { files: [] } } : base(url)));
     queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
     document.documentElement.dataset.layout = 'cards';
     try {
-      expect(await loadTask(queryClient, '12')).toMatchObject({ tab: 'chat' });
-      queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
-      expect((await loadTask(queryClient, '12'))?.tab).not.toBe('chat');
-      queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-      document.documentElement.dataset.layout = 'sheets';
-      expect((await loadTask(queryClient, '12'))?.tab).not.toBe('chat');
+      expect((await loadTask(queryClient, '12'))?.tab).toBe('details');
     } finally {
       delete document.documentElement.dataset.layout;
     }
+    const seen: boolean[] = [];
+    const Shell = ({ task: n }: { task: string }) => {
+      seen.push(useLoadedTask(n).asked.length > 0);
+      return null;
+    };
+    const { rerender } = render(
+      <QueryClientProvider client={queryClient}>
+        <Shell task="12" />
+      </QueryClientProvider>,
+    );
+    expect(seen.at(-1)).toBe(true);
+    queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <Shell task="12" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(seen.at(-1)).toBe(false));
   });
 
   it('reuses a task read from an older id link when redirecting to its numbered address', async () => {

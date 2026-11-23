@@ -15,7 +15,6 @@ import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
-import { pipelinesQuery } from '@/features/tasks/routing';
 import { threadQuery } from '@/features/threads/exports';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask } from '@/lib';
@@ -27,11 +26,11 @@ import { EmailSource, Email as EmailView } from './Email';
 import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, asksInChat, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
+import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
-import { ownAddress } from './routing';
+import { boardOf, ownAddress } from './routing';
 import { useTabs, type Tab } from './tabs';
 import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
@@ -133,30 +132,28 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const named = ask ? requirementOf(t, ask) : null;
   const { tabs, files, waiting } = useTabs(t, named ?? undefined);
   const own = tabs.filter((x) => !x.wait);
-  const known = tab !== undefined && tabs.some((x) => x.slug === tab);
-  const unresolved = !!tab && !known && (!files.isSuccess || !waiting.settled);
+  // On a phone the chat's address (`…/chat`) raises its card over the task's first page, and stays the address, so a
+  // reload comes back to the chat; on a computer it is the chat as the page.
+  const cards = useCards();
+  const chatCard = cards && tab === CHAT;
+  const known = !chatCard && tab !== undefined && tabs.some((x) => x.slug === tab);
+  const unresolved = !!tab && !known && !chatCard && (!files.isSuccess || !waiting.settled);
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
   // file's tab is known once the files are read, so nothing is picked before.
   const [first, setFirst] = useState<string | null>(null);
-  // On a phone, a ❓ for the person in the task's chat opens the chat, where its message box answers the agent asking:
-  // whose it is needs who the person is, so a phone picks once that is known.
-  const meRead = useQuery(meQuery);
-  const me = meRead.data?.id;
-  const phone = useCards();
-  const chatFirst = phone && asksInChat(t, me);
-  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError)) && !(phone && meRead.isPending))
-    setFirst(defaultTab(tabs, chatFirst));
+  const me = useQuery(meQuery).data?.id;
+  if (first === null && waiting.settled && (files.isSuccess || (!tab && files.isError))) setFirst(defaultTab(tabs));
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;
   // Closing: the history steps back, and this page names no tab in the meantime.
   const leaving = useRef(false);
   useEffect(() => {
-    if (known || unresolved || first === null || leaving.current) return;
+    if (known || chatCard || unresolved || first === null || leaving.current) return;
     // The address's other words (a version, `v`) stay while the tab is named.
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: TaskSearch) => prev) as never, replace: true });
-  }, [known, unresolved, first, opened, t, navigate]);
+  }, [known, chatCard, unresolved, first, opened, t, navigate]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, it closes, back to the board, list or page it was opened from (its
      board, while there is one, when nothing is behind it). */
@@ -165,10 +162,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const pipeline = t.pipeline_id;
   const close = useCallback(() => {
     leaving.current = true;
-    leaveTask(router, async () => {
-      const live = await client.ensureQueryData(pipelinesQuery).catch(() => []);
-      return live.some((p) => p.id === pipeline) ? pipeline : null;
-    });
+    leaveTask(router, boardOf(client, pipeline));
   }, [router, client, pipeline]);
   const [seek, setSeek] = useState(0);
   const sought = useRef(0);
@@ -237,19 +231,18 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (!r.ok) toast(failedToast(r));
   };
 
-  const cards = useCards();
   const beside = !!new URLSearchParams(useRouterState({ select: (s) => s.location.searchStr })).get('chat');
-  // A phone's Chat tab: an email's OK hung on this task, as a card in the chat.
+  // The chat as the page (a computer's `…/chat`): an email's OK hung on this task, as a card in the chat.
   const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} details={quiet} />;
 
   const askTarget = targetOf(named);
   const pageTabs: PageTab[] = tabs
-    .filter((x) => !(quiet && x.slug === DETAILS))
+    .filter((x) => !x.chat && !(quiet && x.slug === DETAILS))
     .map((x) => {
       // The tab of the ask the address names keeps it (`?ask=`), so going back to it is still that ask.
       const mine = !!askTarget && (x.doc?.file_id ?? x.file?.id ?? x.other) === askTarget.id;
-      return { label: x.label, to: tabAddress(t, x.slug), ...(mine && ask && { search: { ask } }), mark: markOf(x), target: `task-tab:${x.slug}`, ...(x.chat && { className: 'tab-chat' }) };
+      return { label: x.label, to: tabAddress(t, x.slug), ...(mine && ask && { search: { ask } }), mark: markOf(x), target: `task-tab:${x.slug}` };
     });
 
   const body =
@@ -283,14 +276,14 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
           <div className="tv-lead">
             <Brief note={t.note} />
             <MatterDates matter={t.matter} />
-            <Decision t={current.wait} />
+            {!cards && <Decision t={current.wait} />}
           </div>
         }
       />
     ) : current?.email ? (
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
     ) : current?.chat && t.conversation_id ? (
-      // A phone's Chat tab: the decision sits over its message box, and stands in for it while changes are asked.
+      // The chat as the page: the decision sits over its message box, and stands in for it while changes are asked.
       <Conversation
         id={t.conversation_id}
         variant="page"
@@ -335,9 +328,12 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
           {/* An email's OK on the task itself waits on the person too: off its tab, a pointer to it, never Approve. */}
           {!current?.email && <EmailPointers t={t} items={own.flatMap((x) => (x.email && x.mark === 'ask' ? [{ send: x.email, to: tabAddress(t, x.slug) }] : []))} />}
           {body}
-          {/* Docked (a phone's bottom, beside the chat sheet's own card on a computer), or in the page when the thread a
-              card was opened from holds the chat sheet (`?chat=`): Approve is always somewhere. */}
+          {/* Docked (a phone's dock above its bar, on every tab and over the chat card, whose chat then has none; beside
+              the chat sheet's own card on a computer), or in the page when the thread a card was opened from holds the
+              chat sheet (`?chat=`): Approve is always somewhere. An email's OK filed apart docks on a phone too, in
+              place of its lead's. */}
           {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} dock={cards || !beside} email={pick.email} requirement={ask} />}
+          {cards && current?.wait && <Decision t={current.wait} dock />}
         </div>
       }
     />
@@ -358,7 +354,9 @@ export function TaskChat({ task }: TaskChatProps) {
   const owner = useActor(t?.owner_id);
   const me = useQuery(meQuery).data?.id;
   const [asking, setAsking] = useState(false);
-  const decision = t && <ChatDecision key={t.id} t={t} onAsking={setAsking} />;
+  // On a phone the task page docks the one decision above the bar, in reach with the chat up, so its chat has none.
+  const cards = useCards();
+  const decision = t && !cards && <ChatDecision key={t.id} t={t} onAsking={setAsking} />;
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
   // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.

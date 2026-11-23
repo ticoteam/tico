@@ -6,6 +6,7 @@ import { queryClient } from '@/data';
 import { Route as flowTask } from '@/routes/flow.$task';
 import { Route as flowIndex } from '@/routes/flow.index';
 import { Route as taskById } from '@/routes/task.$task';
+import { Route as taskIndex } from '@/routes/tasks.$pipeline.$task.index';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { TaskById } from './TaskPage';
 
@@ -24,6 +25,7 @@ function at(href: string) {
     flowIndex.update({ getParentRoute: () => root, id: '/flow/', path: '/flow/' } as never),
     flowTask.update({ getParentRoute: () => root, id: '/flow/$task', path: '/flow/$task' } as never),
     taskById.update({ getParentRoute: () => root, id: '/task/$task', path: '/task/$task', component: () => null } as never),
+    taskIndex.update({ getParentRoute: () => root, id: '/tasks/$pipeline/$task/', path: '/tasks/$pipeline/$task/', component: () => null } as never),
     page('/needs-you'),
     page('/tasks/$pipeline/$task/$tab'),
   ]);
@@ -111,5 +113,27 @@ describe('/task/<n> read again after its route could not read it', () => {
     await vi.waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
     await act(async () => {});
     expect(router.state.location.pathname).toBe('/needs-you');
+  });
+});
+
+describe('/tasks/<p>/<n>?tab=chat', () => {
+  const wide = (w: number) => Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+  afterEach(() => wide(1024));
+
+  // the route opens the first page at any width (as on main): the word stays in the address, where only a phone's
+  // shell reads it (it brings the chat card up); a computer's chat is beside the page already
+  it('on a computer opens the task’s first page, not the chat as the page', async () => {
+    wide(1440);
+    const router = at('/tasks/p1/12?tab=chat');
+    await router.load();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/spec'));
+  });
+
+  it('on a phone opens it too, the chat asked for kept in the address', async () => {
+    wide(390);
+    const router = at('/tasks/p1/12?tab=chat');
+    await router.load();
+    await vi.waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/spec'));
+    expect(new URLSearchParams(router.state.location.searchStr).get('tab')).toBe('chat');
   });
 });

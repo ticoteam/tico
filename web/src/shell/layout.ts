@@ -97,9 +97,8 @@ export const C = {
   UNSNAP: 40, // drag back to within this of the floor: it opens again
 } as const;
 
-/* Tico's mark at the top of its sheet and on its edge, and on the phone's lip (tokens.css --tico-mark) */
+/* Tico's mark at the top of its sheet, on its edge and on the phone's bar (tokens.css --tico-mark) */
 export const TICO_MARK = 22;
-export const TICO_MARK_LIP = 26;
 
 interface Spec {
   def: number;

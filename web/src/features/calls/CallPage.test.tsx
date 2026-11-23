@@ -223,6 +223,21 @@ describe('Call window', () => {
     expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 
+  it('on a phone, a call not there or not theirs keeps its way back (a phone has no trail)', async () => {
+    queryClient.removeQueries({ queryKey: callQuery(ROOM).queryKey });
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ error: { code: 'forbidden', message: 'No' } }), { status: 403, headers: { 'Content-Type': 'application/json' } }));
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      const router = show('/tasks');
+      await act(() => router.navigate({ to: `/call/${ROOM}` as never }));
+      expect(await screen.findByText("You don't have access to this call", {}, { timeout: 3000 })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Back to the app' }));
+      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
+
   it('joins on the press: microphone, token, room; then Mute and Leave @s974', async () => {
     show();
     await joinNow();

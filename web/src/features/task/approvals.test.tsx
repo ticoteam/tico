@@ -1166,6 +1166,29 @@ describe('on a phone, the decision holds the bottom', () => {
     // one box: the page's own dock steps aside on the Chat tab
     expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
   });
+
+  it('on a phone, of the chat’s own address too: it stays the address, the page under the chat card, one box @approvals', async () => {
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      const router = show(
+        <>
+          <TaskPage task="12" pipeline="p1" tab="chat" />
+          <TaskChat task="12" />
+        </>,
+        '/tasks/p1/12/chat',
+      );
+      await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+      // the page opens on what waits (the email), its decision docked; the address stays the chat's, for a reload
+      await waitFor(() => expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy());
+      expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
+      expect(router.state.location.pathname).toBe('/tasks/p1/12/chat');
+      expect(screen.queryByRole('link', { name: 'Chat' })).toBeNull();
+      expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
+  });
 });
 
 describe('the matter shows the email that waits on the person', () => {
@@ -1196,6 +1219,20 @@ describe('the matter shows the email that waits on the person', () => {
     expect(within(box).getByText('Sends now')).toBeTruthy();
     fireEvent.click(await ready(box));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r1/ok', body: { shown_hash: 'h-mail' } }));
+  });
+
+  it('on a phone, the "Send:" sub-task’s decision holds the bottom, out of the email’s lead @approvals', async () => {
+    serve(matter({ note: 'Dana Ruiz wants a refund for a late delivery.' } as Partial<TaskData>), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }]);
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
+      const box = await decision();
+      expect(box.closest('[data-dock]')).toBeTruthy();
+      expect(box.closest('.tv-lead')).toBeNull();
+      expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+    } finally {
+      delete document.documentElement.dataset.layout;
+    }
   });
 
   it('on its other pages, where the email is not on screen, only points to it: no Approve, Open goes to the email @approvals', async () => {
