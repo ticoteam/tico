@@ -10,6 +10,12 @@ from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import STATUSES, TASK_ID, _key, _s, _target
 from clients.commands._shared import ASKED, VERSION, _model_id, _seen
+
+# A task title as every create and file tool asks for it (backend/hubdb_text.py lint_title, lint_human_title).
+TITLE = (
+    "Task title, at most 60 characters: the outcome or the question; one for a person starts with a verb "
+    '("Approve the Friday launch?"); no name prefixes, ticket codes or all-caps'
+)
 from clients.commands._requester import ON_BEHALF_OF, _as_person, _asked
 
 
@@ -49,7 +55,7 @@ def task_context(api, args):
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
             "picks one"
         ),
-        "title": _s("Task title: plain words, no reference numbers or all-caps"),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat: what you ask, if the title doesn't say it all", default=""),
         "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
@@ -205,7 +211,7 @@ def task_create(api, args):
     {
         "parent": TASK_ID,
         "owner": _s("Bot slug or human id; `me` for a check_model subtask (the default)"),
-        "title": _s("What to do"),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat", default=""),
         "check_model": _s(
             "A company-enabled runtime, optionally with a model: `grok`, `codex:gpt-6.2-sol`; `auto` for "
@@ -591,9 +597,10 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. A new ❓ "
-    "replaces yours, so put every question in one, numbered when there are several; options and why go in it. While it "
-    "is open you can't mark the task done or close it. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
+    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. Prefer "
+    "one question, its first line the question itself. A new ❓ replaces yours, so number several in one; options and "
+    "why go in it. While it is open you can't mark the task done or close it. An OK: `kind` ok with `show`. "
+    "`withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
@@ -724,7 +731,7 @@ def task_give(api, args):
     "stage picks its owner unless you name one. Sub-tasks nest at most 5 deep.",
     {
         "parent": TASK_ID,
-        "title": _s("What the new task is for, in plain words"),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat: anything the title doesn't say"),
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "
