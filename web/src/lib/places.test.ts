@@ -3,8 +3,12 @@ import { forgetPlaces, leaveTask, notePlace } from './places';
 
 /* Closing a task goes back to where it was opened from, never to the task itself. */
 
-const at = (n: number) => ({ __TSR_index: n, __TSR_key: `k${n}` });
-const router = (step: number) => ({ history: { location: { state: at(step) }, go: vi.fn() }, navigate: vi.fn() });
+const at = (n: number) => ({ __TSR_index: n });
+const router = (step: number) => {
+  const heard = new Set<() => void>();
+  const history = { location: { state: at(step) }, go: vi.fn(), subscribe: (on: () => void) => (heard.add(on), () => heard.delete(on)) };
+  return { history, navigate: vi.fn(), move: () => heard.forEach((on) => on()) };
+};
 const board = (p: string | null) => () => p;
 
 afterEach(() => forgetPlaces());
@@ -40,11 +44,12 @@ describe('leaveTask', () => {
     await vi.waitFor(() => expect(r.navigate).toHaveBeenCalledWith({ href: '/tasks' }));
   });
 
-  it('a page opened while the board is read stands', async () => {
+  it('a page opened while the board is read stands, even after Back to the task', async () => {
     const r = router(0);
     let known!: (p: string | null) => void;
     leaveTask(r, () => new Promise((done) => (known = done)));
-    r.history.location = { state: at(1) }; // the person opens Needs you meanwhile
+    r.move(); // the person opens Needs you meanwhile
+    r.move(); // and steps back to the task
     known('p1');
     await new Promise((done) => setTimeout(done, 0));
     expect(r.navigate).not.toHaveBeenCalled();
