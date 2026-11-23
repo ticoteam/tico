@@ -155,7 +155,7 @@ def test_health_preserves_folder_failure_reason_without_exposing_it_to_members(a
         machine['token'],
     )
     summary = checks(api)['computer_logins']['summary']
-    assert 'Sign in or switch account in Settings > Computers' in summary
+    assert 'Sign in or switch account on an agent’s Computer tab' in summary
     assert reason not in summary and '/srv/acme' not in summary
 
 

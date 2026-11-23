@@ -7,7 +7,9 @@ import type { HealthFix } from './queries';
 const SETTINGS_TAB: Record<string, string> = {
   devices: '/settings/computers',
   bots: '/settings/agents',
-  models: '/settings/models',
+  models: '/settings/providers',
+  providers: '/settings/providers',
+  subscriptions: '/settings/providers',
 };
 
 const OLD: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => string]> = [
@@ -17,7 +19,8 @@ const OLD: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => string]> = [
   [/^#\/listening$/, () => '/company/listening'],
   [/^#\/changelog$/, () => '/settings/changelog'],
   [/^#\/tools(\/.*)?$/, () => '/library/tools'],
-  [/^#\/settings\/models(\/.*)?$/, () => '/settings/models'],
+  [/^#\/settings\/(?:models|providers|subscriptions)(\/.*)?$/, () => '/settings/providers'],
+  [/^#\/bot\/([^/?#]+)\/computer$/, (m) => `/team/${m[1]}?tab=computer`],
   [/^#\/bot\/([^/?#]+)(\/.*)?$/, (m) => `/team/${m[1]}`],
   [/^#\/computers\/([^/?#]+)(\/.*)?$/, (m) => `/settings/computers?open=${m[1]}`],
 ];

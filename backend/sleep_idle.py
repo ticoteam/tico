@@ -64,7 +64,7 @@ SENDS = {
     "webhook_sends": "state IN ('ready')",
     "personal_alerts": "state='pending'",
 }
-NO_KEY = "Connect the Tico Gateway in Settings > Models first: Sleep when idle asks Tico with its key."
+NO_KEY = "Connect the Tico Gateway in Settings > Providers first: Sleep when idle asks Tico with its key."
 NOT_HOSTED = "Sleep when idle is only for servers Tico hosts."
 
 

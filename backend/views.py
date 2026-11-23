@@ -3759,7 +3759,9 @@ def runnable_choices(c, who, auth, settings):
     this person manages (backend/readiness.py `can_run`, via health.runtime_choice). A harness not listed is not refused."""
     from .harnesses import HARNESS_BY_ID
     from .health import _movable, runtime_choice
+    from .model_subscriptions import _may_manage
 
+    manages = _may_manage(auth, who)
     enabled = providers.load(c, settings)["enabled"]
     harnesses = sorted(
         {
@@ -3802,13 +3804,13 @@ def runnable_choices(c, who, auth, settings):
             set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())
         ):
             runtime = HARNESS_BY_ID[harness]["runtime"]
-            answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)
+            answer = runtime_choice(c, bot, runtime, who, computers, harness=harness, manages=manages)
             if answer.get("can_run") is False:
                 out.setdefault(bot, {})[harness] = answer
         # A Tico model on a computer that cannot run Gateway work, under its model id: the picker marks it "not on this
         # computer" while the harness itself (pi on the bot's own key) stays offered.
         if tico:
-            answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0])
+            answer = runtime_choice(c, bot, "pi", who, computers, harness="pi", model=sorted(tico)[0], manages=manages)
             if answer.get("can_run") is False:
                 # `tico`: any pick of the Gateway's lineup, which the picker cannot list one by one.
                 out.setdefault(bot, {}).update({model: answer for model in tico} | {"tico": answer})

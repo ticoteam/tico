@@ -197,7 +197,7 @@ export function Billing() {
 
 const SAY: Record<string, string> = { ok: 'Fine', info: 'Note', warn: 'Look', bad: 'Broken' };
 
-/** A check's first fix: a link where the new app has the page, else its words. */
+/** A link where the new app has the page, else the fix's words. */
 function Fix({ f }: { f: HealthFix }) {
   const to = fixHref(f);
   if (!to) return <span className="row-cell">{f.label}</span>;
@@ -226,7 +226,11 @@ function CheckRow({ c }: { c: HealthCheck }) {
     <div className={fine ? 'row g-hl' : 'row g-hl is-bad'} title={c.label} data-target={`check:${c.id}`}>
       <span className="row-title">{c.label}</span>
       <span className="row-sub">{c.summary}</span>
-      <span className="hl-act">{c.fixes?.[0] && <Fix f={c.fixes[0]} />}</span>
+      {!!c.fixes?.length && (
+        <span className="hl-act">
+          {c.fixes.map((f) => <Fix key={`${f.label}:${f.href}:${f.tab}:${f.click}`} f={f} />)}
+        </span>
+      )}
       <span className="row-state">
         <Word fine={fine}>{SAY[c.status] ?? c.status}</Word>
       </span>
@@ -263,7 +267,6 @@ function Stuck({ rows }: { rows: StuckAgent[] }) {
         <To key={r.bot} href={`/team/${encodeURIComponent(r.bot)}`} className="row g-hl is-bad" title={r.name} data-target={`agent:${r.bot}`}>
           <span className="row-title">{r.name}</span>
           <span className="row-sub">{[r.why, ...queueWords(r)].join(', ')}</span>
-          <span className="hl-act" />
           <span className="row-state">
             <Word>Stuck</Word>
           </span>

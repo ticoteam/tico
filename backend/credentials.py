@@ -61,7 +61,7 @@ LOGIN = 'login'
 # run only as a proxy token.
 OAUTH = 'oauth'
 # A secret the server itself uses: sealed here, never listed, granted, revealed or handed to a run (`Vault.row` answers
-# 404 for one). The Slack app's tokens (backend/slack_app.py), each Settings > Models subscription's value
+# 404 for one). The Slack app's tokens (backend/slack_app.py), each Settings > Providers subscription's value
 # (backend/model_subscriptions.py), the Tico AI Gateway key and install secret (backend/gateway_connection.py) and the
 # Tico company server key (backend/company_server.py).
 SERVICE = 'service'
@@ -77,8 +77,11 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
-# A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Models.
-MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Models'
+# A model key for computers is a subscription now (backend/model_subscriptions.py).
+MODELS_FOR_COMPUTERS = (
+    'Add or replace model keys in Settings > Providers. Assign or unassign them with '
+    '`tico settings set models.computer_subscription`.'
+)
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -1605,7 +1608,7 @@ def install_credentials(app, store, delegate=None, propose=None):
         from .tools_delegation import DELEGATE_VIAS
 
         if body.subject == COMPUTERS:
-            # A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Models.
+            # A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Providers.
             raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # Agent Ops giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
@@ -1886,7 +1889,7 @@ def install_credentials(app, store, delegate=None, propose=None):
     def model_credentials(request: Request, runtime: str, login: str = ''):
         """The model key or token this computer signs `runtime` in with: the key subscription it is given that is kept
         in the vault (its own, added from Settings > Computers before D11-4, or a shared one). Only those, named for
-        this runtime: never one granted to a bot, never a subscription sealed in Settings > Models. Runners of
+        this runtime: never one granted to a bot, never a subscription sealed in Settings > Providers. Runners of
         v0.6.0-rc.1 on poll it, so the reply keeps its shape, and `login` (a key job's id) is still taken and answered
         with nothing (backend/model_subscriptions.py keys_for)."""
         who = request.state.identity

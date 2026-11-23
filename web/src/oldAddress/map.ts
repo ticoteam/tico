@@ -77,16 +77,15 @@ const SETTINGS_SECTION: Record<string, string> = {
   people: 'people',
   humans: 'people',
   bots: 'agents',
-  // Subscriptions fold into Agents in the new design (owner, Nov 19).
-  subscriptions: 'agents',
+  subscriptions: 'providers',
   devices: 'computers',
   computers: 'computers',
-  models: 'models',
-  chat: 'models',
-  providers: 'models',
-  limits: 'models',
-  'turn-levels': 'models',
-  gateway: 'models',
+  models: 'providers',
+  chat: 'providers',
+  providers: 'providers',
+  limits: 'limits',
+  'turn-levels': 'limits',
+  gateway: 'providers',
   tasks: 'tasks',
   contacts: 'contacts',
   security: 'security',
@@ -100,11 +99,13 @@ const SETTINGS_SECTION: Record<string, string> = {
 };
 /** Cards that moved out of their tab (ui/app/pages-shell.ts SETTINGS_MOVED_TO_MODELS; tokens are Account's now). */
 const SETTINGS_CARD_SECTION: Record<string, string> = {
-  'settings-models': 'models',
-  'set-providers': 'models',
-  'set-gateway': 'models',
-  'set-turn-levels': 'models',
-  'settings-subs': 'agents',
+  'settings-models': 'providers',
+  'set-providers': 'providers',
+  'set-gateway': 'providers',
+  'set-turn-levels': 'limits',
+  'settings-limits': 'limits',
+  'settings-subs': 'providers',
+  'settings-defaults': 'agents',
   'settings-tokens': 'account',
 };
 /** System's cards that are a built-in agent's settings now (ui/app/pages-shell.ts SETTINGS_SYSTEM_BOTS). */
@@ -122,7 +123,9 @@ function settingsAddress(tab: string, card: string, q: URLSearchParams): string 
   if (tab === 'releases') return '/settings/agents';
   const section = SETTINGS_CARD_SECTION[card] ?? SETTINGS_SECTION[tab];
   if (!section) return '/settings'; // the old app opened General for a name it did not know
+  if (section === 'limits') return '/company/usage?view=limits';
   const who = q.get('who');
+  if (section === 'providers') return at('/settings/providers', { open: q.get('open') });
   return at(`/settings/${section}`, section === 'history' && who && /^(bot|human):\S+$/.test(who) ? { who } : {});
 }
 
@@ -303,11 +306,11 @@ export const ROWS: readonly Row[] = [
   // A live meeting's page has no counterpart: the Calendar holds meetings.
   { page: 'Live meeting', path: /^#\/meetings\/live\/(.+)$/, to: () => '/calendar' },
   { page: 'Meetings', path: /^#\/meetings$/, to: (_m, q) => (q.get('live') ? '/calendar' : meetingsAddress(q.get('meeting'))) },
-  // An agent's page; a person's or agent's Settings and Instructions are tabs there. Other old tabs open the page.
+  // An agent's page and its tabs.
   {
     page: 'Agent page',
     path: /^#\/bot\/([^/]+)(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' ? tab : null }),
+    to: ([ref, tab]) => at(`/team/${seg(ref)}`, { tab: tab === 'settings' || tab === 'instructions' || tab === 'computer' ? tab : null }),
   },
   { page: 'Threads', path: /^#\/threads$/, to: () => '/threads' },
   {
@@ -350,7 +353,7 @@ export const ROWS: readonly Row[] = [
   {
     page: 'Webhooks, Triggers',
     path: /^#\/(?:triggers|webhooks|settings\/triggers|settings\/webhooks)(?:\/([^/]+))?(?:\/.*)?$/,
-    to: ([part]) => (part === 'outgoing' ? at('/library/tools', { kind: 'webhook' }) : part === 'gateway' ? '/settings/models' : at('/company/routines', { tab: 'webhooks' })),
+    to: ([part]) => (part === 'outgoing' ? at('/library/tools', { kind: 'webhook' }) : part === 'gateway' ? '/settings/providers' : at('/company/routines', { tab: 'webhooks' })),
   },
   { page: 'Health', path: /^#\/health$/, to: () => '/settings/health' },
   { page: 'Settings › roadmap suggestions', path: /^#\/settings\/roadmap$/, to: () => '/settings/tasks' },
@@ -358,7 +361,7 @@ export const ROWS: readonly Row[] = [
   { page: 'Settings › System (Rules, Routines)', path: /^#\/settings\/(?:rules|routines)$/, to: () => SYSTEM_JOBS },
   { page: 'Settings › People', path: /^#\/settings\/people$/, to: () => '/settings/people' },
   { page: 'Settings › Computers', path: /^#\/settings\/computers$/, to: () => '/settings/computers' },
-  { page: 'Subscriptions', path: /^#\/(?:settings\/)?subscriptions$/, to: () => '/settings/agents' },
+  { page: 'Subscriptions', path: /^#\/(?:settings\/)?subscriptions$/, to: (_, q) => at('/settings/providers', { open: q.get('open') }) },
   { page: "Strategy Owner's settings", path: /^#\/settings\/ceo$/, to: () => at('/team/strategy-owner', { tab: 'settings' }) },
   // Every other Settings tab, and a card in it (backend/settings_entries.py writes these).
   {

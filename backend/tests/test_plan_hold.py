@@ -32,9 +32,9 @@ def checks(api):
     return {row["id"]: row for row in get(api, "health", "ana-test")["checks"]}
 
 
-def ready(api):
+def ready(api, *, manages=False):
     with api.app.state.store.read() as c:
-        return readiness.can_run(c, "ops", "claude")
+        return readiness.can_run(c, "ops", "claude", manages=manages)
 
 
 def pinned(api, *, second=True):
@@ -49,7 +49,7 @@ def pinned(api, *, second=True):
     return m, plan, other
 
 
-def test_a_computer_whose_only_plan_is_held_says_so_and_offers_its_owners_plans_in_turn(api):
+def test_a_held_pinned_plan_points_to_providers_and_gives_the_cli_assignment(api):
     m, plan, _ = pinned(api)
     found = checks(api)
     assert "computer_signin" not in found
@@ -57,27 +57,33 @@ def test_a_computer_whose_only_plan_is_held_says_so_and_offers_its_owners_plans_
     assert "Test Mac's only Claude plan, Matheus, is at its weekly usage limit until Nov 22 09:00 UTC" in line
     with api.app.state.store.read() as c:
         owner = MS._name_of(c, MS.row(c, plan)["owner_id"])
-    assert f"Give Test Mac {owner}'s plans, in turn, in Settings > Computers" in line
+    assert f"Assign {owner}'s plans to Test Mac with `tico settings set models.computer_subscription`" in line
     assert "sign in" not in line.lower()
-    assert [f["tab"] for f in found["computer_plan_held"]["fixes"]] == ["devices"]
+    assert [f["href"] for f in found["computer_plan_held"]["fixes"]] == ["#/settings/providers"]
     verdict = ready(api)
     assert verdict["can_run"] is False and not verdict.get("sign_in")
     assert "Matheus" in verdict["problem"] and "has no" not in verdict["problem"]
     assert verdict["bot_problems"] == [verdict["problem"]]
+    assert verdict["link"] == "#/settings/providers"
+    assert verdict["fix"].startswith("An owner or admin can assign")
+    assert ready(api, manages=True)["fix"].startswith("Assign")
 
 
 def test_a_held_plan_with_no_other_plan_left_says_to_add_one(api):
     pinned(api, second=False)
     line = checks(api)["computer_plan_held"]["summary"]
-    assert "Add a Claude plan with usage left in Settings > Models" in line
-    assert [f["tab"] for f in checks(api)["computer_plan_held"]["fixes"]] == ["models"]
+    assert "Add a Claude plan with usage left in Settings > Providers" in line
+    assert [f["href"] for f in checks(api)["computer_plan_held"]["fixes"]] == ["#/settings/providers"]
 
 
 def test_another_owners_plan_with_usage_left_is_offered_by_name(api):
     _, _, other = pinned(api)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE model_subscriptions SET owner_id='human:someone-else' WHERE id=?", (other,))
-    assert "Give Test Mac Spare, which has usage left" in checks(api)["computer_plan_held"]["summary"]
+    assert (
+        "Assign Spare to Test Mac with `tico settings set models.computer_subscription`"
+        in checks(api)["computer_plan_held"]["summary"]
+    )
 
 
 def test_a_held_plan_is_not_named_while_the_computers_own_login_runs_its_turns(api):
@@ -128,8 +134,8 @@ def test_a_person_with_a_held_plan_and_one_to_reconnect_is_told_to_reconnect_it(
     hold(api, first)
     found = checks(api)["computer_plan_held"]
     assert "each is at its usage limit" not in found["summary"]
-    assert "Plan B needs reconnecting. Reconnect Plan B in Settings > Models" in found["summary"]
-    assert [f["tab"] for f in found["fixes"]] == ["models"]
+    assert "Plan B needs reconnecting. Reconnect Plan B in Settings > Providers" in found["summary"]
+    assert [f["href"] for f in found["fixes"]] == ["#/settings/providers"]
 
 
 def test_a_member_reads_how_many_computers_wait_never_the_plan_or_its_owner(api):
@@ -137,4 +143,5 @@ def test_a_member_reads_how_many_computers_wait_never_the_plan_or_its_owner(api)
     found = {row["id"]: row for row in get(api, "health", "cara-test")["checks"]}
     line = found["computer_plan_held"]["summary"]
     assert line.startswith("1 computer(s) wait") and "Matheus" not in line and "Test Mac" not in line
-    assert not found["computer_plan_held"]["fixes"]
+    assert "Ask an owner or admin" in line
+    assert [f["href"] for f in found["computer_plan_held"]["fixes"]] == ["#/settings/providers"]

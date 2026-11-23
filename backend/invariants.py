@@ -238,7 +238,7 @@ CHECKS = (
         "relay_silent",
         "Webhook relay not pulled",
         f"Webhook relay addresses exist, and no delivery was pulled from Tico Gateway for {RELAY_SILENT_MINUTES} minutes.",
-        "This server's Gateway key and network (Settings > Models › Tico Gateway); deliveries wait at Tico Gateway until it works.",
+        "This server's Gateway key and network (Settings > Providers › Tico Gateway); deliveries wait at Tico Gateway until it works.",
         "owner",
         relay_silent,
     ),

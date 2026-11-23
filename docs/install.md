@@ -100,7 +100,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
 1. **Choose AI providers** (optional): **Your Claude and ChatGPT subscriptions, plus Tico Gateway** is recommended
    ([the four choices](ai-gateway.md#choose-how-bots-get-their-models)). To choose later, select
    **Your company's plans or API keys**, untick its providers and press **Skip for now**. Bots need a provider
-   to run; until then each bot says "Add an AI provider", and **Settings > Models** adds it.
+   to run; until then each bot says "Add an AI provider", and **Settings > Providers** adds it.
    With a gateway key from Tico, the [Tico AI Gateway](ai-gateway.md) card there adds the Tico picks (level, Fast, version).
    With no provider yet, the Bets step needs one bet and one line under **What we won't do**; any short sentence works.
 2. **Name the team**, say what it does, and pick its groups. A few bots are suggested for each group. For the first result
@@ -116,7 +116,7 @@ Open the link in your browser: the app opens on **Finish setup**. Then:
    selected harness to be installed, then press **Sign in** beside it.
    Open the provider link and enter its device code, or paste the returned code into Tico when asked.
    Wait for the computer's model sign-in to show **ready**. Other harnesses use their own terminal sign-in; API credentials and
-   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Models** if you skipped it,
+   profiles are explained in [Harnesses](harnesses.md). Pick a provider in **Settings > Providers** if you skipped it,
    then choose the starter's model in **Settings > Bots**.
 
 **Unreleased wizard layout:** Provider checkboxes appear only under **Your company's plans or API keys**.
@@ -173,11 +173,11 @@ Paste this into its Setup DM (or replace it with your own facts):
 ### First-result recovery
 
 - **Add an AI provider**: when the DM says "Saved — no AI provider is chosen", use its **Add an AI provider** link
-  to open **Settings > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
+  to open **Settings > Providers**, then select the agent's model from its **Model** tab. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENTS.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
-  **Settings > Models**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
+  **Settings > Providers**; for a computer-local key or login, update it or use **Sign in** from the agent's **Computer** tab.
   Older computers show both paths. See [Harnesses](harnesses.md).
 - **Needs setup**: open the bot's page and press **Start onboarding**; tasks and routines wait until its onboarding is finished.
 - **A missing Tool or Credential**: use the bot's card or [Connect tools](connect-tools.md) and grant the credential to that bot.
@@ -209,7 +209,7 @@ The server answers on this computer only: compose publishes the port on `127.0.0
 sign-in refuses to start. A public address always needs sign-in.
 
 Bots' pages and SVG show as **Open** cards here: they need a separate address to show inline. Turn on
-[Tico file hosting](files.md#tico-file-hosting) in **Settings → Models → Tico Gateway** and they show inline from your `ticofiles.com`
+[Tico file hosting](files.md#tico-file-hosting) in **Settings → Providers → Tico Gateway** and they show inline from your `ticofiles.com`
 address; nothing has to reach this computer ([Visuals](visuals.md#self-hosting)).
 
 ### Add a domain and sign-in later
@@ -602,7 +602,7 @@ minutes:
 {"type": "tico.wake", "install": "acme", "pending": 3, "oldest_received_at": "2026-10-25T10:00:00Z"}
 ```
 
-Set it as the owner, with the Tico Gateway connected in Settings → Models:
+Set it as the owner, with the Tico Gateway connected in Settings → Providers:
 
 ```
 tico relay wake-url set https://wake.acme.example/start-tico
@@ -636,7 +636,7 @@ runs your bots"), pick the kind of computer, and copy the commands it shows. The
 expires after 15 minutes. Adding a computer never assigns bots to it: choose it for each bot afterwards.
 
 **A new computer signs in to your model by itself when your team has given it a model key.** Add the key once in
-**Settings > Models** and give it to the computers that should use it ([API keys on a Computer](computers.md#api-keys-on-a-computer)).
+**Settings > Providers** and give it to the computers that should use it ([API keys on a Computer](computers.md#api-keys-on-a-computer)).
 Only a credential administrator can do this. From then on, when a new computer joins or gets its first job and its model is not
 signed in, the runner (the software on the computer) asks the server for that key as itself, saves it in its own secrets folder
 and signs in the way it would with a key you had typed there. Nobody copies a key between computers, and the key is in no log.
@@ -653,7 +653,7 @@ signed in on the side, and the old one keeps working until that finishes (or if 
 that stop first; they wait until someone signs in again. A computer you signed out is not signed back in by the model key
 it is given until you sign in or choose **Use the shared key**. See [Computers](computers.md#signing-out-and-switching-accounts).
 
-A computer can also run on a model API key, with no terminal: add the key in **Settings > Models** and give it to the
+A computer can also run on a model API key, with no terminal: add the key in **Settings > Providers** and give it to the
 computer there. Taking it off the computer there makes the computer delete its copy at its next key fetch (an offline
 computer when it is next online). See [Computers](computers.md#api-keys-on-a-computer).
 
@@ -758,7 +758,7 @@ image still starts on the migrated volume and reads its own files; the bots then
 the next update. Use `docker exec -u bot` for what a bot should
 own (model logins). Legacy secret files stay with the runner supervisor; bots receive granted Credentials.
 
-The image holds no model CLI. Once your team has enabled a provider (Settings > Models), the runner installs
+The image holds no model CLI. Once your team has enabled a provider (Settings > Providers), the runner installs
 that provider's CLI into `/home/runner/tools` in the volume (a minute or two; Settings > Computers shows the progress),
 keeps it current between runs, and lets the owner pin a version. See [harnesses](harnesses.md).
 
@@ -775,7 +775,7 @@ docker exec -it -u bot '<container-name>' claude auth login              # Claud
 ```
 
 `claude setup-token` is not a sign-in: it prints a long-lived token and leaves Claude Code signed out. To use such a
-token, add it as a model key in **Settings > Models** and give it to the computers instead (above).
+token, add it as a model key in **Settings > Providers** and give it to the computers instead (above).
 
 Store API keys and other Credentials in **Tools > Add > Key**, set their environment-variable name,
 and grant them to each bot that needs them. A bot run receives only its grants; it does not inherit
@@ -783,7 +783,7 @@ and grant them to each bot that needs them. A bot run receives only its grants; 
 key in its computer's `_shared.env`, so its access continues. Bots created after the upgrade start with none. See [Credentials](credential-vault.md).
 
 **Codex with an API key.** Model sign-in on a Computer may use a computer-local key or a team's model key given to it
-in **Settings > Models**. The runner sends it to `codex login --with-api-key` on standard input,
+in **Settings > Providers**. The runner sends it to `codex login --with-api-key` on standard input,
 with no key in a command line or log. This signs models in; tool Credentials still need a grant per bot.
 A key Codex refuses is tried again after ten minutes or when the key changes.
 The `.codex` folder in the volume belongs to `bot`, is group-writable and setgid, and its login files are

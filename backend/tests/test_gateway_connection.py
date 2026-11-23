@@ -983,8 +983,8 @@ REFUSED = "Tico AI Gateway refused the request as sent: {message} ({code})"
     [
         (
             "unknown_model",
-            "Tico AI Gateway: this model isn't offered; Settings > Models lists the picks (unknown_model)",
-            "The Tico AI Gateway doesn't offer this model; Settings > Models lists the picks",
+            "Tico AI Gateway: this model isn't offered. Choose another in the agent's Model controls (unknown_model)",
+            "The Tico AI Gateway doesn't offer this model. Choose another in the agent's Model controls",
         ),
         (
             "unsupported_field",
@@ -1344,8 +1344,8 @@ def test_a_gateway_with_no_chat_endpoint_yet_reads_plainly(api, monkeypatch, act
     with api.app.state.store.read() as c:
         focus = H.status(c, "ops")["focus"]
     assert focus == (
-        "The Tico AI Gateway doesn't serve Tico models at its URL yet; check the Gateway URL in "
-        "Settings > Computers. This run is saved for later"
+        "The Tico AI Gateway doesn't serve Tico models at its URL yet. Check the Gateway address in "
+        "Settings > Providers. This run is saved for later"
     ), focus
 
 

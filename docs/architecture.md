@@ -73,7 +73,7 @@ The server never runs a bot or a model CLI; when decisions (or Slack routing) ar
 
 - **Local model logins stay on computers; Credentials are held by the server.** Subscription sign-ins
   for model CLIs stay on the computer where you signed in. Tico's server stores encrypted bot
-  Credentials and the model keys given to computers in **Settings > Models**, decrypts them and delivers them to
+  Credentials and the model keys given to computers in **Settings > Providers**, decrypts them and delivers them to
   granted bots or computers. It also holds the Decision provider's key when configured. A compromised
   server can expose those stored values; protect the Credential key and the complete backup.
   See [Credential storage and recovery](credential-vault.md).

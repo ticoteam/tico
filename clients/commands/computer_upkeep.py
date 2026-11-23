@@ -260,7 +260,7 @@ def cloud_replace(api, args):
     "The company's AI subscriptions (a person): each one's name, kind, runtime, status, a preview of its value (never "
     "the value), who added it and owns it and the computers given it; each computer given a person's plans for a tool "
     "(`people_plans`: whose, the plan in use and why); and the computers that cannot take one until they update. "
-    "Adding one or pasting a value is the person's own, in Settings > Models. Example: tico subscription list",
+    "Adding one or pasting a value is the person's own, in Settings > Providers. Example: tico subscription list",
     {},
 )
 def subscription_list(api, args):

@@ -10,7 +10,7 @@ import { useDestination } from './Destination';
 import { Line, Verb, Word } from './parts';
 import { gatewayQuery, type GatewayStatus, type GatewayView } from './queries';
 
-/* Models › When a plan runs out › the Tico Gateway's key (old app settings-providers.ts gatewayHTML), as lines. The key
+/* Providers › Tico Gateway › the Tico Gateway's key (old app settings-providers.ts gatewayHTML), as lines. The key
    is typed once, sent, and never shown again; only its preview comes back. A new address while a key is saved is held
    by the server and asked here (Keep or Clear). Set by the server's environment, it is not shown. */
 

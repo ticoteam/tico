@@ -13,7 +13,7 @@ import { History, type HistoryWho } from './HistoryViews';
 import { Account, General, People, Security } from './Basics';
 import { Contacts, Tasks } from './Catalog';
 import { AddPersonButton } from './People';
-import { AddComputer, Agents, Computers, Models, mainQuery } from './main';
+import { AddComputer, Agents, Computers, Providers, mainQuery } from './main';
 import { NO_ACCESS, isForbidden } from './parts';
 import { accessQuery, settingsCatalogQuery, type SettingHit } from './queries';
 import { NAV, sectionName, type SectionId } from './sections';
@@ -27,7 +27,7 @@ const BODY: Record<SectionId, (p: { open?: string; who?: HistoryWho }) => ReactN
   people: ({ open }) => <People open={open} />,
   agents: ({ open }) => <Agents open={open} />,
   computers: ({ open }) => <Computers open={open} />,
-  models: () => <Models />,
+  providers: ({ open }) => <Providers open={open} />,
   tasks: () => <Tasks />,
   contacts: ({ open }) => <Contacts open={open} />,
   account: () => <Account />,
@@ -76,7 +76,9 @@ const TAB: Record<string, SectionId> = {
   bots: 'agents',
   devices: 'computers',
   computers: 'computers',
-  models: 'models',
+  models: 'providers',
+  providers: 'providers',
+  subscriptions: 'providers',
   tasks: 'tasks',
   security: 'security',
   billing: 'billing',
@@ -90,10 +92,10 @@ const CARD: Record<string, [SectionId, string]> = {
   'set-screening-card': ['security', 'setting:screening'],
   'settings-sleep': ['computers', 'setting:sleep'],
   'settings-tokens': ['account', 'setting:tokens'],
-  'settings-subs': ['agents', 'setting:subscriptions'],
-  'settings-gateway-card': ['models', 'setting:gateway'],
-  'wh-gateway': ['models', 'setting:gateway'],
-  'settings-defaults': ['models', 'setting:defaults'],
+  'settings-subs': ['providers', 'setting:subscriptions'],
+  'settings-gateway-card': ['providers', 'setting:gateway'],
+  'wh-gateway': ['providers', 'setting:gateway'],
+  'settings-defaults': ['agents', 'setting:defaults'],
   'settings-company': ['general', 'setting:company'],
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],

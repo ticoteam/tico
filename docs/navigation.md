@@ -1,7 +1,7 @@
 # Navigation
 
 The current paths in Tico. Settings is under your email and opens on General; each tab has its own address,
-shown in the address bar while the tab is open (`#/settings/people`, `#/settings/models`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
+shown in the address bar while the tab is open (`/settings/people`, `/settings/providers`), to bookmark or share, and a tab you can't see opens General with **That page is for admins**.
 Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
@@ -14,24 +14,25 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Add or edit a Routine | Automations → New automation ([Routines](routines.md)) |
 | See what Tico runs on its own | Automations → System jobs ([System routines](system-routines.md)) |
 | Receive a webhook, or send events out | Automations → Incoming webhooks, or Tools → Add tool → Outgoing webhook ([Webhooks](webhooks.md)) |
-| Keep webhooks while the server is off | Settings → Models → Tico Gateway → Webhooks |
+| Keep webhooks while the server is off | Settings → Providers → Tico Gateway → Webhooks |
 | Stop a hosted server when idle | Settings → Computers → Sleep when idle ([Account](account.md#sleep-when-idle)) |
 | See or change what wakes a bot | Automations → What wakes bots, or What wakes <bot> |
 | Add, assign or set up a bot | Settings → Bots → Add from template; then the bot → Set up |
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask Agent Ops to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Add a subscription (Connect or paste) and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
-| Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
-| Change company turn limits | Settings → Models → Limits |
+| Add a subscription (Connect or paste) and give it to computers | Settings → Providers → Add, then `tico settings set models.computer_subscription` ([Subscriptions](computers.md#subscriptions)) |
+| Sign a computer in to an AI tool | Agent → Computer → This computer’s sign-in ([Computers](computers.md)) |
+| Change company turn limits | Usage → Limits |
 | Check problems and recovery | Settings → General → Health → Details (`#/settings/health`) |
 | Store a Credential and grant it | Tools → Add → Key; then open it under the Keys filter → Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
 | Connect your Google account, or the whole Workspace (admins) | Tools > Settings > Email: pick One account at a time or Whole Workspace |
 | See and manage every mailbox, Tico address, number and mailing address | Tools |
-| Choose AI providers | Settings → Models |
-| Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
+| Add plans and API keys | Settings → Providers |
+| Choose the default model | Settings → Agents → Defaults |
+| Connect the Tico AI Gateway | Settings → Providers → Tico Gateway → Change ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |

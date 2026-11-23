@@ -629,7 +629,11 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
             "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
             (runner, H.now()),
         )
-    assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
+    _, checks = health_of(api)
+    signin = checks["computer_signin"]
+    assert "sign in to Codex" in signin["summary"]
+    assert [fix["href"] for fix in signin["fixes"]] == ["#/bot/coder/computer", "#/settings/providers"]
+    assert [fix["href"] for fix in checks["computer_logins"]["fixes"]] == ["#/bot/coder/computer"]
 
 
 def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_the_one_cli_it_installs(environment):
@@ -659,6 +663,7 @@ def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_t
     assert not runtimes["codex"]["sign_in"] and not runtimes["codex"]["needed"] and runtimes["codex"]["signable"]
     assert "sign in to Claude Code" in checks["computer_signin"]["summary"]
     assert "Codex" not in checks["computer_signin"]["summary"]
+    assert checks["computer_signin"]["fixes"][0]["href"] == f"#/computers/{runner}"
 
 
 def _claude_signed_out_on_an_isolated_computer(api, runner, *, isolated):
@@ -1812,9 +1817,48 @@ def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environmen
 def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
     from backend import health
 
-    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials")])
+    text = health._rejected_summary([("Mac mini", "Claude Code", H.now(), "invalid key", "credentials", "r1")])
     assert not re.search(r"\d{4}-\d\d-\d\dT", text), text
     assert re.search(r" at \d\d:\d\d UTC: invalid key", text), text
+
+
+@pytest.mark.parametrize("other_login", ["ready", "credentials", None])
+def test_rejected_logins_link_to_their_credential_sources(environment, other_login):
+    api = environment()
+    failed = enrolled(api)
+    add_bot(api, "helper")
+    heartbeat(
+        api,
+        failed,
+        runtimes={
+            "codex": {
+                "installed": True,
+                "authenticated": "rejected",
+                "credential_source": "computer",
+            }
+        },
+    )
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
+            (failed, H.now()),
+        )
+    if other_login:
+        from backend.tests.helpers.onboarding import machine
+
+        other = machine(api, label="Other computer")
+        runtimes = (
+            SIGNED_IN
+            if other_login == "ready"
+            else {
+                "codex": {"installed": True, "authenticated": "rejected", "credential_source": other_login},
+            }
+        )
+        heartbeat(api, other["runner_id"], runtimes=runtimes)
+    check = health_of(api)[1]["models"]
+    assert check["status"] == ("warn" if other_login == "ready" else "bad")
+    expected = ["#/tools/keys?show=credentials"] if other_login == "credentials" else []
+    assert [f["href"] for f in check["fixes"]] == [*expected, "#/bot/helper/computer"]
 
 
 def test_token_use_names_a_deleted_bot_deleted_bot_never_its_id(environment):

@@ -54,9 +54,10 @@ def test_a_model_key_goes_to_computers_from_settings_models_not_a_grant(environm
     assert computer_asks(api, machine["token"]).json() == {"credentials": []}
     cid = store(api, "ANTHROPIC_API_KEY", "sk-ant-team-0123456789", name="Claude key")
     refused = grant(api, cid, "computers", expected=422).json()
-    assert refused["error"]["detail"] == "Give model keys to computers in Settings > Models"
+    assert "Settings > Providers" in refused["error"]["detail"]
+    assert "tico settings set models.computer_subscription" in refused["error"]["detail"]
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
-    # Moved from a grant made before: taking it off the computer in Settings > Models takes the key back.
+    # The old grant became a subscription: unassigning it takes the key back.
     heartbeat(api, machine["runner_id"], runtimes={"claude": on_shared("ANTHROPIC_API_KEY")})
     shared_before(api, cid)
     assert computer_asks(api, machine["token"], "claude").json()["credentials"][0]["env"] == "ANTHROPIC_API_KEY"

@@ -1,0 +1,3 @@
+.connect-plan,.connect-plan-fields{display:grid;gap:var(--s-3)}
+.connect-plan{padding:var(--s-3);border:1px solid var(--line);border-radius:var(--r-row)}
+.connect-plan-actions{display:flex;flex-wrap:wrap;gap:var(--s-2)}

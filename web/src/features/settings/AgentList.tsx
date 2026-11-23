@@ -33,16 +33,14 @@ import {
   limitsQuery,
   modelsQuery,
   stoppedRunsQuery,
-  subscriptionsQuery,
   type Audience,
   type BotAccess,
   type BotListed,
   type StoppedRun,
-  type Subscription,
   type TaskModel,
 } from './queries';
 
-/* Settings › Agents, the fleet (pages/8-settings/settings.js fleet): search, group by team, computer or subscription,
+/* Settings › Agents, the fleet (pages/8-settings/settings.js fleet): search, group by team or computer,
    change a row where it stands, check several to change their model or move them; open one in place for its model,
    owners, access, mail and stopped runs; bring back a retired one. */
 
@@ -443,16 +441,14 @@ function AgentOpen({ slug, name, listed }: { slug: string; name: string; listed?
 
 // ---------------------------------------------------------------- the fleet (settings.js fleet, a trial)
 
-/* One table of agents, grouped by team, computer or subscription. A row is changed where it stands: its model, what
+/* One table of agents, grouped by team or computer. A row is changed where it stands: its model, what
    its tasks run on, its computer and its limit. Check several to change their model or move them at once. */
 
-type By = 'team' | 'computer' | 'subscription';
+type By = 'team' | 'computer';
 const BY = [
   { value: 'team', label: 'Team' },
   { value: 'computer', label: 'Computer' },
-  { value: 'subscription', label: 'Subscription' },
 ] as const;
-const THIRD: Record<By, string> = { team: 'Computer', computer: 'Team', subscription: 'Next' };
 
 const useRows = () => useQuery(agentsQuery).data;
 const useMachines = () => useQuery(computersQuery).data;
@@ -587,7 +583,6 @@ interface LineProps {
   open: boolean;
   owner?: Face;
   machines: Machine[];
-  next: string;
   limit?: { monthly_usd?: number | null; blocked?: string | null; may_edit?: boolean };
   onPick: (on: boolean) => void;
   onEdit: (e: Change) => void;
@@ -595,7 +590,7 @@ interface LineProps {
   drag?: Ref<HTMLDivElement>;
 }
 
-function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit, onPick, onEdit, drag }: LineProps) {
+function FleetLine({ a, slug, r, by, picked, open, owner, machines, limit, onPick, onEdit, drag }: LineProps) {
   const models = useQuery(modelsQuery);
   const manage = r?.can_manage !== false;
   const tm = r?.task_model;
@@ -648,7 +643,7 @@ function FleetLine({ a, slug, r, by, picked, open, owner, machines, next, limit,
           ))}
         </Menu>
       ) : (
-        <span className="row-cell">{by === 'computer' ? (a.team ?? 'No team') : next}</span>
+        <span className="row-cell">{computer ?? 'No computer'}</span>
       )}
       <button type="button" className="fl-lim" title="Limit a month" aria-label={`${a.name}'s limit`} disabled={limit?.may_edit === false} onClick={edit('limit')}>
         {limit?.monthly_usd != null ? usd(limit.monthly_usd) : 'None'}
@@ -672,7 +667,6 @@ export function AgentList({ open }: { open?: string }) {
   const navigate = useNavigate();
   const all = useAgentFaces();
   const faces = useFaces();
-  const subs = useQuery(subscriptionsQuery);
   const limits = useQuery(limitsQuery);
   const bots = useQuery({ ...botsQuery, retry: false });
   const mayRestore = useMayRestore();
@@ -683,14 +677,9 @@ export function AgentList({ open }: { open?: string }) {
   const [editing, setEditing] = useState<Change | null>(null);
   const rows = (useRows() ?? []) as Row[];
   const live = useMachines() ?? [];
-  const plans = (subs.data?.subscriptions ?? []) as Subscription[];
   const slugOf = (a: Face) => a.slug ?? bare(a.id);
   const rowOf = (slug: string) => rows.find((r) => r.slug === slug);
   const listedOf = (slug: string) => bots.data?.find((b) => b.slug === slug || b.id === rowOf(slug)?.id);
-  const onPlan = (slug: string, fallback: boolean) => {
-    const id = rowOf(slug)?.id;
-    return plans.find((s) => (s.agents ?? []).some((x) => (x.id === id || x.id === slug) && !!x.fallback === fallback));
-  };
   const computerOf = (slug: string) => {
     const m = rowOf(slug)?.machine;
     return m?.label ?? live.find((c) => c.id === m?.runner_id)?.label ?? '';
@@ -707,7 +696,7 @@ export function AgentList({ open }: { open?: string }) {
   const mayPick = shown.map(slugOf).filter((x) => rowOf(x)?.can_manage !== false);
   const retired = (bots.data ?? []).filter((b) => b.state === 'archived' && mayRestore(b));
 
-  // A computer or a subscription with no agents is still a group; an agent sits under the plan it uses first.
+  // A computer with no agents still has a group.
   const groups: Group[] = [];
   const put = (key: string, name: string, slug?: string) => {
     let g = groups.find((x) => x.key === key);
@@ -715,17 +704,13 @@ export function AgentList({ open }: { open?: string }) {
     if (slug) g.slugs.push(slug);
   };
   if (by === 'computer') live.forEach((m) => put(`computer:${m.id}`, m.label || m.id));
-  if (by === 'subscription') plans.forEach((s) => put(`subscription:${s.id}`, s.name));
   for (const a of shown) {
     const slug = slugOf(a);
     if (by === 'team') put(`team:${a.team ?? ''}`, a.team ?? 'No team', slug);
-    else if (by === 'computer') {
+    else {
       const m = rowOf(slug)?.machine?.runner_id;
       if (m && live.some((c) => c.id === m)) put(`computer:${m}`, '', slug);
       else put('computer:', 'No computer', slug);
-    } else {
-      const s = onPlan(slug, false);
-      put(s ? `subscription:${s.id}` : 'subscription:', s?.name ?? 'No subscription', slug);
     }
   }
 
@@ -770,7 +755,6 @@ export function AgentList({ open }: { open?: string }) {
         open={isOpen}
         owner={owner}
         machines={live}
-        next={onPlan(slug, true)?.name ?? 'None'}
         limit={limits.data?.bots[slug]}
         onPick={(on) => setPicked((s) => toggled(s, slug, on))}
         onEdit={setEditing}
@@ -828,7 +812,7 @@ export function AgentList({ open }: { open?: string }) {
             <span>Model</span>
             <span className="c-tasks">Tasks</span>
             <span className="c-own is-mid">Owner</span>
-            <span>{THIRD[by]}</span>
+            <span>Computer</span>
             <span className="is-num">Limit</span>
           </div>
           {groups.map((g) => {

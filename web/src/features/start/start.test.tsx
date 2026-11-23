@@ -1,10 +1,14 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ActionsRoot } from '@/actions';
 import { ApiError } from '@/api/client';
 import { directoryQuery, queryClient } from '@/data';
+// Keep the lazy Settings import's transform outside the sign-in test.
+import '@/features/settings/exports';
+import { subscriptionsQuery } from '@/features/settings/routing';
 import { FirstRun } from './FirstRun';
 import { useStartGate } from './gate';
 import { GithubConnection } from './GithubConnection';
@@ -255,8 +259,92 @@ describe('Setup dialog, three steps @s1171', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
     await waitFor(() => expect((router.state.location.search as { setup?: string }).setup).toBe('model'));
     expect(putBody()).toMatchObject({ names: { company_name: 'Fernhill' } });
-    const next = await screen.findByRole('dialog', { name: 'Connect a model' });
+    const next = await screen.findByRole('dialog', { name: 'Connect your AI plan' });
     expect(within(next).getByRole('img', { name: 'Step 2 of 3' })).toBeTruthy();
+  });
+
+  it('continues when the first held provider becomes available and refreshes the later hold too', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      const quota = new Date(now + 4000).toISOString();
+      const capacity = new Date(now + 2000).toISOString();
+      const path = '/api/v2/model-subscriptions';
+      const catalog = () => {
+        const limited = Date.now() < now + 4000;
+        const busy = Date.now() < now + 2000;
+        return { kinds: [], subscriptions: [
+          { id: 'limited', name: 'Limited plan', runtime: 'codex', available: !limited, usage: limited ? { quota_hold_until: quota } : null },
+          { id: 'busy', name: 'Busy plan', runtime: 'claude', available: !busy, usage: busy ? { capacity_until: capacity } : null },
+        ] };
+      };
+      queryClient.setQueryData(subscriptionsQuery.queryKey, catalog() as never);
+      serve((_method, url) => url === path ? catalog() : RECORD);
+      show(<FirstRun />, '/tasks?setup=model');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      const dialog = within(screen.getByRole('dialog', { name: 'Connect your AI plan' }));
+      expect(dialog.queryByRole('button', { name: 'Continue' })).toBeNull();
+
+      await act(() => vi.advanceTimersByTimeAsync(1999));
+      expect(sent('GET', path)).toHaveLength(0);
+      await act(() => vi.advanceTimersByTimeAsync(6));
+      expect(sent('GET', path)).toHaveLength(1);
+      expect(dialog.getByRole('button', { name: 'Continue' })).toBeTruthy();
+      expect(dialog.getByText('Busy plan')).toBeTruthy();
+
+      await act(() => vi.advanceTimersByTimeAsync(1994));
+      expect(sent('GET', path)).toHaveLength(1);
+      await act(() => vi.advanceTimersByTimeAsync(6));
+      expect(sent('GET', path)).toHaveLength(2);
+      expect(dialog.getByText('Limited plan')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('connects inline, retries, and continues only after a provider is ready', async () => {
+    let allowed = false;
+    let saved = false;
+    const usage = { used_pct: 100, resets_at: '2099-07-01T00:00:00Z' };
+    const existing = { id: 'old', name: 'Held plan', runtime: 'claude', status: 'working', available: false, usage: { ...usage, quota_hold_until: usage.resets_at } };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [existing] } as never);
+    const codePage = 'https://auth.example/claude';
+    otherwise = (method, url) => {
+      if (url.endsWith('/connect')) {
+        return allowed
+          ? { body: { id: 'login1', runner_id: 'r1', state: 'waiting', url: codePage, code: 'TEMP-CODE' } }
+          : refusal(409, 'offline', 'No computer can sign in');
+      }
+      if (url.endsWith('/logins/login1/cancel')) return { body: { state: 'canceled' } };
+      if (url.endsWith('/logins/login1')) return { body: { id: 'login1', runner_id: 'r1', state: 'waiting', url: codePage, code: 'TEMP-CODE', not_yours: true } };
+      if (url === '/api/v2/model-subscriptions') {
+        if (method === 'POST') {
+          saved = true;
+          return { body: { id: 'new', name: 'New plan' } };
+        }
+        return { body: { kinds: [], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working', available: true, usage }] : [existing] } };
+      }
+      return { body: RECORD };
+    };
+    const router = show(<><ActionsRoot dot={() => null} fold={() => {}} /><FirstRun /></>, '/tasks?setup=model');
+    const dialog = await screen.findByRole('dialog', { name: 'Connect your AI plan' });
+    expect(within(dialog).getByRole('button', { name: 'Use an API key' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Continue' })).toBeNull();
+    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Connect' })[0]!);
+    await within(dialog).findByRole('region', { name: 'Connect Claude plan' });
+    const connect = () => within(within(dialog).getByRole('region', { name: 'Connect Claude plan' }));
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(await connect().findByRole('button', { name: 'Paste instead' })).toBeTruthy();
+    allowed = true;
+    fireEvent.click(connect().getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(connect().getByRole('link', { name: 'Open Claude' })).toBeTruthy());
+    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain('TEMP-CODE');
+    fireEvent.click(await connect().findByRole('button', { name: 'Paste instead' }));
+    fireEvent.change(await connect().findByLabelText('Setup token'), { target: { value: 'made-up-plan-token' } });
+    fireEvent.click(connect().getByRole('button', { name: 'Connect' }));
+    expect(sent('POST', '/api/v2/model-subscriptions/connect')).toHaveLength(2);
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Continue' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({ setup: 'team' }));
   });
 
   it('step 3 makes the team with the first job picked, then lands on Tasks with the dialog shut', async () => {

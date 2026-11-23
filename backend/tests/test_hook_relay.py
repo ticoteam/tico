@@ -42,7 +42,7 @@ def test_an_address_needs_the_gateway_key_and_shows_its_secret_once(api, hq, mon
     monkeypatch.delenv("TICO_GATEWAY_KEY")
     post(api, "triggers", {"name": "Shop"})
     refused = post(api, "triggers/shop/relay", {}, expected=409)
-    assert "Settings > Models" in refused["error"]["detail"] and hq.calls == []
+    assert "Settings > Providers" in refused["error"]["detail"] and hq.calls == []
 
     monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
     made = post(api, "triggers/shop/relay", {}, key="k1")["relay"]
@@ -345,7 +345,7 @@ def test_the_wake_address_needs_the_gateway_key_and_never_leaves_a_rehearsal(api
     url = {"url": "https://wake.acme.example/start"}
     monkeypatch.delenv("TICO_GATEWAY_KEY")
     refused = put(api, "hooks/wake-url", url, expected=409)
-    assert "Settings > Models" in refused["error"]["detail"] and hq.calls == []
+    assert "Settings > Providers" in refused["error"]["detail"] and hq.calls == []
     monkeypatch.setenv("TICO_GATEWAY_KEY", KEY)
     svc = api.app.state.hook_relay  # the real service: monkeypatch sets and restores on the attribute's owner
     monkeypatch.setattr(svc, "settings", dataclasses.replace(svc.settings, rehearsal=True))

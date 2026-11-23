@@ -5,7 +5,8 @@ import { limitsQuery, usageQuery, type UsageRange } from './queries';
 // access line. No components here: the first load imports this file, and a page comes through exports.ts.
 export { SECTION_IDS, isSection, type SectionId } from './sections';
 export { loadSection } from './main';
-export { supportAccessQuery, type SupportAccessView } from './queries';
+export { providerReady } from './providerStatus';
+export { addSubscription, subscriptionsQuery, supportAccessQuery, type SignInKind, type SupportAccessView } from './queries';
 
 export interface UsageSearch {
   view?: 'limits';

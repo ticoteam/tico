@@ -2,7 +2,8 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
 level (X-Low, Low, Medium, High or X-High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Models**, where the **Tico Gateway** card also shows prices and what is in use. How runs reach the Gateway, for developers, is in
+connect it once in **Settings → Providers → Tico Gateway**. Each agent's **Model** controls show the available picks.
+How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
@@ -35,17 +36,15 @@ still runs as that level.
 
 ## Choose how bots get their models
 
-In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
-switch, **Use until a computer is signed in** (used while a computer has no subscription and no login of its own): on is
-the first choice (or Tico Gateway only, when that was picked), off is the second (or your company's plans or API keys).
-Whether a computer's bots run on Tico Gateway when its plans run out is that computer's own **Fall back to Tico Gateway**
-switch, off until an owner or admin turns it on ([Computers](computers.md#subscriptions)).
+The setup choice determines whether bots can use the Gateway while their computers wait for a sign-in. To let a
+computer's bots use the Gateway when their plans run out, open the computer in **Settings → Computers** and use
+**Fall back to Tico Gateway** ([Computers](computers.md#subscriptions)).
 
 The four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway**. Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
-  **Settings → Computers**, and don't share one login across your team. Until you sign in, bots run on Tico Medium 1.0
+  **Settings → Providers**, and don't share one login across your team. Until you sign in, bots run on Tico Medium 1.0
   through the Gateway, and they move to your subscriptions on their next turn once you do, with no restart. When a
   plan runs out, the bot finishes on the Gateway, after any other provider signed in on its computer. Decide and
   update drafts run on the Gateway.
@@ -54,7 +53,7 @@ The four choices:
 - **Tico Gateway only**. Bots run on the Tico models you pick for them. A bot whose plan runs out finishes on the
   Gateway too.
 - **Your company's plans or API keys**. Bring your own: tick the providers, then sign in or add API keys in
-  **Credentials**. As with subscriptions only, the gateway key is spent only for a bot you put on a Tico model.
+  **Settings → Providers**. As with subscriptions only, the gateway key is spent only for a bot you put on a Tico model.
 
 Tico's installer sets the recommended choice, subscriptions only (`TICO_MODELS_PRESET=subscriptions` in the server's environment)
 until the owner saves another one here.
@@ -73,7 +72,7 @@ run on** says which bots ran on something other than what they are set to, for e
 (gpt-6-luna) and runs on Tico Medium: its computer has no Codex subscription", or one line when every bot that ran did.
 Two bots set to different models for independent work, such as two reviewers, are the same model until then.
 
-When a used-up login has its bots on the Gateway, **Settings → General → Health → Details** says so in one line, for example "Team box's
+When a used-up login has its bots on the Gateway, **Settings → Health** says so in one line, for example "Team box's
 Claude login is used up. Bots are on Tico Gateway until it resets." When the bot's computer can't run Gateway work,
 Health says the bot stopped and what to do: sign in another login, or add a Docker runner. When the gateway key reaches
 its monthly cap, the Gateway work stops and Health says **Gateway cap reached** ([What the card says](#what-the-card-says)).
@@ -82,28 +81,15 @@ its monthly cap, the Gateway work stops and Health says **Gateway cap reached** 
 
 Only the owner can do this.
 
-1. Open **Settings → Models**. The **Tico AI Gateway** card is under the providers.
-2. Paste the key Tico gave you in **Gateway key**.
-3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
+1. Open **Settings → Providers → Tico Gateway** and select **Change** on the **Gateway key** row.
+2. Paste the key Tico gave you in **Key**.
+3. Leave **Address** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
    you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
    (`TICO_GATEWAY_URL`) follows the same rule, or the key is not sent and the card says **Not working**.
-4. Press **Connect**.
+4. Press **Save**. The key field clears and the row shows a short preview of the saved key.
 
-The card shows **Connected**, and the Tico levels appear in the bot model list. The key field empties as
-soon as you press **Connect**, and the key is never shown again: the field shows only a short preview, its first and
-last three characters. If the card says **Not working** or **Not ready**, see [What the card says](#what-the-card-says).
-
-Once connected, the card has three buttons:
-
-- **Save**: saves a new key or URL. Leave the key field empty to keep the saved key.
-- **Check now**: asks the Gateway about the key again.
-- **Clear key**: removes the key. Bots on Tico models stop until a key is saved again, and the Tico models leave the
-  model list.
-
-If the server's environment sets the key (`TICO_GATEWAY_KEY`), that key wins: the card shows **Connected**, says the
-key is set by the server's environment, and has only **Check now**. Change it where the server is configured.
-
-People other than the owner see only whether the Gateway is connected.
+To update the address and keep the saved key, leave **Key** empty when you save. If the server sets the key through
+`TICO_GATEWAY_KEY`, change it where the server is configured.
 
 ### Connected automatically
 
@@ -130,11 +116,9 @@ Sign in directly as an owner or admin to link the server:
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
 With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
 Gateway use spends that company's credit.
-The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
-
 If linking fails, check the error beside the form. Tico must be able to reach your server's
-[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → General → Health → Details**;
-the company Gateway endpoint also needs to be available at Tico HQ.
+[connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**.
+The company Gateway endpoint also needs to be available at Tico HQ.
 
 An existing key stays in use when you link the server. A pasted or environment key takes precedence over automatic enrollment.
 To unlink the server, press **Disconnect** on the **Tico company** card and confirm.
@@ -149,8 +133,7 @@ Turning the install off still stops all its keys immediately. A run that could e
 under 24 hours, including any fallback; its run details explain the shorter limit.
 
 - A key you paste on the card, or one the server's environment sets, wins over the automatic key.
-- **Clear key** removes the automatic key, and the server does not get a new one by itself. **Connect automatically**
-  on the card turns it back on.
+- Disconnecting the linked company from **Settings → General → Tico company** removes its automatic key.
 - If Tico turns the Gateway off for your install, Health says "Tico AI Gateway was turned off for this install by
   Tico. Contact support." Decide and bots on Tico models stop, and the server stops asking for a key.
 - If the invite code doesn't work (expired, used by all the installs it allows, or canceled), Health says so. Ask
@@ -161,7 +144,7 @@ your server can make, never the bot's name.
 
 ## Changing where an integration sends
 
-A saved Gateway key goes only to the **Gateway URL** it was saved with. Before you change that URL to another service,
+A saved Gateway key goes only to the **Address** it was saved with. Before you change that address to another service,
 Tico asks what to do with the key. It asks when the new address differs in scheme (`https` or `http`), host or port.
 Going back to the default, `https://updates.tico.team/v1/gateway`, counts as a change too. Changing the key alone does not
 ask.
@@ -182,10 +165,8 @@ not list it.
 
 ## Pick a Tico model for a bot
 
-While the Gateway is connected, choose **Tico AI Gateway** as a bot's harness / provider in **Settings → Bots**
-([Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback)). The Model list then gives
-way to three controls: **Level** (X-Low, Low, Medium, High, X-High), **Fast** and **Version**. One line under them says what runs and the price, for example "Claude Sonnet 5.5 · $2.50 / $12.50 per
-1M". Effort, Fallback and Tasks work as for any model. The same controls appear for a fallback or a task model.
+While the Gateway is connected, open the affected agent's **Settings → Model**. Choose a Tico model from the available
+picks and select **Apply**. See [Harness, model, effort and fallback](creating-bots.md#7-harness-model-effort-and-fallback).
 
 A bot on the Gateway with no model of its own, for example one that waits for a sign-in, runs on Medium at the current
 version. A template can start a bot on another level: its `bot.yaml` may hold
@@ -235,9 +216,8 @@ status and **Needs you** say so.
 
 ## What the card says
 
-Tico asks the Gateway about the key when you save it, when you press **Check now**, when the owner opens the page
-(at most once a minute) and every hour. The card shows the Gateway's last answer, and **Settings → General → Health → Details** shows the
-same warnings to the owner, with **Open Models**.
+Tico checks the key when you save it, when the owner opens Providers (at most once a minute), and every hour.
+**Settings → Health** shows Gateway warnings to the owner and links back to Providers.
 
 | The card says | What it means | What to do |
 |---|---|---|
@@ -245,7 +225,7 @@ same warnings to the owner, with **Open Models**.
 | "This key has used 80% of its monthly Gateway cap. Bots stop at 100% until next month." | The key is near its monthly cap. The number is the share used. | Nothing yet, or ask Tico for a higher cap. |
 | **Gateway cap reached** | The key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap. | Wait for the next month (UTC), or ask Tico to raise the cap. |
 | **Not working**: key not recognised | The Gateway doesn't accept the key: it was revoked, or it was mistyped. | Check you pasted the whole key, or ask Tico for a new one and save it. |
-| **Not ready** | The Gateway at that URL doesn't serve Tico models yet. | Check the **Gateway URL**, or wait until Tico turns the models on. |
+| **Not ready** | The Gateway at that URL doesn't serve Tico models yet. | Check the Gateway **Address**, or wait until Tico turns the models on. |
 | "Not checked: the Gateway did not answer." | The Gateway was unreachable. This says nothing about the key. | Nothing. Bots keep trying; check again later. |
 
 ## When the Gateway refuses a bot's run
@@ -256,27 +236,22 @@ The Gateway is one login for the whole company, as a provider login is for its c
 | The bot's status says | What happens to the run |
 |---|---|
 | **Gateway cap reached** | Waits until the next month (UTC). |
-| The Tico AI Gateway key is not working; save a new one in Settings > Computers | Waits for a new key. |
+| The Tico AI Gateway key is not working | Waits for a new key in **Settings → Providers**. |
 | Tico models are paused: this company is out of credit | The company's credit is at its minimum ([Credit and the minimum balance](#credit-and-the-minimum-balance)). The bot runs on its other models meanwhile and tries Tico models again after a minute. The Gateway can take up to five minutes to refresh its balance after credit is added. |
 | Tico AI Gateway rate limited | Retries after the Gateway's requested wait, for the key's minute rate window or an address block. When the bot's other model finished the turn, the bot tries Tico models again after a minute. Update the server and its computers to use that wait; older computers without it wait at least an hour. |
-| The Tico AI Gateway doesn't offer this model | Saved for later, not retried. Pick another in the bot's Model controls; **Settings → Models → Tico Gateway** lists the picks in use. |
+| The Tico AI Gateway doesn't offer this model | Saved for later. Choose another in the agent's **Model** controls. |
 | The Tico AI Gateway refused the request as sent, with the Gateway's reason | Saved for later, not retried. |
 | No Tico route for this request | Saved for later, not retried. |
-| The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later, not retried. Check the **Gateway URL**. |
+| The Tico AI Gateway doesn't serve Tico models at its URL yet | Saved for later. Check the Gateway **Address** in **Settings → Providers**. |
 | Tico AI Gateway is unavailable, try again | Back in the queue if nothing ran yet: tried up to three times, waiting a minute, then two. After the third try, or if the run had already acted, saved for later. |
 
 If the Gateway cuts a reply off after the bot started answering, the bot posts what it had written, with a note
 saying the Tico AI Gateway cut the reply off.
 
-## Settings → Models → Tico Gateway
+## Settings → Providers → Tico Gateway
 
-One card. Its first line says whether the Gateway is connected (and, for the owner only, this month's spend against its
-cap, with a bar) beside the **Use until a computer is signed in** switch. Owners and admins also see **prices** per 1M tokens in and out by
-level (X-Low to X-High) and mode (Regular, Fast), without the models underneath; **Picks in use** (name, version or
-Auto, number of bots) when a bot uses one; **API keys**, a link for the owner while the Gateway is connected
-([API keys](#api-keys)); and **Services**, folded, with each service's status (Live, On request, Coming soon), price and
-the tools that use it. The owner's key and Gateway URL are under **Advanced**. The old **Settings → Gateway** address
-(`#/settings/gateway`) opens this card.
+The **Gateway key** row lets the owner change the key and address. **Limits** opens the company usage limits.
+The old **Settings → Gateway** address (`#/settings/gateway`) opens Providers.
 
 Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
 **Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
@@ -289,7 +264,7 @@ skill is `skills/gateway/SKILL.md`.
 ## API keys
 
 To use the Gateway from other tools (your own code, Claude Code, Codex, curl), make an API key on
-[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys). The owner reaches it from **Settings → Models → Tico Gateway → API keys**.
+[app.tico.dev/gateway](https://app.tico.dev/gateway#api-keys).
 Each key has a name and a monthly cap in dollars billed ($1 to $100, $20 by default), and its use bills to the company's
 credit like its bots' use. The company's owners and admins on app.tico.dev make and revoke keys once the company has
 prepaid credit. The key is shown once.
@@ -378,8 +353,8 @@ period ends.
 
 ## Webhooks through the Gateway
 
-With the Gateway connected, an incoming webhook can have a second address at Tico HQ (Settings → Models → Tico
-Gateway → Webhooks). It keeps what senders post while your server is off or asleep, hands it over within seconds of the server being back,
+With the Gateway connected, an incoming webhook can have a second address at Tico HQ. It keeps what senders post
+while your server is off or asleep, hands it over within seconds of the server being back,
 and wakes a server Tico hosts that is asleep. The same key brings notices from Tico Team. See [Webhooks](webhooks.md#through-tico-gateway).
 
 ## Credit and the minimum balance

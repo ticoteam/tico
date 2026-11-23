@@ -23,12 +23,12 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { configQuery, pageOwnersQuery, queryClient, quietRoot, write, type PageOwnerRow, type PageOwners } from '@/data';
+import { configQuery, pageOwnersQuery, queryClient, quietRoot, QUIET_STALE_MS, write, type PageOwnerRow, type PageOwners } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
-   section opens with data older than a minute. The one timer is a model sign-in under way (readSignIn). */
+   section opens with data older than a minute. Model sign-ins and provider holds also refresh while they wait. */
 quietRoot('settings');
 quietRoot('usage');
 
@@ -390,7 +390,7 @@ export const addProductUpdate = async (title: string, bullets: string[]) => {
   await queryClient.invalidateQueries({ queryKey: changelogQuery.queryKey });
 };
 
-// ---------------------------------------------------------------- model subscriptions (Settings, Agents)
+// ---------------------------------------------------------------- model subscriptions (Settings, Providers)
 
 /** The agents on a subscription: the server adds `agents` (S2); until it does there are none to draw. */
 export interface SubscriptionAgent {
@@ -402,6 +402,22 @@ export interface SubscriptionAgent {
 export const subscriptionsQuery = queryOptions({
   queryKey: ['settings', 'subscriptions'],
   queryFn: ({ signal }) => api.get<ModelSubscriptionList>('/api/v2/model-subscriptions', { signal }),
+  refetchInterval: ({ state }) => {
+    let earliest = Infinity;
+    for (const { usage } of state.data?.subscriptions ?? []) {
+      for (const end of [usage?.quota_hold_until, usage?.capacity_until, usage?.resets_at]) {
+        const at = Date.parse(end ?? '');
+        if (at < earliest) earliest = at;
+      }
+    }
+    if (earliest === Infinity) return false;
+    // If a fresh response still reports a past deadline (for example with clock skew), back off.
+    if (earliest <= state.dataUpdatedAt) return QUIET_STALE_MS;
+    // A failed refresh leaves the deadline in the past: retry no faster than every 5 s.
+    const wait = earliest - Date.now();
+    return wait > 0 ? Math.min(2_147_483_647, wait) : 5_000;
+  },
+  refetchIntervalInBackground: true,
 });
 
 export type Subscription = ModelSubscription & { agents?: SubscriptionAgent[] };
@@ -447,6 +463,7 @@ export interface SignIn {
   url?: string | null;
   code?: string | null;
   accepts_code?: boolean;
+  code_sent?: boolean;
   message?: string | null;
   computer?: string | null;
   not_yours?: boolean;
@@ -464,8 +481,14 @@ export const startSignIn = (input: { kind: SignInKind } | { subscription: string
 
 /** One read of a sign-in under way. Not a query: its answer holds the provider's one-time code and page, which stay
     in the dialog's state (polled with `poll` from @/lib), never the query cache. */
-export const readSignIn = (runner: string, id: string, signal?: AbortSignal) =>
-  api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal });
+export async function readSignIn(runner: string, id: string, signal?: AbortSignal): Promise<Partial<SignIn>> {
+  try {
+    return await api.get<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}`, { signal });
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return { state: 'failed' };
+    throw error;
+  }
+}
 
 export const sendSignInCode = (runner: string, id: string, code: string) =>
   api.post<SignIn>(`/api/v2/computers/${enc(runner)}/logins/${enc(id)}/code`, { code });

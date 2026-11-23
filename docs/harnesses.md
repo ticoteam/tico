@@ -147,7 +147,7 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > Models** (`backend/providers.py`). Each provider names its runtime
+The owner enables providers in **Settings > Providers** (`backend/providers.py`). Each provider names its runtime
 (the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
 anything. Each computer installs only:
 
@@ -175,7 +175,7 @@ on lookup, and pi's `models.json` names the turn's model for the run. An id from
 department, or the first lineup's) was rewritten once to its level's id and resolves as that id when it still arrives
 (`gateway_tiers.new_id`). In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
 Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
-exactly while the **Tico AI Gateway** connection in Settings > Models has a key (`backend/gateway_connection.py`),
+exactly while the **Tico AI Gateway** connection in Settings > Providers has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
 preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
@@ -478,7 +478,7 @@ A harness is a manifest plus a host adapter.
    seed = []                    # of files, those copied into the side folder first (settings the CLI keeps with the login)
    keychain = []                # platforms (as the runner names them, e.g. "darwin") where the CLI keeps the login in
                                 # the system keychain instead: no Switch account there (`switch_unavailable_on`)
-   connect = ["login", "--device-auth"]  # optional: signs a plan in for a company subscription (Connect in Settings > Models)
+   connect = ["login", "--device-auth"]  # optional: signs a plan in for a company subscription (Connect in Settings > Providers)
    connect_file = "auth.json"   # its result: this one of files, in a home of its own; or connect_token = "<prefix>",
                                 # a token it prints starting with that (and a kind in backend/model_subscriptions.py)
 
@@ -504,7 +504,7 @@ is a bug in its host, not a reason to compare names.
 
 Sign-in facts come from the tables that already hold them: `[login]` present means the browser relay (Settings >
 Computers), `paste_code` means it takes a pasted code, `logout` means Sign out and Switch account (`sign_out` in
-`harnesses[].capabilities`), `connect` means Connect in Settings > Models (`subscription_connect`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
+`harnesses[].capabilities`), `connect` means Connect in Settings > Providers (`subscription_connect`), `auth.api_key_env` names the keys. A login's `files` are paths inside its home (the
 `profile_home` variable's folder, or `HOME`), never absolute, never with `..` or an empty part; `seed` names only
 some of `files`, and `logout` needs `files`. `keychain` lists the platforms where Switch account is not offered
 (`switch_unavailable_on` in `harnesses[].capabilities`; Claude Code on a Mac).

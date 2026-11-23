@@ -2,7 +2,7 @@ import { Radio } from '@base-ui/react/radio';
 import { RadioGroup } from '@base-ui/react/radio-group';
 import { useQuery } from '@tanstack/react-query';
 import { useLocation } from '@tanstack/react-router';
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useState, type FormEvent, type ReactNode } from 'react';
 import { run, useAction } from '@/actions';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -10,10 +10,10 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
 import { Checkbox } from '@/kit/Checkbox';
-import { poll } from '@/lib';
+import { providerReady, subscriptionsQuery, type SignInKind } from '@/features/settings/routing';
 import { Dot } from '@/tico/dot';
 import { keyLost, pendingSetup, reasonOf } from './handoff';
-import { githubQuery, loginLive, loginQuery, readLogin, setupQuery, subscriptionsQuery, type KeyKind, type PlanKind, type PlanLogin } from './queries';
+import { githubQuery, setupQuery, type KeyKind } from './queries';
 import { setupStep, stepNumber, type SetupStep } from './steps';
 import './start.css';
 
@@ -27,7 +27,7 @@ const FAILED = 'That did not go through. Try again.';
 const TITLES: Record<SetupStep, string> = {
   path: 'Set up your company',
   name: 'Name your company',
-  model: 'Connect a model',
+  model: 'Connect your AI plan',
   paste: 'Paste a key',
   team: 'Pick a team',
   github: 'Connect GitHub',
@@ -48,7 +48,7 @@ export function FirstRun() {
       lead={<Head step={shown} back={shown === 'paste'} />}
       title={TITLES[shown]}
     >
-      <Step step={shown} />
+      <Step key={step ?? 'closed'} step={shown} />
     </Dialog>
   );
 }
@@ -173,114 +173,55 @@ function NameStep() {
   );
 }
 
-const PLANS: readonly { kind: PlanKind; runtime: string; name: string; mark: string }[] = [
-  { kind: 'claude_token', runtime: 'claude', name: 'Claude', mark: 'C' },
-  { kind: 'codex_login', runtime: 'codex', name: 'ChatGPT', mark: 'G' },
-];
+const ConnectPlan = lazy(() => import('@/features/settings/exports').then((m) => ({ default: m.ConnectPlan })));
+
+const PLANS = [
+  { kind: 'claude_token', runtime: 'claude', name: 'Claude plan', mark: 'C' },
+  { kind: 'codex_login', runtime: 'codex', name: 'ChatGPT plan', mark: 'G' },
+] as const;
 
 function ModelStep() {
-  const subs = useQuery(subscriptionsQuery);
-  const { data: login } = useQuery(loginQuery);
-  const connect = useStepAction('setup.connect');
-  const list = subs.data?.subscriptions ?? [];
-  const any = list.length > 0;
-  const going = loginLive(login) ? login : null;
-  // The sign-in's one-time code and the provider's page: this state only, never the cache (which holds the state).
-  const [seen, setSeen] = useState<PlanLogin | null>(null);
-  const live = !!going;
-  useEffect(() => {
-    if (!live) return;
-    return poll(readLogin, setSeen, loginLive, 2000);
-  }, [live]);
-  const shown = going?.id && seen?.id === going.id ? seen : null;
-
-  const end = (plan: (typeof PLANS)[number], first: boolean) => {
-    const sub = list.find((s) => s.runtime === plan.runtime);
-    if (sub)
-      return (
-        <span className="wl-done">
-          {sub.name}
-          <Icon name="check" />
-        </span>
-      );
-    if (going?.kind === plan.kind && going.state === 'waiting' && shown?.url)
-      return (
-        <a className="btn btn-fill" href={shown.url} target="_blank" rel="noopener noreferrer">
-          Open {plan.name}
-        </a>
-      );
-    return (
-      <Button
-        variant={first && !any && !going ? 'primary' : 'plain'}
-        busy={going?.kind === plan.kind}
-        disabled={!!going}
-        onClick={() => connect.press({ kind: plan.kind })}
-      >
-        Connect
-      </Button>
-    );
-  };
-
-  const failed = login && !going && login.state === 'failed' ? login.message || 'The sign-in did not finish' : null;
+  const { data } = useQuery(subscriptionsQuery);
+  const [kind, setKind] = useState<SignInKind | null>(null);
+  const next = useStepAction('setup.next');
+  const ready = (data?.subscriptions ?? []).filter(providerReady);
   return (
     <>
       <div className="wl-list">
-        {PLANS.map((plan, i) => (
-          <div className="wl-row" key={plan.kind}>
-            <span className="wl-mark" aria-hidden="true">
-              {plan.mark}
-            </span>
-            <b>{plan.name}</b>
-            {end(plan, i === 0)}
-          </div>
-        ))}
+        {PLANS.map((plan) => {
+          const connected = ready.find((s) => s.runtime === plan.runtime);
+          return (
+            <div className="wl-row" key={plan.kind}>
+              <span className="wl-mark" aria-hidden="true">{plan.mark}</span>
+              <b>{plan.name}</b>
+              {connected ? (
+                <span className="wl-done">{connected.name}<Icon name="check" /></span>
+              ) : (
+                <Button disabled={kind !== null} onClick={() => setKind(plan.kind)}>Connect</Button>
+              )}
+            </div>
+          );
+        })}
       </div>
-      {shown?.code && (
-        <p className="wl-done">
-          Code <b>{shown.code}</b>
-        </p>
+      {kind && (
+        <Suspense fallback={null}>
+          <ConnectPlan kind={kind} inline onClose={() => setKind(null)} />
+        </Suspense>
       )}
-      {going?.accepts_code && !going.code_sent && <CodeForm />}
       <Foot
-        error={connect.error ?? failed}
-        left={
-          <Button variant="quiet" onClick={() => run('setup.open', { step: 'paste' }, click)}>
-            Paste key
-          </Button>
-        }
-        right={
-          any ? (
-            <Button variant="primary" onClick={() => run('setup.next', { from: 'model' }, click)}>
-              Continue
-            </Button>
-          ) : undefined
-        }
+        error={next.error}
+        left={<Button variant="quiet" onClick={() => run('setup.open', { step: 'paste' }, click)}>Use an API key</Button>}
+        right={ready.length > 0 && (
+          <Button variant="primary" busy={next.pending} onClick={() => next.press({ from: 'model' })}>Continue</Button>
+        )}
       />
     </>
   );
 }
 
-/** A sign-in that hands a code back on the provider's page: the person pastes it here. */
-function CodeForm() {
-  const [code, setCode] = useState('');
-  const send = useStepAction('setup.sendCode');
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (code.trim()) void send.press({ code: code.trim() });
-  };
-  return (
-    <form className="wl-fields" onSubmit={submit}>
-      <Field label="Code" labelHidden placeholder="Code" value={code} onValueChange={setCode} autoComplete="one-time-code" error={send.error ? 'Did not go through' : undefined} />
-      <Button type="submit" busy={send.pending} disabled={!code.trim()}>
-        Sign in
-      </Button>
-    </form>
-  );
-}
-
 const KEYS: readonly { value: KeyKind; label: string }[] = [
-  { value: 'anthropic_key', label: 'Claude' },
-  { value: 'openai_key', label: 'ChatGPT' },
+  { value: 'anthropic_key', label: 'Anthropic' },
+  { value: 'openai_key', label: 'OpenAI' },
 ];
 
 function PasteStep() {
@@ -295,7 +236,7 @@ function PasteStep() {
   return (
     <form className="wl-form" onSubmit={(e) => void submit(e)}>
       <div className="wl-fields">
-        <Select label="Model" labelHidden options={KEYS} value={kind} onValueChange={setKind} />
+        <Select label="Provider" labelHidden options={KEYS} value={kind} onValueChange={setKind} />
         <Field label="Key" labelHidden type="password" value={secret} onValueChange={setSecret} autoComplete="off" />
       </div>
       <Foot

@@ -237,7 +237,7 @@ TRIGGER = _s("The trigger's id, from `trigger list`")
     "tico_trigger_relay_create",
     "Give a trigger a second address through Tico Gateway, which keeps what is sent to it "
     "while this server is off or unreachable and hands it over when the server is back. Needs the Tico Gateway "
-    "connected in Settings > Models. The answer's `address` carries the secret and is shown only now; the trigger's "
+    "connected in Settings > Providers. The answer's `address` carries the secret and is shown only now; the trigger's "
     "own address keeps working. The server still checks signatures itself.",
     {"trigger": TRIGGER},
     required=("trigger",),

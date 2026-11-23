@@ -11,16 +11,12 @@ The old registration must have no assigned bots, cloud machine, shared browser a
 keys, subscriptions or profiles. Computers with an unknown device identity stay listed. The runner
 reports an app-salted hash of the OS device identity; the raw identity stays on the computer.
 
-**Settings → Models** holds the company's model settings:
+**Settings → Providers** lists Claude and ChatGPT plans and API keys by owner. **Tico Gateway** holds the
+[Gateway](ai-gateway.md) key and a link to its limits. **Settings → Agents → Defaults** holds the model for new agents
+and the meetings model. Open **Usage → Limits** for the [company turn levels](#change-the-company-turn-levels).
 
-- **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
-- **Tico Gateway**: one switch, **Use until a computer is signed in** (used while a computer has no subscription and no
-  login of its own). The [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
-- **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
-- **Limits**: the [company turn levels](#change-the-company-turn-levels).
-
-Owners and admins change subscriptions and limits; the owner changes the Gateway and defaults; everyone else sees them.
-Old links to AI providers, Subscriptions or the Models card on Computers open Models.
+Owners and admins add providers. Everyone can see the pools, usage badges and the count of agents they can read.
+Old links to Models or Subscriptions open Providers.
 
 ## Subscriptions
 
@@ -33,7 +29,7 @@ admin turns it on. When every plan given to a computer for a tool is at its limi
 login of its own, its bots wait for the first plan to reset unless that switch is on; with it on they run on Tico
 Gateway meanwhile.
 
-1. Open **Settings → Agents**, then click **Add** beside **Subscriptions and keys**.
+1. Open **Settings → Providers**, then click **Add**.
 2. Tap **Claude plan** or **ChatGPT plan**. The sign-in starts at once on one of the company's computers. With none
    online, Tico starts the company's cloud computer first when one is available.
 3. Tap **Open Claude** or **Open ChatGPT** and sign in with the account that has the plan. Claude's page hands back a
@@ -56,9 +52,9 @@ is at its limit, turns run as for a single plan at its limit: the computer's own
 A plan the person adds later joins on its own, and one given to someone else leaves. API keys have no owner and are
 never part of a person's plans. `tico subscription list` shows which plan is in use and why.
 
-The plan defaults to a name like *Ana's Claude plan* and its owner is the person who signed in; change either
-under the row's **Edit** action. When a sign-in cannot run, **Paste instead** takes the token from
-`claude setup-token` or the contents of Codex's `auth.json`. Open a saved plan's row and click **Reconnect** to
+The plan defaults to a name like *Ana's Claude plan*, and the person who signed in owns it. Use **Rename** in
+the row's **⋯** menu to change the name. When a sign-in cannot run, **Paste instead** takes the token from
+`claude setup-token` or the contents of Codex's `auth.json`. Choose **Reconnect** from a saved plan's menu to
 sign in again or paste a replacement. If running work would restart, Tico asks for confirmation.
 
 Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
@@ -66,9 +62,11 @@ session of that tool there starts fresh. When tasks are running, Tico asks first
 subscription does the same on each computer that had it. A computer below the minimum release (0.6.0-rc.1) is paused
 until it updates.
 
-Settings → Models lists subscriptions under each owner's avatar and name, yours first, with API keys under **No
-owner**. Inside a group each tool's plans are in the order a person's plans are used: the plan in use names its computer,
-the next one is marked, and a plan at its limit says until when. Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used and the time until that window resets (such as `4d 15h`), or an API key's cost this month. Hover the usage to see the share left and the reset time. **Reconnect** means the saved login stopped working; connect again or paste a new one from the row's menu. A new value restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the old one. The page asks first and says how many. **Edit** in the same menu changes the name or, for a plan, the owner.
+Providers opens **Your pool** first and folds other people's pools by default. Older plans appear under **No owner**
+and shared keys under **Company keys**. Each populated pool counts its plans and keys and shows how many visible agents use them. A row shows
+the number of agents on it, usage and reset for a plan, or monthly spend for a key. Its badge shows the most
+urgent problem or the plan's place in today's rotation. Owners and admins use the row menu to manage plans and
+keys. **Replace key** updates the existing key and asks for confirmation if work would restart.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -194,11 +192,11 @@ The company-limit message does not confirm that an automatic repair has run.
 
 You must be the owner or an admin. The server rejects changes from anyone else.
 
-![Settings, Models, Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
+![Usage Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
 
-Example owner/admin view of **Settings → Models → Limits**, using synthetic data.
+Example owner/admin view of **Usage → Limits**, using synthetic data.
 
-1. Open **Settings → Models**.
+1. Open **Usage → Limits**.
 2. Find **Limits**.
 3. Enter **Warn at** (runs per person).
 4. Enter **Stop at** (runs per person).
@@ -227,11 +225,11 @@ A **connection** is one login an AI tool on a computer runs on. It is one of:
   line to change its account. To run bots on a different account for the same tool, add another computer (another
   runner, which can be on the same machine; see [Install](install.md#add-computers-to-run-your-bots)).
 - **An API key**: the computer's login can run on a model API key instead of a plan (Codex, Claude Code, Cursor Agent
-  and Muse Code take one). The key is one given to the computer in **Settings > Models**, or a key set on the
+  and Muse Code take one). The key is one given to the computer in **Settings > Providers**, or a key set on the
   computer itself. See [API keys on a Computer](#api-keys-on-a-computer).
 
 Plan logins stay on the computer that holds them. Tico stores each connection's name, sign-in state, the account it
-reports and its usage readings, never the login itself. A key added in Settings > Models is kept sealed in Tico's
+reports and its usage readings, never the login itself. A key added in Settings > Providers is kept sealed in Tico's
 credential vault.
 
 Named subscriptions that an earlier release signed in on a computer are no longer used or shown. Bots that ran on one
@@ -248,7 +246,7 @@ the login check resumes when they report again.
 An unknown account type gives no API-key warning; a retained named login may need its next account report first.
 When a tool cannot write its data folder, Health names the reported folder problem for the computer operator.
 
-**Shared connections.** A model key added in **Settings > Models** can be given to several computers. Each computer it
+**Shared connections.** A model key added in **Settings > Providers** can be given to several computers. Each computer it
 serves shows it as a chip, its pop-up line marked **Shared** and listing those computers. Only credential administrators
 see the key's name and preview; an operator sees which computers it serves ([API keys on a Computer](#api-keys-on-a-computer)).
 
@@ -285,17 +283,17 @@ Signing a saved subscription in again is **Reconnect**, and asks first when runn
 unconfirmed sign-in, Tico keeps the previous credential; reconnect again to confirm the restart. A subscription belongs to the
 company. A plan's **Owner** is the person whose plan it is. Whoever adds a plan is its owner, unless an owner or admin names
 another active person in the company, now or later. A plan is for its owner's own bots, not shared ones; the sign-in step says
-so. Owners and admins add, edit, reconnect and remove them in **Settings > Agents**. The person who added a plan or API key
+so. Owners and admins add, edit, reconnect and remove them in **Settings > Providers**. The person who added a plan or API key
 can also remove it there. Default names use the owner's display name, as in **Ana's Claude plan** or **Ana's ChatGPT
 plan**, and fall back to **Claude plan** or **ChatGPT plan**. On upgrade, Tico replaces legacy email names on saved
-logins, including Claude logins since converted to setup tokens. The list shows the plan's usage to all members, its
-account email to its owner and admins, and only the agents each viewer can read.
+logins, including Claude logins since converted to setup tokens. The list shows plan usage to all members and the
+account email only to the plan's owner and admins. Only admins see API key previews. Each viewer sees agents they can read.
 
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many computers.
 Every bot on that computer then runs that tool on it. A bot with no fallback of its own, or whose named fallback is another
 model on the same login (that fallback is skipped once the login is spent), can use it too when that tool is installed,
 the company has that tool's provider turned on (adding a subscription for that tool turns it on, and the first-run setup
-lists the providers to switch on), and **Fall back when a plan runs out** is on in **Settings > Models**. On an updated
+lists the providers to switch on), and the company enables automatic fallback (`tico settings set models.providers`). On an updated
 runner, an unused automatic candidate's login is fetched only when the bot is about to use it.
 Changing or removing that login leaves a turn still running on another tool alone. Once the fallback fetches the login,
 changing it stops that turn too. Older runners fetch fallback logins up front and restart those turns when a login
@@ -355,7 +353,7 @@ one older than a day is marked as possibly out of date, and after its reset it r
 fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Details are in
 [Signed-in account and usage windows](#signed-in-account-and-usage-windows).
 
-An admin can read a Claude plan's week now: the **↻** beside its row's **⋯** menu on the Subscriptions page asks one
+An admin can read a Claude plan's week now: **Check use** in its **⋯** menu on Providers asks one
 computer that has the plan. That computer sends a one-line prompt to Haiku with the plan's token, in a temporary home it
 deletes after, and sends back the week's percent and reset from that reply. A setup-token can only run prompts, so
 Claude Code's `/usage` cannot read it; the prompt uses a few tokens of the plan. The token is used for that one read and
@@ -545,15 +543,15 @@ Choose **API key** when you pay the provider for each use:
 - Bots on one OpenAI API key run side by side, as do bots on one ChatGPT sign-in
   ([sharing a sign-in](#bots-sharing-one-chatgpt-sign-in-run-side-by-side)).
 - Where the key goes:
-  - **Settings > Models** holds the keys for Codex, Claude Code, Cursor Agent and Muse Code, each given to one
+  - **Settings > Providers** holds the keys for Codex, Claude Code, Cursor Agent and Muse Code, each given to one
     computer or several.
   - **Credentials** holds the key of a tool whose key belongs to each bot, such as the Gemini CLI.
 
 ### Add one
 
-In an agent's **Computer** tab, open **Sign-ins on this computer**, choose **Add a sign-in**, and pick an installed AI
+In an agent's **Computer** tab, open **This computer’s sign-in**, choose **Add a sign-in**, and pick an installed AI
 tool that supports browser sign-in. Follow the provider's link and enter its code when prompted. The sign-in list
-updates when the computer reports the login. Add shared API keys in **Settings > Models** (see
+updates when the computer reports the login. Add shared API keys in **Settings > Providers** (see
 [API keys on a Computer](#api-keys-on-a-computer)).
 
 The computer must be online ("Computer is offline" otherwise). Every bot on the computer that runs that tool uses the
@@ -590,7 +588,7 @@ Settings > General > Health > Details shows "*computer name*: sign in to Codex" 
 
 ### Signing out and switching accounts
 
-In an agent's **Computer** tab, **Sign-ins on this computer** offers **Sign out** on each signed-in tool that supports it.
+In an agent's **Computer** tab, **This computer’s sign-in** offers **Sign out** on each signed-in tool that supports it.
 The computer's operator, owners and admins can sign out. The computer must be online and on a current runner. An older
 runner answers `Update <computer> to sign out from here`.
 
@@ -609,16 +607,15 @@ runner answers `Update <computer> to sign out from here`.
   the old account working, and the side folder is removed (kept, and named in the message, only if the old files could
   not be put back). Runs that start afterwards use the new account. The account and usage readings of the old account
   are cleared.
-- A **Computer's own login that someone signed out stays signed out**. The model key given to it in Settings > Models
+- A **Computer's own login that someone signed out stays signed out**. The model key given to it in Settings > Providers
   does not sign it back in: the server does not hand it out for that runtime, the runner neither applies it
   again (its ten-minute retry included) nor puts it in turns, and Claude Code no longer reads "ready" because of it.
   Signing in again, or **Use the shared key** next to it, ends that.
   A signed-out login reads **Signed out · Sign in** and its chip has a red dot, with or without bots on it. The
   confirmation names the bots in a line: "Reviewer 1, QA and 2 more will stop running until this is signed in again"
   (every name on hover).
-- To move a Computer's login **from an API key to a subscription**, take the key off the computer in **Settings >
-  Models**, then sign it in. To move it **to an API key**, give it the key there. (The **Switch to subscription** and
-  **Switch to API key** buttons are gone; a page drawn before that asks for one is told so.)
+- To move a Computer's login **from an API key to a subscription**, take the key off the computer using `tico settings set models.computer_subscription`, then sign it in. Use that same command to
+  give it an API key.
 
 None of this restarts the runner. `POST /api/v2/computers/{runner_id}/logouts` with `{"runtime":"codex"}` (and
 `"profile"` for a named subscription left from an earlier release) signs out; `GET /api/v2/computers/{runner_id}/logouts/bots?runtime=codex` lists the
@@ -637,14 +634,15 @@ the change, redrawing **Settings → Computers**, for about a minute.
 ### API keys on a Computer
 
 A Computer's own login can run on a model API key instead of a subscription (Codex, Claude Code, Cursor Agent and
-Muse Code take one). Keys are subscriptions in **Settings > Models**: added there, sealed in Tico's credential vault and
-never shown again in full, and given to one computer or several. The Computer fetches the key it is given over its own
-connection, at start-up and every ten minutes (`GET /api/v2/runner-model-credentials`). Its line in the computer's pop-up
-says whose key it is, by its preview only (`sk-…xyz`): **this computer's key** (given to it alone), **a shared key**
+Muse Code take one). Add or replace keys in **Settings > Providers**. Tico seals them in its credential vault and shows
+only the preview after saving. Use `tico settings set models.computer_subscription` to assign or unassign a key on each
+computer. The computer fetches its key at start-up and every ten minutes (`GET /api/v2/runner-model-credentials`).
+Its line in the computer's pop-up says whose key it is, by its preview only (`sk-…xyz`):
+**this computer's key** (given to it alone), **a shared key**
 (given to several computers, listed on the line), or **a key set on the computer** (its environment or
 `secrets/_shared.env`).
 
-- **Replacing** the key in Settings > Models reaches each computer given it at its next key fetch.
+- **Replacing** the key in Settings > Providers reaches each computer given it at its next key fetch.
 - **Taking it off** a computer, or deleting it, tells each computer to delete its copies at its next key fetch (Codex
   also logs out the login the key made; a browser or subscription login is not the key's and stays). An offline
   Computer does so when it is next online. Bots and assignments stay; the line reads **No key**, with **Sign in** and
@@ -654,7 +652,7 @@ says whose key it is, by its preview only (`sk-…xyz`): **this computer's key**
 
 Before keys became subscriptions, Settings > Computers kept keys of its own (**Add key**, **Replace key**, **Clear
 key**, **Switch to subscription** and **Switch to API key**). Upgrading moved each key a computer ran on into Settings >
-Models, given to that computer, and a computer switched to a subscription stays on it. `GET` and `POST
+Providers, given to that computer, and a computer switched to a subscription stays on it. `GET` and `POST
 /api/v2/computers/{runner_id}/keys` and `POST …/keys/clear` now answer `410` (`moved`) with where keys are changed.
 
 ## Subscriptions from earlier releases

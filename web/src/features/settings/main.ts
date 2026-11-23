@@ -1,7 +1,7 @@
 import { isCancelledError, type FetchQueryOptions, type QueryClient } from '@tanstack/react-query';
 import { lazyRouteComponent, type AsyncRouteComponent } from '@tanstack/react-router';
 import { configQuery, meQuery } from '@/data';
-import { computersQuery } from '@/features/team/routing';
+import { agentsQuery, computersQuery } from '@/features/team/routing';
 import {
   accessQuery,
   billingQuery,
@@ -9,7 +9,6 @@ import {
   contactTypesQuery,
   healthQuery,
   historyQuery,
-  modelsQuery,
   roadmapQuery,
   screeningQuery,
   subscriptionsQuery,
@@ -20,12 +19,12 @@ const loadFleet = () => import('./Agents');
 export const Agents = lazyRouteComponent(loadFleet, 'Agents');
 export const Computers = lazyRouteComponent(loadFleet, 'Computers');
 export const AddComputer = lazyRouteComponent(loadFleet, 'AddComputer');
-export const Models = lazyRouteComponent(loadFleet, 'Models');
+export const Providers = lazyRouteComponent(() => import('./Providers'), 'Providers');
 
 const fleetParts: Partial<Record<SectionId, readonly Pick<AsyncRouteComponent<object>, 'preload'>[]>> = {
   agents: [Agents],
   computers: [Computers, AddComputer],
-  models: [Models],
+  providers: [Providers],
 };
 
 /** The server said this read is for owners and admins. */
@@ -62,11 +61,11 @@ export function mainQuery(section: SectionId) {
     case 'people':
       return accessQuery;
     case 'agents':
-      return subscriptionsQuery;
+      return agentsQuery;
     case 'computers':
       return computersQuery;
-    case 'models':
-      return modelsQuery;
+    case 'providers':
+      return subscriptionsQuery;
     case 'tasks':
       return roadmapQuery;
     case 'contacts':

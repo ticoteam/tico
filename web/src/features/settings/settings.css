@@ -49,7 +49,12 @@ button.row{width:100%;border:0;background:none;color:inherit;font:inherit;text-a
 button.row:hover{background:var(--hover)}
 div.row{cursor:default}
 .l-of{color:var(--muted)}
+.g-hl .row-title{grid-area:name}
+.g-hl .row-sub{grid-area:sub}
+.g-hl .row-state{grid-area:word}
 .hl-act{display:flex;justify-content:flex-end}
+.g-hl .hl-act{grid-area:fixes;flex-wrap:wrap;gap:var(--s-1) var(--s-3)}
+.g-hl .hl-act>.verb{display:inline-flex;align-items:center;height:auto;min-height:var(--ctl-sm);white-space:normal}
 
 /* a table's head: one quiet line of column words on the rows' own grid */
 .tbl-head{height:var(--ctl);display:grid;grid-template-columns:var(--g);column-gap:var(--s-3);align-items:center;padding:0 var(--s-2);box-shadow:inset 0 -1px 0 var(--line);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
@@ -58,13 +63,14 @@ div.row{cursor:default}
 .g-person{--g:var(--av-sm) minmax(0,1fr) minmax(0,1.1fr) 62px 86px}
 .g-tok{--g:minmax(0,1fr) 96px 120px 68px}
 .g-chg{--g:var(--av-sm) minmax(0,1fr) 160px}
-.g-hl{--g:120px minmax(0,1fr) auto 92px}
+.g-hl{--g:120px minmax(0,1fr) auto 92px;grid-template-areas:"name sub fixes word"}
+.g-hl:where(:has(.hl-act > :nth-child(2))){grid-template-areas:"name sub . word" ". fixes fixes fixes";height:auto;min-height:var(--row)}
+.g-hl:where(:has(.hl-act > :nth-child(2))) .hl-act{justify-content:flex-start}
 .g-door{--g:minmax(0,1fr) 120px}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
 .g-bots{--g:16px var(--av-sm) minmax(96px,1fr) 176px 124px 44px 140px 48px}
 .g-ret{--g:minmax(0,1fr) auto}
 .g-host{--g:minmax(0,1fr) 118px 72px}
-.g-fsub{--g:minmax(0,1fr) 128px 74px 172px 28px}
 .g-use{--g:var(--av-sm) minmax(0,1fr) 112px 44px 44px 76px 52px}
 .g-mod{--g:minmax(0,1fr) 136px 44px 44px 76px 52px}
 .g-lim{--g:var(--av-sm) minmax(0,1fr) 150px 60px 60px 48px}
@@ -102,17 +108,6 @@ div.row{cursor:default}
 .meter.is-over i{background:var(--ink)}
 
 /* Agents: what pays for them. Name and account, where it is signed in, the agents on it, how much is used */
-.fs-name{display:flex;align-items:baseline;gap:var(--s-2h);min-width:0}
-.fs-name>span{flex:none}
-.fs-name>em{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-style:normal;font-weight:var(--w-text);font-size:var(--t-sm);color:var(--muted)}
-.fs-on{display:inline-flex;align-items:center;gap:var(--s-1h);min-width:0;font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap}
-.fs-on.is-none{color:var(--muted)}
-.fs-n{font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap}
-.fs-use{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0;font-size:var(--t-sm);color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
-.fs-use .meter{width:44px;flex:none}
-.fs-use.is-none{color:var(--muted)}
-.fs-use.is-out{color:var(--ink);font-weight:var(--w-strong)}
-.g-fsub .ib{justify-self:end}
 .fs-code{display:block;font-family:var(--font-code);font-size:var(--t-sm);line-height:var(--lh-code);color:var(--ink);overflow-wrap:anywhere;user-select:all}
 /* Add computer: a command, its note above, its copy button at the right */
 .set-cmd{display:grid;gap:var(--s-1)}
@@ -186,12 +181,6 @@ div.row{cursor:default}
 .fl-lim:hover{background:var(--well-2);color:var(--ink)}
 .fl-lim:disabled{cursor:default;background:none}
 .fl-none{height:var(--row);display:flex;align-items:center;gap:var(--s-4);padding:0 var(--s-2) 0 calc(var(--s-8) + var(--s-1));color:var(--muted);font-size:var(--t-sm)}
-/* folded, Subscriptions and keys is one line: a fault first, a quiet chip for each kind, Add at the right */
-.fs-kinds,.fs-bad{display:inline-flex;align-items:center;gap:var(--s-1h);flex:none;margin-left:var(--s-1)}
-.fs-chip{display:inline-flex;align-items:center;gap:var(--s-1);margin:0}
-.fs-chip b{font-weight:var(--w-text);color:var(--faint);font-variant-numeric:tabular-nums}
-.fs-chip .ico{width:12px;height:12px;stroke-width:2.2}
-.tbl-head.g-fsub{column-gap:var(--s-3);box-shadow:none;height:24px}
 .pk-sec+.list-tools,.pk-sec+.fl{border-top:1px solid var(--line)}
 /* the table measures its own width (the page's includes the section list): narrow, the model for tasks and the owner give way */
 .fl{container:fleet / inline-size}
@@ -258,16 +247,13 @@ html[data-layout="cards"] .g-chg>:first-child{grid-area:av;align-self:start}
 html[data-layout="cards"] .g-chg .row-title{grid-area:title;white-space:normal;line-height:1.35}
 html[data-layout="cards"] .g-chg .row-age{grid-area:date;text-align:left}
 html[data-layout="cards"] .g-hl{--g:minmax(0,1fr) auto;grid-template-areas:"name word" "sub sub"}
-html[data-layout="cards"] .g-hl .row-title{grid-area:name}
-html[data-layout="cards"] .g-hl .row-sub{grid-area:sub;white-space:normal;line-height:1.35}
-html[data-layout="cards"] .g-hl .row-state{grid-area:word}
-html[data-layout="cards"] .g-hl .hl-act{display:none}
+html[data-layout="cards"] .g-hl:has(.hl-act){grid-template-areas:"name word" "sub sub" "fixes fixes"}
+html[data-layout="cards"] .g-hl .row-sub{white-space:normal;line-height:1.35}
+html[data-layout="cards"] .g-hl .hl-act{justify-content:flex-start}
 html[data-layout="cards"] .g-host{--g:minmax(0,1fr) auto auto}
 html[data-layout="cards"] .list-tools .search{max-width:none}
 html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-cred{--g:minmax(0,1fr) auto}
 html[data-layout="cards"] .g-tok>:nth-child(n+3)>:nth-child(n+3),html[data-layout="cards"] .g-cred>:nth-child(n+3)>:nth-child(n+3){display:none}
-html[data-layout="cards"] .g-fsub{--g:minmax(0,1fr) 116px 28px}
-html[data-layout="cards"] .g-fsub>:nth-child(2),html[data-layout="cards"] .g-fsub>:nth-child(3){display:none}
 html[data-layout="cards"] .g-use{--g:var(--av-sm) minmax(0,1fr) auto}
 html[data-layout="cards"] .g-use>:nth-child(n+3):not(.is-strong){display:none}
 html[data-layout="cards"] .g-bots{--g:16px var(--av-sm) minmax(0,1fr) auto}
@@ -317,3 +303,26 @@ html[data-layout="cards"] .g-lim.is-pool .row-title{grid-area:av / av / name / n
 .set-num .field{width:72px}
 /* Usage: the chart's section stands on the page's edge, as the figures and the table do (more.js) */
 .usage-page .pk-chart{padding-left:0;padding-right:0}
+
+.provider-pool{margin-block:var(--s-3);border:1px solid var(--line);border-radius:var(--r-row)}
+.provider-pool-head{display:flex;align-items:baseline;flex-wrap:wrap;gap:var(--s-1) var(--s-3);padding:var(--s-2h);font-size:var(--t-sm);color:var(--muted)}
+.provider-pool-head .sec-name{color:var(--ink)}
+.provider-pool-count{margin-inline-start:auto}
+.provider-pool-note{padding:0 var(--s-2h) var(--s-2h);font-size:var(--t-sm);color:var(--muted)}
+.pk-settings .row.g-provider{--g:16px minmax(0,1.25fr) minmax(75px,.7fr) minmax(85px,1fr) minmax(86px,.9fr) 75px 28px;height:auto;min-height:var(--row);padding:var(--s-2h);border-top:1px solid var(--line);border-radius:0}
+.provider-order,.provider-kind,.provider-usage,.provider-agents{font-size:var(--t-sm);color:var(--ink-2)}
+.provider-name,.provider-usage{display:grid;gap:var(--s-0);min-width:0}
+.provider-name small,.provider-usage small{font-size:var(--t-xs);color:var(--muted)}
+.provider-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.provider-usage .meter{width:100%;max-width:140px}
+.provider-badge .pill{display:inline-block;white-space:normal;line-height:1.35;height:auto}
+.provider-more{justify-self:end}
+
+html[data-layout="cards"] .pk-settings .row.g-provider{--g:16px minmax(0,3fr) minmax(0,2fr) var(--ctl-sm);grid-template-areas:"order name badge more" ". kind agents agents" ". use use .";gap:var(--s-1) var(--s-2);align-items:start}
+html[data-layout="cards"] .provider-order{grid-area:order}
+html[data-layout="cards"] .provider-name{grid-area:name}
+html[data-layout="cards"] .provider-kind{grid-area:kind}
+html[data-layout="cards"] .provider-usage{grid-area:use}
+html[data-layout="cards"] .provider-badge{grid-area:badge;justify-self:end}
+html[data-layout="cards"] .provider-agents{grid-area:agents;justify-self:end}
+html[data-layout="cards"] .provider-more{grid-area:more}

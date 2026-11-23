@@ -104,6 +104,7 @@ import { SECTION_IDS } from './sections';
 
 const id = (what: string) => z.string().check(z.minLength(1), z.maxLength(200), z.describe(what));
 const setting = (key: string) => ({ kind: 'setting', id: key });
+const sectionPage = (section: string) => section === 'models' ? 'providers' : section;
 const bare = (actor: string) => actor.replace(/^human:/, '');
 
 const MAX_SUBSCRIPTION_NAME = 80;
@@ -118,11 +119,11 @@ export const openSection = defineAction({
   id: 'settings.open',
   title: 'Open a settings section',
   kind: 'view',
-  input: z.strictObject({ section: z.enum(SECTION_IDS) }),
-  run: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section } }),
-  show: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section } }),
-  did: ({ section }) => `Opened ${section}`,
-  target: ({ section }) => ({ kind: 'page', id: `/settings/${section}` }),
+  input: z.strictObject({ section: z.enum([...SECTION_IDS, 'models'] as const) }),
+  run: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section: sectionPage(section) } }),
+  show: ({ router }, { section }) => router.navigate({ to: '/settings/$section', params: { section: sectionPage(section) } }),
+  did: ({ section }) => `Opened ${sectionPage(section)}`,
+  target: ({ section }) => ({ kind: 'page', id: `/settings/${sectionPage(section)}` }),
 });
 
 // ---------------------------------------------------------------- appearance (this device)
@@ -452,7 +453,7 @@ const planSecret = z.string().check(z.minLength(1), z.maxLength(65536));
 
 export const pastePlan = defineAction({
   id: 'settings.pastePlan',
-  title: 'Paste a plan credential',
+  title: 'Paste a provider credential',
   kind: 'change',
   input: z.union([
     z.strictObject({ kind: z.enum(['claude_token', 'codex_login']), secret: planSecret }),
