@@ -4,7 +4,6 @@ import base64
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from unittest.mock import patch
 
 import pytest
 
@@ -96,14 +95,17 @@ def test_a_tool_whose_key_is_on_the_computer_is_told_to_use_its_variable_never_i
     assert "s3cret" not in words and "acme.example" not in words and "TICO_JIRA" not in words
 
 
-def test_the_mcp_tool_gives_the_same_words():
+def test_the_mcp_tool_gives_the_same_words(monkeypatch):
     """AC-2: tico_tool_call answers with the same error text."""
+    import os
+
     from clients.commands import tools
 
-    environ = {"JIRA_API_TOKEN": "s3cret-token", "JIRA_BASE_URL": "https://acme.example"}
-    with patch.dict("os.environ", environ, clear=True):
-        out = tools.tool_call(None, {"tool": "jira", "method": "GET", "path": "/rest/api/3/myself"})
-    assert out == {"error": tool_call.not_proxied("jira", environ)}
+    monkeypatch.setenv("JIRA_API_TOKEN", "s3cret-token")
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme.example")
+    monkeypatch.delenv("TICO_TOOL_JIRA_URL", raising=False)
+    out = tools.tool_call(None, {"tool": "jira", "method": "GET", "path": "/rest/api/3/myself"})
+    assert out == {"error": tool_call.not_proxied("jira", os.environ)}
     assert out["error"].startswith("jira's access is on this computer")
 
 
