@@ -10,6 +10,12 @@ from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import STATUSES, TASK_ID, _key, _s, _target
 from clients.commands._shared import ASKED, VERSION, _model_id, _seen
+
+# A task title as every create and file tool asks for it (backend/hubdb_text.py lint_title, lint_human_title).
+TITLE = (
+    'Task title, at most 60 characters: what is to be done, verb first ("Approve the Friday launch"); no name '
+    "prefixes, ticket codes or all-caps"
+)
 from clients.commands._requester import ON_BEHALF_OF, _as_person, _asked
 
 
@@ -49,9 +55,7 @@ def task_context(api, args):
             "Who does it: a bot slug, a person id, or `me`. Left out, a pipeline's first stage that picks from several "
             "picks one"
         ),
-        "title": _s(
-            "Task title: the outcome or the question, at most 60 characters; no name prefixes, ticket codes or all-caps"
-        ),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat: what you ask, if the title doesn't say it all", default=""),
         "pipeline": _s("The pipeline's id; default general"),
         "visibility": _s(
@@ -727,7 +731,7 @@ def task_give(api, args):
     "stage picks its owner unless you name one. Sub-tasks nest at most 5 deep.",
     {
         "parent": TASK_ID,
-        "title": _s("What the new task is for, in plain words"),
+        "title": _s(TITLE),
         "message": _s("The first message on its chat: anything the title doesn't say"),
         "owner": _s(
             "Who does it: a bot slug, a person id, or `me` (the default; in a pipeline whose first stage picks, the "

@@ -708,7 +708,7 @@ def parser():
         dest="from_message",
         help="with --for: the id of the message that person asked in (you must be able to read it)",
     )
-    s.add_argument("--title", required=True)
+    s.add_argument("--title", required=True, help=tasks_commands.TITLE)
     s.add_argument(
         "--message", "--body", dest="message", default="", help="the first message on its chat: what you ask"
     )
@@ -761,6 +761,7 @@ def parser():
     s = task.add_parser(
         "ask",
         help="ask a person on this task: the message is posted on the task's chat marked ❓ (needs their reply); "
+        "prefer one question, its first line the question itself (a new ❓ replaces yours, so number several in one); "
         "with --kind ok and --show, an OK of what it shows",
     )
     s.add_argument("id")
