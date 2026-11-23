@@ -362,34 +362,26 @@ WAIT_SECONDS = 300
 
 
 def harnesses():
-    """Every harness and variant the manifests name, with what its stand-in CLI needs to answer."""
+    """Every harness the manifests name, with what its stand-in CLI needs to answer."""
     found = []
     for path in sorted(HARNESSES.glob("*.toml")):
         manifest = tomllib.loads(path.read_text())
-        base_caps = manifest.get("capabilities") or {}
-        rows = [(manifest["runtime"], manifest, base_caps)]
-        for variant, fields in (manifest.get("variants") or {}).items():
-            rows.append(
-                (
-                    variant,
-                    {**manifest, **{k: fields[k] for k in ("host", "executable") if k in fields}},
-                    {**base_caps, **(fields.get("capabilities") or {})},
-                )
-            )
-        for harness, fields, caps in rows:
-            found.append(
-                {
-                    "harness": harness,
-                    "runtime": manifest["runtime"],
-                    "host": fields["host"],
-                    "executable": fields["executable"],
-                    "bot": "acme-" + "".join(c if c.isalnum() else "-" for c in harness),
-                    "version_args": (manifest.get("version") or {}).get("args") or ["--version"],
-                    "status": caps.get("sign_in_status") or {},
-                    "key_env": ((manifest.get("auth") or {}).get("api_key_env") or [""])[0],
-                    "isolated": bool(caps.get("isolated_user")),
-                }
-            )
+        caps = manifest.get("capabilities") or {}
+        # What bot configs call it: its `runtime`, else its `host` (clients/harness_manifests.py parse).
+        runtime = manifest.get("runtime") or manifest["host"]
+        found.append(
+            {
+                "harness": runtime,
+                "runtime": runtime,
+                "host": manifest["host"],
+                "executable": manifest["executable"],
+                "bot": "acme-" + "".join(c if c.isalnum() else "-" for c in runtime),
+                "version_args": (manifest.get("version") or {}).get("args") or ["--version"],
+                "status": caps.get("sign_in_status") or {},
+                "key_env": ((manifest.get("auth") or {}).get("api_key_env") or [""])[0],
+                "isolated": bool(caps.get("isolated_user")),
+            }
+        )
     return found
 
 
