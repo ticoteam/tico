@@ -264,7 +264,7 @@ impl SignIn {
             Rejection {
                 at,
                 mono: Instant::now(),
-                reason: crate::hosts::rejection_reason(text),
+                reason: crate::hosts::rejection_reason(runtime, text),
             },
         );
         drop(rows);

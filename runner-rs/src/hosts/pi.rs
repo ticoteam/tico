@@ -2378,7 +2378,7 @@ mod tests {
                 "{code}"
             );
             assert!(
-                !crate::hosts::rejection_reason(&said).contains("[redacted]"),
+                !crate::hosts::rejection_reason("pi", &said).contains("[redacted]"),
                 "{code}"
             );
         }

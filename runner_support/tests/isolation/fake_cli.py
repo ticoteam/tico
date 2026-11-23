@@ -209,11 +209,12 @@ def antigravity():
     # A resumed conversation (`--conversation <id>`, after a restart) keeps its id, as the real CLI does.
     resumed = sys.argv[sys.argv.index("--conversation") + 1] if "--conversation" in sys.argv else None
     conversation = resumed or str(uuid.uuid4())
+    # agy names its conversation before it reads its input; the runner holds a resumed turn's prompt until then.
+    say({"event": "init", "conversation_id": conversation})
     for msg in lines():
         if msg.get("event") != "user":
             continue
         text = probe(None)
-        say({"event": "init", "conversation_id": conversation})
         say({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": text}})
         say(
             {

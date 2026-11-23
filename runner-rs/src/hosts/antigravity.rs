@@ -2,8 +2,10 @@
 //! user line on stdin, closed once the result is in; the provider's conversation id is saved beside the stable thread id
 //! (`<home>/<thread>.json`, supervisor-only), so the next turn resumes it with `--conversation` on any model or effort.
 //! A failed or interrupted turn is never replayed. `agy` runs in a process group of its own, owned by the shared process
-//! owner: a stop reaches the group, and whatever of it is left when `agy` exits goes too. A conversation other than the
-//! saved one that `agy` names is kept (the prompt already went to it) and the next turn is told everything again.
+//! owner: a stop reaches the group, and whatever of it is left when `agy` exits goes too. A resumed turn's prompt is held
+//! until `agy` names its conversation (`init`, sent before it reads its input): a turn that must continue the saved one
+//! is never sent into another. Any other turn goes on in the conversation `agy` began, which is kept once the model
+//! works in it, and the next turn is told everything again.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -41,6 +43,11 @@ const MISSING: &str = "No conversation found for this Antigravity thread on this
 /// A turn that must continue its saved conversation, which `agy` did not resume.
 const LOST: &str =
     "No conversation found: Antigravity began a new conversation in place of the saved one";
+/// A turn that must continue its saved conversation, which `agy` never named before it would have read the prompt.
+const UNCONFIRMED: &str = "No conversation found: Antigravity did not say it resumed the saved conversation, so this turn was not sent";
+/// How long a resumed turn's prompt waits for `agy` to name its conversation (`init`, which agy 1.5.15 sends before it
+/// reads its input). A turn that must continue it is never sent without it; any other is sent after the wait.
+const INIT_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
 
 /// `agy`'s argv: model `<model>-<effort>`, effort high unless set, permissions skipped, the saved conversation if any.
 pub fn argv(
@@ -137,6 +144,9 @@ impl Proc {
 struct Running {
     stdout: Lines<BufReader<ChildStdout>>,
     stderr: crate::run_diagnostics::Stderr,
+    /// Sends the held prompt (a resumed turn's, once `agy` names the saved conversation); dropped unsent, it is never
+    /// written.
+    release: Option<oneshot::Sender<()>>,
     close: Option<oneshot::Sender<()>>,
     exited: watch::Receiver<Option<i32>>,
 }
@@ -151,6 +161,13 @@ struct Stream {
     step_usage: BTreeMap<i64, Value>,
     /// A step has run: the conversation `agy` is on can no longer be swapped for another without losing work.
     stepped: bool,
+    /// A step other than the prompt's own (`user_input`) has run: the model worked in this conversation.
+    worked: bool,
+    /// `agy` named its conversation (`init`) and the turn may go on: its held prompt is sent.
+    confirmed: bool,
+    /// Another conversation than the saved one that `init` named: kept only once the model works in it or the turn
+    /// succeeds, so a refusal before any work leaves the saved one as it was.
+    staged: Option<String>,
     skipped: Vec<String>,
     skipped_count: usize,
 }
@@ -160,8 +177,8 @@ enum End {
     Result(Value),
     /// No result: the stream closed, or broke (why).
     Closed(Option<String>),
-    /// `agy` began another conversation than the saved one, before any step, on a turn that must continue it.
-    Mismatch,
+    /// `agy` did not continue the saved conversation on a turn that must continue it: why.
+    Mismatch(&'static str),
 }
 
 struct Inner {
@@ -350,6 +367,7 @@ impl AntigravityHost {
         effort: Option<&str>,
         provider: Option<&str>,
         text: &str,
+        hold: bool,
     ) -> Result<(Proc, Running), HostError> {
         let mut child = self
             .command(settings, effort, provider)?
@@ -378,7 +396,12 @@ impl AntigravityHost {
         let mut stdin = child.stdin.take();
         let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
         let (close, closed) = oneshot::channel::<()>();
+        let (release, released) = oneshot::channel::<()>();
         tokio::spawn(async move {
+            // A held prompt goes only once the reader releases it; never when it is dropped unsent.
+            if hold && released.await.is_err() {
+                return;
+            }
             if let Some(s) = stdin.as_mut() {
                 let _ = s.write_all(line.as_bytes()).await;
                 let _ = s.flush().await;
@@ -411,6 +434,7 @@ impl AntigravityHost {
             Running {
                 stdout: BufReader::new(stdout).lines(),
                 stderr,
+                release: hold.then_some(release),
                 close: Some(close),
                 exited,
             },
@@ -431,7 +455,10 @@ impl AntigravityHost {
             ));
         }
         let settings = inner.settings.clone().unwrap_or_default();
-        let (proc, running) = self.spawn(&settings, effort, inner.provider.as_deref(), text)?;
+        // A resumed turn's prompt waits until agy names the conversation it resumed.
+        let provider = inner.provider.clone();
+        let (proc, running) =
+            self.spawn(&settings, effort, provider.as_deref(), text, provider.is_some())?;
         inner.proc = Some(proc);
         inner.turn = Some(turn.clone());
         let host = self.clone();
@@ -452,7 +479,9 @@ impl AntigravityHost {
     async fn run(&self, tid: &str, turn: &str, mut running: Running) {
         let mut stream = Stream::default();
         let end = self.read(tid, turn, &mut stream, &mut running).await;
-        // Its stdin closes first, whatever the end: agy takes that as the end of its input and exits.
+        // A prompt still held is never sent, and stdin closes, whatever the end: agy takes that as the end of its input
+        // and exits.
+        drop(running.release.take());
         if let Some(close) = running.close.take() {
             let _ = close.send(());
         }
@@ -494,7 +523,7 @@ impl AntigravityHost {
                     &stream,
                 );
             }
-            End::Mismatch => {
+            End::Mismatch(error) => {
                 // Kept on the host while it goes, so a stop meanwhile waits for it too. The saved conversation stays
                 // as it was: a continuation must not run on another one.
                 let proc = self.inner().proc.clone();
@@ -508,7 +537,7 @@ impl AntigravityHost {
                         "turn_failed",
                         Some(tid),
                         Some(turn),
-                        json!({"error": LOST, "limit": false}),
+                        json!({"error": error, "limit": false}),
                     ),
                 );
             }
@@ -517,11 +546,27 @@ impl AntigravityHost {
 
     /// Read one process's stream to its result or its end.
     async fn read(&self, tid: &str, turn: &str, stream: &mut Stream, running: &mut Running) -> End {
-        let scrub = crate::redact::Redactor::new(&crate::redact::env_secrets(
-            &self.inner().settings.clone().unwrap_or_default().env,
-        ));
+        let settings = self.inner().settings.clone().unwrap_or_default();
+        let scrub = crate::redact::Redactor::new(&crate::redact::env_secrets(&settings.env));
         loop {
-            let line = match running.stdout.next_line().await {
+            // While its prompt is held, agy has INIT_WAIT to name its conversation.
+            let next = if running.release.is_some() {
+                match tokio::time::timeout(INIT_WAIT, running.stdout.next_line()).await {
+                    Ok(next) => next,
+                    Err(_) if settings.require_existing_session => {
+                        return End::Mismatch(UNCONFIRMED)
+                    }
+                    Err(_) => {
+                        if let Some(release) = running.release.take() {
+                            let _ = release.send(());
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                running.stdout.next_line().await
+            };
+            let line = match next {
                 Ok(Some(l)) => l,
                 Ok(None) => return End::Closed(None),
                 Err(e) => return End::Closed(Some(e.to_string())),
@@ -556,6 +601,11 @@ impl AntigravityHost {
                 Ok(Some(end)) => return end,
                 Err(e) => return End::Closed(Some(e)),
             }
+            if stream.confirmed {
+                if let Some(release) = running.release.take() {
+                    let _ = release.send(());
+                }
+            }
         }
     }
 
@@ -568,19 +618,29 @@ impl AntigravityHost {
         stream: &mut Stream,
         ev: &Value,
     ) -> Result<Option<End>, String> {
+        // A turn that must continue its saved conversation never runs in another (checked on every id agy names).
+        let must_continue = inner
+            .settings
+            .as_ref()
+            .is_some_and(|s| s.require_existing_session);
         if ev["event"] == "init" {
             let cid = Some(&ev["conversation_id"])
                 .filter(|c| crate::util::truthy(Some(c)))
                 .unwrap_or(&ev["init"]["conversation_id"]);
-            let must_continue = inner
-                .settings
-                .as_ref()
-                .is_some_and(|s| s.require_existing_session);
-            if crate::util::truthy(Some(cid))
-                && self.remember(inner, &text_of(cid), must_continue && !stream.stepped)?
-            {
-                return Ok(Some(End::Mismatch));
+            if crate::util::truthy(Some(cid)) {
+                let cid = canonical(&text_of(cid)).ok_or("not a conversation id")?;
+                match inner.provider.clone() {
+                    // The first conversation of a new thread.
+                    None => self.save(inner, &cid)?,
+                    Some(saved) if saved == cid => {}
+                    // agy began another before the prompt went: a continuation is not sent at all.
+                    Some(_) if must_continue => return Ok(Some(End::Mismatch(LOST))),
+                    Some(_) => stream.staged = Some(cid),
+                }
+            } else if must_continue {
+                return Ok(Some(End::Mismatch(UNCONFIRMED)));
             }
+            stream.confirmed = true;
         }
         let step = ev
             .get("step_update")
@@ -589,9 +649,17 @@ impl AntigravityHost {
             .unwrap_or(json!({}));
         if step.as_object().is_some_and(|s| !s.is_empty()) {
             stream.stepped = true;
+            stream.worked |= step["step_type"] != "user_input";
         }
-        if crate::util::truthy(step.get("conversation_id")) {
-            self.remember(inner, &text_of(&step["conversation_id"]), false)?;
+        if stream.worked {
+            if let Some(cid) = stream.staged.take() {
+                self.remember(inner, &cid, false)?;
+            }
+        }
+        if crate::util::truthy(step.get("conversation_id"))
+            && self.remember(inner, &text_of(&step["conversation_id"]), must_continue)?
+        {
+            return Ok(Some(End::Mismatch(LOST)));
         }
         let (tid, turn) = (Some(tid), Some(turn));
         if let Some(usage) = step.get("usage").filter(|u| u.is_object()) {
@@ -633,17 +701,31 @@ impl AntigravityHost {
             .get("result")
             .filter(|r| r.is_object())
             .ok_or("KeyError: 'result'")?;
-        // A refusal before any step names no conversation the thread should move to: the saved one stays.
+        // A refusal before any work names no conversation the thread should move to: the saved one stays.
+        let kept = result["status"] == "SUCCESS" || stream.worked;
+        if kept {
+            if let Some(cid) = stream.staged.take() {
+                self.remember(inner, &cid, false)?;
+            }
+        }
         if crate::util::truthy(result.get("conversation_id"))
-            && (result["status"] == "SUCCESS" || stream.stepped)
+            && (kept || stream.stepped)
+            && self.remember(inner, &text_of(&result["conversation_id"]), must_continue)?
         {
-            self.remember(inner, &text_of(&result["conversation_id"]), false)?;
+            return Ok(Some(End::Mismatch(LOST)));
         }
         Ok(Some(End::Result(result.clone())))
     }
 
     /// The turn's events from its result.
     fn finish(&self, tid: &str, turn: &str, result: &Value, stream: &Stream, stderr: &str) {
+        // A turn stopped (or replaced) meanwhile says nothing more: no usage or answer after the stop.
+        {
+            let inner = self.inner();
+            if !inner.up || inner.turn.as_deref() != Some(turn) {
+                return;
+            }
+        }
         let usage = result
             .get("usage")
             .filter(|u| u.is_object())
@@ -850,11 +932,13 @@ mod tests {
         );
     }
 
-    /// An `agy` for one turn: it logs its argv and pid, reads the user line, and answers with the fixture (`$FIXTURE`,
-    /// then the fixture's `.stderr` beside it on stderr and exit 1), or with its conversation (`$NEW` when it begins one)
-    /// and the prompt it was given. `--conversation` resumes that one unless `$LOSE` names the one it begins instead; with `$LATE` it says
-    /// which only after a step. With `$STUCK` it ignores SIGTERM and never answers; with `$ORPHAN` it leaves a tool that
-    /// ignores SIGTERM in its group. It exits when stdin closes.
+    /// An `agy` for one turn, which names its conversation (`init`) before it reads its input, as agy 1.5.15 does: it
+    /// logs its argv, its pid and the user line it read (`.prompts`), and answers with the fixture (`$FIXTURE`, printed
+    /// first, then the fixture's `.stderr` beside it on stderr and exit 1), or with its conversation (`$NEW` when it
+    /// begins one) and the prompt it was given. `--conversation` resumes that one unless `$LOSE` names the one it begins
+    /// instead; with `$LATE` it names the asked one first and the other only after a step; with `$NOINIT` it names none.
+    /// With `$STUCK` it ignores SIGTERM and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM in its
+    /// group. It exits when stdin closes.
     fn fake_agy(dir: &Path) -> String {
         let path = dir.join("fake-agy");
         crate::util::write_script(
@@ -865,20 +949,27 @@ echo "$@" >> "$ARGS_LOG"
 echo $$ > "$ARGS_LOG.pid"
 if [ -n "$STUCK" ]; then trap '' TERM; while :; do sleep 1; done; fi
 if [ -n "$ORPHAN" ]; then (trap '' TERM; exec sleep 30) >/dev/null 2>&1 & echo $! > "$ARGS_LOG.orphan"; fi
-IFS= read -r line
 if [ -n "$FIXTURE" ]; then
   cat "$FIXTURE"
+  IFS= read -r line || exit 0
+  printf '%s\n' "$line" >> "$ARGS_LOG.prompts"
   if [ -f "${{FIXTURE%.jsonl}}.stderr" ]; then cat "${{FIXTURE%.jsonl}}.stderr" >&2; exit 1; fi
 else
   conv=${{NEW:-{SAVED}}}
+  asked=""
   prev=""
-  for a in "$@"; do [ "$prev" = --conversation ] && conv="${{LOSE:-$a}}"; prev="$a"; done
+  for a in "$@"; do [ "$prev" = --conversation ] && asked="$a" && conv="${{LOSE:-$a}}"; prev="$a"; done
+  if [ -n "$LATE" ]; then
+    echo "{{\"event\": \"init\", \"conversation_id\": \"${{asked:-$conv}}\"}}"
+  elif [ -z "$NOINIT" ]; then
+    echo "{{\"event\": \"init\", \"conversation_id\": \"$conv\"}}"
+  fi
+  IFS= read -r line || exit 0
+  printf '%s\n' "$line" >> "$ARGS_LOG.prompts"
   text=$(printf '%s' "$line" | sed 's/.*"content": "\(.*\)"}}}}$/\1/')
   if [ -n "$LATE" ]; then
     echo '{{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "x"}}}}'
     echo "{{\"event\": \"step_update\", \"step_update\": {{\"conversation_id\": \"$conv\"}}}}"
-  else
-    echo "{{\"event\": \"init\", \"conversation_id\": \"$conv\"}}"
   fi
   echo "{{\"event\": \"result\", \"result\": {{\"status\": \"SUCCESS\", \"response\": \"$text\", \"usage\": {{\"input_tokens\": 10, \"output_tokens\": 2}}}}}}"
 fi
@@ -1035,7 +1126,8 @@ read -r _
         let fixture = dir.join("other.jsonl");
         std::fs::write(
             &fixture,
-            format!("{{\"event\": \"result\", \"result\": {{\"status\": \"ERROR\", \"error\": \"no\", \"conversation_id\": \"{OTHER}\"}}}}\n"),
+            // agy names another conversation, then refuses before any work.
+            format!("{{\"event\": \"init\", \"conversation_id\": \"{OTHER}\"}}\n{{\"event\": \"result\", \"result\": {{\"status\": \"ERROR\", \"error\": \"no\", \"conversation_id\": \"{OTHER}\"}}}}\n"),
         )
         .unwrap();
         let s = rig.settings(&[("FIXTURE", fixture.display().to_string())]);
@@ -1093,11 +1185,45 @@ read -r _
         assert!(crate::continuity::missing(&text_of(&failed["error"])));
         host.stop().await;
         assert_eq!(rig.runs().len(), 1, "no second start");
+        assert!(
+            !rig.dir.join("args.log.prompts").exists(),
+            "the prompt never went to the other conversation"
+        );
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert!(
             record.contains(SAVED) && !record.contains(OTHER),
             "{record}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_continuation_agy_never_confirms_is_not_sent() {
+        let rig = Rig::new();
+        let mut s = rig.settings(&[("NOINIT", "1".into())]);
+        s.require_existing_session = true;
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
+        host.start_turn(&thread, "go on", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert_eq!(failed["error"], UNCONFIRMED);
+        assert!(crate::continuity::missing(UNCONFIRMED));
+        host.stop().await;
+        assert!(!rig.dir.join("args.log.prompts").exists(), "never sent");
+    }
+
+    #[tokio::test]
+    async fn any_other_resumed_turn_is_sent_after_the_wait_when_agy_names_no_conversation() {
+        let rig = Rig::new();
+        let s = rig.settings(&[("NOINIT", "1".into())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.remember(&mut host.inner(), SAVED, false).unwrap();
+        host.start_turn(&thread, "hello", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_completed"), "{events:?}");
+        host.stop().await;
     }
 
     #[tokio::test]

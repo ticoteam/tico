@@ -230,12 +230,13 @@ pub fn is_auth_retryable(text: &str) -> bool {
     auth_retry_re().is_match(text) && !is_auth_rejected(text)
 }
 
-/// One line of the provider's refusal for people to read; keys and tokens are never kept.
-pub fn rejection_reason(text: &str) -> String {
+/// One line of `runtime`'s refusal for people to read (the line `is_auth_rejected_on` finds); keys and tokens are
+/// never kept.
+pub fn rejection_reason(runtime: &str, text: &str) -> String {
     let line = text
         .lines()
         .map(str::trim)
-        .find(|row| is_auth_rejected(row))
+        .find(|row| is_auth_rejected_on(runtime, row))
         .map(String::from)
         .unwrap_or_default();
     let line = if line.is_empty() {
@@ -2189,8 +2190,13 @@ pub(crate) mod tests {
             "Please sign in to continue to the dashboard"
         ));
         assert_eq!(
-            rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
+            rejection_reason("claude", "x\nInvalid API key sk-ant-abcdefghijk"),
             "Invalid API key [redacted]"
+        );
+        // Antigravity's own words are its refusal's line.
+        assert_eq!(
+            rejection_reason("antigravity", "Process exited (exit code 1)\nError: authentication required"),
+            "Error: authentication required"
         );
         assert_eq!(compact_at(&json!("120000")), 120000);
         assert_eq!(compact_at(&json!(0)), DEFAULT_COMPACT_AT);
