@@ -99,7 +99,7 @@ A task is open, done or closed. It sits in a stage of a pipeline; General has on
   6. Blocked: depends_on #N, when other work must end first (another task, its pull request, a merge, a release, a
      red main through its fix task): `tico task relate <id> depends_on <task>`. It shows Blocked, with no date,
      and you are woken when that task ends. Never snooze for a block. A person or a decision you wait for is a ❓.
-     An optional follow-up never blocks: relate it (`tico task relate <id> <task>`).
+     An optional follow-up never blocks: link it as one (`tico task relate <id> follow_up <task>`).
   While your own pull request's checks run, the turn is GitHub's: say done first where the stage asks for it, then
   stop; their end wakes you.
   Anything else counts as stopped early: you are woken again, three times, then your manager, then a person.

@@ -24,8 +24,8 @@ and the proof, without running anything.
    and its response, the query and its rows). "Looks good" is not proof, and a check with none is not checked.
 4. A check that fails is yours to fix before the page goes out: fix, push, and run the checks it touches again
    (the bot that wrote the latest Review page reads the new commit before the person is asked). Keep what you found
-   and fixed under the findings. Anything that does not block the change becomes its own task, related:
-   `tico task relate <id> <task>` (never `depends_on`).
+   and fixed under the findings. Anything that does not block the change becomes its own task, a follow-up:
+   `tico task relate <id> follow_up <task>` (never `depends_on`).
 
 ## 2. Build the page
 
