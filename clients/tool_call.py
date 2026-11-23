@@ -64,6 +64,14 @@ def own_variables(tool, environ):
     return []
 
 
+def names_command(stem):
+    """The shell line that lists the variables named after a tool, names only. It reads the names themselves: text
+    tools over `env` would print a line of a multi-line value that starts with the prefix. The first word's prefix covers
+    the full id's too (own_variables' fallback)."""
+    first = stem.split("_", 1)[0] or stem
+    return "python3 -c 'import os; print(*sorted(k for k in os.environ if k.startswith(\"" + first + "_\")))'"
+
+
 def not_proxied(tool, environ, shell=True):
     """Why `tool` cannot be called here, and what to do instead: a refusal read as "no access" stalls a turn whose key is
     in its own environment. Variable names only, never their values. `shell` is False for the MCP server: a harness
@@ -81,11 +89,9 @@ def not_proxied(tool, environ, shell=True):
         )
     stem = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
     if not shell:
-        # The first word's prefix covers the full id's too (own_variables' fallback); cut drops every value first.
-        first = stem.split("_", 1)[0] or stem
         return (
             f"{tool} is not proxied for this MCP server, which cannot see your shell's variables. Run "
-            f"`env | cut -d= -f1 | grep ^{first}_` (names only): if it lists any, {tool}'s access is on your computer, so call the "
+            f"`{names_command(stem)}` (names only): if it lists any, {tool}'s access is on your computer, so call the "
             f"{vendor} API yourself with them; if none, check that this bot is granted {tool} (tico tool show {tool})."
         )
     return (

@@ -106,19 +106,35 @@ def test_the_mcp_tool_names_the_variables_it_sees_and_never_says_none_are_set(mo
         monkeypatch.delenv(name)
     unseen = tools.tool_call(None, ask)["error"]
     assert unseen.startswith("jira is not proxied for this MCP server, which cannot see your shell's variables.")
-    # The check prints names only (cut drops every value first) and looks under the first word, as own_variables does.
     assert (
-        "`env | cut -d= -f1 | grep ^JIRA_`" in unseen
+        f"`{tool_call.names_command('JIRA')}`" in unseen
         and "call the Jira API yourself" in unseen
         and "tico tool show jira" in unseen
     )
     assert "no JIRA_ variable is set" not in unseen
-    assert "`env | cut -d= -f1 | grep ^CLOSE_`" in tool_call.not_proxied("close-crm", {}, shell=False)
+    assert tool_call.names_command("CLOSE_CRM") in tool_call.not_proxied("close-crm", {}, shell=False)
     monkeypatch.setenv("JIRA_API_TOKEN", "s3cret-token")
     monkeypatch.setenv("JIRA_BASE_URL", "https://acme.example")
     seen = tools.tool_call(None, ask)["error"]
     assert seen == tool_call.not_proxied("jira", os.environ)  # the CLI's words when the server does see them
     assert seen.startswith("jira's access is on this computer") and "s3cret" not in seen
+
+
+def test_the_shell_check_it_suggests_prints_names_never_a_value_even_one_over_several_lines():
+    """The line the MCP error tells an agent to run, run in a shell: a value whose own line starts like a variable
+    (a pasted config) is never printed, and the first word's prefix finds a key named after it alone."""
+    import subprocess
+    import sys
+
+    environ = {
+        "PATH": os.environ.get("PATH", ""),
+        "CONFIG": "settings\nCLOSE_API_KEY: s3cret-in-config",
+        "CLOSE_API_KEY": "s3cret-key",
+        "CLOSE_CRM_URL": "https://acme.example",
+    }
+    line = tool_call.names_command("CLOSE_CRM").replace("python3", sys.executable, 1)
+    out = subprocess.run(["sh", "-c", line], env=environ, capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["CLOSE_API_KEY", "CLOSE_CRM_URL"] and "s3cret" not in out
 
 
 def test_a_tool_id_with_two_words_falls_back_to_its_first_word():
