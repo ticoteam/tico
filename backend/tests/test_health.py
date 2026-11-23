@@ -1784,6 +1784,61 @@ def test_github_is_a_note_until_a_bot_someone_made_is_backed_up_nowhere_then_cle
     assert health_of(api)[1]["github"]["status"] == "ok"
 
 
+def _installed(api):
+    """The GitHub App, connected and installed, as an "All repositories" install leaves it: nothing In use."""
+    state = api.app.state
+    with state.store.transaction() as c:
+        state.github_app.save(
+            c,
+            "human:ana",
+            "Acme",
+            True,
+            {
+                "id": 7,
+                "slug": "acme-tico",
+                "client_id": "Iv1.synthetic",
+                "pem": "synthetic-pem",
+                "webhook_secret": "whsec-synthetic",
+            },
+        )
+        c.execute("UPDATE github_app SET installation_id=77")
+
+
+def test_a_company_that_builds_software_with_no_repository_in_use_is_told_where_to_choose_one(environment):
+    """Nov 22, Acme: GitHub was connected on "All repositories" and a Builder was there, but nothing was In use, so a
+    feature reached In development with nowhere to write, and Health said Fine. The GitHub line now says so, with the
+    one link to Settings › General's Repositories card; a company that builds no software keeps its Fine."""
+    api = environment()
+    _installed(api)
+    assert health_of(api)[1]["github"] == {
+        "id": "github",
+        "label": "GitHub",
+        "status": "ok",
+        "summary": "Connected to Acme.",
+        "fixes": [],
+    }
+    add_bot(api, "builder")
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "builder", {"template": "builder"})
+    check = health_of(api)[1]["github"]
+    assert (check["status"], check["summary"]) == (
+        "warn",
+        "Connected to Acme, but no repository is in use, so the Builder has nowhere to write.",
+    )
+    assert check["fixes"] == [
+        {"label": "Choose a repository", "href": "#/settings/general/set-repos", "tab": "", "click": ""}
+    ]
+    with api.app.state.store.transaction() as c:  # a bot's own repository is not where the product is built
+        c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('Acme/bot-builder',1,1)")
+    assert health_of(api)[1]["github"]["status"] == "warn"
+    with api.app.state.store.transaction() as c:  # one Add on Not in use
+        c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('Acme/app',1,0)")
+    assert (health_of(api)[1]["github"]["status"], health_of(api)[1]["github"]["summary"]) == (
+        "ok",
+        "Connected to Acme.",
+    )
+
+
 def test_work_its_tasks_snooze_holds_is_work_queueing_not_a_stuck_bot(environment):
     """Tico Team, Nov 11: Health warned that Reviewer 2's job had been queued 17 minutes when its task was snoozed. The
     snooze holds it on purpose (task_wait) until it ends; on an awake computer, as on a sleeping cloud machine, that is

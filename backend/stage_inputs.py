@@ -71,9 +71,21 @@ _PR_KEYS = (
 # Whether a task's pipeline works on code: a stage of it reads PRs. Its tasks are in the repositories In use.
 _CODE = (
     "SELECT 1 FROM tasks t JOIN stages s ON s.pipeline_id = t.pipeline_id JOIN requirements r ON r.stage_id = s.id "
-    "WHERE t.id=? AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
+    "WHERE t.id=? AND s.retired_at IS NULL AND r.kind='item' AND r.source='github' AND r.withdrawn_at IS NULL LIMIT 1"
+)
+# Whether the company works on code at all: a live pipeline has a stage that reads PRs (_CODE's rule, on every pipeline).
+_ANY_CODE = (
+    "SELECT 1 FROM pipelines p JOIN stages s ON s.pipeline_id = p.id JOIN requirements r ON r.stage_id = s.id "
+    "WHERE p.retired_at IS NULL AND s.retired_at IS NULL AND r.kind='item' AND r.source='github' "
+    "AND r.withdrawn_at IS NULL LIMIT 1"
 )
 _IN_USE = "SELECT full_name FROM repositories WHERE enabled=1 AND bot_repo=0 ORDER BY full_name COLLATE NOCASE"
+# Said in the wake of a code pipeline's task while no repository is In use (Nov 22: a Builder woke with no repository
+# line at all, and nothing said why), beside a linked PR's repository line too.
+NOWHERE = (
+    "No repository is in use in this company, so there is nowhere to build yet. Health reports it to Agent Ops; "
+    "do not build in your own repository."
+)
 _RELEASES = (
     "SELECT r.tag FROM github_release_commits rc JOIN github_releases r ON r.id = rc.release_id "
     "WHERE rc.commit_sha=? AND rc.included=1 ORDER BY r.published_at, r.tag"
@@ -296,7 +308,7 @@ def repositories(conn: "sqlite3.Connection", task_id: str, readable: Callable[[s
             found.setdefault(repo.lower(), repo)
     if found:
         return list(found.values())
-    if not conn.execute(_CODE, (task_id,)).fetchone():
+    if not works_on_code(conn, task_id):
         return []
     return in_use(conn)
 
@@ -312,12 +324,44 @@ def in_use(conn: "sqlite3.Connection") -> list[str]:
         return []  # no table: GitHub was never set up here
 
 
+def builds_code(conn: "sqlite3.Connection") -> bool:
+    """Whether the company builds software: a live pipeline has a stage that reads PRs (the Engineering and Product
+    presets' Build), or it has a Builder (pipeline_seats). Health's GitHub line and the setup checklist then want a
+    repository In use."""
+    import sqlite3
+
+    from . import pipeline_seats
+
+    try:
+        if conn.execute(_ANY_CODE).fetchone():
+            return True
+        return pipeline_seats.resolve(conn)[pipeline_seats.BUILDER] is not None
+    except sqlite3.OperationalError:
+        return False  # no pipelines or bots here yet
+
+
+def works_on_code(conn: "sqlite3.Connection", task_id: str) -> bool:
+    """Whether a task's pipeline has a stage that reads PRs, so its work goes to a repository In use."""
+    return conn.execute(_CODE, (task_id,)).fetchone() is not None
+
+
 def repository(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> str | None:
     """The one GitHub repository a task's work is in (`repositories`). The runner sets it as the turn's GH_REPO
     (runner-rs/src/env.rs), so a bare `gh pr checks 46` reads it from a copy with no git remote too, and the gh shim
     picks its token. None when there is none, or more than one: the wake names each PR by its link then."""
     found = repositories(conn, task_id, readable)
     return found[0] if len(found) == 1 else None
+
+
+def repository_lines(conn: "sqlite3.Connection", task_id: str, readable: Callable[[str], bool]) -> list[str]:
+    """The lines a wake opens the work with: the task's repository (`repository_line`), and NOWHERE while its pipeline
+    works on code and no repository is In use, whether or not a PR is linked."""
+    from .item_sources import github as G
+
+    found = [line] if (line := repository_line(repositories(conn, task_id, readable))) else []
+    if works_on_code(conn, task_id) and not G.in_use(conn):
+        found.append(NOWHERE)
+    return found
 
 
 def repository_line(repos: list[str]) -> str:

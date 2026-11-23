@@ -229,6 +229,11 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       results.current?.querySelector<HTMLElement>(`[data-hit="${Math.max(0, Math.min(at, hits.length - 1))}"]`)?.click();
     }
   };
+  // A link to one of this section's cards (`?open=set-repos`, Health's fix) lands on it, as a search pick does.
+  useState(() => {
+    const card = open ? CARD[open] : undefined;
+    if (card?.[0] === section) landing = card[1];
+  });
   useLanding(section, !searching);
   return (
     <Settings

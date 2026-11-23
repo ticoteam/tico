@@ -129,19 +129,20 @@ def test_needs_you_gives_the_row_a_link_to_the_github_page(api):
     assert [(i["line"], i["href"], len(i["task_ids"])) for i in items] == [(F.CONNECT, F.CONNECT_AT, 2)]
 
 
-def test_with_github_installed_but_no_repository_in_use_the_owner_is_asked_to_choose_one(c, eng, later):
+def test_with_github_installed_but_no_repository_in_use_the_builder_is_woken_told_and_no_person_is_asked(c, eng, later):
+    """Nov 22: the App on "All repositories" puts none In use. That is no person's pause: the task's bot is woken on
+    entry and told there is nowhere to build (stage_inputs.NOWHERE); Health files it for Agent Ops (test_health)."""
+    from backend import stage_inputs as SI
+    from backend import task_wakes as TW
+
     X.github_installed(c, repository=None)
-    first = X.new_task(c, ANA, "Add a login page", "eng")["id"]
-    second = X.new_task(c, ANA, "Fix the footer", "eng")["id"]
-    assert [(n["line"], n["href"], sorted(n["tasks"])) for n in _connect(c)] == [
-        (F.CHOOSE, F.CHOOSE_AT, sorted([first, second]))
-    ]
-    assert later(minutes=5) == {} and X.wakes(c, first) == []
-    # A bot's own repository is not one a task can be built in.
-    c.execute("INSERT INTO repositories(id,full_name,enabled,bot_repo) VALUES('b','acme/bot-builder',1,1)")
-    assert [n["line"] for n in _connect(c)] == [F.CHOOSE]
+    task_id = X.new_task(c, ANA, "Add a login page", "eng")["id"]
+    assert _connect(c) == []  # no Needs you row for the Owner
+    assert [(w.state, w.who, w.line) for w in W.waiting_on(c, task_id)] == [("bot", BUILDER, "No PR linked")]
+    ((key, _to),) = X.wakes(c, task_id, BUILDER)  # woken on entry, as with a repository, and told why
+    assert SI.NOWHERE in c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
     X.github_installed(c)  # a person puts acme/app in use
-    assert _connect(c) == [] and later(seconds=10) == {"woken": 2}
+    assert SI.NOWHERE not in TW.body(c, E.task(c, task_id), to=BUILDER)
 
 
 def test_a_task_held_days_on_connect_github_is_not_handed_up_once_github_is_connected(c, eng, later):

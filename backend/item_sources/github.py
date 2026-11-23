@@ -2145,7 +2145,8 @@ def _now() -> Any:
 # A task with no PR linked needs a repository the company's GitHub App reaches. With no App installed nobody can open
 # one, so the condition says a person connects GitHub first (`Standing.fix`): whoever has the task is Paused on it, the
 # company's Owner has one row in Needs you for every task it holds up, and the tasks carry on once the App is installed
-# (waiting_on).
+# (waiting_on). Installed with no repository In use is not a pause: the task's bot is woken and told there is nowhere
+# to build (stage_inputs.NOWHERE), and Health's GitHub line (CHOOSE, CHOOSE_AT) files it for Agent Ops, not a person.
 CONNECT = "Connect GitHub"
 CONNECT_AT = "#/tools/github"
 CHOOSE = "Choose a repository"
@@ -2171,14 +2172,17 @@ def installed(conn: "sqlite3.Connection") -> bool:
     return _one(conn, _INSTALLED)
 
 
+def in_use(conn: "sqlite3.Connection") -> bool:
+    """Whether any product repository is In use (docs/repositories.md): bots reach only those, so with none a task's
+    bot has nowhere to open a PR."""
+    return _one(conn, _IN_USE)
+
+
 def first_fix(conn: "sqlite3.Connection") -> tuple[str, str] | None:
     """What a person does before any bot can work on a repository, as (line, where), or None when nothing is missing:
-    connect GitHub (no App installed), then choose a repository (none is In use, docs/repositories.md). Bots reach only
-    the repositories In use, so with none a task's bot has nowhere to open a PR."""
+    connect GitHub (no App installed). None In use is no person's pause (see CHOOSE)."""
     if not installed(conn):
         return CONNECT, CONNECT_AT
-    if not _one(conn, _IN_USE):
-        return CHOOSE, CHOOSE_AT
     return None
 
 

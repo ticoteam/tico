@@ -1,5 +1,5 @@
 import { CancelledError, notifyManager, QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider, useSearch } from '@tanstack/react-router';
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, Outlet, RouterProvider, useSearch } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -700,6 +700,64 @@ describe('Settings › General @s1072', () => {
     const off = await unfold('Not in use');
     fireEvent.click(within(off).getByRole('button', { name: 'Add' }));
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/repositories/acme/api', method: 'PUT', body: { enabled: true } }));
+  });
+
+  it('Health\'s "Choose a repository" lands on Repositories with Not in use open; one Add and Health reads Fine', async () => {
+    let inUse = false;
+    const look = { id: 'github', label: 'GitHub', status: 'warn', summary: 'Connected to Acme, but no repository is in use, so the Builder has nowhere to write.', fixes: [{ label: 'Choose a repository', href: '#/settings/general/set-repos' }] };
+    const fine = { id: 'github', label: 'GitHub', status: 'ok', summary: 'Connected to Acme.', fixes: [] };
+    serve((url, method) => {
+      if (url === '/api/v2/health') return ok({ checked: new Date().toISOString(), checks: [inUse ? fine : look] });
+      if (url === '/api/v2/setup') return ok(SETUP);
+      if (url === '/api/v2/repositories/acme/web' && method === 'PUT') {
+        inUse = true;
+        return ok({});
+      }
+      if (url.startsWith('/api/v2/repositories')) return ok({ ...REPOS, repositories: [repo('acme/web', inUse), repo('acme/api', false)] });
+      if (url === '/api/v2/system/storage') return ok({ active: null, server: { mode: 'disk' }, tico: null, copy: { done: 0, total: 0 }, earlier: [] });
+      return undefined;
+    });
+    const root = createRootRoute({
+      component: () => (
+        <>
+          <ActionsRoot dot={() => null} fold={() => {}} />
+          <Outlet />
+        </>
+      ),
+    });
+    const page = createRoute({
+      getParentRoute: () => root,
+      path: '/settings/$section',
+      validateSearch: settingsRoute.options.validateSearch,
+      component: function Page() {
+        const { section } = page.useParams();
+        const { open } = page.useSearch();
+        return <SettingsPage key={section} section={section as 'general' | 'health'} open={open} />;
+      },
+    });
+    const router = createRouter({ routeTree: root.addChildren([page]), history: createMemoryHistory({ initialEntries: ['/settings/health'] }) });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    );
+    const github = await screen.findByTitle('GitHub');
+    expect(within(github).getByText('Look')).toBeTruthy();
+    // The kit's link is a plain anchor in tests (main.tsx hands it the router's): follow its address the same way.
+    const href = within(github).getByRole('link', { name: 'Choose a repository' }).getAttribute('href') ?? '';
+    expect(href).toBe('/settings/general?open=set-repos');
+    await act(() => router.navigate({ href }));
+    const off = (await screen.findByText('acme/api')).closest<HTMLElement>('section, [role="region"]') as HTMLElement;
+    expect(router.state.location.pathname).toBe('/settings/general');
+    // Landed on the Repositories card, not the top of General.
+    await waitFor(() => expect(document.activeElement?.closest('[data-target="setting:repositories"]')).toBeTruthy());
+    expect(within(off).getAllByRole('button', { name: 'Add' })).toHaveLength(2);
+    fireEvent.click(within(off).getAllByRole('button', { name: 'Add' })[1] as HTMLElement);
+    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/repositories/acme/web', method: 'PUT', body: { enabled: true } }));
+    await act(() => router.navigate({ to: '/settings/$section', params: { section: 'health' } }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Check now' }));
+    expect(await screen.findByText('Connected to Acme.')).toBeTruthy();
+    expect(within(screen.getByTitle('GitHub')).getByText('Fine')).toBeTruthy();
   });
 
   it('asks for the icon only when the config says one is set', async () => {

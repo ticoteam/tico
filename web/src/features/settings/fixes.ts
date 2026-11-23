@@ -18,6 +18,8 @@ const OLD: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => string]> = [
   [/^#\/usage$/, () => '/company/usage'],
   [/^#\/listening$/, () => '/company/listening'],
   [/^#\/changelog$/, () => '/settings/changelog'],
+  // Settings › General's Repositories card, landed on (SettingsPage `open`): Health's "Choose a repository".
+  [/^#\/settings\/general\/set-repos$/, () => '/settings/general?open=set-repos'],
   [/^#\/tools(\/.*)?$/, () => '/library/tools'],
   [/^#\/settings\/(?:models|providers|subscriptions)(\/.*)?$/, () => '/settings/providers'],
   [/^#\/bot\/([^/?#]+)\/computer$/, (m) => `/team/${m[1]}?tab=computer`],

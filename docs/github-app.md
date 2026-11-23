@@ -114,8 +114,8 @@ Beyond setup, the first task that reaches a stage reading its PRs (Engineering's
 puts one **Connect GitHub** row in the company owner's Needs you, linked to this page. Every other such task waits on
 the same row: its bot shows Paused on "Connect GitHub", and no bot is woken or asked to snooze it meanwhile. Once the
 app is installed the row goes by itself, and each task's bot is woken once to carry on. Installed with no product
-repository In use, the row is **Choose a repository** instead, linked to Settings > General › Repositories, on the
-same terms.
+repository In use is no row for a person: the task's bot is woken and told there is nowhere to build yet, and Health's
+GitHub line (**Choose a repository**, linked to Settings > General › Repositories) files it for Agent Ops.
 
 1. As the owner, open Tools, GitHub. Under **Create the app in**, choose where GitHub makes the app:
    - **My GitHub account** (the default): nothing to type. GitHub makes the app for whoever is signed in to GitHub
