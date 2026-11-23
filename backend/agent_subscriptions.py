@@ -101,44 +101,6 @@ def plan_runtimes() -> set[str]:
     return {spec["runtime"] for spec in MS.KINDS.values() if spec["billing"] == "subscription"}
 
 
-def clear_for_move(
-    c: Connection, auth: Any, who: Identity, bot: str, *, seed_runner_owner: str | None = None
-) -> list[str]:
-    if MS._may_manage(auth, who):
-        return []
-    if who.role == "system":
-        if (
-            seed_runner_owner
-            and c.execute(
-                "SELECT 1 FROM agent_subscriptions p JOIN bot_config b ON b.bot=p.bot "
-                "WHERE p.bot=? AND p.person NOT IN ('','human:'||?) "
-                "AND coalesce(b.owner_id,'')<>? LIMIT 1",
-                (bot, seed_runner_owner, seed_runner_owner),
-            ).fetchone()
-        ):
-            raise Problem("payer_placement", "Choose a computer approved for this agent's Paid by", 409)
-        return []
-    # The default pool may go to its owner's computer (or company cloud) on first placement.
-    condition = (
-        "person<>? AND NOT ("
-        "? IS NOT NULL AND kind='pool' AND (?='' OR person='human:'||?) "
-        "AND person=(SELECT 'human:'||owner_id FROM bot_config WHERE bot=?) "
-        "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.target=agent_subscriptions.bot "
-        "AND e.action IN ('agent_subscription.changed','bot.archived','bot.assigned') "
-        "AND (e.action<>'agent_subscription.changed' OR json_extract(e.detail,'$.runtime')=agent_subscriptions.runtime)))"
-    )
-    args = (who.actor, seed_runner_owner, seed_runner_owner, seed_runner_owner, bot)
-    removed = [
-        row[0]
-        for row in c.execute(
-            f"DELETE FROM agent_subscriptions WHERE bot=? AND {condition} RETURNING runtime", (bot, *args)
-        )
-    ]
-    for runtime in sorted(removed):
-        H.event(c, who.actor, "agent_subscription.cleared_on_move", bot, {"runtime": runtime})
-    return sorted(removed)
-
-
 def save(c: Connection, auth: Any, who: Identity, bot: str, changes: dict[str, Pick | None]) -> dict[str, Row]:
     """Patch only the supplied tools, with permission checked on each changed payer."""
     MS._reader(who)
@@ -308,9 +270,16 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             f"WHERE p.bot IN ({marks}) AND p.kind<>'pool' UNION ALL "
             "SELECT p.bot,p.runtime,p.parent_grant,s.id FROM agent_subscriptions p "
             "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_pool ON s.owner_id=p.person "
-            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ('claude_token','claude_login','codex_login')) "
-            "SELECT choice.bot,choice.runtime,choice.parent_grant AS payer_parent,s.*,m.value AS payer_usage "
+            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ('claude_token','claude_login','codex_login')), "
+            # Drive the count from live attempts across the team, including legacy delivery and excluding shell sign-ins.
+            "live AS MATERIALIZED (SELECT s.subscription_id,count(*) AS turns "
+            "FROM attempts a INDEXED BY attempts_live_lease CROSS JOIN attempt_subscriptions s ON s.attempt_id=a.id "
+            "WHERE a.state IN ('leased','running') AND s.delivery<>'shell' "
+            "AND coalesce(a.handed_runtime,s.runtime)=s.runtime GROUP BY s.subscription_id) "
+            "SELECT choice.bot,choice.runtime,choice.parent_grant AS payer_parent,s.*,m.value AS payer_usage,"
+            "coalesce(live.turns,0) AS live_turns "
             f"FROM chosen choice CROSS JOIN {MS.SUBS} s ON s.id=choice.provider_id "
+            "LEFT JOIN live ON live.subscription_id=s.id "
             "LEFT JOIN credentials v ON v.id=s.credential_id "
             "LEFT JOIN registry_metadata m ON m.key=?||s.id "
             "LEFT JOIN credential_grants parent ON parent.id=choice.parent_grant "
@@ -364,6 +333,7 @@ def resolve(
     inputs: Inputs | None = None,
     prefer: str = "",
     exclude: str = "",
+    enforce_live_limit: bool = True,
 ) -> Payment | None:
     """None means unset. A choice without a payable subscription must wait."""
     snapshot = inputs if inputs is not None else (loads.payers if loads is not None else None)
@@ -384,6 +354,7 @@ def resolve(
     if not rows:
         return Payment(None, f"{payer_label()}: no provider for {MS.RUNTIME_LABELS.get(runtime, runtime)}")
     eligible: list[tuple[datetime, str, str, Row]] = []
+    full: list[tuple[datetime, str, str, Row]] = []
     resets: list[tuple[datetime, str]] = []
     probing = refreshing = False
     for sub in rows:
@@ -403,11 +374,21 @@ def resolve(
         if blocked:
             resets.append((blocked, ""))
             continue
-        eligible.append((next_reset or datetime.max.replace(tzinfo=timezone.utc), sub["created_at"], sub["id"], sub))
+        rank = (next_reset or datetime.max.replace(tzinfo=timezone.utc), sub["created_at"], sub["id"], sub)
+        if enforce_live_limit and MS.owned(sub["kind"]) and sub["live_turns"] >= sub["max_live_turns"]:
+            full.append(rank)
+        else:
+            eligible.append(rank)
     for _, _, _, sub in sorted(eligible, key=lambda candidate: (candidate[2] != prefer, *candidate[:3])):
         if MS.payer_readable(c, sub):
             return Payment(sub)
-    if eligible:
+    for _, _, _, sub in sorted(full, key=lambda candidate: candidate[:3]):
+        if MS.payer_readable(c, sub):
+            turns = sub["live_turns"]
+            return Payment(
+                None, f"{sub['name']} is running {turns} {'turn' if turns == 1 else 'turns'}; waits for one to finish"
+            )
+    if eligible or full:
         return Payment(None, MS.PAYER_UNAVAILABLE)
     if resets:
         reset, held = min(resets)
@@ -434,6 +415,7 @@ def for_runner(
     loads: Any = None,
     job: str | None = None,
     inputs: Inputs | None = None,
+    enforce_live_limit: bool = True,
 ) -> Payment | None:
     """The next turn's payer, including whether this computer can carry it."""
     runtime = str(config.get("runtime") or "")
@@ -445,6 +427,7 @@ def for_runner(
     if runtime not in snapshot.picks[bot]:
         return None
     caps: list[str] = H._json(runner["capabilities"], []) or []
+    per_turn = CAPABILITY in caps
     current = MS.legacy_current(c, runner["id"], runtime, caps, loads)
     payment = resolve(
         c,
@@ -455,10 +438,12 @@ def for_runner(
         job=job,
         inputs=snapshot,
         prefer=current["id"] if current else "",
+        # A legacy runner uses the computer's current sign-in across turns.
+        enforce_live_limit=enforce_live_limit and per_turn,
     )
     if payment is None or payment.subscription is None:
         return payment
-    if CAPABILITY in caps:
+    if per_turn:
         return payment
     sub = payment.subscription
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):

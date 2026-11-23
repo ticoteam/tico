@@ -245,7 +245,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
     payer_model = model or (config.get("model") if config.get("runtime") == runtime else "")
     if (
         payment := agent_subscriptions.for_runner(
-            c, row, bot, {**config, "runtime": runtime, "model": payer_model}, loads=loads
+            c, row, bot, {**config, "runtime": runtime, "model": payer_model}, loads=loads, enforce_live_limit=False
         )
     ) is not None:
         if payment.subscription:

@@ -1297,7 +1297,6 @@ def check_host(c, bot, runner_id):
             "That computer is another bot's own cloud machine. Choose the shared cloud machine or another computer",
             409,
         )
-    return found is not None
 
 
 def placed(c, bot, runner_id, actor):
@@ -2934,15 +2933,8 @@ def change(
     after = row(c, bot)
     if after["mode"] == "cloud" and after["placement"] == "shared":
         ensure_shared(c)
-    cleared = []
     if after["mode"] == "cloud":
-        from .agent_subscriptions import clear_for_move
-
         chose = mode is not None or placement is not None
-        destination_changed = bool({"mode", "placement"} & fields.keys())
-        if chose and (destination_changed or unplaced(c, bot)):
-            first = c.execute("SELECT 1 FROM assignments WHERE bot=?", (bot,)).fetchone() is None
-            cleared = clear_for_move(c, auth, who, bot, seed_runner_owner="" if first else None)
         # onto a machine that is there already; else when it is made. A person's choice of a machine hears a lasting refusal.
         bind(c, execution, bot, lasting=chose)
     H.event(
@@ -2956,8 +2948,7 @@ def change(
             if after[key] != before[key]
         },
     )
-    result = view(c, bot, execution.store.settings)
-    return {**result, "paid_by_cleared": cleared} if cleared and result is not None else result
+    return view(c, bot, execution.store.settings)
 
 
 def size_fields(c, before, size, grow_storage):

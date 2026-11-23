@@ -13,7 +13,7 @@ import { Pill } from '@/kit/Pill';
 import { SectionHead } from '@/kit/SectionHead';
 import { fmtDate } from '@/lib';
 import { Section } from '@/pagekinds';
-import { editSubscriptionName } from './actions';
+import { editSubscriptionName, maxLiveTurns } from './actions';
 import { ConnectPlan } from './ConnectPlan';
 import { GatewayLines } from './Gateway';
 import { Line, Meter, act, agentsWord, usd, useAdmin } from './parts';
@@ -98,6 +98,37 @@ function RenameDialog({ s, onClose }: { s: Subscription; onClose: () => void }) 
   );
 }
 
+function LiveTurnLimit({ id, limit, manage }: { id: string; limit: number; manage: boolean }) {
+  const [draft, setDraft] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  const value = draft ?? String(limit);
+  const parsed = maxLiveTurns.safeParse(Number(value));
+  const save = async () => {
+    if (saving || !parsed.success || parsed.data === limit) return;
+    setSaving(true);
+    try {
+      await act('settings.editSubscription', { subscription: id, max_live_turns: parsed.data });
+    } finally {
+      setDraft(undefined);
+      setSaving(false);
+    }
+  };
+  return manage ? (
+    <div className="set-num provider-limit">
+      <Field
+        label="Max live turns"
+        type="number"
+        wide={false}
+        value={value}
+        onValueChange={setDraft}
+        onCommit={save}
+        disabled={saving}
+        error={parsed.success ? undefined : '1 to 200'}
+      />
+    </div>
+  ) : <small className="provider-limit">Max live turns {limit}</small>;
+}
+
 function Usage({ s }: { s: Subscription }) {
   const u = s.usage;
   if (u?.used_pct != null) {
@@ -144,7 +175,10 @@ function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean;
           {preview && <small title={preview}>{preview}</small>}
           {byWhen && <small>Reconnect by {byWhen}</small>}
         </div>
-        <span className="provider-kind">{plan ? (s.kind === 'codex_login' ? 'ChatGPT plan' : 'Claude plan') : 'API key'}</span>
+        <div className="provider-kind">
+          {plan ? (s.kind === 'codex_login' ? 'ChatGPT plan' : 'Claude plan') : 'API key'}
+          {plan && s.max_live_turns !== undefined && <LiveTurnLimit id={s.id} limit={s.max_live_turns} manage={manage} />}
+        </div>
         {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? <Usage s={s} /> : <span className="provider-usage" />}
         <span className="provider-badge"><Pill flag={badge.label === 'Problem' || needsReconnect(s)} title={badge.detail}>{badge.label}</Pill></span>
         <span className="provider-agents">Picked by {agentsWord(agents.length)}</span>

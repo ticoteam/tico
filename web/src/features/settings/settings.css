@@ -313,7 +313,8 @@ html[data-layout="cards"] .g-lim.is-pool .row-title{grid-area:av / av / name / n
 .pk-settings .row.g-provider{--g:16px minmax(0,1.25fr) minmax(75px,.7fr) minmax(85px,1fr) minmax(86px,.9fr) 90px 28px;height:auto;min-height:var(--row);padding:var(--s-2h);border-top:1px solid var(--line);border-radius:0}
 .provider-order,.provider-kind,.provider-usage,.provider-agents{font-size:var(--t-sm);color:var(--ink-2)}
 .provider-name,.provider-usage{display:grid;gap:var(--s-0);min-width:0}
-.provider-name small,.provider-usage small{font-size:var(--t-xs);color:var(--muted)}
+.provider-name small,.provider-usage small,.provider-limit{font-size:var(--t-xs);color:var(--muted)}
+.provider-limit{display:block;margin-top:var(--s-1)}
 .provider-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .provider-usage .meter{width:100%;max-width:140px}
 .provider-badge .pill{display:inline-block;white-space:normal;line-height:1.35;height:auto}

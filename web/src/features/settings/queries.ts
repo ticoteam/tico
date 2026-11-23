@@ -436,16 +436,15 @@ export const removeSubscription = (id: string) =>
 
 export const refreshSubscription = (id: string) => api.post(`/api/v2/model-subscriptions/${enc(id)}/usage-refresh`, {});
 
-/** A new name, and for a plan a new person who holds it (`owner`: a person id), sent only when it changed. */
-export const editSubscription = (id: string, name: string, owner?: string) =>
+export const editSubscription = (id: string, change: { name?: string; owner_id?: string; max_live_turns?: number }) =>
   write({
     key: subscriptionsQuery.queryKey,
     optimistic: (v: ModelSubscriptionList | undefined) =>
-      v && { ...v, subscriptions: v.subscriptions.map((x) => (x.id === id ? { ...x, name, ...(owner ? { owner_id: `human:${owner}` } : {}) } : x)) },
+      v && { ...v, subscriptions: v.subscriptions.map((x) => (x.id === id ? { ...x, ...change } : x)) },
     send: (idempotencyKey) =>
       api.post<ModelSubscription>(
         `/api/v2/model-subscriptions/${enc(id)}`,
-        { name, ...(owner ? { owner_id: `human:${owner}` } : {}) },
+        change,
         { idempotencyKey },
       ),
   });

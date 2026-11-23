@@ -106,6 +106,7 @@ KINDS = {
 RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
 RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
+DEFAULT_MAX_LIVE_TURNS = 20
 
 
 class SubscriptionWrite(Contract):
@@ -116,6 +117,15 @@ class SubscriptionWrite(Contract):
     owner_id: str | None = Field(default=None, max_length=120)
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
+    max_live_turns: int | None = Field(
+        default=None,
+        strict=True,
+        ge=1,
+        le=200,
+        # Requests that omit the limit must match their existing idempotency receipts.
+        exclude_if=lambda limit: limit is None,
+        description="Maximum live turns across all computers, for a plan",
+    )
     confirm: bool = False
 
 
@@ -787,7 +797,10 @@ def turn_runtimes(config, record=None):
 
 def covered_runtimes(c, runner, config, loads=None, *, bot):
     """{runtime: kind} the agent's selected payer signs in on this computer."""
-    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config, loads, bot=bot)}
+    return {
+        item["runtime"]: item["subscription"]["kind"]
+        for item in for_claim(c, runner, config, loads, bot=bot, enforce_live_limit=False)
+    }
 
 
 def covered(ready, runtimes):
@@ -1253,6 +1266,7 @@ def view(c, sub, ctx=None):
         "id": sub["id"],
         "name": sub["name"],
         "kind": sub["kind"],
+        **({"max_live_turns": sub["max_live_turns"]} if owned(sub["kind"]) else {}),
         "runtime": spec.get("runtime", ""),
         "label": spec.get("label", sub["kind"]),
         "status": sub["status"],
@@ -1870,6 +1884,8 @@ def save(c, vault, settings, auth, who, body, sid=None):
         if not body.secret.get_secret_value().lstrip().startswith("{"):
             body = body.model_copy(update={"kind": "claude_token"})
     kind = body.kind or sub["kind"] if sub else body.kind
+    if body.max_live_turns is not None and not owned(kind):
+        raise Problem("max_live_turns", "Only plans have a live-turn limit", 422)
     login = None
     if kind == "claude_login" and body.secret is not None:
         login = claude_login.facts(checked("claude_login", body.secret.get_secret_value())[0])
@@ -1904,6 +1920,11 @@ def save(c, vault, settings, auth, who, body, sid=None):
                 _confirm_reconnect(c, settings, [], paid_attempts)
         if name is not None:
             c.execute("UPDATE model_subscriptions SET name=?,updated_at=? WHERE id=?", (name, now, sid))
+        if body.max_live_turns is not None:
+            c.execute(
+                "UPDATE model_subscriptions SET max_live_turns=?,updated_at=? WHERE id=?",
+                (body.max_live_turns, now, sid),
+            )
         if body.secret is not None and same:
             # The same account signed in again (its monthly Reconnect): a refresh, not a change. Its runs go on and get
             # the new access token; its readings stay.
@@ -1977,8 +1998,20 @@ def save(c, vault, settings, auth, who, body, sid=None):
     cid = _keep_value(c, vault, {"id": sid, "credential_id": None}, value, preview, who.actor, now)
     c.execute(
         "INSERT INTO model_subscriptions(id,name,kind,sealed,preview,added_by,owner_id,created_at,updated_at,"
-        "credential_at,credential_id) VALUES(?,?,?,'',?,?,?,?,?,?,?)",
-        (sid, name, body.kind, preview, who.actor, owner, now, now, now, cid),
+        "credential_at,credential_id,max_live_turns) VALUES(?,?,?,'',?,?,?,?,?,?,?,?)",
+        (
+            sid,
+            name,
+            body.kind,
+            preview,
+            who.actor,
+            owner,
+            now,
+            now,
+            now,
+            cid,
+            body.max_live_turns or DEFAULT_MAX_LIVE_TURNS,
+        ),
     )
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
@@ -2486,11 +2519,15 @@ def key_listing(c):
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
-def for_claim(c, runner, config, loads=None, *, bot):
+def for_claim(c, runner, config, loads=None, *, bot, enforce_live_limit=True):
     """The chosen payer for this turn, if one was assigned to the agent."""
     from . import agent_subscriptions
 
-    if runner and (payment := agent_subscriptions.for_runner(c, runner, bot, config, loads=loads)):
+    if runner and (
+        payment := agent_subscriptions.for_runner(
+            c, runner, bot, config, loads=loads, enforce_live_limit=enforce_live_limit
+        )
+    ):
         if payment.subscription:
             return [agent_subscriptions.claim_entry(config["runtime"], payment)]
     return []
@@ -2749,7 +2786,9 @@ def assignment_fields(c, runner, config, *, bot="", inputs=None):
     subscription covers a runtime, so the runner does not count that runtime's missing sign-in against the bot."""
     from . import agent_subscriptions
 
-    payment = agent_subscriptions.for_runner(c, runner, bot, config, inputs=inputs) if bot else None
+    payment = (
+        agent_subscriptions.for_runner(c, runner, bot, config, inputs=inputs, enforce_live_limit=False) if bot else None
+    )
     return (
         {"subscriptions": {config["runtime"]: payment.subscription["kind"]}} if payment and payment.subscription else {}
     )
@@ -3059,7 +3098,7 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "changeModelSubscription",
-            "Rename or reconnect a subscription as its owner or an admin. A reconnect answers 409 "
+            "Rename, set a plan's live-turn limit or reconnect a subscription as its owner or an admin. A reconnect answers 409 "
             "`confirm_restart` while runs would stop unless `confirm` is true",
             "ModelSubscription",
         ),

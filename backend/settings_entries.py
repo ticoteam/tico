@@ -757,15 +757,15 @@ ENTRIES = TEAM_RULES + [
     ),
     S(
         "models.subscription.change",
-        "Rename or reconnect a subscription",
+        "Rename, set a live-turn limit or reconnect a subscription",
         PROVIDERS,
-        "admin",
+        "provider",
         "person",
         "POST",
         "model-subscriptions/{id}",
         value="json",
         card=_card("models", "settings-subs"),
-        words="rename reconnect",
+        words="rename reconnect max live turns",
         why="A subscription's token, key or login is pasted in Settings, never passed through a bot",
     ),
     S(

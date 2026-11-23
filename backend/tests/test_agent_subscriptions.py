@@ -332,7 +332,7 @@ def test_removing_an_exact_choice_restarts_only_that_agents_turn_and_lists_the_l
     assert not lost("ben-test")
 
 
-def report(api, computer, bots, *, modern=True, codex=False):
+def report(api, computer, bots, *, modern=True, codex=False, signed_in=True):
     caps = ["model_subscriptions_v1", "task_lanes_v2"]
     if modern:
         caps.append(paid_by.CAPABILITY)
@@ -346,10 +346,10 @@ def report(api, computer, bots, *, modern=True, codex=False):
             "readiness": {
                 "schema_version": 1,
                 "runtimes": {
-                    "claude": {"installed": True, "authenticated": "ready"},
+                    "claude": {"installed": True, "authenticated": "ready" if signed_in else "missing"},
                     **({"codex": {"installed": True, "authenticated": "ready"}} if codex else {}),
                 },
-                "bots": {bot: {"runtime": "claude", "ready": True} for bot in bots},
+                "bots": {bot: {"runtime": "claude", "ready": True, "sign_in": "ready"} for bot in bots},
             },
         },
         token=computer["token"],
@@ -502,6 +502,92 @@ def test_pool_wait_is_visible_in_health_and_rechecks_without_a_gateway_fallback(
     assert get(api, "bots/ops/subscriptions?last_turn=true", "ben-test")["last_turn"] is None
 
 
+@pytest.mark.parametrize("legacy", [False, True])
+def test_plan_live_turn_limit_across_computers_rotates_the_pool_and_waits_on_exact_picks(api, legacy):
+    from backend import views
+    from backend.tests.helpers.shared_bots import revision
+
+    setup(api)
+    company(api)
+    first = add(api, name="First plan")["id"]
+    spare = add(api, name="Spare plan")["id"]
+    post(api, f"model-subscriptions/{first}", {"max_live_turns": 1})
+    store = api.app.state.store
+    with store.read() as c:
+        model = providers.load(c)["model"]
+    boxes = {}
+    for bot in ("ops", "cpo", "finance"):
+        box = boxes[bot] = machine(api, bot=bot, signed_in=bot != "finance")
+        if bot == "finance":
+            report(api, box, [bot], signed_in=False)
+        elif legacy:
+            report(api, box, [bot], modern=False)
+        on(api, bot, "claude", model)
+        choose(
+            api, bot, {"kind": "pool", "person": "ana"} if bot == "cpo" else {"kind": "plan", "subscription_id": first}
+        )
+        post(api, f"chat/{bot}", {"text": "Check the provider."})
+    with store.transaction() as c:
+        now = datetime.now(timezone.utc)
+        reading(c, first, 40, now + timedelta(hours=1))
+        reading(c, spare, 40, now + timedelta(hours=2))
+        if legacy:
+            MS._set(c, boxes["ops"]["runner_id"], "claude", first, "human:ana")
+            MS._set(c, boxes["cpo"]["runner_id"], "claude", first, "human:ana", "human:ana")
+
+    ops = boxes["ops"]
+    turn = claim(api, ops, "ops")
+    assert turn["subscriptions"][0]["id"] == first
+    if legacy:
+        assert turn["subscriptions"][0]["source"] == "computer"
+        assert get(api, "credential-runtime", turn["token"])["subscriptions"][0]["id"] == first
+
+    finance = boxes["finance"]
+    assert claim(api, finance, "finance") is None
+    last_turn = "bots/finance/subscriptions?last_turn=true"
+    [wait] = get(api, last_turn)["last_turn"]["waits"]
+    assert wait["reason"] == "First plan is running 1 turn; waits for one to finish"
+
+    cpo = boxes["cpo"]
+    pooled = claim(api, cpo, "cpo")
+    if legacy:
+        assert pooled["subscriptions"][0]["id"] == first
+        assert pooled["subscriptions"][0]["source"] == "computer"
+        assert get(api, "credential-runtime", pooled["token"])["subscriptions"][0]["id"] == first
+    else:
+        assert pooled["attempt_credential"]["id"] == spare
+        changed = post(
+            api, "bots/finance/model", {"model": "claude-opus-5-5", "expected_revision": revision(api, "finance")}
+        )
+        assert changed["readiness"]["can_run"] is True
+        [entry] = get(api, "runners/assignments", finance["token"])
+        assert entry["subscriptions"] == {"claude": "claude_token"}
+        tools = get(api, "bots/finance/tools")["tools"]
+        assert next(tool for tool in tools if tool["id"] == "model")["status"] == "ready"
+        with store.read() as c:
+            assert views.machine(c, bot_id(c, "finance"))["ready"]
+        with store.transaction() as c:
+            cid = MS.row(c, first)["credential_id"]
+            sealed = c.execute("SELECT ciphertext FROM credentials WHERE id=?", (cid,)).fetchone()[0]
+            c.execute("UPDATE credentials SET ciphertext=X'FF' WHERE id=?", (cid,))
+        [wait] = get(api, last_turn)["last_turn"]["waits"]
+        assert wait["reason"] == MS.PAYER_UNAVAILABLE
+        with store.transaction() as c:
+            c.execute("UPDATE credentials SET ciphertext=? WHERE id=?", (sealed, cid))
+
+    for box, attempt in ((ops, turn), (cpo, pooled)):
+        post(api, f"attempts/{attempt['id']}/started", {"thread_id": "first-plan"}, box["token"])
+        post(
+            api,
+            f"attempts/{attempt['id']}/complete",
+            {"outcome": "completed", "last_seq": 0, "text": "Done."},
+            box["token"],
+        )
+        if legacy and box == ops:
+            assert claim(api, finance, "finance") is None
+    assert claim(api, finance, "finance")["subscriptions"][0]["id"] == first
+
+
 def test_paid_by_catalog_and_agent_report_the_same_assignment_rights_as_writes(api):
     setup(api)
     own = add(api, token="cara-test")["id"]
@@ -648,15 +734,15 @@ def test_saved_fallback_session_waits_when_its_tool_gets_a_paid_by(api, monkeypa
     assert again["job_id"] == first["job_id"] and again["source_continuation"] == saved
 
 
-def test_moving_clears_only_the_other_owners_payers(api):
+def test_moving_preserves_payers(api):
     setup(api)
     owner_plan = add(api)["id"]
     member_key = add(api, "openai_key", "sk-acme-fake-test-key-654321", token="cara-test")["id"]
-    box = machine(api)
-    other = runner(api, label="Other Mac")
+    machine(api)
+    other = runner(api, operator="ben", label="Other Mac")
     with api.app.state.store.transaction() as c:
         bot = bot_id(c, "ops")
-        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot=?", (bot,))
+        c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara' WHERE bot=?", (bot,))
         c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (other["runner_id"],))
     choose(api, "ops", {"kind": "plan", "subscription_id": owner_plan})
     put(
@@ -669,17 +755,16 @@ def test_moving_clears_only_the_other_owners_payers(api):
         },
         "cara-test",
     )
-    move = assign(api, other, "ops", generation=1, operator="cara-test")
-    assert move["paid_by_cleared"] == ["claude"]
+    assert assign(api, other, "ops", generation=1, operator="cara-test")["runner_id"] == other["runner_id"]
     with api.app.state.store.read() as c:
-        assert set(paid_by.picks(c, bot)) == {"codex"}
-    assign(api, box, "ops", generation=2)
-    choose(api, "ops", {"kind": "plan", "subscription_id": owner_plan})
-    assert "paid_by_cleared" not in assign(api, other, "ops", generation=3)
+        assert {tool: pick["subscription_id"] for tool, pick in paid_by.picks(c, bot).items()} == {
+            "claude": owner_plan,
+            "codex": member_key,
+        }
 
 
 @pytest.mark.parametrize(("automatic", "runner_owner"), [(False, "cara"), (True, "cara"), (True, "ana")])
-def test_first_placement_by_comanager_only_keeps_default_pool_on_owners_computer(api, automatic, runner_owner):
+def test_first_placement_by_comanager_keeps_default_pool(api, automatic, runner_owner):
     from backend import placement
 
     setup(api)
@@ -697,15 +782,15 @@ def test_first_placement_by_comanager_only_keeps_default_pool_on_owners_computer
             placed = placement.auto_place(c, api.app.state.execution, "ops", Identity("human:cara", "human"))
             assert placed["runner_id"] == box["runner_id"]
     if not automatic:
-        assert assign(api, box, "ops", operator="cara-test")["paid_by_cleared"] == ["claude"]
+        assert assign(api, box, "ops", operator="cara-test")["runner_id"] == box["runner_id"]
     with store.read() as c:
-        assert bool(paid_by.picks(c, "ops")) == (runner_owner == "ana")
+        assert paid_by.picks(c, "ops")["claude"]["person"] == "human:ana"
 
 
 @pytest.mark.parametrize(
     ("kind", "runner_owner"), [("pool", "ben"), ("plan", "ben"), ("key", "ben"), ("key", "ana"), ("plan", "cara")]
 )
-def test_placement_sweep_preserves_foreign_picks_and_skips_third_party_computers(api, kind, runner_owner):
+def test_placement_sweep_preserves_foreign_picks_on_other_computers(api, kind, runner_owner):
     from backend import placement
     from backend.tests.helpers.model_subscriptions import pick
 
@@ -723,14 +808,14 @@ def test_placement_sweep_preserves_foreign_picks_and_skips_third_party_computers
         pick(api, "ops", tool, sid, kind=kind)
     with store.transaction() as c:
         c.execute("UPDATE bots SET state='active' WHERE id='ops'")
-        placed = dict(placement.sweep(c, api.app.state.execution)).get("ops")
-        assert (placed or {}).get("runner_id") == (None if runner_owner == "ben" else box["runner_id"])
+        placed = dict(placement.sweep(c, api.app.state.execution))["ops"]
+        assert placed["runner_id"] == box["runner_id"]
         choice = paid_by.picks(c, "ops")[tool]
         assert choice["kind"] == kind and choice["person"] == "human:ana"
         assert choice["subscription_id"] == ("" if kind == "pool" else sid)
 
 
-def test_placement_sweep_keeps_the_owners_own_pool_off_a_third_party_computer(api):
+def test_placement_sweep_keeps_the_owners_pool_on_a_third_party_computer(api):
     from backend import placement
 
     setup(api)
@@ -744,11 +829,11 @@ def test_placement_sweep_keeps_the_owners_own_pool_off_a_third_party_computer(ap
             "VALUES('ops','claude','pool','human:cara','human:cara','2026-11-22T00:00:00Z')"
         )
         c.execute("UPDATE bots SET state='active' WHERE id='ops'")
-        assert dict(placement.sweep(c, api.app.state.execution)).get("ops") is None
+        assert dict(placement.sweep(c, api.app.state.execution))["ops"]["runner_id"] == box["runner_id"]
         assert paid_by.picks(c, "ops")["claude"]["person"] == "human:cara"
 
 
-def test_member_restore_checks_a_foreign_plan_before_placing_the_agent(api):
+def test_member_restore_keeps_a_foreign_plan_when_placing_the_agent(api):
     from backend import bot_settings
     from backend.tests.helpers.shared_bots import revision
 
@@ -764,10 +849,8 @@ def test_member_restore_checks_a_foreign_plan_before_placing_the_agent(api):
     post(api, "bots/ops/archive", {"expected_revision": revision(api, "ops")})
     post(api, "bots/ops/restore", {}, "cara-test")
     with store.read() as c:
-        assert paid_by.picks(c, "ops") == {}
+        assert paid_by.picks(c, "ops")["claude"]["subscription_id"] == plan
         assert c.execute("SELECT runner_id FROM assignments WHERE bot='ops'").fetchone()[0] == box["runner_id"]
-    lost = next(row for row in get(api, "health")["checks"] if row["id"] == "paid_by_unset")
-    assert [item["bot"] for item in lost["items"]] == ["ops"]
 
 
 def test_a_comanager_can_place_an_agent_on_its_seeded_pool(api):

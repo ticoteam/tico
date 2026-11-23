@@ -627,6 +627,36 @@ describe('Settings › Providers', () => {
     expect(legacy.compareDocumentPosition(company)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  it('lets members edit their own plan limit and read other plans’ limits', async () => {
+    queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
+    let mine = { ...plan, max_live_turns: 20 };
+    const other = { ...mine, id: 'other', name: 'Other plan', owner_id: 'human:p2', owner_name: 'Ben Sample' };
+    const key = { ...plan, id: 'key', name: 'My key', kind: 'anthropic_key' as const };
+    const catalog = () => ({ kinds: [], subscriptions: [mine, other, key] });
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog());
+    serve((url, method) => {
+      if (url === '/api/v2/model-subscriptions') return ok(catalog());
+      if (method === 'POST' && url.endsWith(`/model-subscriptions/${plan.id}`)) {
+        mine = { ...mine, max_live_turns: 12 };
+        return ok(mine);
+      }
+    });
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const input = await screen.findByRole<HTMLInputElement>('spinbutton', { name: 'Max live turns' });
+    expect(input.valueAsNumber).toBe(20);
+    fireEvent.change(input, { target: { value: '201' } });
+    fireEvent.blur(input);
+    expect(sent).toEqual([]);
+    fireEvent.change(input, { target: { value: '12' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(sent).toEqual([{ url: `/api/v2/model-subscriptions/${plan.id}`, method: 'POST', body: { max_live_turns: 12 } }]);
+    expect(input.valueAsNumber).toBe(12);
+    fireEvent.click(screen.getByRole('button', { name: "Ben Sample's pool" }));
+    expect(screen.getByText('Max live turns 20')).toBeTruthy();
+    expect(screen.getAllByRole('spinbutton')).toHaveLength(1);
+  });
+
   it('identifies fallback agents in the expanded provider row and counts them', async () => {
     const catalog = { kinds: [], subscriptions: [{ ...plan, agents: [
       { id: 'a1', name: 'Alpha Agent', fallback: false },

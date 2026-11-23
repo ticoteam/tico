@@ -153,7 +153,9 @@ def _model_tool(c, settings, bot, config, readiness, label, runner=None):
     state = (readiness.get("runtimes") or {}).get(runtime) if harness not in EXTERNAL_HARNESSES else None
     if isinstance(state, dict):
         payment = (
-            agent_subscriptions.for_runner(c, runner, bot, {"runtime": runtime, "model": model})
+            agent_subscriptions.for_runner(
+                c, runner, bot, {"runtime": runtime, "model": model}, enforce_live_limit=False
+            )
             if runner and state.get("installed")
             else None
         )
