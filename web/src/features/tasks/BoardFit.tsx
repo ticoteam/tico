@@ -9,8 +9,8 @@ import { FlowMark } from '@/kit/FlowMark';
    outline at both ends. */
 const GAP = 10;
 const STRIP = 40;
-const MIN = 138;
-const MAX = 296;
+const MIN = 224;
+const MAX = 400;
 const EDGE = 4;
 
 interface Edge {
@@ -55,9 +55,13 @@ export function BoardFit({ shape }: { shape: string }) {
       let end = from;
       while (end < cols.length && need(cols.slice(from, end + 1), MIN) <= avail + 0.5) end++;
       end = Math.max(end, from + 1);
+      // a page of folded strips alone would show part of the next column: take that column in
+      while (end < cols.length && !cols.slice(from, end).some(isOpen)) end++;
       const shown = cols.slice(from, end);
       const opens = shown.filter(isOpen).length;
-      const w = opens ? Math.min(MAX, (avail - need(shown, 0)) / opens) : MIN;
+      // capped only when nothing lies past the right edge: a capped column would leave part of the next one showing
+      const cap = end < cols.length ? Infinity : MAX;
+      const w = opens ? Math.min(cap, (avail - need(shown, 0)) / opens) : MIN;
       inn.style.setProperty('--col-w', `${w}px`);
       if (more && from) {
         // room to bring a late stage to the left edge
