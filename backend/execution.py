@@ -2184,7 +2184,12 @@ def limit_lifted(c, settings, bot, attempt_id, finished):
     ).fetchone()
     if (
         paid
-        and (payment := agent_subscriptions.resolve(c, bot, paid["handed_runtime"], paid["handed_model"])) is not None
+        and (
+            payment := agent_subscriptions.resolve(
+                c, bot, paid["handed_runtime"], paid["handed_model"], enforce_live_limit=False
+            )
+        )
+        is not None
     ):
         return "reset" if payment.subscription else None
     now = H.now()
@@ -2280,6 +2285,7 @@ def cooling_off(c, settings, bot, loads=None):
                 bot,
                 providers.fill(loads.record if loads else providers.load(c, settings), config),
                 loads=loads,
+                enforce_live_limit=False,
             )
         )
         is not None
@@ -4392,7 +4398,7 @@ class Execution:
             )
         return result
 
-    def assign(self, c, who, bot, body, *, placement_requester=None):
+    def assign(self, c, who, bot, body):
         bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         from .shared_bots import check_runner
 
@@ -4437,7 +4443,7 @@ class Execution:
             raise Problem("forbidden", "This machine's operator is not authorized to host this bot", 403)
         from . import cloud_machines
 
-        cloud_host = cloud_machines.check_host(c, bot, body.runner_id)
+        cloud_machines.check_host(c, bot, body.runner_id)
         old = c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone()
         generation = old["generation"] if old else 0
         if body.expected_generation != generation:
@@ -4463,17 +4469,6 @@ class Execution:
                 )
             if old and (blocked := stranded(c, self.store.settings, bot, old["runner_id"], body.runner_id)):
                 raise Problem("repository_unpublished", blocked, 409)
-        cleared = (
-            agent_subscriptions.clear_for_move(
-                c,
-                self.auth,
-                placement_requester or who,
-                bot,
-                seed_runner_owner=(("" if cloud_host else runner["owner_id"] or None) if not old else None),
-            )
-            if not old or old["runner_id"] != body.runner_id
-            else []
-        )
         self.expire(c)
         c.execute(
             "INSERT INTO assignments VALUES(?,?,?,?,?) ON CONFLICT(bot) DO UPDATE SET "
@@ -4495,8 +4490,7 @@ class Execution:
         if old and old["runner_id"] != body.runner_id:
             forget_report(c, old["runner_id"], bot)
         cloud_machines.placed(c, bot, body.runner_id, who.actor)
-        result = dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
-        return {**result, "paid_by_cleared": cleared} if cleared else result
+        return dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot,)).fetchone())
 
     def grace_leases(self):
         """After a restart, leases that lapsed while the API was away get one more lease
@@ -5846,7 +5840,7 @@ class Execution:
             here = relationship_readiness(here)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         if "codex" in paid_tools and handed[0] != "codex" and agent_subscriptions.CAPABILITY in caps:
-            shell = agent_subscriptions.resolve(c, bot, "codex", "")
+            shell = agent_subscriptions.resolve(c, bot, "codex", "", enforce_live_limit=False)
             if shell and shell.subscription and model_subscriptions.for_shell(shell.subscription):
                 subscribed.append({"runtime": "codex", "subscription": shell.subscription, "delivery": "shell"})
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.

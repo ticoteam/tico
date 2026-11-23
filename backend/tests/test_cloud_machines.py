@@ -3023,7 +3023,8 @@ def test_a_bot_put_on_an_ordinary_computer_gets_no_plan(cloud):
     assert events(cloud, "subscription.given") == []
 
 
-def test_a_member_move_clears_another_owners_pick_and_keeps_the_other_agents_pick(cloud):
+def test_a_member_move_keeps_every_agents_pick(cloud):
+    # Plans run on any computer (Nov 23): a move never clears Paid by; who may set a pick is checked when it is set.
     sid = plan_company(cloud, "cpo", "ops")
     pick(cloud.api, "cpo", "claude", sid)
     pick(cloud.api, "ops", "claude", sid)
@@ -3032,11 +3033,11 @@ def test_a_member_move_clears_another_owners_pick_and_keeps_the_other_agents_pic
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="shared")
     assert placed(cloud)["ops"] == shared
-    assert payer(cloud, "ops") is None and payer(cloud, "cpo")["subscription_id"] == sid
+    assert payer(cloud, "ops")["subscription_id"] == sid and payer(cloud, "cpo")["subscription_id"] == sid
     change_as(cloud, "ops", "cara-test", mode="cloud", placement="own")
     work(cloud, "ops")
     computer = enroll_made(cloud, "ops")
-    assert placed(cloud)["ops"] == computer["runner_id"] and payer(cloud, "ops") is None
+    assert placed(cloud)["ops"] == computer["runner_id"] and payer(cloud, "ops")["subscription_id"] == sid
 
 
 def test_an_admin_move_preserves_the_agents_pick_without_giving_the_machine_a_plan(cloud):

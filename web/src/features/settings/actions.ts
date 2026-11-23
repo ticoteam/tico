@@ -114,6 +114,7 @@ const subscriptionName = z.string().check(
   z.refine((name) => [...name].length <= MAX_SUBSCRIPTION_NAME, { message: `must be at most ${MAX_SUBSCRIPTION_NAME} characters` }),
 ).register(z.globalRegistry, { maxLength: MAX_SUBSCRIPTION_NAME });
 export const editSubscriptionName = subscriptionName.check(z.minLength(1));
+export const maxLiveTurns = z.int().check(z.minimum(1), z.maximum(200));
 
 export const openSection = defineAction({
   id: 'settings.open',
@@ -582,17 +583,18 @@ export const addComputer = defineAction({
 
 export const editSub = defineAction({
   id: 'settings.editSubscription',
-  title: 'Rename a subscription or change who holds it',
+  title: 'Rename a subscription or set its live-turn limit',
   kind: 'change',
   input: z.strictObject({
     subscription: id('a subscription id'),
-    name: editSubscriptionName,
+    name: z.optional(editSubscriptionName),
     owner: z.optional(z.string().check(z.maxLength(200), z.describe('a person id, for a plan'))),
-  }),
+    max_live_turns: z.optional(maxLiveTurns),
+  }).check(z.refine(({ name, max_live_turns }) => name !== undefined || max_live_turns !== undefined)),
   // Who holds a plan's sign-in is the person's own press; a new name stays Tico's.
   can: (ctx, { owner }) => !(owner && ctx.via === 'tico'),
-  run: (_ctx, { subscription, name, owner }) => editSubscription(subscription, name, owner || undefined),
-  did: ({ name }) => `Saved ${name}`,
+  run: (_ctx, { subscription, owner, ...change }) => editSubscription(subscription, { ...change, ...(owner && { owner_id: `human:${owner}` }) }),
+  did: ({ name }) => name ? `Saved ${name}` : 'Saved max live turns',
   target: ({ subscription }) => sub(subscription),
 });
 

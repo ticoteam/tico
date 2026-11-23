@@ -7792,7 +7792,7 @@
     },
     {
       "id": "settings.editSubscription",
-      "title": "Rename a subscription or change who holds it",
+      "title": "Rename a subscription or set its live-turn limit",
       "kind": "change",
       "input": {
         "type": "object",
@@ -7812,11 +7812,15 @@
             "type": "string",
             "maxLength": 200,
             "description": "a person id, for a plan"
+          },
+          "max_live_turns": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
           }
         },
         "required": [
-          "subscription",
-          "name"
+          "subscription"
         ],
         "additionalProperties": false
       }

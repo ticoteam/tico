@@ -1046,9 +1046,6 @@ class SettingsAdmin:
 
     def _restored(self, c, who, bot, status):
         """The restore once its status is chosen: the bot's status back, its shared room and the event."""
-        from .agent_subscriptions import clear_for_move
-
-        clear_for_move(c, self.auth, who, bot)
         self.update_bot(
             c, who, bot, M.BotDefinitionUpdate(status=status, expected_revision=self._config(c, bot)["revision"])
         )

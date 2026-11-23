@@ -41,6 +41,7 @@ WHO = {
     "self": "each person, for themselves",
     "creator": "the person who made it, an admin or the owner",
     "operator": "the computer's operator, an admin or the owner",
+    "provider": "the provider's owner or an admin",
     "scope": "the people who manage the rule's scope (for a team rule, the owner or an admin)",
     "anyone": "anyone on the team",
 }
@@ -313,6 +314,11 @@ def _whose(c, e, target):
 
 def may(c, auth, who, e, target=None):
     """Whether `who` passes the entry's own check (the route still makes its own)."""
+    if e.who == "provider":
+        from . import model_subscriptions
+
+        sid = (target or {}).get("id")
+        return model_subscriptions._may_manage_provider(auth, who, model_subscriptions.row(c, sid) or {"owner_id": ""})
     if who.role == "owner":
         return True
     if e.who == "anyone":

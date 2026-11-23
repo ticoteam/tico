@@ -10,7 +10,6 @@ in the scheduler tries again as computers arrive.
 from types import SimpleNamespace
 
 from . import runner_online
-from .auth import Identity
 from .store import H, Problem
 from . import bot_settings as BS
 
@@ -67,17 +66,11 @@ def auto_place(c, execution, bot, requester=None):
 
     if external_harness(c, bot):
         return None  # an external agent has a credential, not a computer
-    from . import agent_subscriptions, cloud_machines
+    from . import cloud_machines
 
     actor = requester.actor if requester else H.TICO_ACTOR
-    if cloud_machines.offered(c, execution.store.settings):
-        existing = cloud_machines.row(c, bot)
-        if cloud_machines.adopt(c, bot, actor):
-            if not existing:
-                agent_subscriptions.clear_for_move(
-                    c, execution.auth, requester or Identity(actor, "system"), bot, seed_runner_owner=""
-                )
-            return None  # its cloud machine is made when it has work (backend/cloud_machines.py)
+    if cloud_machines.offered(c, execution.store.settings) and cloud_machines.adopt(c, bot, actor):
+        return None  # its cloud machine is made when it has work (backend/cloud_machines.py)
     try:
         who = requester if requester and requester.role in ("owner", "human") else execution.auth.owner_identity(c)
     except Problem:
@@ -90,7 +83,6 @@ def auto_place(c, execution, bot, requester=None):
                 who,
                 bot,
                 SimpleNamespace(runner_id=runner["id"], expected_generation=0),
-                placement_requester=requester or Identity(actor, "system"),
             )
         except Problem:
             c.execute("ROLLBACK TO auto_place")

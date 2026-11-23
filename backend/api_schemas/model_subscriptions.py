@@ -20,6 +20,12 @@ SCHEMAS['ModelSubscription'] = obj(
         'id': 's',
         'name': 's',
         'kind': _SUB_KIND,
+        'max_live_turns': {
+            'type': 'integer',
+            'minimum': 1,
+            'maximum': 200,
+            'description': 'Maximum live turns across all computers. Present for plans, which default to 20.',
+        },
         'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
         'label': 's',
         'status': {'enum': ['new', 'working', 'needs_reconnect']},

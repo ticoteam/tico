@@ -1,5 +1,7 @@
 """Provider plans, agent Paid by, and the credentials and usage of the resulting turns."""
 
+import hashlib
+import hmac
 import json
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
@@ -1268,6 +1270,57 @@ def test_members_save_and_manage_their_own_api_keys(api):
     )
     post(api, key, {"secret": "sk-ant-again-0000000000"}, "delegated", expected=403)
     assert api.delete(f"/api/v2/{key}", headers=headers("cara-test")).json()["deleted"]
+
+
+def test_plan_live_turn_limit_defaults_and_uses_provider_management_rights(api):
+    setup(api)
+    plan = add(api, token="cara-test")
+    assert plan["max_live_turns"] == 20
+    sid = plan["id"]
+    route = f"model-subscriptions/{sid}"
+    catalog = "settings/catalog/models.subscription.change"
+    for actor, limit in (("cara-test", 12), ("ben-test", 200)):
+        body = {"max_live_turns": limit}
+        result = post(api, catalog + "/plan", {"id": sid, "value": body}, actor)
+        assert result["run"] == {"method": "POST", "path": route, "body": body}
+        assert post(api, route, body, actor)["max_live_turns"] == limit
+    other = add(api)["id"]
+    body = {"max_live_turns": 5}
+    denied = post(api, f"model-subscriptions/{other}", body, "cara-test", expected=403)
+    assert denied["error"]["code"] == "forbidden"
+    post(api, catalog + "/plan", {"id": other, "value": body}, "cara-test", expected=403)
+    for invalid in (0, 201, 12.5, True):
+        post(api, route, {"max_live_turns": invalid}, "cara-test", expected=422)
+    assert post(api, route, {"name": "Renamed plan"}, "cara-test")["max_live_turns"] == 200
+    assert post(api, route, {"secret": OTHER}, "cara-test")["max_live_turns"] == 200
+    assert next(s for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == sid)["max_live_turns"] == 200
+
+    key = add(api, "anthropic_key", "sk-ant-replacement-0000000000")
+    assert "max_live_turns" not in key
+    post(api, f"model-subscriptions/{key['id']}", body, expected=422)
+
+
+def test_provider_writes_replay_receipts_from_before_the_live_turn_limit(api):
+    setup(api)
+    saved = add(api)
+    vault = api.app.state.vault
+    defaults = {"name": None, "owner_id": None, "kind": None, "secret": None, "confirm": False}
+    for route, body in (
+        ("model-subscriptions", {"kind": "claude_token", "secret": TOKEN}),
+        (f"model-subscriptions/{saved['id']}", {"name": "Company Max"}),
+    ):
+        receipt = {k: v for k, v in saved.items() if k != "max_live_turns"}
+        with api.app.state.store.transaction() as c:
+            fingerprint = hmac.new(
+                vault.cipher.key(c), b"tico-request:v1:" + encode(defaults | body).encode(), hashlib.sha256
+            ).hexdigest()
+            c.execute(
+                "INSERT INTO idempotency(actor,operation,key,request_hash,response,created_at) VALUES(?,?,?,?,?,?)",
+                ("human:ana", "/api/v2/" + route, "before-limit", fingerprint, encode(receipt), H.now()),
+            )
+        assert post(api, route, body, key="before-limit") == receipt
+        error = post(api, route, {**body, "max_live_turns": 12}, key="before-limit", expected=409)
+        assert error["error"]["code"] == "idempotency_conflict"
 
 
 def usage_of(api, sid):

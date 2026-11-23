@@ -37,6 +37,10 @@ and `tico subscription set <agent> <tool> <pool|plan|key|unset> [person or provi
 
 On a pool, the next turn uses the compatible plan with the soonest reset and more than 0.5% left. Plans with
 no usage reading rank after measured plans. A plan whose credential cannot be opened is skipped.
+**Max live turns** defaults to 20 leased or running turns across all computers. The plan's owner or an admin can
+set it to 1–200 on the plan's Providers row. On runners with per-turn credentials, a pool skips a plan at its
+limit and an exact plan pick waits for a turn to finish. Older runners can still start turns on a full plan,
+and their turns count toward the limit. API keys have no turn limit.
 When no provider in the choice can pay, the turn waits and Health shows the reason and next known reset.
 With **Paid by** unset, the computer's sign-in and Gateway still work where configured. Fallbacks can only
 hop to tools with **Paid by** unset. A saved fallback session waits if its tool gains a **Paid by** choice.
@@ -44,9 +48,7 @@ A computer that needs a runner update can use an explicitly configured
 fallback on an unset tool. It skips automatic fallbacks for agents with a **Paid by** choice.
 
 Changing **Paid by** takes effect at the next turn. Current runners install the turn's own credential and stop if
-installation fails. A placement or move by an agent manager clears selections owned by someone else
-unless that manager is an admin. The automatic placement sweep keeps existing choices and skips a computer if it
-belongs to someone other than the agent's owner or a selected payer's owner. The Remove confirmation counts the
+installation fails. Agents keep their **Paid by** selections when placed or moved. The Remove confirmation counts the
 readable agents whose Paid by will be cleared. Removing a provider clears exact picks and any pool picks it empties
 for that tool, and restarts affected turns.
 When someone leaves, Tico removes their providers, cancels their pending
@@ -632,6 +634,9 @@ Read or update **Paid by** per AI tool with `GET /api/v2/bots/{bot}/subscription
 `PUT /api/v2/bots/{bot}/subscriptions`. The legacy `GET /api/v2/bots/{bot}/subscription` reports the local computer
 login and its sign-in state. The legacy `GET /api/v2/subscriptions` returns named profiles that computers still
 report from earlier releases.
+
+Set a plan's limit with `POST /api/v2/model-subscriptions/{id}` and `{"max_live_turns": 12}`, or run
+`tico settings set models.subscription.change '{"max_live_turns": 12}' --id <plan-id>`.
 
 ### Sign-in and profiles on the computer
 
