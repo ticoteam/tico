@@ -23,6 +23,16 @@ def test_a_reset_in_words_is_honored_and_a_past_or_unreadable_one_falls_back_to_
     assert login_holds.reset_from_text("resets 1:40am (UTC)", hit) is None
     assert login_holds.reset_from_text("resets 2:40am (Mars/Base)", hit) is None
     assert login_holds.reset_from_text("Quota exceeded. Check your plan and billing details.", hit) is None
+    # Antigravity's quota refusal: its timestamp, else its delay from the hit; one too far off, or unreadable, is none.
+    agy = "Status: RESOURCE_EXHAUSTED, Details: [map[metadata:map[quotaResetDelay:{} quotaResetTimeStamp:{}] reason:QUOTA_EXHAUSTED]]"
+    assert login_holds.reset_from_text(agy.format("3600s", "2026-10-19T03:05:00Z"), hit) == datetime(
+        2026, 10, 19, 3, 5, tzinfo=timezone.utc
+    )
+    assert login_holds.reset_from_text(agy.format("1h13.5s", "soon"), hit) == datetime(
+        2026, 10, 19, 2, 47, 0, 500000, tzinfo=timezone.utc
+    )
+    assert login_holds.reset_from_text(agy.format("999999999h", "soon"), hit) is None
+    assert login_holds.reset_from_text(agy.format("later", "soon"), hit) is None
     # Never a hold of no time, and a weekly reset days away is kept as it is.
     assert login_holds.believable("2026-10-19T01:00:00Z", hit) is None
     assert login_holds.believable("2026-10-23T09:00:00Z", hit)

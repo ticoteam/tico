@@ -1,0 +1,41 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "delta",
+  "text": "ok",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "delta",
+  "text": "!",
+  "delta_kind": "text"
+ },
+ {
+  "kind": "tokens",
+  "input": 1000,
+  "output": 60,
+  "cached": 500,
+  "total": 1060,
+  "usage": {
+   "input": 1000,
+   "cached": 500,
+   "output": 60
+  }
+ },
+ {
+  "kind": "message",
+  "text": "ok!",
+  "final": true
+ },
+ {
+  "kind": "turn_completed",
+  "status": "completed"
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

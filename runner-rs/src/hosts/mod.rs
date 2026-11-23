@@ -90,7 +90,7 @@ pub fn limit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
+            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota_exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
         )
         .unwrap()
     })
@@ -126,7 +126,7 @@ fn auth_rejected_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication",
+            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication|please sign in|\bunauthenticated \(code 401\)",
         )
         .unwrap()
     })
@@ -2143,6 +2143,15 @@ pub(crate) mod tests {
         // Codex with no login at all (codex 0.167, cli_contract.rs): nothing was sent, so no retry can help.
         let no_login = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
         assert!(is_auth_rejected(no_login) && !is_auth_retryable(no_login));
+        // Antigravity: its account quota (a Google API error naming the reason), and a sign-in it has not got or lost.
+        let quota = "Error 429, Message: Quota exhausted., Details: [map[metadata:map[quotaResetDelay:3600s] reason:QUOTA_EXHAUSTED]]";
+        assert!(is_limit(quota) && !is_capacity(quota));
+        assert!(is_auth_rejected(
+            "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."
+        ));
+        assert!(is_auth_rejected(
+            "UNAUTHENTICATED (code 401): Request had invalid authentication credentials."
+        ));
         assert_eq!(
             rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
             "Invalid API key [redacted]"

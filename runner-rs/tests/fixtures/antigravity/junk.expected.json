@@ -1,0 +1,17 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "turn_failed",
+  "error": "Process exited (exit code 1): Antigravity CLI 1.5.15\nError: UNAUTHENTICATED (code 401): Request had invalid authentication credentials.",
+  "limit": false,
+  "exit_code": 1,
+  "process_exit": true
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]
