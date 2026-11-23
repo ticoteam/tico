@@ -25,6 +25,9 @@ const boards = new Map<string, Record<string, unknown>>();
 
 export const isTaskPath = (path: string): boolean => TASK.test(path);
 
+/** The history entry an address is (its own key, kept while it stays). */
+const entryOf = (state: unknown): unknown => (state as { __TSR_key?: unknown } | null | undefined)?.__TSR_key;
+
 const stepOf = (state: unknown): number | undefined => {
   const at = (state as { __TSR_index?: unknown } | null | undefined)?.__TSR_index;
   return typeof at === 'number' ? at : undefined;
@@ -48,7 +51,11 @@ export function leaveTask(r: Steps, board?: () => string | null | Promise<string
   const to = beforeTask;
   if (to?.at !== undefined && now !== undefined && to.at < now) return r.history.go(to.at - now);
   if (to) return void r.navigate({ href: to.href });
-  void Promise.resolve(board?.() ?? null).then((p) => r.navigate({ href: p ? `/tasks/${encodeURIComponent(p)}` : HOME }));
+  // the board may take a moment to read: a page opened meanwhile stands
+  const from = entryOf(r.history.location.state);
+  void Promise.resolve(board?.() ?? null).then((p) => {
+    if (entryOf(r.history.location.state) === from) r.navigate({ href: p ? `/tasks/${encodeURIComponent(p)}` : HOME });
+  });
 }
 
 /** Forgets every place (tests). */

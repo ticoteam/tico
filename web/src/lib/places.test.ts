@@ -3,7 +3,7 @@ import { forgetPlaces, leaveTask, notePlace } from './places';
 
 /* Closing a task goes back to where it was opened from, never to the task itself. */
 
-const at = (n: number) => ({ __TSR_index: n });
+const at = (n: number) => ({ __TSR_index: n, __TSR_key: `k${n}` });
 const router = (step: number) => ({ history: { location: { state: at(step) }, go: vi.fn() }, navigate: vi.fn() });
 const board = (p: string | null) => () => p;
 
@@ -38,5 +38,15 @@ describe('leaveTask', () => {
     expect(r.navigate).not.toHaveBeenCalled();
     known(null);
     await vi.waitFor(() => expect(r.navigate).toHaveBeenCalledWith({ href: '/tasks' }));
+  });
+
+  it('a page opened while the board is read stands', async () => {
+    const r = router(0);
+    let known!: (p: string | null) => void;
+    leaveTask(r, () => new Promise((done) => (known = done)));
+    r.history.location = { state: at(1) }; // the person opens Needs you meanwhile
+    known('p1');
+    await new Promise((done) => setTimeout(done, 0));
+    expect(r.navigate).not.toHaveBeenCalled();
   });
 });
