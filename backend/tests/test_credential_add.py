@@ -188,12 +188,12 @@ def test_a_bot_stores_a_key_it_holds_as_its_own_under_the_vendor_and_its_next_ru
 def test_a_bot_replaces_only_its_own_key(api, monkeypatch):
     vault(api)
     _, attempt = turn(api)
-    monkeypatch.setenv("OPENAI_API_KEY", SECRET)
-    first = run(api, attempt["token"], "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
-    monkeypatch.setenv("OPENAI_API_KEY", SECRET + "-rotated")
-    again = run(api, attempt["token"], "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
+    monkeypatch.setenv("LINEAR_API_KEY", SECRET)
+    first = run(api, attempt["token"], "tico_credential_add", {"name": "Linear (ops)", "from_env": "LINEAR_API_KEY"})
+    monkeypatch.setenv("LINEAR_API_KEY", SECRET + "-rotated")
+    again = run(api, attempt["token"], "tico_credential_add", {"name": "Linear (ops)", "from_env": "LINEAR_API_KEY"})
     assert again["replaced"] is True and again["id"] == first["id"]
-    assert runtime(api, attempt["token"])["OPENAI_API_KEY"] == SECRET + "-rotated"
+    assert runtime(api, attempt["token"])["LINEAR_API_KEY"] == SECRET + "-rotated"
     # A CRM write key is a person's own to change (Rule P): the bot stores its own, but never replaces it.
     monkeypatch.setenv("CLOSE_API_KEY", SECRET)
     run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
@@ -202,16 +202,28 @@ def test_a_bot_replaces_only_its_own_key(api, monkeypatch):
         run(api, attempt["token"], "tico_credential_add", {"name": "Close (ops)", "from_env": "CLOSE_API_KEY"})
 
 
+def test_a_bot_cannot_store_a_model_key_for_itself_and_is_pointed_at_paid_by(api, monkeypatch):
+    # An AI model key reaches an agent only as its Paid by (Settings > Agents), never as a key granted to the bot.
+    vault(api)
+    _, attempt = turn(api)
+    monkeypatch.setenv("OPENAI_API_KEY", SECRET)
+    with pytest.raises(APIError) as refused:
+        run(api, attempt["token"], "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
+    assert refused.value.status == 422 and "Paid by" in str(refused.value) and SECRET not in str(refused.value)
+    assert credential(api, "OPENAI_API_KEY") == []  # nothing half-stored
+    assert SECRET not in everything(api)
+
+
 def test_a_bot_removes_its_own_key_through_mcp(api, monkeypatch):
     vault(api)
     _, attempt = turn(api)
     token = attempt["token"]
-    monkeypatch.setenv("OPENAI_API_KEY", SECRET)
-    saved = run(api, token, "tico_credential_add", {"name": "OpenAI (ops)", "from_env": "OPENAI_API_KEY"})
-    [own] = credential(api, "OPENAI_API_KEY")
+    monkeypatch.setenv("LINEAR_API_KEY", SECRET)
+    saved = run(api, token, "tico_credential_add", {"name": "Linear (ops)", "from_env": "LINEAR_API_KEY"})
+    [own] = credential(api, "LINEAR_API_KEY")
     err, out = call(api, "tico_credential_delete", {"credential": saved["id"]}, token=token)
     assert not err and out["deleted"]
-    assert credential(api, "OPENAI_API_KEY") == []
+    assert credential(api, "LINEAR_API_KEY") == []
     with api.app.state.store.read() as c:
         assert (
             c.execute(
