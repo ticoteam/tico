@@ -162,7 +162,17 @@ function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open
       {open && expandable && (
         <Facts label={s.name}>
           {badge.detail && <Line label="State">{badge.detail}</Line>}
-          {agents.length > 0 && <Line label="Agents on it">{agents.map((a) => a.name).join(', ')}</Line>}
+          {agents.length > 0 && (
+            <Line label="Agents on it">
+              {agents.map((a, i) => (
+                <span key={a.id}>
+                  {i > 0 && ', '}
+                  {a.name}
+                  {a.fallback && <Pill>Fallback</Pill>}
+                </span>
+              ))}
+            </Line>
+          )}
         </Facts>
       )}
       {changing === 'reconnect' && admin && isPlan(s.kind) && <ConnectPlan kind={s.kind} subscription={s.id} onClose={close} />}

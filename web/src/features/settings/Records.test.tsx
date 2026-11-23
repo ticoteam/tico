@@ -142,6 +142,23 @@ describe('Settings › Changelog @s1068', () => {
 });
 
 describe('Settings › Health @s1082', () => {
+  it('links both credential sources when model sign-ins are rejected', async () => {
+    const health = {
+      checks: [{
+        id: 'models', label: 'Models', status: 'bad', summary: 'Sign-in rejected',
+        fixes: [
+          { label: 'Open Keys', href: '#/tools/keys?show=credentials' },
+          { label: 'Open Computer on Studio', href: '#/bot/alpha/computer' },
+        ],
+      }],
+    };
+    serve((url) => url === '/api/v2/health' ? ok(health) : undefined);
+    show(<SettingsPage section="health" />, '/settings/health');
+    const models = within(await screen.findByTitle('Models'));
+    expect(models.getByRole('link', { name: 'Open Keys' }).getAttribute('href')).toBe('/library/tools');
+    expect(models.getByRole('link', { name: 'Open Computer on Studio' }).getAttribute('href')).toBe('/team/alpha?tab=computer');
+  });
+
   it('splits Needs a look from Fine with the checked time, links a fix and a stuck agent, and Check now reads again', async () => {
     const HEALTH = {
       checked: new Date().toISOString(),

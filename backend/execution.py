@@ -8279,7 +8279,7 @@ class Execution:
                 c,
                 row["bot_id"],
                 "idle" if requeue else "crashed",
-                "The Tico AI Gateway key is not working; save a new one in Settings > Computers",
+                "The Tico AI Gateway key is not working. Save a new one in Settings > Providers",
                 claimed=row["created_at"],
                 stop=aid if not requeue else None,
             )

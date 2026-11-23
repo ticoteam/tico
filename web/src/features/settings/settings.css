@@ -49,7 +49,11 @@ button.row{width:100%;border:0;background:none;color:inherit;font:inherit;text-a
 button.row:hover{background:var(--hover)}
 div.row{cursor:default}
 .l-of{color:var(--muted)}
-.hl-act{display:flex;justify-content:flex-end}
+.g-hl .row-title{grid-area:name}
+.g-hl .row-sub{grid-area:sub}
+.g-hl .row-state{grid-area:word}
+.hl-act{grid-area:fixes;display:flex;justify-content:flex-end;flex-wrap:wrap;gap:var(--s-1) var(--s-3)}
+.hl-act>.verb{display:inline-flex;align-items:center;height:auto;min-height:var(--ctl-sm);white-space:normal}
 
 /* a table's head: one quiet line of column words on the rows' own grid */
 .tbl-head{height:var(--ctl);display:grid;grid-template-columns:var(--g);column-gap:var(--s-3);align-items:center;padding:0 var(--s-2);box-shadow:inset 0 -1px 0 var(--line);font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
@@ -58,7 +62,9 @@ div.row{cursor:default}
 .g-person{--g:var(--av-sm) minmax(0,1fr) minmax(0,1.1fr) 62px 86px}
 .g-tok{--g:minmax(0,1fr) 96px 120px 68px}
 .g-chg{--g:var(--av-sm) minmax(0,1fr) 160px}
-.g-hl{--g:120px minmax(0,1fr) auto 92px}
+.g-hl{--g:120px minmax(0,1fr) auto 92px;grid-template-areas:"name sub fixes word"}
+.g-hl:where(:has(.hl-act > :nth-child(2))){grid-template-areas:"name sub . word" ". fixes fixes fixes";height:auto;min-height:var(--row)}
+.g-hl:where(:has(.hl-act > :nth-child(2))) .hl-act{justify-content:flex-start}
 .g-door{--g:minmax(0,1fr) 120px}
 .g-cred{--g:minmax(0,1fr) 96px 96px 96px}
 .g-bots{--g:16px var(--av-sm) minmax(96px,1fr) 176px 124px 44px 140px 48px}
@@ -240,10 +246,9 @@ html[data-layout="cards"] .g-chg>:first-child{grid-area:av;align-self:start}
 html[data-layout="cards"] .g-chg .row-title{grid-area:title;white-space:normal;line-height:1.35}
 html[data-layout="cards"] .g-chg .row-age{grid-area:date;text-align:left}
 html[data-layout="cards"] .g-hl{--g:minmax(0,1fr) auto;grid-template-areas:"name word" "sub sub"}
-html[data-layout="cards"] .g-hl .row-title{grid-area:name}
-html[data-layout="cards"] .g-hl .row-sub{grid-area:sub;white-space:normal;line-height:1.35}
-html[data-layout="cards"] .g-hl .row-state{grid-area:word}
-html[data-layout="cards"] .g-hl .hl-act{display:none}
+html[data-layout="cards"] .g-hl:has(.hl-act){grid-template-areas:"name word" "sub sub" "fixes fixes"}
+html[data-layout="cards"] .g-hl .row-sub{white-space:normal;line-height:1.35}
+html[data-layout="cards"] .g-hl .hl-act{justify-content:flex-start}
 html[data-layout="cards"] .g-host{--g:minmax(0,1fr) auto auto}
 html[data-layout="cards"] .list-tools .search{max-width:none}
 html[data-layout="cards"] .g-tok,html[data-layout="cards"] .g-cred{--g:minmax(0,1fr) auto}

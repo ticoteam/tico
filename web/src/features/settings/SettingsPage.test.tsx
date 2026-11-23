@@ -512,12 +512,15 @@ describe('Settings › Security', () => {
 describe('Settings › Providers @s710', () => {
   const planId = '5ed13d77-db89-42a3-90a6-cd51a8d977f0';
   it.each([
-    ['models', 's1', 'providers'],
-    ['agents', planId, 'providers'],
-    ['agents', '5ed13d77db8942a390a6cd51a8d977f1', 'providers'],
-    ['agents', 'alpha', 'agents'],
-    ['agents', 'computer:studio', 'agents'],
-  ])('routes the %s bookmark for %s to %s', async (section, open, expected) => {
+    ['models', 's1', 'providers', false],
+    ['agents', planId, 'providers', false],
+    ['agents', planId, 'providers', true],
+    ['agents', '5ed13d77db8942a390a6cd51a8d977f1', 'providers', false],
+    ['agents', '5ed13d77-db89-42a3-90a6-cd51a8d977f2', 'agents', true],
+    ['agents', 'alpha', 'agents', false],
+    ['agents', 'computer:studio', 'agents', false],
+  ])('routes the %s bookmark for %s to %s with a cached list %s', async (section, open, expected, cached) => {
+    if (cached) queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [] });
     serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: [{ id: planId }, { id: '5ed13d77db8942a390a6cd51a8d977f1' }] }) : undefined);
     const root = createRootRoute();
     const beforeLoad = settingsRoute.options.beforeLoad!;
@@ -536,6 +539,7 @@ describe('Settings › Providers @s710', () => {
     await screen.findByText('Loaded settings');
     expect(router.state.location.pathname).toBe(`/settings/${expected}`);
     expect(router.state.location.search).toEqual({ open });
+    if (cached) expect(read).toEqual(['/api/v2/model-subscriptions']);
   });
 
   it('keeps Gateway limits in Providers and computer switches in the computer panel', async () => {

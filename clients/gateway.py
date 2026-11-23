@@ -404,11 +404,11 @@ def run_code(text):
 def run_status(code, text=""):
     """What a bot's status says about a run the Gateway refused with `code`, before what happens to the run."""
     if code == "unknown_model":
-        return "The Tico AI Gateway doesn't offer this model; Settings > Providers lists the picks"
+        return "The Tico AI Gateway doesn't offer this model. Choose another in the agent's Model controls"
     if code == "no_route":
         return "No Tico route for this request"
     if code == NOT_FOUND:
-        return NOT_SERVED + "; check the Gateway URL in Settings > Computers"
+        return NOT_SERVED + ". Check the Gateway address in Settings > Providers"
     if code == UNAVAILABLE:
         return "Tico AI Gateway is unavailable, try again"
     if code == NOT_ISOLATED:

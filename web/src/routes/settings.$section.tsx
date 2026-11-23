@@ -14,11 +14,13 @@ export const Route = createFileRoute('/settings/$section')({
   }),
   beforeLoad: async ({ params, search, context: { queryClient } }) => {
     const { open } = search;
-    const subscription = params.section === 'agents' && open && (
-      open.startsWith('subscription:') ||
-      (SUBSCRIPTION_ID.test(open) && await queryClient.ensureQueryData(subscriptionsQuery)
-        .then((data) => data.subscriptions.some((s) => s.id === open), () => false))
-    );
+    let subscription = params.section === 'agents' && !!open?.startsWith('subscription:');
+    if (params.section === 'agents' && open && SUBSCRIPTION_ID.test(open)) {
+      const matches = (s: { id: string }) => s.id === open;
+      subscription = queryClient.getQueryData(subscriptionsQuery.queryKey)?.subscriptions.some(matches)
+        || await queryClient.fetchQuery({ ...subscriptionsQuery, staleTime: 0 })
+          .then((data) => data.subscriptions.some(matches), () => false);
+    }
     if (params.section === 'models' || subscription) {
       throw redirect({ to: '/settings/$section', params: { section: 'providers' }, search, replace: true });
     }

@@ -505,6 +505,20 @@ describe('Settings › Providers', () => {
     expect(legacy.compareDocumentPosition(company)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
+  it('identifies fallback agents in the expanded provider row and counts them', async () => {
+    const catalog = { kinds: [], subscriptions: [{ ...plan, agents: [
+      { id: 'a1', name: 'Alpha Agent', fallback: false },
+      { id: 'b2', name: 'Beta Agent', fallback: true },
+    ] }] };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    serve((url) => url === '/api/v2/model-subscriptions' ? ok(catalog) : undefined);
+    show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
+    const pool = within(await screen.findByRole('region', { name: 'Your pool' }));
+    expect(pool.getByText('On 2 agents')).toBeTruthy();
+    const [fallback] = pool.getAllByText('Fallback');
+    expect(fallback?.parentElement?.textContent).toContain('Beta Agent');
+  });
+
   it('selects one badge per row by severity before rotation', async () => {
     const usage: NonNullable<Subscription['usage']> = { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z' };
     const base = { ...plan, status: 'working' as const };

@@ -1817,8 +1817,8 @@ def test_a_rejected_sign_in_says_when_in_clock_time_never_an_iso_stamp():
     assert re.search(r" at \d\d:\d\d UTC: invalid key", text), text
 
 
-@pytest.mark.parametrize("other_signed_in", [False, True])
-def test_a_rejected_computer_login_links_to_the_affected_agents_computer_tab(environment, other_signed_in):
+@pytest.mark.parametrize("other_login", ["ready", "credentials", None])
+def test_rejected_logins_link_to_their_credential_sources(environment, other_login):
     api = environment()
     failed = enrolled(api)
     add_bot(api, "helper")
@@ -1838,14 +1838,22 @@ def test_a_rejected_computer_login_links_to_the_affected_agents_computer_tab(env
             "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('helper',?,1,?,'t')",
             (failed, H.now()),
         )
-    if other_signed_in:
+    if other_login:
         from backend.tests.helpers.onboarding import machine
 
-        good = machine(api, label="Other computer")
-        heartbeat(api, good["runner_id"], runtimes=SIGNED_IN)
+        other = machine(api, label="Other computer")
+        runtimes = (
+            SIGNED_IN
+            if other_login == "ready"
+            else {
+                "codex": {"installed": True, "authenticated": "rejected", "credential_source": other_login},
+            }
+        )
+        heartbeat(api, other["runner_id"], runtimes=runtimes)
     check = health_of(api)[1]["models"]
-    assert check["status"] == ("warn" if other_signed_in else "bad")
-    assert [f["href"] for f in check["fixes"]] == ["#/bot/helper/computer"]
+    assert check["status"] == ("warn" if other_login == "ready" else "bad")
+    expected = ["#/tools/keys?show=credentials"] if other_login == "credentials" else []
+    assert [f["href"] for f in check["fixes"]] == [*expected, "#/bot/helper/computer"]
 
 
 def test_token_use_names_a_deleted_bot_deleted_bot_never_its_id(environment):

@@ -1848,7 +1848,7 @@ def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fa
     assert all(a["id"] != cpo for s in member_rows.values() for a in s["agents"])
 
 
-def test_a_plan_default_uses_its_owner_and_only_the_owner_and_admins_see_its_preview(api):
+def test_only_the_plan_owner_and_admins_see_its_preview_and_refusal_detail(api):
     setup(api)
     company(api)
     email = "cara@acme.example"
@@ -1861,12 +1861,18 @@ def test_a_plan_default_uses_its_owner_and_only_the_owner_and_admins_see_its_pre
         "ben-test",
     )
     assert plan["name"] == "Casey's ChatGPT plan" and plan["expired"] is False
-    assert listed(api, "ben-test")[0]["preview"] == email
+    refusal = f"The provider refused the sign-in for {email}"
+    with api.app.state.store.transaction() as c:
+        MS._status(c, plan["id"], "needs_reconnect", refusal)
+    [admin] = listed(api, "ben-test")
+    assert admin["preview"] == email and admin["status_detail"] == refusal
     post(api, "access/humans/ben", {"role": "member"})
     [member] = listed(api, "ben-test")
     assert member["preview"] == "" and member["usage"] == plan["usage"] and member["can_remove"]
-    assert listed(api, "cara-test")[0]["preview"] == email
-    assert listed(api)[0]["preview"] == email
+    assert member["status"] == "needs_reconnect" and member["status_detail"] == "The provider refused it"
+    for token in ("cara-test", "ana-test"):
+        [owner] = listed(api, token)
+        assert owner["preview"] == email and owner["status_detail"] == refusal
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE humans SET name='' WHERE id='cara'")
         c.execute("UPDATE humans SET name=email WHERE id='ben'")

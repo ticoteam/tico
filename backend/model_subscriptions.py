@@ -2892,6 +2892,8 @@ def install(app, store, auth, mutate, settings):
                 sub["can_remove"] = may_remove(who, sub["added_by"], manages=manages)
                 if not manages and (not owned(sub["kind"]) or sub["owner_id"] != who.actor):
                     sub["preview"] = ""
+                    if sub["status_detail"]:
+                        sub["status_detail"] = "The provider refused it"
                 sub["agents"] = [agent for agent in sub["agents"] if access[agent["id"]]["read"]]
             return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
 
