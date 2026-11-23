@@ -1027,12 +1027,37 @@ describe('an answer on a task beside its pipeline’s list', () => {
     fireEvent.click(button);
   };
 
-  it('opened from its board, Approve opens the task below it in the list, as its row does', async () => {
+  it('opened from its board, Approve opens the task below it in the list, as its row does, and its Approve the one after', async () => {
     const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
     fireEvent.click(await screen.findByRole('link', { name: 'Bulk edit stock' }));
     await screen.findByRole('navigation', { name: 'Engineering' });
     await approve(router, 7);
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/5(\/|$)/));
+    await approve(router, 5);
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/8(\/|$)/));
+  });
+
+  it('opened by a link, stepping back to it from its board does not make it opened from the board: Approve goes to the board', async () => {
+    const router = show('/tasks/eng/7', false, page);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/details'));
+    await act(() => router.navigate({ href: '/tasks/eng' }));
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    act(() => router.history.back());
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+  });
+
+  it('a row pressed with a key held (opened elsewhere) does not mark that task here, if it opens from a thread next', async () => {
+    const router = show('/needs-you', false, page);
+    expect(await screen.findByRole('heading', { name: 'Needs you page' })).toBeTruthy();
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/details'));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    fireEvent.click(await within(list).findByRole('link', { name: /Task 5/ }), { metaKey: true });
+    await act(() => router.navigate({ href: '/tasks/eng/5/details?chat=c1&via=thread' }));
+    await approve(router, 5);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
   });
 
   it('opened from Needs you, Approve goes back there; a press on a row of the list opens a task that goes on to the row below', async () => {

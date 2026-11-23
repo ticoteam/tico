@@ -71,6 +71,9 @@ describe('nextInList', () => {
     notePlace('/tasks/p1/7/details', '', {}, entry(1, 'c'));
     noteList({ pipeline: 'p1', open: '7', rows });
     expect(nextInList('t7')).toEqual({ pipeline: 'p1', task: '5' });
+    // the same task opened again from a thread's card in it: from the thread
+    notePlace('/tasks/p1/7', '?chat=c1&via=thread', { chat: 'c1', via: 'thread' }, entry(2, 'e'));
+    expect(nextInList('t7')).toBeNull();
     // Back to the board, and the task again from a thread's card over it
     notePlace('/tasks/p1', '', {}, entry(0, 'a'));
     notePlace('/tasks/p1/7', '?chat=c1&via=thread', { chat: 'c1', via: 'thread' }, entry(1, 'd'));

@@ -60,10 +60,11 @@ export function leaveTask(r: Steps, board?: () => string | null | Promise<string
 
 /* A task opened from its pipeline: from its board (not a thread's card over it), or by a press on a row of the list
    beside an open task. Each entry in the history that is one (its own key: Back and Forward come to the same entry, a
-   new address is a new one), with its task (`<pipeline>/<task>`); `here`, the place shown now; `last`, the board shown
-   just before it, if one was. */
+   new address is a new one), with its task (`<pipeline>/<task>`); `seen`, every entry shown, so a step back or forward
+   onto one keeps what it had; `here`, the place shown now; `last`, the board shown just before it, if one was. */
 const OPEN_TASK = /^\/tasks\/([^/]+)\/(?!edit(?:\/|$))([^/]+)/;
 const fromList = new Map<string, string>();
+const seen = new Set<string>();
 let pressed: string | null = null;
 let last: string | null = null;
 let here: { entry: string; task: string } | null = null;
@@ -76,12 +77,15 @@ const entryOf = (state: unknown): string => {
 function noteFromList(path: string, search: Record<string, unknown>, entry: string, board: string | null): void {
   const t = OPEN_TASK.exec(path);
   const task = t ? `${decodeURIComponent(t[1]!)}/${decodeURIComponent(t[2]!)}` : null;
-  if (task) {
-    const fromBoard = last !== null && task.startsWith(`${last}/`) && search.chat === undefined && search.via === undefined;
+  // a new entry only (an address opened, or one changed in place): Back and Forward come to one as it was
+  if (task && !seen.has(entry)) {
+    const plain = search.chat === undefined && search.via === undefined; // not a thread's card
+    const fromBoard = plain && last !== null && task.startsWith(`${last}/`);
     // the same task's address changing (its tab named, another tab) keeps how it was opened
-    const kept = here?.task === task && fromList.get(here.entry) === task;
+    const kept = plain && here?.task === task && fromList.get(here.entry) === task;
     if (pressed === task || fromBoard || kept) fromList.set(entry, task);
   }
+  seen.add(entry);
   pressed = null;
   here = task ? { entry, task } : null;
   last = board;
@@ -130,6 +134,7 @@ export function forgetPlaces(): void {
   boards.clear();
   listed = null;
   fromList.clear();
+  seen.clear();
   pressed = null;
   last = null;
   here = null;
