@@ -549,3 +549,41 @@ def test_a_runner_with_no_resident_voice_answers_your_private_call_as_you(meet):
     assert _filed(meet, filed["task_id"]) == ("human:ana", "bot:assistant", "human:ana")
     changes = get(meet, "assistant/changes")["changes"]
     assert [x["words"] for x in changes if x["object"] == f"task:{filed['task_id']}"] == [SYNTHETIC_SPEECH]
+
+
+def test_the_private_calls_claim_reads_your_mail_and_finance_as_your_own_chat_does(meet):
+    from backend.finance import brief as finance_brief
+    from backend import mailbox_access
+
+    call, session, _ = _private_call(meet)
+    ana = Identity("human:ana", "human", "ana@acme.example")
+    with meet.app.state.store.read() as c:
+        assert session["mailbox_levels"] == mailbox_access.levels_for(c, ana) and session["mailbox_levels"]
+        assert session["mailbox_levels"] != mailbox_access.levels_for(c, "bot:assistant")
+        assert session["finance"] == finance_brief.for_turn(c, "human:ana")
+
+
+def test_a_turn_past_its_voice_deadline_is_not_what_you_just_said(meet):
+    call, session, worker = _private_call(meet)
+    spoken = _heard(meet, call, session, worker)
+    with meet.app.state.store.transaction() as c:  # left claimed by a restart, its answer no longer wanted
+        c.execute(
+            "UPDATE live_meeting_turns SET voice_expires_at=? WHERE id=?", (H.shift(H.now(), seconds=-1), spoken["id"])
+        )
+    _not_cited(meet, call, session)
+
+
+def test_once_anyone_else_is_in_the_call_its_voice_session_writes_nothing_of_yours(meet):
+    call, session, worker = _private_call(meet)
+    errand = _anas_errand(meet)
+    _heard(meet, call, session, worker)
+    post(meet, f"tasks/{errand}/comments", {"text": "Found the ship date"}, token=session["token"])
+    with meet.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO call_participants(call_id,actor,joined_at,in_call) VALUES(?,?,?,1)",
+            (call["id"], "human:ben", H.now()),
+        )
+    refused = meet.post(
+        f"/api/v2/tasks/{errand}/comments", json={"text": "Book the freight"}, headers=headers(session["token"])
+    )
+    assert refused.status_code in (403, 404), refused.text

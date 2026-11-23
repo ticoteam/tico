@@ -526,10 +526,11 @@ def call_turn(c, who):
     """The delegation record for what the person just said aloud, when this is the Assistant's voice session in a call
     in their own Assistant chat that is theirs alone (rooms.call_person: nobody else has been in it), pinned to them at
     its claim, or its turn's own job on a runner with no resident voice: the question it is answering now (the turn it
-    holds), within INSTRUCTION_TTL_S. Only a turn the recorder made from the person's own voice counts: a 1:1 call's
-    gathered utterance (call_voice.GATHERED_SOURCE), never a typed chat line or an uploaded transcript line, in a call
-    whose transcript holds nobody's voice but theirs, each line first written by the recorder for them, whatever a
-    correction says since. Else None, and `turn` names the run's message as in their chat."""
+    holds, before its voice deadline), within INSTRUCTION_TTL_S. Only a turn the recorder made from the person's own
+    voice counts: a 1:1 call's gathered utterance (call_voice.GATHERED_SOURCE), never a typed chat line or an uploaded
+    transcript line, in a call whose transcript holds nobody's voice but theirs, each line first written by the
+    recorder for them, whatever a correction says since. Else None, and `turn` names the run's message as in their
+    chat."""
     from . import rooms
     from .call_voice import GATHERED_SOURCE
 
@@ -540,8 +541,10 @@ def call_turn(c, who):
         "JOIN messages m ON m.id=j.message_id "
         "JOIN live_meeting_turns t ON t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND t.bot=a.bot_id "
         "AND t.status='claimed' AND (t.voice_attempt=a.id OR t.voice_input IS NULL AND t.claim_owner='job:'||a.job_id) "
+        # A resident turn past its voice deadline is answered by nobody (call_sessions.inputs), one a restart left too.
+        "AND (t.voice_expires_at IS NULL OR t.voice_expires_at>?) "
         "WHERE a.id=? AND t.created_at>=? ORDER BY t.claimed_at DESC LIMIT 1",
-        (who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
+        (H.now(), who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
     ).fetchone()
     if not turn or turn["source_key"] != f"{GATHERED_SOURCE}{turn['transcript_seq']}":
         return None
