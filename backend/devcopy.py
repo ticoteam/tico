@@ -192,6 +192,7 @@ EMPTY = (
     "tool_settings",
     # Saved providers, per-agent choices, compatibility bindings and the payer recorded for each attempt
     "model_subscriptions",
+    "plan_exits",
     "computer_subscriptions",
     "agent_subscriptions",
     "attempt_subscriptions",

@@ -117,9 +117,27 @@ SCHEMAS['ModelSubscription'] = obj(
     ],
 )
 
+_PLAN_EXIT = {
+    'person_id': 's',
+    'runner_id': 'n',
+    'runner_label': 'n',
+    'generation': 'i',
+    'can_change': 'b',
+}
+
+SCHEMAS['PlanExit'] = obj(_PLAN_EXIT)
+SCHEMAS['PlanExitSettings'] = obj(
+    {
+        **_PLAN_EXIT,
+        'computers': items(obj({'id': 's', 'label': 's'})),
+        'next_after': 'n',
+    }
+)
+
 SCHEMAS['ModelSubscriptionList'] = obj(
     {
         'subscriptions': items(ref('ModelSubscription')),
+        'plan_exits': items(ref('PlanExit')),
         'kinds': items(
             obj(
                 {
@@ -133,7 +151,8 @@ SCHEMAS['ModelSubscriptionList'] = obj(
                 }
             )
         ),
-    }
+    },
+    required=['subscriptions', 'kinds'],
 )
 
 SCHEMAS['ModelSubscriptionDeleted'] = obj(

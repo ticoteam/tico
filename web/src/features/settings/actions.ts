@@ -31,6 +31,7 @@ import {
   sendInvite,
   setMyNotice,
   setPageOwner,
+  setPlanExit,
   setRoadmap,
   addContactField,
   addProductUpdate,
@@ -517,6 +518,17 @@ export const removeSub = defineAction({
   tico: false,
   run: (_ctx, { subscription }) => removeSubscription(subscription),
   did: () => 'Removed',
+  target: () => setting('subscriptions'),
+});
+
+export const changePlanExit = defineAction({
+  id: 'settings.changePlanExit',
+  title: 'Change exit computer',
+  kind: 'change',
+  input: z.strictObject({ person: id('a person id'), computer: id('a computer id') }),
+  tico: false,
+  run: (_ctx, { person, computer }) => setPlanExit(person, computer),
+  did: () => 'Exit changed',
   target: () => setting('subscriptions'),
 });
 

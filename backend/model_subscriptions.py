@@ -2013,6 +2013,10 @@ def save(c, vault, settings, auth, who, body, sid=None):
             body.max_live_turns or DEFAULT_MAX_LIVE_TURNS,
         ),
     )
+    if owned(body.kind):
+        from .plan_exits import ensure_default
+
+        ensure_default(c, H.actor_id(owner))
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
@@ -2150,6 +2154,9 @@ def owner_left(c, settings, actor, owner):
     for (sid,) in c.execute("SELECT id FROM model_subscriptions WHERE owner_id=? ORDER BY id", (owner,)).fetchall():
         remove(c, settings, SimpleNamespace(actor=actor), sid, confirm=True)
     c.execute("DELETE FROM computer_subscriptions WHERE person=?", (owner,))
+    from .plan_exits import clear
+
+    clear(c, H.actor_id(owner))  # keeps the generation rising if they come back
     for bot, runtime in lost:
         H.event(c, actor, "agent_subscription.owner_left", bot, {"runtime": runtime, "owner": owner})
 
@@ -3013,7 +3020,10 @@ def install(app, store, auth, mutate, settings):
 
     from .models import Empty
 
+    from . import plan_exits
+
     vault = app.state.vault
+    plan_exits.install(app, store, auth, mutate)
 
     @app.get(
         "/api/v2/model-subscriptions",
@@ -3058,7 +3068,16 @@ def install(app, store, auth, mutate, settings):
                     if sub["status_detail"]:
                         sub["status_detail"] = "The provider refused it"
                 sub["agents"] = [agent for agent in sub["agents"] if access[agent["id"]]["read"]]
-            return {"subscriptions": subscriptions, "kinds": kinds(), "connect": connect_ready(c)}
+            return {
+                "subscriptions": subscriptions,
+                "kinds": kinds(),
+                "connect": connect_ready(c),
+                "plan_exits": (
+                    plan_exits.listed(c, auth, who)
+                    if any(sub["owner_id"] and owned(sub["kind"]) for sub in subscriptions)
+                    else []
+                ),
+            }
 
     @app.post(
         "/api/v2/model-subscriptions",

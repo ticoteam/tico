@@ -297,6 +297,33 @@ def subscription_set(api, args):
     )
 
 
+@tool(
+    "tico_subscription_exit",
+    "Read a person's plan exit and the computers they may select. Example: tico subscription exit ana",
+    {"person": _s("The plan owner's person id"), "after": _s("Cursor from the previous page of computers")},
+    required=("person",),
+)
+def subscription_exit(api, args):
+    path = f"model-subscriptions/plan-exits/{_path(args['person'])}"
+    return _as_person(api).get(path, **({"after": args["after"]} if args.get("after") else {}))
+
+
+@tool(
+    "tico_subscription_set_exit",
+    "Change a person's plan exit as the pool owner or an admin. Example: tico subscription set-exit ana <computer-id>",
+    {"person": _s("The plan owner's person id"), "computer": _s("Computer id from tico subscription exit")},
+    required=("person", "computer"),
+    writes=True,
+)
+def subscription_set_exit(api, args):
+    return _as_person(api).call(
+        "PUT",
+        f"model-subscriptions/plan-exits/{_path(args['person'])}",
+        {"runner_id": args["computer"]},
+        key=_key(args),
+    )
+
+
 # ----------------------------------------------------------------------------- registration
 MINE = TOOLS[_FIRST:]
 AUDIENCE = {
@@ -310,6 +337,8 @@ AUDIENCE = {
             "tico_subscription_list",
             "tico_subscription_show",
             "tico_subscription_set",
+            "tico_subscription_exit",
+            "tico_subscription_set_exit",
         )
     },
 }
@@ -349,6 +378,12 @@ UPKEEP = (
         "subscription list",
         "list the team's plans and API keys",
         example="tico subscription list",
+    ),
+    Command("subscription exit", "read a person's plan exit", example="tico subscription exit ana"),
+    Command(
+        "subscription set-exit",
+        "change a person's plan exit",
+        example="tico subscription set-exit ana <computer-id>",
     ),
     Command("subscription show", "read an agent's Paid by", example="tico subscription show ops"),
     Command(

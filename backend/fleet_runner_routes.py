@@ -161,6 +161,8 @@ def register(
     @app.post("/api/v2/computers/{rid}/member-bots")
     def runner_member_bots(request: Request, rid: str, body: M.RunnerMemberBots):
         """Whether a computer takes the bots members create. Owners and admins."""
+        from . import plan_exits
+
         who = request.state.identity
 
         def work(c):
@@ -168,6 +170,8 @@ def register(
             if not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone():
                 raise Problem("not_found", "Computer not found", 404)
             c.execute("UPDATE runners SET accepts_member_bots=? WHERE id=?", (int(body.accepts), rid))
+            if not body.accepts:
+                plan_exits.replace_closed(c, rid)
             H.event(c, who.actor, "runner.member_bots", rid, {"accepts": body.accepts})
             return {"accepts_member_bots": body.accepts}
 

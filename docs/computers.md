@@ -28,6 +28,12 @@ Open **Settings → Providers → Add** to connect a plan or paste a key. Each p
 in their own pool. Owners and admins can add for a teammate. The provider's owner or an admin can reconnect,
 rename, replace or remove it.
 
+A personal plan pool shows **Exit** in its header. Tico picks the owner's most recently seen registered personal
+computer. The pool owner or an admin can choose another computer the owner can use. If the exit is removed or
+retired, Tico picks the next eligible personal computer.
+Use `tico subscription exit <person>` to read the setting and `tico subscription set-exit <person> <computer-id>`
+to change it. The setting is saved for future routing.
+
 **Paid by** on an agent's settings picks a person's pool, one plan or one key for each AI tool. The **Paid by**
 column in **Settings → Agents** shows the choice for the agent's current tool. **Last turn** shows the recorded payer
 or the current payer wait with its reason, known reset time and who can fix it. New agents
