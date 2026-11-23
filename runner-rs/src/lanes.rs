@@ -70,10 +70,12 @@ pub const CAPABILITIES: &[&str] = &[
     VOICE_INPUTS,
     RELAY_HINTS,
     crate::model_exit::CAPABILITY,
+    // Antigravity plans: their Connect, install and turns (model_subscriptions.rs TURN_HOMES).
+    crate::model_subscriptions::AGY_PLAN_CAPABILITY,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
-// A 0.6.0 hub that reports only a list refusal can need thirteen capability drops before it accepts the heartbeat.
-pub const MAX_HEARTBEAT_POSTS: u32 = 14;
+// A 0.6.0 hub that reports only a list refusal can need fourteen capability drops before it accepts the heartbeat.
+pub const MAX_HEARTBEAT_POSTS: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -150,6 +152,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
+    crate::model_subscriptions::AGY_PLAN_CAPABILITY,
     crate::model_exit::CAPABILITY,
     ATTEMPT_CREDENTIALS,
     RELAY_HINTS,
@@ -739,6 +742,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    crate::model_subscriptions::AGY_PLAN_CAPABILITY,
                     crate::model_exit::CAPABILITY,
                     ATTEMPT_CREDENTIALS,
                     RELAY_HINTS,
@@ -779,11 +783,19 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(crate::model_exit::CAPABILITY)
+            Some(crate::model_subscriptions::AGY_PLAN_CAPABILITY)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != crate::model_subscriptions::AGY_PLAN_CAPABILITY)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::model_exit::CAPABILITY)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != crate::model_exit::CAPABILITY)
             .collect();
         assert_eq!(

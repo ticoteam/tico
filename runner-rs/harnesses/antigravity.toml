@@ -6,12 +6,12 @@ executable = "agy"
 providers = ["google"]
 
 # Google publishes it only through its own updater: a manifest per platform names a build-numbered tarball and its
-# sha512. antigravity-install.sh (in this folder, fetched from the main branch at this checksum) checks both and
-# installs the CLI as bin/agy. A change to the script changes this checksum in the same commit.
+# sha512. antigravity-install-v1.sh (in this folder, fetched from the main branch at this checksum) checks both and
+# installs the CLI as bin/agy. That file is never edited: a change is a new -v2 file, named here with its checksum.
 [install]
 method = "script"
-url = "https://raw.githubusercontent.com/ticoteam/tico/main/runner-rs/harnesses/antigravity-install.sh"
-sha256 = "6611fa6f23e59c53627782ef6179a559d228c9b2cbf56f164e83cc42b0d64abb"
+url = "https://raw.githubusercontent.com/ticoteam/tico/main/runner-rs/harnesses/antigravity-install-v1.sh"
+sha256 = "7d63f719fb27def9931d505477462f4d35ffdd7536a7598e3fd607fa9664b48f"
 requires = ["curl", "tar", "mktemp"]
 prefix_env = "AGY_PREFIX"
 bin = "bin/agy"

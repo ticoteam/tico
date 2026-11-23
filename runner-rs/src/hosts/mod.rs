@@ -306,6 +306,9 @@ pub struct Settings {
     /// The bot's Codex verbosity (`verbosity`: low, medium, high), Codex's `model_verbosity`. None is the model's own;
     /// every other harness ignores it.
     pub verbosity: Option<String>,
+    /// The home of the turn's plan for this harness when its sign-in lives in a home made for the turn
+    /// (model_subscriptions::plan_home): the CLI runs on nothing but the sign-in there, each time it starts it.
+    pub plan_home: Option<String>,
 }
 
 /// The bot's `output_style` from its run config, or None for Default: nothing saved (an older server sends none), or

@@ -80,6 +80,8 @@ KINDS: dict[str, dict[str, Any]] = {
         "help": "Connect signs the plan in on one of your computers.",
         "connect": True,
         "paste": False,
+        # Only a computer that reports this signs it in, installs agy for it, or runs its turns (`carries`).
+        "capability": "antigravity_plan_v1",
     },
     "anthropic_key": {
         "name": "Anthropic API",
@@ -588,7 +590,15 @@ def in_effect(c, runner_id, runtime, loads=None):
     return sub if _runner_takes(runner, sub) else None
 
 
+def carries(kind: str, caps: list[str]) -> bool:
+    """A computer with these capabilities can carry a plan of `kind`: its sign-in, its CLI's install and its turns."""
+    need = KINDS[kind].get("capability")
+    return not need or need in caps
+
+
 def _runner_takes(runner, sub):
+    if runner and not carries(sub["kind"], H._json(runner["capabilities"], []) or []):
+        return False
     if runner and sub["kind"] == "claude_login":
         from . import claude_login
 
@@ -612,6 +622,7 @@ def legacy_current(c, runner_id, runtime, caps, loads=None):
         current
         and available(c, current, runtime, loads)
         and (current["kind"] != "claude_login" or claude_login.CAPABILITY in caps)
+        and carries(current["kind"], caps)
     ):
         return current
     return None
@@ -1967,7 +1978,9 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
     with the same account is a refresh: the plan's turns keep running (they get the new access token) and its readings
     stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
     its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
-    path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
+    path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way.
+
+    A kind that is never pasted (`paste` False) takes a secret only from its Connect (`completing_login_id`)."""
     from . import claude_login, model_login, quarantine_stops
 
     sub = _manage_provider(c, auth, who, sid) if sid else None
@@ -1980,6 +1993,8 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
         if not body.secret.get_secret_value().lstrip().startswith("{"):
             body = body.model_copy(update={"kind": "claude_token"})
     kind = body.kind or sub["kind"] if sub else body.kind
+    if body.secret is not None and completing_login_id is None and not KINDS.get(kind, {}).get("paste", True):
+        raise Problem("secret", "Use Connect for this plan", 422)
     if body.max_live_turns is not None and not owned(kind):
         raise Problem("max_live_turns", "Only plans have a live-turn limit", 422)
     login = None
@@ -2955,11 +2970,12 @@ def assignment_fields(c, runner, config, *, bot="", inputs=None):
 
 # ------------------------------------------------------------------------------------------------ routes
 # ------------------------------------------------------------------------------------------------ connect
-def _connect_computers(c, runtime, who=None):
-    """The computers that can run `runtime`'s sign-in for a Connect: the person's own first, since the result passes
-    through the computer, then those with nothing signing in for that tool, then the one seen last."""
+def _connect_computers(c, spec, who=None):
+    """The computers that can run the sign-in of `spec`'s kind for a Connect: the person's own first, since the result
+    passes through the computer, then those with nothing signing in for that tool, then the one seen last."""
     from . import model_login
 
+    runtime, need = spec["runtime"], spec.get("capability")
     if runtime not in model_login.CONNECT_RUNTIMES:
         return []
     busy = {
@@ -2973,6 +2989,8 @@ def _connect_computers(c, runtime, who=None):
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
+        if need and need not in (H._json(runner["capabilities"], []) or []):
+            continue
         if model_login._online(runner) and (report.get(runtime) or {}).get("installed"):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen_at"] or "", reverse=True)
@@ -2987,19 +3005,22 @@ def _shared_runner(c):
     return (shared["runner_id"] if shared else "") or ""
 
 
-def _install_target(c, auth, runtime):
-    """(computer, its install state, active) for a Connect with no online computer that has `runtime`'s CLI: one of the
-    company owner's online computers, or the shared cloud computer, whose runner reports the harness and was not turned
-    off for it. Active is one turned on for it or installing it now, which stays the target while it installs (one
+def _install_target(c, auth, spec):
+    """(computer, its install state, active) for a Connect with no online computer that has the CLI of `spec`'s kind:
+    one of the company owner's online computers, or the shared cloud computer, whose runner can carry the kind, reports
+    the harness and was not turned off for it. Active is one turned on for it or installing it now, which stays the target while it installs (one
     installing first); a failed one only when no other is left; ties go to the one enrolled first, never to the
     heartbeat order. None when there is none."""
     from . import harness_actions, model_login
 
+    runtime, need = spec["runtime"], spec.get("capability")
     owner, shared = auth.owner_id(c), _shared_runner(c)
     chosen = harness_actions.choices_by_runner(c)
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         if not model_login._online(runner) or (runner["id"] != shared and runner["owner_id"] != owner):
+            continue
+        if need and need not in (H._json(runner["capabilities"], []) or []):
             continue
         tool = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(runtime)
         choice = chosen.get(runner["id"], {}).get(runtime)
@@ -3008,11 +3029,12 @@ def _install_target(c, auth, runtime):
         state = tool.get("state") or ""
         busy = state in ("queued", "installing")
         active = choice is True or busy
-        found.append(((state == "failed", not active, not busy, runner["created_at"] or "", runner["id"]), runner))
+        found.append(
+            ((state == "failed", not active, not busy, runner["created_at"] or "", runner["id"]), runner, state)
+        )
     if not found:
         return None
-    key, runner = min(found, key=lambda f: f[0])
-    state = (readiness_document(runner["readiness"]).get("harnesses") or {})[runtime].get("state") or ""
+    key, runner, state = min(found, key=lambda f: f[0])
     return runner, state, not key[1]
 
 
@@ -3021,7 +3043,7 @@ def connect_ready(c):
     return [
         kind
         for kind, spec in KINDS.items()
-        if spec.get("connect") and not spec.get("hidden") and _connect_computers(c, spec["runtime"])
+        if spec.get("connect") and not spec.get("hidden") and _connect_computers(c, spec)
     ]
 
 
@@ -3086,7 +3108,7 @@ def connect(c, settings, auth, who, body):
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
         return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
-    computers = _connect_computers(c, spec["runtime"], who)
+    computers = _connect_computers(c, spec, who)
     if exit_id:
         computers = [r for r in computers if r["id"] == exit_id]
     if kind in claude:
@@ -3121,7 +3143,7 @@ def connect(c, settings, auth, who, body):
             }
 
         # Antigravity: no online computer has agy, so one installs it, and the page asks again until it has.
-        target = _install_target(c, auth, spec["runtime"]) if spec["runtime"] == "antigravity" else None
+        target = _install_target(c, auth, spec) if spec["runtime"] == "antigravity" else None
         if target:
             runner, state, active = target
             if state == "failed":

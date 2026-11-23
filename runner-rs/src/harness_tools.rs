@@ -2619,7 +2619,7 @@ mod tests {
         // The script is fetched from the main branch: it runs only at the checksum this manifest pins.
         assert_eq!(
             agy.get("sha256"),
-            sha256_hex(include_bytes!("../harnesses/antigravity-install.sh"))
+            sha256_hex(include_bytes!("../harnesses/antigravity-install-v1.sh"))
         );
         assert!(
             !agy.capabilities.persistent_session

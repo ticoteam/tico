@@ -3,6 +3,9 @@
 # repository at its pinned checksum). Google publishes it only through its updater: one manifest per platform names a
 # build-numbered tarball and its sha512. Anything that does not match exactly what that manifest is expected to say is
 # refused, and nothing is installed.
+#
+# Never edited in place: shipped runners fetch this file by name at their pinned checksum. A change is a new file
+# (antigravity-install-v2.sh) with antigravity.toml pointing at it.
 set -eu
 
 : "${AGY_PREFIX:?AGY_PREFIX names the install directory}"
@@ -28,8 +31,9 @@ dash=""
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-curl -fsSL --proto '=https' --max-time 60 -o "$work/manifest.json" "$MANIFESTS/${os}_${target}${musl}.json"
-field() { sed -n "s/^[[:space:]{]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$work/manifest.json" | head -n 1; }
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 -o "$work/manifest.json" "$MANIFESTS/${os}_${target}${musl}.json"
+# One "name": "value" per line, however the manifest is laid out (none of its values holds a brace or comma).
+field() { tr '{},' '\n\n\n' <"$work/manifest.json" | sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1; }
 version=$(field version)
 url=$(field url)
 sha512=$(field sha512 | tr 'A-F' 'a-f')
@@ -43,7 +47,7 @@ rest=${url#"$DOWNLOADS$version-"}
 echo "$rest" | grep -Eq "^[0-9]+/$os-$folder$dash/cli_${mac}_${cpu}${musl}\.tar\.gz\$" \
   || { echo "The Antigravity manifest names a download for another platform" >&2; exit 1; }
 
-curl -fsSL --proto '=https' --max-time 600 -o "$work/cli.tar.gz" "$url"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 600 -o "$work/cli.tar.gz" "$url"
 if command -v sha512sum >/dev/null 2>&1; then
   got=$(sha512sum "$work/cli.tar.gz" | cut -d' ' -f1)
 else

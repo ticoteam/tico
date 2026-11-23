@@ -1018,33 +1018,30 @@ fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
     }
 }
 
-/// At the runner's start, before any sign-in: the side homes a Connect of a plan that signs in per turn left (the runner
-/// stopped mid sign-in) go. They hold nothing else: the computer's own login is never in one.
-pub fn sweep_plan_sides() {
+/// Where a Connect of a plan that signs in per turn (model_subscriptions.rs TURN_HOMES) makes its side home: in this
+/// runner's own state, so another runner of the same OS user never sees it, nor sweeps it away.
+fn plan_sides(state_dir: &std::path::Path) -> std::path::PathBuf {
+    crate::isolation::bot_state(state_dir).join("plan-sides")
+}
+
+/// At the runner's start, under its lock and before any sign-in: the side homes its Connects of such plans left (it
+/// stopped mid sign-in) go, removed as the CLI's user. They hold nothing else: the computer's own login is never in one.
+pub fn sweep_plan_sides(state_dir: &std::path::Path) {
+    let dir = plan_sides(state_dir).display().to_string();
     let process: Env = std::env::vars().collect();
-    for t in crate::model_subscriptions::TURN_HOMES {
-        let Some(home) = t.own(&process) else {
-            continue;
-        };
-        for entry in std::fs::read_dir(&home).into_iter().flatten().flatten() {
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".tico-switch-")
-                && entry.file_type().is_ok_and(|f| f.is_dir())
-            {
-                let _ = std::fs::remove_dir_all(entry.path());
-            }
-        }
+    if let Err(e) = file_command(&["rm", "-rf", &dir], &process) {
+        log(&format!("Tico runner: could not remove {dir}: {e}"));
     }
 }
 
-/// A Switch account's own home: a new folder inside the login's home, made as the CLI's user, with the manifest's
-/// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_files`.
+/// A Switch account's own home: a new folder inside the login's home (or `under`, for a plan's Connect), made as the
+/// CLI's user, with the manifest's `seed` files copied in. The login command signs in there; the old login is
+/// untouched until `adopt_files`.
 fn begin_switch(
     runtime: &str,
     id: &str,
     env: &Env,
+    under: Option<&std::path::Path>,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let login = crate::harness_tools::login_command(runtime)
         .ok_or("Switching accounts is not available")?;
@@ -1058,14 +1055,15 @@ fn begin_switch(
     }
     let home =
         login_home(runtime, env).ok_or("Switching accounts is not available for this runtime")?;
-    let side = home.join(format!(
+    let parent = under.unwrap_or(&home);
+    let side = parent.join(format!(
         ".tico-switch-{}",
         id.chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .take(32)
             .collect::<String>()
     ));
-    let (home_s, side_s) = (home.display().to_string(), side.display().to_string());
+    let (home_s, side_s) = (parent.display().to_string(), side.display().to_string());
     file_command(&["mkdir", "-p", "-m", "700", &home_s], env)?;
     file_command(&["mkdir", "-m", "700", &side_s], env)?;
     let seed = || -> Result<(), String> {
@@ -1298,7 +1296,10 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         || full
         || (connect && !login.connect_file.is_empty())
     {
-        match begin_switch(&s.runtime, &s.id, &env) {
+        let sides = crate::model_subscriptions::turn_home(&s.runtime)
+            .filter(|_| connect)
+            .map(|_| plan_sides(&config.state_dir()));
+        match begin_switch(&s.runtime, &s.id, &env, sides.as_deref()) {
             Ok((home, side)) => {
                 let var = match crate::model_subscriptions::turn_home(&s.runtime) {
                     Some(t) => t.var.to_string(),
@@ -1975,7 +1976,7 @@ fn run_use_key(
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
-        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env) {
+        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env, None) {
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
@@ -2005,7 +2006,7 @@ fn run_use_key(
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
-        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env) {
+        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env, None) {
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
@@ -3020,13 +3021,17 @@ esac
             "computer",
         )
         .unwrap();
-        // One a Connect cut off by a stop left: it goes when the runner starts.
-        std::fs::create_dir_all(own.join(".tico-switch-old/antigravity-cli")).unwrap();
-        sweep_plan_sides();
         std::fs::create_dir_all(root.join("projects")).unwrap();
         let path = root.join("runner.json");
         std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
         let config = Config::load(&path).unwrap();
+        // One a Connect cut off by a stop left: it goes when the runner starts. Another runner's are not its to sweep.
+        let sides = plan_sides(&config.state_dir());
+        std::fs::create_dir_all(sides.join(".tico-switch-old/antigravity-cli")).unwrap();
+        let other = root.join("other-state/plan-sides/.tico-switch-live");
+        std::fs::create_dir_all(&other).unwrap();
+        sweep_plan_sides(&config.state_dir());
+        assert!(!sides.exists() && other.exists());
         let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
         let runner = Arc::new(Runner::new(
             config.clone(),
@@ -3071,9 +3076,10 @@ esac
             .flatten()
             .map(|e| e.file_name())
             .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("antigravity-cli")]);
         assert_eq!(
-            left,
-            vec![std::ffi::OsString::from("antigravity-cli")],
+            std::fs::read_dir(&sides).map_or(0, |d| d.count()),
+            0,
             "no side home stays"
         );
     }
@@ -3431,7 +3437,7 @@ esac
             ("PATH".to_string(), std::env::var("PATH").unwrap()),
         ]
         .into();
-        let err = begin_switch("claude", "setup1", &env).unwrap_err();
+        let err = begin_switch("claude", "setup1", &env, None).unwrap_err();
         assert!(err.starts_with("cp failed"), "{err}");
         assert!(
             !home.join(".tico-switch-setup1").exists(),
@@ -5804,7 +5810,7 @@ esac
                 for key in crate::harness_tools::caps(runtime).profile_home_overrides {
                     custom.insert(key, root.join("outside").display().to_string());
                 }
-                assert!(begin_switch(runtime, "custom", &custom)
+                assert!(begin_switch(runtime, "custom", &custom, None)
                     .unwrap_err()
                     .contains("custom login folder"));
                 assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);

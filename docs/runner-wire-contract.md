@@ -28,8 +28,9 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
-Heartbeats can carry 34 capabilities. If an older hub refuses the count, the runner drops
-`model_exit_v1` first and then `attempt_credentials_v1` if needed.
+Heartbeats can carry 35 capabilities. If an older hub refuses the count, the runner drops
+`antigravity_plan_v1` first, then `model_exit_v1`, then `attempt_credentials_v1` if needed.
+Only a runner with `antigravity_plan_v1` gets an Antigravity plan's Connect, install or turns.
 
 Both computers must report `model_exit_v1` to use a model tunnel. The runner-only browser-exit
 tunnel endpoint accepts `kind: "model"` with an attempt ID and the selected exit generation.

@@ -445,9 +445,11 @@ def for_runner(
     )
     if payment is None or payment.subscription is None:
         return payment
+    sub = payment.subscription
+    if not MS.carries(sub["kind"], caps):
+        return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
     if per_turn:
         return payment
-    sub = payment.subscription
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):
         return replace(payment, delivery="legacy")
     return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
@@ -484,6 +486,8 @@ def provider_runners(c: Connection, sub: Row) -> set[str]:
     allowed: set[str] = set()
     for r in rows:
         caps: list[str] = H._json(r["capabilities"], []) or []
+        if not MS.carries(sub["kind"], caps):
+            continue
         if CAPABILITY in caps or (
             "model_subscriptions_v1" in caps
             and (sub["kind"] != "claude_login" or claude_login.CAPABILITY in caps)

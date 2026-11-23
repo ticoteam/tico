@@ -2908,6 +2908,7 @@ impl Runner {
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
                 output_style: hosts::output_style(&config),
                 verbosity: hosts::verbosity(&config),
+                plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &runtime),
             };
             let mut resumed = false;
             let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
@@ -3551,6 +3552,7 @@ impl Runner {
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
                     output_style: hosts::output_style(&config),
                     verbosity: hosts::verbosity(&config),
+                    plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &hop.runtime),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;

@@ -741,7 +741,7 @@ export const signInCode = defineAction({
   title: 'Send the code from the sign-in page',
   kind: 'change',
   tico: false,
-  input: z.strictObject({ computer, login, code: z.string().check(z.minLength(1), z.maxLength(700), z.describe('the code')) }),
+  input: z.strictObject({ computer, login, code: z.string().check(z.minLength(1), z.maxLength(2000), z.describe('the code')) }),
   run: (_ctx, { computer, login, code }) => said("Couldn't send the code", () => sendLoginCode(computer, login, code)),
   did: () => 'Code sent',
   target: () => ({ kind: 'team', id: 'computer' }),

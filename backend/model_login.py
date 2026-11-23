@@ -84,10 +84,15 @@ MOVED = "Add or replace model keys in Settings > Providers. Choose the key under
 CONNECT_CHANGED = "This plan changed. Start the connect again."
 EXIT_NOT_READY = "The plan's exit is temporarily unavailable. Try again shortly."
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
-# A runtime whose sign-in shows only a link to its provider's page, and what it takes back besides a code: Antigravity's
-# Google sign-in, which takes the code or the whole page address it ends on.
-LINKS = {"antigravity": ("https://accounts.google.com", ("/o/oauth2/auth", "/o/oauth2/v2/auth"))}
-CALLBACKS = {"antigravity": re.compile(r"^https://antigravity\.google/oauth-callback\?[A-Za-z0-9_\-.~%+=&/]{1,2000}$")}
+# A runtime whose sign-in shows only a link to its provider's page (the pages it may be), and the page that sign-in ends
+# on, whose whole address it takes back as well as a code: Antigravity's Google sign-in.
+LINKS = {
+    "antigravity": (
+        ("https://accounts.google.com/o/oauth2/auth", "https://accounts.google.com/o/oauth2/v2/auth"),
+        "https://antigravity.google/oauth-callback",
+    )
+}
+MAX_CODE = 2000  # models.py LoginCode; web settings.signInCode
 
 # The runner redacts before it reports; this is the same rule again because the server does not
 # take a runner's word for it.
@@ -158,13 +163,48 @@ def clean_url(url, runtime=""):
     ):
         return ""
     if runtime in LINKS:
-        from urllib.parse import urlsplit
-
-        origin, paths = LINKS[runtime]
-        parts = urlsplit(url)
-        if f"{parts.scheme}://{parts.netloc}" != origin or parts.path not in paths:
+        pages, callback = LINKS[runtime]
+        page, query = _address(url)
+        if (
+            page not in pages
+            or query.get("redirect_uri") != [callback]
+            or query.get("response_type") != ["code"]
+            or len(query.get("state") or []) != 1
+            or not 0 < len(query["state"][0]) <= 512
+        ):
             return ""
     return url
+
+
+def _address(url):
+    """(`https://host/path`, its query as {name: [values]}) of a plain https address; ("", {}) for anything else,
+    including one that does not parse."""
+    from urllib.parse import parse_qs, urlsplit
+
+    try:
+        parts = urlsplit(url)
+        _ = parts.port  # a bad port or bracketed host raises here
+    except ValueError:
+        return "", {}
+    if parts.scheme != "https" or "@" in parts.netloc or parts.fragment:
+        return "", {}
+    return f"https://{parts.netloc}{parts.path}", parse_qs(parts.query, keep_blank_values=True)
+
+
+def _ended_on(runtime, link, code):
+    """Whether `code` is the whole address of the page `runtime`'s sign-in ends on, answering the `link` it showed: one
+    nonempty code and that link's state. One where Google says the person said no is refused, and the sign-in still
+    takes a code."""
+    if runtime not in LINKS or len(code) > MAX_CODE or re.search(r"[\s\x00-\x1f\x7f<>\"']", code):
+        return False
+    page, query = _address(code)
+    if page != LINKS[runtime][1]:
+        return False
+    if query.get("error"):
+        raise Problem("denied", "Google didn't allow the sign-in; open Google again", 422)
+    state = _address(link)[1].get("state")
+    codes = query.get("code") or []
+    return bool(state) and query.get("state") == state and len(codes) == 1 and bool(codes[0])
 
 
 def clean_user_code(code):
@@ -659,8 +699,7 @@ def submit_code(c, who, rid, lid, code, auth=None):
     if row["kind"] == "connect" and lid in _stale_connects(c, rid, require_ready=True):
         raise Problem("offline", EXIT_NOT_READY, 409)
     code = str(code or "").strip()
-    callback = CALLBACKS.get(row["runtime"])
-    if not (PASTE_RE.fullmatch(code) or (callback and callback.fullmatch(code))):
+    if not (PASTE_RE.fullmatch(code) or _ended_on(row["runtime"], row["url"] or "", code)):
         raise Problem("kind", "That does not look like the code the sign-in page showed", 422)
     if row["code_sent"]:
         raise Problem("state", "A code was already sent; start a new sign-in to try again", 409)

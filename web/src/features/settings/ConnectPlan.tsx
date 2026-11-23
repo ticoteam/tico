@@ -118,9 +118,9 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
     if (state !== 'done' || finished.current) return;
     finished.current = true;
     void qc.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
-    toast({ text: `${label} connected`, kind: 'done' });
+    toast({ text: `${now.name || label} connected`, kind: 'done' });
     onClose();
-  }, [state, label, qc, onClose]);
+  }, [state, now.name, label, qc, onClose]);
   const timedOut = late && !starting && !login;
   const ended =
     error?.message ??

@@ -35,9 +35,11 @@
 //! An Antigravity plan (`antigravity_login`) is a home subscription made for each turn too (`TURN_HOMES`): `agy` reads its
 //! sign-in from `<GEMINI_HOME>/antigravity-cli/antigravity-oauth-token` only when it believes it runs over SSH (else
 //! from the system keyring), so a plan turn's GEMINI_HOME is a home of its own holding that file, and its `agy` alone
-//! is told it runs over SSH (hosts/antigravity.rs). The bot's own `~/.gemini` rules, skills and conversations are
+//! is told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from `plan_home`, so even an `agy`
+//! started again later never falls back to the keyring). The bot's own `~/.gemini` rules, skills and conversations are
 //! linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so a move between
-//! plans resumes the same conversation.
+//! plans resumes the same conversation. Its conversation summaries (`conversation_summaries.db`) are not: a SQLite
+//! file cannot be shared through a link, so they do not carry across plans.
 //!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
@@ -60,6 +62,8 @@ const FILES: &[&str] = &["auth.json", CREDENTIALS];
 pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
 /// What `agy` is told so it reads and writes AGY_TOKEN, never the system keyring.
 pub const OVER_SSH: (&str, &str) = ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0");
+/// This runner can sign in, install and run Antigravity plans; the hub gives such work to no other runner.
+pub const AGY_PLAN_CAPABILITY: &str = "antigravity_plan_v1";
 
 /// A runtime whose plan login lives in a home made for each turn, which its CLI finds through `var`.
 pub struct TurnHome {
@@ -72,7 +76,7 @@ pub struct TurnHome {
     /// Linked from the bot's own home when there, `keep` made there first so what the CLI writes in them stays.
     links: &'static [&'static str],
     keep: &'static [&'static str],
-    /// Variables that would sign the CLI in some other way than the file.
+    /// Variables that would sign the CLI in some other way than the file: taken off its own process only.
     pub strip: &'static [&'static str],
     /// Set on the CLI's own process only (the bot's tools inside it inherit it), never in the turn's environment.
     pub env: &'static [(&'static str, &'static str)],
@@ -94,7 +98,6 @@ pub const TURN_HOMES: &[TurnHome] = &[TurnHome {
         "antigravity-cli/annotations",
         "antigravity-cli/implicit",
         "antigravity-cli/knowledge",
-        "antigravity-cli/conversation_summaries.db",
     ],
     keep: &["antigravity-cli/conversations", "antigravity-cli/brain"],
     strip: &[
@@ -127,10 +130,20 @@ impl TurnHome {
         }
     }
 
-    /// Whether `home` is a turn's home of this runtime with its sign-in in place: its CLI runs on the plan.
-    pub fn holds(&self, home: &str) -> bool {
-        let home = Path::new(home);
-        homes().live.contains_key(home) && home.join(self.file).is_file()
+    /// The sign-in a plan turn's CLI is about to run on in `home`: a plain file (never through a link), no larger than
+    /// a subscription, holding agy's `{"token": {...}}` with a token in it. Err says why there is none.
+    pub fn sign_in(&self, home: &str) -> Result<String, String> {
+        let text = read_codex_auth(&Path::new(home).join(self.file))
+            .ok_or("the plan's sign-in is not in place")?;
+        let v: Value = serde_json::from_str(&text).map_err(|_| "the plan's sign-in is unreadable")?;
+        if ["access_token", "refresh_token"]
+            .iter()
+            .any(|k| v["token"][k].as_str().is_some_and(|t| !t.is_empty()))
+        {
+            Ok(text)
+        } else {
+            Err("the plan's sign-in holds no token".into())
+        }
     }
 
     /// Link `links` of the bot's own home `own` into the turn's `home`. Best effort: a turn whose links fail still runs.
@@ -186,6 +199,8 @@ pub struct Delivered {
     /// CLAUDE_CONFIG_DIR, while HOME stays the turn's).
     pub home_env: Option<String>,
     pub file: Option<PathBuf>,
+    /// Where `home` is made from, one folder at a time (`plain_dirs`): the runner's own state.
+    root: PathBuf,
     /// As the server handed it.
     value: String,
     /// What the file held when this turn put it in place (`start`).
@@ -357,6 +372,7 @@ pub fn apply(
             home: None,
             home_env: None,
             file: None,
+            root: crate::isolation::bot_state(state_dir),
             value: value.clone(),
             written: value.clone(),
             refreshed: None,
@@ -404,9 +420,7 @@ pub fn apply(
                 }
                 delivered.home_env = Some(home_env);
             }
-            let plan = crate::isolation::bot_state(state_dir)
-                .join("subscriptions")
-                .join(&id);
+            let plan = delivered.root.join("subscriptions").join(&id);
             let home = if name == CREDENTIALS || per_turn.is_some() || delivered.attempt_only {
                 plan.join(TURNS)
                     .join(uuid::Uuid::new_v4().simple().to_string())
@@ -583,7 +597,7 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
             .strip_prefix(&home)
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let written = place(&home, &name, &d.value, d.revision)?;
+        let written = place(&d.root, &home, &name, &d.value, d.revision)?;
         if written != d.value {
             secrets.extend(if d.home_env.is_some() && d.turn_home().is_none() {
                 claude_secrets(&written)
@@ -595,14 +609,8 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         d.held = true;
     }
     if let Some(t) = d.turn_home() {
-        for key in t
-            .strip
-            .iter()
-            .map(|k| k.to_string())
-            .chain(crate::harness_tools::api_key_env(&d.runtime))
-        {
-            env.remove(&key);
-        }
+        // What else would sign the CLI in comes off its own process only (hosts/antigravity.rs): the turn's other
+        // runtimes, a fallback hop among them, keep the bot's keys.
         if let Some(own) = t.own(env) {
             t.link(&home, &own);
         }
@@ -784,25 +792,13 @@ fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
 /// revision, else `value`. A turn joining one already running keeps the file in place (Codex may have refreshed it)
 /// unless it brings a newer revision (someone reconnected it). Returns what the file holds now.
-fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
+fn place(root: &Path, home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
     let mut homes = homes();
     let path = home.join(name);
-    let folder = path.parent().unwrap_or(home);
-    crate::isolation::mkdir(folder, 0o700)
-        .map_err(|e| format!("cannot make a subscription home: {e}"))?;
-    // Every folder from the home down to the file's is a real one: a link there would put the file elsewhere.
-    if folder
-        .ancestors()
-        .take_while(|p| p.starts_with(home))
-        .any(|p| !std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()))
-    {
-        return Err("a subscription home's folder is not a plain folder".into());
-    }
+    plain_dirs(root, path.parent().unwrap_or(home), true)?;
     let live = homes.live.get(home).map(|l| l.revision);
     let current = match live {
-        Some(at) if revision <= at => std::fs::read_to_string(&path)
-            .ok()
-            .filter(|t| !t.trim().is_empty()),
+        Some(at) if revision <= at => read_codex_auth(&path),
         _ => None,
     };
     let text = match current {
@@ -825,12 +821,39 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
     Ok(text)
 }
 
+/// Each folder from `root` down to `dir`, one at a time, is a plain folder (never a link, which would put a sign-in
+/// file, or a cleanup, somewhere else): a missing one is made (`make`) only once the one above it checked out.
+fn plain_dirs(root: &Path, dir: &Path, make: bool) -> Result<(), String> {
+    let refused = || "a subscription home's folder is not a plain folder".to_string();
+    let rest = dir.strip_prefix(root).map_err(|_| refused())?;
+    let mut at = root.to_path_buf();
+    for part in rest.components() {
+        let std::path::Component::Normal(part) = part else {
+            return Err(refused());
+        };
+        at.push(part);
+        match std::fs::symlink_metadata(&at) {
+            Ok(m) if m.is_dir() => {}
+            Err(e) if make && e.kind() == std::io::ErrorKind::NotFound => {
+                crate::isolation::mkdir(&at, 0o700)
+                    .map_err(|e| format!("cannot make a subscription home: {e}"))?;
+                if !std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
+                    return Err(refused());
+                }
+            }
+            _ => return Err(refused()),
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn write_private(path: &Path, value: &str) -> Result<(), String> {
     let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
     let mut f = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
         .open(&staged)
         .map_err(|e| format!("cannot write a subscription file: {e}"))?;
     let written = crate::isolation::chown_file(&f)
@@ -864,8 +887,15 @@ fn clear(home: &Path) {
 /// At the runner's start, before any turn: no turn holds a home, so a sign-in file left in one (the runner stopped
 /// mid-turn, or an older runner kept it) is removed.
 pub fn sweep(state_dir: &Path) {
-    let root = crate::isolation::bot_state(state_dir).join("subscriptions");
+    let state = crate::isolation::bot_state(state_dir);
+    let root = state.join("subscriptions");
+    if plain_dirs(&state, &root, false).is_err() {
+        return;
+    }
     for sub in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        if !sub.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
         for home in std::fs::read_dir(sub.path())
             .into_iter()
             .flatten()
@@ -896,7 +926,14 @@ fn release(d: &mut Delivered) -> Vec<String> {
     };
     d.held = false;
     let mut homes = homes();
-    if let Some(now) = changed(d) {
+    if d.turn_home().is_some() {
+        // A plan turn's CLI refreshes its access token in the file: masked for the turn, never kept or sent back.
+        if let Some(now) = d.file.as_deref().and_then(read_codex_auth) {
+            if now != d.written {
+                secrets.extend(secrets_in(&now));
+            }
+        }
+    } else if let Some(now) = changed(d) {
         secrets.extend(secrets_in(&now));
         if !d.attempt_only
             && homes
@@ -912,6 +949,10 @@ fn release(d: &mut Delivered) -> Vec<String> {
         Some(live) if live.turns > 1 => live.turns -= 1,
         _ => {
             homes.live.remove(&home);
+            if plain_dirs(&d.root, &home, false).is_err() {
+                // Replaced by a link since: what it points at is not this runner's to clean.
+                return secrets;
+            }
             clear(&home);
             if let Some(turn) = turn_dir(&home) {
                 // A turn's own config directory: its links go with it (never what they point at).
@@ -933,6 +974,15 @@ fn turn_dir(home: &Path) -> Option<&Path> {
 
 pub fn for_runtime<'a>(delivered: &'a [Delivered], runtime: &str) -> Option<&'a Delivered> {
     delivered.iter().find(|d| d.runtime == runtime)
+}
+
+/// The home of `runtime`'s plan in this turn when its sign-in lives in a home made for the turn (TURN_HOMES): the
+/// host runs that CLI on nothing but the sign-in there (hosts::Settings::plan_home), every time it starts it.
+pub fn plan_home(delivered: &[Delivered], runtime: &str) -> Option<String> {
+    for_runtime(delivered, runtime)
+        .filter(|d| d.turn_home().is_some())
+        .and_then(|d| d.home.as_ref())
+        .map(|h| h.display().to_string())
 }
 
 /// The file as Codex left it, when it refreshed a ChatGPT login since the turn began; None when it is as written.
@@ -1462,8 +1512,13 @@ mod tests {
                 .iter()
                 .any(|v| v == "ya29.synthetic-access-token-0123456789"));
             start(&mut got, "antigravity", &mut env).unwrap();
-            assert!(!env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
+            // The bot's other Google sign-ins stay in the turn's environment for its other runtimes: only agy's own
+            // process goes without them, and over SSH (hosts/antigravity.rs).
+            assert!(env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
             let home = PathBuf::from(&env["GEMINI_HOME"]);
+            assert_eq!(plan_home(&got, "antigravity"), Some(env["GEMINI_HOME"].clone()));
+            let t = turn_home("antigravity").unwrap();
+            assert_eq!(t.sign_in(&env["GEMINI_HOME"]).unwrap(), value);
             let token = home.join(AGY_TOKEN);
             assert_eq!(std::fs::read_to_string(&token).unwrap(), value);
             assert_eq!(
@@ -1491,10 +1546,31 @@ mod tests {
             turns.push((got, home));
         }
         assert_ne!(turns[0].1, turns[1].1);
-        for (mut got, home) in turns {
-            finish(&mut got);
+        // The first turn's agy refreshed its access token: masked for that turn, never kept or sent back.
+        let refreshed = r#"{"token":{"access_token":"ya29.synthetic-refreshed-token-9876543210"}}"#;
+        std::fs::write(turns[0].1.join(AGY_TOKEN), refreshed).unwrap();
+        for (i, (mut got, home)) in turns.into_iter().enumerate() {
+            let masked = finish(&mut got);
+            assert_eq!(
+                masked
+                    .iter()
+                    .any(|m| m == "ya29.synthetic-refreshed-token-9876543210"),
+                i == 0
+            );
+            assert!(got[0].refreshed.is_none());
             assert!(!home.exists());
         }
+        // A sign-in file that is gone, a link, or no token is no sign-in: agy is never started on it.
+        let t = turn_home("antigravity").unwrap();
+        let fake = state.join("fake");
+        std::fs::create_dir_all(fake.join("antigravity-cli")).unwrap();
+        let fake_s = fake.display().to_string();
+        assert!(t.sign_in(&fake_s).is_err());
+        std::fs::write(fake.join(AGY_TOKEN), r#"{"token":{}}"#).unwrap();
+        assert!(t.sign_in(&fake_s).is_err());
+        std::fs::remove_file(fake.join(AGY_TOKEN)).unwrap();
+        std::os::unix::fs::symlink(own.join(AGY_TOKEN), fake.join(AGY_TOKEN)).unwrap();
+        assert!(t.sign_in(&fake_s).is_err());
         assert_eq!(
             std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
             "computer-token"
@@ -1527,6 +1603,21 @@ mod tests {
         std::os::unix::fs::symlink(&own, &home).unwrap();
         assert!(start(&mut got, "codex", &mut env).is_err());
         assert!(!own.join("auth.json").exists());
+        // A link anywhere above the home (here the plan's `turns`) is refused before anything is made through it.
+        let elsewhere = state.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        let turns_dir = got[0].home.clone().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+        let _ = std::fs::remove_dir_all(&turns_dir);
+        std::os::unix::fs::symlink(&elsewhere, &turns_dir).unwrap();
+        assert!(start(&mut got, "antigravity", &mut env).is_err());
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
         assert_eq!(
             std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
             "computer-token"

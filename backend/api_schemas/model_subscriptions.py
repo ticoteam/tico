@@ -175,7 +175,8 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
             )
         ),
         'capable': items({'type': 'string'}),
-        'people': items(obj({'id': 's', 'name': 's', 'claude': 'i', 'codex': 'i'}, required=['id', 'name'])),
+        # Each person's number of plans for each runtime they have one for.
+        'people': items(obj({'id': 's', 'name': 's', **{r: 'i' for r in RUNTIMES}}, required=['id', 'name'])),
     }
 )
 
