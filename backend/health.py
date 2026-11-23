@@ -1023,7 +1023,7 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
             group = groups.setdefault(key, {"reason": key, "queued": 0, "oldest": job["created_at"]})
             group["queued"] += 1
             group["oldest"] = min(group["oldest"], job["created_at"])
-            if homes := worktree_waits.get(job["id"]):
+            if homes := worktree_waits.get(job["id"] if "id" in job.keys() else None):
                 known = group.setdefault("worktree_homes", [])
                 known.extend(sorted(homes.difference(known)))
         return list(groups.values())
