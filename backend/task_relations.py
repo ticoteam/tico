@@ -385,10 +385,12 @@ def relate(conn, actor, task_id, other_id, kind="related", remove=False, mover=N
 
         merge_order.release_one(conn, from_id, actor)
     if kind == "depends_on" and rows[0].get("pipeline_id"):
-        # Blocked now, or no longer: its ladder starts again, and the never-stuck pass reads it again (task_depends).
-        from . import task_engine
+        # Blocked now, or no longer: its ladder starts again, and the never-stuck pass reads it again. Its last open
+        # dependency taken off releases it as that task's end would: it moves on, or its owner is woken once.
+        from . import task_depends, task_engine
 
-        task_engine.changed(conn, from_id, actor)
+        if not (remove and task_depends.unlinked(conn, from_id, to_id, actor)):
+            task_engine.changed(conn, from_id, actor)
     return True
 
 
