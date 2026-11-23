@@ -438,14 +438,22 @@ function ChatDecision({ t, onAsking }: { t: TaskData; onAsking: (asking: boolean
     its own, replaced, as the route would have made it (ownAddress). */
 export function TaskById({ task }: { task: string }) {
   const { t } = useTask(task);
-  const navigate = useNavigate();
+  const router = useRouter();
   const client = useQueryClient();
   // the address as it was opened: once the task is read it is replaced, once
   const [search] = useState(useRouterState({ select: (s) => s.location.search as Record<string, unknown> }));
   const read = !!t;
   useEffect(() => {
     if (!read) return;
-    void ownAddress(client, task, search).then((to) => to && navigate({ ...to, search: to.search as never, replace: true }));
-  }, [read, client, task, search, navigate]);
+    let on = true;
+    const from = router.state.location.href;
+    void ownAddress(client, task, search).then((to) => {
+      // gone, or the person went elsewhere meanwhile: theirs wins
+      if (on && to && router.state.location.href === from) void router.navigate({ ...to, search: to.search as never, replace: true });
+    });
+    return () => {
+      on = false;
+    };
+  }, [read, client, task, search, router]);
   return t ? null : <TaskPage task={task} />;
 }
