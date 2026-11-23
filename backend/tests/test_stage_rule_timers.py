@@ -114,6 +114,30 @@ def _rule(c, **fields):
     )
 
 
+def test_quiet_bot_tasks_passes_over_a_task_whose_owner_is_mid_run(c, time_machine, jev_calls):
+    working = _task(c, "eng", "Build", "bot:builder", "Long build")
+    idle = _task(c, "eng", "Build", "bot:builder", "Forgotten build")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=6))
+    queued = c.execute(
+        "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
+        "WHERE j.bot_id='builder' AND m.wake_key LIKE ? LIMIT 1",
+        (working + ":%",),
+    ).fetchone()
+    assert queued, "the task's wake made no job"
+    run = H.new_id()
+    c.execute(
+        "INSERT INTO attempts (id, job_id, bot_id, runner_id, generation, token_hash, state, lease_until, created_at, "
+        "started_at, message_id, task_id) VALUES (?,?,?,?,1,?,'running',?,?,?,?,?)",
+        (run, queued[0], "builder", "r1", run, H.shift(H.now(), minutes=1), H.now(), H.now(), queued[1], working),
+    )
+    c.execute("UPDATE jobs SET state='running', attempt_id=? WHERE id=?", (run, queued[0]))
+    NS.check(c)
+    body = dict(_told(c))["bot:lead"]
+    assert _title(c, idle) in body
+    assert _title(c, working) not in body
+
+
 def test_quiet_bot_tasks_tells_each_manager_once_for_all_its_tasks_with_no_model_call(c, time_machine, jev_calls):
     assert SR.get(c, SR.QUIET_BOT_TASKS)["status"] == "active"  # seeded at start, as every default rule
     eng = [_task(c, "eng", "Build", "bot:builder", f"Eng {n}") for n in range(5)]

@@ -2023,12 +2023,14 @@ impl Runner {
             .unwrap_or(DEFAULT_RUN_MINUTES);
         let requested = run_clock() + Duration::from_secs_f64(60.0 * minutes);
         let limit = relay.map_or(requested, |r| r.limit(requested));
-        let name = if limit < requested {
+        // The Gateway's hold is a minute or two under the default day: that is the same limit, not a clamp to report.
+        let clamped = limit < requested && minutes > DEFAULT_RUN_MINUTES;
+        let name = if clamped {
             "Gateway credential lifetime (24 hours)".into()
         } else {
             format!("max_run_minutes ({minutes} minutes)")
         };
-        if limit < requested {
+        if clamped {
             self.diagnose(aid, "Tico Gateway limits this attempt to just under 24 hours from when it received its key, including any fallback, so the key remains valid after rotation.");
         }
         if limit <= run_clock() {

@@ -3,7 +3,6 @@ display_name: "Sales Operations Manager"
 labels: [owner:sales-operations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-crm-report
     title: Weekly CRM hygiene and pipeline report

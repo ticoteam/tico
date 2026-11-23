@@ -632,7 +632,7 @@ cases.
 
 #### A bot builds for a day
 
-- One run lasts at most 60 minutes. That is today's limit, a setting on the bot.
+- One run lasts at most a day by default (a setting on the bot); before Nov 23, 2026 it was 60 minutes.
 - The run ends with new commits and the stage not finished. Something changed, so no try is counted. The bot is woken
   again 15 minutes later.
 - A day of building is up to 23 runs, back to back. The row shows a spinner. The task's top line says "Builder working".

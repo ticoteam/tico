@@ -3,7 +3,6 @@ display_name: "Sales Engineer"
 labels: [owner:sales-engineer]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-technical-prep
     title: Weekly technical deal prep

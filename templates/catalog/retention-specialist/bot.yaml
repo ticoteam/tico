@@ -3,7 +3,6 @@ display_name: "Retention Specialist"
 labels: [owner:retention-specialist]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-retention-report
     title: Weekly retention report

@@ -701,7 +701,7 @@ Levers set in **Settings → Bots**, not in the repository:
   own limit, so a long build or review runs to the end in one turn. A computer that stops answering is caught within
   minutes by its lease; a run whose computer still answers but whose harness hangs runs until this limit or a Stop.
   Set a lower number only for a short routine that should never run long. The server holds the value a run is held
-  to (Settings → Bots), and no check compares a `bot.yaml` with it.
+  to, and no check compares a `bot.yaml` with it.
 - **`gateway:`** (optional, in a template's `bot.yaml`): `level: xlow | low | medium | high | xhigh` and `fast: true` (Fast costs more and runs on another vendor, so no template turns it on). A bot made from the
   template that runs on the [Tico AI Gateway](ai-gateway.md) with no model of its own starts on that
   level, for example `gateway: {level: low}` on a mail watcher, or `level: high` on an engineering builder. It

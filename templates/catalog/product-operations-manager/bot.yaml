@@ -3,7 +3,6 @@ display_name: "Product Operations Manager"
 labels: [owner:product-operations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-product-ops-review
     title: Weekly product ops review

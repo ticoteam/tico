@@ -80,6 +80,12 @@ def next_attempt(api, machine, first):
     return resumed
 
 
+def test_a_bot_with_no_limit_of_its_own_is_sent_the_day_default(api):
+    """Spelled out on the claim, so a runner from before the default changed (it fell back to 60) runs a day too."""
+    _, _, attempt = running(api)
+    assert attempt['config']['max_run_minutes'] == 24 * 60
+
+
 def test_first_timeout_waiting_for_live_session_has_timeout_card_then_resumes(api):
     """A session fence delays recovery without changing the cause to a computer restart."""
     machine, task, first = running(api)

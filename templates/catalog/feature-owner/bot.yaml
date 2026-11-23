@@ -4,7 +4,6 @@ labels: [owner:feature-owner]
 session: task                      # one task, one session: from the Spec to the check in production
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-area-review
     title: Weekly area review

@@ -3,7 +3,6 @@ display_name: "Legal Operations Manager"
 labels: [owner:legal-operations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: monthly-legal-spend
     title: Monthly legal spend summary

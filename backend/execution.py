@@ -6273,7 +6273,12 @@ class Execution:
                     # (backend/updates_chat.py). None for every other turn.
                     "updates": updates_chat.for_turn(c, self.auth, self.store.settings, conv, row["bot_id"], msg, aid),
                     # The owner's earlier Strategy Owner chat is a session of its own (backend/rooms.py).
-                    "config": wire_config,
+                    # A bot with no limit of its own gets the default spelled out, so a runner from before the default
+                    # changed (it fell back to 60 minutes) runs a day too.
+                    "config": {
+                        **wire_config,
+                        "max_run_minutes": wire_config.get("max_run_minutes") or RD.MAX_RUN_MINUTES,
+                    },
                     **({"session_fence": session_fence} if session_fence is not None else {}),
                     # Bumped by a session clear or reset (views.py clear_session, app.py reset_bot_sessions):
                     # a runner that sees it change starts a fresh provider thread (runner-rs/src/execute.rs).

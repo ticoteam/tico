@@ -220,6 +220,8 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
     started = _started(conn, rule, task)
     if not started or not _due(conn, rule, task, started, at):
         return None
+    if rule["timer_kind"] == "quiet" and _mod("task_wakes").live_run(conn, task, task["owner_id"], at):
+        return None  # its owner is mid-run: a run may last a day (max_run_minutes), and working is not quiet
     mark = f"{task['visit_id']}@{started}"
     label = str(rule["cond"].get("label") or "")
     if label and _mod("stage_rules")._tagged(conn, {"id": task["id"]}, label):

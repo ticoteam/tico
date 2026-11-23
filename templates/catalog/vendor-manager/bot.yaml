@@ -3,7 +3,6 @@ display_name: "Vendor Manager"
 labels: [owner:vendor-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-vendor-page
     title: Weekly vendor and renewals page

@@ -3,7 +3,6 @@ display_name: "Head of People"
 labels: [owner:head-of-people]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-people-summary
     title: Weekly people summary

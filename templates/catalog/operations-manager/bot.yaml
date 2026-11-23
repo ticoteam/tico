@@ -3,7 +3,6 @@ display_name: "Operations Manager"
 labels: [owner:operations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: weekly-ops-checklist
     title: Weekly ops checklist and team summary

@@ -3,7 +3,6 @@ display_name: "Support Operations Specialist"
 labels: [owner:support-operations-specialist]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 # Cron runs Mondays 1-7 of the month; the playbook skips a run that is not the month's first Monday.
 routines:
   - id: monthly-helpdesk-audit

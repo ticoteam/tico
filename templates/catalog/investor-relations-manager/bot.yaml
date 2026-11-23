@@ -3,7 +3,6 @@ display_name: "Investor Relations Manager"
 labels: [owner:investor-relations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-
 routines:
   - id: monthly-investor-update
     title: Monthly investor update draft
