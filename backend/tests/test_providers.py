@@ -362,3 +362,17 @@ def test_the_antigravity_migration_moves_every_antigravity_pick_and_flash_to_hyd
         "model": "gemini-4-neon",
         "check_models": ["antigravity:gemini-4-neon", "grok"],
     }
+
+
+def test_a_runner_without_the_antigravity_runtime_is_never_handed_a_named_antigravity_fallback():
+    # A runner from before the split takes harness antigravity for the Gemini CLI: it would run Neon there.
+    from backend.execution import without_unknown_fallback
+
+    config = {"runtime": "claude", "fallback": {"harness": "antigravity", "model": "gemini-4-neon"}}
+    old = {"runtimes": {"claude": {"installed": True}, "gemini": {"installed": True}}}
+    assert without_unknown_fallback(config, old) == {"runtime": "claude"}
+    new = {"runtimes": {**old["runtimes"], "antigravity": {"installed": True}}}
+    assert without_unknown_fallback(config, new) == config
+    # Any other named fallback stays where it is.
+    codex = {"runtime": "claude", "fallback": {"harness": "codex", "model": "gpt-6-sol"}}
+    assert without_unknown_fallback(codex, old) == codex

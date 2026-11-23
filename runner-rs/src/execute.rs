@@ -1056,6 +1056,9 @@ pub(crate) struct Drove {
     pub(crate) limited: bool,
     /// The model produced a message or tool call, so a saved fallback must retain its own work.
     pub(crate) acted: bool,
+    /// A tool ran in the turn: what it did outside this computer may not be done again, so no fallback takes the turn.
+    /// Not `acted`: a quota notice is a message (Claude's), and a turn stopped by one still falls back.
+    pub(crate) tool_ran: bool,
     /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
     pub(crate) capacity: bool,
     /// The model was at capacity after the turn acted: no fallback or fresh thread may take it, but its own thread can
@@ -1077,6 +1080,7 @@ impl Drove {
             tokens: json!({}),
             limited: false,
             acted: false,
+            tool_ran: false,
             capacity: false,
             continues: false,
             retryable: false,
@@ -2477,6 +2481,14 @@ impl Runner {
         // Where no harness is allocated before `started` (Claude), an ask before it is kept too.
         let late_allocation = allocates_at_spawn(&runtime);
         let mut ran: Result<(), Fail> = async {
+            // Every harness this runner runs is its own runtime (crate::readiness::unsupported): a pair from a server
+            // that has not moved it (runtime gemini, harness antigravity) would start the wrong CLI on its model.
+            let harness = text_of(&config["harness"]);
+            if !harness.is_empty() && harness != runtime {
+                return Err(Fail::runtime(format!(
+                    "This computer runs the {harness} harness as runtime {harness}, not {runtime}: update the server, then run the turn again"
+                )));
+            }
             self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
             selected = self.turn_profile(&attempt)?;
@@ -3339,17 +3351,19 @@ impl Runner {
             config.clone()
         };
         let fallback_allowed = !paid_by && !voice_reply && !native_control && continuing.is_empty();
-        let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
-            crate::fallback::configured_for(
-                &fallback_config,
-                &self.sign_in,
-                selected.as_ref(),
-                &bot,
-                |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt),
-            )
-        } else {
-            None
-        };
+        // A turn whose tools ran is never taken again by a fallback: it may already have changed things.
+        let mut pending =
+            if unavailable && drove.outcome != "completed" && fallback_allowed && !drove.tool_ran {
+                crate::fallback::configured_for(
+                    &fallback_config,
+                    &self.sign_in,
+                    selected.as_ref(),
+                    &bot,
+                    |rt| crate::model_subscriptions::available(&vault.subscriptions, &attempt, rt),
+                )
+            } else {
+                None
+            };
         let turn_env = base_env.clone().unwrap_or_default();
         if pending.is_none() && (hit_limit || held.is_some()) && fallback_allowed && prepared {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
@@ -3720,6 +3734,7 @@ impl Runner {
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
             if drove.limited
+                && !drove.tool_ran
                 && hop.default
                 && !native_control
                 && spent < 2
@@ -4505,6 +4520,7 @@ impl Runner {
             tokens: json!({}),
             limited: false,
             acted: drove.acted,
+            tool_ran: drove.tool_ran,
             capacity: false,
             continues: false,
             retryable: true,
@@ -6743,6 +6759,17 @@ mod tests {
         turns: &[Turn],
         limited: &[usize],
     ) -> Ran {
+        session_turns_playing(task, serves, turns, limited, "error.jsonl").await
+    }
+
+    /// `session_turns_limited`, with pi playing fixture `refusal` (tests/fixtures/pi) for each prompt of `limited`.
+    async fn session_turns_playing(
+        task: bool,
+        serves: bool,
+        turns: &[Turn],
+        limited: &[usize],
+        refusal: &str,
+    ) -> Ran {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir =
@@ -6755,7 +6782,7 @@ mod tests {
         });
         for n in limited {
             std::fs::copy(
-                fixture.with_file_name("error.jsonl"),
+                fixture.with_file_name(refusal),
                 dir.join(format!("fixture-{n}")),
             )
             .unwrap();
@@ -6839,7 +6866,7 @@ mod tests {
         }
         server.abort();
         let sessions = std::fs::read_to_string(dir.join("args.log"))
-            .unwrap()
+            .unwrap_or_default()
             .lines()
             .map(|l| {
                 l.split_whitespace()
@@ -7247,6 +7274,124 @@ mod tests {
             "{:?}",
             ran.saved
         );
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_tool_ran_before_its_quota_ran_out_never_falls_back() {
+        // pi ran a tool (a push), then its login ran out of quota: a fallback would do the push again, so the turn
+        // ends on its limit and no fallback harness starts.
+        let fallback = json!({"fallback": {"harness": "pi", "model": "kimi-k3-fallback"}});
+        let ran = session_turns_playing(
+            true,
+            true,
+            &[("m4", json!({}), fallback)],
+            &[0],
+            "tool_then_limit.jsonl",
+        )
+        .await;
+        assert_eq!(
+            ran.sessions.len(),
+            1,
+            "no fallback started: {:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            ran.completions[0]["outcome"], "failed",
+            "{}",
+            ran.completions[0]
+        );
+        assert!(
+            ran.completions[0]["fallback"].is_null(),
+            "{}",
+            ran.completions[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_harness_on_another_runtime_fails_the_turn_without_starting_any_cli() {
+        // A server that has not moved Antigravity to its own runtime sends runtime gemini with harness antigravity:
+        // the Gemini CLI must not run its model.
+        let old = json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(false, true, &[("m4", json!({}), old)]).await;
+        assert!(
+            ran.sessions.is_empty(),
+            "no CLI started: {:?}",
+            ran.sessions
+        );
+        // Ended as a runner failure (report_failure), never run.
+        assert_eq!(
+            ran.completions[0]["outcome"], "interrupted",
+            "{}",
+            ran.completions[0]
+        );
+    }
+
+    /// An `agy` for execute's tests (argv: this script, its folder): it keeps each prompt as `agy-prompt-<n>` and
+    /// resumes `--conversation`, unless `agy-lose-<n>` is there: then it names a new conversation (it ran the prompt
+    /// in one it began).
+    const FAKE_AGY: &str = r#"#!/usr/bin/env python3
+import json, os, sys, uuid
+folder, args = sys.argv[1], sys.argv[2:]
+n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
+text = json.loads(sys.stdin.readline())["message"]["content"]
+open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(text)
+conv = args[args.index("--conversation") + 1] if "--conversation" in args else str(uuid.uuid4())
+if os.path.exists(os.path.join(folder, "agy-lose-%d" % n)):
+    conv = str(uuid.uuid4())
+for event in (
+    {"event": "init", "conversation_id": conv},
+    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Done."}},
+    {"event": "result", "result": {"status": "SUCCESS", "response": "Done.", "conversation_id": conv,
+                                   "usage": {"input_tokens": 1, "output_tokens": 1}}},
+):
+    print(json.dumps(event), flush=True)
+sys.stdin.read()
+"#;
+
+    #[tokio::test]
+    async fn after_agy_moves_a_thread_to_a_new_conversation_the_next_turn_is_told_everything_once()
+    {
+        // Turn 2's agy ran its prompt in a conversation it began in place of the saved one: that one holds turn 2
+        // only. Turn 3 resumes it and is given the conversation's history; turn 4, after turn 3 completed, is not.
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        let fake = folder.join("agy");
+        crate::util::write_script(&fake, FAKE_AGY);
+        std::fs::write(folder.join("agy-lose-1"), "").unwrap();
+        HOST_COMMANDS.with(|commands| {
+            commands.borrow_mut().insert(
+                "antigravity".into(),
+                vec![fake.display().to_string(), folder.display().to_string()],
+            )
+        });
+        let agy =
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(
+            false,
+            true,
+            &[
+                ("m1", json!({}), agy.clone()),
+                ("m1", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy),
+            ],
+        )
+        .await;
+        for (n, c) in ran.completions.iter().enumerate() {
+            assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
+        }
+        let prompt =
+            |n: usize| std::fs::read_to_string(folder.join(format!("agy-prompt-{n}"))).unwrap();
+        let replayed = "latest messages before the current one are replayed here";
+        assert!(!prompt(1).contains(replayed), "{}", prompt(1));
+        let told = prompt(2);
+        assert!(
+            told.contains(replayed) && told.contains("Watch the Acme release."),
+            "{told}"
+        );
+        assert!(!prompt(3).contains(replayed), "told once: {}", prompt(3));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[tokio::test]

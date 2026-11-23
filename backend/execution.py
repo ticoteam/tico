@@ -2805,6 +2805,17 @@ def fallback_uses_primary_login(config, named, primary):
     )
 
 
+def without_unknown_fallback(config, readiness):
+    """`config` without its named Antigravity fallback on a computer whose runner does not report the antigravity
+    runtime: a runner from before Antigravity had a runtime of its own takes that harness for the Gemini CLI and would
+    run Neon or Hydrogen there. Its other fallbacks stay."""
+    named = config.get("fallback")
+    runtimes = (readiness or {}).get("runtimes") or {}
+    if isinstance(named, dict) and named.get("harness") == "antigravity" and "antigravity" not in runtimes:
+        return {key: value for key, value in config.items() if key != "fallback"}
+    return config
+
+
 def restrict_fallbacks(config, paid_tools, caps):
     """Keep a turn on unset tools when it starts on an unset tool."""
     from .harnesses import runtime_of
@@ -5866,6 +5877,7 @@ class Execution:
             # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
             # Gateway's one probe.
             login_holds.take_probe(c, runner["id"], login_holds.GATEWAY, login_holds.GATEWAY_RUNTIME, row["id"])
+        config = without_unknown_fallback(config, readiness_document(runner["readiness"]))
         config = gateway_admit(c, runner["id"], config, row["id"])
         config = models_preset.with_gateway_inputs(config)
         # Where it compacts: its own size, or its model's default when none is saved (providers.compact_default).

@@ -1,0 +1,8 @@
+{"type":"session","version":3,"id":"0b5c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b","timestamp":"2026-10-14T09:00:00.000Z","cwd":"/tmp"}
+{"type":"agent_start"}
+{"type":"turn_start"}
+{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hello"}],"timestamp":1760400000000}}
+{"type":"tool_execution_start","toolName":"bash","toolCallId":"t1","args":{"command":"git push"}}
+{"type":"tool_execution_end","toolName":"bash","toolCallId":"t1","result":{"content":[{"type":"text","text":"pushed"}]}}
+{"type":"error","error":{"message":"429 Rate limit exceeded: free-models-per-day","code":429}}
+{"type":"agent_end","messages":[]}

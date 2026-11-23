@@ -860,6 +860,24 @@ pub fn unsupported(entry: &Value) -> Vec<String> {
     needs
 }
 
+/// Whether a bot.yaml still declares the Antigravity pick it had when Antigravity ran on the Gemini runtime (runtime
+/// gemini, with harness antigravity or Neon or Flash) for the bot the server moved to runtime antigravity (migration
+/// 20261123184253: Flash became Hydrogen). Any other difference is still drift.
+fn legacy_antigravity(declared: &Map<String, Value>, expected: &Value) -> bool {
+    const NEON: &str = "gemini-4-neon";
+    const FLASH: &str = "gemini-3.8-flash";
+    let said = |key: &str| declared.get(key).map(text_of).unwrap_or_default();
+    let model = said("model");
+    let was_agy = said("harness") == "antigravity" || model == NEON || model == FLASH;
+    let now = text_of(&expected["model"]);
+    let same_model =
+        model.is_empty() || model == now || (model == FLASH && now == "gemini-4-hydrogen");
+    text_of(&expected["runtime"]) == "antigravity"
+        && said("runtime") == "gemini"
+        && was_agy
+        && same_model
+}
+
 pub fn manifest_path(folder: &Path) -> PathBuf {
     for name in ["bot.yaml", "employee.yaml"] {
         if folder.join(name).is_file() {
@@ -1112,8 +1130,8 @@ pub async fn preflight(
                             .is_some_and(|f| crate::sessions::folder_named_from(&f, &name));
                         let known_name = name == bot || (!slug.is_empty() && name == slug) || named;
                         (known_name || (!shared.is_empty() && name == shared))
-                            && same("runtime")
-                            && same("model")
+                            && ((same("runtime") && same("model"))
+                                || legacy_antigravity(&declared, expected))
                     }
                     _ => false,
                 };
@@ -1410,6 +1428,70 @@ pub fn changed_agent_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bot_yaml_from_before_antigravity_had_its_own_runtime_is_no_drift_but_other_changes_are() {
+        let yaml = |text: &str| match crate::manifest::parse(text).unwrap() {
+            Value::Object(m) => m,
+            other => panic!("{other}"),
+        };
+        let hydrogen = json!({"runtime": "antigravity", "model": "gemini-4-hydrogen"});
+        let neon = json!({"runtime": "antigravity", "model": "gemini-4-neon"});
+        for (declared, expected, ok) in [
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                true,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                true,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-4-neon\n",
+                &neon,
+                true,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\n",
+                &neon,
+                true,
+            ),
+            // Drift that has nothing to do with the move is still drift.
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\nmodel: gemini-3.7-pro\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.7-pro\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: codex\nmodel: gemini-4-neon\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &json!({"runtime": "gemini", "model": "gemini-3.8-flash"}),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                legacy_antigravity(&yaml(declared), expected),
+                ok,
+                "{declared} for {expected}"
+            );
+        }
+    }
 
     #[test]
     fn only_a_cloud_machine_says_trust_and_only_to_a_server_that_takes_it() {

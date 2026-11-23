@@ -165,7 +165,7 @@ impl Runner {
             (String::new(), json!({}), "interrupted".to_string());
         let (mut limited, mut capacity, mut retryable, mut acted, mut complete) =
             (false, false, false, false, false);
-        let mut continues = false;
+        let (mut continues, mut tool_ran) = (false, false);
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -332,6 +332,7 @@ impl Runner {
                     tokens: spent(&earlier_tokens, &tokens),
                     limited: false,
                     acted,
+                    tool_ran,
                     capacity: false,
                     continues: false,
                     retryable: false,
@@ -349,6 +350,7 @@ impl Runner {
                     tokens: spent(&earlier_tokens, &tokens),
                     limited: false,
                     acted,
+                    tool_ran,
                     capacity: false,
                     continues: false,
                     retryable: false,
@@ -530,6 +532,7 @@ impl Runner {
                     // Proof the turn reached the model and may have changed something outside this computer.
                     acted = true;
                 }
+                tool_ran |= kind == "tool";
                 if kind == "background_kept" {
                     // Watched after the run; a command still running at the run's time limit is killed then.
                     let deadline = crate::util::epoch_s()
@@ -781,6 +784,7 @@ impl Runner {
             tokens: spent(&earlier_tokens, &tokens),
             limited,
             acted,
+            tool_ran,
             capacity,
             continues,
             retryable,
