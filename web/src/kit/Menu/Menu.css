@@ -4,6 +4,12 @@
 /* A quiet note at a row's right, as the model menu draws it (pages/8-settings/settings.css .mdrop). */
 .menu a em{font-style:normal;font-weight:var(--w-text);margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .menu a em+.ico{margin-left:0}
+/* a row of two lines: the label over a quiet second line (your name over your email) */
+.menu a.is-two{height:auto;min-height:var(--ctl);padding-block:var(--s-1h)}
+.menu-two{display:grid;gap:var(--s-0);line-height:var(--lh-tight)}
+.menu-two>*{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.menu-two b{font-weight:var(--w-strong)}
+.menu-two small{font-size:var(--t-sm);color:var(--muted)}
 .menu-group-label{padding:var(--s-1) var(--s-2);color:var(--muted);font-size:var(--t-sm)}
 /* a row that opens a second level (pages/1-tasks/list.css) */
 .menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}

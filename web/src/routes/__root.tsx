@@ -22,7 +22,7 @@ import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu as DropMenu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu as DropMenu, MenuItem } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
 import { LatePill } from '@/kit/Pill';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
@@ -502,8 +502,8 @@ function AppMenu({ note }: { note: ReactNode }) {
   );
 }
 
-/* The company pick: every company the desktop app holds, this one checked, then Add company. A browser holds one
-   company per address, so it lists this one only. */
+/* The pick's companies: every company the desktop app holds, this one checked, then Add company. A browser holds one
+   company per address, so it lists this one only. The menu puts them under "Companies", with this one's settings. */
 function CompanyRows({ name, all }: { name: string; all: Company[] | null }) {
   const list = all ?? [{ id: '', name, active: true, self: true, needs: 0 }];
   return (
@@ -522,44 +522,33 @@ function CompanyRows({ name, all }: { name: string; all: Company[] | null }) {
           onSelect={c.self ? () => undefined : press('shell.switchCompany', { id: c.id })}
         />
       ))}
-      {all ? (
-        <>
-          <MenuRule />
-          <MenuItem label="Add company" icon="plus" onSelect={press('shell.addCompany')} />
-        </>
-      ) : null}
+      {all ? <MenuItem label="Add company" icon="plus" onSelect={press('shell.addCompany')} /> : null}
     </>
   );
 }
 
 const THEMES = [
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-  { value: 'system', label: 'Auto' },
+  { value: 'dark', label: 'Dark', icon: 'moon' },
+  { value: 'light', label: 'Light', icon: 'sun' },
+  { value: 'system', label: 'Auto', icon: 'auto' },
 ] as const;
 
-/* The account menu over your name (pages/8-settings/more.js account): you, your page and Settings, the theme, Sign out
-   last. Every row is an action; Sign out is the person's own (settings.signOut, tico: false). */
+/* The pick's bottom half (concept D, Nov 23): you, then Sign out last. Your row opens Settings' Account section, your
+   own settings; the theme sits on its right as three icons. Your page is no row here: the Team list reaches it. Every
+   row is an action; Sign out is the person's own (settings.signOut, tico: false). */
 function AccountRows({ me, email }: { me: MenuMate; email: string }) {
   const [theme] = usePref<Theme>(THEME_KEY, 'dark');
   return (
     <>
       <div className="acct-me">
-        <Avatar decorative kind={me.kind} name={me.name} initials={me.short} hue={me.hue} size={36} />
-        <span>
-          <b>{me.name}</b>
-          {email && email !== me.name ? <em>{email}</em> : null}
-        </span>
-      </div>
-      <MenuRule />
-      <MenuItem label="My page" onSelect={press('team.open', { who: bare(me.id) })} />
-      <MenuItem label="Settings" onSelect={press('shell.goTo', { to: '/settings' })} />
-      <MenuRule />
-      <div className="acct-line">
-        <span>Theme</span>
+        <MenuItem
+          label={me.name}
+          sub={email && email !== me.name ? email : undefined}
+          lead={<Avatar decorative kind={me.kind} name={me.name} initials={me.short} hue={me.hue} size={36} />}
+          onSelect={press('shell.goTo', { to: '/settings/account' })}
+        />
         <Segmented label="Theme" options={THEMES} value={theme} onValueChange={(v) => void run('settings.setTheme', { theme: v }, { via: 'click' })} />
       </div>
-      <MenuRule />
       <MenuItem label="Sign out" onSelect={press('settings.signOut')} />
     </>
   );

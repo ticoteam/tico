@@ -93,16 +93,25 @@ export type MenuItemBodyProps = {
   lead?: ReactNode;
   /** A quiet note at the right, such as a model's price. */
   meta?: string;
+  /** A second, quiet line under the label, such as your email under your name. */
+  sub?: string;
   /** The chosen one: a check at the right. */
   on?: boolean;
 };
 
 /** What a menu row shows. Select and Combobox rows use it too. */
-export function MenuItemBody({ label, icon, lead, meta, on = false }: MenuItemBodyProps) {
+export function MenuItemBody({ label, icon, lead, meta, sub, on = false }: MenuItemBodyProps) {
   return (
     <>
       {icon ? <Icon name={icon} /> : lead}
-      <span>{label}</span>
+      {sub ? (
+        <span className="menu-two">
+          <b>{label}</b>
+          <small>{sub}</small>
+        </span>
+      ) : (
+        <span>{label}</span>
+      )}
       {meta && <em>{meta}</em>}
       {on && <Icon name="check" />}
     </>
@@ -114,16 +123,16 @@ export type MenuItemProps = MenuItemBodyProps & {
   disabled?: boolean;
 };
 
-export function MenuItem({ label, icon, lead, meta, on = false, onSelect, disabled = false }: MenuItemProps) {
+export function MenuItem({ label, icon, lead, meta, sub, on = false, onSelect, disabled = false }: MenuItemProps) {
   return (
     <BaseMenu.Item
       render={<a />}
       label={label}
       disabled={disabled}
-      className={[on && 'is-on', disabled && 'is-disabled'].filter(Boolean).join(' ') || undefined}
+      className={[on && 'is-on', sub && 'is-two', disabled && 'is-disabled'].filter(Boolean).join(' ') || undefined}
       onClick={() => onSelect()}
     >
-      <MenuItemBody label={label} icon={icon} lead={lead} meta={meta} on={on} />
+      <MenuItemBody label={label} icon={icon} lead={lead} meta={meta} sub={sub} on={on} />
     </BaseMenu.Item>
   );
 }

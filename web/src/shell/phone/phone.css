@@ -86,9 +86,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone .tree-row,.phone .tree-team{height:44px;font-size:15px}
 .phone .tree-team{font-size:var(--t-base)}
 .phone .tree-head{height:36px}
-.phone .m-foot{flex:none;height:56px;display:flex;align-items:center;gap:2px;padding:0 6px 0 12px;border-top:1px solid var(--line)}
-.phone .m-foot .me-name{display:inline-flex;align-items:center;gap:10px;font-size:15px}
-.phone .ly-menu .co-pick{height:44px;font-size:var(--t-md)}
+.phone .ly-menu .co-pick{min-height:44px;font-size:var(--t-md)}
 .phone .ly-menu .co-pick .co-mark{color:var(--c-menu)}
 
 /* the open chat. Its sheet is a desktop side sheet (.pane.side), which the phone rules hide (parts.css): in the card

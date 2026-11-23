@@ -324,17 +324,39 @@ describe('the root', () => {
     localStorage.clear();
   });
 
-  it('your name at the menu’s foot opens the account menu: you, My page, Settings, the theme, Sign out @s1189 @s1206', async () => {
+  /* concept D (Nov 23): the menu's foot moved into its head. The pick is the company and you, and opens one menu. */
+  it('the company and you at the menu’s head open one menu: Companies, this one’s settings, you with the theme, Sign out @s1189 @s1206', async () => {
     people(MAYA, QA);
-    show('/');
+    const router = show('/');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    fireEvent.click(await within(nav).findByRole('button', { name: 'Maya Okafor' }));
+    const pick = await within(nav).findByRole('button', { name: /^Fernhill/ });
+    expect(pick.textContent).toContain('Maya Okafor');
+    // no foot: no name, gear or "?" under the list; the "?" is in the head
+    expect(document.querySelector('.nav-foot, .m-foot')).toBeNull();
+    expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull();
+    expect(within(nav).getByRole('button', { name: /^Tico support/ }).closest('.nav-head')).toBeTruthy();
+    fireEvent.click(pick);
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getByText('maya@example.com')).toBeTruthy();
-    expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['My page', 'Settings', 'Sign out']);
-    expect(within(menu).getByRole('group', { name: 'Theme' })).toBeTruthy();
-    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Sign out' }));
+    const rows = [...menu.querySelectorAll('.menu-group-label, [role="menuitem"], [role="separator"], [role="group"][aria-label="Theme"]')].map((e) =>
+      e.getAttribute('role') === 'separator' ? '—' : e.getAttribute('aria-label') === 'Theme' ? 'theme' : e.textContent,
+    );
+    expect(rows).toEqual(['Companies', 'FFernhill', 'Fernhill settings', '—', 'MOMaya Okaformaya@example.com', 'theme', 'Sign out']);
+    expect(within(menu).queryByText('My page')).toBeNull();
+    // the theme: three icons, each named
+    for (const [name, theme] of [['Light', 'light'], ['Auto', 'system'], ['Dark', 'dark']] as const) {
+      fireEvent.click(within(menu).getByRole('button', { name }));
+      expect(vi.mocked(run)).toHaveBeenCalledWith('settings.setTheme', { theme }, { via: 'click' });
+    }
+    // your row: your own settings, in Settings' Account section
+    fireEvent.click(within(menu).getByRole('menuitem', { name: /Maya Okafor/ }));
+    expect(vi.mocked(run)).toHaveBeenCalledWith('shell.goTo', { to: '/settings/account' }, { via: 'click' });
+    fireEvent.click(pick);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Sign out' }));
     expect(vi.mocked(run)).toHaveBeenCalledWith('settings.signOut', {}, { via: 'click' });
+    // the company's settings
+    fireEvent.click(pick);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Fernhill settings' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
   });
 
   it('draws the call in the frame without ?window=1', async () => {
@@ -1175,10 +1197,10 @@ describe('the desktop app', () => {
     show('/');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
     await waitFor(() => expect(t.companies.list).toHaveBeenCalled());
-    fireEvent.click(await within(nav).findByRole('button', { name: 'Fernhill' }));
+    fireEvent.click(await within(nav).findByRole('button', { name: /^Fernhill/ }));
     const menu = await screen.findByRole('menu');
     await within(menu).findByRole('menuitem', { name: /Okafor Garden Tours/ });
-    expect(within(menu).getByRole('menuitem', { name: /Fernhill/ }).className).toContain('is-on');
+    expect(within(menu).getByRole('menuitem', { name: 'Fernhill' }).className).toContain('is-on');
     expect(within(menu).getByRole('menuitem', { name: /Okafor Garden Tours/ }).textContent).toContain('3');
     expect(within(menu).getByRole('menuitem', { name: /Add company/ })).toBeTruthy();
     fireEvent.click(within(menu).getByRole('menuitem', { name: /Okafor Garden Tours/ }));
@@ -1189,9 +1211,10 @@ describe('the desktop app', () => {
   it('in a browser, the company pick holds this company only, with no Add company @s1160', async () => {
     show('/');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    fireEvent.click(await within(nav).findByRole('button', { name: 'Fernhill' }));
+    fireEvent.click(await within(nav).findByRole('button', { name: /^Fernhill/ }));
     const menu = await screen.findByRole('menu');
-    expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['FFernhill']);
+    expect(within(within(menu).getByRole('group', { name: 'Companies' })).getAllByRole('menuitem').map((i) => i.textContent)).toEqual(['FFernhill']);
+    expect(within(menu).queryByRole('menuitem', { name: /Add company/ })).toBeNull();
   });
 
   it('in a browser, nothing is reported and nothing breaks', async () => {

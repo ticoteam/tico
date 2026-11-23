@@ -28,6 +28,11 @@ const PROPS: MenuProps = {
   org: ORG,
   counts: { flow: 8 },
 };
+// the pick's menu: this company, and you (Sign out stands for your rows)
+const PICK: Partial<MenuProps> = {
+  companyMenu: <MenuItem label="Fernhill" onSelect={() => undefined} />,
+  accountMenu: <MenuItem label="Sign out" onSelect={() => undefined} />,
+};
 
 async function show(props: Partial<MenuProps> = {}, at = '/tasks') {
   const root = createRootRoute({ component: () => <Menu {...PROPS} {...props} /> });
@@ -37,15 +42,20 @@ async function show(props: Partial<MenuProps> = {}, at = '/tasks') {
 }
 
 describe('Menu', () => {
-  it('draws its rows as links, with no Meetings row, and the person row with Settings @s1188', async () => {
+  it('draws its rows as links, with no Meetings row; the head is the company and you, with no foot under the list @s1188', async () => {
     const nav = await show();
     for (const name of ['Tasks', 'Calendar', 'Company', 'Library']) expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeTruthy();
     expect(within(nav).queryByRole('link', { name: /Meetings/ })).toBeNull();
     // Threads and Updates are no rows: conversations are the area's tabs, updates cards in a team's thread
     expect(within(nav).queryByRole('link', { name: /^(Threads|Updates)/ })).toBeNull();
     expect(within(nav).getByRole('link', { name: /^Tasks/ }).getAttribute('aria-current')).toBe('page');
-    expect(within(nav).getByRole('link', { name: 'Settings' })).toBeTruthy();
-    expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
+    // concept D (Nov 23): the foot moved into the head; Settings is in the pick's menu
+    expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull();
+    expect(nav.querySelector('.nav-foot')).toBeNull();
+    const pick = within(nav).getByRole('button', { name: /^Fernhill/ });
+    expect(pick.querySelector('.co-name')?.textContent).toBe('Fernhill');
+    expect(pick.querySelector('.co-you')?.textContent).toBe('Maya');
+    expect(pick.querySelector('.co-mark .co-badge')).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Engineering Manager' })).toBeTruthy();
   });
 
@@ -59,40 +69,55 @@ describe('Menu', () => {
     expect(rows).toEqual(['Tasks', 'Needs you', 'Calendar', 'Company', 'Library']);
   });
 
-  it('leaves out pages the person cannot open', async () => {
-    const nav = await show({ can: page => page !== 'company' && page !== 'settings' });
+  it('leaves out pages the person cannot open, the company’s settings too', async () => {
+    const nav = await show({ can: page => page !== 'company' && page !== 'settings', ...PICK });
     expect(within(nav).queryByRole('link', { name: /^Company/ })).toBeNull();
-    expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull();
     expect(within(nav).getByRole('link', { name: /^Library/ })).toBeTruthy();
+    fireEvent.click(within(nav).getByRole('button', { name: /^Fernhill/ }));
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).queryByRole('menuitem', { name: 'Fernhill settings' })).toBeNull();
+    expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
   });
 
-  it('folded, keeps every row as an icon with its name, and the company and settings reachable', async () => {
-    const nav = await show({ folded: true }, '/team/qa');
+  it('folded, keeps every row as an icon with its name, the company (its one menu) and the "?"; Settings is in the menu', async () => {
+    const nav = await show({ folded: true, ...PICK }, '/team/qa');
     // the faces are the rows showing: your direct reports, each folded
-    for (const name of ['Tasks', 'Needs you', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops', 'Settings']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    for (const name of ['Tasks', 'Needs you', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
     expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
-    expect(within(nav).getByRole('button', { name: 'Fernhill' })).toBeTruthy();
+    expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull();
+    expect(within(nav).queryByRole('button', { name: 'Maya' })).toBeNull();
+    expect(within(nav).getByRole('button', { name: 'Tico support' })).toBeTruthy();
     expect(within(nav).getByRole('link', { name: 'Tasks' }).textContent).toBe(''); // the folded Dot holds no count
-  });
-
-  it('opens the company pick and the account menu from the company and your name', async () => {
-    const pick = vi.fn();
-    const nav = await show({
-      companyMenu: <MenuItem label="Okafor Garden Tours" onSelect={pick} />,
-      accountMenu: <MenuItem label="Sign out" onSelect={() => undefined} />,
-    });
     fireEvent.click(within(nav).getByRole('button', { name: 'Fernhill' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Okafor Garden Tours' }));
-    expect(pick).toHaveBeenCalledOnce();
-    // your name at the foot opens your menu
-    fireEvent.click(within(nav).getByRole('button', { name: 'Maya' }));
-    expect(await screen.findByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByRole('menuitem', { name: 'Fernhill settings' })).toBeTruthy();
+    expect(within(menu).getByRole('menuitem', { name: 'Sign out' })).toBeTruthy();
   });
 
-  it('marks the "?" with Tico support\'s unread count, open and folded, and presses onHelp', async () => {
+  it('the pick opens one menu: Companies, the company’s settings, a rule, then you; no My page', async () => {
+    const pick = vi.fn();
+    const root = createRootRoute({ component: () => <Menu {...PROPS} {...PICK} companyMenu={<MenuItem label="Okafor Garden Tours" onSelect={pick} />} /> });
+    const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) });
+    render(<RouterProvider router={router} />);
+    const nav = await screen.findByRole('navigation', { name: 'Main' });
+    fireEvent.click(within(nav).getByRole('button', { name: /^Fernhill/ }));
+    const menu = await screen.findByRole('menu');
+    const rows = [...menu.querySelectorAll('.menu-group-label, [role="menuitem"], [role="separator"]')].map((e) => (e.getAttribute('role') === 'separator' ? '—' : e.textContent));
+    expect(rows).toEqual(['Companies', 'Okafor Garden Tours', 'Fernhill settings', '—', 'Sign out']);
+    expect(within(menu).queryByText('My page')).toBeNull();
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Okafor Garden Tours' }));
+    expect(pick).toHaveBeenCalledOnce();
+    // the company's settings are Settings
+    fireEvent.click(within(nav).getByRole('button', { name: /^Fernhill/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Fernhill settings' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings'));
+  });
+
+  it('marks the "?" in the head with Tico support\'s unread count, open and folded, and presses onHelp', async () => {
     const help = vi.fn();
     let nav = await show({ counts: { support: 2 }, onHelp: help });
     const q = within(nav).getByRole('button', { name: 'Tico support, 2 unread' });
+    expect(q.closest('.nav-head')).toBeTruthy();
     expect(q.parentElement?.querySelector('.slot-n')?.textContent).toBe('2');
     fireEvent.click(q);
     expect(help).toHaveBeenCalledOnce();
@@ -337,7 +362,7 @@ describe('Menu', () => {
     localStorage.clear();
   });
 
-  it('on a phone, the menu is a card from the bar’s Company icon: the rows and a way to tuck it away; search is on the bar @s1210', async () => {
+  it('on a phone, the menu is a card from the bar’s Company icon: the pick, the "?" and a way to tuck it away in its head, no foot; search is on the bar @s1210', async () => {
     const root = createRootRoute({ component: () => <PhoneCards page={<h1>Finance</h1>} tico={<p>Tico's chat</p>} menu={<Menu {...PROPS} />} /> });
     render(<RouterProvider router={createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) })} />);
     fireEvent.click(within(await screen.findByRole('navigation', { name: 'Bar' })).getByRole('button', { name: 'Company' }));
@@ -346,7 +371,11 @@ describe('Menu', () => {
     for (const name of ['Tasks', 'Calendar', 'Company', 'Library']) expect(within(nav).getByRole('link', { name: new RegExp(`^${name}`) })).toBeTruthy();
     expect(within(nav).getByRole('tab', { name: 'Threads' })).toBeTruthy();
     expect(within(card).queryByRole('button', { name: 'Search' })).toBeNull();
-    fireEvent.click(within(card).getByRole('button', { name: 'Tuck the menu away' }));
+    const head = card.querySelector<HTMLElement>('.m-head')!;
+    expect(within(head).getByRole('button', { name: /^Fernhill/ })).toBeTruthy();
+    expect(within(head).getByRole('button', { name: 'Tico support' })).toBeTruthy();
+    expect(card.querySelector('.m-foot')).toBeNull();
+    fireEvent.click(within(head).getByRole('button', { name: 'Tuck the menu away' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Finance' })).toBeTruthy();
   });

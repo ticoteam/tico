@@ -34,13 +34,18 @@
 .did .av{opacity:.9}
 .did span:last-child{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 
-/* the menu's head and foot in this shell */
-.co-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 8px 0 6px;margin-left:-6px;display:inline-flex;align-items:center;gap:10px;color:var(--ink);font:inherit;min-width:0}
+/* the menu's head in this shell: the pick, Tico support's "?" and the fold (its foot moved up here) */
+.co-pick{min-height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:var(--s-0) 8px var(--s-0) 6px;margin-left:-6px;display:inline-flex;align-items:center;gap:10px;color:var(--ink);font:inherit;min-width:0}
 .co-pick:hover,.co-pick.is-open{background:var(--hover)}
-.co-pick .co-name{flex:none;font-weight:var(--w-strong)}
 .co-pick .co-mark{flex:none}
-.co-pick>.ico{width:14px;height:14px;color:var(--muted);margin-left:-6px}
-.me-name{display:inline-flex;align-items:center;gap:10px;padding-left:4px;margin-left:0;border-radius:var(--r-ctl)}
+.co-pick>.ico{width:14px;height:14px;color:var(--muted);margin-left:-6px;flex:none}
+/* the company over your name, and your face on the company's mark (concept D) */
+.co-two{display:grid;min-width:0;text-align:left;line-height:var(--lh-tight)}
+.co-two>*{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.co-pick .co-name{font-weight:var(--w-strong)}
+.co-you{font-size:var(--t-xs);color:var(--muted)}
+.co-mark:has(>.co-badge){position:relative}
+.co-badge.av{position:absolute;right:-5px;bottom:-5px;box-shadow:0 0 0 2px var(--surface)}
 .pg-owner{width:var(--ctl);height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);display:grid;place-items:center;flex:none}
 .pg-owner:hover{background:var(--hover)}
 .pg-owner.is-on{background:var(--selected)}
