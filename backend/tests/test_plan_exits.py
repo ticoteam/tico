@@ -231,3 +231,11 @@ def test_an_unknown_pool_is_not_found(api):
     setup(api)
     for person in ("nobody", "bot:ops"):
         assert api.get(f"/api/v2/{EXITS}/{person}", headers=headers("ana-test")).status_code == 404
+
+
+def test_an_admin_changes_the_exit_of_someone_whose_sign_in_is_off(api):
+    setup(api)
+    add(api, token="cara-test")
+    computer = runner(api, label="Office Mac")["runner_id"]
+    post(api, "access/humans/cara", {"sign_in": False})
+    assert put(api, f"{EXITS}/cara", {"runner_id": computer})["runner_id"] == computer

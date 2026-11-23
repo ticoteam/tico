@@ -76,7 +76,11 @@ def replace_retired(c: Connection, runner_id: str) -> None:
 
 
 def clear(c: Connection, person_id: str) -> None:
-    _save(c, person_id, None)
+    """Departure: an exit that was handed out is cleared and fenced; nobody else gets a row."""
+    c.execute(
+        "UPDATE plan_exits SET runner_id=NULL,generation=generation+1 WHERE person_id=? AND runner_id IS NOT NULL",
+        (person_id,),
+    )
 
 
 def replace_closed(c: Connection, runner_id: str) -> None:
@@ -109,11 +113,7 @@ def _may_change(auth: Any, who: Identity, person_id: str) -> bool:
 
 def _view(row: Any, auth: Any, who: Identity) -> Row:
     person_id = row["person_id"]
-    visible = (
-        row["accepts_member_bots"]
-        or who.actor in (f"human:{person_id}", f"human:{row['owner_id']}")
-        or auth.bot_admin(who)
-    )
+    visible = row["accepts_member_bots"] or who.actor == f"human:{row['owner_id']}" or auth.bot_admin(who)
     return {
         "person_id": person_id,
         "runner_id": row["runner_id"] if visible else None,
@@ -207,6 +207,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
         def check(c: Connection) -> None:
             auth.sync_access(c)
+            _exit(c, _person(person))  # a missing pool is a 404 for everyone
             if not _may_change(auth, who, _person(person)):
                 raise Problem("forbidden", "Only the pool owner or an admin can change its exit", 403)
 
