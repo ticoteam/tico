@@ -5,13 +5,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import model_subscriptions as MS, plan_exits, runner_states, subscription_refresh as SR
-from backend.repositories import metadata
+from backend import claude_login, model_subscriptions as MS, plan_exits, runner_states, subscription_refresh as SR
+from backend.repositories import metadata, save_metadata
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, put
 from backend.tests.helpers.claude_login import access, full, refresh
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, company, on, pick
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, company, legacy_give, on, pick
 
 EMPTY = {"refreshes": [], "tokens": [], "usage": []}
 CONNECT = "model-subscriptions/connect"
@@ -25,16 +25,20 @@ def computer(api, label, platform="linux"):
     return machine
 
 
-def heartbeat(api, machine, bot=None, **runtime):
+def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, **runtime):
+    claude = {"installed": True, **runtime}
     post(
         api,
         "runners/heartbeat",
         {
             "version": "test",
             "platform": machine["platform"],
-            "capabilities": [
+            "capabilities": ["model_subscriptions_v1"]
+            if legacy
+            else [
                 "model_subscriptions_v1",
                 "model_connect_v1",
+                "computer_logins_v1",
                 "claude_login_v1",
                 "plan_usage_v1",
                 "attempt_credentials_v1",
@@ -42,9 +46,11 @@ def heartbeat(api, machine, bot=None, **runtime):
             ],
             "readiness": {
                 "schema_version": 1,
-                "runtimes": {"claude": {"installed": True, **runtime}},
+                "runtimes": {"claude": claude},
                 "bots": {bot: {"runtime": "claude", "ready": True}} if bot else {},
+                **({"computer_profile": profile} if profile else {}),
             },
+            **({"profiles": [{"name": profile, "runtimes": {"claude": runtime}}]} if profile else {}),
         },
         machine["token"],
     )
@@ -125,7 +131,7 @@ def test_full_login_upkeep_and_token_acknowledgments_only_use_the_exit(api, comp
 
     select(api, non_exit)
     select(api, exit_runner)
-    assert post(api, refreshed, result, exit_runner["token"]) == {"stored": False}
+    assert post(api, refreshed, result, exit_runner["token"]) == {"stored": True, "revision": 2}
     post(api, f"runner-claude-logins/{sid}/usage", usage_body, exit_runner["token"], expected=404)
     assert poll(api, exit_runner, sid)["tokens"] == []
     poll(api, exit_runner, sid, 2)
@@ -133,18 +139,21 @@ def test_full_login_upkeep_and_token_acknowledgments_only_use_the_exit(api, comp
         assert MS.handed(c, local, "claude")["revision"] == 1
 
 
-def test_an_outstanding_refresh_stays_uncertain_after_the_exit_changes(api, computers):
+def test_only_a_successful_result_from_the_issued_runner_survives_the_exit_change(api, computers):
     exit_runner, non_exit = computers
     sid = add(api, "claude_login", full(minutes=30))["id"]
     select(api, exit_runner)
     [job] = poll(api, exit_runner, sid)["refreshes"]
     select(api, non_exit)
-    select(api, exit_runner)
+    assert poll(api, non_exit, sid)["refreshes"] == []
+    path = f"runner-claude-logins/{sid}/refreshed"
     result = {"lease": job["lease"], "revision": job["revision"], "state": "succeeded", "value": full(n=2)}
-    assert post(api, f"runner-claude-logins/{sid}/refreshed", result, exit_runner["token"]) == {"stored": False}
-    assert poll(api, exit_runner, sid)["refreshes"] == []
+    rejected = {"lease": job["lease"], "revision": job["revision"], "state": "rejected"}
+    assert post(api, path, rejected, exit_runner["token"]) == {"stored": False}
     with api.app.state.store.read() as c:
-        assert MS.row(c, sid)["revision"] == job["revision"]
+        assert MS.row(c, sid)["status"] != "needs_reconnect"
+    assert post(api, path, result, non_exit["token"]) == {"stored": False}
+    assert post(api, path, result, exit_runner["token"]) == {"stored": True, "revision": 2}
 
 
 def test_scheduled_usage_uses_the_exit_even_without_attempts(api, computers):
@@ -156,10 +165,37 @@ def test_scheduled_usage_uses_the_exit_even_without_attempts(api, computers):
         runner_states.save(c, exit_runner["runner_id"], last_seen_at=H.shift(H.now(), hours=-1))
     assert poll(api, non_exit, sid) == EMPTY
     post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["reason"] == "Waiting for the plan's exit computer"
 
     heartbeat(api, exit_runner)
     [job] = poll(api, exit_runner, sid)["usage"]
     assert job["subscription"] == sid and job["token"] == access(1)
+    idle = add(api, "claude_login", full(n=2, email="idle@acme.example"), name="Idle")["id"]
+    with api.app.state.store.transaction() as c:
+        save_metadata(c, SR.plan_key(idle), {"schedule": {"read_at": H.shift(H.now(), hours=-1)}})
+    assert all(job["subscription"] != idle for job in poll(api, exit_runner, idle)["usage"])
+
+
+def test_claude_poll_reads_exit_selections_once_per_snapshot(api, computers, monkeypatch):
+    exit_runner, other = computers
+    select_ids = [
+        add(api, "claude_login", full(minutes=30, email=email), name=email)["id"]
+        for email in ("first@acme.example", "second@acme.example")
+    ]
+    select(api, exit_runner)
+    body = claude_login.Poll.model_validate({"live": [{"subscription": sid, "revision": 1} for sid in select_ids]})
+    app = api.app.state
+    for enabled, expected in ((True, 1), (False, 0)):
+        monkeypatch.setattr(plan_exits, "UPKEEP_ROUTING", enabled)
+        with app.store.read_transaction() as c:
+            statements = []
+            c.set_trace_callback(statements.append)
+            try:
+                assert claude_login.poll(c, app.vault, other["runner_id"], body, write=False) == EMPTY
+            finally:
+                c.set_trace_callback(None)
+        assert sum("FROM plan_exits" in statement for statement in statements) == expected
 
 
 def test_rotation_advances_the_tunnel_lease_atomically(api, computers):
@@ -232,6 +268,132 @@ def test_turn_windows_from_non_exit_computers_are_ignored(api, computers):
     assert plan["usage"]["used_pct"] == 42
 
 
+def test_raw_and_saved_turn_windows_require_a_current_local_receipt(api, computers):
+    exit_runner, other = computers
+    sid = add(api)["id"]
+    old_generation = select(api, exit_runner)
+    agent_on(api, exit_runner, "ops", sid)
+    attempt = turn(api, exit_runner, "ops")
+    store = api.app.state.store
+    key = SR.plan_key(sid)
+    taken = H.now()
+
+    def reading(pct, seconds):
+        return {
+            **window(pct),
+            "origin": "subscription",
+            "subscription_id": sid,
+            "reported_at": H.shift(taken, seconds=seconds),
+        }
+
+    def usage():
+        [plan] = get(api, "model-subscriptions")["subscriptions"]
+        return plan["usage"]["used_pct"]
+
+    heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(42, 1))
+    assert usage() == 42
+    with store.transaction() as c:
+        assert metadata(c, key)["turn_weekly_exit"] == [exit_runner["runner_id"], old_generation]
+        save_metadata(c, key, {})
+    assert usage() == 42  # the named profile's raw window has the same provenance
+    select(api, other)
+    current = select(api, exit_runner)
+    heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(93, 2))
+    assert usage() is None
+    with store.transaction() as c:
+        assert metadata(c, key) == {}
+        delivery = MS.handed(c, attempt, "claude")["delivery"]
+        c.execute(
+            "UPDATE attempt_subscriptions SET exit_generation=?,delivery='model_exit' WHERE attempt_id=?",
+            (current, attempt),
+        )
+    heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(94, 3))
+    assert usage() is None
+    with store.transaction() as c:
+        assert metadata(c, key) == {}
+        c.execute("UPDATE attempt_subscriptions SET delivery=? WHERE attempt_id=?", (delivery, attempt))
+        save_metadata(
+            c,
+            key,
+            {
+                "turn_weekly": reading(40, 5),
+                "turn_weekly_exit": [exit_runner["runner_id"], old_generation],
+            },
+        )
+    heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(45, 4))
+    with store.read() as c:
+        assert metadata(c, key)["turn_weekly"]["used_percent"] == 40
+    heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(46, 6))
+    with store.read() as c:
+        assert metadata(c, key)["turn_weekly_exit"] == [exit_runner["runner_id"], current]
+        assert metadata(c, key)["turn_weekly"]["used_percent"] == 46
+
+
+@pytest.mark.parametrize("waiting", ["cleared", "revoked", "not_ready"])
+def test_waiting_routes_never_send_upkeep_to_legacy_computers(api, computers, monkeypatch, waiting):
+    exit_runner, other = computers
+    token_sid = add(api)["id"]
+    full_sid = add(api, "claude_login", full(minutes=30), name="Full login")["id"]
+    select(api, exit_runner)
+    agent_on(api, other, "ops", token_sid)
+    agent_on(api, other, "cpo", full_sid)
+    path = "runner-subscription-refreshes"
+    with monkeypatch.context() as legacy:
+        legacy.setattr(plan_exits, "UPKEEP_ROUTING", False)
+        request_usage(api, token_sid)
+        [old] = get(api, path, other["token"])["refreshes"]
+    store = api.app.state.store
+    if waiting == "not_ready":
+        heartbeat(api, exit_runner, installed=False)
+    else:
+        with store.transaction() as c:
+            if waiting == "cleared":
+                plan_exits.clear(c, "ana")
+            else:
+                c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), exit_runner["runner_id"]))
+    with store.read() as c:
+        for sid in (full_sid, token_sid):
+            assert plan_exits.routed(c, MS.row(c, sid)).runner_id is None
+    assert poll(api, other, full_sid) == EMPTY
+    assert get(api, path, other["token"])["refreshes"] == []
+    report = {"subscription": token_sid, "runtime": "claude", "state": "succeeded", "plan": window()}
+    post(api, f"{path}/{old['id']}/report", report, other["token"], expected=404)
+    for sid in (full_sid, token_sid):
+        post(api, CONNECT, {"subscription": sid, "confirm": True}, expected=409)
+        post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)
+
+
+def test_legacy_runner_can_pick_from_a_personal_pool_with_routing_on(api, computers):
+    exit_runner, legacy = computers
+    sid = add(api)["id"]
+    other_sid = add(api, secret=OTHER, name="Another plan")["id"]
+    select(api, exit_runner)
+    assign(api, legacy, "ops")
+    heartbeat(api, legacy, "ops", legacy=True)
+    binding = legacy_give(api, {"runner_id": legacy["runner_id"], "runtime": "claude", "person": "human:ana"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE model_subscriptions SET status='needs_reconnect' WHERE id=?", (binding["subscription_id"],))
+        payer = MS.legacy_current(c, legacy["runner_id"], "claude", ["model_subscriptions_v1"])
+        assert {payer["id"], binding["subscription_id"]} == {sid, other_sid}
+
+
+def test_a_legacy_connect_cannot_poll_or_receive_a_code_after_routing_activates(api, computers, monkeypatch):
+    exit_runner, other = computers
+    sid = add(api)["id"]
+    select(api, exit_runner)
+    heartbeat(api, other)
+    request = {"subscription": sid, "confirm": True}
+    with monkeypatch.context() as legacy:
+        legacy.setattr(plan_exits, "UPKEEP_ROUTING", False)
+        login = post(api, CONNECT, request)
+        assert login["runner_id"] == other["runner_id"]
+        post(api, f"runner-logins/{login['id']}/report", {"state": "waiting"}, other["token"])
+    code_path = f"computers/{other['runner_id']}/logins/{login['id']}/code"
+    post(api, code_path, {"code": "abcdef#ghijkl"}, expected=409)
+    assert get(api, "runner-logins", other["token"])["logins"] == []
+    assert post(api, CONNECT, request)["runner_id"] == exit_runner["runner_id"]
+
+
 def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, computers):
     _, linux = computers
     mac = computer(api, "Mac exit", "darwin")
@@ -240,6 +402,13 @@ def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, comput
     select(api, mac)
     with api.app.state.store.read() as c:
         assert plan_exits.routed(c, MS.row(c, full_id)) is None
+    denied = post(
+        api,
+        f"model-subscriptions/{sid}",
+        {"kind": "claude_login", "secret": full(n=2, email="other@acme.example")},
+        expected=409,
+    )
+    assert denied["error"]["code"] == "exit_platform"
     request_usage(api, sid)
     assert get(api, "runner-subscription-refreshes", mac["token"])["refreshes"][0]["subscription"] == sid
 
@@ -249,9 +418,16 @@ def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, comput
     assert post(api, CONNECT, request)["id"] == login["id"]
     path = f"runner-logins/{login['id']}/subscription"
     post(api, path, {"value": OTHER}, linux["token"], expected=404)
+    post(api, f"runner-logins/{login['id']}/report", {"state": "waiting"}, mac["token"])
+    code_path = f"computers/{mac['runner_id']}/logins/{login['id']}/code"
+    post(api, code_path, {"code": "abcdef#ghijkl"})
     select(api, linux)
+    assert get(api, "runner-logins", mac["token"])["logins"] == []
+    assert post(api, code_path, {"code": "abcdef#ghijkl"}, expected=409)["error"]["code"] == "state"
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT pending_code FROM model_logins WHERE id=?", (login["id"],)).fetchone()[0] is None
     select(api, mac)
-    assert post(api, path, {"value": OTHER}, mac["token"])["state"] == "failed"
+    post(api, path, {"value": OTHER}, mac["token"], expected=409)
     current = post(api, CONNECT, request)
     assert current["id"] != login["id"] and current["runner_id"] == mac["runner_id"]
     assert post(api, f"runner-logins/{current['id']}/subscription", {"value": OTHER}, mac["token"])["state"] == "done"

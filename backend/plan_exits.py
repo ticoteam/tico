@@ -2,7 +2,7 @@
 """One exit computer for a person's saved plans."""
 
 from sqlite3 import Connection
-from typing import Any
+from typing import Any, NamedTuple
 
 from fastapi import Query, Request
 
@@ -10,7 +10,7 @@ from . import access, hubdb
 from .api_contract import api_v2, error
 from .auth import Identity
 from .models import ID, Contract
-from .read_cache import readiness
+from .read_cache import one, readiness
 from .store import Problem
 
 H: Any = hubdb
@@ -35,11 +35,22 @@ EXIT_ROWS = (
 PAGE_SIZE = 100
 # Upkeep stays dark until turn routing is ready and legacy maintenance jobs have drained.
 UPKEEP_ROUTING = False
-Route = tuple[str, int]
+_SELECTIONS = (
+    "SELECT e.person_id,e.generation,r.id,r.platform,r.capabilities,r.readiness FROM plan_exits e "
+    "LEFT JOIN runners_with_state r ON r.id=e.runner_id AND r.revoked_at IS NULL"
+)
 
 
-def routed(c: Connection, sub: Any) -> Route | None:
-    """The personal Claude plan's maintenance computer and selection generation."""
+class Route(NamedTuple):
+    runner_id: str | None
+    generation: int
+
+
+def selections(c: Connection) -> Row:
+    return {row["person_id"]: row for row in c.execute(_SELECTIONS)} if UPKEEP_ROUTING else {}
+
+
+def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
     if (
         not UPKEEP_ROUTING
         or not sub
@@ -47,28 +58,38 @@ def routed(c: Connection, sub: Any) -> Route | None:
         or not sub["owner_id"].startswith("human:")
     ):
         return None
-    exit_runner = c.execute(
-        "SELECT r.id,r.platform,r.capabilities,r.readiness,e.generation FROM plan_exits e "
-        "JOIN runners_with_state r ON r.id=e.runner_id WHERE e.person_id=? AND r.revoked_at IS NULL",
-        (sub["owner_id"].removeprefix("human:"),),
-    ).fetchone()
+    person = sub["owner_id"].removeprefix("human:")
+    if exits is None:
+        return one(c, _SELECTIONS + " WHERE e.person_id=?", (person,))
+    return exits.get(person)
+
+
+def routed(c: Connection, sub: Any, exits: Row | None = None) -> Route | None:
+    """A missing route uses legacy upkeep. A route without a runner waits for its exit."""
+    exit_runner = selected(c, sub, exits)
     if exit_runner is None:
         return None
+    runner_id, generation = exit_runner["id"], exit_runner["generation"]
+    if runner_id is None:
+        return Route(None, generation)
     if sub["kind"] == "claude_login":
-        from .claude_login import can_refresh
+        from .claude_login import platform_can_refresh, takes_turns
 
-        # An offline exit remains authoritative. Its ability to refresh is independent of its heartbeat.
-        ready = readiness(c, exit_runner["id"], exit_runner["readiness"])
-        runtimes: Row = ready.get("runtimes") or {}
-        claude: Row = runtimes.get("claude") or {}
-        if not can_refresh(exit_runner) or not claude.get("installed"):
+        if not platform_can_refresh(exit_runner):
             return None
-    return exit_runner["id"], exit_runner["generation"]
+        if not takes_turns(exit_runner):
+            return Route(None, generation)
+    ready = readiness(c, runner_id, exit_runner["readiness"])
+    runtimes: Row = ready.get("runtimes") or {}
+    claude: Row = runtimes.get("claude") or {}
+    return Route(runner_id if claude.get("installed") else None, generation)
 
 
 def matches(route: Route | None, runner_id: str | None, generation: int | None) -> bool:
     """Legacy jobs and generation-bound jobs each belong to their own routing mode."""
-    return route == (None if generation is None else (runner_id, generation))
+    if route is None:
+        return generation is None
+    return runner_id is not None and route == (runner_id, generation)
 
 
 class ChangeExit(Contract):
@@ -86,7 +107,7 @@ def _choose(c: Connection, person_id: str) -> str | None:
 
 
 def _save(c: Connection, person_id: str, runner_id: str | None) -> bool:
-    return bool(
+    changed = bool(
         c.execute(
             "INSERT INTO plan_exits(person_id,runner_id,generation) VALUES(?,?,1) "
             "ON CONFLICT(person_id) DO UPDATE SET runner_id=excluded.runner_id,generation=plan_exits.generation+1 "
@@ -94,6 +115,11 @@ def _save(c: Connection, person_id: str, runner_id: str | None) -> bool:
             (person_id, runner_id),
         ).rowcount
     )
+    if changed and UPKEEP_ROUTING:
+        from .model_login import invalidate_connects
+
+        invalidate_connects(c, f"human:{person_id}")
+    return changed
 
 
 def ensure_default(c: Connection, person_id: str) -> None:
@@ -114,10 +140,14 @@ def replace_retired(c: Connection, runner_id: str) -> None:
 
 def clear(c: Connection, person_id: str) -> None:
     """Departure: an exit that was handed out is cleared and fenced; nobody else gets a row."""
-    c.execute(
+    changed = c.execute(
         "UPDATE plan_exits SET runner_id=NULL,generation=generation+1 WHERE person_id=? AND runner_id IS NOT NULL",
         (person_id,),
-    )
+    ).rowcount
+    if changed and UPKEEP_ROUTING:
+        from .model_login import invalidate_connects
+
+        invalidate_connects(c, f"human:{person_id}")
 
 
 def replace_closed(c: Connection, runner_id: str) -> None:

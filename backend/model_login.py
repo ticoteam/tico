@@ -27,6 +27,7 @@ Only that save ends the job `done`; a report can only fail it.
 
 import json
 import re
+from sqlite3 import Connection
 
 from clients import harness_manifests as manifests
 
@@ -158,6 +159,38 @@ def clean_user_code(code):
     return code if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 \-]{2,30}", code) else ""
 
 
+def _stale_connects(c, runner_id=None, owner=None):
+    from . import plan_exits
+
+    if not plan_exits.UPKEEP_ROUTING:
+        return []
+    where, args = (" AND l.runner_id=?", (runner_id,)) if runner_id else ("", ())
+    if owner:
+        where += " AND s.owner_id=?"
+        args = (*args, owner)
+    rows = c.execute(
+        "SELECT s.*,l.runner_id FROM subscription_connects s JOIN model_logins l ON l.id=s.login_id "
+        f"WHERE s.kind IN ('claude_token','claude_login') AND l.{ACTIVE_SQL}" + where,
+        args,
+    ).fetchall()
+    return [
+        row["login_id"]
+        for row in rows
+        if not plan_exits.matches(plan_exits.routed(c, row), row["runner_id"], row["exit_generation"])
+    ]
+
+
+def invalidate_connects(c: Connection, owner: str | None = None) -> None:
+    c.executemany(
+        "UPDATE model_logins SET state='failed', message=?, url='', user_code='', pending_code=NULL, updated_at=? "
+        "WHERE id=?",
+        [
+            ("The plan's exit changed. Reconnect again on the current exit.", H.now(), lid)
+            for lid in _stale_connects(c, owner=owner)
+        ],
+    )
+
+
 def sweep(c):
     """Expire what ran out of time; forget what nobody needs any more."""
     now = H.now()
@@ -166,6 +199,10 @@ def sweep(c):
         f"WHERE {ACTIVE_SQL} AND expires_at<?",
         (now, now),
     )
+    from . import plan_exits
+
+    if plan_exits.UPKEEP_ROUTING:
+        invalidate_connects(c)
     # What a Connect that is over would have become: the job names no value, and nothing reads this once it has ended.
     if H._has_table(c, "subscription_connects"):
         c.execute(
@@ -174,7 +211,7 @@ def sweep(c):
     c.execute("DELETE FROM model_logins WHERE created_at<?", (H.shift(now, days=-1),))
 
 
-def sweep_due(c):
+def sweep_due(c, runner_id=None):
     """Whether `sweep` has anything to change: a poll reads without the write lock when it has not."""
     now = H.now()
     return bool(
@@ -182,6 +219,7 @@ def sweep_due(c):
             f"SELECT 1 FROM model_logins WHERE ({ACTIVE_SQL} AND expires_at<?) OR created_at<? LIMIT 1",
             (now, H.shift(now, days=-1)),
         ).fetchone()
+        or _stale_connects(c, runner_id)
     )
 
 

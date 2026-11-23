@@ -216,10 +216,14 @@ def takes_turns(runner: Any) -> bool:
     return bool(runner) and CAPABILITY in _caps(runner)
 
 
-def can_refresh(runner: Any) -> bool:
-    """Claude must keep the login in a file so a copy can be refreshed beside the one turns use."""
+def platform_can_refresh(runner: Any) -> bool:
+    """A copy can be refreshed beside the login turns use when Claude keeps it in a file."""
     keychain = manifests.caps("claude").get("switch_unavailable_on", [])
-    return takes_turns(runner) and runner["platform"] not in keychain
+    return runner["platform"] not in keychain
+
+
+def can_refresh(runner: Any) -> bool:
+    return takes_turns(runner) and platform_can_refresh(runner)
 
 
 def can_sign_in(runner: Any) -> bool:
@@ -227,26 +231,24 @@ def can_sign_in(runner: Any) -> bool:
     return can_refresh(runner) and _online(runner)
 
 
-def _computers(c: Any, sid: str, *, upkeep: bool = True) -> list[tuple[Any, bool]]:
+def _computers(c: Any, sub: Any, route: plan_exits.Route | None) -> list[tuple[Any, bool]]:
     """The computers of a plan, each `(runner row, live)`: those with a turn on it now first, then those given it (on
     its own or in its owner's plans), each by id. A computer using the plan through an exit cannot receive its login
     for refresh or usage."""
+    if not sub or (route and route.runner_id is None):
+        return []
     live: set[str] = set()
     routed: set[str] = set()
     for rid, model_exit in c.execute(
         "SELECT DISTINCT a.runner_id,s.delivery='model_exit' FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? AND s.delivery<>'' "
         "AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL",
-        (sid,),
+        (sub["id"],),
     ):
         (routed if model_exit else live).add(rid)
     from .agent_subscriptions import provider_runners
 
-    sub = _MS().row(c, sid)
-    if not sub:
-        return []
-    route = plan_exits.routed(c, sub) if upkeep else None
-    ids = [route[0]] if route else sorted(provider_runners(c, sub) - routed)
+    ids = [route.runner_id] if route else sorted(provider_runners(c, sub) - routed)
     if not ids:
         return []
     rows = c.execute(
@@ -261,7 +263,11 @@ def can_convert(c: Any, sid: str) -> None:
     """A setup-token plan becomes a full login only when every computer that runs it can take one: those given it, those
     with a turn on it, and those it ran on in the last week. An older runner would drop the plan (its turns would sign in
     as the computer instead), so the change is refused, naming them, until they are updated."""
-    ids = {r["id"] for r, _ in _computers(c, sid, upkeep=False)}
+    sub = _MS().row(c, sid)
+    selected = plan_exits.selected(c, sub)
+    if selected and selected["id"] and not platform_can_refresh(selected):
+        raise Problem("exit_platform", "The plan's exit platform cannot refresh a full Claude login", 409)
+    ids = {r["id"] for r, _ in _computers(c, sub, None)}
     ids |= {
         r[0]
         for r in c.execute(
@@ -306,13 +312,15 @@ def _tell(c: Any, runner_ids: Iterable[str]) -> None:
 def read_soon(c: Any, sid: str) -> None:
     """A new login's usage is read now, not on a computer's next 5-minute poll: each computer that can read it is told
     (a plan never read is due at once, `_wanted`)."""
-    _tell(c, [r["id"] for r, _ in _computers(c, sid) if takes_turns(r) and _online(r)])
+    sub = _MS().row(c, sid)
+    _tell(c, [r["id"] for r, _ in _computers(c, sub, plan_exits.routed(c, sub)) if takes_turns(r) and _online(r)])
 
 
 def pushed(c: Any, sid: str) -> None:
     """A plan's login changed (a refresh, or a Reconnect of the same account): every computer with a turn on it is told,
     and rewrites its turns' files on its poll; a turn waiting for it goes."""
-    _tell(c, [r["id"] for r, live in _computers(c, sid) if live])
+    sub = _MS().row(c, sid)
+    _tell(c, [r["id"] for r, live in _computers(c, sub, plan_exits.routed(c, sub)) if live])
     unpark(c, sid)
 
 
@@ -393,7 +401,7 @@ def _value(c: Any, vault: Any, sub: Any, write: bool) -> str | None:
     return _MS().value_of(c, vault.cipher, sub)
 
 
-def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[Row]:
+def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> list[Row]:
     """The refreshes this computer is to make now, each with the plan's login: a lease it holds, or one it takes."""
     now = H.now()
     due = H.shift(now, seconds=REFRESH_BEFORE.total_seconds())
@@ -405,12 +413,12 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[R
             (KIND, due),
         )
     ):
-        route = plan_exits.routed(c, sub)
-        if route and route[0] != runner_id:
+        route = plan_exits.routed(c, sub, exits)
+        if route and route.runner_id != runner_id:
             continue
         lease: Row = _lease(c, sub["id"])
         quiet = ""
-        computers = _computers(c, sub["id"])
+        computers = _computers(c, sub, route)
         if lease.get("lease_id"):
             destination = lease["lease_runner"]
             if destination and (
@@ -449,7 +457,7 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[R
             c.execute(
                 "INSERT INTO claude_login_leases(id,subscription_id,runner_id,revision,issued_at,exit_generation) "
                 "VALUES(?,?,?,?,?,?)",
-                (lease["lease_id"], sub["id"], runner_id, sub["revision"], now, route[1] if route else None),
+                (lease["lease_id"], sub["id"], runner_id, sub["revision"], now, route.generation if route else None),
             )
             c.execute("DELETE FROM claude_login_leases WHERE issued_at<?", (H.shift(now, seconds=-KEEP_SECONDS),))
             _put_lease(
@@ -482,16 +490,19 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
     sub = MS.row(c, sid)
     if not sub or sub["kind"] != KIND:
         raise Problem("not_found", "That plan is not a full Claude login", 404)
-    route = plan_exits.routed(c, sub)
     issued = H._one(c, "SELECT * FROM claude_login_leases WHERE id=?", (body.lease,))
     if (
         not issued
         or issued["runner_id"] != runner_id
         or issued["subscription_id"] != sid
         or issued["revision"] != body.revision
-        or not plan_exits.matches(route, runner_id, issued["exit_generation"])
     ):
         return {"stored": False}
+    route = None
+    if body.state != "succeeded":
+        route = plan_exits.routed(c, sub)
+        if not plan_exits.matches(route, runner_id, issued["exit_generation"]):
+            return {"stored": False}
     lease = _lease(c, sid)
     if lease.get("done_lease") == body.lease:
         return {"stored": True, "revision": lease["done_revision"]}
@@ -524,7 +535,7 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
         H.event(c, "runner:" + runner_id, "subscription.refreshed", sid, {"revision": sub["revision"] + 1})
         pushed(c, sid)
         return {"stored": True, "revision": sub["revision"] + 1}
-    if not holds or not any(r["id"] == runner_id for r, _ in _computers(c, sid)):
+    if not holds or not any(r["id"] == runner_id for r, _ in _computers(c, sub, route)):
         return {"stored": False}
     failures = (lease.get("failures") or 0) + 1
     _put_lease(
@@ -611,16 +622,18 @@ def paid_parks(c: Any, bots: list[str], job: str | None = None) -> set[tuple[str
 
 
 # ------------------------------------------------------------------------------------------------ tokens
-def _live_plans(c: Any, runner_id: str, live: list["LiveToken"]) -> list[tuple["LiveToken", Row, int | None]]:
+def _live_plans(
+    c: Any, runner_id: str, live: list["LiveToken"], exits: Row
+) -> list[tuple["LiveToken", Row, int | None]]:
     """Resolve the poll's reported plans once, for both revision acknowledgments and token delivery."""
     plans: list[tuple[LiveToken, Row, int | None]] = []
     for item in live[:MAX_LIVE]:
         sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (item.subscription,))
         if not sub:
             continue
-        route = plan_exits.routed(c, sub)
-        if route is None or route[0] == runner_id:
-            plans.append((item, sub, route[1] if route else None))
+        route = plan_exits.routed(c, sub, exits)
+        if route is None or route.runner_id == runner_id:
+            plans.append((item, sub, route.generation if route else None))
     return plans
 
 
@@ -661,12 +674,14 @@ def ask_usage(c: Any, sid: str, actor: str) -> Any:
     sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,))
     if not sub:
         raise Problem("not_found", "Subscription not found", 404)
-    ready = [r["id"] for r, _ in _computers(c, sid) if takes_turns(r) and _online(r)]
+    route = plan_exits.routed(c, sub)
+    ready = [r["id"] for r, _ in _computers(c, sub, route) if takes_turns(r) and _online(r)]
     if not ready:
+        if route:
+            raise Problem("offline", "Waiting for the plan's exit computer", 409)
         raise Problem("offline", "Its computers are offline or not yet updated to read usage", 409)
     value = _usage_meta(c, sid)
     old: Row = value.get("request") or {}
-    route = plan_exits.routed(c, sub)
     if old and not plan_exits.matches(route, old.get("runner_id"), old.get("exit_generation")):
         old = {}
     now = H.now()
@@ -697,7 +712,7 @@ def _request(runner_id: str, now: str, route: plan_exits.Route | None) -> Row:
         "updated_at": now,
         "expires_at": H.shift(now, seconds=USAGE_LIFETIME),
         "state": "requested",
-        **({"exit_generation": route[1]} if route else {}),
+        **({"exit_generation": route.generation} if route else {}),
     }
 
 
@@ -708,8 +723,9 @@ class _Line:
     plans' usage (`_listing`) for every set. Neither changes while a poll runs: its writes are leases and asked reads,
     which no pick reads."""
 
-    def __init__(self, c: Any) -> None:
+    def __init__(self, c: Any, exits: Row) -> None:
         self.c = c
+        self.exits = exits
         self.current: set[str] | None = None
         self.following: set[str] | None = None
         self._given: dict[tuple[str, str], Row] | None = None
@@ -737,48 +753,47 @@ class _Line:
                 members: list[Row] = entry.get("members") or []
                 ready = [m for m in members if MS.available(self.c, m, runtime)]
                 if len(ready) > 1 and ctx is None:
-                    ctx = MS._listing(self.c)
+                    ctx = MS._listing(self.c, exits=self.exits)
                 self.following.update(m["id"] for m in MS._ordered(self.c, ready, runtime, ctx)[:2])
         return sid in self.following
 
 
-def _wanted(c: Any, sid: str, schedule: Row, line: _Line) -> bool:
+def _wanted(c: Any, sub: Row, schedule: Row, line: _Line) -> bool:
     """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
     with it now), or next in line in a person's set (`line`, the poll's). Others wait for ↻ or their turn to come up."""
     from .agent_subscriptions import provider_runners
 
-    sub = _MS().row(c, sid)
-    if not schedule.get("read_at") or (sub and provider_runners(c, sub)):
+    if not schedule.get("read_at") or provider_runners(c, sub):
         return True
     if c.execute(
         "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
         "AND a.state IN ('leased','running') LIMIT 1",
-        (sid,),
+        (sub["id"],),
     ).fetchone():
         return True
-    return sid in line
+    return sub["id"] in line
 
 
-def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[Row]:
+def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> list[Row]:
     """The usage reads this computer is to make now, each with the plan's access token for this read only: one asked of
     it, or one due on the plan's schedule whose turn is this computer's."""
     now = H.now()
     fresh = H.shift(now, seconds=120)
     out: list[Row] = []
-    line = _Line(c)
+    line = _Line(c, exits)
     for sub in H._rows(
         c.execute(
             f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
             (KIND, fresh),
         )
     ):
-        route = plan_exits.routed(c, sub)
-        if route and route[0] != runner_id:
+        route = plan_exits.routed(c, sub, exits)
+        if route and route.runner_id != runner_id:
             continue
         value = _usage_meta(c, sub["id"])
         request: Row = value.get("request") or {}
         live = request.get("state") == "requested" and request.get("expires_at", "") > now
-        computers = _computers(c, sub["id"])
+        computers = _computers(c, sub, route)
         if live and (
             not plan_exits.matches(route, request.get("runner_id"), request.get("exit_generation"))
             or not any(r["id"] == request.get("runner_id") for r, _ in computers)
@@ -793,7 +808,7 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[
             continue  # its token is about to change
         if not live:
             schedule: Row = value.get("schedule") or {}
-            if (schedule.get("next_at") or "") > now or (not route and not _wanted(c, sub["id"], schedule, line)):
+            if (schedule.get("next_at") or "") > now or not _wanted(c, sub, schedule, line):
                 continue
             if _chosen(computers, lambda r: takes_turns(r) and _online(r), schedule.get("failures") or 0) != runner_id:
                 continue
@@ -863,12 +878,13 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
     sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,))
     value = _usage_meta(c, sid)
     request: Row = value.get("request") or {}
+    route = plan_exits.routed(c, sub)
     if (
         not sub
         or request.get("id") != body.id
         or request.get("runner_id") != runner_id
-        or not plan_exits.matches(plan_exits.routed(c, sub), runner_id, request.get("exit_generation"))
-        or (request.get("state") == "requested" and not any(r["id"] == runner_id for r, _ in _computers(c, sid)))
+        or not plan_exits.matches(route, runner_id, request.get("exit_generation"))
+        or (request.get("state") == "requested" and not any(r["id"] == runner_id for r, _ in _computers(c, sub, route)))
     ):
         raise Problem("not_found", "Usage request not found", 404)
     now = H.now()
@@ -980,7 +996,8 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
         return {"tokens": [], "refreshes": [], "usage": []}
     # What the computer's turns hold now: their record moves with it, so a later refusal is judged against the token
     # they really had (`gap`).
-    live = _live_plans(c, runner_id, body.live)
+    exits = plan_exits.selections(c)
+    live = _live_plans(c, runner_id, body.live, exits)
     for item, sub, generation in live:
         args = (sub["id"], generation, item.revision, sub["id"], runner_id)
         if not write:
@@ -1002,8 +1019,8 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
             tokens.append({"subscription": sub["id"], "revision": sub["revision"], "value": turn_file(value)})
     return {
         "tokens": tokens,
-        "refreshes": _refreshes(c, vault, runner_id, write) if can_sign_in(runner) else [],
-        "usage": _usage_jobs(c, vault, runner_id, write),
+        "refreshes": _refreshes(c, vault, runner_id, write, exits) if can_sign_in(runner) else [],
+        "usage": _usage_jobs(c, vault, runner_id, write, exits),
     }
 
 
