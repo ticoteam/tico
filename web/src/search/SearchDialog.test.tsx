@@ -52,6 +52,25 @@ describe('Search @s1209', () => {
     expect(popup.style.top).toBe('12px');
   });
 
+  it('closes on a click off the palette, even with the shell drawn over it', async () => {
+    render(
+      <>
+        <div className="shell-frame" style={{ position: 'relative', zIndex: 1 }} />
+        <SearchDialog />
+      </>,
+    );
+    act(() => openSearch());
+    await screen.findByRole('combobox', { name: 'Search' });
+    const off = document.querySelector('.pal-off');
+    expect(off).toBeTruthy();
+    fireEvent.pointerDown(off!, { button: 0 });
+    fireEvent.mouseDown(off!, { button: 0 });
+    fireEvent.pointerUp(off!, { button: 0 });
+    fireEvent.mouseUp(off!, { button: 0 });
+    fireEvent.click(off!, { button: 0 });
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Search' })).toBeNull());
+  });
+
   it('finds a teammate by name and opens their page; the last row hands the words to Tico', async () => {
     // a choice runs through the action layer (shell.goTo), which moves this router
     const router = createRouter({ routeTree: createRootRoute(), history: createMemoryHistory({ initialEntries: ['/tasks'] }) });
