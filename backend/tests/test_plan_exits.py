@@ -2,9 +2,9 @@
 
 import pytest
 
-from backend import hosting_enrollment, plan_exits, runner_states
+from backend import cloud_machines, hosting_enrollment, plan_exits, runner_states
 from backend.store import H, digest
-from backend.tests.helpers.api import get, post, put, runner
+from backend.tests.helpers.api import get, headers, post, put, runner
 from backend.tests.helpers.claude_login import full
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import TOKEN, add, codex_file
@@ -63,6 +63,26 @@ def test_cloud_and_hosted_computers_are_excluded_from_the_default(api):
 
     add(api)
     assert stored_exit(api) == (personal["runner_id"], 1)
+
+
+def test_replacing_a_manually_selected_cloud_exit_does_not_pick_its_replacement(api):
+    setup(api)
+    store = api.app.state.store
+    key = cloud_machines.SHARED
+    with store.transaction() as c:
+        c.execute("INSERT INTO cloud_machines(bot,state,updated_at) VALUES(?,'stopped',?)", (key, H.now()))
+        code = cloud_machines.mint(c, key, owner="ana")
+    old = post(api, "runners/enroll", {"code": code, "label": "Cloud machine", "platform": "linux"})["runner_id"]
+    add(api)
+    put(api, f"{EXITS}/ana", {"runner_id": old})
+    assert stored_exit(api) == (old, 1)
+
+    with store.transaction() as c:
+        code = cloud_machines.mint(c, key, owner="ana")
+    new = post(api, "runners/enroll", {"code": code, "label": "Cloud machine", "platform": "linux"})["runner_id"]
+    assert new != old
+    assert stored_exit(api) == (None, 2)
+    assert get(api, f"{EXITS}/ana")["runner_label"] is None
 
 
 def test_revoking_the_exit_moves_it_to_the_next_computer_then_clears_it(api):
@@ -140,23 +160,59 @@ def test_exit_computers_are_paged_and_visible_only_to_people_who_can_change_it(a
     assert readonly["computers"] == [] and readonly["next_after"] is None
 
 
-def test_health_warns_only_for_a_personal_plan_without_an_exit(api):
+def test_private_exit_details_are_hidden_from_other_members(api):
     setup(api)
+    computer = runner(api, operator="cara", label="Private Mac")["runner_id"]
+    post(api, f"computers/{computer}/member-bots", {"accepts": False})
+    add(api)
+    path = f"{EXITS}/ana"
+    put(api, path, {"runner_id": computer})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id,name,email) VALUES('eve','Eve','eve@acme.example')")
 
-    def warnings():
-        return [check for check in get(api, "health")["checks"] if check["id"] == "plan_exit_missing"]
+    [hidden] = get(api, SUBSCRIPTIONS, token="eve-test")["plan_exits"]
+    assert hidden == {
+        "person_id": "ana",
+        "runner_id": None,
+        "runner_label": "Private computer",
+        "generation": 1,
+        "can_change": False,
+    }
+    assert get(api, path, token="eve-test") == {**hidden, "computers": [], "next_after": None}
+    for token in ("ana-test", "ben-test", "cara-test"):
+        visible = get(api, path, token=token)
+        assert (visible["runner_id"], visible["runner_label"], visible["generation"]) == (computer, "Private Mac", 1)
 
-    add(api, "anthropic_key", API_KEY)
-    assert warnings() == []
-    add(api, token="cara-test")
-    [check] = warnings()
-    assert (check["label"], check["status"]) == ("No exit computer", "warn")
-    assert [item["name"] for item in check["items"]] == ["Cara"]
-    # The issue list sorts every check's items by name, so this one must carry the shared item shape.
-    assert [i["name"] for i in get(api, "health/issues")["issues"] if i["kind"] == "plan_exit_missing"] == ["Cara"]
 
-    runner(api, operator="cara")
-    assert warnings() == []
+def test_closing_a_shared_exit_rechooses_only_for_members_who_lose_access(api):
+    setup(api)
+    post(api, "access/humans", {"email": "eve@acme.example"})
+    shared = runner(api, operator="cara", label="Shared Mac")["runner_id"]
+    personal = runner(api, operator="eve", label="Eve's Mac")["runner_id"]
+    for person in ("cara", "ben", "eve"):
+        add(api, token=f"{person}-test")
+        put(api, f"{EXITS}/{person}", {"runner_id": shared}, token=f"{person}-test")
+
+    post(api, f"computers/{shared}/member-bots", {"accepts": False})
+    assert stored_exit(api, "cara") == (shared, 1)
+    assert stored_exit(api, "ben") == (shared, 1)
+    assert stored_exit(api, "eve") == (personal, 3)
+
+
+def test_departure_clears_a_plan_exit_and_a_legacy_exit_does_not_block_removal(api):
+    person = post(api, "access/humans", {"email": "typo@acme.example"})["person"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO plan_exits(person_id,generation) VALUES(?,1)", (person,))
+    post(api, f"humans/{person}", {"left": True})
+    assert stored_exit(api, person) is None
+
+    # Someone marked left before exits were cleared can still be removed.
+    with store.transaction() as c:
+        c.execute("INSERT INTO plan_exits(person_id,generation) VALUES(?,1)", (person,))
+    removed = api.delete(f"/api/v2/humans/{person}", headers=headers("ana-test"))
+    assert removed.status_code == 200, removed.text
+    assert stored_exit(api, person) is None
 
 
 def test_model_subscriptions_lists_each_plan_pools_exit(api):

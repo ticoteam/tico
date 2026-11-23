@@ -30,7 +30,7 @@ rename, replace or remove it.
 
 A personal plan pool shows **Exit** in its header. Tico picks the owner's most recently seen registered personal
 computer. The pool owner or an admin can choose another computer the owner can use. If the exit is removed or
-retired, Tico picks the next eligible personal computer. Health lists pools with personal plans and no exit.
+retired, Tico picks the next eligible personal computer.
 Use `tico subscription exit <person>` to read the setting and `tico subscription set-exit <person> <computer-id>`
 to change it. The setting is saved for future routing.
 

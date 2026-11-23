@@ -26,7 +26,7 @@ KEEPS = "Has history; stays as left"
 SKIP_TABLES = ("humans", "idempotency", "principals")
 # A seat that reports to them is moved by `remove` to their manager (or the owner removing them), as people are: an
 # invite from setup moves the seats that waited with the owner under the person, which is not something they did.
-OWN_COLUMNS = {("human_tokens", "human"), ("seats", "reports_to")}
+OWN_COLUMNS = {("human_tokens", "human"), ("plan_exits", "person_id"), ("seats", "reports_to")}
 # Settings that name them and are rewritten by `remove`.
 OWN_SETTINGS = (Access.ACCESS, "people", "invites")
 
@@ -128,6 +128,7 @@ def remove(c, actor, roster, person):
         "UPDATE idempotency SET error_detail=? WHERE binding=? AND subject=? AND state='refused'",
         (invites.REMOVED, invites.BINDING, pid),
     )
+    c.execute("DELETE FROM plan_exits WHERE person_id=?", (pid,))
     c.execute("DELETE FROM humans WHERE id=?", (pid,))
     sent = invites.sent(c)
     if pid in sent:

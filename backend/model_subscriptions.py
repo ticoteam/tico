@@ -2154,6 +2154,7 @@ def owner_left(c, settings, actor, owner):
     for (sid,) in c.execute("SELECT id FROM model_subscriptions WHERE owner_id=? ORDER BY id", (owner,)).fetchall():
         remove(c, settings, SimpleNamespace(actor=actor), sid, confirm=True)
     c.execute("DELETE FROM computer_subscriptions WHERE person=?", (owner,))
+    c.execute("DELETE FROM plan_exits WHERE person_id=?", (H.actor_id(owner),))
     for bot, runtime in lost:
         H.event(c, actor, "agent_subscription.owner_left", bot, {"runtime": runtime, "owner": owner})
 
@@ -3069,7 +3070,11 @@ def install(app, store, auth, mutate, settings):
                 "subscriptions": subscriptions,
                 "kinds": kinds(),
                 "connect": connect_ready(c),
-                "plan_exits": plan_exits.listed(c, auth, who),
+                "plan_exits": (
+                    plan_exits.listed(c, auth, who)
+                    if any(sub["owner_id"] and owned(sub["kind"]) for sub in subscriptions)
+                    else []
+                ),
             }
 
     @app.post(

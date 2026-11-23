@@ -14,16 +14,20 @@ from .store import Problem
 
 H: Any = hubdb
 Row = dict[str, Any]
+# SQLite uses the partial index when the kind predicate matches model_subscriptions_pool.
 PLAN_OWNERS = (
     "SELECT DISTINCT h.id AS person_id FROM model_subscriptions s JOIN humans h ON s.owner_id='human:' || h.id "
-    "WHERE s.kind IN ('claude_login','claude_token','codex_login')"
+    "WHERE s.kind IN ('claude_token','claude_login','codex_login')"
 )
+# During replacement, the new runner has consumed its code before the machine row points to it.
 PERSONAL_RUNNER = (
     "NOT EXISTS (SELECT 1 FROM cloud_machines m WHERE m.runner_id=r.id) "
+    "AND NOT EXISTS (SELECT 1 FROM enrollments e JOIN cloud_machine_codes m USING(code_hash) WHERE e.runner_id=r.id) "
     "AND NOT EXISTS (SELECT 1 FROM enrollments e JOIN hosting_enrollments h USING(code_hash) WHERE e.runner_id=r.id)"
 )
 EXIT_ROWS = (
-    "SELECT p.person_id,r.id AS runner_id,r.label AS runner_label,coalesce(e.generation,0) AS generation "
+    "SELECT p.person_id,r.id AS runner_id,r.label AS runner_label,coalesce(e.generation,0) AS generation, "
+    "r.owner_id,r.accepts_member_bots "
     f"FROM ({PLAN_OWNERS}) p LEFT JOIN plan_exits e USING(person_id) "
     "LEFT JOIN runners r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
@@ -71,6 +75,17 @@ def replace_retired(c: Connection, runner_id: str) -> None:
         _save(c, person_id, _choose(c, person_id))
 
 
+def replace_closed(c: Connection, runner_id: str) -> None:
+    admins = access.owner_and_admin_emails(c)
+    for person_id, email in c.execute(
+        "SELECT e.person_id,lower(h.email) FROM plan_exits e JOIN humans h ON h.id=e.person_id "
+        "JOIN runners r ON r.id=e.runner_id WHERE e.runner_id=? AND e.person_id<>r.owner_id",
+        (runner_id,),
+    ).fetchall():
+        if email not in admins:
+            _save(c, person_id, _choose(c, person_id))
+
+
 def initialize(c: Connection) -> None:
     """Backfill after migrations have settled the owners of existing plans."""
     for (runner_id,) in c.execute(
@@ -80,7 +95,8 @@ def initialize(c: Connection) -> None:
     for (person_id,) in c.execute(
         f"SELECT p.person_id FROM ({PLAN_OWNERS}) p LEFT JOIN plan_exits e USING(person_id) WHERE e.runner_id IS NULL"
     ).fetchall():
-        ensure_default(c, person_id)
+        if chosen := _choose(c, person_id):
+            _save(c, person_id, chosen)
 
 
 def _may_change(auth: Any, who: Identity, person_id: str) -> bool:
@@ -88,22 +104,19 @@ def _may_change(auth: Any, who: Identity, person_id: str) -> bool:
 
 
 def _view(row: Any, auth: Any, who: Identity) -> Row:
-    return {**dict(row), "can_change": _may_change(auth, who, row["person_id"])}
+    person_id = row["person_id"]
+    visible = row["accepts_member_bots"] or H.actor_id(who.actor) in (person_id, row["owner_id"]) or auth.bot_admin(who)
+    return {
+        "person_id": person_id,
+        "runner_id": row["runner_id"] if visible else None,
+        "runner_label": "Private computer" if row["runner_id"] and not visible else row["runner_label"],
+        "generation": row["generation"],
+        "can_change": _may_change(auth, who, person_id),
+    }
 
 
 def listed(c: Connection, auth: Any, who: Identity) -> list[Row]:
     return [_view(row, auth, who) for row in c.execute(EXIT_ROWS + " ORDER BY p.person_id")]
-
-
-def missing(c: Connection, limit: int) -> list[tuple[str, str]]:
-    return [
-        (row["id"], row["name"] or "A teammate")
-        for row in c.execute(
-            f"SELECT h.id,h.name FROM ({EXIT_ROWS}) e JOIN humans h ON h.id=e.person_id "
-            "WHERE e.runner_id IS NULL ORDER BY h.name,h.id LIMIT ?",
-            (limit,),
-        )
-    ]
 
 
 def _exit(c: Connection, person_id: str) -> Any:
