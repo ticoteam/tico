@@ -16,7 +16,7 @@ own mark, until a person signs in again or chooses to use the shared key (`use_s
 v0.6.0-rc.1 runner's own marks). A key deleted in Settings > Providers or Credentials clears it the same way
 (`mark_key_cleared`).
 
-A model key is a subscription, added and given to computers in Settings > Providers (backend/model_subscriptions.py).
+A model key is a subscription, added in Settings > Providers and assigned to computers with the CLI.
 The Settings > Computers key jobs (Add, Replace and Clear key, Switch to subscription, Switch to API key) are gone: a
 page or client that still asks is told where keys are changed now (`MOVED`).
 
@@ -85,8 +85,8 @@ VERDICTS.update(LEGACY_VERDICTS)
 MAX_LINES, MAX_LINE = 12, 200
 # What a page drawn before D11-5, or a client, is told when it asks for a key job from Settings > Computers.
 MOVED = (
-    "Model keys moved to Settings > Providers: add the key there as a subscription and give it to this computer. "
-    "To stop a computer using a key, take it off the computer there and sign the computer in"
+    "Add or replace model keys in Settings > Providers. Assign or unassign them with "
+    "`tico settings set models.computer_subscription`. After removing a key, sign the computer in."
 )
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
 

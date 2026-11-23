@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -261,6 +261,45 @@ describe('Setup dialog, three steps @s1171', () => {
     expect(putBody()).toMatchObject({ names: { company_name: 'Fernhill' } });
     const next = await screen.findByRole('dialog', { name: 'Connect your AI plan' });
     expect(within(next).getByRole('img', { name: 'Step 2 of 3' })).toBeTruthy();
+  });
+
+  it('continues when the first held provider becomes available and refreshes the later hold too', async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.now();
+      const quota = new Date(now + 4000).toISOString();
+      const capacity = new Date(now + 2000).toISOString();
+      const path = '/api/v2/model-subscriptions';
+      const catalog = () => {
+        const limited = Date.now() < now + 4000;
+        const busy = Date.now() < now + 2000;
+        return { kinds: [], subscriptions: [
+          { id: 'limited', name: 'Limited plan', runtime: 'codex', available: !limited, usage: limited ? { quota_hold_until: quota } : null },
+          { id: 'busy', name: 'Busy plan', runtime: 'claude', available: !busy, usage: busy ? { capacity_until: capacity } : null },
+        ] };
+      };
+      queryClient.setQueryData(subscriptionsQuery.queryKey, catalog() as never);
+      serve((_method, url) => url === path ? catalog() : RECORD);
+      show(<FirstRun />, '/tasks?setup=model');
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      const dialog = within(screen.getByRole('dialog', { name: 'Connect your AI plan' }));
+      expect(dialog.queryByRole('button', { name: 'Continue' })).toBeNull();
+
+      await act(() => vi.advanceTimersByTimeAsync(1999));
+      expect(sent('GET', path)).toHaveLength(0);
+      await act(() => vi.advanceTimersByTimeAsync(6));
+      expect(sent('GET', path)).toHaveLength(1);
+      expect(dialog.getByRole('button', { name: 'Continue' })).toBeTruthy();
+      expect(dialog.getByText('Busy plan')).toBeTruthy();
+
+      await act(() => vi.advanceTimersByTimeAsync(1994));
+      expect(sent('GET', path)).toHaveLength(1);
+      await act(() => vi.advanceTimersByTimeAsync(6));
+      expect(sent('GET', path)).toHaveLength(2);
+      expect(dialog.getByText('Limited plan')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('connects inline, retries, and continues only after a provider is ready', async () => {

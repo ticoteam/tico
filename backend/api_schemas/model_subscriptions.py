@@ -42,6 +42,10 @@ SCHEMAS['ModelSubscription'] = obj(
                         'cost_usd_month': NUM_N,
                         'resets_at': 'n',
                         'quota_hold_until': {'type': 'string', 'description': 'Reset of an active quota hold'},
+                        'capacity_until': {
+                            'type': 'string',
+                            'description': 'End of a temporary provider capacity hold',
+                        },
                         'reason': {'type': ['string', 'null']},
                         'weekly_resets_at': 'n',
                         'weekly_used_pct': NUM_N,

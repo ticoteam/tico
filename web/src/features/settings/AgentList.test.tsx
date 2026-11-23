@@ -526,6 +526,7 @@ describe('Settings › Providers', () => {
       { ...base, name: 'Payment', problem: 'Payment past due', expired: true, usage },
       { ...base, id: 'expired', name: 'Expired', expired: true, usage },
       { ...base, id: 'limited', name: 'Limited', available: false, usage: { ...usage, quota_hold_until: usage.resets_at! } },
+      { ...base, id: 'busy', name: 'Busy plan', available: false, usage: { ...usage, capacity_until: usage.resets_at! } },
       { ...base, id: 'near', name: 'Near', usage: { ...usage, used_pct: 96, near: true }, in_use_on: ['r1'] },
       { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'], available: true, usage },
       { ...base, id: 'ready', name: 'Ready plan', order: 2, usage: { ...usage, used_pct: 100.4, resets_at: null } },
@@ -535,12 +536,13 @@ describe('Settings › Providers', () => {
     serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: rows }) : undefined);
     show(<SettingsPage section="providers" />, '/settings/providers');
     await screen.findByRole('region', { name: 'Your pool' });
-    for (const [row, words] of [['Payment', 'Problem'], ['Expired', 'Reconnect needed'], ['Limited', 'At limit until'], ['Near', 'Near limit'], ['Live', 'In use'], ['Spare', 'Next'], ['Ready plan', 'Ready']] as const) {
+    for (const [row, words] of [['Payment', 'Problem'], ['Expired', 'Reconnect needed'], ['Limited', 'At limit until'], ['Busy plan', 'Busy until'], ['Near', 'Near limit'], ['Live', 'In use'], ['Spare', 'Next'], ['Ready plan', 'Ready']] as const) {
       const badges = screen.getByTitle(row).querySelectorAll('.pill');
       expect(badges).toHaveLength(1);
       expect(badges[0]?.textContent).toContain(words);
     }
     expect(screen.getByText('Problem').getAttribute('title')).toBe('Payment past due');
+    expect(within(screen.getByTitle('Busy plan')).getByText(/Busy until/).classList.contains('pill-flag')).toBe(false);
     expect(within(screen.getByTitle('Live')).getByText(/100%/)).toBeTruthy();
     expect(within(screen.getByTitle('Expired')).queryByText(/100%/)).toBeNull();
   });

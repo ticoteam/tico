@@ -754,10 +754,10 @@ def _rejected(computers):
 
 
 def _needs_sign_in(computers):
-    """(computer, model CLI) for online computers that have to be signed in to a model they run, by hand or Agent Ops.
+    """(label, runtime, runner) for online computers that have to be signed in to a model they run, by hand or Agent Ops.
     A model whose bots the Tico AI Gateway runs meanwhile (`gateway_covered`) is not one of them."""
     return [
-        (x["label"], providers.RUNTIME_LABELS.get(r["name"], r["name"]))
+        (x["label"], r["name"], x["id"])
         for x in computers
         if x["online"]
         for r in x["runtimes"]
@@ -800,27 +800,33 @@ def _rejected_summary(rows):
     )
 
 
-def _rejected_fixes(c, settings, rows):
+def _computer_login_fixes(c, settings, rows):
     from urllib.parse import quote
 
+    logins = _login_dependencies(c, settings)
+    fixes = {}
+    for label, runtime, runner in rows:
+        if runner not in fixes and len(fixes) == 5:
+            continue
+        agents = logins.get(runner, {}).get(runtime, ())
+        if agents:
+            fixes[runner] = _fix(f"Open Computer on {label}", f"#/bot/{quote(min(agents), safe='')}/computer")
+        else:
+            fixes.setdefault(runner, _fix(f"Open {label}", f"#/computers/{quote(runner, safe='')}"))
+    return list(fixes.values())
+
+
+def _rejected_fixes(c, settings, rows):
     sources = {row[4] for row in rows}
     fixes = []
     if "credentials" in sources or "" in sources:
         fixes.append(_fix("Open Keys", "#/tools/keys?show=credentials"))
     if "computer" in sources or "" in sources:
-        logins = _login_dependencies(c, settings)
-        linked = set()
-        for label, runtime, _, _, source, runner in rows:
-            if source not in ("", "computer") or runner in linked:
-                continue
-            linked.add(runner)
-            agents = logins.get(runner, {}).get(runtime, ())
-            if agents:
-                fixes.append(_fix(f"Open Computer on {label}", f"#/bot/{quote(min(agents), safe='')}/computer"))
-            else:
-                fixes.append(_fix(f"Open {label}", f"#/computers/{quote(runner, safe='')}"))
-            if len(linked) == 5:
-                break
+        fixes += _computer_login_fixes(
+            c,
+            settings,
+            ((label, runtime, runner) for label, runtime, _, _, source, runner in rows if source in ("", "computer")),
+        )
     if "" in sources:
         fixes.append(_fix("Open Providers", "#/settings/providers"))
     return fixes
@@ -3771,11 +3777,14 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "computer_signin",
                 "Computer sign-in",
                 "warn",
-                "; ".join(f"{label}: sign in to {model}" for label, model in unsigned[:5])
+                "; ".join(
+                    f"{label}: sign in to {providers.RUNTIME_LABELS.get(runtime, runtime)}"
+                    for label, runtime, _ in unsigned[:5]
+                )
                 + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
-                + " Sign in on an agent’s Computer tab (Agent Ops can start it). To have new computers sign in by "
-                "themselves, store the company's model key in Tools > Keys and give it to every computer.",
-                [_fix("Open Computers", "#/settings", "devices"), _fix("Open Keys", "#/tools/keys?show=credentials")],
+                + " Sign in on an agent’s Computer tab (Agent Ops can start it). For a shared model key, add it in "
+                "Settings > Providers and assign it with `tico settings set models.computer_subscription`.",
+                [*_computer_login_fixes(c, settings, unsigned), _fix("Open Providers", "#/settings/providers")],
             )
         )
     # A signed-in API key can be paid and usable, but it never spends a subscription's allowance. Keep this visible
@@ -3814,7 +3823,11 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                 "Computer logins used by bots",
                 "bad" if unavailable else "warn",
                 summary,
-                [_fix("Open Computers", "#/settings", "devices")] if full else [],
+                _computer_login_fixes(
+                    c, settings, ((computer["label"], runtime["name"], computer["id"]) for computer, runtime in logins)
+                )
+                if full
+                else [],
             )
         )
     # The Tico AI Gateway's word on the company's key, for the owner who manages the connection: 80% of the month's cap

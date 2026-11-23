@@ -1814,6 +1814,30 @@ def test_the_list_distinguishes_readings_from_holds_and_pins_from_rotation(api):
     assert held[next_plan]["in_use_on"] == [m["runner_id"]]
 
 
+def test_capacity_holds_preserve_usage_and_report_when_the_provider_is_available_again(api, monkeypatch):
+    setup(api)
+    company(api)
+    plan = add(api)["id"]
+    key = add(api, "anthropic_key", secret="sk-ant-api-" + "c" * 24, name="Company API")["id"]
+    before = {s["id"]: s["usage"] for s in listed(api)}
+    with api.app.state.store.transaction() as c:
+        hit = H.now()
+        for sid in (plan, key):
+            login_holds.record(c, "", login_holds.subscription_login(sid), "claude", hit, error="overloaded")
+
+    until = H.shift(hit, seconds=login_holds.CAPACITY_WAIT)
+    held = {s["id"]: s for s in listed(api)}
+    for sid in (plan, key):
+        assert not held[sid]["available"]
+        assert held[sid]["usage"] == {**before[sid], "capacity_until": until}
+
+    monkeypatch.setattr(H, "now", lambda: until)
+    released = {s["id"]: s for s in listed(api)}
+    for sid in (plan, key):
+        assert released[sid]["available"]
+        assert released[sid]["usage"] == before[sid]
+
+
 def test_each_subscription_lists_the_bots_it_serves_and_marks_those_that_only_fall_back_to_it(api):
     """The Agents screen's faces on a subscription row: the bots on the computers given it whose turns run its runtime,
     one that reaches it only through its named fallback marked as such. One that needs reconnecting still lists the

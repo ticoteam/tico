@@ -961,8 +961,6 @@ def _usage(c, sub, ctx=None):
 
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
-    if spec.get("billing") == "api":
-        return {"window": None, "used_pct": None, "cost_usd_month": round(float(ctx["costs"].get(sub["id"]) or 0), 2)}
     hold = login_holds.get(
         c,
         "",
@@ -970,17 +968,25 @@ def _usage(c, sub, ctx=None):
         spec.get("runtime", ""),
         loads=SimpleNamespace(holds=ctx["holds"]),
     )
-    if hold and (hold.get("until") or "") > H.now() and not hold.get("capacity"):
+    until = hold.get("until") or ""
+    active = until > H.now()
+    capacity = hold.get("capacity")
+    if spec.get("billing") == "api":
+        usage = {"window": None, "used_pct": None, "cost_usd_month": round(float(ctx["costs"].get(sub["id"]) or 0), 2)}
+    elif active and not capacity:
         kind = login_holds.window(hold.get("error"))
         window = "week" if "weekly" in kind else "5h" if "5-hour" in kind else None
-        return {
+        usage = {
             "window": window,
             "used_pct": 100,
             "cost_usd_month": None,
-            "resets_at": hold["until"],
-            "quota_hold_until": hold["until"],
+            "resets_at": until,
         }
-    return _plan_usage(c, sub, spec.get("runtime", ""), ctx)
+    else:
+        usage = _plan_usage(c, sub, spec.get("runtime", ""), ctx)
+    if active:
+        usage["capacity_until" if capacity else "quota_hold_until"] = until
+    return usage
 
 
 def _reason(text):

@@ -83,8 +83,8 @@ const SETTINGS_SECTION: Record<string, string> = {
   models: 'providers',
   chat: 'providers',
   providers: 'providers',
-  limits: 'providers',
-  'turn-levels': 'providers',
+  limits: 'limits',
+  'turn-levels': 'limits',
   gateway: 'providers',
   tasks: 'tasks',
   contacts: 'contacts',
@@ -102,7 +102,8 @@ const SETTINGS_CARD_SECTION: Record<string, string> = {
   'settings-models': 'providers',
   'set-providers': 'providers',
   'set-gateway': 'providers',
-  'set-turn-levels': 'providers',
+  'set-turn-levels': 'limits',
+  'settings-limits': 'limits',
   'settings-subs': 'providers',
   'settings-defaults': 'agents',
   'settings-tokens': 'account',
@@ -122,6 +123,7 @@ function settingsAddress(tab: string, card: string, q: URLSearchParams): string 
   if (tab === 'releases') return '/settings/agents';
   const section = SETTINGS_CARD_SECTION[card] ?? SETTINGS_SECTION[tab];
   if (!section) return '/settings'; // the old app opened General for a name it did not know
+  if (section === 'limits') return '/company/usage?view=limits';
   const who = q.get('who');
   if (section === 'providers') return at('/settings/providers', { open: q.get('open') });
   return at(`/settings/${section}`, section === 'history' && who && /^(bot|human):\S+$/.test(who) ? { who } : {});

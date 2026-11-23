@@ -629,7 +629,11 @@ def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):
             "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('coder',?,1,?,'t')",
             (runner, H.now()),
         )
-    assert "sign in to Codex" in health_of(api)[1]["computer_signin"]["summary"]
+    _, checks = health_of(api)
+    signin = checks["computer_signin"]
+    assert "sign in to Codex" in signin["summary"]
+    assert [fix["href"] for fix in signin["fixes"]] == ["#/bot/coder/computer", "#/settings/providers"]
+    assert [fix["href"] for fix in checks["computer_logins"]["fixes"]] == ["#/bot/coder/computer"]
 
 
 def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_the_one_cli_it_installs(environment):
@@ -659,6 +663,7 @@ def test_a_computer_with_no_bots_and_no_company_default_is_asked_to_sign_in_on_t
     assert not runtimes["codex"]["sign_in"] and not runtimes["codex"]["needed"] and runtimes["codex"]["signable"]
     assert "sign in to Claude Code" in checks["computer_signin"]["summary"]
     assert "Codex" not in checks["computer_signin"]["summary"]
+    assert checks["computer_signin"]["fixes"][0]["href"] == f"#/computers/{runner}"
 
 
 def _claude_signed_out_on_an_isolated_computer(api, runner, *, isolated):

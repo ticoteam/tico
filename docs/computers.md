@@ -634,10 +634,11 @@ the change, redrawing **Settings → Computers**, for about a minute.
 ### API keys on a Computer
 
 A Computer's own login can run on a model API key instead of a subscription (Codex, Claude Code, Cursor Agent and
-Muse Code take one). Keys are subscriptions in **Settings > Providers**: added there, sealed in Tico's credential vault and
-never shown again in full, and given to one computer or several. The Computer fetches the key it is given over its own
-connection, at start-up and every ten minutes (`GET /api/v2/runner-model-credentials`). Its line in the computer's pop-up
-says whose key it is, by its preview only (`sk-…xyz`): **this computer's key** (given to it alone), **a shared key**
+Muse Code take one). Add or replace keys in **Settings > Providers**. Tico seals them in its credential vault and shows
+only the preview after saving. Use `tico settings set models.computer_subscription` to assign or unassign a key on each
+computer. The computer fetches its key at start-up and every ten minutes (`GET /api/v2/runner-model-credentials`).
+Its line in the computer's pop-up says whose key it is, by its preview only (`sk-…xyz`):
+**this computer's key** (given to it alone), **a shared key**
 (given to several computers, listed on the line), or **a key set on the computer** (its environment or
 `secrets/_shared.env`).
 

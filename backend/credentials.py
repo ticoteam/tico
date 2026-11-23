@@ -77,8 +77,11 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
-# A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Providers.
-MODELS_FOR_COMPUTERS = 'Give model keys to computers in Settings > Providers'
+# A model key for computers is a subscription now (backend/model_subscriptions.py).
+MODELS_FOR_COMPUTERS = (
+    'Add or replace model keys in Settings > Providers. Assign or unassign them with '
+    '`tico settings set models.computer_subscription`.'
+)
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'

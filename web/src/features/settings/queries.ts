@@ -23,12 +23,12 @@ import type {
   UsageFigures,
   UsageLimits,
 } from '@/api/schema';
-import { configQuery, pageOwnersQuery, queryClient, quietRoot, write, type PageOwnerRow, type PageOwners } from '@/data';
+import { configQuery, pageOwnersQuery, queryClient, quietRoot, QUIET_STALE_MS, write, type PageOwnerRow, type PageOwners } from '@/data';
 import type { TaskCaps } from '@/api/schema';
 import type { ProductRepositoryPreview, ProductRepositoryResult, Repository, RepositoryList } from '@/api/schema';
 
 /* Settings and Usage have no live topic: both are read again after the person's own writes, on reconnect, and when a
-   section opens with data older than a minute. The one timer is a model sign-in under way (readSignIn). */
+   section opens with data older than a minute. Model sign-ins and provider holds also refresh while they wait. */
 quietRoot('settings');
 quietRoot('usage');
 
@@ -402,6 +402,20 @@ export interface SubscriptionAgent {
 export const subscriptionsQuery = queryOptions({
   queryKey: ['settings', 'subscriptions'],
   queryFn: ({ signal }) => api.get<ModelSubscriptionList>('/api/v2/model-subscriptions', { signal }),
+  refetchInterval: ({ state }) => {
+    let earliest = Infinity;
+    for (const { usage } of state.data?.subscriptions ?? []) {
+      for (const end of [usage?.quota_hold_until, usage?.capacity_until]) {
+        const at = Date.parse(end ?? '');
+        if (at < earliest) earliest = at;
+      }
+    }
+    if (earliest === Infinity) return false;
+    // If a fresh response still reports a past deadline (for example with clock skew), back off.
+    if (earliest <= state.dataUpdatedAt) return QUIET_STALE_MS;
+    return Math.min(2_147_483_647, Math.max(1, earliest - Date.now()));
+  },
+  refetchIntervalInBackground: true,
 });
 
 export type Subscription = ModelSubscription & { agents?: SubscriptionAgent[] };
