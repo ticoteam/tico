@@ -505,7 +505,7 @@ def github_refuses_the_merge(r: SoftRig) -> None:
     r.at(e, "Merge")
     r.says(e, "GitHub refused the merge: GitHub is unavailable")
     expect(r.waits(e) == [("bot", RELEASE)], f"waits on {r.waits(e)}")
-    tried = r.gh.stats["call ready"]  # each try marks the PR ready for review first, then queues it
+    tried = r.gh.stats["call read_checks"]  # each try reads the head's checks first, then marks it ready and queues it
     expect(tried == 3, f"the queue call was tried {tried} times, not 3")
 
 
