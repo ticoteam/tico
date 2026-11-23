@@ -891,6 +891,7 @@ impl Runner {
                 .store(beat.subscription_accounts == Some(true), Ordering::SeqCst);
             crate::profiles::set_server_takes_usage_sources(
                 beat.subscription_usage_sources == Some(true),
+                beat.subscription_usage_attempts == Some(true),
             );
             // Performance diagnostics run only while the computer's owner has them on (crate::perf).
             crate::perf::set_enabled(beat.performance == Some(true));

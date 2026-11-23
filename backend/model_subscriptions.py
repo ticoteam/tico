@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
-from . import hubdb as H
+from . import hubdb as H, plan_exits
 from .credentials import SERVICE, keep_service
 from .models import Contract, ID
 from .store import Problem, encode, readiness_document
@@ -411,6 +411,7 @@ def _given_rows(c, runner_ids=None):
                             "revision",
                             "status",
                             "status_at",
+                            "owner_id",
                             "created_at",
                             "credential_at",
                             "account",
@@ -849,7 +850,7 @@ def _api_costs(c, month, sid=None):
     return {r["subscription_id"]: r["cost"] for r in H._rows(c.execute(costs_sql(len(ids)), (month, *ids)))}
 
 
-def _listing(c, sid=None):
+def _listing(c, sid=None, exits=None):
     """What a plan list reads about plans and their computers, in a fixed number of queries however many plans and
     computers there are. Read agent picks and legacy bindings with their computers, readiness, login reports, holds,
     API key costs and registry metadata. With `sid`, only that plan's associations and computers are read."""
@@ -931,6 +932,7 @@ def _listing(c, sid=None):
         "holds": holds,
         "meta": subscription_meta(c),
         "people": {},
+        "exits": plan_exits.selections(c) if exits is None else exits,
     }
 
 
@@ -1029,29 +1031,61 @@ def provenance(reading):
     return {**reading, "origin": None, "subscription_id": None}
 
 
+def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
+    binding = ""
+    args = (sid, runtime, runner_id)
+    if route:
+        if route.runner_id != runner_id or not (attempt_id := reading.get("attempt_id")):
+            return False
+        binding = (
+            "AND s.attempt_id=? AND e.exit_generation=? AND s.delivery<>'model_exit' "
+            "AND julianday(a.created_at)<=julianday(?) "
+        )
+        args = (*args, attempt_id, route.generation, reading["reported_at"])
+    return (
+        c.execute(
+            "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+            "JOIN model_subscriptions m ON m.id=s.subscription_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id "
+            "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
+            "AND a.created_at>=m.credential_at " + binding + "LIMIT 1",
+            args,
+        ).fetchone()
+        is not None
+    )
+
+
 def remember_turn_usage(c, runner_id, runtimes):
     """Keep each payer's latest window when another agent's reading replaces it on the computer."""
     from .repositories import metadata, save_metadata
     from .subscription_refresh import plan_key
 
+    exits = None
+    routes = {}
     for runtime, state in runtimes.items():
         for window in ("weekly", "five_hour"):
             reading = provenance(state.get(window))
             if not reading or reading.get("origin") != "subscription" or not (sid := reading.get("subscription_id")):
                 continue
-            if not c.execute(
-                "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
-                "JOIN model_subscriptions m ON m.id=s.subscription_id "
-                "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
-                "AND a.created_at>=m.credential_at LIMIT 1",
-                (sid, runtime, runner_id),
-            ).fetchone():
+            if plan_exits.UPKEEP_ROUTING and sid not in routes:
+                if exits is None:
+                    exits = plan_exits.selections(c)
+                sub = c.execute("SELECT kind,owner_id FROM model_subscriptions WHERE id=?", (sid,)).fetchone()
+                routes[sid] = plan_exits.routed(c, sub, exits)
+            route = routes.get(sid)
+            if not _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
                 continue
             key = plan_key(sid)
             saved = metadata(c, key) or {}
             field = "turn_" + window
+            binding = field + "_exit"
             previous = (saved.get(field) or {}).get("reported_at")
-            if not previous or _at(reading["reported_at"]) > _at(previous):
+            current = list(route) if route else None
+            if saved.get(binding) != current or not previous or _at(reading["reported_at"]) > _at(previous):
+                if current:
+                    saved[binding] = current
+                else:
+                    saved.pop(binding, None)
                 save_metadata(c, key, {**saved, field: reading})
 
 
@@ -1079,18 +1113,33 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     from .subscriptions import WINDOWS, computer_logins, weekly_snapshot
 
     runners = ctx["runners"]
-    computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
+    exits = ctx.get("exits")
+    route = plan_exits.routed(c, sub, exits)
+    # Routed windows use the reading saved after checking its turn receipt at heartbeat ingestion.
+    computers = [
+        g
+        for g in ctx["grants"].get(sub["id"], [])
+        if not route and g["runtime"] == runtime and g["runner_id"] in runners
+    ]
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
-    has_turn_reading = bool(meta.get("turn_weekly") or meta.get("turn_five_hour"))
+    turn_weekly, turn_five_hour = (
+        meta.get(field)
+        if not route
+        or (route.runner_id and meta.get(field + "_exit") == list(route) and (meta.get(field) or {}).get("attempt_id"))
+        else None
+        for field in ("turn_weekly", "turn_five_hour")
+    )
+    has_turn_reading = bool(turn_weekly or turn_five_hour)
     has_own_reading = bool(SR.plan_reading(meta) or meta.get("five_hour"))
-    if not computers and not has_turn_reading and not has_own_reading and windows is None:
+    if not route and not computers and not has_turn_reading and not has_own_reading and windows is None:
         return _reason("Not on a computer yet")
     if sub["status"] == "needs_reconnect":
         return _reason("Reconnect to see usage")
     readers = [g for g in computers if computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])]
     # A full login's usage is the plan's own read (backend/claude_login.py), whichever computers it is on.
     if (
-        not readers
+        not route
+        and not readers
         and not has_turn_reading
         and not has_own_reading
         and sub["kind"] != "claude_login"
@@ -1142,8 +1191,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     for reading, window, label in (
         (SR.plan_reading(meta), "weekly", "week"),
         (meta.get("five_hour") if sub["kind"] == "claude_login" else None, "five_hour", "5h"),
-        (meta.get("turn_weekly"), "weekly", "week"),
-        (meta.get("turn_five_hour"), "five_hour", "5h"),
+        (turn_weekly, "weekly", "week"),
+        (turn_five_hour, "five_hour", "5h"),
     ):
         own = weekly_snapshot(reading, window)
         if (
@@ -1201,6 +1250,12 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
         return {"window": label, "used_pct": used, "cost_usd_month": None, "resets_at": resets, **week, **extra}
     if percent_missing:
         return _reason("No percentage from the plan")
+    if route:
+        return _reason(
+            "Waiting for the exit's first usage reading"
+            if route.runner_id and model_login._online(plan_exits.selected(c, sub, exits))
+            else "Waiting for the plan's exit computer"
+        )
     if outside:
         return _reason("No usage reported since this subscription was added")
     if not any(model_login._online(runners[g["runner_id"]]) for g in readers):
@@ -1862,7 +1917,7 @@ def default_name(c, kind, owner=""):
     return name
 
 
-def save(c, vault, settings, auth, who, body, sid=None):
+def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
     its usage-limit hold as Try now does, and a name renames it. Returns its view.
 
@@ -1872,7 +1927,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
     stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
     its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
     path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
-    from . import claude_login, quarantine_stops
+    from . import claude_login, model_login, quarantine_stops
 
     sub = _manage_provider(c, auth, who, sid) if sid else None
     admin = _may_manage(auth, who)
@@ -1894,7 +1949,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
             if not sid and taken["owner_id"] == owner:
                 # A second Connect of the same account reconnects its owner's plan.
                 body = body.model_copy(update={"name": None, "owner_id": None})
-                return save(c, vault, settings, auth, who, body, taken["id"])
+                return save(c, vault, settings, auth, who, body, taken["id"], completing_login_id=completing_login_id)
             label = f" as {taken['name']}" if sid and _may_manage_provider(auth, who, taken) else ""
             raise Problem("account", f"This Claude account is already connected{label}", 409)
     if sid and sub:
@@ -1947,6 +2002,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
                 # A setup-token plan becomes a full login, the same plan: owner, computers and history stay. Its readings
                 # and asked reads were the token's, and the login may be another account: they go.
                 c.execute("UPDATE model_subscriptions SET kind=? WHERE id=?", (body.kind, sid))
+                model_login.invalidate_plan_connects(c, sid, completing_login_id)
                 claude_login.reset_usage(c, sid)
                 H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
             if kind == "claude_login" and _kept_key(sub):
@@ -2035,6 +2091,15 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
         "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
         (_keep_value(c, vault, sub, value, preview, actor, now), preview, now, sub["id"]),
     )
+    if route := plan_exits.routed(c, sub):
+        c.execute(
+            "UPDATE attempt_subscriptions AS s SET revision=? FROM plan_exit_bindings e "
+            "WHERE s.subscription_id=? AND s.delivery='model_exit' AND s.revision=? "
+            "AND e.kind='attempt' AND e.ref_id=s.attempt_id AND e.exit_generation=? "
+            "AND s.attempt_id IN (SELECT id FROM attempts "
+            "WHERE state IN ('leased','running') AND stop_requested_at IS NULL AND lease_until>?)",
+            (sub["revision"] + 1, sub["id"], sub["revision"], route.generation, now),
+        )
 
 
 def _agent_attempts(c, sid):
@@ -2552,11 +2617,24 @@ def hand_out(c, attempt_id, chosen):
     for item in chosen:
         sub = item["subscription"]
         delivery = item.get("delivery", "")
+        route = plan_exits.routed(c, sub)
         c.execute(
-            "INSERT OR REPLACE INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) "
-            "VALUES(?,?,?,?,?,?)",
-            (attempt_id, item["runtime"], sub["id"], sub["revision"], delivery, sub.get("payer_parent")),
+            "INSERT OR REPLACE INTO attempt_subscriptions"
+            "(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) VALUES(?,?,?,?,?,?)",
+            (
+                attempt_id,
+                item["runtime"],
+                sub["id"],
+                sub["revision"],
+                delivery,
+                sub.get("payer_parent"),
+            ),
         )
+        if route:
+            c.execute(
+                "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES('attempt',?,?)",
+                (attempt_id, route.generation),
+            )
         if item.get("activate"):
             c.execute(
                 "INSERT OR IGNORE INTO pending_subscription_fallbacks(attempt_id,runtime) VALUES(?,?)",
@@ -2897,6 +2975,10 @@ def connect(c, settings, auth, who, body):
     owner = sub["owner_id"] if sub else _default_owner(c, auth, who, body)
     if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
         raise Problem("owner", "A provider keeps its owner", 422)
+    route = plan_exits.routed(c, sub or {"owner_id": owner, "kind": kind})
+    if route and route.runner_id is None:
+        raise Problem("offline", "The plan's exit needs to be online with Claude Code installed", 409)
+    exit_id, exit_generation = route or (None, None)
 
     def answer(login, runner, plan_name):
         return {
@@ -2913,11 +2995,13 @@ def connect(c, settings, auth, who, body):
     same = claude if kind in claude else (kind,)
     target = c.execute(
         f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=s.login_id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
         f"AND s.subscription_id=? AND s.owner_id=? AND {model_login.ACTIVE_SQL}"
+        " AND e.exit_generation IS ? AND l.runner_id=coalesce(?,l.runner_id)"
         + (" AND s.name=?" if name else "")
         + " ORDER BY l.created_at",
-        (who.actor, *same, sid, owner, *([name] if name else [])),
+        (who.actor, *same, sid, owner, exit_generation, exit_id, *([name] if name else [])),
     ).fetchone()
     if target:
         if body.confirm:
@@ -2926,11 +3010,15 @@ def connect(c, settings, auth, who, body):
         plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
         return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
     computers = _connect_computers(c, spec["runtime"], who)
+    if exit_id:
+        computers = [r for r in computers if r["id"] == exit_id]
     if kind in claude:
         full = [r for r in computers if claude_login.can_sign_in(r)]
         if full or kind == "claude_login":
             computers, kind = full, "claude_login"
     plan_name = sub["name"] if sub else name or default_name(c, kind, owner)
+    if exit_id and not computers:
+        raise Problem("offline", "The plan's exit needs to be online with Claude Code installed", 409)
     if not computers and kind == "claude_login" and sub and sub["kind"] == "claude_login":
         raise Problem(
             "offline",
@@ -2977,6 +3065,11 @@ def connect(c, settings, auth, who, body):
         "VALUES(?,?,?,?,?,?)",
         (login["id"], kind, "" if sid else name, sid, owner, int(body.confirm)),
     )
+    if route:
+        c.execute(
+            "INSERT INTO plan_exit_bindings(kind,ref_id,exit_generation) VALUES('connect',?,?)",
+            (login["id"], route.generation),
+        )
     H.event(c, who.actor, "subscription.connect", sid or login["id"], {"kind": kind, "runner": runner["id"]})
     return answer(login, runner, plan_name)
 
@@ -2995,7 +3088,11 @@ def connected(c, vault, settings, auth, who, login_id, body):
         raise Problem("not_found", "That sign-in does not exist", 404)
     if login["state"] not in model_login.ACTIVE:
         raise Problem("state", "That sign-in has ended", 409)
-    target = c.execute("SELECT * FROM subscription_connects WHERE login_id=?", (login_id,)).fetchone()
+    target = c.execute(
+        "SELECT s.*,e.exit_generation FROM subscription_connects s "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=s.login_id WHERE s.login_id=?",
+        (login_id,),
+    ).fetchone()
     state, message, category = "done", "", ""
     if not target:
         state, message, category = "failed", "That sign-in has ended", "ended"
@@ -3007,7 +3104,13 @@ def connected(c, vault, settings, auth, who, login_id, body):
             confirm=bool(target["restart_confirmed"]),
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
+        sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
+        route = plan_exits.routed(c, sub, connect_kind=target["kind"])
+        if route and route.runner_id is None:
+            raise Problem("offline", model_login.EXIT_NOT_READY, 503, retryable=True)
         try:
+            if not plan_exits.matches(route, who.runner_id, target["exit_generation"]):
+                raise Problem("stale_exit", model_login.CONNECT_CHANGED, 409)
             auth.sync_access(c)
             requester = auth.identity_for_actor(c, login["requested_by"])
             save(
@@ -3018,6 +3121,7 @@ def connected(c, vault, settings, auth, who, login_id, body):
                 requester,
                 write,
                 target["subscription_id"] or None,
+                completing_login_id=login_id,
             )
         except Problem as problem:
             # A fixed word for the history: never the value, nor what the provider said about it.

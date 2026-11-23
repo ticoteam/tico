@@ -229,8 +229,9 @@ def computer_details(c, row, who, auth):
         for bot, report in readiness.get("bots", {}).items()
         if bot in assigned and (access.get(bot) or {}).get("read") and isinstance(report, dict)
     }
-    from .subscriptions import may_see_accounts, without_accounts
+    from .subscriptions import may_see_accounts, without_accounts, without_usage_attempts
 
+    without_usage_attempts(readiness.get("runtimes") or {})
     if not may_see_accounts(auth, who, value):
         without_accounts(readiness.get("runtimes") or {}, windows=True)
     update = runner_versions.view(runner_versions.load(c).get(row["id"]))
@@ -3104,6 +3105,7 @@ def install_views(app, store, auth, mutate, task_view):
                 value.update(performance_listing(value))
                 value.pop("capabilities")
                 value["readiness"] = readiness_document(value.pop("readiness"))
+                subscriptions.without_usage_attempts(value["readiness"].get("runtimes") or {})
                 value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {

@@ -470,6 +470,7 @@ impl Runner {
                         Some(id) => {
                             reading["origin"] = json!("subscription");
                             reading["subscription_id"] = json!(id);
+                            reading["attempt_id"] = json!(aid);
                         }
                         None => reading["origin"] = json!("login"),
                     }

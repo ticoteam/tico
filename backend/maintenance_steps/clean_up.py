@@ -48,6 +48,12 @@ def run(c, ctx):
         webhook_delivery.prune(tx, now)  # outgoing webhooks: events and finished sends keep a month
         automations.prune(tx, now)  # automation runs: step detail keeps 30 days
         _prune_history(tx, now)
+        # A finished attempt can still substantiate a delayed usage report.
+        tx.execute(
+            "DELETE FROM plan_exit_bindings AS e WHERE "
+            "(e.kind='attempt' AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.id=e.ref_id)) OR "
+            "(e.kind='connect' AND NOT EXISTS (SELECT 1 FROM subscription_connects s WHERE s.login_id=e.ref_id))"
+        )
         presence.sweep(tx, now)
         calendar_store.purge_cancelled(tx, now)  # cancelled calendar events keep 90 days
     sweep_idempotency(store, now)

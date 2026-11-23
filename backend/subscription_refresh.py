@@ -10,7 +10,7 @@ from pydantic import Field
 from clients.harness_manifests import caps
 
 from . import hubdb as H, models as M
-from . import runner_online
+from . import plan_exits, runner_online
 from .repositories import metadata, save_metadata
 from .store import Problem
 from .api_contract import api_v2
@@ -127,7 +127,7 @@ def request_refresh(c, auth, who, body):
     return view(value)
 
 
-def pending(c, runner):
+def pending(c, runner, exits=None):
     prefix = f'subscription-refresh:{runner}:'
     # LIKE is unnecessary: runner IDs may contain wildcard characters.
     rows = c.execute('SELECT value FROM registry_metadata WHERE substr(key,1,?)=? ORDER BY key', (len(prefix), prefix))
@@ -136,7 +136,7 @@ def pending(c, runner):
         for row in rows
         if (value := json.loads(row[0])).get('state') == 'requested' and value['expires_at'] > H.now()
     ]
-    return (reads + plan_pending(c, runner))[:5]
+    return (reads + plan_pending(c, runner, exits))[:5]
 
 
 def report(c, runner, rid, body):
@@ -224,9 +224,11 @@ def _can_read_plan(runner):
     return model_login._online(runner) and PLAN_CAPABILITY in (H._json(runner['capabilities'], []) or [])
 
 
-def _plan_computers(c, sub):
+def _plan_computers(c, sub, route):
     from .agent_subscriptions import provider_runners
 
+    if route:
+        return {route.runner_id} if route.runner_id else set()
     return provider_runners(c, sub)
 
 
@@ -251,8 +253,11 @@ def request_plan_read(c, sid, actor):
         )
     if sub['status'] == 'needs_reconnect':
         raise Problem('signed_out', 'Sign in again before reading this plan', 409)
-    computers = _plan_computers(c, sub)
+    route = plan_exits.routed(c, sub)
+    computers = _plan_computers(c, sub, route)
     if not computers:
+        if route:
+            raise Problem('offline', "Waiting for the plan's exit computer", 409)
         raise Problem('no_computer', 'Choose this plan or its pool for an agent on a computer first', 409)
     ready = [
         runner
@@ -263,9 +268,13 @@ def request_plan_read(c, sid, actor):
         and _can_read_plan(row)
     ]
     if not ready:
+        if route:
+            raise Problem('offline', "Waiting for the plan's exit computer", 409)
         raise Problem('offline', 'Its computers are offline or not yet updated to read usage', 409)
     value = metadata(c, plan_key(sid)) or {}
     old = value.get('request') or {}
+    if old and not plan_exits.matches(route, old.get('runner_id'), old.get('exit_generation')):
+        old = {}
     now = H.now()
     if (old.get('state') == 'requested' and old.get('expires_at', '') > now) or old.get('requested_at', '') > H.shift(
         now, seconds=-COOLDOWN
@@ -278,14 +287,17 @@ def request_plan_read(c, sid, actor):
         'updated_at': now,
         'expires_at': H.shift(now, seconds=LIFETIME),
         'state': 'requested',
+        **({'exit_generation': route.generation} if route else {}),
     }
     save_metadata(c, plan_key(sid), value)
     H.event(c, actor, 'subscription.usage_requested', sid, {'runner_id': ready[0]})
     return plan_view(value)
 
 
-def plan_pending(c, runner):
+def plan_pending(c, runner, exits=None):
     """This computer's reads asked and not yet answered (at most five), as its runner polls them."""
+    from . import model_subscriptions as MS
+
     rows = c.execute(
         'SELECT key, value FROM registry_metadata WHERE key>=? AND key<?', (PLAN_PREFIX, PLAN_PREFIX[:-1] + ';')
     )
@@ -296,10 +308,14 @@ def plan_pending(c, runner):
         if request.get('kind') == 'oauth_usage':
             continue  # a full login's read, polled with its token (backend/claude_login.py)
         if request.get('state') == 'requested' and request.get('runner_id') == runner and request['expires_at'] > now:
+            sid = row['key'][len(PLAN_PREFIX) :]
+            route = plan_exits.routed(c, MS.row(c, sid), exits) if plan_exits.UPKEEP_ROUTING else None
+            if not plan_exits.matches(route, runner, request.get('exit_generation')):
+                continue
             out.append(
                 {
                     'id': request['id'],
-                    'subscription': row['key'][len(PLAN_PREFIX) :],
+                    'subscription': sid,
                     'profile': '',
                     'runtime': 'claude',
                     'state': 'requested',
@@ -307,18 +323,29 @@ def plan_pending(c, runner):
                     'expires_at': request['expires_at'],
                 }
             )
-    return out[:5]
+            if len(out) == 5:
+                break
+    return out
 
 
-def plan_with_value(c, vault, runner, item):
+def plan_with_value(c, vault, runner, item, exits=None):
     """The pending read with its plan's setup-token, for this poll only: the value is never kept in a request, and it
     goes only to a computer the plan is still given to."""
     from . import model_subscriptions as MS
 
     sid = item['subscription']
     sub = MS.row(c, sid)
-    if not sub or sub['status'] == 'needs_reconnect' or runner not in _plan_computers(c, sub):
+    route = plan_exits.routed(c, sub, exits)
+    if not sub or sub['status'] == 'needs_reconnect' or runner not in _plan_computers(c, sub, route):
         return item
+    if plan_exits.UPKEEP_ROUTING:
+        request = (metadata(c, plan_key(sid)) or {}).get('request') or {}
+        if (
+            request.get('id') != item['id']
+            or request.get('runner_id') != runner
+            or not plan_exits.matches(route, runner, request.get('exit_generation'))
+        ):
+            return item
     value = MS.value_of(c, vault.cipher, sub)
     if value is None:
         return item
@@ -329,10 +356,15 @@ def plan_with_value(c, vault, runner, item):
 def plan_report(c, runner, rid, body):
     """A computer's answer to a read it was asked. A succeeded read with its week (a reset in a week's reach) is kept as
     the plan's reading; any other answer only ends the read with its state."""
+    from . import model_subscriptions as MS
+
     storage = plan_key(body.subscription)
     value = metadata(c, storage) or {}
     request = value.get('request') or {}
     if not request or request.get('id') != rid or request.get('runner_id') != runner:
+        raise Problem('not_found', 'Usage request not found', 404)
+    route = plan_exits.routed(c, MS.row(c, body.subscription)) if plan_exits.UPKEEP_ROUTING else None
+    if not plan_exits.matches(route, runner, request.get('exit_generation')):
         raise Problem('not_found', 'Usage request not found', 404)
     now = H.now()
     if request['state'] != 'requested' or request['expires_at'] <= now:
@@ -370,15 +402,17 @@ def install(app, store, auth, mutate):
 
     @app.get('/api/v2/runner-subscription-refreshes')
     def runner_refreshes(request: Request):
-        with store.read() as c:
+        read = store.read_transaction if plan_exits.UPKEEP_ROUTING else store.read
+        with read() as c:
             who = request.state.identity
             request.app.state.execution.runner(c, who)
             vault = request.app.state.vault
+            exits = plan_exits.selections(c)
             # A plan's read gets its token here, for this poll only (`plan_with_value`); nothing stores it.
             return {
                 'refreshes': [
-                    plan_with_value(c, vault, who.runner_id, item) if item.get('subscription') else item
-                    for item in pending(c, who.runner_id)
+                    plan_with_value(c, vault, who.runner_id, item, exits) if item.get('subscription') else item
+                    for item in pending(c, who.runner_id, exits)
                 ]
             }
 

@@ -668,7 +668,14 @@ pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
         _ => (Value::Null, Value::Null),
     };
     let now = crate::util::iso(&json!(crate::util::epoch_s()));
-    weekly().lock().unwrap().insert((profile.into(), runtime.into(), window), json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status, "origin": origin, "subscription_id": subscription}));
+    let mut reading = json!({"used_percent": percent, "resets_at": reset, "reported_at": now, "status": status, "origin": origin, "subscription_id": subscription});
+    if !subscription.is_null() && event["attempt_id"].is_string() {
+        reading["attempt_id"] = event["attempt_id"].clone();
+    }
+    weekly()
+        .lock()
+        .unwrap()
+        .insert((profile.into(), runtime.into(), window), reading);
 }
 
 /// The usage windows kept for `profile`'s `runtime` login, as `weekly` / `five_hour` fields.
@@ -688,26 +695,33 @@ pub fn windows(profile: &str, runtime: &str) -> Map<String, Value> {
 /// `subscription_usage_sources`): an older server refuses those fields, and with them the whole window.
 static SERVER_USAGE_SOURCES: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+static SERVER_USAGE_ATTEMPTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
-pub fn set_server_takes_usage_sources(on: bool) {
-    SERVER_USAGE_SOURCES.store(on, std::sync::atomic::Ordering::Relaxed);
+pub fn set_server_takes_usage_sources(sources: bool, attempts: bool) {
+    SERVER_USAGE_SOURCES.store(sources, std::sync::atomic::Ordering::Relaxed);
+    SERVER_USAGE_ATTEMPTS.store(attempts, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// `windows` as the server takes them: each window's origin and subscription id only where the server reads them.
 pub fn windows_for_server(profile: &str, runtime: &str) -> Map<String, Value> {
     let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
+    let attempts = SERVER_USAGE_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed);
     windows(profile, runtime)
         .into_iter()
-        .map(|(w, v)| (w, for_server(v, takes)))
+        .map(|(w, v)| (w, for_server(v, takes, attempts)))
         .collect()
 }
 
-/// A usage window without its origin and subscription id unless `takes` (the server reads them).
-pub fn for_server(mut window: Value, takes: bool) -> Value {
-    if !takes {
-        if let Some(fields) = window.as_object_mut() {
+/// Send each provenance field only to servers that accept it.
+fn for_server(mut window: Value, sources: bool, attempts: bool) -> Value {
+    if let Some(fields) = window.as_object_mut() {
+        if !sources {
             fields.remove("origin");
             fields.remove("subscription_id");
+        }
+        if !sources || !attempts {
+            fields.remove("attempt_id");
         }
     }
     window
@@ -934,6 +948,7 @@ pub async fn report(
     };
     let weekly = weekly().lock().unwrap();
     let takes = SERVER_USAGE_SOURCES.load(std::sync::atomic::Ordering::Relaxed);
+    let attempts = SERVER_USAGE_ATTEMPTS.load(std::sync::atomic::Ordering::Relaxed);
     rows.into_iter()
         .map(|mut p| {
             let name = text_of(&p["name"]);
@@ -941,7 +956,7 @@ pub async fn report(
                 for (runtime, state) in rts.iter_mut() {
                     for window in ["weekly", "five_hour"] {
                         if let Some(w) = weekly.get(&(name.clone(), runtime.clone(), window)) {
-                            state[window] = for_server(w.clone(), takes);
+                            state[window] = for_server(w.clone(), takes, attempts);
                         }
                     }
                     // The account only beside a login that is not known to be signed out.
@@ -1262,9 +1277,16 @@ pub(crate) mod tests {
 
     #[test]
     fn a_window_is_sent_with_its_origin_only_to_a_server_that_reads_it() {
-        let window = json!({"used_percent": 40, "origin": "login", "subscription_id": null});
-        assert_eq!(for_server(window.clone(), true), window);
-        assert_eq!(for_server(window, false), json!({"used_percent": 40}));
+        let window = json!({"used_percent": 40, "origin": "subscription", "subscription_id": "s", "attempt_id": "a"});
+        assert_eq!(for_server(window.clone(), true, true), window);
+        assert_eq!(
+            for_server(window.clone(), true, false),
+            json!({"used_percent": 40, "origin": "subscription", "subscription_id": "s"})
+        );
+        assert_eq!(
+            for_server(window, false, false),
+            json!({"used_percent": 40})
+        );
     }
 
     #[test]
