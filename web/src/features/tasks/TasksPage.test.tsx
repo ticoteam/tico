@@ -282,6 +282,16 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     expect(screen.getByRole('heading', { name: /Inbox/ }).closest('.stage-line')).toBeTruthy();
   });
 
+  it('what waits on you leads its stage on the board and in the list', async () => {
+    serve(() => ({ status: 200, body: {} }));
+    const mine = { state: 'person' as const, who: ME, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false };
+    seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's1'), task('a3', 9, 'Approve the copy', 's1', { turn: mine })]);
+    show(<TasksPage pipeline="eng" search={{}} />, '/tasks/eng');
+    await screen.findByTitle('Approve the copy');
+    const order = () => screen.getAllByTitle(/Fix the export|Write the notes|Approve the copy/).map((el) => el.getAttribute('title'));
+    expect(order()).toEqual(['Approve the copy', 'Fix the export', 'Write the notes']);
+  });
+
   it('a card and a row say which tasks they block', async () => {
     serve(() => ({ status: 200, body: {} }));
     seed([task('a1', 7, 'Fix the export', 's1', { blocks: [{ id: 'b1', number: 613, label: 'E613' }, { id: 'b2', number: 633, label: null }] })]);
