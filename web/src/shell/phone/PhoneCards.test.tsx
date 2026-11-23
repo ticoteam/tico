@@ -1,10 +1,11 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { useCards } from '@/kit/Popover';
+import { forgetPlaces, leaveTask, notePlace } from '@/lib';
 import { arrangementFor } from '@/shell/arrangement';
 import { Frame } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
@@ -23,6 +24,7 @@ afterEach(() => {
   queryClient.clear();
   width(1440);
   window.history.replaceState(null, '', '/');
+  forgetPlaces();
 });
 
 /** The frame as the root draws it, on a phone, at an address. */
@@ -106,6 +108,28 @@ describe('the phone’s bar', () => {
     for (const name of ['Tico', 'Finance Owner', 'Company', 'Company', 'Tico', 'Company']) fireEvent.click(icon(name));
     expect(window.history.length).toBe(before);
     expect(window.history.state).toBeNull();
+  });
+
+  it('with the chat up over a task, closing the task (an answer) steps back to the list it was opened from', async () => {
+    window.history.replaceState(null, '', '/tasks/eng');
+    function Shell() {
+      const onTask = useLocation({ select: (l) => l.pathname !== '/tasks/eng' });
+      return cards({ page: <h1>{onTask ? 'Fix the export' : 'Board'}</h1>, chat: onTask ? <p>Owner's chat</p> : undefined, tucked: true, labels: {}, onLeave: onTask ? () => {} : undefined });
+    }
+    const router = createRouter({ routeTree: createRootRoute({ component: Shell }) });
+    // as the shell does: each address shown is noted, with its step in the history
+    const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
+    router.subscribe('onResolved', (e) => note(e.toLocation));
+    render(<RouterProvider router={router} />);
+    await screen.findByRole('heading', { name: 'Board' });
+    note(router.state.location);
+    await act(() => router.navigate({ to: '/tasks/eng/7' as never }));
+    await screen.findByRole('heading', { name: 'Fix the export' });
+    fireEvent.click(icon('Agent'));
+    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    act(() => leaveTask(router, 'eng'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
   });
 
   it('Search opens search; the card stays as it was', () => {
