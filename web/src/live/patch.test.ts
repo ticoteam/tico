@@ -127,8 +127,25 @@ describe('tasks', () => {
     queryClient.setQueryData(detail, { ...task('t1'), matter: { dates: [{ id: 'd1', done_at: null }] } });
     FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'human:p1', at: AT, id: 't1', kind: 'obligations', kinds: ['obligations'] }));
     flushFrame();
-    // off screen, the copy goes: the next open reads it
-    expect(queryClient.getQueryState(detail)).toBeUndefined();
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
+  it('read a task again when a ❓ on it is put or cleared: who it waits on is in its waits, not the row @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    queryClient.setQueryData(detail, task('t1'));
+    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
+    flushFrame();
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
+  });
+
+  it('a ❓ event that carries the task’s row lands the row, and leaves the task owed its read: a closed task reopens fresh @live', () => {
+    const detail = ['tasks', 'detail', 't1'];
+    // a task read before and closed since: nothing observes it, so its read waits for the next open
+    queryClient.setQueryData(detail, { ...task('t1'), waits: [{ requirement_id: 'qmark:m1' }] });
+    FakeEventSource.last.feed(taskFrame(901, task('t1', { version: 2, title: 'Renamed' }), 'question'));
+    flushFrame();
+    expect(queryClient.getQueryData<{ title: string }>(detail)?.title).toBe('Renamed');
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
   it('read a case again when its key date changes even if a later event of the same frame names only the task @live', () => {
@@ -137,60 +154,7 @@ describe('tasks', () => {
     FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'human:p1', at: AT, id: 't1', kind: 'obligations', kinds: ['obligations'] }));
     FakeEventSource.last.feed(frame(902, 'tasks', { seq: 902, actor: 'human:p1', at: AT, id: 't1', kind: 'update', kinds: ['update'] }));
     flushFrame();
-    expect(queryClient.getQueryState(detail)).toBeUndefined();
-  });
-
-  it('a ❓ put or cleared on a task on screen reads it again; one off screen is dropped, and a later row never brings the old copy back @live', async () => {
-    const detail = ['tasks', 'detail', 't1'];
-    const reads: (() => void)[] = [];
-    const read = () => new Promise((done) => reads.push(() => done({ ...task('t1', { version: 2 }), waits: [] })));
-    queryClient.setQueryData(detail, { ...task('t1'), waits: [{ requirement_id: 'qmark:m1' }] });
-    const seen = new QueryObserver(queryClient, { queryKey: detail, queryFn: read, staleTime: Infinity });
-    const stop = seen.subscribe(() => {});
-    try {
-      FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
-      flushFrame();
-      expect(reads).toHaveLength(1);
-      await act(() => reads.splice(0).forEach((go) => go()));
-      expect(queryClient.getQueryData<{ waits: unknown[] }>(detail)?.waits).toEqual([]);
-    } finally {
-      stop();
-    }
-    // closed since, with an old ❓ in its copy: the ❓ clears, then a rename's row (no waits) comes in a later frame
-    queryClient.setQueryData(detail, { ...task('t1', { version: 2 }), waits: [{ requirement_id: 'qmark:m2' }] });
-    FakeEventSource.last.feed(frame(902, 'tasks', { seq: 902, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
-    flushFrame();
-    FakeEventSource.last.feed(taskFrame(903, task('t1', { version: 3, title: 'Renamed' })));
-    flushFrame();
-    expect(queryClient.getQueryState(detail)).toBeUndefined();
-  });
-
-  it('a ❓ cleared while the task’s first read by its number is in flight drops what that read seeds, and no other task’s @live', async () => {
-    // as taskRefQuery: the read seeds the task's detail and its number's address, then names the task
-    const detail = (id: string) => ['tasks', 'detail', id];
-    const land: (() => void)[] = [];
-    const byNumber = (n: string, id: string) =>
-      queryClient.fetchQuery({
-        queryKey: ['tasks', 'ref', n],
-        queryFn: ({ client }) =>
-          new Promise((done) =>
-            land.push(() => {
-              client.setQueryData(detail(id), { ...task(id), waits: [{ requirement_id: 'qmark:m1' }] });
-              client.setQueryData(['tasks', 'ref', n === id ? '12' : n], id);
-              done(id);
-            }),
-          ),
-      });
-    const reads = [byNumber('t1', 't1'), byNumber('13', 't9')];
-    FakeEventSource.last.feed(frame(901, 'tasks', { seq: 901, actor: 'bot:qa', at: AT, id: 't1', kind: 'question', kinds: ['question'] }));
-    flushFrame();
-    await act(async () => {
-      land.splice(0).forEach((go) => go());
-      await Promise.all(reads);
-    });
-    expect(queryClient.getQueryState(detail('t1'))).toBeUndefined();
-    expect(queryClient.getQueryData(['tasks', 'ref', '12'])).toBe('t1');
-    expect(queryClient.getQueryData(detail('t9'))).toBeTruthy();
+    expect(queryClient.getQueryState(detail)?.isInvalidated).toBe(true);
   });
 
   it('start a read of a task’s children again when a review ends while an older one is in flight: it ends Reviewed', async () => {

@@ -43,9 +43,9 @@ const refetchedAt = new Map<string, number>();
 const trailing = new Map<string, ReturnType<typeof setTimeout>>();
 let pendingRefetch = new WeakSet<Promise<unknown>>();
 
-function refetchAfterRead(key: QueryKey, exact = false): void {
+function refetchAfterRead(key: QueryKey): void {
   const cache = queryClient.getQueryCache();
-  for (const q of cache.findAll({ queryKey: key, exact })) {
+  for (const q of cache.findAll({ queryKey: key })) {
     const filters = { queryKey: q.queryKey, exact: true };
     const pending = q.state.fetchStatus !== 'idle' && q.promise;
     if (!pending) {
@@ -58,7 +58,7 @@ function refetchAfterRead(key: QueryKey, exact = false): void {
     const waiting = pendingRefetch;
     waiting.add(pending);
     const settled = () => {
-      if (waiting === pendingRefetch && cache.get(q.queryHash) === q) refetchAfterRead(q.queryKey, true);
+      if (waiting === pendingRefetch && cache.get(q.queryHash) === q) refetchAfterRead(q.queryKey);
     };
     void pending.then(settled, settled);
   }
@@ -238,15 +238,6 @@ export function patchTaskList<T extends TaskRow>(
   return { list: tasks === list.tasks ? list : { ...list, tasks }, unsure };
 }
 
-/** A task's read is owed: on screen, it reads again (after a read in flight lands, which left before the change); off
-    screen, its cached copy goes, so the next open reads it, and no later row's merge can make the old copy look fresh
-    (a merge only lands on a copy held). */
-function owe(detail: QueryKey): void {
-  const held = queryClient.getQueryCache().find({ queryKey: detail, exact: true });
-  if (held?.isActive()) refetchAfterRead(detail, true);
-  else queryClient.removeQueries({ queryKey: detail, exact: true });
-}
-
 function patchTasks(batch: TaskEvent[]): void {
   const bulk = batch.some((e) => e.bulk);
   if (bulk) {
@@ -303,15 +294,9 @@ function patchTasks(batch: TaskEvent[]): void {
     // waits again on any change: the row carries only their summary, and who they wait on may have moved.
     const shots = !!held?.waits?.some((w) => w.requirement_id?.startsWith('paid_render:'));
     if (held && (related.has(id) || shots)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
-    // A matter's key date changed or was marked done (an `obligations` change on its task), or a ❓ on it was put or
-    // cleared: the stream's row leaves out the matter and the waits, so the task's read is owed (`owe`). A first read
-    // by its number still in flight (taskRefQuery seeds the detail once it lands) may have left before the change: once
-    // it lands as this task, the read is owed again. Another task's read is left alone.
-    if (dated.has(id)) {
-      owe(detail);
-      for (const q of queryClient.getQueryCache().findAll({ queryKey: ['tasks', 'ref'], fetchStatus: 'fetching' }))
-        void q.promise?.then((got) => got === id && owe(detail), () => undefined);
-    }
+    // A matter's key date changed or was marked done (an `obligations` change on its task): the stream's row leaves out
+    // the matter, so the task's read, with its dates, starts again.
+    if (dated.has(id)) void queryClient.invalidateQueries({ queryKey: detail, exact: true }, { cancelRefetch: true });
     if (!task) continue;
     // A file or a linked page changed: whatever the task view reads under its detail key (not the detail itself).
     if (e.kinds?.includes('files'))

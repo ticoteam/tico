@@ -55,12 +55,14 @@ export interface TaskPageProps {
   file?: string;
 }
 
-/** The address's task, read once and kept current by the stream while it is open. */
-function useTask(param: string) {
+/** The address's task, read once and kept current by the stream while it is open. `opens`: the task's page, which
+    reads it afresh as it opens: what changed while it was closed (a ❓ cleared, say) reaches no copy off screen, and a
+    later row merged into that copy would make it look fresh. The chat beside it shares that read. */
+function useTask(param: string, opens = false) {
   const ref = useQuery(taskRefQuery(param));
   // On this screen only, the task reads itself again every few minutes: the stream sends its status line as it changes,
   // and this heals one it missed (a backstop, not the way it updates).
-  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: STATUS_BACKSTOP_MS });
+  const detail = useQuery({ ...taskDetailQuery(ref.data), refetchInterval: STATUS_BACKSTOP_MS, ...(opens && { refetchOnMount: 'always' as const }) });
   useFollow(ref.data ? { task: ref.data } : null);
   const error = ref.error ?? detail.error;
   const retry = () => void (ref.isError ? ref.refetch() : detail.refetch());
@@ -76,7 +78,7 @@ function stateOf(error: unknown): PageState {
 
 /** One open task: a Document whose pages are the stage's pages and Details (page-types: "A task open"). */
 export function TaskPage({ task, pipeline, tab, file }: TaskPageProps) {
-  const { t, error, retry } = useTask(task);
+  const { t, error, retry } = useTask(task, true);
   if (!t) {
     const path = `/tasks/${pipeline ?? ''}/${task}`;
     return (
