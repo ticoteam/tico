@@ -225,19 +225,21 @@ def can_sign_in(runner: Any) -> bool:
 
 def _computers(c: Any, sid: str) -> list[tuple[Any, bool]]:
     """The computers of a plan, each `(runner row, live)`: those with a turn on it now first, then those given it (on
-    its own or in its owner's plans), each by id."""
-    live = {
-        r[0]
-        for r in c.execute(
-            "SELECT DISTINCT a.runner_id FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
-            "WHERE s.subscription_id=? AND s.delivery<>'' AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL",
-            (sid,),
-        )
-    }
+    its own or in its owner's plans), each by id. A computer using the plan through an exit cannot receive its login
+    for refresh or usage."""
+    live: set[str] = set()
+    routed: set[str] = set()
+    for rid, model_exit in c.execute(
+        "SELECT DISTINCT a.runner_id,s.delivery='model_exit' FROM attempt_subscriptions s "
+        "JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? AND s.delivery<>'' "
+        "AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL",
+        (sid,),
+    ):
+        (routed if model_exit else live).add(rid)
     from .agent_subscriptions import provider_runners
 
     sub = _MS().row(c, sid)
-    ids = sorted(provider_runners(c, sub)) if sub else []
+    ids = sorted(provider_runners(c, sub) - routed) if sub else []
     if not ids:
         return []
     rows = c.execute(
@@ -598,7 +600,8 @@ def _tokens(c: Any, runner_id: str, live: "list[LiveToken]") -> list[Row]:
             runner_id not in provider_runners(c, sub)
             or not c.execute(
                 "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
-                "AND a.runner_id=? AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL LIMIT 1",
+                "AND s.delivery<>'model_exit' AND a.runner_id=? AND a.state IN ('leased','running') "
+                "AND a.stop_requested_at IS NULL LIMIT 1",
                 (sub["id"], runner_id),
             ).fetchone()
         ):
@@ -918,7 +921,8 @@ class UsageResult(M.Contract):
 # The records of this computer's running turns on a plan that its poll moves up to the revision they hold (`poll`).
 # Capped at the plan's own revision, as the move is: a computer ahead of its hub (a restored database) is not behind.
 _BEHIND = (
-    "WHERE subscription_id=? AND revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND attempt_id IN "
+    "WHERE subscription_id=? AND delivery<>'model_exit' "
+    "AND revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND attempt_id IN "
     "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))"
 )
 

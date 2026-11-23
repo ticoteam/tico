@@ -2645,9 +2645,12 @@ def model_exit_credential(c, vault, sub):
         return None
     if sub["kind"] == "claude_token":
         return {"access_token": value}
-    if sub["kind"] == "claude_login":
-        return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
-    tokens = (_codex_login(value) or {}).get("tokens") or {}
+    try:
+        if sub["kind"] == "claude_login":
+            return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
+        tokens = (_codex_login(value) or {}).get("tokens") or {}
+    except Problem:
+        return None
     access, account = tokens.get("access_token"), tokens.get("account_id")
     if all(isinstance(v, str) and v for v in (access, account)):
         return {"access_token": access, "account_id": account}
@@ -2729,7 +2732,8 @@ def refreshed(c, vault, who, body):
     given = c.execute(
         "SELECT s.runtime,s.revision,s.delivery,a.state,a.lease_until,a.stop_requested_at FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id WHERE s.attempt_id=? AND s.subscription_id=? "
-        "AND a.runner_id=? AND NOT EXISTS (SELECT 1 FROM pending_subscription_fallbacks p "
+        "AND a.runner_id=? AND s.delivery IN ('','claim','legacy') "
+        "AND NOT EXISTS (SELECT 1 FROM pending_subscription_fallbacks p "
         "WHERE p.attempt_id=s.attempt_id AND p.runtime=s.runtime)",
         (body.attempt, body.subscription, who.runner_id),
     ).fetchone()

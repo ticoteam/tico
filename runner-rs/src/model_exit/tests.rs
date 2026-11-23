@@ -59,7 +59,7 @@ async fn fake_provider() -> (reqwest::Client, mpsc::UnboundedReceiver<Seen>) {
                 tls.read_exact(&mut body[rest.len()..]).await.unwrap();
                 assert_eq!(&body, b"{}");
                 let head = String::from_utf8(head).unwrap();
-                let redirect = head.starts_with("POST /v1/messages/count_tokens ");
+                let redirect = head.starts_with("POST /v1/messages/count_tokens?beta=true ");
                 let (finish, finished) = oneshot::channel();
                 let (gone, disconnected) = oneshot::channel();
                 sent.send(Seen {
@@ -251,9 +251,11 @@ async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
             ("POST", "/backend-api/codex/accounts", None, ""),
             ("POST", path, Some(CODEX), ""),
             ("POST", path, None, "Transfer-Encoding: chunked\r\n"),
+            ("POST", path, None, "Content-Encoding: gzip\r\n"),
             ("POST", path, None, "Content-Length: 2\r\n"),
         ] {
-            assert!(reply(&mut request(&local, method, path, host, extra).await).await.starts_with("HTTP/1.1 400"));
+            let answer = reply(&mut request(&local, method, path, host, extra).await).await;
+            assert!(answer.starts_with("HTTP/1.1 400") && answer.contains(BAD_REQUEST));
         }
         let mut a = request(&local, "POST", path, None,
             "ChatGPT-Account-Id: untrusted-account\r\nX-Api-Key: untrusted-key\r\nContent-Type: application/json\r\n").await;
@@ -270,9 +272,10 @@ async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
 
         for cancel in [true, false] {
             let (local, relay) = route(&http, Provider::Claude).await;
-            let mut a = self::request(&local, "POST", "/v1/messages", None,
+            let mut a = self::request(&local, "POST", "/v1/messages?beta=true", None,
                 "Anthropic-Version: 2023-06-01\r\nAnthropic-Beta: oauth-2025-04-20\r\n").await;
             let request = seen.recv().await.unwrap();
+            assert!(request.head.starts_with("POST /v1/messages?beta=true HTTP/1.1"));
             assert!(request.head.contains(&format!("\r\nauthorization: Bearer {SECRET}\r\n")));
             assert!(request.head.contains("\r\nanthropic-version: 2023-06-01\r\n"));
             assert!(request.head.contains("\r\nanthropic-beta: oauth-2025-04-20\r\n"));
@@ -289,13 +292,143 @@ async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
         }
 
         let (local, relay) = route(&http, Provider::Claude).await;
-        let mut a = self::request(&local, "POST", "/v1/messages/count_tokens", None, "").await;
+        let mut a = self::request(&local, "POST", "/v1/messages/count_tokens?beta=true", None, "").await;
         let response = reply(&mut a).await;
         assert!(response.starts_with("HTTP/1.1 502") && response.contains("model_exit_redirect"));
-        assert!(seen.recv().await.unwrap().head.starts_with("POST /v1/messages/count_tokens "));
+        assert!(seen.recv().await.unwrap().head.starts_with("POST /v1/messages/count_tokens?beta=true "));
         only_exit_holds_credential(relay.await.unwrap());
         assert!(seen.try_recv().is_err(), "the provider's redirect was followed");
     }).await.unwrap();
+}
+
+#[test]
+fn claude_message_targets_allow_only_the_exact_beta_query() {
+    let client = http_builder(crate::tls::http_builder()).build().unwrap();
+    let credential = Credential {
+        provider: "claude".into(),
+        access_token: SECRET.into(),
+        account_id: None,
+    };
+    for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+        for query in [
+            "",
+            "?beta=true",
+            "?beta=false",
+            "?beta=true&extra=1",
+            "?beta=%74rue",
+            "?",
+        ] {
+            let head =
+                format!("POST {path}{query} HTTP/1.1\r\nHost: {CLAUDE}\r\nContent-Length: 2");
+            let wire = format!("{head}\r\n\r\n{{}}").into_bytes();
+            if query.is_empty() || query == "?beta=true" {
+                let local = Request::parse(head.as_bytes(), Provider::Claude, CLAUDE).unwrap();
+                let upstream = upstream_request(
+                    &client,
+                    &credential,
+                    local.canonical(Provider::Claude, b"{}".to_vec()),
+                )
+                .unwrap();
+                assert_eq!(
+                    upstream.url().as_str(),
+                    format!("https://{CLAUDE}{path}{query}")
+                );
+            } else {
+                assert!(Request::parse(head.as_bytes(), Provider::Claude, CLAUDE).is_none());
+                assert_eq!(
+                    upstream_request(&client, &credential, wire).unwrap_err(),
+                    BAD_REQUEST
+                );
+            }
+        }
+    }
+    assert!(Provider::Codex
+        .url("/backend-api/codex/responses?beta=true")
+        .is_none());
+}
+
+#[test]
+fn request_with_content_encoding_is_rejected_before_forwarding() {
+    let head =
+        format!("POST /backend-api/codex/responses HTTP/1.1\r\nHost: {CODEX}\r\nContent-Length: 2");
+    assert!(Request::parse(head.as_bytes(), Provider::Codex, CODEX).is_some());
+    let encoded = format!("{head}\r\nCoNtEnT-EnCoDiNg: gzip");
+    assert!(Request::parse(encoded.as_bytes(), Provider::Codex, CODEX).is_none());
+}
+
+#[tokio::test]
+async fn model_exit_caps_the_body_at_32_mib_including_on_the_wire() {
+    let limit: usize = 32 * 1024 * 1024;
+    for length in [limit, limit + 1] {
+        let head =
+            format!("POST /v1/messages HTTP/1.1\r\nHost: {CLAUDE}\r\nContent-Length: {length}");
+        assert_eq!(
+            Request::parse(head.as_bytes(), Provider::Claude, CLAUDE).is_some(),
+            length == limit
+        );
+    }
+    let wire_limit = limit + HEAD_BYTES + 4;
+    let full = wire_limit / FRAME;
+    let tail = wire_limit % FRAME;
+    let bytes = Bytes::from(vec![0; FRAME]);
+    for extra in [0, 1] {
+        let frames = std::iter::repeat_n(bytes.clone(), full).map(|b| Ok(Message::Binary(b)));
+        let mut ws = futures_util::stream::iter(frames.chain([
+            Ok(Message::Binary(vec![0; tail + extra].into())),
+            Ok(Message::Binary(Bytes::new())),
+        ]));
+        if extra == 0 {
+            assert_eq!(read_wire(&mut ws).await.unwrap().len(), wire_limit);
+        } else {
+            assert_eq!(read_wire(&mut ws).await.unwrap_err(), BAD_REQUEST);
+        }
+    }
+}
+
+#[test]
+fn only_allowed_provider_response_headers_are_forwarded() {
+    let allowed = [
+        ("retry-after", "60"),
+        ("x-should-retry", "true"),
+        ("request-id", "req-claude"),
+        ("anthropic-ratelimit-unified-status", "rejected"),
+        ("x-codex-primary-used-percent", "100"),
+        ("x-request-id", "req-codex"),
+        ("openai-request-id", "req-openai"),
+        ("x-openai-request-id", "req-x-openai"),
+    ];
+    let refused = [
+        ("anthropic-ratelimit-requests-limit", "100"),
+        ("openai-organization", "org-synthetic"),
+        ("set-cookie", "session=private"),
+        ("content-length", "17"),
+    ];
+    let mut headers = HeaderMap::new();
+    for (name, value) in allowed.into_iter().chain(refused) {
+        headers.insert(name, HeaderValue::from_static(value));
+    }
+    let head = response_head(reqwest::StatusCode::TOO_MANY_REQUESTS, &headers);
+    for (name, value) in allowed {
+        assert!(head.contains(&format!("\r\n{name}: {value}\r\n")));
+    }
+    for (name, _) in refused {
+        assert!(!head.contains(&format!("\r\n{name}:")));
+    }
+}
+
+#[tokio::test]
+async fn model_open_skips_ping_and_pong_before_acknowledgment() {
+    let mut ws = futures_util::stream::iter([
+        Ok(Message::Ping(Bytes::new())),
+        Ok(Message::Pong(Bytes::new())),
+        Ok(Message::Text(r#"{"ok":true}"#.into())),
+        Ok(Message::Binary(Bytes::from_static(b"response"))),
+    ]);
+    assert_eq!(confirm_open(&mut ws).await, Ok(()));
+    assert_eq!(
+        ws.next().await.unwrap().unwrap().into_data(),
+        b"response"[..]
+    );
 }
 
 #[tokio::test]

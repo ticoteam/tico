@@ -30,7 +30,7 @@ def revoke(c, actor, runner_id, *, reason=None, at=None):
 
 
 def disconnect(store, runner_id):
-    """Close screen and browser access after revocation commits."""
+    """Close screen, browser and model access after revocation commits."""
     from . import browser_commands
 
     browser_commands.disconnect(runner_id)  # website tools' commands and live view on it end

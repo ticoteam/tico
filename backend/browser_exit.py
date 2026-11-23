@@ -270,7 +270,7 @@ def _model_binding(c, runner_id, attempt_id, generation):
         raise _model_stale()
     owner = sub["owner_id"].removeprefix("human:")
     selected = c.execute("SELECT runner_id,generation FROM plan_exits WHERE person_id=?", (owner,)).fetchone()
-    if not selected or selected["generation"] != generation or not selected["runner_id"]:
+    if not selected or selected["generation"] != generation or selected["runner_id"] in (None, "", runner_id):
         raise _model_stale()
     exit_row = _computer(c, selected["runner_id"])
     if not exit_row or not _model_capable(exit_row):

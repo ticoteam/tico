@@ -139,8 +139,10 @@ def _exit(c: Connection, person_id: str) -> Any:
     return row
 
 
-def _eligible(c: Connection, person_id: str) -> tuple[str, tuple[str, bool]]:
-    # Apply the Computers access rule to the pool owner, including when an admin edits another person's pool.
+def _eligible(c: Connection, person_id: str, who: Identity) -> tuple[str, tuple[str] | tuple[str, bool]]:
+    if who.actor != f"human:{person_id}":
+        return " FROM runners WHERE revoked_at IS NULL AND owner_id=?", (person_id,)
+    # Apply the Computers access rule when the pool owner chooses their own exit.
     email = c.execute("SELECT lower(email) FROM humans WHERE id=?", (person_id,)).fetchone()[0]
     return (
         " FROM runners WHERE revoked_at IS NULL AND (owner_id=? OR accepts_member_bots=1 OR ?)",
@@ -175,7 +177,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             result = _view(_exit(c, person_id), auth, who)
             computers: list[Row] = []
             if result["can_change"]:
-                eligible, args = _eligible(c, person_id)
+                eligible, args = _eligible(c, person_id, who)
                 computers = [
                     dict(row)
                     for row in c.execute(
@@ -197,7 +199,9 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
             "PlanExit",
             responses={
                 **errors,
-                "403": error("Only the pool owner or an admin may select a computer the owner can use"),
+                "403": error(
+                    "The pool owner may choose a computer they can use. An admin may choose one the owner owns."
+                ),
             },
         ),
     )
@@ -214,9 +218,14 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
         def work(c: Connection) -> Row:
             person_id = _person(person)
             _exit(c, person_id)
-            eligible, args = _eligible(c, person_id)
+            eligible, args = _eligible(c, person_id, who)
             if not c.execute("SELECT 1" + eligible + " AND id=?", (*args, body.runner_id)).fetchone():
-                raise Problem("forbidden", "Choose a registered computer the pool owner can use", 403)
+                detail = (
+                    "Choose a registered computer you can use"
+                    if who.actor == f"human:{person_id}"
+                    else "Choose a registered computer owned by the pool owner"
+                )
+                raise Problem("forbidden", detail, 403)
             if _save(c, person_id, body.runner_id):
                 H.event(c, who.actor, "subscription.plan_exit", person_id, {"runner_id": body.runner_id})
             return _view(_exit(c, person_id), auth, who)

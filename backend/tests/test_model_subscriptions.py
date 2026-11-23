@@ -12,7 +12,17 @@ from backend import agent_subscriptions, login_holds
 from backend import model_subscriptions as MS
 from backend.auth import Identity
 from backend.store import H, Problem, encode
-from backend.tests.helpers.api import assign, claim, get, headers, post, restrict, runner, unrelated_task_managers
+from backend.tests.helpers.api import (
+    assign,
+    claim,
+    get,
+    headers,
+    post,
+    restrict,
+    runner,
+    setup_attempt,
+    unrelated_task_managers,
+)
 from backend.tests.helpers.credentials import setup
 from backend import bot_settings as BS
 from backend.tests.helpers.model_subscriptions import (
@@ -406,6 +416,27 @@ def test_removing_a_pick_confirms_and_unsets_every_agent_selecting_it(api):
     assert "claude" not in get(api, "bots/ops/subscriptions")["subscriptions"]
     assert "claude" not in get(api, "bots/cpo/subscriptions")["subscriptions"]
     assert post(api, f"attempts/{turn['id']}/renew", {}, m["token"])["stop"] is True
+
+
+def test_a_model_exit_turn_cannot_submit_a_refreshed_chatgpt_login(api):
+    setup(api)
+    sid = add(api, "codex_login", codex_file())["id"]
+    m, _, turn = setup_attempt(api)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision,delivery) "
+            "VALUES(?,'codex',?,1,'model_exit')",
+            (turn["id"], sid),
+        )
+    post(
+        api,
+        "runner-model-subscription-refresh",
+        {"attempt": turn["id"], "subscription": sid, "revision": 1, "value": codex_file(refresh="r-2")},
+        m["token"],
+        expected=403,
+    )
+    with api.app.state.store.read() as c:
+        assert MS.row(c, sid)["revision"] == MS.handed(c, turn["id"], "codex")["revision"] == 1
 
 
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):

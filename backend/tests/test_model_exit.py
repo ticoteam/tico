@@ -1,11 +1,12 @@
 """The hub's model tunnel control path with synthetic plans and a stand-in private relay."""
 
 import json
+from contextlib import contextmanager
 
 import httpx
 import pytest
 
-from backend import browser_exit
+from backend import browser_exit, model_subscriptions
 from backend.store import Problem
 from backend.tests.helpers.api import post, runner, setup_attempt
 from backend.tests.helpers.claude_login import access, full
@@ -35,7 +36,10 @@ class Relay:
             grant = body["grant"]
             self.bindings[grant["id"]] = {k: v for k, v in grant.items() if k not in ("id", "kind")}
             return httpx.Response(200, json={"boot": "test", "ticket": A_TICKET})
-        if body["op"] == "model_exit_generation":
+        if body["op"] == "heartbeat":
+            live = {b["owner"]: b["generation"] for b in self.bindings.values()}
+            return httpx.Response(200, json={"boot": "test", "reports": [], "model_exit_live": live})
+        if body["op"] == "model_exit_generations":
             return httpx.Response(200, json={"boot": "test", "closed": 0})
         assert body["op"] == "exit_redeem"
         binding = self.bindings.get(body["id"])
@@ -139,7 +143,7 @@ def test_model_exit_has_its_own_link_and_only_the_selected_runner_can_redeem(api
 
 @pytest.mark.parametrize("change", ["stopped", "generation", "revision", "relay_lease"])
 def test_model_exit_rechecks_the_live_binding_before_opening_the_vault(api, tunnel, change):
-    _, exit_runner, attempt, plan, generation, relay = tunnel
+    _, exit_runner, attempt, plan, _, relay = tunnel
     relay.online = True
     answer = grant(api, tunnel)
     store = api.app.state.store
@@ -153,11 +157,76 @@ def test_model_exit_rechecks_the_live_binding_before_opening_the_vault(api, tunn
         else:
             relay.lease = "replaced"
     assert redeem(api, answer, exit_runner["token"], 409)["error"]["code"] == "model_exit_stale"
-    if change == "generation":
-        store.screen_sessions._exit_reconcile()
-        assert relay.commands[-1]["generation"] == generation + 1
     if change != "revision":
         assert grant(api, tunnel, 409 if change != "relay_lease" else 503)["error"]["code"].startswith("model_exit_")
+
+
+def test_relay_tick_without_live_model_grants_only_heartbeats(api, tunnel, monkeypatch):
+    *_, relay = tunnel
+    store = api.app.state.store
+    read = store.read
+    statements = []
+
+    @contextmanager
+    def trace_read():
+        with read() as c:
+            c.set_trace_callback(statements.append)
+            try:
+                yield c
+            finally:
+                c.set_trace_callback(None)
+
+    monkeypatch.setattr(store, "read", trace_read)
+    store.screen_sessions.tick()
+    assert [c["op"] for c in relay.commands] == ["heartbeat"]
+    assert not any("plan_exits" in statement.lower() for statement in statements)
+
+
+def test_relay_tick_batches_only_changed_owners_with_live_model_grants(api, tunnel):
+    _, _, _, plan, generation, relay = tunnel
+    owner = plan["owner_id"].removeprefix("human:")
+    relay.online = True
+    grant(api, tunnel)
+    relay.bindings["second"] = {"owner": "cara", "generation": 1}
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE plan_exits SET generation=generation+1 WHERE person_id=?", (owner,))
+        c.execute("INSERT INTO plan_exits(person_id,generation) VALUES('cara',2),('ben',3)")
+
+    store.screen_sessions.tick()
+    assert [c["op"] for c in relay.commands] == ["exit_grant", "heartbeat", "model_exit_generations"]
+    assert relay.commands[-1]["generations"] == {owner: generation + 1, "cara": 2}
+
+
+def test_the_turn_computer_cannot_also_be_the_model_exit(api, tunnel):
+    bot, _, _, plan, _, relay = tunnel
+    relay.online = True
+    answer = grant(api, tunnel)
+    owner = plan["owner_id"].removeprefix("human:")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE plan_exits SET runner_id=? WHERE person_id=?", (bot["runner_id"], owner))
+    assert grant(api, tunnel, 409)["error"]["code"] == "model_exit_stale"
+    assert [c["op"] for c in relay.commands] == ["exit_grant"]
+    # Recheck even if the relay had already admitted a same-computer binding.
+    relay.bindings[answer["tunnel_id"]]["exit"] = bot["runner_id"]
+    assert redeem(api, answer, bot["token"], 409)["error"]["code"] == "model_exit_stale"
+
+
+@pytest.mark.parametrize(
+    ("kind", "runtime", "value"), [("claude_login", "claude", full()), ("codex_login", "codex", codex_file())]
+)
+def test_redemption_of_a_malformed_saved_login_is_stale(api, tunnel, monkeypatch, kind, runtime, value):
+    _, exit_runner, attempt, _, _, relay = tunnel
+    plan = add(api, kind, value)
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE attempt_subscriptions SET runtime=?,subscription_id=?,revision=? WHERE attempt_id=?",
+            (runtime, plan["id"], plan["revision"], attempt["id"]),
+        )
+    relay.online = True
+    answer = grant(api, tunnel)
+    monkeypatch.setattr(model_subscriptions, "open_payer", lambda *_: "malformed")
+    assert redeem(api, answer, exit_runner["token"], 409)["error"]["code"] == "model_exit_stale"
 
 
 def test_normal_claims_keep_the_claim_delivery_even_on_capable_runners(api):

@@ -210,6 +210,7 @@ pub(super) struct Exits {
     links: HashMap<String, Link>,
     model_links: HashMap<String, Link>,
     model_generations: HashMap<String, u64>,
+    model_owners: HashMap<String, usize>,
     tunnels: HashMap<String, Tunnel>,
     /// Usage of each tunnel, by slot. A released slot goes to `free` and is reused.
     rows: Vec<TunnelUsage>,
@@ -413,6 +414,14 @@ impl Exits {
     pub(super) fn close(&mut self, tid: &str, close: Close) {
         if let Some(t) = self.tunnels.remove(tid) {
             let _ = t.cancel.send(Some(close));
+            if let Some(r) = t.redemption {
+                let owner = &r.binding.owner;
+                let count = self.model_owners.get_mut(owner).unwrap();
+                *count -= 1;
+                if *count == 0 {
+                    self.model_owners.remove(owner);
+                }
+            }
             let Some(usage) = t.usage else { return };
             let day = self.today();
             self.roll(usage, day);
@@ -503,19 +512,28 @@ impl Exits {
         Ok(closed)
     }
 
-    /// Close one bot's tunnels, or one exit's (a bot's exit changed, a computer was removed).
+    /// Close one bot's tunnels, or close a removed computer's tunnels and model link.
     pub(super) fn close_matching(
         &mut self,
         bot: Option<&str>,
         exit: Option<&str>,
         reason: &str,
     ) -> usize {
+        let close = Close::new(4403, reason);
+        if let Some(exit) = exit.filter(|_| bot.is_none()) {
+            if let Some(link) = self.model_links.remove(exit) {
+                let _ = link.cancel.send(Some(close.clone()));
+            }
+        }
         self.close_where(
             |t| {
-                t.usage.is_none()
-                    || !(bot.is_none_or(|b| t.bot == b) && exit.is_none_or(|e| t.exit == e))
+                if let Some(r) = &t.redemption {
+                    return bot.is_some()
+                        || exit.is_none_or(|e| t.exit != e && r.binding.runner_id != e);
+                }
+                !(bot.is_none_or(|b| t.bot == b) && exit.is_none_or(|e| t.exit == e))
             },
-            Close::new(4403, reason),
+            close,
         )
     }
 
@@ -644,9 +662,17 @@ impl Exits {
         ))
     }
 
+    // Browser and model tunnels share the global and per-exit caps.
     fn busy(&self, exit: &str) -> bool {
         self.tunnels.len() >= TUNNELS
             || self.tunnels.values().filter(|t| t.exit == exit).count() >= TUNNELS_PER_EXIT
+    }
+
+    pub(super) fn live_model_owners(&self) -> HashMap<&str, u64> {
+        self.model_owners
+            .keys()
+            .map(|owner| (owner.as_str(), self.model_generations[owner]))
+            .collect()
     }
 
     pub(super) fn fence_model(&mut self, owner: &str, generation: u64) -> usize {
@@ -696,6 +722,7 @@ impl Exits {
         let (client_ticket, exit_ticket) = (id() + &id(), id() + &id());
         let open = json!({"op": "open", "kind": "model", "id": tid, "ticket": exit_ticket});
         link.open.send(open.to_string()).map_err(|_| offline())?;
+        *self.model_owners.entry(b.owner.clone()).or_default() += 1;
         let exit = b.exit.clone();
         let redemption = Redemption {
             binding,
@@ -1471,6 +1498,7 @@ mod tests {
         );
         let (_, _, _, canceled, usage) = exits.admit_model("model", binding()).unwrap();
         assert!(usage.is_none());
+        assert_eq!(exits.live_model_owners(), HashMap::from([("owner", 1)]));
         let opened: Value = serde_json::from_str(&opens.try_recv().unwrap()).unwrap();
         let ticket = opened["ticket"].as_str().unwrap();
         assert!(exits.take("model", ticket, Side::Exit).is_some());
@@ -1492,6 +1520,7 @@ mod tests {
         assert!(!exits.links.contains_key("laptop"));
         assert!(exits.model_links.contains_key("laptop"));
         assert_eq!(exits.fence_model("owner", 2), 1);
+        assert!(exits.live_model_owners().is_empty());
         assert_eq!(
             canceled.borrow().as_ref().unwrap().reason,
             "model_exit_stale"
@@ -1501,6 +1530,66 @@ mod tests {
             "model_exit_stale"
         );
         assert_eq!(exits.backlog(), 0);
+    }
+
+    #[test]
+    fn removing_a_computer_closes_its_model_tunnels_and_its_exit_link() {
+        let mut exits = exits();
+        let (open, _opens) = mpsc::unbounded_channel();
+        let (cancel, link_closed) = watch::channel(None);
+        exits.model_links.insert(
+            "laptop".into(),
+            Link {
+                serial: 1,
+                open,
+                cancel,
+            },
+        );
+        let mut admit = |id: &str, runner_id: &str| {
+            exits
+                .admit_model(
+                    id,
+                    ModelBinding {
+                        runner_id: runner_id.into(),
+                        exit: "laptop".into(),
+                        attempt_id: id.into(),
+                        owner: "owner".into(),
+                        plan: "plan".into(),
+                        revision: 1,
+                        generation: 1,
+                        provider: "claude".into(),
+                    },
+                )
+                .unwrap()
+                .3
+        };
+        let removed_turn = admit("first", "server");
+        let other_turn = admit("second", "worker");
+
+        assert_eq!(
+            exits.close_matching(None, Some("server"), "computer removed"),
+            1
+        );
+        assert_eq!(
+            removed_turn.borrow().as_ref().unwrap().reason,
+            "computer removed"
+        );
+        assert!(other_turn.borrow().is_none());
+        assert!(link_closed.borrow().is_none());
+
+        assert_eq!(
+            exits.close_matching(None, Some("laptop"), "computer removed"),
+            1
+        );
+        assert_eq!(
+            other_turn.borrow().as_ref().unwrap().reason,
+            "computer removed"
+        );
+        assert_eq!(
+            link_closed.borrow().as_ref().unwrap().reason,
+            "computer removed"
+        );
+        assert!(!exits.model_links.contains_key("laptop"));
     }
 
     #[test]
@@ -1804,7 +1893,7 @@ mod tests {
             .unwrap();
         let fence = command(
             7,
-            json!({"op": "model_exit_generation", "owner": "owner", "generation": 2}),
+            json!({"op": "model_exit_generations", "generations": {"owner": 2}}),
         )
         .await
         .unwrap()

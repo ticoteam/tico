@@ -6,7 +6,7 @@ use crate::{
     client::Client,
     gateway_relay::{find, peer_is, same, turn_token},
 };
-use futures_util::{Sink, SinkExt, StreamExt};
+use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -17,11 +17,11 @@ use tokio::{
     sync::oneshot,
     task::{JoinHandle, JoinSet},
 };
-use tokio_tungstenite::tungstenite::{Bytes, Message};
+use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
 pub const CAPABILITY: &str = "model_exit_v1";
 const TIME: Duration = Duration::from_secs(25);
-const BODY: usize = 8 * 1024 * 1024;
+const BODY: usize = 32 * 1024 * 1024;
 const FRAME: usize = 64 * 1024;
 const CLAUDE: &str = "api.anthropic.com";
 const CODEX: &str = "chatgpt.com";
@@ -47,6 +47,12 @@ impl Provider {
             (Self::Claude, "/v1/messages") => Some("https://api.anthropic.com/v1/messages"),
             (Self::Claude, "/v1/messages/count_tokens") => {
                 Some("https://api.anthropic.com/v1/messages/count_tokens")
+            }
+            (Self::Claude, "/v1/messages?beta=true") => {
+                Some("https://api.anthropic.com/v1/messages?beta=true")
+            }
+            (Self::Claude, "/v1/messages/count_tokens?beta=true") => {
+                Some("https://api.anthropic.com/v1/messages/count_tokens?beta=true")
             }
             (Self::Codex, "/backend-api/codex/responses") => {
                 Some("https://chatgpt.com/backend-api/codex/responses")
@@ -159,9 +165,15 @@ impl<'a> Request<'a> {
             }
         }
         if headers.get("host")?.as_bytes() != authority.as_bytes()
-            || ["transfer-encoding", "expect", "trailer", "upgrade"]
-                .iter()
-                .any(|h| headers.contains_key(*h))
+            || [
+                "transfer-encoding",
+                "content-encoding",
+                "expect",
+                "trailer",
+                "upgrade",
+            ]
+            .iter()
+            .any(|h| headers.contains_key(*h))
             || headers.get("connection").is_some_and(|v| {
                 !["close", "keep-alive"]
                     .iter()
@@ -337,17 +349,35 @@ async fn open(turn: &Turn) -> Result<Socket, &'static str> {
     )
     .await
     .map_err(|_| UNAVAILABLE)?;
-    match tokio::time::timeout(TIME, ws.next()).await {
-        Ok(Some(Ok(Message::Text(text)))) => {
+    confirm_open(&mut ws).await?;
+    Ok(ws)
+}
+
+async fn confirm_open(
+    ws: &mut (impl Stream<Item = Result<Message, WsError>> + Unpin),
+) -> Result<(), &'static str> {
+    match tokio::time::timeout(TIME, next_data(ws)).await {
+        Ok(Some(Message::Text(text))) => {
             if serde_json::from_str::<Value>(&text).is_ok_and(|v| v["ok"] == true) {
-                Ok(ws)
+                Ok(())
             } else {
                 Err(refusal(&text))
             }
         }
-        Ok(Some(Ok(Message::Close(Some(frame))))) => Err(error_code(&frame.reason)),
+        Ok(Some(Message::Close(Some(frame)))) => Err(error_code(&frame.reason)),
         _ => Err(UNAVAILABLE),
     }
+}
+
+async fn next_data(
+    ws: &mut (impl Stream<Item = Result<Message, WsError>> + Unpin),
+) -> Option<Message> {
+    while let Some(Ok(message)) = ws.next().await {
+        if !matches!(message, Message::Ping(_) | Message::Pong(_)) {
+            return Some(message);
+        }
+    }
+    None
 }
 
 #[derive(Deserialize)]
@@ -422,15 +452,16 @@ async fn serve_exit_with(
 }
 
 // The sender terminates the request with an empty binary frame, independently of HTTP framing.
-async fn read_wire(ws: &mut Socket) -> Result<Vec<u8>, &'static str> {
+async fn read_wire(
+    ws: &mut (impl Stream<Item = Result<Message, WsError>> + Unpin),
+) -> Result<Vec<u8>, &'static str> {
     let mut wire = Vec::new();
-    while let Some(Ok(message)) = ws.next().await {
+    while let Some(message) = next_data(ws).await {
         match message {
             Message::Binary(bytes) if bytes.is_empty() => return Ok(wire),
             Message::Binary(bytes) if wire.len() + bytes.len() <= HEAD_BYTES + BODY + 4 => {
                 wire.extend_from_slice(&bytes)
             }
-            Message::Ping(_) | Message::Pong(_) => {}
             _ => break,
         }
     }
@@ -480,21 +511,7 @@ async fn forward(
     if status.is_redirection() {
         return Err("model_exit_redirect");
     }
-    let content_type = upstream
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("application/octet-stream");
-    let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {content_type}\r\n{}Connection: close\r\n\r\n",
-        status.as_u16(),
-        status.canonical_reason().unwrap_or(""),
-        if status == reqwest::StatusCode::NO_CONTENT {
-            ""
-        } else {
-            "Transfer-Encoding: chunked\r\n"
-        }
-    );
+    let head = response_head(status, upstream.headers());
     send.send(Message::Binary(head.into_bytes().into()))
         .await
         .map_err(|_| UNAVAILABLE)?;
@@ -514,6 +531,43 @@ async fn forward(
     send.send(Message::Binary(b"0\r\n\r\n".to_vec().into()))
         .await
         .map_err(|_| UNAVAILABLE)
+}
+
+fn response_head(status: reqwest::StatusCode, headers: &HeaderMap) -> String {
+    use std::fmt::Write as _;
+
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream");
+    let mut head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {content_type}\r\n",
+        status.as_u16(),
+        status.canonical_reason().unwrap_or(""),
+    );
+    for (name, value) in headers {
+        let name = name.as_str();
+        if matches!(
+            name,
+            "retry-after"
+                | "x-should-retry"
+                | "request-id"
+                | "x-request-id"
+                | "openai-request-id"
+                | "x-openai-request-id"
+        ) || name.starts_with("anthropic-ratelimit-unified-")
+            || name.starts_with("x-codex-")
+        {
+            if let Ok(value) = value.to_str() {
+                let _ = write!(head, "{name}: {value}\r\n");
+            }
+        }
+    }
+    if status != reqwest::StatusCode::NO_CONTENT {
+        head.push_str("Transfer-Encoding: chunked\r\n");
+    }
+    head.push_str("Connection: close\r\n\r\n");
+    head
 }
 
 #[cfg(test)]

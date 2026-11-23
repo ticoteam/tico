@@ -286,6 +286,28 @@ def test_one_computer_refreshes_the_login_and_the_others_turns_get_the_new_token
     assert poll(api, m, [(sid, 2)])["refreshes"] == [] and poll(api, spare)["refreshes"] == []
 
 
+def test_model_exit_turn_is_excluded_from_claude_login_polls(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "")
+    sid = add(api, "claude_login", full(minutes=30))["id"]
+    m = computer(api, bot="ops")
+    pick(api, "ops", "claude", sid)
+    post(api, "chat/ops", {"text": "Check the account."})
+    turn = claim(api, m)
+    post(api, f"model-subscriptions/{sid}/usage-refresh", {})
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE model_subscriptions SET revision=2 WHERE id=?", (sid,))
+        c.execute("UPDATE attempt_subscriptions SET delivery='model_exit' WHERE attempt_id=?", (turn["id"],))
+
+    for revision in (1, 2):
+        assert poll(api, m, [(sid, revision)]) == {"tokens": [], "refreshes": [], "usage": []}
+    with store.read() as c:
+        assert MS.handed(c, turn["id"], "claude")["revision"] == 1
+        assert not c.execute("SELECT 1 FROM claude_login_leases WHERE subscription_id=?", (sid,)).fetchone()
+
+
 def test_legacy_pool_refreshes_the_rotated_login_after_it_expires_without_a_live_turn(api):
     setup(api)
     company(api)
