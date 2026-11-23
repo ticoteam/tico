@@ -751,9 +751,8 @@ class Voice:
             named=True,
             voice_input=question["text"] if warm else None,
             question=question["text"] if gathered else None,
-            voice_expires_at=H.shift(H.now(), seconds=question["heard"] + ANSWER_SECONDS - self.clock())
-            if warm
-            else None,
+            # Its answer deadline is kept for a turn of its own job too, so one claimed after a restart is passed.
+            voice_expires_at=H.shift(H.now(), seconds=question["heard"] + ANSWER_SECONDS - self.clock()),
         )
         return selected, warm
 

@@ -587,3 +587,73 @@ def test_once_anyone_else_is_in_the_call_its_voice_session_writes_nothing_of_you
         f"/api/v2/tasks/{errand}/comments", json={"text": "Book the freight"}, headers=headers(session["token"])
     )
     assert refused.status_code in (403, 404), refused.text
+
+
+# --- Only a Tico Meet call that speaks its replies, and that only ever had the person in it, is theirs alone.
+
+
+def _line(api, meeting_id, text, speaker="External guest"):
+    """A transcript line uploaded to the meeting by its connector (Ana)."""
+    with api.app.state.store.read() as c:
+        seq = c.execute("SELECT seq FROM live_meetings WHERE id=?", (meeting_id,)).fetchone()[0] + 1
+    line = {"seq": seq, "speaker": speaker, "start_ms": seq * 1000, "end_ms": seq * 1000 + 500, "text": text}
+    post(api, f"live-meetings/{meeting_id}/chunks", {"chunks": [line]})
+
+
+def _is_the_assistants_own(api, attempt):
+    assert not attempt.get("personal") and "Needs you" not in (attempt.get("run_header") or "")
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
+        assert api.app.state.auth.assistant_principal(c, row) is None
+    get(api, "needs-you", attempt["token"], expected=403)
+
+
+@pytest.mark.parametrize("provider", ["google_meet", "tico"])
+def test_a_call_in_your_assistant_chat_that_does_not_speak_its_replies_never_acts_as_you(meet, provider):
+    worker = _resident(meet)
+    call = start_call(meet, room(meet)["room_id"], speak_replies=False)
+    post(meet, f"calls/{call['id']}/bots", {"bots": ["assistant"]})
+    with meet.app.state.store.transaction() as c:  # a Google Meet (set up here as one), or a Tico Meet that is silent
+        c.execute("UPDATE calls SET provider=? WHERE id=?", (provider, call["id"]))
+    _line(meet, call["meeting_id"], "Assistant, what is waiting on Ana?")  # a guest the call does not name
+    turn = _claim(meet, worker)
+    assert turn["message"]["refs"]["live_meeting"]["turn_id"]
+    _is_the_assistants_own(meet, turn)
+
+
+def test_a_call_someone_else_was_in_never_becomes_yours_alone_once_they_are_taken_out(meet):
+    worker = _resident(meet)
+    rid = room(meet)["room_id"]
+    with meet.app.state.store.transaction() as c:  # Ben is a member of Ana's room, as a migrated room may grant
+        c.execute("UPDATE conversations SET audience='personal' WHERE id=?", (rid,))
+        c.execute(
+            "INSERT INTO thread_members(id,thread_id,actor,role,added_by,created_at,updated_at) "
+            "VALUES(?,?,'human:ben','member','human:ana',?,?)",
+            (str(uuid.uuid4()), rid, H.now(), H.now()),
+        )
+    call = start_call(meet, rid, bots=["assistant"])
+    post(meet, f"live-meetings/{call['meeting_id']}/join", {}, token="ben-test")  # Ben is in its meeting
+    with meet.app.state.store.transaction() as c:  # then taken out of the room, and of the meeting
+        c.execute("DELETE FROM thread_members WHERE thread_id=? AND actor='human:ben'", (rid,))
+    post(meet, f"live-meetings/{call['meeting_id']}/access", {"remove": ["ben"]})
+    session = _claim(meet, worker)
+    assert session["message"]["refs"]["live_meeting"]["voice_call"] == call["id"]
+    _is_the_assistants_own(meet, session)
+
+
+def test_a_turn_of_its_own_job_claimed_after_its_voice_deadline_is_passed(meet):
+    worker = _resident(meet, voice=False)
+    call = start_call(meet, room(meet)["room_id"], bots=["assistant"])
+    calls = meet.app.state.calls
+    join(meet, call["id"])
+    calls.ingest(call["id"], "human:ana", PCM_ONE_SECOND * 2 + SILENCE_ONE_SECOND, 0)
+    assert calls.settle()
+    with meet.app.state.store.transaction() as c:  # a restart, and a minute passes before a runner claims it
+        [turn] = c.execute("SELECT * FROM live_meeting_turns WHERE meeting_id=?", (call["meeting_id"],)).fetchall()
+        assert turn["voice_expires_at"], "its answer deadline is kept"
+        late = H.shift(turn["voice_expires_at"], seconds=-60)
+        c.execute("UPDATE live_meeting_turns SET voice_expires_at=? WHERE id=?", (late, turn["id"]))
+    assert _claim(meet, worker) is None
+    with meet.app.state.store.read() as c:
+        row = c.execute("SELECT status,skip_reason FROM live_meeting_turns WHERE id=?", (turn["id"],)).fetchone()
+    assert tuple(row) == ("skipped", "voice_deadline")

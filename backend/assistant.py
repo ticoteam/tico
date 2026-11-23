@@ -541,7 +541,7 @@ def call_turn(c, who):
         "JOIN messages m ON m.id=j.message_id "
         "JOIN live_meeting_turns t ON t.meeting_id=json_extract(m.refs,'$.live_meeting.meeting_id') AND t.bot=a.bot_id "
         "AND t.status='claimed' AND (t.voice_attempt=a.id OR t.voice_input IS NULL AND t.claim_owner='job:'||a.job_id) "
-        # A resident turn past its voice deadline is answered by nobody (call_sessions.inputs), one a restart left too.
+        # A turn past its voice deadline is answered by nobody (call_sessions.inputs, claim_runner_turn), one a restart left.
         "AND (t.voice_expires_at IS NULL OR t.voice_expires_at>?) "
         "WHERE a.id=? AND t.created_at>=? ORDER BY t.claimed_at DESC LIMIT 1",
         (H.now(), who.attempt_id, H.shift(H.now(), seconds=-INSTRUCTION_TTL_S)),
