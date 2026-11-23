@@ -1459,7 +1459,9 @@ def refresh_pending_checks(service):
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
     so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
     pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
-    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A check waiting
+    for approval is unfinished the same way: the read keeps it at approval while it waits, and a missed webhook after
+    the approval cannot leave it there. A link whose stored
     copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
@@ -1473,9 +1475,10 @@ def refresh_pending_checks(service):
                 "SELECT l.id,l.repo,l.number,l.updated_at,l.checks,json_extract(l.detail,'$.head_sha') AS head "
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
-                "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
+                "WHERE l.kind='pr' AND l.state='open' AND (l.checks IN ('pending','approval') "
                 "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
-                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') "
+                "WHERE value IN ('pending','approval'))) "
                 "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",

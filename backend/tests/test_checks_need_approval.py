@@ -329,3 +329,32 @@ def test_the_queue_is_refused_while_a_check_needs_approval_beside_a_failed_one(c
     assert not [call for call in gh.calls if call[0] in ("post_check", "enqueue")]
     with company.transaction() as c:
         assert stand_line(c, task_id, "pr_merged")[2] == "The checks on acme/app#1 need approval"
+
+
+def test_the_periodic_read_takes_a_link_left_at_approval_and_finishes_its_head(company, monkeypatch):
+    """A webhook missed after the approval: the background read (github.refresh_pending_checks) reads the link again,
+    as it does a pending one, so it does not stay at approval once GitHub's checks are done."""
+    with company.transaction() as c:
+        X.bot(c, "builder")
+        task_id = X.new_task(c, "bot:builder", "Fix it")["id"]
+        c.execute("INSERT INTO repositories(id,full_name,enabled,reachable) VALUES(?,?,1,1)", (H.new_id(), "acme/app"))
+        detail = {"head_sha": "h7", "checks": {"build": "approval"}}
+        c.execute(
+            "INSERT INTO task_links (id, task_id, kind, url, repo, number, state, checks, source, item_type, item_key, "
+            "detail, created_at, updated_at) VALUES (?,?,'pr','https://github.com/acme/app/pull/7','acme/app',7,'open',"
+            "'approval','github','pr','acme/app#7',?,?,?)",
+            (H.new_id(), task_id, json.dumps(detail), H.now(), H.shift(H.now(), hours=-1)),
+        )
+
+    class Service:
+        store = company
+
+        def row(self, c):
+            return {"org": "acme"}
+
+    G._pending_reads.clear()
+    monkeypatch.setattr(G, "_fresh_checks", lambda service, repo, head: {"build": "passing"})
+    G.refresh_pending_checks(Service())
+    with company.transaction() as c:
+        assert c.execute("SELECT checks FROM task_links WHERE task_id=?", (task_id,)).fetchone()[0] == "passing"
+        assert "h7:pass" in _link_detail(c, task_id).get("checks_done", [])
