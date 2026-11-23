@@ -1075,9 +1075,9 @@ def person_asked(c, sender, receiver, task_id=None, conversation_id=None, in_rep
     """What lets a bot write to a person who is not adjacent to it, and only this: a direct reply to the person's own
     message, a write in a conversation where the person wrote to the bot in the last SOLICITED_DAYS, or a write on a
     task the person handed this bot. Being on the task in any other way (reader, former owner, thread member, an
-    ancestor's party, its assignee: that opens only an ask, check(ask=True)) or having given the bot some other task does
-    not count. A person who pinged the bot for questions in the last day (backend/flow_ping.py) asked to be asked: its
-    question tasks for them are answers."""
+    ancestor's party, its assignee: that opens only an ask, check(ask=True)) or having given the bot some other task
+    does not count. A person who pinged the bot for questions in the last day (backend/flow_ping.py) asked to be asked:
+    its question tasks for them are answers."""
     return (
         solicited(c, sender, receiver, conversation_id, in_reply_to, before, person=True)
         or handed(c, sender, receiver, task_id, before)

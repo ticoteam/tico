@@ -100,7 +100,7 @@ def test_the_migration_moves_each_human_once(dev):
 
 
 def test_a_stage_a_person_holds_asks_them_not_the_assignee(dev):
-    """The holder comes before the assignee: Cara holds Review, so its unnamed OK is hers though Ben is who it is for."""
+    """The holder comes before the assignee: Cara holds Review, so its unnamed OK is hers though it is for Ben."""
     api = dev
     task = _file(api, "Review the export", "review", owner="ben")
     assert (task["owner_id"], task["assignee_id"]) == (CARA, BEN)

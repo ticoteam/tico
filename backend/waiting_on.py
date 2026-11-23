@@ -1248,9 +1248,9 @@ def candidates(conn: "sqlite3.Connection", person: str, shots: bool = False) -> 
     list for them, and others it reads to be sure. A task reaches a person in one of these ways (`of`,
     `needs_by_person`):
 
-    - it is theirs (its owner), they are its assignee (on its ladder after the holder, `person_for`), the ladder already
-      brought it to them (its visit's person), or a requirement on its stage or visit names them (one of a page's approvers
-      too), or was given to them;
+    - it is theirs (its owner), they are its assignee (on its ladder after the holder, `person_for`), the ladder
+      already brought it to them (its visit's person), or a requirement on its stage or visit names them (one of a
+      page's approvers too), or was given to them;
     - a page on it that names nobody asks again whoever sent it back or whose OK lapsed (an answer of theirs);
     - a bot they fix cannot run (`_fixer`) and the task is that bot's turn: its owner, its pipeline's manager, a
       requirement naming or given to it, a page's reviewer, a conflicting PR's builder;

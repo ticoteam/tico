@@ -907,8 +907,8 @@ def test_the_owning_bot_asks_its_tasks_assignee_on_it_once_in_needs_you_and_with
 
 
 def test_the_owning_bot_sends_a_stage_ask_to_its_tasks_assignee_once_in_needs_you(api):
-    """AC-2: a real stage ask (POST /asks, an OK of a page) from the owner to its task's person assignee goes through and is one
-    Needs you item for Ben."""
+    """AC-2: a real stage ask (POST /asks, an OK of a page) from the owner to its task's person assignee goes through
+    and is one Needs you item for Ben."""
     own = _humaned(api)
     file_id, _ = store_file(api, "The launch note.", title="Launch note")
     with api.app.state.store.read() as c:
@@ -956,13 +956,14 @@ def _set_human(api, task_id, who, actor):
 
 
 def test_only_an_assignee_a_person_or_tico_named_on_this_task_opens_it(api):
-    """AC-4, AC-5, AC-9: an assignee ops named itself is refused with the one sentence alone, also when a person named the
-    same assignee on its parent (no other task is read) and when ops names him again after a person did (the latest change
-    counts). Named by Tico on the task itself, he is open."""
+    """AC-4, AC-5, AC-9: an assignee ops named itself is refused with the one sentence alone, also when a person named
+    the same assignee on its parent (no other task is read) and when ops names him again after a person did (the latest
+    change counts). Named by Tico on the task itself, or filed for him with no change since, he is open."""
     own = _humaned(api, set_by="bot:ops")
     detail = _refused_ask(api, "bot:ops", own["id"])
     assert detail == (
-        "An agent named this task's assignee, not a person or Tico, so this task does not let it ask them. Nothing was sent."
+        "An agent named this task's assignee, not a person or Tico, so this task does not let it ask them. "
+        "Nothing was sent."
     ), detail
     parent = _humaned(api, set_by="human:ana", chart_too=False)
     child = task(api, "ana-test", "bot:ops", title="Child note")
@@ -981,8 +982,8 @@ def test_only_an_assignee_a_person_or_tico_named_on_this_task_opens_it(api):
 
 
 def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_first(api):
-    """Only a ❓ and a stage ask open the assignee: an OK for an action (POST /oks, a grant the bot then uses) is refused
-    as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""
+    """Only a ❓ and a stage ask open the assignee: an OK for an action (POST /oks, a grant the bot then uses) is
+    refused as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""
     own = _humaned(api)
     with api.app.state.store.read() as c:
         version = H.task(c, own["id"])["version"]

@@ -5413,8 +5413,8 @@ def task_update(
 ):
     """Edit a task's fields: title, due date, note, labels, lane, rank, goal, the Contacts entity it is for
     (`entity_id`, "" for none; the caller resolved it as one the editor sees), number, privacy, roles, size, its
-    `human` role and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
-    at: an edit against an older one is refused.
+    `human` role and its public text. One edit raises the task's version once. `seen_version` is the version the
+    caller looked at: an edit against an older one is refused.
 
     This never writes the task's status, stage or owner: the engine does (backend/task_engine.py). For the callers
     that still say it this way, `status="done"` is `task_done`, `status="closed"` is `task_close`, `status="open"` on
