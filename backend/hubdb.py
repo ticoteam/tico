@@ -4257,8 +4257,20 @@ def task_comment(
 
         R.check_thread(conn, reach, conv["id"], text)
     msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to)
+    task_commented(conn, actor, row, msg, text, delegate=wake if delegate is None else delegate)
+    if public:
+        conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
+        msg = message(conn, msg['id'])
+    return msg
+
+
+def task_commented(conn, actor, row, msg, text, *, delegate):
+    """What a comment on task `row` sets off once `msg` is written, whichever route wrote it: `task_comment`, or a
+    person's message in the task's own chat (thread_api, `comment_on_post`). `delegate`: a person's comment delegates the
+    task to the bots it woke."""
     from . import wake_rules
 
+    task_id = row["id"]
     wake_rules.own_comment(conn, msg, row)  # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(
         conn,
@@ -4270,20 +4282,34 @@ def task_comment(
     )
     if actor != TICO_ACTOR:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
-    if is_human(actor) and (wake if delegate is None else delegate):
+    if is_human(actor) and delegate:
         delegate_woken(conn, task_id, actor, msg)
+    owner = row["owner_id"]
     if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
         from . import task_engine
 
         task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
-    if public:
-        conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
-        msg = message(conn, msg['id'])
     if is_human(actor):
         from . import ask_ingest
 
-        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
-    return msg
+        sources = (_json(msg.get("refs"), {}) or {}).get("body_sources", [])
+        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=sources)
+
+
+def comment_on_post(conn, actor, thread_id, kind="say", parent_message_id=None, via=None):
+    """The task a message posted in thread `thread_id` comments on, or None. A person's own plain message in a task's
+    own chat (not a sub-thread, not relayed) is their comment on the task, as `task_comment` writes one: the caller marks
+    it `{"task": id, "comment": True}` and calls `task_commented` once it is written, so the task, its delegation and its
+    stage rules read it as one."""
+    from . import threads
+
+    if not is_human(actor) or via or kind != "say" or parent_message_id or not thread_id:
+        return None
+    thread = threads.thread_row(conn, thread_id)
+    if not thread or thread.get("parent_id") or threads.audience_of(thread) != "task" or not thread.get("task_id"):
+        return None
+    row = task(conn, thread["task_id"])
+    return row if row and row.get("conversation_id") == thread["id"] else None
 
 
 # The mark on a task's first message: the request it was made with (task_create, the description migration).
@@ -4538,6 +4564,7 @@ def is_comment(msg):
                 "comment",
                 "quiet",
                 "via",
+                "from_page",
                 "rule",
                 "wake_immediate",
                 "delivery",

@@ -213,6 +213,27 @@ def _delivery_words(body):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
 
 
+def _commented_task(c, who, thread_id, body):
+    """The task a person's plain message in its own chat comments on (H.comment_on_post), or None: one write path with
+    POST /api/v2/tasks/{id}/comments, so what the task page and the Thread page send is a comment on the task."""
+    return H.comment_on_post(c, who.actor, thread_id, body.kind, body.parent_message_id, getattr(who, "via", None))
+
+
+def _comment_refs(task):
+    return {"task": task["id"], "comment": True} if task else {}
+
+
+def _commented(c, who, task, message, text):
+    """What the comment sets off once written (H.task_commented). A steer or queue by someone who may direct the task
+    delegates it to the bots it woke, as a task comment does (task_comments_routes.comment_write)."""
+    if not task:
+        return
+    from .chat_goals import may_direct
+
+    way, _ = threads.message_way(H._json(message.get("refs"), {}) or {})
+    H.task_commented(c, who.actor, task, message, text, delegate=way != "defer" and may_direct(c, who, task))
+
+
 def _reply_check(c, auth, who, thread_id, body):
     """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
     reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
@@ -1078,13 +1099,14 @@ def install(app, store, auth, mutate, rule_check):
             replying = _reply_check(c, auth, who, target, body) if target else None
             way, marks = _delivery_refs(c, auth, who, body, target) if body.delivery and target else (None, {})
             shared = shared_files(c, app.state.files, who, body.attachments)
+            task = _commented_task(c, who, target, body)
             message = threads.post(
                 c,
                 v,
                 target,
                 body.text,
                 kind=body.kind,
-                refs={**body.refs, **marks} if marks else body.refs,
+                refs={**body.refs, **marks, **_comment_refs(task)},
                 parent_message_id=body.parent_message_id,
                 to_actor=body.to,
                 checked=rc,
@@ -1096,6 +1118,7 @@ def install(app, store, auth, mutate, rule_check):
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
+            _commented(c, who, task, message, body.text)
             out = _thread_message(message)
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
@@ -1455,6 +1478,7 @@ def install(app, store, auth, mutate, rule_check):
                 caption = body.titles[index] if index < len(body.titles) else ""
                 item["title"] = caption or item["name"]
             items += shared_files(c, app.state.files, who, body.attachments)
+            task = _commented_task(c, who, target, body)
             posted = threads.post(
                 c,
                 v,
@@ -1462,7 +1486,8 @@ def install(app, store, auth, mutate, rule_check):
                 body.text,
                 kind=body.kind,
                 to_actor=body.to,
-                refs={**marks, **({"from_page": body.from_page} if body.from_page else {})} or None,
+                refs={**marks, **({"from_page": body.from_page} if body.from_page else {}), **_comment_refs(task)}
+                or None,
                 parent_message_id=body.parent_message_id,
                 checked=checked["rc"],
                 attachments=items or None,
@@ -1471,6 +1496,7 @@ def install(app, store, auth, mutate, rule_check):
             )
             if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
+            _commented(c, who, task, posted, body.text)
             message = _thread_message(H.message(c, posted["id"]))
             assert message is not None  # the message just posted
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])

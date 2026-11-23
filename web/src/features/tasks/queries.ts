@@ -860,8 +860,17 @@ export const flowQuery = queryOptions({
       // the stage asks for, the task's owner, then who asked for the task, whichever is an agent
       const task = it.task as (typeof it.task & { requester_id?: string | null }) | undefined;
       const by = it.kind === 'question' ? it.from_id : it.kind === 'ask' ? [it.ask?.asked_by, task?.owner_id, task?.requester_id].find((a) => !!a?.startsWith('bot:')) : null;
-      // where it waits (its chat, or its task), which the Agent bar links: a ❓ may wait in a Home or a task's chat
-      const href = it.href ?? (it.conversation_id ? `/threads/${encodeURIComponent(it.conversation_id)}` : it.task?.id ? `/task/${encodeURIComponent(it.task.id)}` : null);
+      // where it waits, which the Agent bar links: a ❓ on a task in the task's chat (the task, on its chat), else its
+      // chat (a Home), else its task
+      const href =
+        it.href ??
+        (it.task?.id && it.kind === 'question'
+          ? `/task/${encodeURIComponent(it.task.id)}?tab=chat`
+          : it.conversation_id
+            ? `/threads/${encodeURIComponent(it.conversation_id)}`
+            : it.task?.id
+              ? `/task/${encodeURIComponent(it.task.id)}`
+              : null);
       if (by?.startsWith('bot:')) asks.push({ id: it.id, kind: it.kind === 'question' ? 'question' : 'ask', by, pipeline: it.task?.pipeline_id ?? null, href });
       if (isRequest(it)) {
         requests.push(it);

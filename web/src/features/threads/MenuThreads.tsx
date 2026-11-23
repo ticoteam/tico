@@ -1,13 +1,14 @@
 import { useInfiniteQuery, useQueries, useQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useRef, useState, type ReactNode } from 'react';
+import { CHAT_TAB } from '@/features/task/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { contactsOf, conversationsOf, isDm, isTaskThread, letterAt, letterRows, letterUnread, othersOf, rowsOf, senderName, teamOf, unreadOf, type LetterRow, type Text, type Thread } from './model';
+import { contactsOf, conversationsOf, isDm, isTaskThread, ownTaskOf, letterAt, letterRows, letterUnread, othersOf, rowsOf, senderName, teamOf, unreadOf, type LetterRow, type Text, type Thread } from './model';
 import { Face, press, useMe, useTitle } from './people';
 import { archivedQuery, inboxQuery, mailboxesQuery, textListQuery, threadListQuery } from './queries';
 
@@ -134,12 +135,12 @@ function ThreadLine({ t, ask, gone }: { t: Thread; ask: boolean; gone?: boolean 
   const title = useTitle(t);
   const isNew = !gone && (unreadOf(t) > 0 || !!t.me?.activity);
   const at = gone ? t.archived_at : t.last_message_at;
+  const task = ownTaskOf(t); // a task's own chat opens as the task
   return (
     <Line>
       <Link
         className={isNew ? 'tree-row is-new' : 'tree-row'}
-        to="/threads/$thread"
-        params={{ thread: t.id }}
+        {...(task ? { to: '/task/$task', params: { task }, search: { tab: CHAT_TAB } as never } : { to: '/threads/$thread', params: { thread: t.id } })}
         activeProps={ACTIVE}
         title={title}
         data-target={`thread:${t.id}`}
