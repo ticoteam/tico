@@ -2178,6 +2178,10 @@ impl Runner {
             if runtime == "claude" || tests::HOST_CLAUDE.with(|claude| claude.get()) {
                 return Ok(Host::Claude(ClaudeHost::new(bot, command, tx)));
             }
+            if runtime == "antigravity" {
+                let home = self.state.directory.join("agy").join(bot);
+                return Ok(Host::Antigravity(AntigravityHost::new(&home, command, tx)));
+            }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
                 command,
@@ -3048,13 +3052,18 @@ impl Runner {
                 }).await?;
                 return Ok(());
             }
+            // A resumed thread that its harness moved to a new conversation after its last turn had begun (Antigravity:
+            // Host::lost_history) holds none of what came before: it is told everything again, as a new one is, until a
+            // turn has completed with it.
+            let refresh = resumed && self.state.repo_rules(&crate::continuity::refresh_key(&th), None)?.is_some_and(|v| !v.is_empty());
+            let told = resumed && !refresh;
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
             // compaction first may have taken them out.
             let digest = p.rules_digest.clone();
             let compacted_first = session.as_ref().is_some_and(|s| s.why == Some(crate::continuity::COMPACTED));
-            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
+            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (refresh || compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
             let names = self.names().await;
-            let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
+            let after = if told { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
             // The tools this turn calls through the Tico proxy, for their prompt line (crate::prompt `proxied_tools`).
             attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());
@@ -3074,7 +3083,7 @@ impl Runner {
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
-            let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+            let mut seen = if !stateless && prompt_turn && told && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
@@ -3102,13 +3111,13 @@ impl Runner {
                 && first_turn_key(&key);
             let replay = if moved_session {
                 crate::fallback::moved_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
-            } else if first_turn {
+            } else if first_turn || refresh {
                 crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
             } else { String::new() };
-            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &seen, &context);
+            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), told, &replay, &seen, &context);
             if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
-                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
+                built = crate::prompt::build(&attempt, &names, after.as_deref(), told, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
@@ -3180,6 +3189,13 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            // A late move to a new conversation is kept, and the next turn is told everything again; told once it has
+            // completed with it.
+            if h.lost_history(&th) {
+                self.state.repo_rules(&crate::continuity::refresh_key(&th), Some("1"))?;
+            } else if refresh && drove.outcome == "completed" {
+                self.state.repo_rules(&crate::continuity::refresh_key(&th), Some(""))?;
+            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));

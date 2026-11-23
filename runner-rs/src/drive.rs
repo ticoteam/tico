@@ -619,7 +619,7 @@ impl Runner {
                     }
                     // A sign-in the runtime could not renew refuses the turn before it starts, so the job can go
                     // back in the queue; `acted` guards a token that died after the bot had done something.
-                    let rejected = hosts::is_auth_rejected(&error);
+                    let rejected = hosts::is_auth_rejected_on(d.runtime, &error);
                     if rejected {
                         *auth_rejected = Some((d.runtime.to_string(), scrub(&error)));
                     }

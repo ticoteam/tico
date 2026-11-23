@@ -14,8 +14,9 @@ authentication mode. Readiness finds `agy` and checks sign-in with `agy models` 
 Each turn starts its own `agy` process, which ends with the turn; no process is kept between turns. The runner saves
 each thread's conversation ID locally (`state/agy/<bot>/`, readable by the runner only) and resumes it with
 `--conversation`. Failed or interrupted runs are never replayed automatically. Changing the effort keeps the
-conversation; starting a new chat starts a new one. When `agy` cannot resume the saved conversation, the turn starts a
-new one with the whole conversation (or stops, when it must continue the old one).
+conversation; starting a new chat starts a new one. When `agy` runs a turn in a new conversation instead of the saved one, the runner keeps the new one
+and tells the next turn the conversation's history again; nothing is run twice. A turn that must continue the old
+conversation stops instead. When `agy` exits, whatever of its process group is left (a tool it started) is stopped too.
 
 Only the initial run gets the recent conversation bootstrap (up to 30 messages).
 Later runs send messages after the last successfully delivered human request,

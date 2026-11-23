@@ -126,9 +126,18 @@ fn auth_rejected_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication|please sign in|\bunauthenticated \(code 401\)",
+            r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication",
         )
         .unwrap()
+    })
+}
+
+/// Antigravity's own words for a sign-in it has not got or lost: too general to read on any other runtime's errors.
+fn agy_auth_rejected_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)please sign in to view available models|\bauthentication required\b")
+            .unwrap()
     })
 }
 
@@ -210,6 +219,11 @@ pub fn edge_summary(text: &str) -> Option<String> {
 
 pub fn is_auth_rejected(text: &str) -> bool {
     auth_rejected_re().is_match(text)
+}
+
+/// `is_auth_rejected`, with the words only `runtime`'s CLI says (Antigravity's).
+pub fn is_auth_rejected_on(runtime: &str, text: &str) -> bool {
+    is_auth_rejected(text) || (runtime == "antigravity" && agy_auth_rejected_re().is_match(text))
 }
 
 pub fn is_auth_retryable(text: &str) -> bool {
@@ -1400,6 +1414,16 @@ impl Host {
         }
     }
 
+    /// Whether the harness moved `thread_id` to a new conversation after the turn's prompt had gone to the old one, so
+    /// the new one holds only this turn (Antigravity: it names its conversation only once it runs). The next turn is
+    /// told everything again (crate::continuity::refresh_key).
+    pub fn lost_history(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Antigravity(h) => h.restored(thread_id),
+            _ => false,
+        }
+    }
+
     /// Whether the harness says in its stream when it compacts a session (`compaction_events`), so a resumed turn
     /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
     pub fn reports_compaction(&self) -> bool {
@@ -1429,10 +1453,8 @@ impl Host {
     /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
     /// harness starts a new one in its place (`restored`): a new session's whole prompt.
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
-        match self {
-            Host::Claude(h) => h.full_prompt(thread_id, text),
-            Host::Antigravity(h) => h.full_prompt(thread_id, text),
-            _ => {}
+        if let Host::Claude(h) = self {
+            h.full_prompt(thread_id, text);
         }
     }
 
@@ -2146,11 +2168,25 @@ pub(crate) mod tests {
         // Antigravity: its account quota (a Google API error naming the reason), and a sign-in it has not got or lost.
         let quota = "Error 429, Message: Quota exhausted., Details: [map[metadata:map[quotaResetDelay:3600s] reason:QUOTA_EXHAUSTED]]";
         assert!(is_limit(quota) && !is_capacity(quota));
-        assert!(is_auth_rejected(
-            "Error: Please sign in to view available models. Launch the CLI without arguments to sign in."
+        let signed_out =
+            "Error: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+        assert!(is_auth_rejected_on("antigravity", signed_out));
+        assert!(is_auth_rejected_on(
+            "antigravity",
+            "Error: authentication required"
         ));
-        assert!(is_auth_rejected(
+        assert!(is_auth_rejected_on(
+            "antigravity",
             "UNAUTHENTICATED (code 401): Request had invalid authentication credentials."
+        ));
+        // Its words on any other runtime are a tool's or a page's, not that runtime's login.
+        assert!(!is_auth_rejected_on("claude", signed_out));
+        assert!(!is_auth_rejected_on(
+            "codex",
+            "proxy said: authentication required"
+        ));
+        assert!(!is_auth_rejected(
+            "Please sign in to continue to the dashboard"
         ));
         assert_eq!(
             rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
