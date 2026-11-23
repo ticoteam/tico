@@ -11,7 +11,9 @@ import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
 import { pipelineTasksQuery } from '@/features/tasks/routing';
-import { forgetPlaces } from '@/lib';
+import { forgetPlaces, nextInList, notePlace, pressListRow } from '@/lib';
+import { TaskPage } from '@/features/task/exports';
+import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
 import { foldSheet } from './Frame';
@@ -34,6 +36,7 @@ const { gate, q, catchUpRead, lists, owners, asks } = vi.hoisted(() => ({
 
 // the router module only: the app's pages are not needed to know what it draws for a page that breaks
 vi.mock('@/routeTree.gen', () => ({ routeTree: createRootRoute() }));
+vi.mock('@/live/follow', () => ({ useFollow: vi.fn(), follow: vi.fn(() => () => {}) }));
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 const power = vi.hoisted(() => ({ now: undefined as { available: boolean } | undefined }));
 vi.mock('@/tico/power', () => ({ useTicoPower: () => power.now }));
@@ -100,6 +103,7 @@ vi.mock('@/features/tasks/routing', async () => {
     staleTime: Infinity,
   })),
   flowQuery: { queryKey: ['flow'], queryFn: async () => ({ count: 4, items: [], asks: [...asks] }), staleTime: Infinity },
+  flowSnoozedAsksQuery: real.flowSnoozedAsksQuery,
   pipelinesQuery: q('pipelines', []),
   roadmapPipeline: () => null,
   firstPipeline: (p: { id: string }[]) => p[0]?.id ?? null,
@@ -110,7 +114,8 @@ vi.mock('@/features/team/exports', () => ({
   AddTeammate: ({ team }: { team: string }) => <p>add teammate onto {team}</p>,
   TeamAccess: () => null,
 }));
-vi.mock('@/features/task/exports', () => ({ TaskChat: () => <p>task chat</p> }));
+// the task page itself where a test draws it (`show`'s `opened`); its chat a stand-in
+vi.mock('@/features/task/exports', async (orig) => ({ TaskPage: (await orig<typeof TaskExports>()).TaskPage, TaskChat: () => <p>task chat</p> }));
 vi.mock('@/features/team/routing', () => ({
   whoHref: () => '/',
   groupsQuery: q('groups', []),
@@ -122,9 +127,11 @@ vi.mock('@/features/threads/exports', () => ({
   MenuThreads: () => <p>the threads</p>,
   MessagePick: () => null,
   TeamThread: () => <p>the team thread</p>,
+  threadQuery: (id: string) => q(`thread:${id}`, null),
 }));
 vi.mock('@/features/threads/routing', async () => ({
   asksOf: (await vi.importActual<{ asksOf: unknown }>('@/features/threads/routing')).asksOf,
+  threadQuery: (id: string) => q(`thread:${id}`, null),
   catchUpQuery: { ...q('catch-up', { count: 0, items: [] }), queryFn: catchUpRead },
   threadListQuery: { queryKey: ['threads-list'], queryFn: async () => ({ rows: [], next: null }), initialPageParam: null, getNextPageParam: () => undefined, staleTime: Infinity },
 }));
@@ -146,7 +153,7 @@ const QA = { id: 'bot:qa', kind: 'agent', name: 'QA Owner', slug: 'qa', team: 'E
 const people = (...actors: { id: string }[]) =>
   queryClient.setQueryData(['directory'], { actors, byId: Object.fromEntries(actors.flatMap((a) => [[a.id, a], [a.id.slice(a.id.indexOf(':') + 1), a]])) });
 
-function show(at: string, browser = false) {
+function show(at: string, browser = false, opened?: (p: { pipeline: string; task: string; tab?: string }) => ReactNode) {
   const page = createRoute({ getParentRoute: () => root, path: '/', component: () => <main className="pane page"><h1>Home</h1></main> });
   const call = createRoute({ getParentRoute: () => root, path: '/call/$room', component: () => <main className="pane cw">call page</main> });
   const calendar = createRoute({ getParentRoute: () => root, path: '/calendar', component: () => <main className="pane page"><h1>Calendar page</h1></main> });
@@ -160,12 +167,29 @@ function show(at: string, browser = false) {
     component: () => (
       <main className="pane page">
         <h1>Board</h1>
-        <Link to="/tasks/$pipeline/$task" params={{ pipeline: 'eng', task: '7' }}>Bulk edit stock</Link>
+        <Link to="/tasks/$pipeline/$task" params={{ pipeline: 'eng', task: '7' }} onClick={(e) => pressListRow('eng', '7', e)}>
+          Bulk edit stock
+        </Link>
       </main>
     ),
   });
-  const open = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task', component: () => <main className="pane page"><h1>An open task</h1></main> });
-  const tab = createRoute({ getParentRoute: () => root, path: '/tasks/$pipeline/$task/$tab', component: () => <main className="pane page"><h1>An open task</h1></main> });
+  // an open task: a stand-in, or the page a test hands in (`opened`)
+  const open = createRoute({
+    getParentRoute: () => root,
+    path: '/tasks/$pipeline/$task',
+    component: function OpenTask() {
+      const p = open.useParams();
+      return opened ? opened(p) : <main className="pane page"><h1>An open task</h1></main>;
+    },
+  });
+  const tab = createRoute({
+    getParentRoute: () => root,
+    path: '/tasks/$pipeline/$task/$tab',
+    component: function OpenTab() {
+      const p = tab.useParams();
+      return opened ? opened(p) : <main className="pane page"><h1>An open task</h1></main>;
+    },
+  });
   const finance = createRoute({ getParentRoute: () => root, path: '/company/finance', component: () => <main className="pane page"><h1>Finance</h1></main> });
   const router = createRouter({ routeTree: root.addChildren([page, call, calendar, task, needs, editor, board, open, tab, finance]),
     context: { queryClient },
@@ -921,6 +945,161 @@ describe('a task opened from a board', () => {
     expect(await screen.findByRole('navigation', { name: 'Engineering' })).toBeTruthy();
   });
 
+  it('keeps its rows in the order drawn, a folded stage’s left out, so an answer that leaves nothing on the task opens the row below', async () => {
+    lists.eng = [row(7, 'Bulk edit stock', 'review'), row(8, 'Postal codes', 'qa'), row(5, 'Rate fallback', 'review')];
+    await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    await within(list).findByRole('link', { name: /Postal codes/ });
+    // by stage, then as the list read gives them: Review's 7 and 5, then QA's 8
+    expect(nextInList('t7')).toEqual({ pipeline: 'eng', task: '5' });
+    expect(nextInList('t5')).toEqual({ pipeline: 'eng', task: '8' });
+    expect(nextInList('t8')).toBeNull();
+    fireEvent.click(within(list).getByRole('button', { name: /^QA/ }));
+    await waitFor(() => expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull());
+    expect(nextInList('t5')).toBeNull();
+    // with the list closed there is no row below
+    fireEvent.click(within(list).getByRole('button', { name: 'Close the list' }));
+    expect(await screen.findByRole('navigation', { name: 'Main' })).toBeTruthy();
+    expect(nextInList('t7')).toBeNull();
+  });
+
+});
+
+describe('an answer on a task beside its pipeline’s list', () => {
+  /* The task page itself under the shell: one plain OK on each task waits on Maya, and Approve leaves nothing on it. */
+  const at = (w: number) =>
+    act(() => {
+      Object.defineProperty(window, 'innerWidth', { value: w, configurable: true });
+      window.dispatchEvent(new Event('resize'));
+    });
+  const ENG = { id: 'eng', name: 'Engineering', stages: [{ id: 'review', name: 'Review' }, { id: 'qa', name: 'QA' }], done: null };
+  const row = (n: number, stage: string) => ({ id: `t${n}`, number: n, title: `Task ${n}`, status: 'open', pipeline_id: 'eng', stage_id: stage, owner_id: 'bot:qa', labels: [], late: false, turn: null, updated_at: '2026-11-18T09:00:00Z', version: 1 });
+  const ok = (n: number, answered: boolean) => ({
+    requirement_id: `r${n}`,
+    kind: 'ok',
+    line: 'Ship it?',
+    met: answered,
+    may: answered ? ['undo'] : ['ok', 'no'],
+    shows: [],
+    asked_by: 'bot:qa',
+    answer: answered ? { id: `a${n}`, value: 'ok', by: 'human:maya', at: '2026-11-19T10:00:00Z', note: null } : null,
+    standing: answered ? 'done' : 'waiting',
+    who: 'human:maya',
+  });
+  const task = (n: number, answered = false) => ({
+    ...row(n, 'review'),
+    pipeline: { id: 'eng', name: 'Engineering' },
+    stage: { id: 'review', name: 'Review' },
+    next: { id: 'qa', name: 'QA' },
+    conversation_id: null,
+    created_at: '2026-11-01T10:00:00Z',
+    documents: [],
+    links: [],
+    to_leave: [ok(n, answered)],
+  });
+  beforeEach(() => {
+    at(1600);
+    people(MAYA, QA);
+    queryClient.setQueryData(['pipelines'], [ENG]);
+    lists.eng = [row(7, 'review'), row(5, 'review'), row(8, 'qa')];
+    vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
+      const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+      const n = Number(/\/api\/v2\/tasks\/(?:%23|t)(\d+)/.exec(url)?.[1]);
+      if (init?.method === 'POST' && /\/asks\/r\d+\/answer$/.test(url)) return json({ task: task(n, true) });
+      if (url.includes('/api/v2/oks/')) return json({}, 404);
+      if (url.endsWith('/files?all=1')) return json({ files: [] });
+      if (n) return json({ task: task(n), runs: [], children: [], can_comment: true, mover: true });
+      return json({});
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    at(1024);
+  });
+  const page = (p: { task: string; tab?: string }) => <TaskPage task={p.task} pipeline="eng" tab={p.tab} />;
+  // once the page has named its tab in the address (it has settled), its Approve
+  const approve = async (router: { state: { location: { pathname: string } } }, n: number) => {
+    await waitFor(() => expect(router.state.location.pathname).toMatch(new RegExp(`^/tasks/eng/${n}/`)));
+    const button = await waitFor(() => {
+      const b = within(screen.getByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' });
+      expect(b).toHaveProperty('disabled', false);
+      return b;
+    });
+    fireEvent.click(button);
+  };
+
+  it('opened from its board, Approve opens the task below it in the list, as its row does, and its Approve the one after', async () => {
+    const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
+    fireEvent.click(await screen.findByRole('link', { name: 'Bulk edit stock' }));
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/5(\/|$)/));
+    await approve(router, 5);
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/8(\/|$)/));
+  });
+
+  it('opened over its board with no press on its card (Tico’s tracker), Approve goes back to the board', async () => {
+    const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+  });
+
+  it('opened by a link, then its board, a reload and Back: Approve goes to the board', async () => {
+    const router = show('/tasks/eng/7', false, page);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/details'));
+    await act(() => router.navigate({ href: '/tasks/eng' }));
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    // the reload: what the app noted in memory is gone, and the board it loads on is noted afresh
+    forgetPlaces();
+    notePlace('/tasks/eng', '', {}, router.state.location.state);
+    act(() => router.history.back());
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+  });
+
+  it('a row pressed with a key held (opened elsewhere) does not mark that task here, if it opens from a thread next', async () => {
+    const router = show('/needs-you', false, page);
+    expect(await screen.findByRole('heading', { name: 'Needs you page' })).toBeTruthy();
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/details'));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    fireEvent.click(await within(list).findByRole('link', { name: /Task 5/ }), { metaKey: true });
+    await act(() => router.navigate({ href: '/tasks/eng/5/details?chat=c1&via=thread' }));
+    await approve(router, 5);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+  });
+
+  it('opened from Needs you, Approve goes back there; a press on a row of the list opens a task that goes on to the row below', async () => {
+    const router = show('/needs-you', false, page);
+    expect(await screen.findByRole('heading', { name: 'Needs you page' })).toBeTruthy();
+    await act(() => router.navigate({ href: '/tasks/eng/7' }));
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+    // again, and a row pressed in the list: that task was opened from the list
+    await act(() => router.navigate({ href: '/tasks/eng/8' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    fireEvent.click(await within(list).findByRole('link', { name: /Task 7/ }));
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/7(\/|$)/));
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/5(\/|$)/));
+  });
+
+  it('with the list folded away, Approve goes back to the board', async () => {
+    const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
+    fireEvent.click(await screen.findByRole('link', { name: 'Bulk edit stock' }));
+    await screen.findByRole('navigation', { name: 'Engineering' });
+    act(() => foldSheet('list', true));
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+  });
 });
 
 describe('the desktop app', () => {

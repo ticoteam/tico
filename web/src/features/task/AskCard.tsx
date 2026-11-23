@@ -4,7 +4,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Link } from '@/kit/Link';
 import { useCards } from '@/kit/Popover';
 import { toast } from '@/kit/Toast';
-import { answered } from './answered';
+import { answered, answering } from './answered';
 import { failedToast, reasonOf } from './model';
 import { Face } from './parts';
 import './ask.css';
@@ -97,5 +97,10 @@ export function useAnswering() {
     setError(reasonOf(res.error));
   };
   const moveOn = () => void (here.current && answered());
-  return { error, setError, here, refused, moveOn };
+  // an answer starts: what it said last goes, and the list beside the task keeps its order as it is now
+  const start = () => {
+    setError('');
+    answering();
+  };
+  return { error, here, refused, moveOn, start };
 }

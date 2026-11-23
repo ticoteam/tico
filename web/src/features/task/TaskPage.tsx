@@ -18,7 +18,7 @@ import { FilePreview } from '@/features/library/exports';
 import { threadQuery } from '@/features/threads/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { leaveTask } from '@/lib';
+import { leaveTask, nextInList, pressListRow } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AskCard } from './AskCard';
@@ -166,7 +166,8 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: TaskSearch) => prev) as never, replace: true });
   }, [known, chatCard, unresolved, first, opened, t, navigate]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
-     the task stays as it is; once nothing does, it closes, back to the board, list or page it was opened from (its
+     the task stays as it is; once nothing does, opened from its board or the list beside it, the task below it in that
+     list opens, as a press on its row does; else it closes, back to the board, list or page it was opened from (its
      board, while there is one, when nothing is behind it). */
   const router = useRouter();
   const client = useQueryClient();
@@ -182,9 +183,14 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       onAnswered(() => {
         const waits = waitsNow(client, t.id, me);
         if (waits === 'ask') return setSeek((n) => n + 1);
-        if (!waits) close();
+        if (waits) return;
+        const next = nextInList(t.id);
+        if (!next) return close();
+        leaving.current = true;
+        pressListRow(next.pipeline, next.task);
+        void navigate({ to: '/tasks/$pipeline/$task', params: next });
       }),
-    [t.id, me, client, close],
+    [t.id, me, client, close, navigate],
   );
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {

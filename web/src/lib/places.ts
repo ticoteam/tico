@@ -35,6 +35,7 @@ export function notePlace(path: string, searchStr: string, search: Record<string
   if (!isTaskPath(path)) beforeTask = { href: path + searchStr, at: stepOf(state) };
   const board = BOARD.exec(path);
   if (board?.[1]) boards.set(decodeURIComponent(board[1]), search);
+  noteFromList(path, search, entryOf(state));
 }
 
 /** The search a pipeline's board was last shown with (its view and filters), or none. */
@@ -57,8 +58,84 @@ export function leaveTask(r: Steps, board?: () => string | null | Promise<string
   });
 }
 
+/* A task opened from its pipeline: by a press on a card of its board, on a row of the list beside an open task, or as
+   Tico went on to the row below after an answer. Only that press says so, never the address before it (a link, the
+   tracker over the board). Each entry in the history that is one (its own key: Back and Forward come to the same
+   entry, a new address is a new one), with its task (`<pipeline>/<task>`); `seen`, every entry shown, so a step back
+   or forward onto one keeps what it had; `here`, the place shown now. Kept in memory: after a reload, none is. */
+const OPEN_TASK = /^\/tasks\/([^/]+)\/(?!edit(?:\/|$))([^/]+)/;
+const fromList = new Map<string, string>();
+const seen = new Set<string>();
+let pressed: string | null = null;
+let here: { entry: string; task: string } | null = null;
+
+const entryOf = (state: unknown): string => {
+  const s = state as { __TSR_key?: unknown; key?: unknown } | null | undefined;
+  return String(s?.__TSR_key ?? s?.key ?? stepOf(state) ?? '');
+};
+
+function noteFromList(path: string, search: Record<string, unknown>, entry: string): void {
+  const t = OPEN_TASK.exec(path);
+  const task = t ? `${decodeURIComponent(t[1]!)}/${decodeURIComponent(t[2]!)}` : null;
+  // a new entry only (an address opened, or one changed in place): Back and Forward come to one as it was
+  if (task && !seen.has(entry)) {
+    // the same task's address changing (its tab named, another tab) keeps how it was opened; a thread's card does not
+    const kept = search.chat === undefined && search.via === undefined && here?.task === task && fromList.get(here.entry) === task;
+    if (pressed === task || kept) fromList.set(entry, task);
+  }
+  seen.add(entry);
+  pressed = null;
+  here = task ? { entry, task } : null;
+}
+
+/** A press that opens a task from its pipeline (a board's card, a row of the list beside an open task; none for Tico's
+    own move on): its pipeline and task as the address names them. Only a plain press opens it here: one with a key
+    held, another button, or one the page took for itself (picking) marks nothing. */
+export function pressListRow(pipeline: string, task: string, e?: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; defaultPrevented: boolean }): void {
+  if (e && (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.defaultPrevented)) return;
+  pressed = `${pipeline}/${task}`;
+}
+
+/** A row of the list beside an open task: its task's id, its number as the address names it. */
+export interface ListRow {
+  id: string;
+  n: string;
+}
+
+/* The list beside an open task while it shows: its rows in the order drawn, `held` as they were when an answer was
+   given on the open task. */
+let listed: { pipeline: string; open: string; rows: ListRow[]; held?: ListRow[] } | null = null;
+
+/** The list beside an open task (its pipeline, the open task as the address names it), as it draws its rows in order (a
+    folded stage's are not drawn); null while it does not show. */
+export function noteList(list: { pipeline: string; open: string; rows: ListRow[] } | null): void {
+  const same = !!list && listed?.pipeline === list.pipeline && listed.open === list.open;
+  listed = list && { ...list, ...(same && listed?.held && { held: listed.held }) };
+}
+
+/** An answer is being given on the open task: the row below it is the one below it now, wherever the answer moves it. */
+export const holdList = (): void => void (listed && (listed.held = listed.rows));
+
+/** The task below `id` in the list beside it as an answer found it (past rows that have left the list since), opened as
+    a press on its row would: its pipeline and number. Null at the list's last row, with no list showing, or when the open
+    task was not opened from its pipeline's board or list (a link, Needs you, a thread: its answer goes back there). */
+export function nextInList(id: string): { pipeline: string; task: string } | null {
+  if (!listed || !here || fromList.get(here.entry) !== here.task || !here.task.startsWith(`${listed.pipeline}/`)) return null;
+  const { pipeline, rows } = listed;
+  const order = listed.held ?? rows;
+  const now = new Set(rows.map((r) => r.id));
+  const at = order.findIndex((r) => r.id === id);
+  const next = at < 0 ? undefined : order.slice(at + 1).find((r) => r.id !== id && now.has(r.id));
+  return next ? { pipeline, task: next.n } : null;
+}
+
 /** Forgets every place (tests). */
 export function forgetPlaces(): void {
   beforeTask = null;
   boards.clear();
+  listed = null;
+  fromList.clear();
+  seen.clear();
+  pressed = null;
+  here = null;
 }

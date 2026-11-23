@@ -72,7 +72,7 @@ function HeldBox({ t, summary }: { t: TaskData; summary: Hold }) {
   const opened = useQuery(holdQuery(summary.id));
   const keep = useAction('task.keepHold');
   const send = useAction('task.sendHold');
-  const { error, setError, refused, moveOn } = useAnswering();
+  const { error, refused, moveOn, start } = useAnswering();
   const busy = keep.pending || send.pending;
 
   const h = opened.data ?? summary;
@@ -84,7 +84,7 @@ function HeldBox({ t, summary }: { t: TaskData; summary: Hold }) {
   const sendable = whole && h.can_send && !!h.nonce;
 
   const decide = async (how: 'keep' | 'send') => {
-    setError('');
+    start();
     const more = othersHeld(t.id, h.id);
     const res = how === 'send' ? await send.run({ task: t.id, hold: h.id, nonce: h.nonce }) : await keep.run({ task: t.id, hold: h.id });
     if (!res.ok) return refused(res);
