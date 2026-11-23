@@ -2060,9 +2060,7 @@ def test_a_reconnect_that_made_a_new_app_names_both_bots_for_30_days(api, gh):
     # AC-7: 30 days after that connect the notice is gone; the bot still shows.
     with api.app_state.store.transaction() as c:
         old = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        c.execute(
-            "UPDATE events SET created_at=? WHERE action='github.app_connected' AND target='acme-tico-2'", (old,)
-        )
+        c.execute("UPDATE events SET created_at=? WHERE action='github.app_connected' AND target='acme-tico-2'", (old,))
     later = api.get("/api/v2/github/app", headers=auth()).json()
     assert later["app_changed"] is None and later["bot"]["login"] == "acme-tico-2[bot]"
 
