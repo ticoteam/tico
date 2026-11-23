@@ -1473,9 +1473,39 @@ def _repos_fields(fields):
     return fields
 
 
-def _repos_run(api, fields):
+def _repos_edit(api, bot, add, remove):
+    """`--add` and `--remove`: the bot's chosen repositories as they are, each --add grant added or changed and each
+    --remove taken out, sent back whole. A bot on its own repository starts from none, and one on All ticked repos from
+    what that covers at its access (repositories ticked later no longer reach it, as stderr says). A kept grant's
+    workflow settings stay as they are."""
+    grants = [chosen_grant(g) for g in add or []]
+    gone = {g["full_name"].lower() for g in grants} | {name.strip().lower() for name in remove or []}
+    current = bot_repos_get(api, {"bot": bot}) or {}
+    rows = current.get("chosen") or [] if current.get("mode") == "chosen" else []
+    if current.get("mode") == "all":
+        covered = current.get("all_ticked")
+        if covered is None:  # a hub from before all_ticked: what the bot reaches now
+            covered = [
+                r["full_name"] for r in current.get("effective") or [] if r["access"] == current.get("all_access")
+            ]
+        rows = [{"full_name": name, "access": current.get("all_access")} for name in covered]
+        print(
+            f"{bot} moves from All ticked repos to chosen ones: repositories ticked later won't reach it",
+            file=sys.stderr,
+        )
+    kept = [{"full_name": r["full_name"], "access": r["access"]} for r in rows if r["full_name"].lower() not in gone]
+    return _repos_run(api, {"bot": bot, "mode": "chosen", "chosen": kept + grants})
+
+
+def _repos_run(api, fields, add=None, remove=None):
     """Read the access when no mode is given, else set it and say on stderr what the change took away (a switch to own
-    keeps the chosen rows, but they stop applying)."""
+    keeps the chosen rows, but they stop applying). `--add`/`--remove` change the chosen list (`_repos_edit`)."""
+    if add or remove:
+        if "mode" in fields:
+            raise APIError(
+                "validation", "--add and --remove change the chosen list: leave out --all, --own and --chosen"
+            )
+        return _repos_edit(api, fields["bot"], add, remove)
     if "mode" not in fields:
         return bot_repos_get(api, {"bot": fields["bot"]})
     result = bot_repos_set(api, fields)
@@ -1507,12 +1537,28 @@ BOT_REPOS = (
                 action="store",
                 metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
             ),
+            Arg(
+                "add",
+                flag="--add",
+                action="append",
+                local=True,
+                metavar="OWNER/REPO[:read|:write[+actions|-actions][+edit|-edit]]",
+                help="add or change one repository, keeping the others (--chosen replaces the whole list)",
+            ),
+            Arg(
+                "remove",
+                flag="--remove",
+                action="append",
+                local=True,
+                metavar="OWNER/REPO",
+                help="take one repository away, keeping the others",
+            ),
         ),
         exclusive=(("mode", "chosen"),),
         omit=("all_access",),
         convert=_repos_fields,
         run=_repos_run,
-        example="tico bot repos builder --chosen acme/app:write+actions",
+        example="tico bot repos builder --add acme/app:write+actions",
     ),
 )
 

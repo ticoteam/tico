@@ -15,8 +15,9 @@ What the screen is made of:
   with evidence (a summary and findings by file and line). The whole bundle is read, scripts included, each file fenced as
   data, with the diff against the base for an update. No fallback to another model: a lower-quality answer is not a screen.
 
-Unlike screening.py's doors there is no switch, no length bypass, no cut and no fail-open: a bundle too big for the state
-is `not_screened` (`oversize`), and no model, the spend cap, a timeout or an error is `not_screened` with that reason until
+Unlike screening.py's doors there is no switch, no length bypass, no cut and no fail-open: a bundle too big for one state
+(the Gateway refuses a state over J.MAX_STATE_CHARS) is read in parts (`states`), one call each, and the screen is the worst
+part's verdict and risk. No model, the spend cap, a timeout or an error on any part is `not_screened` with that reason until
 someone screens it again. A proposal is never `screened` without a model answer. A `screened` row for the same sha, base and
 question set version is reused instead of paying again; a new question set version sends pending proposals back to be
 screened (approved versions are not re-gated). Events name the proposal, the skill and the outcome, never a file's text.
@@ -158,7 +159,7 @@ def _fenced(path, text):
 
 
 def full_diff(before, after):
-    """The unified diff of every changed file, uncut: the state must hold all of it or the screen is `oversize`."""
+    """The unified diff of every changed file, uncut (`states` reads a diff too long for one state in parts)."""
     old = {item["path"]: item["content"] for item in before}
     new = {item["path"]: item["content"] for item in after}
     return "".join(
@@ -205,6 +206,73 @@ def build_state(name, description, files, base_files, patterns):
 
 def state_chars(state):
     return len(json.dumps(state, default=str))
+
+
+PART = (
+    "{} of {}: the skill is too long for one read, so each part holds some of its files and diff. "
+    "Judge what this part shows."
+)
+
+
+def _cost(text):
+    """`text`'s characters as JSON inside a fence, without its quotes (escaping is per character, so costs add up)."""
+    return len(json.dumps(text.replace(f"</{FENCE}", f"</ {FENCE}"))) - 2
+
+
+def _pieces(text, room):
+    """`text` cut on line boundaries into [first line, last line, text] pieces of at most `room` characters of JSON
+    each; a line longer than that on its own is cut as well (12 characters of JSON is the most one character takes)."""
+    out, size, step = [], 0, max(1, room // 12)
+    for n, line in enumerate(text.splitlines(keepends=True), 1):
+        for bit in [line] if _cost(line) <= room else [line[i : i + step] for i in range(0, len(line), step)]:
+            cost = _cost(bit)
+            if not out or size + cost > room:
+                out.append([n, n, ""])
+                size = 0
+            out[-1][1], out[-1][2], size = n, out[-1][2] + bit, size + cost
+    return out
+
+
+def states(name, description, files, base_files, patterns, limit=None):
+    """What the model reads, as states of at most `limit` (J.MAX_STATE_CHARS) characters each: `build_state` alone when it
+    fits, else the files in order and then the diff, cut on line boundaries and packed into as few parts as fit, each with
+    the name, description and pattern hits, which part it is (`part`) and, for a file cut across parts, its `lines`."""
+    limit = limit or J.MAX_STATE_CHARS
+    whole = build_state(name, description, files, base_files, patterns)
+    if state_chars(whole) <= limit:
+        return [whole]
+    frame = {"name": name, "description": description, "part": PART.format(99, 99), "files": [], "patterns": patterns}
+    if base_files is not None:
+        frame["diff"] = _fenced("diff", "")
+    streams = [(f["path"], f["content"]) for f in sorted(files, key=lambda f: f["path"])]
+    if base_files is not None:
+        streams.append((None, full_diff(base_files, files)))
+    widest = max((len(path or "") for path, _ in streams), default=0)
+    entry = state_chars({"path": "p" * widest, "lines": "9" * 13, "content": _fenced("p" * widest, "")}) + 2
+    # 100 to spare: a fence tag cut across two slices of one long line is escaped once the slices are joined again.
+    room = max(1, limit - state_chars(frame) - entry - 100)
+    parts = []  # [room left, [(path, lines or None, text)]]
+    for path, text in streams:
+        pieces = _pieces(text, room) or [[1, 1, ""]]
+        for first, last, bit in pieces:
+            if not parts or parts[-1][0] < _cost(bit):
+                parts.append([room, []])
+            parts[-1][0] -= _cost(bit) + entry
+            parts[-1][1].append((path, f"{first}-{last}" if len(pieces) > 1 else None, bit))
+    out = []
+    for n, (_, pieces) in enumerate(parts, 1):
+        state = {"name": name, "description": description, "part": PART.format(n, len(parts)), "files": []}
+        for path, lines, bit in pieces:
+            if path is not None:
+                state["files"].append(
+                    {"path": path, **({"lines": lines} if lines else {}), "content": _fenced(path, bit)}
+                )
+        diff = "".join(bit for path, _, bit in pieces if path is None)
+        state["patterns"] = patterns
+        if diff:
+            state["diff"] = _fenced("diff", diff)
+        out.append(state)
+    return out
 
 
 # ----------------------------------------------------------------------------------------------- the question set
@@ -379,45 +447,55 @@ def screen(store, row, base_files, engine_for=None):
             judge_call_id=cached["judge_call_id"],
             cached_from=cached["id"],
         )
-    state = build_state(row["name"], row["description"], files, base_files, hits)
-    if state_chars(state) > J.MAX_STATE_CHARS:
-        return _outcome("not_screened", label, hits, "oversize")
+    parts = states(row["name"], row["description"], files, base_files, hits)
     with store.read() as c:
         engine = (engine_for or strict_engine)(store, c)
         at_cap = engine is None and over_spend_cap(c, store.settings)
     if engine is None:
         return _outcome("not_screened", label, hits, "cap" if at_cap else "unavailable")
-    since, started = H.now(), time.monotonic()
-    try:
-        result = engine(state, qset["questions"], label=label, evidence=True)
-    except J.JudgeError as exc:
-        return _outcome(
-            "not_screened",
-            label,
-            hits,
-            _reason(exc, time.monotonic() - started, STRICT_SECONDS),
-            judge_call_id=_judge_call(store, label, since),
-        )
-    call_id = _judge_call(store, label, since)
-    answers = (result or {}).get("answers") or {}
-    try:
-        verdict, risk = J.choice(answers, "verdict")[0], J.choice(answers, "risk")[0]
-        flags = {qid: J.noul(answers, qid) for qid in FLAGS if qid in answers}
-    except (KeyError, TypeError, ValueError):
-        verdict = risk = None
-    if verdict not in VERDICTS or risk not in RISKS:
-        return _outcome("not_screened", label, hits, "error", judge_call_id=call_id)
-    evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+    since, answered = H.now(), []
+    for state in parts:  # one call a part; any part that fails leaves the whole skill unscreened
+        started = time.monotonic()
+        try:
+            result = engine(state, qset["questions"], label=label, evidence=True)
+        except J.JudgeError as exc:
+            return _outcome(
+                "not_screened",
+                label,
+                hits,
+                _reason(exc, time.monotonic() - started, STRICT_SECONDS),
+                judge_call_id=_judge_call(store, label, since),
+            )
+        answers = (result or {}).get("answers") or {}
+        try:
+            verdict, risk = J.choice(answers, "verdict")[0], J.choice(answers, "risk")[0]
+            flags = {qid: J.noul(answers, qid) for qid in FLAGS if qid in answers}
+        except (KeyError, TypeError, ValueError):
+            verdict = risk = None
+        if verdict not in VERDICTS or risk not in RISKS:
+            return _outcome("not_screened", label, hits, "error", judge_call_id=_judge_call(store, label, since))
+        evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+        answered.append((verdict, risk, flags, evidence))
+    # The worst part is the screen: its verdict, its risk, each concern at its highest, every part's summary and findings.
+    flags = {}
+    for _, _, part_flags, _ in answered:
+        for qid, p in part_flags.items():
+            flags[qid] = max(flags.get(qid, 0.0), p)
+    summaries = [e.get("summary") for *_, e in answered]
+    if len(answered) > 1:
+        summary = " ".join(f"Part {n} of {len(answered)}: {s}" for n, s in enumerate(summaries, 1) if s) or None
+    else:
+        summary = summaries[0]
     flag_at = float((qset.get("thresholds") or {}).get("flag", FLAG_AT))
     return _outcome(
         "screened",
         label,
         hits,
-        verdict=verdict,
-        risk=raised_risk(risk, every, flags, flag_at),
-        summary=evidence.get("summary"),
-        findings=evidence.get("findings") or [],
-        judge_call_id=call_id,
+        verdict=max((a[0] for a in answered), key=VERDICTS.index),
+        risk=raised_risk(max((a[1] for a in answered), key=RISKS.index), every, flags, flag_at),
+        summary=summary,
+        findings=[f for *_, e in answered for f in (e.get("findings") or [])],
+        judge_call_id=_judge_call(store, label, since),
     )
 
 

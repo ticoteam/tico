@@ -174,14 +174,42 @@ def test_no_engine_is_unavailable_or_the_cap_and_nothing_is_asked(api):
     assert latest(api, pid)["reason"] == "cap"
 
 
-def test_an_update_whose_diff_cannot_fit_the_state_is_oversize_and_never_asked(api):
-    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2400))
+def test_an_update_too_big_for_one_call_is_screened_in_parts_at_its_worst_part(api):
+    # The case a TIDY developer hit: an 81,000-character skill whose diff against its base is about 70,000 more.
+    lines = "".join(f"line {n:05d} of the alpha steps\n" for n in range(2700))
     head = "---\nname: triage\ndescription: Sorts the inbox by urgency\n---\n"
-    publish(api, bundle(head + lines))
-    pid = proposal(api, bundle(head + lines.replace("alpha", "gamma")))["id"]
-    engine = Engine()
-    assert drain(api, engine) == ["not_screened"]
-    assert latest(api, pid)["reason"] == "oversize" and engine.calls == []
+    base = bundle(head + lines)
+    publish(api, base)
+    newer = bundle(head + lines.replace("alpha steps\n", "gamma steps\n", 1100))
+    pid = proposal(api, newer)["id"]
+    whole = S.build_state("triage", "Sorts the inbox by urgency", newer, base, [])
+    assert S.state_chars(whole) > J.MAX_STATE_CHARS  # one state was `oversize`, and never screened
+
+    class Parts(Engine):  # the part holding the diff is the one the model is worried about
+        def __call__(self, state, questions, label=None, evidence=False):
+            J.validate(state, questions, label)  # each part is a call the Gateway takes
+            self.verdict, self.risk = ("unsafe", "high") if "diff" in state else ("safe", "low")
+            self.evidence = {"summary": f"part {len(self.calls) + 1}", "findings": EVIDENCE["findings"]}
+            return super().__call__(state, questions, label, evidence)
+
+    engine = Parts()
+    assert drain(api, engine) == ["screened"]
+    states = [call["state"] for call in engine.calls]
+    assert len(states) >= 2 and all(S.state_chars(s) <= J.MAX_STATE_CHARS for s in states)
+    assert [s["part"].split(":")[0] for s in states] == [f"{n} of {len(states)}" for n in range(1, len(states) + 1)]
+    read = "".join(f["content"].split("\n", 1)[1].rsplit("\n", 1)[0] for s in states for f in s["files"])
+    assert read == head + lines.replace("alpha steps\n", "gamma steps\n", 1100)  # every line, once, in order
+    diff = "".join(s["diff"].split("\n", 1)[1].rsplit("\n", 1)[0] for s in states if "diff" in s)
+    assert diff == S.full_diff(base, newer)
+    screened = latest(api, pid)
+    assert (screened["status"], screened["reason"], screened["verdict"], screened["risk"]) == (
+        "screened",
+        None,
+        "unsafe",
+        "high",
+    )
+    assert screened["summary"].startswith("Part 1 of ") and len(json.loads(screened["findings"])) == len(states)
+    assert "oversize" not in S_SKILLS.SCREEN_REASONS
 
 
 @pytest.mark.parametrize(

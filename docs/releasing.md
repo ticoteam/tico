@@ -860,8 +860,8 @@ leaves the other installs untouched, and the bot asks the owner what to do next.
 Setup, once:
 
 - **Write on the repository.** An owner or admin ticks the repository in Settings → General → Repositories and gives the bot
-  write on it: `tico bot repos <slug> --chosen <owner>/<repo>:write` (list the bot's other chosen repositories in the
-  same command; `--chosen` replaces them), or the same in the bot's settings ([Repositories](repositories.md)).
+  write on it: `tico bot repos <slug> --add <owner>/<repo>:write` (it keeps the bot's other repositories), or the same
+  in the bot's settings ([Repositories](repositories.md)).
 - **An update key per install.** The owner of each install, the team's own included, runs
   `tico service-key create --label "<team> Release Owner" --scope update` there ([Service keys](service-keys.md#update-keys)).
   Each key is stored as a key in Tools (Tools → Add → Key) on the Release Owner's install, granted to the bot, with the variable
