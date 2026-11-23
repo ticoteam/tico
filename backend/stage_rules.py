@@ -756,6 +756,7 @@ def sweep_owners(conn: Any) -> list[str]:
     """Owner on the team over the open tasks in its stages, once at release: each refused owner is cleared (the stage
     has nobody, as with no assignee), the history names the rule, and each manager gets ONE wake listing them.
     Returns the task ids changed."""
+    from . import question_marks
     from . import task_engine as _E_mod
     from . import task_wakes as _task_wakes_mod
 
@@ -783,6 +784,8 @@ def sweep_owners(conn: Any) -> list[str]:
         if row["stage"].get("owner") == "assignee" or _picks_owner(row["stage"]):
             fields["assignee_id"] = None
         E._write(conn, task_id, **fields)
+        # It clears the holder and the assignee without what follows an owner (task_effects._follow_owner).
+        question_marks.clear_gone(conn, task_id)
         record(conn, task_id, rule, line, _core.TICO_ACTOR, data={"owner": row.get("owner_id"), "sweep": True})
         pipe: Any = row.get("pipeline") or {}
         manager = pipe.get("manager_id")

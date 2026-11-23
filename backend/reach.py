@@ -861,12 +861,13 @@ def _held(c, task_id, field, current, before):
 
 
 def task_parties(c, task_id, before=None):
-    """Everyone a task is shared with: its owner, requester, everyone an ask on it named (or was given to), its readers
-    (a group's by its members), everyone who owned it, in this stage or an earlier one, and whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
+    """Everyone a task is shared with: its owner, requester, person assignee, everyone an ask on it named (or was given
+    to), its readers (a group's by its members), everyone who owned it, in this stage or an earlier one, and whoever posted in or is a member of its thread. `before`: who was on it then (the dry-run's history; thread members
     are left out, as their joins are not dated)."""
     row = (
         c.execute(
-            "SELECT id, status, owner_id, requester_id, readers, conversation_id FROM tasks WHERE id=?", (task_id,)
+            "SELECT id, status, owner_id, requester_id, assignee_id, readers, conversation_id FROM tasks WHERE id=?",
+            (task_id,),
         ).fetchone()
         if task_id
         else None
@@ -874,6 +875,8 @@ def task_parties(c, task_id, before=None):
     if not row:
         return set()
     out = {row["requester_id"]} | H.reader_actors(c, dict(row))
+    if H.is_human(row["assignee_id"]):
+        out.add(row["assignee_id"])  # a person assignee reads it as its requester does
     out |= _held(c, task_id, "reassign", row["owner_id"], before)
     # A stage hand-off is a move, not a reassign: whoever owned it in an earlier stage worked it too.
     for r in c.execute(

@@ -308,13 +308,25 @@ def test_a_deleted_task_with_no_trash_row_is_reported_gone_to_its_reader(api):
 
 def test_an_unknown_filter_is_refused_not_ignored(api):
     """A filter the list does not take answers 422 naming it, never the list without it (#150: `assignee=` read as
-    no filter and answered every open task)."""
+    no filter and answered every open task). An assignee that names nobody is refused the same way."""
     post(api, "tasks", {"owner": "ben", "title": "Draft the agenda", "body": "Please."})
-    r = api.get("/api/v2/tasks?assignee=bot:x&status=open", headers=headers())
+    r = api.get("/api/v2/tasks?developer=bot:x&status=open", headers=headers())
     assert r.status_code == 422, r.text
     error = r.json()["error"]
-    assert error["code"] == "filter" and "assignee" in error["detail"] and "owner=" in error["detail"]
-    assert "status" in error["detail"] and "waiting_on" in error["detail"]  # the filters it does take
+    assert error["code"] == "filter" and "developer" in error["detail"]
+    assert "assignee" in error["detail"] and "waiting_on" in error["detail"]  # the filters it does take
+    for nobody in ("bot:x", ""):
+        r = api.get(f"/api/v2/tasks?assignee={nobody}&status=open", headers=headers())
+        assert r.status_code == 422 and r.json()["error"]["code"] == "assignee", (nobody, r.text)
+    # Someone the caller may not see is refused as someone who is not there: the filter never says they exist.
+    from backend.tests.helpers.teammate_access import set_access
+
+    only_ana = {"people": ["ana"]}
+    set_access(api, "humans/ben", see=only_ana, read=only_ana, write=only_ana)
+    unseen = api.get("/api/v2/tasks?assignee=human:ben&status=open", headers=headers("cara-test"))
+    nobody = api.get("/api/v2/tasks?assignee=human:nobody&status=open", headers=headers("cara-test"))
+    assert unseen.status_code == 422 and unseen.json()["error"] == nobody.json()["error"], unseen.text
+    assert api.get("/api/v2/tasks?assignee=human:ben&status=open", headers=headers()).status_code == 200
     # A delta read is refused the same way.
     cursor = tasks(api, ACTIVE)["cursor"]
     r = api.get(f"/api/v2/tasks?status=open&changed_after={cursor}&colour=red", headers=headers())
@@ -356,6 +368,7 @@ def test_every_filter_the_list_takes_still_answers(api):
     values = {
         "owner": "ben",
         "requester": "ana",
+        "assignee": "me",
         "status": "open",
         "lane": "company",
         "label": "area-a",
@@ -694,3 +707,87 @@ def test_a_task_read_carries_its_chat_and_links_and_so_does_its_row(api):
     ]
     [listed] = [t for t in tasks(api, ACTIVE + "&brief=1")["tasks"] if t["id"] == row["id"]]
     assert listed["conversation_id"] == chat and [link["id"] for link in listed["links"]] == [task["links"][0]["id"]]
+
+
+def test_a_persons_private_ticket_stays_theirs_past_in_progress_and_leaves_when_reassigned(api):
+    """BotDesk's "my tickets": a stage move changes who has a ticket, never who it is for. A person's private ticket in
+    an agent's QA stage is missing from owner=<them> and found by assignee=me, and they can open it. Reassigning it away
+    tells their delta read it is gone, clears the ❓ they were asked on it and wakes the agent that asked."""
+    from backend import question_marks as Q
+    from backend.tests.helpers import engine as X
+
+    store = api.app.state.store
+    done = [{"kind": "owner_done"}]
+    with store.transaction() as c:
+        qa, builder = X.bot(c, "qa"), X.bot(c, "builder")
+        stages = ({"name": "In progress", "owner": "assignee", "requirements": done},)
+        X.pipeline(c, "dev", "Dev", (*stages, {"name": "QA", "owner": qa, "requirements": done}))
+        made = H.task_create(
+            c, "human:cara", "Fix the login page", "What to do.", "human:ben", pipeline="dev", private=True, lint=False
+        )
+    tid = made["id"]
+    path = "tasks/" + tid
+    post(api, path + "/readers", {"add": ["bot:qa"]}, "cara-test")  # so QA still reads it once it leaves QA
+    post(api, path + "/done", {"note": "Fixed.", "version": get(api, path, "ben-test")["task"]["version"]}, "ben-test")
+    row = get(api, path, "ben-test")["task"]  # 404 before: a private ticket only its parties and readers open
+    assert (row["owner_id"], row["assignee_id"]) == (qa, "human:ben")
+    assert tid not in {t["id"] for t in tasks(api, "owner=human:ben&status=open", "ben-test")["tasks"]}
+    mine = tasks(api, "assignee=me&status=open&counts=stage", "ben-test")
+    assert [t["id"] for t in mine["tasks"]] == [tid] and mine["counts"]["total"] == 1
+    assert [t["id"] for t in tasks(api, "assignee=human:ben&status=open", "cara-test")["tasks"]] == [tid]
+
+    with store.transaction() as c:
+        said = H.task_comment(c, qa, tid, "Which browser did you test it in?", wake=False)
+        mark = Q.mark(c, qa, said["id"], "human:ben")
+        woken = len(X.wakes(c, tid, qa))
+    cursor = mine["cursor"]
+    version = get(api, path, "cara-test")["task"]["version"]
+    post(api, path + "/move", {"to": "In progress", "why": "Back for the edge case.", "version": version}, "cara-test")
+    version = get(api, path, "cara-test")["task"]["version"]
+    post(api, path + "/owner", {"owner": "builder", "why": "Builder takes it.", "version": version}, "cara-test")
+    assert get(api, path, "cara-test")["task"]["assignee_id"] == builder
+
+    get(api, path, "ben-test", expected=404)
+    changed = delta(api, "assignee=me&status=open", cursor, "ben-test")
+    assert changed["tasks"] == [] and changed["gone"] == [tid]
+    with store.read() as c:
+        assert Q.get(c, mark["id"])["cleared_reason"] == "addressee_gone"
+        assert len(X.wakes(c, tid, qa)) == woken + 1  # told at once, not at the next never-stuck pass
+
+
+def test_a_person_assignee_opens_a_company_ticket_held_by_an_agent_they_cannot_read_by_any_name(api):
+    """A person assignee reads a ticket as its requester does: a company ticket held by an agent whose activity they
+    may not read opens for both, by its id, its #number and in a list, while for anyone else it stays shut."""
+    from backend.tests.helpers.api import as_member
+
+    with api.app.state.store.transaction() as c:
+        made = H.task_create(c, "human:cara", "Fix the login page", "What.", "bot:ops", private=False, lint=False)
+        other = H.task_create(c, "human:cara", "Fix the signup page", "What.", "bot:ops", private=False, lint=False)
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (made["id"],))
+        restrict(c, "ops", people=["ana"])
+    as_member(api, "ben@acme.example")
+    for token in ("ben-test", "cara-test"):
+        for path in (made["id"], f"%23{made['number']}"):
+            assert api.get(f"/api/v2/tasks/{path}", headers=headers(token)).status_code == 200, (token, path)
+        assert made["id"] in {t["id"] for t in tasks(api, "status=open", token)["tasks"]}, token
+    assert api.get(f"/api/v2/tasks/%23{other['number']}", headers=headers("ben-test")).status_code in (403, 404)
+    assert other["id"] not in {t["id"] for t in tasks(api, "status=open", "ben-test")["tasks"]}
+
+
+def test_an_agent_assignee_is_not_told_a_hidden_teammate_a_person_assignee_would_be(api):
+    """Someone the reader may not see shows as "" on a task, except to its parties. A person assignee is one; an agent
+    assignee is not."""
+    from backend import teammate_access as TA
+    from backend.tests.helpers.teammate_access import set_access
+
+    only_ana = {"people": ["ana"]}
+    set_access(api, "humans/ben", see=only_ana, read=only_ana, write=only_ana)
+    auth = api.app.state.auth
+    row = {"id": "t1", "owner_id": "human:ana", "requester_id": "human:ben", "readers": []}
+    with api.app.state.store.read() as c:
+        agent = TA.Known(c, Identity("bot:ops", "bot"), auth)
+        assert "human:ben" in agent.people
+        assert agent.task({**row, "assignee_id": "bot:ops"})["requester_id"] == ""
+        person = TA.Known(c, api.app.state.store.settings.test_identities["cara-test"], auth)
+        assert "human:ben" in person.people
+        assert person.task({**row, "assignee_id": "human:cara"})["requester_id"] == "human:ben"

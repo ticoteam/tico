@@ -227,8 +227,11 @@ def answerable(conn: sqlite3.Connection, mark: Mapping[str, Any], chats: Mapping
 def clear_gone(conn: sqlite3.Connection, task_id: object = None) -> list[str]:
     """Clear each open ❓ (on `task_id`, or anywhere) whose person can no longer answer it: they left, lost sign-in, or
     can no longer read the chat (`cleared_reason` 'addressee_gone'). Nobody else is asked for them: on a task, its bot
-    is handed the task back and told the question went nowhere, so it can ask someone who can. Run when the roster or
-    a task's readers change, and on each never-stuck pass for anything else. Returns the cleared marks' ids."""
+    is handed the task back and told the question went nowhere, so it can ask someone who can. Run by each writer that
+    can take a person's read of a task away: the roster (access.py), a task's readers (hubdb.set_task_readers), its
+    holder (task_effects._follow_owner, after a private default), its assignee (task_engine._owned: a pick, a move, a
+    refile or a restore) and the stage-rule sweep (stage_rules.sweep_owners); and on each never-stuck pass for
+    anything else. Returns the cleared marks' ids."""
     if task_id:
         found = conn.execute("SELECT * FROM question_marks WHERE cleared_at IS NULL AND task_id=?", (str(task_id),))
         gone = [m for m in (dict(r) for r in found) if not answerable(conn, m)]

@@ -819,3 +819,18 @@ def test_a_person_finishes_a_task_with_a_bots_question_mark_open(c, general):
     _ask(c, task_id)
     H.task_done(c, ANA, task_id, "Written", _version(c, task_id))
     assert E.task(c, task_id)["status"] == "done" and _open(c, task_id) == []
+
+
+def test_a_handoff_that_makes_the_tasks_below_private_clears_the_questions_on_them(c, general):
+    """Given to a bot whose tasks are private by default, a task and every task under it turn private: a ❓ on a task
+    below for someone who can no longer read it clears, and its bot hears at once, as one on the task itself would."""
+    from backend import bot_settings as BS
+
+    X.bot(c, "counsel")
+    BS.write(c, "counsel", {"name": "counsel", "runtime": "fake", "status": "active", "private_tasks_default": True})
+    parent = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
+    child = X.new_task(c, ANA, "Check the launch dates", assignee=BUILDER, parent=parent)["id"]
+    mark = _ask(c, child, person="human:cara")
+    E.reassign(c, parent, "bot:counsel", ANA, "Counsel reviews it", seen_version=E.task(c, parent)["version"])
+    assert H.task_private(c, H.task(c, child))
+    assert Q.get(c, mark["id"])["cleared_reason"] == "addressee_gone"

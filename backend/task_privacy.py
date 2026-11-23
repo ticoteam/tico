@@ -141,7 +141,7 @@ def _task_rows(c, ids):
         found = {
             row[0]: row
             for row in c.execute(
-                "SELECT id,private,owner_id,requester_id,readers FROM tasks WHERE id IN (%s)"
+                "SELECT id,private,owner_id,requester_id,assignee_id,readers FROM tasks WHERE id IN (%s)"
                 % ",".join("?" * len(chunk)),
                 chunk,
             )

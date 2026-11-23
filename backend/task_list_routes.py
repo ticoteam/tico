@@ -33,6 +33,7 @@ LIST_FILTERS = frozenset(
     {
         "owner",
         "requester",
+        "assignee",
         "status",
         "lane",
         "label",
@@ -70,18 +71,14 @@ LIST_FILTERS = frozenset(
 )
 # `on_behalf_of`, read by the Agent Ops middleware (above).
 _LIST_PASSED = frozenset({"on_behalf_of"})
-_FILTER_HINTS = {"assignee": "use owner= (who has it now)"}
 
 
 def unknown_filters(names):
     """Refuse a list read naming a filter it does not take (422 `filter`), with the filters it does take."""
     unknown = sorted(set(names) - LIST_FILTERS - _LIST_PASSED)
     if unknown:
-        hints = "".join(f" For {n}, {_FILTER_HINTS[n]}." for n in unknown if n in _FILTER_HINTS)
         raise Problem(
-            "filter",
-            f"Unknown filter: {', '.join(unknown)}.{hints} Filters: {', '.join(sorted(LIST_FILTERS))}.",
-            422,
+            "filter", f"Unknown filter: {', '.join(unknown)}. Filters: {', '.join(sorted(LIST_FILTERS))}.", 422
         )
 
 
@@ -126,7 +123,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         **api_v2(
             "Tasks",
             "listTasks",
-            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it (owner=, not assignee=). counts=stage also answers `counts`: how many tasks the same filters select in each stage, across every page",
+            "Tasks the caller can see, brief: each row's version, pipeline_id, stage_id, owner, turn (whose turn it is, and why), late and snoozed. q matches title words or #N; status (open, done, closed), number and updated_since filter, member=<actor> keeps the tasks that person or bot is on in some role (role=<name> narrows it to one), assignee=<actor|me> the tasks for that person or bot (who they are for, kept across stage moves; owner= is who has it now), brief=true leaves out bodies. Snoozed tasks are left out unless snoozed=only|all, status=all, or asked for by ids or number. Each answer carries a `cursor`; changed_after=<cursor> with the same filters answers only the tasks changed since (`tasks`) and the ids that left (`gone`), or `reset: true` to read in full. A full read has an ETag: If-None-Match answers 304 when nothing changed. A query parameter that is not one of these filters answers 422 `filter` naming it. counts=stage also answers `counts`: how many tasks the same filters select in each stage, across every page",
             TaskList,
             parameters={
                 "counts": "stage: also answer `counts`, the number of tasks these filters select in each stage across "
@@ -138,6 +135,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "with @<connection_id> for a Jira or Close URL served by several connections",
                 "entity": "A Contacts entity (an id, email or domain you can see; a merged one is the one it went "
                 "into): only the tasks for it. One you cannot see is refused (422 entity)",
+                "assignee": "Who the tasks are for (a person or a bot; `me` is the caller), which a stage move does not "
+                "change, where owner is who has it now. Empty, or one that names nobody, answers 422",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
                 "Use a full read because team membership and availability can change independently of tasks",
             },
@@ -148,6 +147,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         response: Response,
         owner: str | None = None,
         requester: str | None = None,
+        assignee: str | None = None,
         status: str | None = None,
         lane: str | None = None,
         label: str | None = None,
@@ -215,6 +215,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 c,
                 owner=owner,
                 requester=requester,
+                assignee=who.actor if assignee == "me" else assignee,
+                sees=lambda actor: seen(c, who, actor),
                 status=status,
                 lane=lane,
                 label=label,
@@ -249,7 +251,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 H.now(), search, owners, stages, requesters, labels, turn, due, late, hidden=hidden
             )
             if match.sql:
-                filters["match"] = match.sql
+                filters["match"] = [*filters.get("match", ()), *match.sql]
             if link is not None:
                 filters["match"] = [*filters.get("match", ()), linked_to(c, link)]
             if claimable:
@@ -394,6 +396,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     result["missing"] = [ident for ident in typed if found[ident] not in returned]
             brief_rows(rows)
             return result
+
+    def seen(c, who, actor):
+        """Whether `who` may see this person or bot (teammate_access): one they may not is refused as one that is not
+        there, so a filter never tells them it exists."""
+        if actor == who.actor:
+            return True
+        if H.is_bot(actor):
+            slug = H.actor_id(actor)
+            return bool(auth.bot_accesses(c, who, [slug]).get(slug, {}).get("see"))
+        return actor not in teammate_access.Known(c, who, auth).people
 
     def linked_to(c, ref):
         """The list's `link` filter: a WHERE fragment, with its arguments, keeping the tasks that link the outside item

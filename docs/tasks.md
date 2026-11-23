@@ -22,7 +22,9 @@ its owner, all changed only by the engine. Every change raises the task's `versi
 it was last shown, and a move made against an old one is refused: "changed since you looked".
 
 Details shows the stage's **Owner** and adds a **Developer** row when the task's assignee is someone else.
-A stage move keeps the task's rank.
+A stage move keeps the task's rank. The owner changes at each stage; the assignee (who the task is for) does not, so
+"my tasks" is `GET /api/v2/tasks?assignee=me` (`tico task list --assignee me`, `tico_task_list` with `assignee`), not
+`owner=me`. An assignee that names nobody, or an empty one, answers 422.
 
 The moves ([The moves](dev/pipelines-v3.md#the-moves)):
 
@@ -479,14 +481,16 @@ A task's **followers** are the people and bots who follow its thread, each at a 
 
 A new task is readable by the company's people and bots. Reading does not give the right to change it.
 
-Turn on **Private** to limit reads to the requester, the owner, its readers and the managers of any bot on it. Only
+Turn on **Private** to limit reads to the requester, the owner, a person assignee, its readers and the managers of any
+bot on it (not of an agent assignee). Only
 the person who asked for it can make it company-visible again; a bot never can. Reassigning a private task gives the
 new owner access and takes it from the old one, unless they are still the requester, a reader or a manager.
 
 ### Who can see a private task
 
-A private task is seen by its requester, its owner and its **readers**: people, bots and groups listed on it. A group
-names everyone in it, read at each check.
+A private task is seen by its requester, its owner, its assignee when that is a person, and its **readers**: people,
+bots and groups listed on it. A group names everyone in it, read at each check. Someone who loses read (another
+assignee or owner, a reader taken off) has their open ❓ on it cleared, and the agent that asked is told at once.
 
 - The task's **Who can see** row shows them; × takes a reader off and + adds one.
 - Anyone who may change the task changes its readers. A bot adds only people and bots within its reach. Only a person
@@ -580,7 +584,7 @@ tico task file --parent <id> [--pipeline general] [--owner X] "title"
 tico task snooze <id> [--until date] -m "why" --version N
 tico task create --owner X --title "..." [--pipeline general] [--parent <id>]
 tico task update <id> [--title] [--due] [--label] [--goal] [--entity REF] --version N
-tico task list [--status open|done|closed] [--owner X] [--snoozed only|all] [--entity REF]
+tico task list [--status open|done|closed] [--owner X] [--assignee X|me] [--snoozed only|all] [--entity REF]
 ```
 
 A task may name the Contacts entity it is for (`entity`: an id, email or domain you can see; `""` takes it off). It shows

@@ -238,8 +238,10 @@ _MEETING_ACCESS = "OLD.review_state IS NOT NEW.review_state OR OLD.owner IS NOT 
 # Who could read a task before this write: its parties and privacy, kept on the row when they
 # change (and on a delete), so a delta read says `gone` only to someone who could have seen it. Its status rides
 # along (and a status change keeps a snapshot too), so a reader who could see the task before and can now gets
-# `was: {owner, status}` to move it between the lists they hold.
-_WAS = "json_array(OLD.owner_id,OLD.requester_id,OLD.private,OLD.readers,OLD.pipeline_id,OLD.status)"  # _could_read
+# `was: {owner, status}` to move it between the lists they hold. A person assignee reads a private task too, so the
+# assignee comes last, where a six-part snapshot logged before it was kept still parses.
+_WAS_ON = ("owner_id", "requester_id", "private", "readers", "pipeline_id", "status", "assignee_id")
+_WAS = f"json_array({','.join('OLD.' + column for column in _WAS_ON)})"  # task_reads._could_read
 _MEDIA = ("width", "height", "thumb_blob_id", "poster_blob_id")
 _MEDIA_TASKS = (
     "SELECT task_id AS id FROM task_assets WHERE blob_id=NEW.blob_id UNION SELECT f.task_id "
@@ -286,7 +288,7 @@ TRIGGERS = [
         "changes_task_letters_access",
         "UPDATE",
         "tasks",
-        _changed("private", "readers", *_PARTIES),
+        _changed("private", "readers", "assignee_id", *_PARTIES),
         _letters_for_task("NEW.id"),
     ),
     ("changes_task_letters_delete", "DELETE", "tasks", None, _letters_for_task("OLD.id")),
@@ -375,7 +377,7 @@ TRIGGERS = [
         "changes_task_meeting_access",
         "UPDATE",
         "tasks",
-        _changed("owner_id", "requester_id", "private", "readers"),
+        _changed("owner_id", "requester_id", "assignee_id", "private", "readers"),
         _meeting_links("NEW.id"),
     ),
     ("changes_roles_meeting_insert", "INSERT", "task_roles", None, _meeting_links("NEW.task_id")),
@@ -384,7 +386,7 @@ TRIGGERS = [
         "changes_item_task_access",
         "UPDATE",
         "tasks",
-        _changed("owner_id", "requester_id", "private", "readers"),
+        _changed("owner_id", "requester_id", "assignee_id", "private", "readers"),
         _item_task_refs("NEW.id"),
     ),
     ("changes_item_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id")),
@@ -393,7 +395,7 @@ TRIGGERS = [
         "changes_proposal_task_access",
         "UPDATE",
         "tasks",
-        _changed("owner_id", "requester_id", "private", "readers"),
+        _changed("owner_id", "requester_id", "assignee_id", "private", "readers"),
         _item_task_refs("NEW.id", "proposed_task_id"),
     ),
     ("changes_proposal_roles_insert", "INSERT", "task_roles", None, _item_task_refs("NEW.task_id", "proposed_task_id")),
@@ -467,8 +469,7 @@ TRIGGERS = [
             "update",
             "NEW.id",
             # A task's pipeline is part of who reads it (a private pipeline), so a change of it keeps a snapshot too.
-            ref=f"CASE WHEN {_changed('owner_id', 'requester_id', 'private', 'readers', 'pipeline_id', 'status')} "
-            f"THEN {_WAS} END",
+            ref=f"CASE WHEN {_changed(*_WAS_ON)} THEN {_WAS} END",
         )
         + _needs(
             "task",

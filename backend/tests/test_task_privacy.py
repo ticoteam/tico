@@ -8,6 +8,7 @@ from backend import hubdb as H
 from backend import task_relations as TR
 from backend.tests.helpers.tasks_board import api, bot_token, get, headers, post
 from backend import bot_settings as BS
+from backend.task_rights import private_subjects
 
 
 @pytest.mark.parametrize('requester,owner', [('human:ben', 'bot:cpo')])
@@ -46,6 +47,19 @@ def test_private_two_party_matrix(api, requester, owner):
     # Ana is the chart's root above cpo even when she is not a task party.
     parties = {requester, owner, 'human:ana'}
     check(parties)
+    # A person assignee reads it as its requester does. An agent assignee gains nothing, nor does its manager.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET assignee_id='human:priya' WHERE id=?", (task['id'],))
+    check(parties | {'human:priya'})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:priya' WHERE bot='ops'")
+        c.execute("UPDATE tasks SET assignee_id='bot:ops' WHERE id=?", (task['id'],))
+    with api.app.state.store.read() as c:
+        assert 'bot:ops' in private_subjects(c, 'human:priya')  # she would read it, were ops its owner
+    check(parties)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='ops'")
+        c.execute("UPDATE tasks SET assignee_id=NULL WHERE id=?", (task['id'],))
     # A person and a bot on the reader list read it; nobody else does.
     path = 'tasks/' + task['id'] + '/readers'
     post(api, path, {'add': ['priya', 'bot:ops']}, token='ben-test')
