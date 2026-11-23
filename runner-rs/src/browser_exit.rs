@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Notify, Semaphore};
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
@@ -31,14 +31,16 @@ use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
 use crate::client::{bearer, Client, CLIENT_VERSION};
 use crate::util::{log, text_of};
 
-type Socket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+pub(crate) type Socket =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<TcpStream>>;
+pub(crate) const TUNNELS: &str = "runners/me/browser-exit/tunnels";
 
 /// The only ports an exit dials.
 pub const PORTS: [u16; 2] = [80, 443];
 const DIAL: Duration = Duration::from_secs(10);
 /// How long the bot's side waits for the exit to say it reached the site.
 const ANSWER: Duration = Duration::from_secs(25);
-const HEAD_BYTES: usize = 16 * 1024;
+pub(crate) const HEAD_BYTES: usize = 16 * 1024;
 const CHUNK: usize = 64 * 1024;
 const EXIT_TUNNELS: usize = 256;
 /// One bot's proxy takes this many connections at once (a browser opens a few dozen).
@@ -629,11 +631,27 @@ fn ws_origin(hub: &str) -> Result<String, String> {
 
 /// A websocket to the hub at `path`; `authorized` sends the runner's token (the exit's link), a tunnel end carries
 /// its one-use ticket instead.
-async fn connect(client: &Client, path: &str, authorized: bool) -> Result<Socket, String> {
+pub(crate) async fn connect(
+    client: &Client,
+    path: &str,
+    authorized: bool,
+) -> Result<Socket, String> {
+    connect_kind(client, path, authorized, false).await
+}
+
+async fn connect_kind(
+    client: &Client,
+    path: &str,
+    authorized: bool,
+    model: bool,
+) -> Result<Socket, String> {
     let mut request = format!("{}{path}", ws_origin(&client.url)?)
         .into_client_request()
         .map_err(|e| e.to_string())?;
     let headers = request.headers_mut();
+    if model {
+        headers.insert("x-tico-exit-kind", "model".parse().unwrap());
+    }
     if authorized {
         let token = bearer(&client.token).map_err(|e| e.detail)?;
         headers.insert(
@@ -744,7 +762,7 @@ async fn link_loop(client: Client) {
         }
         let began = Instant::now();
         probe_seen(&client).await;
-        match run_link(&client).await {
+        match run_link(&client, false).await {
             Ok(()) => said = None,
             Err(e) => {
                 if said.as_ref() != Some(&e) {
@@ -773,6 +791,19 @@ struct Open {
     host: String,
     port: u16,
     ticket: String,
+    model: bool,
+}
+
+pub(crate) fn valid_tunnel_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+}
+
+pub(crate) fn valid_ticket(ticket: &str) -> bool {
+    ticket.len() == 64 && ticket.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 impl Open {
@@ -780,15 +811,15 @@ impl Open {
         let v: Value = serde_json::from_str(text).ok()?;
         let id = v["id"].as_str()?.to_string();
         let ticket = v["ticket"].as_str()?.to_string();
-        let ok_id = !id.is_empty()
-            && id.len() <= 128
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
-        let ok_ticket = ticket.len() == 64 && ticket.bytes().all(|b| b.is_ascii_hexdigit());
-        (v["op"] == "open" && ok_id && ok_ticket).then(|| Open {
+        let model = match v.get("kind").map(Value::as_str).unwrap_or(Some("browser")) {
+            Some("browser") => false,
+            Some("model") => true,
+            _ => return None,
+        };
+        (v["op"] == "open" && valid_tunnel_id(&id) && valid_ticket(&ticket)).then(|| Open {
             id,
             ticket,
+            model,
             host: text_of(&v["host"]),
             port: v["port"]
                 .as_u64()
@@ -798,25 +829,32 @@ impl Open {
     }
 }
 
-async fn run_link(client: &Client) -> Result<(), String> {
-    let mut ws = connect(client, "/api/v2/runners/me/browser-exit/ws", true).await?;
+#[allow(dead_code)] // Activation owns when the selected model exit holds a link.
+pub(crate) async fn run_model_link(client: &Client) -> Result<(), String> {
+    run_link(client, true).await
+}
+
+async fn run_link(client: &Client, model: bool) -> Result<(), String> {
+    let mut ws = connect_kind(client, "/api/v2/runners/me/browser-exit/ws", true, model).await?;
     let room = Arc::new(Semaphore::new(EXIT_TUNNELS));
     let s = shared();
     let mut probe =
         tokio::time::interval_at(tokio::time::Instant::now() + PROBE_EVERY, PROBE_EVERY);
     loop {
         tokio::select! {
-            _ = probe.tick() => {
+            _ = probe.tick(), if !model => {
                 let client = client.clone();
                 tokio::spawn(async move { probe_seen(&client).await });
             }
             frame = ws.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
-                    if let Some(addresses) = hello_seen(&text) {
-                        remember_seen(&addresses);
-                        continue;
+                    if !model {
+                        if let Some(addresses) = hello_seen(&text) {
+                            remember_seen(&addresses);
+                            continue;
+                        }
                     }
-                    let Some(open) = Open::parse(&text) else { continue };
+                    let Some(open) = Open::parse(&text).filter(|o| o.model == model) else { continue };
                     let client = client.clone();
                     let permit = room.clone().try_acquire_owned().ok();
                     tokio::spawn(async move { serve(&client, open, permit.is_some()).await; drop(permit) });
@@ -825,7 +863,7 @@ async fn run_link(client: &Client) -> Result<(), String> {
                 Some(Ok(_)) => {}
                 Some(Err(e)) => return Err(format!("websocket: {e}")),
             },
-            _ = s.wake.notified() => {
+            _ = s.wake.notified(), if !model => {
                 if !s.sharing.load(Ordering::SeqCst) {
                     let _ = ws.close(None).await;
                     return Ok(());
@@ -837,10 +875,13 @@ async fn run_link(client: &Client) -> Result<(), String> {
 
 /// Dial the site and join the tunnel at the relay at once; the first message says whether the site was reached.
 async fn serve(client: &Client, open: Open, room: bool) {
-    let path = format!(
-        "/api/v2/runners/me/browser-exit/tunnels/{}/exit?ticket={}",
-        open.id, open.ticket
-    );
+    let path = format!("/api/v2/{TUNNELS}/{}/exit?ticket={}", open.id, open.ticket);
+    if open.model {
+        if let Ok(socket) = connect(client, &path, false).await {
+            crate::model_exit::serve_exit(client, socket, &open.id, &open.ticket, room).await;
+        }
+        return;
+    }
     let target = async {
         if room {
             dial(&open.host, open.port).await
@@ -1248,7 +1289,7 @@ fn parse(head: &[u8]) -> Result<Request, (u16, String)> {
 }
 
 /// The head (through the blank line) and whatever followed it in the same reads.
-async fn read_head(conn: &mut TcpStream) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(crate) async fn read_head(conn: &mut (impl AsyncRead + Unpin)) -> Option<(Vec<u8>, Vec<u8>)> {
     let mut data = Vec::new();
     let mut buf = [0u8; 4096];
     loop {
@@ -1595,6 +1636,7 @@ mod tests {
         assert_eq!(
             Open::parse(&text),
             Some(Open {
+                model: false,
                 id: "t1".into(),
                 host: "www.acme.example".into(),
                 port: 443,

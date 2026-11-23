@@ -151,7 +151,8 @@ struct Tunnel {
     bot: String,
     bot_generation: u64,
     /// The tunnel's slot in `Exits::rows`, where its bytes are counted.
-    usage: u32,
+    usage: Option<u32>,
+    redemption: Option<Redemption>,
     client_ticket: Option<String>,
     exit_ticket: Option<String>,
     client: Option<oneshot::Sender<WebSocket>>,
@@ -207,6 +208,8 @@ pub(super) struct Exits {
     /// Per exit number: the policy Python pushed. Its cap is read on every frame.
     policies: Vec<Option<Policy>>,
     links: HashMap<String, Link>,
+    model_links: HashMap<String, Link>,
+    model_generations: HashMap<String, u64>,
     tunnels: HashMap<String, Tunnel>,
     /// Usage of each tunnel, by slot. A released slot goes to `free` and is reused.
     rows: Vec<TunnelUsage>,
@@ -244,13 +247,38 @@ pub(super) struct Grant {
     pub policy: Policy,
 }
 
+#[derive(Deserialize, Serialize)]
+pub(super) struct ModelBinding {
+    runner_id: String,
+    exit: String,
+    attempt_id: String,
+    owner: String,
+    plan: String,
+    revision: u64,
+    generation: u64,
+    provider: String,
+}
+
+#[derive(Deserialize)]
+struct ModelGrant {
+    id: String,
+    #[serde(flatten)]
+    binding: ModelBinding,
+}
+
+struct Redemption {
+    binding: ModelBinding,
+    ticket: Option<String>,
+    expires: Instant,
+}
+
 /// The bot computer's ticket, the two socket slots, the tunnel's cancellation and its usage slot.
 type Admitted = (
     String,
     oneshot::Receiver<WebSocket>,
     oneshot::Receiver<WebSocket>,
     watch::Receiver<Option<Close>>,
-    u32,
+    Option<u32>,
 );
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -385,15 +413,16 @@ impl Exits {
     pub(super) fn close(&mut self, tid: &str, close: Close) {
         if let Some(t) = self.tunnels.remove(tid) {
             let _ = t.cancel.send(Some(close));
+            let Some(usage) = t.usage else { return };
             let day = self.today();
-            self.roll(t.usage, day);
-            let row = &mut self.rows[t.usage as usize];
+            self.roll(usage, day);
+            let row = &mut self.rows[usage as usize];
             row.open = false;
             row.dirty = true;
             row.tunnels += 1;
             // Into the day's totals now, not at release: admission counts those totals, so a tunnel admitted
             // before this one's task releases its slot must see its row.
-            self.flush(t.usage);
+            self.flush(usage);
         }
     }
 
@@ -422,6 +451,9 @@ impl Exits {
         for exit in self.links.keys().cloned().collect::<Vec<_>>() {
             self.drop_link(&exit, close.clone());
         }
+        for (_, link) in self.model_links.drain() {
+            let _ = link.cancel.send(Some(close.clone()));
+        }
     }
 
     /// A new Python lease: it pushes its policies and generations again, and every grant carries them. Usage and the
@@ -430,6 +462,7 @@ impl Exits {
         self.close_all(close);
         self.policies.iter_mut().for_each(|p| *p = None);
         self.bot_generations.clear();
+        self.model_generations.clear();
     }
 
     /// From `generation` on only grants of that bot read at it or later are admitted; tunnels opened under an older
@@ -441,7 +474,7 @@ impl Exits {
         }
         *min = generation;
         self.close_where(
-            |t| t.bot != bot || t.bot_generation >= generation,
+            |t| t.usage.is_none() || t.bot != bot || t.bot_generation >= generation,
             Close::new(4403, reason),
         )
     }
@@ -460,7 +493,7 @@ impl Exits {
             return Err("stale exit policy");
         }
         let closed = self.close_where(
-            |t| t.exit != exit || policy.allows(&t.bot),
+            |t| t.usage.is_none() || t.exit != exit || policy.allows(&t.bot),
             Close::new(4403, "exit_not_shared"),
         );
         if !policy.sharing {
@@ -478,7 +511,10 @@ impl Exits {
         reason: &str,
     ) -> usize {
         self.close_where(
-            |t| !(bot.is_none_or(|b| t.bot == b) && exit.is_none_or(|e| t.exit == e)),
+            |t| {
+                t.usage.is_none()
+                    || !(bot.is_none_or(|b| t.bot == b) && exit.is_none_or(|e| t.exit == e))
+            },
             Close::new(4403, reason),
         )
     }
@@ -509,7 +545,7 @@ impl Exits {
         }
         let exit = self.rows[usage as usize].exit.clone();
         let close = Close::new(4429, "exit_over_cap");
-        self.close_where(|t| t.exit != exit, close.clone());
+        self.close_where(|t| t.usage.is_none() || t.exit != exit, close.clone());
         Err(close)
     }
 
@@ -519,7 +555,7 @@ impl Exits {
         let Some(t) = self.tunnels.get(tid) else {
             return Err(Close::new(1000, ""));
         };
-        let usage = t.usage;
+        let Some(usage) = t.usage else { return Ok(()) };
         self.spend_row(usage, n)
     }
 
@@ -576,9 +612,7 @@ impl Exits {
         // Every slot's counts into the day's totals first, so the row limit sees each key counted so far (a tunnel open
         // across midnight holds yesterday's key in its slot): once per admit, never per frame.
         self.flush_all();
-        if self.tunnels.len() >= TUNNELS
-            || self.usage.len() + self.tunnels.len() >= USAGE_ROWS
-            || self.tunnels.values().filter(|t| t.exit == g.exit).count() >= TUNNELS_PER_EXIT
+        if self.busy(&g.exit) || self.usage.len() + self.rows.len() - self.free.len() >= USAGE_ROWS
         {
             return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_busy"));
         }
@@ -588,9 +622,6 @@ impl Exits {
             return Err(error(StatusCode::CONFLICT, "exit_offline"));
         }
         self.fence_bot(&g.bot, g.bot_generation, "browser exit changed");
-        let (ctx, crx) = oneshot::channel();
-        let (etx, erx) = oneshot::channel();
-        let (cancel, canceled) = watch::channel(None);
         let usage = self.alloc_row(TunnelUsage {
             open: true,
             exit: g.exit.clone(),
@@ -601,13 +632,111 @@ impl Exits {
             day: today,
             ..TunnelUsage::default()
         });
+        Ok(self.register(
+            &g.id,
+            &g.exit,
+            &g.bot,
+            g.bot_generation,
+            Some(usage),
+            client_ticket,
+            exit_ticket,
+            None,
+        ))
+    }
+
+    fn busy(&self, exit: &str) -> bool {
+        self.tunnels.len() >= TUNNELS
+            || self.tunnels.values().filter(|t| t.exit == exit).count() >= TUNNELS_PER_EXIT
+    }
+
+    pub(super) fn fence_model(&mut self, owner: &str, generation: u64) -> usize {
+        let min = self.model_generations.entry(owner.to_owned()).or_default();
+        if generation <= *min {
+            return 0;
+        }
+        *min = generation;
+        self.close_where(
+            |t| {
+                t.redemption
+                    .as_ref()
+                    .is_none_or(|r| r.binding.owner != owner || r.binding.generation >= generation)
+            },
+            Close::new(4403, "model_exit_stale"),
+        )
+    }
+
+    fn admit_model(
+        &mut self,
+        tid: &str,
+        binding: ModelBinding,
+    ) -> std::result::Result<Admitted, Error> {
+        let b = &binding;
+        if [tid, &b.runner_id, &b.exit, &b.attempt_id, &b.owner, &b.plan]
+            .iter()
+            .any(|v| v.is_empty() || v.len() > 128)
+            || b.generation == 0
+            || !matches!(b.provider.as_str(), "claude" | "codex")
+        {
+            return Err(error(StatusCode::BAD_REQUEST, "invalid model exit grant"));
+        }
+        if self.tunnels.contains_key(tid)
+            || self
+                .model_generations
+                .get(&b.owner)
+                .is_some_and(|g| *g > b.generation)
+        {
+            return Err(error(StatusCode::CONFLICT, "model_exit_stale"));
+        }
+        self.fence_model(&b.owner, b.generation);
+        let offline = || error(StatusCode::CONFLICT, "model_exit_offline");
+        let link = self.model_links.get(&b.exit).ok_or_else(offline)?;
+        if self.busy(&b.exit) {
+            return Err(error(StatusCode::TOO_MANY_REQUESTS, "exit_busy"));
+        }
+        let (client_ticket, exit_ticket) = (id() + &id(), id() + &id());
+        let open = json!({"op": "open", "kind": "model", "id": tid, "ticket": exit_ticket});
+        link.open.send(open.to_string()).map_err(|_| offline())?;
+        let exit = b.exit.clone();
+        let redemption = Redemption {
+            binding,
+            ticket: Some(exit_ticket.clone()),
+            expires: Instant::now() + ANSWER,
+        };
+        Ok(self.register(
+            tid,
+            &exit,
+            "",
+            0,
+            None,
+            client_ticket,
+            exit_ticket,
+            Some(redemption),
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)] // Both kinds share the same socket slots and cancellation.
+    fn register(
+        &mut self,
+        tid: &str,
+        exit: &str,
+        bot: &str,
+        bot_generation: u64,
+        usage: Option<u32>,
+        client_ticket: String,
+        exit_ticket: String,
+        redemption: Option<Redemption>,
+    ) -> Admitted {
+        let (ctx, crx) = oneshot::channel();
+        let (etx, erx) = oneshot::channel();
+        let (cancel, canceled) = watch::channel(None);
         self.tunnels.insert(
-            g.id.clone(),
+            tid.to_owned(),
             Tunnel {
-                exit: g.exit.clone(),
-                bot: g.bot.clone(),
-                bot_generation: g.bot_generation,
+                exit: exit.to_owned(),
+                bot: bot.to_owned(),
+                bot_generation,
                 usage,
+                redemption,
                 client_ticket: Some(client_ticket.clone()),
                 exit_ticket: Some(exit_ticket),
                 client: Some(ctx),
@@ -615,7 +744,34 @@ impl Exits {
                 cancel,
             },
         );
-        Ok((client_ticket, crx, erx, canceled, usage))
+        (client_ticket, crx, erx, canceled, usage)
+    }
+
+    pub(super) fn redeem(
+        &mut self,
+        tid: &str,
+        runner: &str,
+        ticket: &str,
+    ) -> std::result::Result<Value, Error> {
+        let stale = || error(StatusCode::CONFLICT, "model_exit_stale");
+        let r = self
+            .tunnels
+            .get_mut(tid)
+            .and_then(|t| t.redemption.as_mut())
+            .ok_or_else(stale)?;
+        if r.binding.exit != runner || ticket.len() != 64 {
+            return Err(error(StatusCode::FORBIDDEN, "model_exit_forbidden"));
+        }
+        let expected = r
+            .ticket
+            .as_deref()
+            .filter(|_| Instant::now() < r.expires)
+            .ok_or_else(stale)?;
+        if !same(expected, ticket) {
+            return Err(error(StatusCode::FORBIDDEN, "model_exit_forbidden"));
+        }
+        r.ticket = None;
+        Ok(json!({"binding": r.binding}))
     }
 
     /// The socket slot a ticket opens, once.
@@ -709,16 +865,34 @@ impl Exits {
 }
 
 /// The control command: admit the tunnel and start its task. The answer carries the bot computer's ticket.
-pub(super) fn grant(app: &App, exits: &mut Exits, g: Grant) -> std::result::Result<Value, Error> {
-    let (ticket, client, exit, canceled, usage) = exits.admit(&g)?;
-    tokio::spawn(tunnel_task(
-        app.clone(),
-        g.id,
-        client,
-        exit,
-        canceled,
-        usage,
-    ));
+pub(super) fn grant(
+    app: &App,
+    exits: &mut Exits,
+    value: Value,
+) -> std::result::Result<Value, Error> {
+    let invalid = || error(StatusCode::BAD_REQUEST, "invalid exit grant");
+    let (tid, admitted) = match value
+        .get("kind")
+        .map(Value::as_str)
+        .unwrap_or(Some("browser"))
+    {
+        Some("model") => {
+            let g: ModelGrant = serde_json::from_value(value).map_err(|_| invalid())?;
+            let admitted = exits.admit_model(&g.id, g.binding)?;
+            (g.id, admitted)
+        }
+        Some("browser") => {
+            let g: Grant = serde_json::from_value(value).map_err(|_| invalid())?;
+            if g.policy.bots.len() > 1024 {
+                return Err(invalid());
+            }
+            let admitted = exits.admit(&g)?;
+            (g.id, admitted)
+        }
+        _ => return Err(invalid()),
+    };
+    let (ticket, client, exit, canceled, usage) = admitted;
+    tokio::spawn(tunnel_task(app.clone(), tid, client, exit, canceled, usage));
     Ok(json!({"ticket": ticket}))
 }
 
@@ -740,14 +914,20 @@ pub(super) async fn link_seen(
     ws: WebSocketUpgrade,
     seen: Option<std::net::IpAddr>,
 ) -> Response {
-    let Some(exit) = sharing_exit(&app, &headers).await else {
+    let model = match headers.get("x-tico-exit-kind").map(|v| v.as_bytes()) {
+        None | Some(b"browser") => false,
+        Some(b"model") => true,
+        _ => return StatusCode::FORBIDDEN.into_response(),
+    };
+    let kind = if model { "model" } else { "browser" };
+    let Some(exit) = sharing_exit(&app, &headers, kind).await else {
         return StatusCode::FORBIDDEN.into_response();
     };
-    ws.on_upgrade(move |socket| link_task(app, exit, socket, seen))
+    ws.on_upgrade(move |socket| link_task(app, exit, socket, seen, model))
 }
 
 /// The exit computer a request's runner token names, when Python says its owner shares it.
-async fn sharing_exit(app: &App, headers: &HeaderMap) -> Option<String> {
+async fn sharing_exit(app: &App, headers: &HeaderMap, kind: &str) -> Option<String> {
     let bearer = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -756,7 +936,7 @@ async fn sharing_exit(app: &App, headers: &HeaderMap) -> Option<String> {
         return None;
     }
     let answer = app
-        .policy_answer(json!({"kind": "exit_link", "authorization": bearer}))
+        .policy_answer(json!({"kind": "exit_link", "authorization": bearer, "exit_kind": kind}))
         .await;
     answer
         .as_ref()
@@ -768,7 +948,7 @@ async fn sharing_exit(app: &App, headers: &HeaderMap) -> Option<String> {
 /// The address a sharing exit's request came from. The exit asks once over IPv4 and once over IPv6, since its link
 /// shows only the family it happened to use, and refuses each answer as its own address.
 pub(super) async fn seen(app: App, headers: HeaderMap, seen: Option<std::net::IpAddr>) -> Response {
-    if sharing_exit(&app, &headers).await.is_none() {
+    if sharing_exit(&app, &headers, "browser").await.is_none() {
         return StatusCode::FORBIDDEN.into_response();
     }
     match seen {
@@ -781,7 +961,13 @@ pub(super) async fn seen(app: App, headers: HeaderMap, seen: Option<std::net::Ip
     }
 }
 
-async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<std::net::IpAddr>) {
+async fn link_task(
+    app: App,
+    exit: String,
+    mut socket: WebSocket,
+    seen: Option<std::net::IpAddr>,
+    model: bool,
+) {
     let hello =
         json!({"op": "hello", "seen": seen.iter().map(|ip| ip.to_string()).collect::<Vec<_>>()});
     if !matches!(
@@ -796,7 +982,12 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
         let mut hub = app.hub.lock().unwrap();
         hub.exits.serial += 1;
         let serial = hub.exits.serial;
-        let old = hub.exits.links.insert(
+        let links = if model {
+            &mut hub.exits.model_links
+        } else {
+            &mut hub.exits.links
+        };
+        let old = links.insert(
             exit.clone(),
             Link {
                 serial,
@@ -808,6 +999,12 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
             let _ = old
                 .cancel
                 .send(Some(Close::new(4409, "replaced by a newer link")));
+            if model {
+                hub.exits.close_where(
+                    |t| t.usage.is_some() || t.exit != exit,
+                    Close::new(4409, "model_exit_offline"),
+                );
+            }
         }
         serial
     };
@@ -833,13 +1030,19 @@ async fn link_task(app: App, exit: String, mut socket: WebSocket, seen: Option<s
     };
     {
         let mut hub = app.hub.lock().unwrap();
-        if hub
-            .exits
-            .links
-            .get(&exit)
-            .is_some_and(|l| l.serial == serial)
-        {
-            hub.exits.links.remove(&exit);
+        let links = if model {
+            &mut hub.exits.model_links
+        } else {
+            &mut hub.exits.links
+        };
+        if links.get(&exit).is_some_and(|l| l.serial == serial) {
+            links.remove(&exit);
+            if model {
+                hub.exits.close_where(
+                    |t| t.usage.is_some() || t.exit != exit,
+                    Close::new(4403, "model_exit_offline"),
+                );
+            }
         }
     }
     close_socket(&mut socket, &outcome).await;
@@ -893,7 +1096,7 @@ async fn tunnel_task(
     mut client_rx: oneshot::Receiver<WebSocket>,
     mut exit_rx: oneshot::Receiver<WebSocket>,
     mut canceled: watch::Receiver<Option<Close>>,
-    usage: u32,
+    usage: Option<u32>,
 ) {
     let deadline = Instant::now() + ANSWER;
     let (mut client, mut exit) = (None, None);
@@ -918,7 +1121,9 @@ async fn tunnel_task(
     {
         let mut hub = app.hub.lock().unwrap();
         hub.exits.close(&tid, outcome.clone());
-        hub.exits.release(usage);
+        if let Some(usage) = usage {
+            hub.exits.release(usage);
+        }
     }
     if let Some(s) = client.as_mut() {
         close_socket(s, &outcome).await;
@@ -932,7 +1137,7 @@ async fn tunnel_task(
 /// The exit's own close reason (a refused address) reaches the bot computer unchanged.
 async fn pump(
     app: &App,
-    usage: u32,
+    usage: Option<u32>,
     client: &mut WebSocket,
     exit: &mut WebSocket,
     cancel: &mut watch::Receiver<Option<Close>>,
@@ -940,7 +1145,11 @@ async fn pump(
     let deadline = Instant::now() + TUNNEL_SESSION;
     let (mut cs, mut cr) = client.split();
     let (mut es, mut er) = exit.split();
-    let spend = |n: usize| app.hub.lock().unwrap().exits.spend_row(usage, n as u64);
+    let spend = |n: usize| {
+        usage.map_or(Ok(()), |slot| {
+            app.hub.lock().unwrap().exits.spend_row(slot, n as u64)
+        })
+    };
     let up = async {
         while let Some(Ok(message)) = cr.next().await {
             match message {
@@ -962,7 +1171,7 @@ async fn pump(
         Close::new(1000, "")
     };
     let down = async {
-        let mut status = false;
+        let mut remaining_status = if usage.is_some() { 1 } else { 2 };
         while let Some(Ok(message)) = er.next().await {
             let message = match message {
                 Message::Binary(bytes) => {
@@ -971,9 +1180,9 @@ async fn pump(
                     }
                     Message::Binary(bytes)
                 }
-                // Only the first message, the exit's status, may be text.
-                Message::Text(text) if !status && text.len() <= 1024 => {
-                    status = true;
+                // A model exit can report a refusal after it has redeemed and accepted the socket.
+                Message::Text(text) if remaining_status > 0 && text.len() <= 1024 => {
+                    remaining_status -= 1;
                     Message::Text(text)
                 }
                 Message::Close(frame) => {
@@ -1233,6 +1442,68 @@ mod tests {
     }
 
     #[test]
+    fn model_exit_redemption_and_fences_are_separate_from_browser_policy() {
+        let mut exits = exits();
+        let _browser = exits.connect_link("laptop");
+        let binding = || ModelBinding {
+            runner_id: "server".into(),
+            exit: "laptop".into(),
+            attempt_id: "attempt".into(),
+            owner: "owner".into(),
+            plan: "plan".into(),
+            revision: 2,
+            generation: 1,
+            provider: "claude".into(),
+        };
+        assert_eq!(
+            code(exits.admit_model("offline", binding())),
+            "model_exit_offline"
+        );
+        let (open, mut opens) = mpsc::unbounded_channel();
+        let (cancel, _) = watch::channel(None);
+        exits.model_links.insert(
+            "laptop".into(),
+            Link {
+                serial: 1,
+                open,
+                cancel,
+            },
+        );
+        let (_, _, _, canceled, usage) = exits.admit_model("model", binding()).unwrap();
+        assert!(usage.is_none());
+        let opened: Value = serde_json::from_str(&opens.try_recv().unwrap()).unwrap();
+        let ticket = opened["ticket"].as_str().unwrap();
+        assert!(exits.take("model", ticket, Side::Exit).is_some());
+        assert_eq!(
+            code(exits.redeem("model", "server", ticket)),
+            "model_exit_forbidden"
+        );
+        assert_eq!(
+            exits.redeem("model", "laptop", ticket).unwrap()["binding"]["plan"],
+            "plan"
+        );
+        assert_eq!(
+            code(exits.redeem("model", "laptop", ticket)),
+            "model_exit_stale"
+        );
+        let mut off = policy(2, &[], 0);
+        off.sharing = false;
+        assert_eq!(exits.set_policy("laptop", off).unwrap(), 0);
+        assert!(!exits.links.contains_key("laptop"));
+        assert!(exits.model_links.contains_key("laptop"));
+        assert_eq!(exits.fence_model("owner", 2), 1);
+        assert_eq!(
+            canceled.borrow().as_ref().unwrap().reason,
+            "model_exit_stale"
+        );
+        assert_eq!(
+            code(exits.admit_model("stale", binding())),
+            "model_exit_stale"
+        );
+        assert_eq!(exits.backlog(), 0);
+    }
+
+    #[test]
     fn a_hostname_is_a_name_or_an_address_never_a_url_or_a_header() {
         for ok in [
             "www.acme.example",
@@ -1287,7 +1558,11 @@ mod tests {
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay = format!("ws://{}", listener.local_addr().unwrap());
+        let control = Router::new()
+            .route("/control/v1/command", post(crate::command))
+            .with_state(app.clone());
         let router = gateway::routes(app.clone())
+            .merge(control)
             .into_make_service_with_connect_info::<std::net::SocketAddr>();
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
 
@@ -1308,7 +1583,7 @@ mod tests {
         }
         let answer = {
             let mut hub = app.hub.lock().unwrap();
-            super::grant(&app, &mut hub.exits, grant("t1", "ops", 1, 0)).unwrap()
+            super::grant(&app, &mut hub.exits, json!(grant("t1", "ops", 1, 0))).unwrap()
         };
         let ticket = answer["ticket"].as_str().unwrap().to_owned();
         let mut hello = None;
@@ -1392,6 +1667,158 @@ mod tests {
                 rows[0].bot.as_str()
             ),
             (11, 1, "www.acme.example", "ops")
+        );
+
+        let control_url = format!("{}/control/v1/command", relay.replacen("ws:", "http:", 1));
+        app.hub.lock().unwrap().lease = Some(("test-lease".into(), Instant::now()));
+        let command = |sequence: u64, mut body: Value| {
+            body["sequence"] = json!(sequence);
+            body["lease"] = json!("test-lease");
+            http.post(&control_url)
+                .bearer_auth(app.key.as_str())
+                .json(&body)
+                .send()
+        };
+        let model = |id| {
+            json!({"op": "exit_grant", "grant": {
+                "kind": "model", "id": id, "runner_id": "server", "exit": "laptop",
+                "attempt_id": "attempt", "owner": "owner", "plan": "plan", "revision": 2,
+                "generation": 1, "provider": "claude"
+            }})
+        };
+        let offline = command(1, model("offline")).await.unwrap();
+        assert_eq!(offline.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            offline.json::<Value>().await.unwrap()["error"],
+            "model_exit_offline"
+        );
+
+        let mut request = format!("{relay}/api/v2/runners/me/browser-exit/ws")
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("authorization", "Bearer laptop-token".parse().unwrap());
+        request
+            .headers_mut()
+            .insert("x-tico-exit-kind", "model".parse().unwrap());
+        let (mut model_link, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !app
+                .hub
+                .lock()
+                .unwrap()
+                .exits
+                .model_links
+                .contains_key("laptop")
+            {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let grant = command(2, model("active"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        let opened = loop {
+            if let M::Text(text) = model_link.next().await.unwrap().unwrap() {
+                let frame: Value = serde_json::from_str(&text).unwrap();
+                if frame["op"] == "open" {
+                    break frame;
+                }
+            }
+        };
+        assert_eq!(opened["kind"], "model");
+        assert_eq!(opened["id"], "active");
+        let redeem = |runner, ticket: &Value| {
+            json!({
+                "op": "exit_redeem", "id": "active", "runner_id": runner, "ticket": ticket
+            })
+        };
+        for (runner, ticket) in [("server", &opened["ticket"]), ("laptop", &grant["ticket"])] {
+            let refused = command(3, redeem(runner, ticket)).await.unwrap();
+            assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        }
+        let redemption = redeem("laptop", &opened["ticket"]);
+        let reply = command(4, redemption.clone())
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(reply["binding"]["attempt_id"], "attempt");
+        assert_eq!(reply["binding"]["revision"], 2);
+        for seq in [4, 5] {
+            assert_eq!(
+                command(seq, redemption.clone()).await.unwrap().status(),
+                StatusCode::CONFLICT
+            );
+        }
+        let base = format!("{relay}/api/v2/runners/me/browser-exit/tunnels/active");
+        let (mut model_exit, _) = tokio_tungstenite::connect_async(format!(
+            "{base}/exit?ticket={}",
+            opened["ticket"].as_str().unwrap()
+        ))
+        .await
+        .unwrap();
+        let (mut model_bot, _) = tokio_tungstenite::connect_async(format!(
+            "{base}/ws?ticket={}",
+            grant["ticket"].as_str().unwrap()
+        ))
+        .await
+        .unwrap();
+
+        let mut off = policy(2, &[], 0);
+        off.sharing = false;
+        assert_eq!(
+            app.hub
+                .lock()
+                .unwrap()
+                .exits
+                .set_policy("laptop", off)
+                .unwrap(),
+            0
+        );
+        model_exit
+            .send(M::Binary(b"model-response".to_vec().into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            model_bot.next().await.unwrap().unwrap().into_data(),
+            b"model-response"[..]
+        );
+        assert_eq!(app.hub.lock().unwrap().exits.backlog(), 1); // Only the browser tunnel's row.
+
+        command(6, model("pending"))
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap();
+        let fence = command(
+            7,
+            json!({"op": "model_exit_generation", "owner": "owner", "generation": 2}),
+        )
+        .await
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+        assert_eq!(fence["closed"], 2);
+        let frame = model_bot.next().await.unwrap().unwrap();
+        assert!(matches!(frame, M::Close(Some(frame)) if frame.reason == "model_exit_stale"));
+        let stale = command(8, model("stale")).await.unwrap();
+        assert_eq!(stale.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            stale.json::<Value>().await.unwrap()["error"],
+            "model_exit_stale"
         );
     }
 

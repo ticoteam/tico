@@ -2625,6 +2625,36 @@ def _lease_subscription(c, given):
     return None
 
 
+def model_exit_payer(c, runner_id, attempt_id):
+    given = _leased_payer(c, runner_id, attempt_id, "model_exit")
+    sub = _lease_subscription(c, given)
+    if (
+        sub
+        and sub["owner_id"].startswith("human:")
+        and sub["kind"] in ("claude_token", "claude_login", "codex_login")
+        and "model_exit_v1" in (H._json(given["capabilities"], []) or [])
+    ):
+        return sub
+    return None
+
+
+def model_exit_credential(c, vault, sub):
+    from . import claude_login
+
+    if not (value := open_payer(c, vault.cipher, sub)):
+        return None
+    if sub["kind"] == "claude_token":
+        return {"access_token": value}
+    if sub["kind"] == "claude_login":
+        parsed = claude_login.parse(value)
+        return {"access_token": parsed["claudeAiOauth"]["accessToken"]} if parsed else None
+    tokens = _codex_login(value)["tokens"]
+    access, account = tokens.get("access_token"), tokens.get("account_id")
+    if all(isinstance(v, str) and v for v in (access, account)):
+        return {"access_token": access, "account_id": account}
+    return None
+
+
 def payer_ready(c, runner_id, attempt_id, delivery):
     """Verify the same bound provider still counts before the harness starts."""
     from .agent_subscriptions import CAPABILITY

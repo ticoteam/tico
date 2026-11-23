@@ -75,6 +75,7 @@ mod mail_retire;
 mod manifest;
 mod mcp;
 mod memory_history;
+mod model_exit;
 mod model_subscriptions;
 mod op;
 mod panics;

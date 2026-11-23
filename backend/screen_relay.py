@@ -84,6 +84,7 @@ class RemoteRegistry:
         # Browser exits (backend/browser_exit.py): the policy and bot-selection generations this lease's relay has
         # (pushed again after a new lease, and until a push succeeds), and the usage batch to acknowledge.
         self.exit_pushed, self.bot_pushed, self.exit_acks = {}, {}, []
+        self.model_exit_pushed = {}
         self.pruned = 0.0
         self.healthy, self.superseded = False, False
 
@@ -135,6 +136,7 @@ class RemoteRegistry:
             self.generations.clear()
             self.exit_pushed.clear()  # a new lease clears the relay's exit policies and bot generations too
             self.bot_pushed.clear()
+            self.model_exit_pushed.clear()
             self.healthy = True
         self._reconcile()
 
@@ -188,11 +190,22 @@ class RemoteRegistry:
             return self._command("pending", runner_id=runner_id)["sessions"]
 
     # ------------------------------------------------------------------ browser exits (relay-rs/src/exit.rs)
-    EXIT_REFUSALS = ("exit_offline", "exit_not_shared", "exit_over_cap", "exit_busy", "exit_stale", "stale exit policy")
+    EXIT_REFUSALS = (
+        "exit_offline",
+        "exit_not_shared",
+        "exit_over_cap",
+        "exit_busy",
+        "exit_stale",
+        "stale exit policy",
+        "model_exit_offline",
+        "model_exit_stale",
+        "model_exit_forbidden",
+    )
 
     def _exit_command(self, op, /, **fields):
         """An exit operation: its answer, or the relay's refusal code as a string. Anything else is the relay
         unavailable (503)."""
+        model = op == "exit_redeem" or fields.get("grant", {}).get("kind") == "model"
         if not self.healthy:
             raise Problem("browser_exit_unavailable", "The relay is unavailable. Try again shortly.", 503)
         self.sequence += 1
@@ -210,9 +223,13 @@ class RemoteRegistry:
                 return code
             if code in ("stale permission lease", "stale control sequence"):
                 self.healthy = False
+                if model:
+                    return "model_exit_stale"
             raise Problem("browser_exit_unavailable", "The relay refused the request. Try again shortly.", 503)
         if answer.get("boot") != self.boot:
             self.healthy = False
+            if model:
+                return "model_exit_stale"
             raise Problem("browser_exit_unavailable", "The relay restarted. Try again shortly.", 503)
         return answer
 
@@ -276,13 +293,23 @@ class RemoteRegistry:
 
         with self.store.read() as c:
             exits, bots = browser_exit.generations(c)
+            owners = dict(c.execute("SELECT person_id,generation FROM plan_exits"))
         with self.lock:
             exits = [rid for rid, g in exits.items() if g > self.exit_pushed.get(rid, 0)][:batch]
             bots = [bot for bot, g in bots.items() if g > self.bot_pushed.get(bot, 0)][:batch]
+            models = [(owner, g) for owner, g in owners.items() if g > self.model_exit_pushed.get(owner, 0)][:batch]
         for rid in exits:
             self.push_exit_policy(rid)
         for bot in bots:
             self.push_bot_generation(bot, "browser exit changed")
+        for owner, generation in models:
+            with self.lock:
+                try:
+                    answer = self._exit_command("model_exit_generation", owner=owner, generation=generation)
+                except Problem:
+                    break  # The next tick retries under the current lease.
+                if isinstance(answer, dict):
+                    self.model_exit_pushed[owner] = max(self.model_exit_pushed.get(owner, 0), generation)
 
     def exit_grant(self, grant, epoch):
         """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read
@@ -302,6 +329,19 @@ class RemoteRegistry:
                 return answer.get("closed", 0) if isinstance(answer, dict) else 0
             except Problem:
                 return 0
+
+    def exit_redeem(self, tunnel_id, ticket, runner_id):
+        with self.lock:
+            epoch = self.lease
+            try:
+                result = self._exit_command("exit_redeem", id=tunnel_id, ticket=ticket, runner_id=runner_id)
+            except Problem:
+                raise Problem("model_exit_unavailable", "The relay is unavailable", 503) from None
+        if result == "model_exit_forbidden":
+            raise Problem(result, "This computer cannot redeem that tunnel", 403)
+        if not isinstance(result, dict):
+            raise Problem("model_exit_stale", "The plan exit tunnel is no longer live", 409)
+        return epoch, result["binding"]
 
     @staticmethod
     def _record(c, report):

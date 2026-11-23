@@ -22,7 +22,9 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 
+from . import model_subscriptions
 from .store import H, Problem
 from .api_contract import api_v2
 
@@ -34,6 +36,8 @@ RETENTION_DAYS = 30
 USAGE_PAGE, USAGE_PAGE_MAX = 200, 500
 PORTS = (80, 443)
 LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
+TUNNELS_PATH = "/api/v2/runners/me/browser-exit/tunnels"
+MODEL_CAPABILITY = "model_exit_v1"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 
@@ -228,19 +232,62 @@ def prune(c):
 
 
 def authorize_link(store, auth, execution, body):
-    """The relay's question for an exit's link: a registered computer whose owner shares its internet."""
+    """Authorize the runner for the exit link it requested."""
     token = body.get("authorization")
-    if not isinstance(token, str) or len(token) > 8192:
+    kind = body.get("exit_kind", "browser")
+    if kind not in ("browser", "model") or not isinstance(token, str) or len(token) > 8192:
         raise Problem("forbidden", "Invalid relay authorization", 403)
     who = auth.authenticate({"authorization": token}, LINK_PATH, "GET")
     with store.read() as c:
         runner = execution.runner(c, who) if who.role == "runner" else None
-        if runner is None or not sharing(c, runner["id"]):
-            raise Problem("forbidden", "This computer does not share its internet", 403)
-    return {"allowed": True, "runner_id": runner["id"]}
+        if runner and not runner["revoked_at"]:
+            rid = runner["id"]
+            if kind == "model":
+                if (
+                    _model_capable(runner)
+                    and c.execute("SELECT 1 FROM plan_exits WHERE runner_id=?", (rid,)).fetchone()
+                ):
+                    return {"allowed": True, "runner_id": rid}
+            elif sharing(c, rid):
+                return {"allowed": True, "runner_id": rid}
+    detail = (
+        "This computer is not a selected plan exit" if kind == "model" else "This computer does not share its internet"
+    )
+    raise Problem("forbidden", detail, 403)
 
 
-def install(app, store, auth, mutate, execution, sessions):
+def _model_capable(runner):
+    return MODEL_CAPABILITY in (H._json(runner["capabilities"], []) or [])
+
+
+def _model_stale():
+    return Problem("model_exit_stale", "The attempt or its plan exit changed", 409)
+
+
+def _model_binding(c, runner_id, attempt_id, generation):
+    sub = model_subscriptions.model_exit_payer(c, runner_id, attempt_id)
+    if not sub:
+        raise _model_stale()
+    owner = sub["owner_id"].removeprefix("human:")
+    selected = c.execute("SELECT runner_id,generation FROM plan_exits WHERE person_id=?", (owner,)).fetchone()
+    if not selected or selected["generation"] != generation or not selected["runner_id"]:
+        raise _model_stale()
+    exit_row = _computer(c, selected["runner_id"])
+    if not exit_row or not _model_capable(exit_row):
+        raise _model_stale()
+    return {
+        "runner_id": runner_id,
+        "exit": exit_row["id"],
+        "attempt_id": attempt_id,
+        "generation": generation,
+        "owner": owner,
+        "plan": sub["id"],
+        "revision": sub["revision"],
+        "provider": "codex" if sub["kind"] == "codex_login" else "claude",
+    }, sub
+
+
+def install(app, store, auth, mutate, execution, sessions, vault):
     from . import models as M
     from .views import human_only
 
@@ -475,11 +522,49 @@ def install(app, store, auth, mutate, execution, sessions):
     def refuse(code, detail, status):
         raise Problem("browser_exit_" + code, detail, status)
 
-    @app.post("/api/v2/runners/me/browser-exit/tunnels")
-    def open_tunnel(request: Request, body: M.BrowserExitTunnel):
+    def model_grant(who, body):
+        epoch = sessions.exit_epoch()
+        with store.read_transaction() as c:
+            runner = execution.runner(c, who)
+            if not runner:
+                raise Problem("forbidden", "This computer is no longer registered", 403)
+            binding, _ = _model_binding(c, runner["id"], body.attempt_id, body.generation)
+        tunnel = H.new_id()
+        result = sessions.exit_grant({"kind": "model", "id": tunnel, **binding}, epoch)
+        if isinstance(result, dict):
+            return {"tunnel_id": tunnel, "ticket": result["ticket"]}
+        if result in ("exit_stale", "model_exit_stale"):
+            raise _model_stale()
+        if result == "model_exit_offline":
+            raise Problem(result, "The plan exit is offline", 409)
+        if result == "exit_busy":
+            raise Problem("model_exit_busy", "Too many plan exit connections", 429)
+        raise Problem("model_exit_unavailable", "The relay is unavailable", 503)
+
+    @app.post(TUNNELS_PATH + "/redeem")
+    def redeem_model_exit(request: Request, body: M.ModelExitRedemption):
+        who = request.state.identity
+        with store.read() as c:
+            runner = execution.runner(c, who)
+            if not runner or runner["revoked_at"]:
+                raise Problem("forbidden", "This computer is no longer registered", 403)
+        epoch, grant = sessions.exit_redeem(body.tunnel_id, body.ticket, runner["id"])
+        with store.read_transaction() as c:
+            binding, sub = _model_binding(c, grant["runner_id"], grant["attempt_id"], grant["generation"])
+            if binding != grant or binding["exit"] != runner["id"] or sessions.exit_epoch() != epoch:
+                raise _model_stale()
+            credential = model_subscriptions.model_exit_credential(c, vault, sub)
+        if not credential:
+            raise _model_stale()
+        return JSONResponse({"provider": binding["provider"], **credential}, headers={"Cache-Control": "no-store"})
+
+    @app.post(TUNNELS_PATH)
+    def open_tunnel(request: Request, body: M.BrowserExitTunnel | M.ModelExitTunnel):
         """One connection of a bot's browser through its exit computer: a one-use ticket for the relay. Asked by the
         computer the bot runs on; nothing is written."""
         who = request.state.identity
+        if isinstance(body, M.ModelExitTunnel):
+            return model_grant(who, body)
         if not valid_host(body.host) or body.port not in PORTS:
             refuse("refused", "Only hostnames on ports 80 and 443 go through a browser exit", 400)
         for _ in range(2):  # once more when a policy change or a new relay lease fenced the first read
