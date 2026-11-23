@@ -31,11 +31,13 @@ export interface AskCardProps {
   href?: string;
   label?: string;
   target?: string;
+  /** Every word shown, never cut short: a request, whose name and level say what Grant gives. */
+  whole?: boolean;
   children?: ReactNode;
 }
 
-export function AskCard({ name, note, who, pill, end, asked, asking, actions, error, href, label = 'The decision', target, children }: AskCardProps) {
-  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link'].filter(Boolean).join(' ');
+export function AskCard({ name, note, who, pill, end, asked, asking, actions, error, href, label = 'The decision', target, whole, children }: AskCardProps) {
+  const className = ['answer askcard', asked && 'is-asked', asking && 'is-asking', href && 'is-link', whole && 'is-whole'].filter(Boolean).join(' ');
   // On a computer what answering does sits at the left of the buttons' row while that row ends the card, and goes while
   // "What should change?" is open; on a phone, or with no row, it stays in the top line.
   const cards = useCards();

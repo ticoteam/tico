@@ -319,13 +319,10 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       title={quiet ? (sendTitle(t.title)?.subject ?? t.title) : t.title}
       path={address}
       sub={
-        quiet ? (
-          <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine>
-        ) : (
-          <WhereLine t={t}>
-            <BlockedOn t={t} />
-          </WhereLine>
-        )
+        <>
+          {quiet ? <QuietLine t={t}>{send && <EmailSource t={t} send={send} />}</QuietLine> : <WhereLine t={t} />}
+          <BlockedOn t={t} />
+        </>
       }
       // An approval's title is read, not renamed (the mock draws it plain): Details, under ⋯, renames it.
       onRename={quiet ? undefined : (title) => void rename(title)}

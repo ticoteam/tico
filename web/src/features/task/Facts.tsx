@@ -136,12 +136,13 @@ export function WaitOn({ t, turn, short = false }: { t: TaskData; turn: Turn; sh
   return <>{turn.line}</>;
 }
 
-/** In the head's where line: the task another task blocks it on, as Details says it, so the wait shows on every tab. */
+/** In the head's where line: the task another task blocks it on, as Details says it, so the wait shows on every tab.
+    Only one the reader may open: nothing of another (its line may name it), which Details says as the server does. */
 export function BlockedOn({ t }: { t: TaskData }) {
   const turn = t.status === 'open' && t.turn?.state === 'tasks' ? t.turn : null;
-  if (!turn) return null;
+  if (!turn?.line || !turn.who || !opens(t, turn.who)) return null;
   return (
-    <span className="tv-wait" title={turn.line ?? undefined}>
+    <span className="tv-wait" title={turn.line}>
       <WaitOn t={t} turn={turn} />
     </span>
   );

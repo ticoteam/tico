@@ -53,6 +53,10 @@ function show(node: ReactNode, at = '/tasks/p1/12') {
   return router;
 }
 
+// Read with node's fs (tests load no CSS, not even ?raw), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url; // not inline: Vite would turn `new URL('…', import.meta.url)` into an asset import
+
 /* Made-up rows only. */
 const task = (more: Partial<TaskData> = {}): TaskData =>
   ({
@@ -322,6 +326,55 @@ describe('one open task', () => {
     expect(head.textContent).not.toContain(id);
     // a page tab, not Details
     expect(screen.queryByText('Waiting on')).toBeNull();
+  });
+
+  it('says nothing in the head of a task blocking it that the reader may not open', async () => {
+    // the server names a private blocker to its readers only (task_calls.task_view); this is what any other line reads
+    const turn = { state: 'tasks', who: 'private-1', line: 'Blocked by Salary numbers, in Build', requirement_id: 'dep:x', since: null, until: null, ask: false };
+    serve(reads(task({ to_leave: [], turn } as Partial<TaskData>)));
+    show(<TaskPage task="12" pipeline="p1" />);
+    expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+    const head = document.querySelector('header') as HTMLElement;
+    expect(head.textContent).not.toContain('Salary');
+    expect(head.querySelector('[title*="Salary"]')).toBeNull();
+  });
+
+  it('says the task blocking it in the head of a sent-back approval’s tab too', async () => {
+    const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
+    const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
+    const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
+    serve(reads(task({ relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
+    show(<TaskPage task="12" pipeline="p1" />);
+    await waitFor(() => expect(document.querySelector('.tv.is-quiet')).toBeTruthy());
+    const where = document.querySelector('.pk-where') as HTMLElement;
+    expect(within(where).getByRole('link', { name: 'Blocked by Matches cause check, in To do' }).getAttribute('href')).toBe(`/task/${id}`);
+  });
+
+  it('on a phone, the where line wraps, its picks never break, and the wait’s link takes no press over them', async () => {
+    const style = document.createElement('style');
+    style.textContent = ['../../styles/parts.css', '../../pagekinds/pagekinds.css', './task.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    document.head.append(style);
+    document.documentElement.dataset.layout = 'cards';
+    try {
+      const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
+      const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
+      const turn = { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false };
+      people([{ id: 'bot:a1', kind: 'agent', name: 'Engineering Manager' }]);
+      serve(reads(task({ to_leave: [], relations: { depends_on: [blocker] }, turn } as Partial<TaskData>)));
+      show(<TaskPage task="12" pipeline="p1" />);
+      expect(await screen.findByRole('heading', { level: 1, name: 'Fix the sign-in page' })).toBeTruthy();
+      const where = document.querySelector('.tv .pk-where') as HTMLElement;
+      expect(getComputedStyle(where).flexWrap).toBe('wrap');
+      const owner = where.querySelector('[data-target="task-owner:t1"]') as HTMLElement;
+      expect([getComputedStyle(owner).flexShrink, getComputedStyle(owner).whiteSpace]).toEqual(['0', 'nowrap']);
+      expect(getComputedStyle(within(owner).getByText('Engineering Manager')).textOverflow).toBe('ellipsis');
+      const link = within(where).getByRole('link', { name: 'Blocked by Matches cause check, in To do' });
+      expect(getComputedStyle(link, '::after').content).toBe('none');
+      expect(getComputedStyle(link).textDecoration).toContain('underline');
+    } finally {
+      style.remove();
+      delete document.documentElement.dataset.layout;
+    }
   });
 
   it('draws Details: what it needs to leave its stage, with what is met folded @s58', async () => {

@@ -514,6 +514,22 @@ def test_a_private_sub_tasks_title_is_not_shown_to_someone_who_reads_only_its_pa
     assert "Salary" in json.dumps(H.task_view(c, parent["id"]))  # the engine's own read hides nothing
 
 
+def test_a_private_task_it_depends_on_is_not_named_to_someone_who_reads_only_the_dependent(c):
+    """Nov 23 gate review: the task head shows what a blocked task waits on on every tab. A private task it depends on
+    that it did not file is no more named to a reader who may not open it than a filed one: not its title, nor its id."""
+    from backend import task_depends as D
+    from backend import task_relations as TR
+
+    blocked = _new(c, by=BEN, owner=BUILDER, title="Plan the offsite")
+    blocker = _new(c, by=ANA, owner=HELPER, title="Salary numbers", private=True)
+    assert not H.task_private_readable(c, BEN, H.task(c, blocker["id"]))
+    assert TR.relate(c, ANA, blocked["id"], blocker["id"], "depends_on")
+    ben = H.task_view(c, blocked["id"], BEN)
+    assert (ben["turn"]["state"], ben["turn"]["who"], ben["turn"]["line"]) == ("tasks", None, D.UNNAMED)
+    assert "Salary" not in json.dumps(ben)
+    assert "Salary" in H.task_view(c, blocked["id"], ANA)["turn"]["line"]  # Ana reads it: it is named to her
+
+
 def test_the_wake_that_says_a_tasks_sub_tasks_ended_names_only_those_everyone_who_reads_it_may_read(c):
     """Codex review 2: the wake on the parent, kept in its thread, says each filed task ended. One the woken bot may not
     open, or a private one whose readers are not the parent's (Ben reads the parent and its thread, not it), is "A

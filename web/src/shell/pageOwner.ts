@@ -130,7 +130,8 @@ export function fromPage(at: PageAt): FromPage {
 
 /* The Agent bar's fold, per page per person, on this device: `{page: true}` folded by hand, `false` opened by hand.
    A page with no hand choice is open on a wide window (C.BAR_OPEN_AT and up) and folded under it and on a phone. An
-   ask from the owner that waits on you opens it until you fold it again (on a wide enough window; a phone keeps the page up). */
+   ask from the owner that waits on you opens it until you fold it again, on a computer of any width; a phone keeps the
+   page up and the ask behind the Agent icon. */
 const KEY = 'owner-bar.v1';
 type Folds = Record<string, Record<string, boolean>>;
 

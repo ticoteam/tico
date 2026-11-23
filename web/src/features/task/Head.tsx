@@ -34,9 +34,8 @@ function useStages(t: TaskData) {
   return stages.data ?? retired.data ?? [];
 }
 
-/** The where line (parts-kit.js where): the stage, who has it, how long, Late, then what the page adds (the task it
-    waits on). Where the task sits is the trail. */
-export function WhereLine({ t, children }: { t: TaskData; children?: ReactNode }) {
+/** The where line (parts-kit.js where): the stage, who has it, how long, Late. Where the task sits is the trail. */
+export function WhereLine({ t }: { t: TaskData }) {
   return (
     <>
       <StagePick t={t} />
@@ -44,7 +43,6 @@ export function WhereLine({ t, children }: { t: TaskData; children?: ReactNode }
       {t.stage_since && <Ago at={t.stage_since} className="row-age" />}
       {t.late && <LatePill />}
       <TaskStatus t={t} />
-      {children}
     </>
   );
 }
@@ -237,7 +235,7 @@ export function OwnerPick({ t }: { t: TaskData }) {
         <button className="tv-pick" type="button" aria-label="Who has it" data-target={`task-owner:${t.id}`}>
           <Face id={t.owner_id} decorative />
           {t.owner_id && (
-            <span>
+            <span className="tv-owner">
               <NameOf id={t.owner_id} />
             </span>
           )}

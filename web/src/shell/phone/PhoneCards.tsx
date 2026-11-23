@@ -107,7 +107,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     else if (card === 'chat') setCard('none');
   } else if ((wasTucked !== tucked || wasKey !== chatKey) && second) {
     // a page's own chat follows its page both ways: one that stops waiting behind its icon comes up (its fold is open,
-    // an ask from the page's owner waits on you, the address names it), and one that waits again goes down
+    // an ask opened it on a narrow computer, the address names it), and one that waits again goes down
     if (comesUp()) setCard('chat');
     else if (card === 'chat') setCard('none');
   } else if (((raiseChat && !wasRaised) || newAsk) && second) setCard('chat');

@@ -20,6 +20,10 @@
 .askcard-field :is(textarea,input){display:block;width:100%;margin-top:var(--s-0);padding:0;border:0;background:none;color:var(--ink);font:inherit;line-height:var(--lh-read);resize:none;outline:none}
 .askcard.is-asking .an-row{margin-top:var(--s-2)}
 
+/* a request (Requests.tsx), on Needs you and Tools: who asks, for what and at which level read whole above Grant; the
+   top line and the buttons' row wrap rather than cut a word */
+.askcard.is-whole :is(.askcard-top,.an-row){flex-wrap:wrap}
+.askcard.is-whole :is(.an-name,.askcard-note){max-width:none;overflow:visible;white-space:normal;overflow-wrap:anywhere}
 /* a request's body (Requests.tsx): what it is for, a key's field and where to get one, a proposal's rows to tick */
 .askcard-help{display:inline-block;margin-top:var(--s-1h);font-size:var(--t-sm);color:var(--muted);text-decoration:underline;text-underline-offset:2px}
 .askcard-help:hover{color:var(--ink)}

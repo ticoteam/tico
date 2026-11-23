@@ -162,17 +162,18 @@ describe('an access request in Needs you', () => {
     expect((await within(box).findByRole('alert')).textContent).toBe('You can’t grant this');
     expect(screen.getByRole('region', { name: 'Access request' })).toBeTruthy();
   });
-  it('on a phone in Needs you, shows who asks, for what and at which level whole above Grant, never cut short', async () => {
+  it.each([
+    ['a phone', 'cards', '.askcard-top'],
+    ['a computer', 'sheets', '.an-row'],
+  ])('on %s, Needs you and Tools alike, shows who asks, for what and at which level whole above Grant', async (_, layout, noteIn) => {
     const style = document.createElement('style');
-    style.textContent = ['../../styles/parts.css', './ask.css', '../tasks/tasks.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
+    style.textContent = ['../../styles/parts.css', './ask.css'].map((f) => fs.readFileSync(new URL(f, here), 'utf8')).join('\n');
     document.head.append(style);
-    document.documentElement.dataset.layout = 'cards';
+    document.documentElement.dataset.layout = layout;
     try {
       render(
         <QueryClientProvider client={queryClient}>
-          <div className="flow-requests">
-            <RequestCard it={ACCESS} />
-          </div>
+          <RequestCard it={ACCESS} />
         </QueryClientProvider>,
       );
       const box = await card('Access request');
@@ -180,6 +181,9 @@ describe('an access request in Needs you', () => {
         const css = getComputedStyle(within(box).getByText(text));
         expect([css.whiteSpace, css.overflow]).toEqual(['normal', 'visible']);
       }
+      // the line it sits in wraps, so the level moves down whole rather than squeezed into a column
+      const line = within(box).getByText('Read and write').closest(noteIn) as HTMLElement;
+      expect(getComputedStyle(line).flexWrap).toBe('wrap');
     } finally {
       style.remove();
       delete document.documentElement.dataset.layout;

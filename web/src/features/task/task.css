@@ -3,14 +3,18 @@
    The head, tab row and sections are the Document kind's; this is only what the task adds inside them. */
 
 /* ---------- the stage and owner picks in the head ---------- */
-.tv-pick{height:22px;display:inline-flex;align-items:center;gap:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--r-chip);background:none;color:inherit;font-family:inherit;font-size:inherit}
+.tv-pick{flex:none;height:22px;display:inline-flex;align-items:center;gap:var(--s-1);padding:0 var(--s-1);border:0;border-radius:var(--r-chip);background:none;color:inherit;font-family:inherit;font-size:inherit;white-space:nowrap}
 .tv-pick:hover{background:var(--hover);color:var(--ink)}
 .tv-pick .ico{width:12px;height:12px;stroke-width:2;color:var(--faint)}
 .tv-pick .av{margin-left:0}
+/* who has it: their name beside the face, a long one cut short */
+.tv-pick>.tv-owner{max-width:18ch;overflow:hidden;text-overflow:ellipsis}
 /* the task another task blocks it on (Facts.tsx BlockedOn), last on the where line: cut short on a computer, whole on
-   hover; on a phone, whole on a line of its own under it */
+   hover; on a phone the line wraps, and the wait is whole on a line of its own */
 .tv .pk-where .tv-wait{min-width:0;margin-left:var(--s-1);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-html[data-layout="cards"] .tv .pk-where:has(>.tv-wait){flex-wrap:wrap;height:auto;row-gap:var(--s-1)}
+.tv .pk-where .tv-wait a{text-decoration:underline;text-decoration-color:var(--line-strong);text-underline-offset:3px}
+.tv .pk-where .tv-wait a:hover{color:var(--ink)}
+html[data-layout="cards"] .tv .pk-where{flex-wrap:wrap;height:auto;row-gap:var(--s-1)}
 html[data-layout="cards"] .tv .pk-where>.tv-wait{flex-basis:100%;margin-left:0;white-space:normal}
 
 /* ---------- the head on a computer (parts.css .tv-head): where it stands, then the title, which wraps, balanced, at
@@ -40,6 +44,8 @@ html[data-layout="cards"] .tv .pk-head .ib{margin-top:calc((var(--t-fig) * var(-
    under the head does not cover it (it starts where the press ends). */
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick){position:relative}
 :where(html[data-layout="cards"]) .tv .pk-where :is(a,.tv-pick)::after{content:"";position:absolute;top:50%;right:0;left:0;height:var(--ctl);transform:translateY(-50%)}
+/* the wait's link on its own line under them takes no such press: it would cover the stage's and the owner's */
+:where(html[data-layout="cards"]) .tv .pk-where .tv-wait a::after{content:none}
 
 /* the framed body: the open page or Details, then the answer on a phone */
 .tv-view{flex:1;min-width:0;min-height:0;display:flex;flex-direction:column;position:relative}

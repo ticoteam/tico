@@ -330,5 +330,3 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 .modal .connect-kind{display:inline-flex;align-items:center;gap:var(--s-1h)}
 .modal .connect-ways{display:grid;gap:var(--s-2)}
 .modal .connect-ways .btn{justify-content:flex-start}
-/* what a request grants reads whole above its Grant, as on Needs you (tasks.css .flow-requests) */
-.tools .tool-requests .askcard-top :is(.an-name,.askcard-note){max-width:none;overflow:visible;white-space:normal;overflow-wrap:anywhere}
