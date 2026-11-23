@@ -57,7 +57,9 @@ export function BoardFit({ shape }: { shape: string }) {
       end = Math.max(end, from + 1);
       const shown = cols.slice(from, end);
       const opens = shown.filter(isOpen).length;
-      const w = opens ? Math.min(MAX, (avail - need(shown, 0)) / opens) : MIN;
+      // capped only when nothing lies past the right edge: a capped column would leave part of the next one showing
+      const cap = end < cols.length ? Infinity : MAX;
+      const w = opens ? Math.min(cap, (avail - need(shown, 0)) / opens) : MIN;
       inn.style.setProperty('--col-w', `${w}px`);
       if (more && from) {
         // room to bring a late stage to the left edge
