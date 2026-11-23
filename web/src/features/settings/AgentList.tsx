@@ -88,7 +88,8 @@ function ModelsDialog({ agents, onClose, onDone }: { agents: string[]; onClose: 
   const [effort, setEffort] = useState('');
   const [busy, setBusy] = useState(false);
   const v = models.data;
-  const { models: usable, harnesses } = pickable(v);
+  // Only harnesses Tico runs: a bulk pick never turns managed agents into external ones.
+  const { models: usable, harnesses } = pickable(v, { managed: true });
   const shown = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const efforts = shown.find((m) => m.id === model)?.efforts ?? [];
   const apply = async () => {
@@ -490,8 +491,7 @@ function TasksDialog({ slug, name, now, onClose }: { slug: string; name: string;
   const [effort, setEffort] = useState(now?.reasoning_effort ?? '');
   const [busy, setBusy] = useState(false);
   const v = models.data;
-  const on = v?.enabled_providers;
-  const usable = (v?.models ?? []).filter((m) => !m.deprecated && (!on || on.includes(m.provider)));
+  const { models: usable } = pickable(v, { managed: true, model: now?.model ?? undefined });
   const efforts = usable.find((m) => m.id === model)?.efforts ?? [];
   const save = async () => {
     setBusy(true);

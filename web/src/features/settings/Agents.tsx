@@ -12,7 +12,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
-import { modelName } from '@/features/team/routing';
+import { modelName, pickable } from '@/features/team/routing';
 import { AgentList } from './AgentList';
 import { ComputerList } from './ComputerList';
 import { installCommands, type Command, type ComputerKind, type RunnerConfig } from './install';
@@ -228,10 +228,12 @@ export function Computers({ open }: { open?: string }) {
 
 function Defaults() {
   const catalog = useQuery(modelsQuery);
-  const names = (catalog.data?.models ?? [])
-    .filter((m) => !m.deprecated && (!catalog.data?.enabled_providers || catalog.data.enabled_providers.includes(m.provider)))
-    .map((m) => ({ value: m.id, label: modelName(m.label) }));
   const providers = useQuery({ ...providersQuery, retry: false });
+  // New agents start on a harness Tico still offers; the current default stays listed.
+  const names = pickable(catalog.data, { managed: true, model: providers.data?.default?.model ?? undefined }).models.map((m) => ({
+    value: m.id,
+    label: modelName(m.label),
+  }));
   const me = useQuery(meQuery);
   const v = providers.data;
   if (!v?.default) return null;

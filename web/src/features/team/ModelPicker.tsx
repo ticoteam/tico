@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { effortLabel, modelName, pickable } from './model';
+import { effortLabel, modelName, pickable, routeTo } from './model';
 import { agentQuery, COMPACT_AT, modelsQuery, type AgentRow } from './queries';
 import './team.css';
 
@@ -45,18 +45,13 @@ export function ModelPicker({
   const savedCompact = detail?.compact_at ? String(detail.compact_at) : '';
   const compactNow = compact ?? savedCompact;
 
-  // Older rows without a harness run their runtime's. A harness no longer offered stays only when every target is on it.
-  const on = (a: AgentRow) => a.harness || a.resolved_runtime || '';
-  const current = also.every((a) => on(a) === on(agent)) ? on(agent) : undefined;
-  const { models: usable, harnesses } = pickable(data, current);
+  // A harness no longer offered stays listed only when every agent being changed is on it (older rows: their runtime).
+  const own = (a: AgentRow) => a.harness || a.resolved_runtime || '';
+  const shared = [agent, ...also].every((a) => own(a) === own(agent));
+  const { models: usable, harnesses } = pickable(data, shared ? { harness: own(agent), model: agent.model || agent.resolved_model } : {});
   const models = usable.filter((m) => !harness || !m.harnesses || m.harnesses.includes(harness));
   const chosen = models.find((m) => m.id === model);
   const efforts = chosen?.efforts ?? [];
-  // Where the pick runs: the harness chosen, else the agent's own when the model runs there, else the model's first.
-  const runs = chosen?.harnesses;
-  const dest = harness || (!runs?.length || runs.includes(on(agent)) ? on(agent) : runs[0]);
-  // Compact shows only where that harness compacts, or while a saved value (a fallback may use it) can still be cleared.
-  const compacts = !also.length && (!!data?.harnesses.find((h) => h.id === dest)?.capabilities?.compaction || !!savedCompact);
 
   const pickHarness = (h: string) => {
     setHarness(h);
@@ -73,7 +68,7 @@ export function ModelPicker({
   const differs = (a: AgentRow) => model !== (a.model || a.resolved_model || '') || effort !== (a.reasoning_effort ?? '') || harness !== (a.harness ?? '');
   const moving = [agent, ...also].filter(differs);
   const modelChanged = moving.length > 0;
-  const compactChanged = compacts && compactNow !== savedCompact;
+  const compactChanged = compactNow !== savedCompact;
   const save = async () => {
     onOpenChange(false);
     // Both edits advance the same configuration revision. The model change must use the revision from compact-at.
@@ -81,7 +76,11 @@ export function ModelPicker({
       const result = await compactAt.run({ slug: agent.slug, at: compactNow ? Number(compactNow) : null });
       if (!result.ok) return;
     }
-    for (const a of moving) void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(harness ? { harness } : {}) });
+    for (const a of moving) {
+      // No harness chosen: each stays on its own where the model runs there, else moves to the model's first offered one.
+      const to = harness || routeTo(chosen?.harnesses, own(a), data?.harnesses);
+      void apply.run({ slug: a.slug, model, ...(effort ? { effort } : {}), ...(to ? { harness: to } : {}) });
+    }
   };
 
   return (
@@ -94,7 +93,7 @@ export function ModelPicker({
           <Button onClick={() => onOpenChange(false)}>Cancel</Button>
           <Button
             variant="primary"
-            disabled={!model || (!modelChanged && !compactChanged)}
+            disabled={!model || (modelChanged ? !chosen : !compactChanged)}
             onClick={() => save()}
           >
             Apply
@@ -126,8 +125,8 @@ export function ModelPicker({
           <Segmented className="is-fill" label="Effort" options={['', ...efforts].map((e) => ({ value: e, label: effortLabel(e) }))} value={effort} onValueChange={setEffort} />
         </div>
       )}
-      {compacts && <FoldButton name="More" open={more} onToggle={() => setMore(!more)} />}
-      {more && compacts && <Select label="Compact" options={COMPACT} value={compactNow} onValueChange={setCompact} />}
+      {!also.length && <FoldButton name="More" open={more} onToggle={() => setMore(!more)} />}
+      {more && !also.length && <Select label="Compact" options={COMPACT} value={compactNow} onValueChange={setCompact} />}
     </Dialog>
   );
 }
