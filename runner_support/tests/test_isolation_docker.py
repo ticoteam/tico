@@ -727,7 +727,9 @@ def test_handing_an_older_releases_session_to_the_bot_changes_no_owner_outside_i
     # candidate takes the next turn there: nothing outside the session and its checkout may change owner.
     previous = previous_image()
     image_ready(previous)
-    table = harnesses()[:1]
+    # Claude's runtime is in every release, so the previous one can take this turn. The first manifest by name
+    # may be a runtime the candidate adds (v0.6.242 added antigravity, which v0.6.241 refuses as unsupported).
+    table = [h for h in harnesses() if h["runtime"] == "claude"]
     h = table[0]
     bot, other = h["bot"], "acme-other"
     stack.start_hub(previous, [bot, other])
