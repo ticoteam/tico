@@ -69,7 +69,7 @@ def up(conn):
                 conn.execute("UPDATE bot_settings SET fallback=? WHERE bot_id=?", (json.dumps(moved), bot))
             rest = _json(extra)
             task = _moved(rest.get("task_model")) if isinstance(rest, dict) else None
-            if task:
+            if task and isinstance(rest, dict):
                 conn.execute(
                     "UPDATE bot_settings SET extra=? WHERE bot_id=?", (json.dumps({**rest, "task_model": task}), bot)
                 )

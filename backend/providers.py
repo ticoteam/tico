@@ -882,7 +882,10 @@ def complete_choice(enabled, runtime="", model="", kept=""):
         # The enabled provider that speaks for this runtime, so a company with only Kimi on
         # the shared pi runtime gets Kimi's model, not OpenRouter's pick; of its models, one this runtime runs.
         own = next((name for name in enabled if runtime in PROVIDER_BY_ID[name]["runtimes"]), provider["id"])
-        model = recommended(own, runtime)["id"]
+        found = recommended(own, runtime)
+        if found is None:
+            raise ProviderError("runtime", f"No model runs on {runtime!r}", 422)
+        model = found["id"]
     else:
         row = recommended(enabled[0])
         return row["runtime"], row["id"]

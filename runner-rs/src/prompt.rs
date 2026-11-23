@@ -178,6 +178,8 @@ pub struct Built {
 /// Heads what a shortened turn's prompt left out when the harness compacts the session during that turn.
 pub const RESTORED: &str = "Your context was compacted during this turn; here again is what this turn's prompt left out because you already had it.";
 
+/// The whole prompt with no replay: what the tests compare a built prompt with.
+#[cfg(test)]
 pub fn prompt(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool) -> String {
     replayed(attempt, names, after, resumed, "")
 }
