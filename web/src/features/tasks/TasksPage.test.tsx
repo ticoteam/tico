@@ -285,9 +285,9 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
   it('what waits on you leads its stage past the cap, on the board and in the list; a bulk move keeps the stage order', async () => {
     serve(() => ({ status: 200, body: { batch_id: 'b', moved: [], moved_unseen: 0, skipped: [] } }));
     const turn = (who: string) => ({ state: 'person' as const, who, line: 'Approve it', requirement_id: null, since: null, until: null, ask: false });
-    const many = Array.from({ length: 12 }, (_, i) => task(`a${i + 1}`, i + 1, `Task ${i + 1}`, 's1'));
-    many[10] = task('a11', 11, 'Ana approves', 's1', { turn: turn('human:ana') });
-    many[11] = task('a12', 12, 'You approve', 's1', { turn: turn(ME) });
+    const many = Array.from({ length: 13 }, (_, i) => task(`a${i + 1}`, i + 1, `Task ${i + 1}`, 's1'));
+    many[11] = task('a12', 12, 'Ana approves', 's1', { turn: turn('human:ana') });
+    many[12] = task('a13', 13, 'You approve', 's1', { turn: turn(ME) });
     const titles = () => screen.getAllByTitle(/^(Task \d+|Ana approves|You approve)$/).map((el) => el.getAttribute('title'));
     for (const view of ['board', 'list'] as const) {
       seed(many);
@@ -295,6 +295,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
       await screen.findByTitle('You approve');
       // Only yours leads: a turn that is someone else's keeps its place.
       expect(titles().slice(0, 2)).toEqual(['You approve', 'Task 1']);
+      expect(titles()).not.toContain('Ana approves'); // still past the cap, behind "more"
       cleanup();
     }
     seed(many);
