@@ -1,24 +1,20 @@
-/* The menus the menu opens: the company pick under the company's name (system/shell.css .co-menu) and the account
-   menu over your name at the foot (pages/8-settings/more.css .acct). Both are kit menus; only their rows are theirs. */
-button.me{border:0;padding:0;background:none;font:inherit;color:inherit;cursor:pointer}
+/* The menu the head's pick opens (concept D, Nov 23): the companies under their label, this one's settings, then you
+   with the theme on your row, and Sign out. A kit menu; only its rows are its own. */
 :where(button).nav-item{border:0;background:none;font:inherit;text-align:left;cursor:pointer}
 .co-pick[data-popup-open]{background:var(--hover)}
 
 .menu:has(a>.co-mark){width:228px}
+.menu:has(>.acct-me){width:288px}
 .menu a>.co-mark{width:22px;height:22px;font-size:var(--t-xs);border-radius:var(--r-chip);background:var(--well-2);color:var(--ink);flex:none}
 .menu a.is-on>.co-mark{background:var(--ink);color:var(--raised)}
 
-.menu:has(>.acct-me){width:264px}
 /* a team's menu opened from the row that heads it: the team's name over its rows */
 .menu-team{height:28px;display:flex;align-items:center;gap:var(--s-2h);padding:0 var(--s-2);color:var(--muted);font-size:var(--t-sm)}
 .menu-team .ico{width:16px;height:16px;flex:none}
 .menu-team span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.acct-me{display:flex;align-items:center;gap:var(--s-2h);padding:var(--s-1h) var(--s-2) var(--s-2)}
-.acct-me>span{display:grid;gap:var(--s-0);min-width:0;line-height:1.15}
-.acct-me b,.acct-me em{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.acct-me b{font-weight:var(--w-strong)}
-.acct-me em{font-style:normal;font-size:var(--t-sm);color:var(--muted)}
-.acct-line{height:var(--ctl);display:flex;align-items:center;justify-content:space-between;padding:0 var(--s-1) 0 var(--s-2)}
+/* your row: you (a row to your own settings), and the theme's three icons beside it, not inside it */
+.acct-me{display:flex;align-items:center;gap:var(--s-1)}
+.acct-me>a{flex:1;min-width:0}
 .help-slot>.slot-n{left:18px;top:-6px;pointer-events:none}
 
 /* The conversation area (plan/threads-team.html .ca): two small underline tabs, Team | Threads, with Message and Call

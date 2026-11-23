@@ -118,7 +118,6 @@ b{font-weight:var(--w-strong)}
 .nav-foot{height:52px;flex:none;display:flex;align-items:center;gap:2px;padding:0 10px 0 8px;border-top:1px solid var(--line)}
 .assistant{flex:1;height:36px;display:flex;align-items:center;gap:10px;padding:0 8px;border-radius:var(--r-ctl);font-weight:var(--w-strong)}
 .assistant:hover{background:var(--well-2)}
-.me{margin-left:6px;display:grid;border-radius:50%}
 
 /* ---------- top bar and rows ---------- */
 .page-head{height:var(--bar);display:flex;align-items:center;gap:8px;padding:0 12px 0 var(--page-x);flex:none}   /* fixed: one page margin */
@@ -549,7 +548,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .nav.is-rail .tree-row>.dot{position:absolute;right:3px;top:1px;box-shadow:0 0 0 2px var(--surface);border-radius:50%}
 .nav.is-rail .nav-foot{height:auto;flex-direction:column;gap:var(--s-1);padding:var(--s-2) 0 var(--s-3)}
 .nav.is-rail .assistant{flex:none;width:40px;padding:0;justify-content:center}
-.nav.is-rail .me{margin:var(--s-1) 0 0}
 /* a count on an icon: the phone's bar and the closed sidebar use the same one */
 .slot-ico{position:relative;display:grid}
 .slot-n{position:absolute;left:14px;top:-5px;min-width:16px;height:16px;line-height:16px;padding:0 4px;border-radius:8px;background:var(--well-2);color:var(--ink-2);

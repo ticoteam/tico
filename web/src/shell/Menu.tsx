@@ -1,11 +1,11 @@
 import { Tabs } from '@base-ui/react/tabs';
-import { Link, useLocation, type LinkProps } from '@tanstack/react-router';
+import { Link, useLocation, useNavigate, type LinkProps } from '@tanstack/react-router';
 import { useEffect, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { Avatar } from '@/kit/Avatar';
 import { Icon, type IconName } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { FlowMark } from '@/kit/FlowMark';
-import { ContextMenu, Menu as Drop, MenuItem } from '@/kit/Menu';
+import { ContextMenu, Menu as Drop, MenuGroup, MenuItem, MenuRule } from '@/kit/Menu';
 import { usePref } from '@/prefs';
 import { revealTeam } from './orgTree';
 import { usePhoneCards } from './phone';
@@ -83,13 +83,13 @@ export interface MenuProps {
   can?: (page: string) => boolean;
   /* drawn as icons; inside a Frame this follows the sheet's fold */
   folded?: boolean;
-  /* a note above the foot, open menu only: the offline bar, or the new desktop app (inside the older one) */
+  /* a note at the bottom, open menu only: the offline bar, or the new desktop app (inside the older one) */
   note?: ReactNode;
-  /* the company pick's menu (the root's rows: this company, the others the desktop app holds, Add company); without
-     it the pick is a plain button that calls onPickCompany */
+  /* The pick at the head is the company and you (concept D, Nov 23): one menu holds both. Its top half is these rows
+     (this company, the others the desktop app holds, Add company) under "Companies", then the company's settings; */
   companyMenu?: ReactNode;
-  /* the account menu that opens from your name at the foot (your page, Settings, the theme, Sign out); without it
-     your name links to your page */
+  /* its bottom half, under a rule: you (your row opens your own settings, the theme on its right), then Sign out.
+     With neither, the pick is a plain button that calls onPickCompany. */
   accountMenu?: ReactNode;
   onPickCompany?: () => void;
   onHelp?: () => void;
@@ -120,7 +120,7 @@ const to = (path: string) => path as LinkProps['to'];
 const ACTIVE = { className: 'is-active', 'aria-current': 'page' as const };
 
 /* the row or link already says the name */
-function Face({ m, size }: { m: MenuMate; size: 16 | 22 | 28 }) {
+function Face({ m, size }: { m: MenuMate; size: 16 | 22 }) {
   return <Avatar decorative kind={m.kind} name={m.name} initials={m.short} hue={m.hue} size={size} live={m.live} />;
 }
 const Asks = () => <FlowMark label="Asks you" />;
@@ -202,15 +202,41 @@ export function Menu(p: MenuProps) {
       ? (p.pipelines ?? []).map(x => ({ key: x.id, label: x.name, to: x.to }))
       : (KIDS[id] ?? []).filter(k => can(`${id}/${slug(k)}`)).map(k => ({ key: k, label: k, to: `/${id}/${slug(k)}` }));
 
+  const navigate = useNavigate();
+  // the pick's one menu: the companies, this one's settings (a person who may open them), then you and Sign out
+  const settings = can('settings') ? (
+    <MenuItem label={`${p.company.name} settings`} icon="gear" onSelect={() => void navigate({ to: to('/settings') })} />
+  ) : null;
+  const pickRows =
+    p.companyMenu || p.accountMenu ? (
+      <>
+        {p.companyMenu ? <MenuGroup label="Companies">{p.companyMenu}</MenuGroup> : null}
+        {settings}
+        {p.accountMenu ? (
+          <>
+            <MenuRule />
+            {p.accountMenu}
+          </>
+        ) : null}
+      </>
+    ) : null;
+  // the company's mark with your face on its corner: the pick is the company and you
+  const mark = (
+    <>
+      {p.company.mark}
+      <Avatar decorative kind={p.me.kind} name={p.me.name} hue={p.me.hue} size={16} className="co-badge" />
+    </>
+  );
+
   if (folded) {
     const faces = shownMates(p.org, isOpen);
     return (
       <nav className="pane nav is-rail" aria-label="Main">
         <header className="nav-head">
           {dropIf(
-            p.companyMenu,
-            <button className="co-mark" type="button" aria-label={p.company.name} title={p.company.name} onClick={p.companyMenu ? undefined : p.onPickCompany}>
-              {p.company.mark}
+            pickRows,
+            <button className="co-mark" type="button" aria-label={p.company.name} title={p.company.name} onClick={pickRows ? undefined : p.onPickCompany}>
+              {mark}
             </button>,
             'right',
             'start',
@@ -237,28 +263,10 @@ export function Menu(p: MenuProps) {
             </div>
           ) : null}
         </div>
+        {/* the strip's foot: Tico support and the way back open; you and Settings are in the mark's menu */}
         <footer className="nav-foot">
           <Help n={c.support} quiet onClick={p.onHelp} />
-          {can('settings') ? (
-            <Link className="ib ib-quiet" to={to('/settings')} aria-label="Settings" title="Settings">
-              <Icon name="gear" />
-            </Link>
-          ) : null}
           <IconButton icon="panel" label="Open the menu" quiet onClick={sheet.toggleFold} />
-          {p.accountMenu ? (
-            dropIf(
-              p.accountMenu,
-              <button className="me" type="button" aria-label={p.me.name} title={p.me.name}>
-                <Face m={p.me} size={28} />
-              </button>,
-              'right',
-              'end',
-            )
-          ) : (
-            <Link className="me" to={to(p.me.to)} aria-label={p.me.name} title={p.me.name}>
-              <Face m={p.me} size={28} />
-            </Link>
-          )}
         </footer>
       </nav>
     );
@@ -282,19 +290,24 @@ export function Menu(p: MenuProps) {
     return null;
   };
 
+  // the head: the company over your name, then Tico support's "?" and the fold (the foot moved up here, concept D)
   const pick = dropIf(
-    p.companyMenu,
-    <button className="co-pick" type="button" aria-haspopup="menu" onClick={p.companyMenu ? undefined : p.onPickCompany}>
+    pickRows,
+    <button className="co-pick" type="button" aria-haspopup="menu" onClick={pickRows ? undefined : p.onPickCompany}>
       <span className="co-mark" aria-hidden="true">
-        {p.company.mark}
+        {mark}
       </span>
-      <span className="co-name">{p.company.name}</span>
-      <Icon name="chevdown" />
+      <span className="co-two">
+        <span className="co-name">{p.company.name}</span>
+        <span className="co-you">{p.me.name}</span>
+      </span>
       {p.company.needs ? <FlowMark /> : null}
+      <Icon name="chevdown" />
     </button>,
     'bottom',
     'start',
   );
+  const help = <Help n={c.support} onClick={p.onHelp} />;
   const items = (
     <div className="nav-items">
       {rows.map(r => {
@@ -464,34 +477,6 @@ export function Menu(p: MenuProps) {
       </Tabs.Panel>
     </Tabs.Root>
   );
-  const foot = (
-    <>
-      {p.accountMenu ? (
-        dropIf(
-          p.accountMenu,
-          <button className="me me-name" type="button">
-            <Face m={p.me} size={28} />
-            <span>{p.me.name}</span>
-          </button>,
-          'top',
-          'start',
-        )
-      ) : (
-        <Link className="me me-name" to={to(p.me.to)}>
-          <Face m={p.me} size={28} />
-          <span>{p.me.name}</span>
-        </Link>
-      )}
-      <span className="grow" />
-      <Help n={p.counts?.support} onClick={p.onHelp} />
-      {can('settings') ? (
-        <Link className="ib" to={to('/settings')} aria-label="Settings" title="Settings">
-          <Icon name="gear" />
-        </Link>
-      ) : null}
-    </>
-  );
-
   // on the phone the menu is a card (B/phone/phone.js menuFull): its head tucks it away, the list scrolls between
   if (phone)
     return (
@@ -499,6 +484,7 @@ export function Menu(p: MenuProps) {
         <header className="m-head">
           {pick}
           <span className="grow" />
+          {help}
           <IconButton icon="chevdown" label="Tuck the menu away" quiet onClick={phone.tuck} />
         </header>
         <nav className="m-scroll" aria-label="Main">
@@ -506,7 +492,6 @@ export function Menu(p: MenuProps) {
           {tree}
         </nav>
         {p.note}
-        <footer className="m-foot">{foot}</footer>
       </>
     );
 
@@ -515,6 +500,7 @@ export function Menu(p: MenuProps) {
       <header className="nav-head">
         {pick}
         <span className="grow" />
+        {help}
         {sheet.canFold ? <IconButton icon="panel" label="Fold the menu" quiet onClick={sheet.toggleFold} /> : null}
       </header>
       <div className="nav-scroll">
@@ -522,12 +508,11 @@ export function Menu(p: MenuProps) {
         {tree}
       </div>
       {p.note}
-      <footer className="nav-foot">{foot}</footer>
     </nav>
   );
 }
 
-/* The foot's "?": Tico support, with a count of its unread replies (the menu's grey count). */
+/* The head's "?": Tico support, with a count of its unread replies (the menu's grey count). */
 function Help({ n, quiet, onClick }: { n?: number; quiet?: boolean; onClick?: () => void }) {
   const label = n ? `Tico support, ${n} unread` : 'Tico support';
   return (
