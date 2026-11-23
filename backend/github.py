@@ -1286,12 +1286,12 @@ def _dropped(checks, kept):
     gone = [
         state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped", "cancelled")
     ]
-    return "failing" if "failing" in gone else "pending" if gone else None
+    return _worst(*gone) if gone else None
 
 
 def _with_dropped(state, dropped):
     """A head's state as a webhook reads it from the stored copy: the copy's state, or the dropped check's if worse."""
-    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else state
+    return _worst(state, dropped) or state
 
 
 def _set_suite_runs(detail, suite_runs):
@@ -1304,8 +1304,10 @@ def _set_suite_runs(detail, suite_runs):
         detail.pop(SUITE_RUNS, None)
 
 
-def _worst(a, b):
-    return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
+def _worst(*states):
+    """The worst unfinished-or-failed state among `states`: failing, then approval (it never finishes by itself),
+    then pending; None when none of them is one."""
+    return next((s for s in ("failing", "approval", "pending") if s in states), None)
 
 
 # Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
@@ -1618,7 +1620,11 @@ def pr_signal(c, event, payload):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
             state = _check_state(
-                signal.get("conclusion") or signal.get("state") or "pending",
+                # A run waiting for approval has no conclusion yet: its `status` says so.
+                signal.get("conclusion")
+                or ("waiting" if signal.get("status") == "waiting" else "")
+                or signal.get("state")
+                or "pending",
                 signal.get("description") if event == "status" else "",
             )
             checks = detail.get("checks", {})
@@ -1629,7 +1635,8 @@ def pr_signal(c, event, payload):
                 if event == "workflow_run"
                 else str(signal.get("name") or signal.get("context") or "Checks")[:200]
             )
-            left_pending = checks.get(name) == "pending" and state != "pending"
+            # Approval is unfinished too: approved and then green is a finish like pending then green.
+            left_pending = checks.get(name) in ("pending", "approval") and state not in ("pending", "approval")
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
             if (

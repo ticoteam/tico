@@ -3,6 +3,8 @@ every agent PR at "Build not triggered: approval required", which Tico read as r
 they need approval and is the owner's turn at once; a bot owner is woken once per commit, a person gets no message. A
 ready PR on a repo that runs checks, with none started, is the owner's after 15 minutes."""
 
+import json
+
 import pytest
 
 from backend import github as G
@@ -272,3 +274,58 @@ def test_no_checks_started_on_a_repo_that_runs_them_is_the_owners_after_15_minut
         (H.shift(H.now(), minutes=-16), f"{REPO}#1"),
     )
     assert line(c, task_id) == (R.NOT_MET, B, "No checks started on acme/app#1 after 15 minutes")
+
+
+def _link_detail(c, task_id):
+    return json.loads(
+        c.execute("SELECT detail FROM task_links WHERE task_id=? AND kind='pr'", (task_id,)).fetchone()[0]
+    )
+
+
+def test_the_pr_link_reads_a_waiting_run_as_approval_and_finishes_the_head_once_approved_and_green(c):
+    """The link path (github.pr_signal): a run waiting for approval has no conclusion, its `status` says so; and an
+    approval-pending status that turns green finishes the head, as a pending one does."""
+    X.bot(c, "builder")
+    task_id = X.new_task(c, "bot:builder", "Fix it")["id"]
+    c.execute(
+        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, detail, created_at) "
+        "VALUES (?,?,'pr','https://github.com/acme/app/pull/7','acme/app',7,'github','pr','acme/app#7',?,?)",
+        (H.new_id(), task_id, json.dumps({"head_sha": "h7"}), H.now()),
+    )
+    repo = {"full_name": "acme/app"}
+    waiting = {
+        "name": "build",
+        "head_sha": "h7",
+        "status": "waiting",
+        "conclusion": None,
+        "pull_requests": [{"number": 7}],
+    }
+    G.pr_signal(c, "check_run", {"check_run": waiting, "repository": repo})
+    assert _link_detail(c, task_id)["checks"]["build"] == "approval"
+    said = {"sha": "h7", "context": "ci/jenkins", "description": "Build not triggered: approval required"}
+    G.pr_signal(c, "status", {**said, "state": "pending", "repository": repo})
+    assert _link_detail(c, task_id)["checks"]["ci/jenkins"] == "approval"
+    G.pr_signal(
+        c, "check_run", {"check_run": {**waiting, "status": "completed", "conclusion": "success"}, "repository": repo}
+    )
+    G.pr_signal(c, "status", {**said, "state": "success", "description": "Build passed", "repository": repo})
+    assert "h7:pass" in _link_detail(c, task_id).get("checks_done", [])
+
+
+def test_a_check_left_out_of_the_stored_copy_keeps_its_approval():
+    assert G._dropped({"a": "approval", "b": "passing"}, {"b": "passing"}) == "approval"
+    assert G._dropped({"a": "approval", "c": "failing"}, {}) == "failing"
+    assert G._with_dropped("pending", "approval") == "approval"
+    assert G._with_dropped("passing", None) == "passing"
+
+
+def test_the_queue_is_refused_while_a_check_needs_approval_beside_a_failed_one(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+        head = F.pr(c, REPO, 1)["head_sha"]
+    gh.set_checks(REPO, head, "failure", "approval")
+    F.run(company, gh)
+    assert not [call for call in gh.calls if call[0] in ("post_check", "enqueue")]
+    with company.transaction() as c:
+        assert stand_line(c, task_id, "pr_merged")[2] == "The checks on acme/app#1 need approval"

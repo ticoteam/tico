@@ -2041,7 +2041,8 @@ def carry_out(github: "GitHub", effect: Row) -> Row:
     if effect["kind"] == SA.ACT:
         # GitHub's own word on the head now, not the saved one a webhook may not have caught up with: checks that need
         # approval never run in the queue, so Tico neither signs it off nor queues it (`gave_up` tells the owner).
-        if head and _checks_state(github.read_checks(repo, head)) == "approval":
+        # Any check that waits for approval, even beside a failed one (where `_checks_state` says failure).
+        if head and any(c.get("state") == "approval" for c in github.read_checks(repo, head) if not c.get("tico")):
             return {"ok": False, "reason": NEEDS_APPROVAL.format(ref=pr_ref(repo, number))}
         github.ready(repo, number)  # a Builder's draft reaches Merge: GitHub queues no draft
         github.post_check(repo, head, True, merge_ok_line(effect, True))
