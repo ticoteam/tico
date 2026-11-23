@@ -636,6 +636,8 @@ checks_pass   a check failed                             not_met  owner   Checks
 pr_merged     effect owed                                waiting  github  Queuing the PR
               queued / auto-merge on                     waiting  github  In the merge queue
               GitHub refused the queue call 3 times      not_met  owner   GitHub refused the merge: <reason>
+              checks need approval at the pinned head    not_met  owner   The checks on <ref> need approval
+                (not queued, no tico/merge-ok posted)
               removed from the queue                     not_met  owner   Dropped from the merge queue: <reason>
                                                                           (<failing check> when known)
               every PR merged                            met              Merged

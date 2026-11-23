@@ -12,7 +12,7 @@ from backend.item_sources import github as F
 from backend.store import H
 from backend.tests.helpers import engine as X
 from backend.tests.helpers.fake_github import FakeGitHub
-from backend.tests.helpers.github_facts_merge_queue import REPO, RM, B, engineering, in_merge, later, new
+from backend.tests.helpers.github_facts_merge_queue import REPO, RM, B, engineering, in_merge, later, new, seen
 
 NEEDS = (
     "Checks need approval on acme/app#1: build. Someone with access must approve the run on GitHub, or the CI must "
@@ -44,6 +44,46 @@ def run(status, conclusion=None, run_id=1):
     }
 
 
+def _app_read(status):
+    """backend/github.py AppGitHub.read_checks on GitHub's answer of no check runs and one commit status."""
+    from backend.github import AppGitHub
+
+    class Answer:
+        status_code = 200
+
+        def __init__(self, body):
+            self.body = body
+
+        def json(self):
+            return self.body
+
+    class Service:
+        def row(self):
+            return {"slug": "tico-app"}
+
+        def mint(self, repos, permissions):
+            return "token", None
+
+        def _call(self, method, path, headers=None, params=None):
+            if path.endswith("/check-runs"):
+                return Answer({"check_runs": []})
+            return Answer({"statuses": [{"id": 9, **status}]})
+
+    return AppGitHub(Service()).read_checks(REPO, "h1")
+
+
+def body_of(c, task_id, actor, part):
+    """The body of the one wake to `actor` whose key has `part`."""
+    (key,) = [k for k, _ in X.wakes(c, task_id, actor) if part in k]
+    return c.execute("SELECT body FROM messages WHERE wake_key=?", (key,)).fetchone()[0]
+
+
+def stand_line(c, task_id, condition):
+    row = E.task(c, task_id)
+    s = next(s for s in R.standings(c, row) if s.requirement["condition"] == condition)
+    return (s.state, s.on, s.line)
+
+
 def approval_wakes(c, task_id, actor=B):
     return [k for k, _ in X.wakes(c, task_id, actor) if k.endswith(":approval")]
 
@@ -54,6 +94,8 @@ def test_a_run_waiting_action_required_or_a_status_saying_so_needs_approval():
     said = {"context": "ci/jenkins", "state": "pending", "description": "Build not triggered: approval required"}
     assert F.status_check(said)["state"] == "approval"
     assert F.status_check({**said, "description": "Build started"})["state"] == "pending"
+    assert F.status_check({**said, "description": "No approval required"})["state"] == "pending"
+    assert F.status_check({**said, "description": "Does not require approval"})["state"] == "pending"
     assert F.status_check({**said, "state": "failure"})["state"] == "failure"
     assert F.run_check(run("queued"), "tico")["state"] == "pending"
     assert G._check_state("action_required") == "pending"  # the link never calls it failed
@@ -91,6 +133,8 @@ def test_a_commit_status_saying_approval_required_needs_approval(c):
     }
     F.webhook(c, "status", {**status, "repository": {"full_name": REPO}})
     assert line(c, task_id) == (R.NOT_MET, B, NEEDS)
+    assert F._checks_state(_app_read(status)) == "approval"  # the REST read of the same status
+    assert F._checks_state(_app_read({**status, "description": "No approval required"})) == "pending"
     F.webhook(c, "status", {**status, "description": "Build started", "repository": {"full_name": REPO}})
     assert line(c, task_id) == (R.WAITING, "github", "Checks running")
 
@@ -124,19 +168,60 @@ def test_a_person_owner_gets_no_message(c):
     assert approval_wakes(c, task_id, X.ANA) == []
 
 
-def test_queue_again_is_refused_while_the_checks_need_approval(company):
+def _approval_on_head(company, gh, task_id):
+    """The checks on the PR's signed-off head (the one the task came into Merge with) turn to needing approval."""
+    with company.transaction() as c:
+        head = F.pr(c, REPO, 1)["head_sha"]
+        gh.set_checks(REPO, head, "approval")
+        seen(c, gh)
+        assert F.pr(c, REPO, 1)["checks_state"] == "approval"
+    return head
+
+
+def test_the_first_queue_is_refused_while_the_checks_need_approval(company):
+    gh = FakeGitHub()
+    with company.transaction() as c:
+        task_id = in_merge(c, gh, 1)
+    head = _approval_on_head(company, gh, task_id)
+    F.run(company, gh)
+    assert not [call for call in gh.calls if call[0] in ("post_check", "enqueue")]
+    assert (REPO, head) not in gh.merge_ok
+    with company.transaction() as c:
+        assert stand_line(c, task_id, "pr_merged") == (R.NOT_MET, RM, "The checks on acme/app#1 need approval")
+        assert "need approval, so Tico did not queue it" in body_of(c, task_id, RM, ":queue_refused:")
+
+
+def test_queue_again_is_refused_while_the_checks_on_the_signed_off_head_need_approval(company):
     gh = FakeGitHub()
     with company.transaction() as c:
         task_id = in_merge(c, gh, 1)
     F.run(company, gh)
-    gh.drop(REPO, 1, "It conflicts with its base branch")
-    gh.set_checks(REPO, gh.push(REPO, 1), "approval")
+    gh.drop(REPO, 1, "Taken out by hand")
+    _approval_on_head(company, gh, task_id)
     F.refresh(company, gh, later())
     with company.transaction() as c:
         version = E.task(c, task_id)["version"]
         with pytest.raises(H.Refused) as raised:
             F.requeue(c, task_id, RM, seen_version=version)
         assert raised.value.detail == "The checks on acme/app#1 need approval"
+
+
+def test_a_stage_that_does_not_ask_for_passing_checks_gets_no_approval_wake(c):
+    X.bot(c, "reviewer")
+    X.github_installed(c)
+    X.pipeline(
+        c,
+        "eng",
+        "Engineering",
+        stages=({"name": "Review", "owner": "bot:reviewer", "requirements": [X.github("pr_open")]},),
+    )
+    task_id = new(c, 1)
+    E.snooze(c, task_id, "bot:reviewer", "Reading the diff", later(90), seen_version=E.task(c, task_id)["version"])
+    F.save_and_settle(
+        c, REPO, 1, {"state": "open", "head_sha": "h1", "checks": [{"name": "build", "state": "approval"}]}, 1
+    )
+    assert approval_wakes(c, task_id, "bot:reviewer") == []
+    assert E.task(c, task_id).get("snooze")
 
 
 def test_no_checks_started_on_a_repo_that_runs_them_is_the_owners_after_15_minutes(c):

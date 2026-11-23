@@ -776,7 +776,11 @@ def real_failure(check: object) -> bool:
     return isinstance(check, str) and check not in ("", CANCELLED_FROM_OUTSIDE)
 
 
-APPROVAL_SAID = re.compile(r"approval required|requires? approval|needs? approval", re.IGNORECASE)
+# What a commit status's description says when its CI waits for someone to approve the build; "no approval required"
+# and "does not require approval" are not that.
+APPROVAL_SAID = re.compile(
+    r"(?<!\bno )approval required|(?<!\bnot )requires? approval|(?<!\bnot )(?<!n't )needs? approval", re.IGNORECASE
+)
 
 
 def check_state(status: object, conclusion: object, description: str = "") -> str:
@@ -788,10 +792,10 @@ def check_state(status: object, conclusion: object, description: str = "") -> st
     whose `description` says approval is required are approval: none of them runs until someone approves it."""
     if status == "waiting" or conclusion == "action_required":
         return "approval"
-    if str(status or "completed") not in ("completed", "success", "failure", "error"):
-        return "pending"
     if status == "pending" and APPROVAL_SAID.search(description):
         return "approval"
+    if str(status or "completed") not in ("completed", "success", "failure", "error"):
+        return "pending"
     result = str(conclusion or status or "")
     if result == "success":
         return "success"
@@ -1407,6 +1411,9 @@ def failing_names(metadata: Row, state: str = "failure") -> str:
     return ", ".join(dict.fromkeys(names)) or "a check"
 
 
+NEEDS_APPROVAL = "The checks on {ref} need approval"  # why Tico does not queue such a PR (`requeue`, `refused_first`)
+
+
 def approval_line(metadata: Row, ref: str) -> str:
     """What to say of a PR whose checks wait for someone to approve them: they never run by themselves."""
     return (
@@ -1502,7 +1509,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         if metadata["checks_state"] == "pending":
             refuse("task_requirement", f"The checks on {ref} are still running")
         if metadata["checks_state"] == "approval":
-            refuse("task_requirement", f"The checks on {ref} need approval")
+            refuse("task_requirement", NEEDS_APPROVAL.format(ref=ref))
         if metadata["checks_state"] == "failure":
             refuse("task_requirement", f"Checks failed on {ref}: {failing_names(metadata)}")
         if metadata["checks_state"] == "cancelled":
@@ -1700,24 +1707,25 @@ def checks_news(conn: "sqlite3.Connection", task_ids: list[str], after: Row, bef
 
 def approval_news(conn: "sqlite3.Connection", task_id: str, what: str, lead: str) -> bool:
     """The checks on a PR's newest commit wait for someone to approve them, so they never finish by themselves and no
-    "checks finished" news comes: `snooze_news` for a bot's snooze, else the bot whose turn it is now is woken once per
-    commit (`what`) with `lead`. A person whose turn it is gets no message: it is in their Needs you. True when woken."""
-    from .. import task_wakes
+    "checks finished" news comes. Only where the task's own Checks pass stands on it now ("Checks need approval"): a
+    bot's snooze ends, and the owner is told once per visit and `what` (`tell_owner`: a wake on the bot owner's turn, no
+    message to a person). A task on a stage that does not ask for passing checks hears nothing. True when told."""
+    from .. import task_requirements as R
 
-    if snooze_news(conn, task_id, what, lead):
-        return True
     E = _engine()
     row: Row | None = E.task(conn, task_id)
-    if not row or row["status"] != "open" or not row.get("visit") or row.get("snooze"):
+    if not row or row["status"] != "open" or not row.get("visit"):
         return False
-    key = f"{task_id}:{row['visit']['id']}:{WAKE_NEWS}:{what}"
-    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
+    stands = any(
+        s.requirement.get("condition") == "checks_pass"
+        and s.state == R.NOT_MET
+        and (s.line or "").startswith("Checks need")
+        for s in R.standings(conn, row)
+    )
+    if not stands:
         return False
-    target, _ = E._turn_of(conn, row)
-    if not target or not E.is_bot(target):
-        return False
-    body = task_wakes.body(conn, row, lead, to=target)
-    return bool(task_wakes.add(conn, row, target, row["visit"], body, wake_key=key))
+    _end_bot_snooze(conn, row, lead)
+    return E.tell_owner(conn, task_id, lead, f"{WAKE_NEWS}:{what}") is not None
 
 
 def mergeable_news(conn: "sqlite3.Connection", task_id: str, ref: str, head: str, mergeable: str) -> bool:
@@ -1948,6 +1956,21 @@ def done_already(conn: "sqlite3.Connection", effect: Row) -> bool:
     return metadata is not None and metadata["state"] == "merged"
 
 
+def refused_first(conn: "sqlite3.Connection", effect: Row) -> str | None:
+    """Why an owed `queue` is not carried out at all, read just before Tico posts `tico/merge-ok` and enqueues: the
+    checks on its pinned head need approval (they would never run in the queue). The action fails with that reason and
+    the owner is told (`gave_up`); `requeue` queues it once they ran. None: carry it out."""
+    if effect["action"] != QUEUE or effect["kind"] != SA.ACT:
+        return None
+    repo, number = _pr_of(effect)
+    metadata = pr(conn, repo, number)
+    if not metadata or metadata["checks_state"] != "approval":
+        return None
+    if effect.get("pinned") and metadata.get("head_sha") != effect["pinned"]:
+        return None
+    return NEEDS_APPROVAL.format(ref=pr_ref(repo, number))
+
+
 def undo_moot(conn: "sqlite3.Connection", effect: Row) -> bool:
     """An `undo` of a visit that left Merge takes the PR out of the queue for good, whoever else queued it: it is moot
     while an open visit (the task's next one, or another task's on the same PR) has queued that PR at the same head
@@ -2032,6 +2055,11 @@ def gave_up(conn: "sqlite3.Connection", effect: Row, reason: str) -> None:
         E.changed(conn, str(row["id"]), E.SYSTEM)
         if reason == CONFLICTS:
             text = MO.conflict_line(conn, row, ref)
+        elif reason == NEEDS_APPROVAL.format(ref=ref):
+            text = (
+                f"{reason}, so Tico did not queue it. Someone with access must approve the run on GitHub, or the CI "
+                f"must trust Tico's GitHub app; once the checks pass, queue it with `tico task queue {row['id']}`."
+            )
         else:
             text = (
                 f"GitHub refused the merge of {ref}: {reason}. Queue it again with `tico task queue {row['id']}` once "
@@ -2399,7 +2427,9 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if effect and effect["state"] == "owed":
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")
     if effect and effect["state"] == "failed":
-        return Standing(requirement, NOT_MET, owner, f"GitHub refused the merge: {effect.get('last_error') or ref}")
+        said = str(effect.get("last_error") or ref)
+        line = said if said == NEEDS_APPROVAL.format(ref=ref) else f"GitHub refused the merge: {said}"
+        return Standing(requirement, NOT_MET, owner, line)
     if metadata["queue_state"] == "removed":
         return Standing(requirement, NOT_MET, owner, removed_line(metadata))
     if effect:

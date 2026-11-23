@@ -22,7 +22,8 @@ States: owed, done, failed, moot. A source module (backend/item_sources) that ac
 effect)` (True: no call is made; the action is done, unless the source settled it otherwise itself), `recorded(conn,
 effect, said, state, version)` and `gave_up(conn, effect, reason)`. It may have `look_first(store, client, effect)`, a
 read before `done_already` with no transaction held, so that it decides on what the source says now, and
-`undo_moot(conn, effect)` (True: an `undo` takes back what an open visit still wants; it is moot, no call is made).
+`undo_moot(conn, effect)` (True: an `undo` takes back what an open visit still wants; it is moot, no call is made), and
+`refused_first(conn, effect)` (a reason: the action is not carried out but `failed` at once with it, `gave_up`).
 
 Every function takes the caller's open write transaction and never commits, except `run`.
 """
@@ -239,6 +240,11 @@ def run(store: Any, clients: dict[str, Any], now: str | None = None) -> int:
             with store.transaction() as conn:
                 if module.done_already(conn, effect):
                     count += 1 if _done(conn, effect) else 0
+                    continue
+                refused = getattr(module, "refused_first", None)
+                why = refused(conn, effect) if refused is not None else None
+                if why:
+                    count += _give_up(conn, effect, int(effect["tries"] or 0), why)
                     continue
         else:
             moot = getattr(module, "undo_moot", None)

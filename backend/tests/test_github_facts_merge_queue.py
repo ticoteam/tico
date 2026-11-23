@@ -222,8 +222,8 @@ CANCELLED = (
 
 def test_a_cancelled_or_stale_run_is_not_a_failure_and_a_failed_or_timed_out_one_is():
     """Nov 12 stress run, I38: a run GitHub cancelled (a concurrency group's duplicate) read as a failed check."""
-    states = ("cancelled", "stale", "failure", "timed_out", "action_required", "startup_failure")
-    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 4
+    states = ("cancelled", "stale", "failure", "timed_out", "startup_failure")
+    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 3
 
 
 @pytest.mark.parametrize(
