@@ -1536,7 +1536,10 @@ read -r _
         .await;
         assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(record.contains(SAVED) && !record.contains(OTHER), "{record}");
+        assert!(
+            record.contains(SAVED) && !record.contains(OTHER),
+            "{record}"
+        );
         assert!(!host.restored(&thread));
         host.stop().await;
     }
