@@ -846,16 +846,9 @@ CARRIED = _routes(
 )
 
 
-def _classified(path):
-    """The route as `/api/v2/...` to classify a call by: `normalize`, with a task named by its number (`tasks/#12`, as
-    the request's URL spells it `tasks/%2312`; the route resolves it as auth.resolve_task does) read as any task id is.
-    `normalize` still refuses `#` and `%` in a path it stores, such as a card's."""
-    return normalize(re.sub(r"^(/api/v2/tasks/)(?:#|%23)(\d+)(?=/|$)", r"\1number-\2", str(path or "")))
-
-
 def carried_lends(method, path):
     """Whether a carried request makes this call with the person's rights (CARRIED)."""
-    path, method = _classified(path), str(method).upper()
+    path, method = normalize(path), str(method).upper()
     return bool(path) and any(m == method and p.fullmatch(path) for m, p in CARRIED)
 
 
@@ -982,7 +975,7 @@ def default_delegable(method, path, body=None, query=None, resolve=None):
     """Whether an Agent Ops call with no explicit `on_behalf_of` acts as the person who asked: only the routes Agent Ops
     may do or propose for a person, and never its own plumbing or its own messages. `resolve` names a bot route by its
     id (`by_id`)."""
-    path = _classified(path)
+    path = normalize(path)
     if (
         path
         and str(method).upper() in ("GET", "POST")
@@ -1846,6 +1839,13 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         """Agent Ops acting for a person: a refusal for a route that hands a secret back, or the Confirm card in their Agent Ops
         chat for one that always needs their own tap (`agent_ops_act.card_for_person`). None when the route runs as them."""
         method, path = request.method, normalize(request.url.path)
+        if not path:
+            # An address its checks cannot read (a `#<number>` or other encoded part): never run as the person unchecked.
+            raise Problem(
+                "on_behalf_of",
+                f"Name it by its id to act for a person (not by #number or an encoded address): {request.url.path}",
+                403,
+            )
         why = person_only(method, path)
         if why:
             raise Problem(

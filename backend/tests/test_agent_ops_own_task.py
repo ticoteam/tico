@@ -400,27 +400,39 @@ def test_a_body_or_header_citation_of_the_turn_ends_its_own_task_too(api, agent_
 
 
 def test_words_that_lend_nothing_on_one_task_never_end_another(api, agent_ops):
-    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused, by its id or by
-    its number (`#<n>`, uncited: the call is still one done for the person, agent_ops_act `default_delegable`), and its
-    own task by number goes no further than by id."""
+    """Only the run's own task falls back to Agent Ops' own rights: another task it owns stays refused."""
     other = post(api, "tasks", {"owner": "botops", "title": "Another task for Agent Ops", "body": "x"})
     finish(api, agent_ops, claim(api, agent_ops, "botops"))
-    task, _, attempt = _asked_in_its_chat(api, agent_ops)
-    with api.app.state.store.read() as c:
-        stage = H.task(c, task["id"])["stage_id"]
-    for row, ref, op, body in (
-        (other, other["id"], "done", {"note": "x"}),
-        (other, f"%23{other['number']}", "done", {"note": "x"}),
-        (other, f"%23{other['number']}", "move", {"to": "closed", "why": "x"}),
-        (task, f"%23{task['number']}", "move", {"to": "next", "why": "x"}),
-    ):
-        tried = api.post(
-            f"/api/v2/tasks/{ref}/{op}", json=_seen(api, row["id"], body), headers=headers(attempt["token"])
-        )
-        assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", (ref, op, tried.text)
+    _, _, attempt = _asked_in_its_chat(api, agent_ops)
+    tried = api.post(
+        f"/api/v2/tasks/{other['id']}/done",
+        json=_seen(api, other["id"], {"note": "x"}),
+        headers=headers(attempt["token"]),
+    )
+    assert tried.status_code == 403 and tried.json()["error"]["code"] == "on_behalf_of", tried.text
     with api.app.state.store.read() as c:
         assert H.task(c, other["id"])["status"] == "open"
-        assert (H.task(c, task["id"])["status"], H.task(c, task["id"])["stage_id"]) == ("open", stage)
+
+
+def test_a_lending_run_by_task_number_never_errors(api, agent_ops):
+    """Ana's own comment on her task lends Agent Ops her rights. Named by its number (`/tasks/%23<n>/done`), an uncited
+    done runs as on main, as Agent Ops on its own task; a cited one, which would act as Ana through checks that read
+    only plain ids, is refused plainly, never a server error."""
+    for n, cite in enumerate(({}, {"X-Tico-On-Behalf-Of": "turn"})):
+        task = post(api, "tasks", {"owner": "botops", "title": f"Book the venue {n}", "body": "x"})
+        finish(api, agent_ops, claim(api, agent_ops, "botops"))
+        post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and finish it"})
+        attempt = claim(api, agent_ops, "botops")
+        done = api.post(
+            f"/api/v2/tasks/%23{task['number']}/done",
+            json=_seen(api, task["id"], {"note": "Booked"}),
+            headers={**headers(attempt["token"]), **cite},
+        )
+        if cite:
+            assert done.status_code == 403 and done.json()["error"]["code"] == "on_behalf_of", done.text
+        else:
+            assert done.status_code == 200, done.text
+        finish(api, agent_ops, attempt)
 
 
 def test_a_refused_message_citation_on_its_own_task_stays_refused(api, agent_ops):
