@@ -76,20 +76,26 @@ const ON_SOMEONE = new Set(['person', 'bot', 'paused']);
 /** The teammate a wait is on, or null: a task's, a stage's or a snoozer's `who` is never named as what it waits on. */
 const onWhom = (turn: Turn) => (ON_SOMEONE.has(turn.state) && isActor(turn.who) ? turn.who : null);
 
+/** Paused: a Paused wait, or an agent's turn whose cloud computer failed to start (task_reads.paused_turn), which the
+    status line says and whose line and Fix are the cause's. */
+const pausedOf = (t: TaskData, turn: Turn) => turn.state === 'paused' || t.status_line === 'paused';
+
 /** Whether the wait only says again who has the task: its agent at work, or its person's own work. Paused always says
-    more (the agent cannot run). */
-export const repeatsOwner = (turn: Turn, owner: string | null | undefined) => !turn.ask && turn.state !== 'paused' && !!owner && onWhom(turn) === owner;
+    more (the agent cannot run), and so does a wait on someone who can't see the task yet (`share`). */
+export const repeatsOwner = (t: TaskData, turn: Turn) => !turn.ask && !turn.share?.length && !pausedOf(t, turn) && !!t.owner_id && onWhom(turn) === t.owner_id;
 
 /** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
 const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*❓️?\s*/u, '');
 
+/** Whether the reader may open task `id`: it is among the task's sub-tasks or related tasks, which list only those. */
+const opens = (t: TaskData, id: string) => t.children.some((c) => c.id === id) || Object.values(t.relations ?? {}).some((list) => list.some((r) => r.id === id));
+
 /** What the open task waits on, in words, for Details' Waiting on and Facts' Waiting: a teammate by name (`short`: only
     that; else with their face, what is asked of them, and a Paused agent's Fix). Anything else is the server's own
-    line: a task it waits on links to it when the reader may know which, and a snooze says why and until when, or "On
+    line: a task it waits on links to it when the reader may open it, and a snooze says why and until when, or "On
     ice". Never an id. */
-export function WaitOn({ turn, short = false }: { turn: Turn; short?: boolean }) {
+export function WaitOn({ t, turn, short = false }: { t: TaskData; turn: Turn; short?: boolean }) {
   const who = onWhom(turn);
-  const line = question(turn.line);
   if (who && short)
     return (
       <>
@@ -97,7 +103,8 @@ export function WaitOn({ turn, short = false }: { turn: Turn; short?: boolean })
       </>
     );
   if (who) {
-    const fix = turn.state === 'paused' ? fixHref(turn.href) : null;
+    const line = question(turn.line);
+    const fix = pausedOf(t, turn) ? fixHref(turn.href) : null;
     return (
       <>
         <Face id={who} />
@@ -114,21 +121,21 @@ export function WaitOn({ turn, short = false }: { turn: Turn; short?: boolean })
     );
   }
   if (turn.state === 'snoozed') {
-    if (!line && !turn.until) return <>On ice</>;
+    if (!turn.line && !turn.until) return <>On ice</>;
     return (
-      <>
-        {line}
+      <span>
+        {turn.line}
         {turn.until && (
           <>
-            {line ? ' · until ' : 'Until '}
+            {turn.line ? ' · until ' : 'Until '}
             <DateText at={turn.until} />
           </>
         )}
-      </>
+      </span>
     );
   }
-  if (turn.state === 'tasks' && turn.who) return <Go to={`/task/${turn.who}`}>{line}</Go>;
-  return <>{line}</>;
+  if (turn.state === 'tasks' && turn.who && opens(t, turn.who)) return <Go to={`/task/${turn.who}`}>{turn.line}</Go>;
+  return <>{turn.line}</>;
 }
 
 /** One quiet line: who or what the open task waits on, and for how long when its time is the wait's own: an ask
@@ -146,7 +153,7 @@ export function WaitFact({ t }: { t: TaskData }) {
             <Ago at={since} />{' '}
           </>
         )}
-        <WaitOn turn={turn} short />
+        <WaitOn t={t} turn={turn} short />
       </small>
     </Kv>
   );

@@ -434,7 +434,7 @@ describe('one open task', () => {
   it('draws the waiting question without a leading question mark emoji', async () => {
     serve((url) =>
       url.endsWith('/api/v2/tasks/t1') || url.includes('/api/v2/tasks/%2312')
-        ? { status: 200, body: detail(task({ owner_id: 'bot:a1', turn: { who: 'human:me', line: '\u2753 Which headline goes live?' } } as Partial<TaskData>)) }
+        ? { status: 200, body: detail(task({ owner_id: 'bot:a1', turn: { state: 'person', who: 'human:me', line: '\u2753 Which headline goes live?', ask: true } } as Partial<TaskData>)) }
         : base(url),
     );
     details();
@@ -836,7 +836,8 @@ describe('Details: the facts @s58', () => {
 
   it('names a task it waits on by its line, linked to it, never by its id', async () => {
     const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
-    serve(reads(task({ turn: { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false } } as Partial<TaskData>)));
+    const blocker = { id, number: 130, title: 'Matches cause check', status: 'open', direction: 'out', owner_id: 'bot:a1' };
+    serve(reads(task({ relations: { depends_on: [blocker] }, turn: { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false } } as Partial<TaskData>)));
     details();
     const row = await waitingOn();
     expect(row.textContent).not.toContain(id);
@@ -851,6 +852,37 @@ describe('Details: the facts @s58', () => {
     const row = await waitingOn();
     expect(row.textContent).toBe('Waiting onA sub-task');
     expect(within(row).queryByRole('link')).toBeNull();
+  });
+
+  it('does not link a task it waits on that the reader may not open, and keeps its line whole', async () => {
+    serve(reads(task({ turn: { state: 'tasks', who: 'private-1', line: '\u2753 Which copy wins?', requirement_id: 'dep:x', since: null, until: null, ask: false } } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(row.textContent).toBe('Waiting on\u2753 Which copy wins?');
+    expect(within(row).queryByRole('link')).toBeNull();
+  });
+
+  it('keeps a snooze reason whole and says until when', async () => {
+    serve(reads(task({ turn: { state: 'snoozed', who: 'human:bo', line: '\u2753 After the launch', requirement_id: null, since: null, until: '2026-12-01T12:00:00Z', ask: false } } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(row.textContent).toMatch(/^Waiting on\u2753 After the launch · until Dec 1/);
+  });
+
+  it('keeps the row and its Fix for an agent with the task whose cloud computer failed to start', async () => {
+    const turn = { state: 'bot', who: 'bot:a1', line: 'Its cloud computer did not start', requirement_id: null, since: null, until: null, ask: false, href: '#/settings/computers' };
+    serve(reads(task({ owner_id: 'bot:a1', status_line: 'paused', turn } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(within(row).getByText('Its cloud computer did not start')).toBeTruthy();
+    expect(within(row).getByRole('link', { name: 'Fix' }).getAttribute('href')).toBe('/settings/computers');
+  });
+
+  it('keeps the row for the person who has the task while they cannot see it', async () => {
+    const turn = { state: 'person', who: 'human:bo', line: "Bo Lee can't see this task", requirement_id: null, since: null, until: null, ask: false, share: ['human:bo'] };
+    serve(reads(task({ owner_id: 'human:bo', turn } as Partial<TaskData>)));
+    details();
+    expect(within(await waitingOn()).getByText("Bo Lee can't see this task")).toBeTruthy();
   });
 
   it('says On ice for a snooze with no reason and no date, not who snoozed it', async () => {

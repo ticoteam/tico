@@ -218,9 +218,9 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             }
           />
         </div>
-        {t.turn && !isShots(t.turn) && !repeatsOwner(t.turn, t.owner_id) && (
-          <Kv k="Waiting on" target={`task-wait:${t.id}`}>
-            <WaitOn turn={t.turn} />
+        {t.turn && !isShots(t.turn) && !repeatsOwner(t, t.turn) && (
+          <Kv k="Waiting on">
+            <WaitOn t={t} turn={t.turn} />
           </Kv>
         )}
         {shots && (
