@@ -6,6 +6,9 @@ import { Icon } from '@/kit/Icon';
 
 /* Small parts the task view repeats: a face by actor id, a link to an app address. */
 
+/** Whether an id is a teammate's (a person or an agent), not a task's, a stage's or a source's such as `github`. */
+export const isActor = (id: string | null | undefined): id is string => !!id && /^(human|bot):/.test(id);
+
 /** A person's or an agent's face, by any id form the directory answers. */
 export function Face({ id, size = 22, decorative }: { id: string | null | undefined; size?: AvatarSize; decorative?: boolean }) {
   const a = useActor(id);
