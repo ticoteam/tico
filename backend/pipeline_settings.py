@@ -1698,7 +1698,7 @@ def _add_late_rules(conn: "sqlite3.Connection", pipeline_id: str, record: Row) -
     stage_rules: Any = _stage_rules  # untyped module
     raw: list[Any] = list(record.get("stages") or [])
     for stage, made in zip(raw, task_engine.stages(conn, pipeline_id), strict=False):
-        minutes = stage.get("late_minutes") if isinstance(stage, dict) else None
+        minutes: Any = cast(Row, stage).get("late_minutes") if isinstance(stage, dict) else None
         if minutes:
             stage_rules.add_late(conn, str(made["id"]), str(made["name"]), pipeline_id, int(cast(int, minutes)))
 
