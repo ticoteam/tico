@@ -8,7 +8,7 @@ slack_channel: "#agents"
 # runtime: <runtime>
 # model: <model id>
 # reasoning_effort: high
-# max_run_minutes: 90
+# max_run_minutes: 120  (default 1440, 24 hours; lower it only for a short routine)
 # Routines are automations in Tico, not lines here: `tico automation create --file -` from a run,
 # or the Automations page on the site (docs/routines.md).
 # What this bot may touch. Shown in the Tico app. See Tico policies/access.md.

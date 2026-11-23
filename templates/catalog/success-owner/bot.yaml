@@ -3,7 +3,6 @@ display_name: "Success Owner"
 labels: [owner:success-owner]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 60
 
 routines:
   - id: weekly-renewal-brief

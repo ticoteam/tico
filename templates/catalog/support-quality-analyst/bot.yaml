@@ -3,7 +3,6 @@ display_name: "Support Quality Analyst"
 labels: [owner:support-quality-analyst]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 45
 
 routines:
   - id: weekly-reply-review

@@ -488,7 +488,7 @@ thread compact its session first; if that run fails the same way, the next one s
 ([Sessions](sessions.md#checkpoints-and-resume)).
 
 **Run time limits.** A run cut by its configured time limit continues on the same task and provider session.
-The task says “Reached its 60-minute run limit; continuing” with its actual limit, and the continuation receives
+The task says “Reached its 1440-minute run limit; continuing” with its actual limit (a day unless the bot sets its own), and the continuation receives
 any hand-off note left on the task. Local edits, shell commands and branch pushes do not require review.
 A named merge, publish, send, payment or consumed approval still holds the run for Agent Ops to check.
 Like restart recovery, a time-limit continuation also permits a harness that does not report tool calls

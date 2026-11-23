@@ -344,7 +344,7 @@ def check_runtime(r, entry, defaults):
     model_for, effort_for = REG.CLI_SETTINGS.get(runtime, (None, None))
     model = model_for(e) if model_for else e.get("model", "default")
     effort = (effort_for(e) or "default") if effort_for else e.get("reasoning_effort", "default")
-    r.ok(f"runtime: {runtime} model={model} effort={effort} max_run_minutes={e.get('max_run_minutes', 60)}")
+    r.ok(f"runtime: {runtime} model={model} effort={effort} max_run_minutes={e.get('max_run_minutes', 24 * 60)}")
     harness = harness_manifests.get(runtime)
     binary = harness["executable"] if harness else ""
     if not binary:

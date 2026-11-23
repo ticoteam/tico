@@ -3,7 +3,6 @@ display_name: "Sales Operations Manager"
 labels: [owner:sales-operations-manager]
 reads: []                        # other bot repositories this one may clone read-only
 
-max_run_minutes: 60
 
 routines:
   - id: weekly-crm-report

@@ -2345,7 +2345,7 @@ Numbered in order so they can be cited (scenario 1 to 49).
 32. A stale PR read arrives after a newer one: the recorded commit doesn't change.
 33. A PR merges after a release is cut: the task stays in Release until a release that contains the merge.
 34. A repo with no checks: Checks pass is met after 10 minutes, with the note.
-35. A run hits the 60-minute limit with new commits: the bot is woken again and no try is counted.
+35. A run hits its run limit with new commits: the bot is woken again and no try is counted.
 36. A run is held or cut off: it doesn't count as on it. A new wake goes out with "your last run was cut off".
 37. A bot's fourth snooze of a task in one stage: the task goes to the manager bot.
 38. A sub-task six levels deep: refused.

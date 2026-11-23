@@ -17,7 +17,6 @@
 # during setup, and every bot without its own choice runs on that default.
 defaults:
   reasoning_effort: high
-  max_run_minutes: 60
 
 employees:
   - name: assistant

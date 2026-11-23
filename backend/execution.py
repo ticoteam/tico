@@ -90,7 +90,7 @@ STALL_MAX = 900
 # How long the sweep waits for a run whose lease lapsed (its runner never said it stopped) before running it again. On
 # Oct 17-18 eight finished turns reached the hub 15 to 76 minutes after their lease lapsed, while their runner was
 # stalled between the model's last word and the hand-in; one sweep resumed at 15 minutes and the request ran twice.
-# 90 minutes covers the slowest seen with room, and outlasts a whole turn (max_run_minutes defaults to 60).
+# 90 minutes covers the slowest seen with room. It counts from the lapse, not the turn's start, so a long turn does not need more.
 RESULT_GRACE = 90 * 60
 # After this long with no decision a held run is a person's: Health and its operator's Needs you name it (Dev 543).
 HELD_UNREVIEWED = 2 * 3600
