@@ -1780,6 +1780,7 @@ def _github(c, github, settings):
     """Not connected is "info" while the team has no bot of its own (getting_started.own_bots) at work, and "warn" once
     it has one: the built-in bots come with every install, so the warning waits for a bot someone made, and a planned
     one (a new company's live seats, until Agent Ops sets them up) keeps nothing yet."""
+    from . import stage_inputs
     from .github_app import account_word
 
     row = github.row(c) if github else None
@@ -1807,6 +1808,15 @@ def _github(c, github, settings):
             "GitHub would not give a bot a token in the last day"
             + (": " + failure["message"] if failure["message"] else "."),
             [fix],
+        )
+    if stage_inputs.builds_code(c) and not stage_inputs.in_use(c):
+        # HotMic, Nov 22: an "All repositories" install puts none In use, so a Builder had nowhere to write.
+        return _check(
+            "github",
+            "GitHub",
+            "warn",
+            f"Connected to {row['org']}, but no repository is in use, so the Builder has nowhere to write.",
+            [_fix("Choose a repository", "#/settings", "general")],
         )
     return _check("github", "GitHub", "ok", f"Connected to {row['org']}.")
 

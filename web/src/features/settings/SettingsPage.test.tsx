@@ -702,6 +702,12 @@ describe('Settings › General @s1072', () => {
     await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/repositories/acme/api', method: 'PUT', body: { enabled: true } }));
   });
 
+  it('opens Not in use while nothing is, where Health\'s "Choose a repository" lands', async () => {
+    general(200, { ...REPOS, repositories: [repo('acme/web', false), repo('acme/api', false)] });
+    const off = await screen.findByRole('region', { name: 'Not in use' });
+    expect(within(off).getAllByRole('button', { name: 'Add' })).toHaveLength(2);
+  });
+
   it('asks for the icon only when the config says one is set', async () => {
     const config = queryClient.getQueryData(['config']) as object;
     queryClient.setQueryData(['config'], { ...config, team_icon: '' });

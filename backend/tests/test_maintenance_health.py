@@ -1727,6 +1727,34 @@ def test_the_health_page_feeds_the_lifecycle_lists_findings_and_reads_the_github
     _story(environment, monkeypatch, [_part_warning, _part_lists, _part_github])
 
 
+def test_no_repository_in_use_is_one_agent_ops_task_and_messages_no_person(environment, monkeypatch):
+    """HotMic, Nov 22: a Builder with nothing In use. Health's GitHub line says so (Look), and the maintenance check
+    keeps one Agent Ops task for it by the path every page line takes; no person is messaged."""
+    api, _ = built(environment)
+    _readers(monkeypatch)
+    store = api.app.state.store
+    store.github_app = SimpleNamespace(row=lambda c: {"installation_id": 7, "org": "acme", "administration": 1})
+    with store.transaction() as c:
+        H.sync_registry(c, {"builder": {"name": "Builder", "status": "active"}}, None)
+        BS.update(c, "builder", {"template": "builder"})
+    monkeypatch.setattr(
+        health,
+        "view",
+        lambda c, who, settings, auth_, github, config, **_: {"checks": [health._github(c, github, settings)]},
+    )
+
+    def to_people():
+        with store.read() as c:
+            return c.execute("SELECT count(*) FROM messages WHERE recipient_id LIKE 'human:%'").fetchone()[0]
+
+    before = to_people()
+    for _ in range(3):
+        run(api)
+    assert finding(api, "page:github")["severity"] == "warn"
+    (task,) = [t for t in agent_ops_tasks(api) if "GitHub" in t["title"]]
+    assert task["owner_id"] == "bot:botops" and to_people() == before
+
+
 def test_a_default_login_limit_is_a_finding_until_a_turn_or_the_reset_clears_it(environment, monkeypatch):
     api, _ = built(environment)
     parts = [

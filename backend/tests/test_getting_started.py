@@ -187,3 +187,36 @@ def test_on_tico_cloud_a_plan_or_key_is_required_and_a_saved_one_counts(api):
     assert plan_step(api)["skipped"] is False  # not set aside on Tico Cloud
     subs.add(api, "anthropic_key", "sk-ant-api-" + "c" * 24, name="Company API")  # on no computer yet
     assert plan_step(api)["done"] is True
+
+
+def test_github_is_not_ticked_while_a_company_that_builds_software_has_no_repository_in_use(api):
+    """HotMic, Nov 22: "GitHub is connected" ticked on the install alone, and a Builder later had nowhere to write."""
+    from backend import bot_settings as BS
+
+    def github():
+        return items(api, bearer(OWNER))[1]["github"]
+
+    state = api.app.state
+    with state.store.transaction() as c:
+        state.github_app.save(
+            c,
+            "human:ana",
+            "Acme",
+            True,
+            {"id": 7, "slug": "acme-tico", "client_id": "Iv1.x", "pem": "pem", "webhook_secret": "whsec"},
+        )
+        c.execute("UPDATE github_app SET installation_id=77")
+    assert github()["done"] is True  # no Builder, no code pipeline: the install is enough
+    add_bot(api, "builder")
+    with state.store.transaction() as c:
+        BS.update(c, "builder", {"template": "builder"})
+    row = github()
+    assert (row["done"], row["why"], row["href"], row["tab"]) == (
+        False,
+        "Choose the repository your bots build in.",
+        "#/settings",
+        "general",
+    )
+    with state.store.transaction() as c:
+        c.execute("INSERT INTO repositories(full_name,enabled,bot_repo) VALUES('Acme/app',1,0)")
+    assert github()["done"] is True

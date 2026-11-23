@@ -5,6 +5,7 @@ import type { HealthFix } from './queries';
    whose page has no new address yet keeps its words and loses its link. */
 
 const SETTINGS_TAB: Record<string, string> = {
+  general: '/settings/general',
   devices: '/settings/computers',
   bots: '/settings/agents',
   models: '/settings/providers',

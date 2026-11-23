@@ -242,7 +242,8 @@ export function Repositories({ admin, owner }: { admin: boolean; owner: boolean 
           })
         )}
       </Section>
-      <Section name="Not in use" count={off.length} defaultOpen={false} target="setting:repos-off">
+      {/* open while nothing is in use: Health's "Choose a repository" lands here, one Add away */}
+      <Section name="Not in use" count={off.length} defaultOpen={!on.some((r) => !r.bot_repo)} target="setting:repos-off">
         <div className="set-add">
           <Field label="Search repositories" labelHidden placeholder="Search" lead="search" value={find} onValueChange={setFind} />
         </div>

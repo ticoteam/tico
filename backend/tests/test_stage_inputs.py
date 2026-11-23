@@ -340,3 +340,28 @@ def test_a_builder_handed_a_task_with_an_open_pr_is_told_to_push_to_it_not_open_
     assert "Never open a second PR" not in _wake(c, product, "bot:pm")  # the filed work's PR is not its own
     _push(c, 12, "aaa", state="merged", merged_sha="ccc111")
     assert SI.one_pr(SI.of(c, E.task(c, eng))) == ""
+
+
+def test_a_builder_with_no_repository_in_use_is_told_there_is_nowhere_to_build(c):
+    """HotMic, Nov 22: the Builder woke in Build with no "Repository:" line and nothing saying why. With none In use its
+    wake says so, and not to build in its own repository; one In use, and the wake names it."""
+    _product, eng = _filed_engineering(c)
+    c.execute("UPDATE repositories SET enabled=0")  # an "All repositories" install: none In use
+    _move(c, eng, "engineering-build")
+    assert SI.NOWHERE in TW.body(c, E.task(c, eng), to="bot:builder")
+    c.execute("UPDATE repositories SET enabled=1 WHERE full_name=?", (REPO,))
+    wake = TW.body(c, E.task(c, eng), to="bot:builder")
+    assert f"Repository: {REPO}." in wake and SI.NOWHERE not in wake
+    assert SI.repository_line([]) == "" and SI.repository_line([], code=True) == SI.NOWHERE
+
+
+def test_a_company_builds_software_with_a_live_code_pipeline_or_a_builder(c):
+    """Health's GitHub line and the setup checklist want a repository In use only from a company that builds software."""
+    assert not SI.builds_code(c)  # a company with no pipeline that reads PRs and no Builder
+    _filed_engineering(c)  # the Product and Engineering presets, and their seats' bots
+    c.execute("UPDATE bots SET state='archived' WHERE slug='builder'")
+    assert SI.builds_code(c)  # the presets' Build reads PRs
+    c.execute("UPDATE pipelines SET retired_at=?", (H.now(),))
+    assert not SI.builds_code(c)
+    c.execute("UPDATE bots SET state='active' WHERE slug='builder'")
+    assert SI.builds_code(c)  # a Builder alone
