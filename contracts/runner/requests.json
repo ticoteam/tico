@@ -2922,6 +2922,20 @@
   "SubscriptionWeekly": {
    "additionalProperties": false,
    "properties": {
+    "attempt_id": {
+     "anyOf": [
+      {
+       "maxLength": 200,
+       "minLength": 1,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Attempt Id"
+    },
     "origin": {
      "anyOf": [
       {

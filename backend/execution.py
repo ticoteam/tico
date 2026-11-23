@@ -51,6 +51,7 @@ from . import (
     cloud_access,
     cloud_machines,
     model_subscriptions,
+    plan_exits,
     quarantine_stops,
     reconnects,
     run_failures,
@@ -4145,7 +4146,6 @@ class Execution:
         del row
         from .subscriptions import record
 
-        record(c, who.runner_id, body.profiles, body.readiness)
         readiness = readiness_document(body.readiness)
         from .repositories import save_metadata, metadata
 
@@ -4186,13 +4186,11 @@ class Execution:
                 row.pop('credential_source', None)
             # The own login's usage windows, checked as a named profile's are: a reset beyond the window is not its.
             for window in ('weekly', 'five_hour'):
-                reading = weekly_snapshot(row.get(window), window)
+                reading = weekly_snapshot(row.get(window), window, keep_attempt=True)
                 if reading:
                     row[window] = reading
                 else:
                     row.pop(window, None)
-        if encode(readiness.get("runtimes") or {}) != encode(readiness_document(stored[3]).get("runtimes") or {}):
-            model_subscriptions.remember_turn_usage(c, who.runner_id, readiness.get("runtimes") or {})
         if readiness.get('worktrees') is None:
             readiness.pop('worktrees', None)
         if not readiness.get('harnesses'):
@@ -4235,6 +4233,9 @@ class Execution:
         if reported != stored:
             state.update(version=body.version, capacity=body.capacity, readiness=reported[3], capabilities=reported[4])
         runner_states.save(c, who.runner_id, **state)
+        record(c, who.runner_id, body.profiles, body.readiness)
+        if encode(readiness.get("runtimes") or {}) != encode(readiness_document(stored[3]).get("runtimes") or {}):
+            model_subscriptions.remember_turn_usage(c, who.runner_id, readiness.get("runtimes") or {})
         from . import cloud_machines
 
         cloud_machines.checked_in(c, who.runner_id)
@@ -4318,6 +4319,7 @@ class Execution:
             "runtime_credential_source": True,
             "subscription_accounts": True,
             "subscription_usage_sources": True,
+            **({"subscription_usage_attempts": True} if plan_exits.UPKEEP_ROUTING else {}),
             "worktree_record_stamp": True,
             "worktree_actions": sendable,
             # Whether the runner samples its performance (backend/performance.py).

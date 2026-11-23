@@ -1257,6 +1257,7 @@ class SubscriptionWeekly(Contract):
     # read or a turn on it). Absent from a runner that predates this, which counts for no plan (model_subscriptions._plan_usage).
     origin: Literal["subscription", "login"] | None = None
     subscription_id: str | None = Field(default=None, max_length=80)
+    attempt_id: ID | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 # The computer's own login's usage window on its runtime row: one that fails its checks is left out, like the account.

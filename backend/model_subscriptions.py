@@ -1031,14 +1031,17 @@ def provenance(reading):
     return {**reading, "origin": None, "subscription_id": None}
 
 
-def _turn_usage_receipt(c, sid, runtime, runner_id, route, reported_at):
+def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
     binding = ""
     args = (sid, runtime, runner_id)
     if route:
-        if route.runner_id != runner_id:
+        if route.runner_id != runner_id or not (attempt_id := reading.get("attempt_id")):
             return False
-        binding = "AND s.exit_generation=? AND s.delivery<>'model_exit' AND julianday(a.created_at)<=julianday(?) "
-        args = (*args, route.generation, reported_at)
+        binding = (
+            "AND s.attempt_id=? AND s.exit_generation=? AND s.delivery<>'model_exit' "
+            "AND julianday(a.created_at)<=julianday(?) "
+        )
+        args = (*args, attempt_id, route.generation, reading["reported_at"])
     return (
         c.execute(
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
@@ -1069,7 +1072,7 @@ def remember_turn_usage(c, runner_id, runtimes):
                 sub = c.execute("SELECT kind,owner_id FROM model_subscriptions WHERE id=?", (sid,)).fetchone()
                 routes[sid] = plan_exits.routed(c, sub, exits)
             route = routes.get(sid)
-            if not _turn_usage_receipt(c, sid, runtime, runner_id, route, reading["reported_at"]):
+            if not _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
                 continue
             key = plan_key(sid)
             saved = metadata(c, key) or {}
@@ -1110,14 +1113,18 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
 
     runners = ctx["runners"]
     route = plan_exits.routed(c, sub, ctx.get("exits"))
+    # Routed windows use the reading saved after checking its turn receipt at heartbeat ingestion.
     computers = [
         g
         for g in ctx["grants"].get(sub["id"], [])
-        if g["runtime"] == runtime and g["runner_id"] in runners and (not route or g["runner_id"] == route.runner_id)
+        if not route and g["runtime"] == runtime and g["runner_id"] in runners
     ]
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
     turn_weekly, turn_five_hour = (
-        meta.get(field) if not route or (route.runner_id and meta.get(field + "_exit") == list(route)) else None
+        meta.get(field)
+        if not route
+        or (route.runner_id and meta.get(field + "_exit") == list(route) and (meta.get(field) or {}).get("attempt_id"))
+        else None
         for field in ("turn_weekly", "turn_five_hour")
     )
     has_turn_reading = bool(turn_weekly or turn_five_hour)
@@ -1164,11 +1171,6 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
                 mine = False
             if reported < since or not mine:
                 outside = True
-                continue
-            if route and (
-                reading.get("origin") != "subscription"
-                or not _turn_usage_receipt(c, sub["id"], runtime, runner_id, route, reading["reported_at"])
-            ):
                 continue
             if reading.get("used_percent") is None:
                 percent_missing = True
@@ -1919,7 +1921,7 @@ def save(c, vault, settings, auth, who, body, sid=None):
     stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
     its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
     path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
-    from . import claude_login, quarantine_stops
+    from . import claude_login, model_login, quarantine_stops
 
     sub = _manage_provider(c, auth, who, sid) if sid else None
     admin = _may_manage(auth, who)
@@ -1994,6 +1996,8 @@ def save(c, vault, settings, auth, who, body, sid=None):
                 # A setup-token plan becomes a full login, the same plan: owner, computers and history stay. Its readings
                 # and asked reads were the token's, and the login may be another account: they go.
                 c.execute("UPDATE model_subscriptions SET kind=? WHERE id=?", (body.kind, sid))
+                if plan_exits.UPKEEP_ROUTING:
+                    model_login.invalidate_connects(c, owner)
                 claude_login.reset_usage(c, sid)
                 H.event(c, who.actor, "subscription.converted", sid, {"from": sub["kind"], "to": body.kind})
             if kind == "claude_login" and _kept_key(sub):
@@ -2082,7 +2086,7 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
         "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
         (_keep_value(c, vault, sub, value, preview, actor, now), preview, now, sub["id"]),
     )
-    if (route := plan_exits.routed(c, sub)) and route.runner_id:
+    if route := plan_exits.routed(c, sub):
         c.execute(
             "UPDATE attempt_subscriptions SET revision=? WHERE subscription_id=? AND delivery='model_exit' "
             "AND exit_generation=? AND revision=? AND attempt_id IN (SELECT id FROM attempts "

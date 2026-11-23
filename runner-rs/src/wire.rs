@@ -29,6 +29,7 @@ pub struct HeartbeatAnswer {
     pub subscription_accounts: Option<bool>,
     /// The server reads a usage window's `origin` and `subscription_id` (backend/model_subscriptions.py `provenance`).
     pub subscription_usage_sources: Option<bool>,
+    pub subscription_usage_attempts: Option<bool>,
     pub worktree_record_stamp: Option<bool>,
     pub worktree_actions: Option<Vec<Value>>,
     pub worktree_actions_skipped: Option<u64>,

@@ -43,12 +43,14 @@ def login_upgrade(runner, ready=None, bot=None, runtime=None):
 WINDOWS = {'weekly': timedelta(days=8), 'five_hour': timedelta(hours=5, minutes=10)}
 
 
-def weekly_snapshot(value, window='weekly'):
+def weekly_snapshot(value, window='weekly', *, keep_attempt=False):
     """Validate timestamps too; a broken report is unknown, never a fresh allowance."""
     if not value:
         return None
     try:
         value = M.SubscriptionWeekly.model_validate(value).model_dump()
+        if not keep_attempt:
+            value.pop('attempt_id', None)
         reported = datetime.fromisoformat(value['reported_at'].replace('Z', '+00:00'))
         if reported.tzinfo is None or reported > datetime.now(timezone.utc) + timedelta(minutes=5):
             return None
@@ -144,6 +146,15 @@ def without_accounts(runtimes, windows=False):
             if windows:
                 state.pop('weekly', None), state.pop('five_hour', None)
     return runtimes
+
+
+def without_usage_attempts(runtimes):
+    for state in runtimes.values():
+        if not isinstance(state, dict):
+            continue
+        for window in ('weekly', 'five_hour'):
+            if isinstance(reading := state.get(window), dict):
+                reading.pop('attempt_id', None)
 
 
 def computer_profiles(c, runner, accounts):
@@ -254,8 +265,8 @@ def record(c, runner_id, profiles, readiness=None):
         for runtime, state in profile.runtimes.items():
             value = state.model_dump()
             for window in ('weekly', 'five_hour'):
-                latest = weekly_snapshot(value.get(window), window)
-                older = weekly_snapshot(previous.get(runtime, {}).get(window), window)
+                latest = weekly_snapshot(value.get(window), window, keep_attempt=True)
+                older = weekly_snapshot(previous.get(runtime, {}).get(window), window, keep_attempt=True)
                 values = [v for v in (latest, older) if v]
                 value[window] = (
                     max(values, key=lambda v: datetime.fromisoformat(v['reported_at'].replace('Z', '+00:00')))
