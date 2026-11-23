@@ -214,8 +214,8 @@ test('phone: open a task, and Back returns to the list', async ({ browser, hub }
   await page.locator('a.row.task', { hasText: draft!.title }).tap();
   await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}`));
   await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
-  await page.getByRole('link', { name: 'Back to Launch' }).tap();
-  await expect(page).toHaveURL(/\/tasks\/launch(\?|$)/);
+  await page.locator('main .pk-head').getByRole('button', { name: 'Back' }).tap();
+  await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
   await expect(page.locator('a.row.task', { hasText: draft!.title })).toBeVisible();
   clean(page);
 });
