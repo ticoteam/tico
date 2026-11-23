@@ -2910,6 +2910,26 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    /// The host's one pi after its turn: still running, so a stop at `release` is the stop under test.
+    fn running_pi(host: &PiHost, events: &[Value]) -> Arc<Proc> {
+        let procs: Vec<Arc<Proc>> = host.inner().procs.values().cloned().collect();
+        assert_eq!(procs.len(), 1, "{events:?}");
+        assert!(procs[0].alive(), "pi had exited before release: {events:?}");
+        procs[0].clone()
+    }
+
+    /// `pi` has exited by the time `release` returns. Its exit is read from the process, not from the fake's
+    /// exits.log: that line is written by its SIGTERM handler, and a stop that has to escalate to SIGKILL after
+    /// STOP_GRACE (a starved runner) still stops it, without the line.
+    fn stopped(pi: &Proc, dir: &std::path::Path) {
+        assert!(
+            *pi.exited.borrow(),
+            "release returned with pi still running"
+        );
+        let exits = std::fs::read_to_string(dir.join("exits.log")).unwrap_or_default();
+        assert!(exits.lines().count() <= 1, "{exits}");
+    }
+
     #[tokio::test]
     async fn a_kept_pi_is_stopped_once_idle_and_one_whose_turn_failed_is_not_kept() {
         let idle = Arc::new(Pool {
@@ -2922,29 +2942,17 @@ mod tests {
         let (dir, host, mut rx) = rpc_host(&[REPLY], Some(idle.clone()));
         let thread = host.start_thread(&rpc_settings(&dir, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
-        turn_events(&mut rx).await;
+        let pi = running_pi(&host, &turn_events(&mut rx).await);
         host.release(true, OWNER, Held::default()).await;
         assert!(idle.kept().is_empty());
-        assert_eq!(
-            std::fs::read_to_string(dir.join("exits.log"))
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
+        stopped(&pi, &dir);
         let (other, host, mut rx) = rpc_host(&[REPLY], None);
         let thread = host.start_thread(&rpc_settings(&other, &[]));
         host.start_turn(&thread, "hello", None).await.unwrap();
-        turn_events(&mut rx).await;
+        let pi = running_pi(&host, &turn_events(&mut rx).await);
         host.release(false, OWNER, Held::default()).await;
         assert!(host.0.pool.kept().is_empty());
-        assert_eq!(
-            std::fs::read_to_string(other.join("exits.log"))
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
+        stopped(&pi, &other);
         for d in [dir, other, idle.dir.clone()] {
             std::fs::remove_dir_all(d).ok();
         }
