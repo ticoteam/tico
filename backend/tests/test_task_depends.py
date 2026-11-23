@@ -271,6 +271,86 @@ def test_a_deleted_blocker_wakes_the_owner_once(c):
     assert f"{number} was deleted" in body
 
 
+def test_taking_the_last_dependency_off_wakes_the_owner_once_as_its_end_would(c):
+    """A "blocked by" link to a follow-up meant as non-blocking froze a task, and taking the link off woke nobody. It
+    releases the task the way the blocker's end does, once a visit: the blocker ending later in the same visit, even
+    after it was linked again, wakes nobody twice."""
+    build(c)
+    blocker, blocked = task(c, "Follow-up"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    X.settled(c)
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
+    (body,) = bodies(c, blocked)
+    assert f"{ref(c, blocker)} no longer blocks this task" in body
+    assert W.turn(c, E.task(c, blocked)) == B
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    ended(c, blocker)
+    assert len(bodies(c, blocked)) == 1
+
+
+def test_the_note_for_a_dependency_taken_off_names_a_private_blocker_only_if_every_reader_may_open_it(c):
+    """The wake is kept in the waiting task's thread: a private blocker one of its readers may not open is "a task",
+    never its number, as the Blocked by line says it to them (waiting_on.unnamed)."""
+    import json
+
+    build(c)
+    blocker, blocked = task(c, "Salary numbers"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([X.ANA]), blocker))
+    c.execute("UPDATE tasks SET readers=? WHERE id=?", (json.dumps(["human:ben"]), blocked))
+    X.settled(c)
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
+    (body,) = bodies(c, blocked)
+    assert D.UNLINKED_UNNAMED in body and ref(c, blocker) not in body
+
+
+def test_taking_one_of_two_dependencies_off_wakes_nobody(c):
+    build(c)
+    first, second, blocked = task(c, "Part 1"), task(c, "Fix main"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, first, "depends_on")
+    TR.relate(c, X.ANA, blocked, second, "depends_on")
+    entered = X.wakes(c, blocked, B)
+    TR.relate(c, X.ANA, blocked, first, "depends_on", remove=True)
+    assert [w.line for w in W.waiting_on(c, blocked)] == ["Blocked by Fix main, in Build"]
+    assert bodies(c, blocked) == [] and X.wakes(c, blocked, B) == entered
+
+
+@pytest.mark.parametrize("by", [X.ANA, B])
+def test_a_task_with_nothing_else_missing_moves_on_when_its_dependency_is_taken_off(c, by):
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
+    X.say_done(c, E.task(c, blocked))
+    assert E.task(c, blocked)["stage"]["name"] == "Build"
+    TR.relate(c, by, blocked, blocker, "depends_on", remove=True)
+    assert E.task(c, blocked)["stage"]["name"] == "Review"
+    assert bodies(c, blocked) == []
+
+
+def test_the_owner_bot_that_takes_the_dependency_off_itself_is_not_woken_for_it(c):
+    build(c)
+    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
+    TR.relate(c, B, blocked, blocker, "depends_on")
+    X.settled(c)
+    entered = X.wakes(c, blocked, B)
+    TR.relate(c, B, blocked, blocker, "depends_on", remove=True)
+    assert not D.blocked(c, blocked) and W.turn(c, E.task(c, blocked)) == B
+    assert bodies(c, blocked) == [] and X.wakes(c, blocked, B) == entered
+
+
+def test_a_person_owner_is_sent_nothing_when_a_dependency_is_taken_off(c):
+    build(c)
+    X.pipeline(c)  # General: To do, the assignee's
+    blocker = task(c, "Part 1")
+    mine = X.new_task(c, X.ANA, "Write the copy", assignee=X.ANA)["id"]
+    TR.relate(c, X.ANA, mine, blocker, "depends_on")
+    assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
+    sent = c.execute("SELECT count(*) FROM messages").fetchone()[0]
+    TR.relate(c, X.ANA, mine, blocker, "depends_on", remove=True)
+    assert c.execute("SELECT count(*) FROM messages").fetchone()[0] == sent
+    assert any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
+
+
 def test_a_dependency_holds_only_until_its_task_first_ends(c):
     """Review 1: a blocker reopened after its dependent went on does not silently block the dependent again."""
     build(c)

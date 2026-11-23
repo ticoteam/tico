@@ -15,8 +15,9 @@ date. It is a named wait, not a state:
   reopened task blocks nothing again), and each task that depended on it and has no other open dependency is read
   again: it moves on if everything its stage asks is met (task_engine.advance), else its owner is woken once, "#304 is
   done" or "#304 was closed without doing it" so they re-plan. A deleted task does the same, "#304 was deleted"
-  (`deleted`). No poll and no date. Every dependency written or taken off leaves a history row on the waiting task,
-  from which `spans` gives the time it was blocked.
+  (`deleted`), and so does a dependency someone takes off, "#304 no longer blocks this task" (`unlinked`), except
+  that an owner bot who took it off itself is not woken for it. No poll and no date. Every dependency written or taken
+  off leaves a history row on the waiting task, from which `spans` gives the time it was blocked.
 - `check`: the writer must be able to change the waiting task and read the other one (task_relations.relate); a loop,
   or a dependency of or on a task that has ended, is refused.
 
@@ -57,6 +58,8 @@ UNNAMED = "Blocked by a task you can't open"
 DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
+UNLINKED = "{ref} no longer blocks this task"
+UNLINKED_UNNAMED = "A task that blocked this one no longer blocks it"
 WAKE = "unblocked"
 UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
 RELEASED_LINE = "Blocked by {task}, done, until production runs its release"
@@ -483,11 +486,42 @@ def restores(conn: "sqlite3.Connection", row: Row, restored_id: str) -> bool:
     return bool(found) and found[0] == "open"
 
 
-def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str) -> int:
+def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str) -> int:
+    """`by` took the dependency of `task_id` on `blocker_id` off (task_relations.relate): what the blocker's end does
+    (`release_one`), "#304 no longer blocks this task", on the same wake key, so the owner hears of that blocker once a
+    visit however it stops blocking. The owner bot that took it off itself is not woken: it knows. 1 when released."""
+    row: Row | None = _engine().task(conn, task_id)
+    if not row:
+        return 0
+    found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
+    named = UNLINKED.format(ref=ref({"id": blocker_id, "number": found[0] if found else None}))
+    said = named if _named_to_all(conn, row, blocker_id) else UNLINKED_UNNAMED
+    return release_one(conn, task_id, blocker_id, said, tell=row.get("owner_id") != by)
+
+
+def _named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
+    """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when it is private,
+    so may every party and reader of `row`, who read the thread later (as task_wakes.told does for a filed task)."""
+    from . import hubdb, task_calls
+
+    H: Any = hubdb
+    TC: Any = task_calls
+    owner = row.get("owner_id")
+    blocker: Row | None = TC._readable_rows(conn, owner, [blocker_id]).get(blocker_id) if owner else None
+    if not blocker:
+        return False
+    if not H.task_private(conn, blocker):
+        return True
+    full: Row = H.task(conn, str(row["id"])) or {}
+    parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
+    return all(H.task_private_readable(conn, p, blocker) for p in parties)
+
+
+def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str, *, tell: bool = True) -> int:
     """One task whose dependency `ended_id` came off. Still blocked by another: nothing, and nobody is woken. Else it
-    moves on if everything is met and there is room; if not, its owner is woken once with `said`. A move the engine
-    refuses is logged and the owner is told instead: a dependent never stops its blocker from ending. 1 when it was
-    released."""
+    moves on if everything is met and there is room; if not, its owner is woken once with `said` (unless not `tell`).
+    A move the engine refuses is logged and the owner is told instead: a dependent never stops its blocker from ending.
+    1 when it was released."""
     E = _engine()
     row: Row | None = E.task(conn, task_id)
     if not row or row["status"] != "open" or not row.get("visit"):
@@ -509,5 +543,6 @@ def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: s
         moved = None
     if moved:
         return 1
-    E.tell_owner(conn, task_id, said, f"{WAKE}:{ended_id}")
+    if tell:
+        E.tell_owner(conn, task_id, said, f"{WAKE}:{ended_id}")
     return 1
