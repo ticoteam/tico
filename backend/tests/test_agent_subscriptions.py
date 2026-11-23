@@ -730,6 +730,24 @@ def test_placement_sweep_preserves_foreign_picks_and_skips_third_party_computers
         assert choice["subscription_id"] == ("" if kind == "pool" else sid)
 
 
+def test_placement_sweep_keeps_the_owners_own_pool_off_a_third_party_computer(api):
+    from backend import placement
+
+    setup(api)
+    box = runner(api, operator="ben")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara',created_by='human:cara' WHERE bot='ops'")
+        c.execute("UPDATE runners SET accepts_member_bots=1 WHERE id=?", (box["runner_id"],))
+        c.execute(
+            "INSERT INTO agent_subscriptions(bot,runtime,kind,person,set_by,updated_at) "
+            "VALUES('ops','claude','pool','human:cara','human:cara','2026-11-22T00:00:00Z')"
+        )
+        c.execute("UPDATE bots SET state='active' WHERE id='ops'")
+        assert dict(placement.sweep(c, api.app.state.execution)).get("ops") is None
+        assert paid_by.picks(c, "ops")["claude"]["person"] == "human:cara"
+
+
 def test_member_restore_checks_a_foreign_plan_before_placing_the_agent(api):
     from backend import bot_settings
     from backend.tests.helpers.shared_bots import revision

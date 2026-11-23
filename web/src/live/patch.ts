@@ -643,6 +643,12 @@ export function installPatchers(): void {
     const key = [...keys.team.paidBy(), e.bot_id, true];
     return queryClient.getQueryState(key) ? [key] : [];
   }, true);
+  // `runs` reaches only open chats; an agent's status line changes on every turn, so Last turn reads it again there too.
+  onRefetch<{ bot?: string }>('bots', (e) => {
+    if (!e.bot) return [];
+    const key = [...keys.team.paidBy(), e.bot, true];
+    return queryClient.getQueryState(key) ? [key] : [];
+  }, true);
   onTopic<ThreadEvent>('threads', applyThreadEvents);
   // An agent added, archived or brought back.
   onRefetch<{ area?: string }>('setup', (e) =>

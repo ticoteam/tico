@@ -111,7 +111,7 @@ def clear_for_move(
             seed_runner_owner
             and c.execute(
                 "SELECT 1 FROM agent_subscriptions p JOIN bot_config b ON b.bot=p.bot "
-                "WHERE p.bot=? AND p.person NOT IN ('','human:'||?,'human:'||coalesce(b.owner_id,'')) "
+                "WHERE p.bot=? AND p.person NOT IN ('','human:'||?) "
                 "AND coalesce(b.owner_id,'')<>? LIMIT 1",
                 (bot, seed_runner_owner, seed_runner_owner),
             ).fetchone()
