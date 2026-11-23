@@ -1754,7 +1754,7 @@ class Heartbeat(Contract):
             "push_hints_v1",  # a push to a bot's repository is told to its computer at once (backend/github.py tell_pushed)
             "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
         ]
-    ] = Field(default_factory=list, max_length=32)
+    ] = Field(default_factory=list, max_length=33)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)

@@ -29,6 +29,7 @@ pub const RELAY_HINTS: &str = "relay_hints_v1";
 /// Reads a Claude plan's week on request (subscription_refresh.rs `read_claude_plan`; backend/subscription_refresh.py
 /// `request_plan_read`).
 const PLAN_USAGE: &str = "plan_usage_v1";
+const ATTEMPT_CREDENTIALS: &str = "attempt_credentials_v1";
 /// The computer's own logins are the ones readiness reads for these bots (runner.rs `computer_logins_for`).
 const COMPUTER_LOGINS: &str = "computer_logins_v1";
 pub const CAPABILITIES: &[&str] = &[
@@ -49,7 +50,7 @@ pub const CAPABILITIES: &[&str] = &[
     // A previous hub release can still send the retired meeting lane (sessions.rs).
     "private_lanes_v1",
     "model_subscriptions_v1",
-    "attempt_credentials_v1",
+    ATTEMPT_CREDENTIALS,
     "model_subscription_activation_v1",
     // Turns of a bot with a browser exit go through it (browser_exit.rs); the server hands them to no other runner.
     "browser_exit_v1",
@@ -70,6 +71,8 @@ pub const CAPABILITIES: &[&str] = &[
     RELAY_HINTS,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
+// A 0.6.0 hub that reports only a list refusal can need twelve capability drops before it accepts the heartbeat.
+pub const MAX_HEARTBEAT_POSTS: u32 = 13;
 
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -146,7 +149,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
-    "attempt_credentials_v1",
+    ATTEMPT_CREDENTIALS,
     RELAY_HINTS,
     VOICE_INPUTS,
     VOICE_SESSION_RESUME,
@@ -220,6 +223,41 @@ fn has_in_profiles(body: &Value, key: &str) -> bool {
     })
 }
 
+fn capability_refusals(detail: &str) -> impl Iterator<Item = Option<usize>> + '_ {
+    // A bot or field named "capabilities" further down is not about the top-level list.
+    static CAPS: OnceLock<regex::Regex> = OnceLock::new();
+    CAPS.get_or_init(|| {
+        regex::Regex::new(r"(?:^|; )(?:body\.)?capabilities(?:[.\[]([0-9]+)\]?)?:").unwrap()
+    })
+    .captures_iter(detail)
+    .map(|m| m.get(1).and_then(|i| i.as_str().parse().ok()))
+}
+
+/// Keep every capability the hub accepted when one response names several refused elements.
+pub fn hold_refused(detail: &str, body: &mut Value) -> bool {
+    let mut held = false;
+    if let Some(caps) = body["capabilities"].as_array() {
+        for index in capability_refusals(detail).flatten() {
+            if let Some(name) = caps
+                .get(index)
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+            {
+                hold_back(name);
+                held = true;
+            }
+        }
+    }
+    if !held {
+        let Some(field) = refused_field(detail, body) else {
+            return false;
+        };
+        hold_back(&field);
+    }
+    drop_held(body);
+    true
+}
+
 /// What to leave out after a heartbeat's 422 (service.py _report_heartbeat), as a hold name: only `weekly` of the
 /// profile report, the worktree reports' `record_updated` stamp, the capability it names by position (any of them; the
 /// newest sent when it names none), else a root field
@@ -253,19 +291,8 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         return Some("worktrees.record_updated".into()); // every worktree report still goes, unstamped
     }
     let caps: Vec<String> = rows(body, "capabilities").map(text_of).collect();
-    // Only an error at the top-level `capabilities` or one of its elements: a bot or field named "capabilities"
-    // further down (say readiness.bots.capabilities) is not about them.
-    static CAPS: OnceLock<regex::Regex> = OnceLock::new();
-    let refused = CAPS
-        .get_or_init(|| {
-            regex::Regex::new(r"(?:^|; )(?:body\.)?capabilities(?:[.\[]([0-9]+)\]?)?:").unwrap()
-        })
-        .captures(detail);
-    if let Some(refused) = refused {
+    if let Some(index) = capability_refusals(detail).next() {
         // Pydantic names the rejected element: drop that one, whatever it is, and keep every other negotiated one.
-        let index = refused
-            .get(1)
-            .and_then(|i| i.as_str().parse::<usize>().ok());
         if let Some(name) = index.and_then(|i| caps.get(i)).filter(|n| !n.is_empty()) {
             return Some(name.clone());
         }
@@ -430,8 +457,7 @@ mod tests {
         (!errors.is_empty()).then(|| errors.join("; "))
     }
 
-    /// runner.rs `post_heartbeat` against that server: post, and on a 422 hold back what `refused_field` names and
-    /// post again, at most 12 times. The capabilities it got through with, and how many posts it took.
+    /// runner.rs `post_heartbeat` against that server: the capabilities it got through with and how many posts it took.
     fn negotiate(known: &[String], max: usize, indexed: bool) -> (Vec<String>, u32) {
         let mut body = json!({"capabilities": sendable()});
         drop_held(&mut body);
@@ -441,11 +467,14 @@ mod tests {
             let Some(detail) = refusal(known, max, &body, indexed) else {
                 return (rows(&body, "capabilities").map(text_of).collect(), tries);
             };
-            assert!(tries < 12, "still refused after {tries} posts: {detail}");
-            let field = refused_field(&detail, &body)
-                .unwrap_or_else(|| panic!("the runner gives up on: {detail}"));
-            hold_back(&field);
-            drop_held(&mut body);
+            assert!(
+                tries < MAX_HEARTBEAT_POSTS,
+                "still refused after {tries} posts: {detail}"
+            );
+            assert!(
+                hold_refused(&detail, &mut body),
+                "the runner gives up on: {detail}"
+            );
         }
     }
 
@@ -503,7 +532,6 @@ mod tests {
             servers.push((release, known, 32));
         }
         for (server, known, max) in servers {
-            assert!(sendable().len() <= max, "{server} takes at most {max}");
             for indexed in [true, false] {
                 release_all();
                 let (kept, tries) = negotiate(&known, max, indexed);
@@ -514,7 +542,13 @@ mod tests {
                     .collect();
                 assert_eq!(kept, expected, "{server} (indexed: {indexed})");
                 let unknown = sendable().len() - expected.len();
-                assert_eq!(tries as usize, unknown + 1, "{server} (indexed: {indexed})");
+                let overflow = sendable().len().saturating_sub(max);
+                let dropped = if indexed {
+                    overflow + usize::from(unknown > overflow)
+                } else {
+                    unknown
+                };
+                assert_eq!(tries as usize, dropped + 1, "{server} (indexed: {indexed})");
                 if server == "current" {
                     assert_eq!(
                         tries, 1,
@@ -703,6 +737,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    ATTEMPT_CREDENTIALS,
                     RELAY_HINTS,
                     VOICE_INPUTS,
                     crate::fetch_fresh::PUSH_HINTS,
@@ -741,13 +776,18 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(RELAY_HINTS)
+            Some(ATTEMPT_CREDENTIALS)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
-            .filter(|c| *c != RELAY_HINTS)
+            .filter(|c| *c != ATTEMPT_CREDENTIALS)
             .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(RELAY_HINTS)
+        );
+        let older: Vec<&str> = older.into_iter().filter(|c| *c != RELAY_HINTS).collect();
         assert_eq!(
             refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
             Some(VOICE_INPUTS)

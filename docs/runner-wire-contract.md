@@ -28,6 +28,8 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
+Heartbeats can carry 33 capabilities. If an older hub refuses more than 32, the runner retries without
+`attempt_credentials_v1` first.
 
 A runner and a server work together when each is on the current or the previous minor release, in either direction:
 a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,

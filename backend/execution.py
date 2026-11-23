@@ -2144,9 +2144,9 @@ PLACE_SQL = "SELECT runner_id FROM assignments WHERE bot=?"
 
 def cooling_off_loads(c):
     """What cooling_off reads, for a page that asks it of many bots in one snapshot (holds._usage_limit): the claim's
-    loads (backend/claim_loads.py: the company's providers and plans, every open hold and every assigned computer's
-    row, read once, as Health passes them), with each bot's computer (PLACE_SQL) and configuration (BS.ONE_SQL) primed
-    in the snapshot's read cache. A row a page primed already stays. None outside a snapshot. Only computers not
+    loads (backend/claim_loads.py: the company's providers, each bot's payer picks, every open hold and every assigned
+    computer's row, read once, as Health passes them). Each bot's computer (PLACE_SQL) and configuration (BS.ONE_SQL)
+    are primed in the snapshot's read cache. A row a page primed already stays. None outside a snapshot. Only computers not
     revoked are in it: a revoked one is judged without loads (holds._usage_limit), as the loads read a revoked
     computer differently in places (model_subscriptions.held_plan's live=True)."""
     from . import claim_loads
@@ -2165,7 +2165,7 @@ def cooling_off_loads(c):
             "SELECT * FROM runners_with_state WHERE id IN (SELECT runner_id FROM assignments) AND revoked_at IS NULL"
         )
     }
-    return claim_loads.read(c, None, runners, ())
+    return claim_loads.read(c, None, runners, bots)
 
 
 def cooling_off(c, settings, bot, loads=None):
@@ -5684,7 +5684,7 @@ class Execution:
         if relationship:
             here = relationship_readiness(here)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
-        if bot != relationship_runs.BOT and config["runtime"] != "codex" and agent_subscriptions.CAPABILITY in caps:
+        if "codex" in paid_tools and handed[0] != "codex" and agent_subscriptions.CAPABILITY in caps:
             shell = agent_subscriptions.resolve(c, bot, "codex", "")
             if shell and shell.subscription and model_subscriptions.for_shell(shell.subscription):
                 subscribed.append({"runtime": "codex", "subscription": shell.subscription, "delivery": "shell"})

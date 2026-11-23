@@ -120,11 +120,12 @@ impl Delivered {
         self.env.is_some() || self.home_env.is_some()
     }
 
-    /// A plan login kept in a home of its own (a ChatGPT login): it also signs its CLI in for the commands of a turn
-    /// running another runtime, so a bot on Claude can run `codex exec` on its computer's ChatGPT plan. Never an API
-    /// key (that spends per use), and never a runtime whose home is HOME (it would move the running CLI's own home).
+    /// A plan login in its own CLI home can sign in shell commands during another runtime's turn. Current hubs send
+    /// the agent's shell payer, and older hubs send the computer's login. API keys pay only for their own runtime.
     fn for_shell(&self) -> bool {
-        self.attempt_only && self.runtime == "codex" && self.home.is_some()
+        self.home.is_some()
+            && self.billing == "subscription"
+            && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
     }
 }
 
@@ -880,7 +881,8 @@ mod tests {
             }])
         };
         let mut first = turn(&state, &items("{\"tokens\":\"attempt one\"}"), "codex");
-        let mut second = turn(&state, &items("{\"tokens\":\"attempt two\"}"), "codex");
+        // The hub can also deliver the agent's Codex login for the shell of a Claude turn.
+        let mut second = turn(&state, &items("{\"tokens\":\"attempt two\"}"), "claude");
         let one = first[0].file.clone().unwrap();
         let two = second[0].file.clone().unwrap();
         assert_ne!(one, two);
@@ -1177,7 +1179,7 @@ mod tests {
     fn an_openai_key_never_signs_in_another_runtimes_commands() {
         let state = dir();
         let items = json!([
-            {"id": "s11", "runtime": "codex", "kind": "openai_key", "file": "auth.json", "billing": "api",
+            {"id": "s11", "runtime": "codex", "kind": "openai_key", "file": "auth.json", "billing": "api", "source": "attempt",
              "value": r#"{"OPENAI_API_KEY":"sk-synthetic-openai-key-eeeeeeee"}"#, "revision": 1},
         ]);
         let mut env = Env::new();
