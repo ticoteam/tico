@@ -147,6 +147,21 @@ describe('Conversation', () => {
     expect(screen.getAllByText('Can you check the label?')).toHaveLength(1);
   });
 
+  it("sends a task chat's words as a comment on the task, to the session of the agent named, and shows the comment once", async () => {
+    const real = msg(3, ME, 'Use the new label');
+    serve(() => ({ status: 200, body: { comment: real } }));
+    const task = { id: 't1', to: 'bot:qa' };
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" task={task} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    type('Use the new label');
+    await waitFor(() => expect(posts).toHaveLength(1));
+    expect(posts[0]).toEqual({ url: '/api/v2/tasks/t1/comments', body: { text: 'Use the new label', to: 'bot:qa' } });
+    emit('messages', [{ id: real.id, conversation_id: T, message: real }]);
+    await waitFor(() => expect(screen.queryByText('Not sent')).toBeNull());
+    expect(screen.getAllByText('Use the new label')).toHaveLength(1);
+  });
+
   it('grows a streamed reply in place, then hands it to the posted message', () => {
     show();
     emit('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'qa', state: 'running' }]);

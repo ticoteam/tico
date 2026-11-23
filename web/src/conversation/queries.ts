@@ -124,9 +124,13 @@ export interface Send {
       chat takes no reply. */
   replyTo?: string;
   quote?: ReplyQuote | null;
+  /** A task's chat: the person's words are a task comment (POST /api/v2/tasks/{task}/comments), which reaches only whom
+      it addresses; with `to`, the agent whose session it is written to, which wakes it. A reply goes to its author
+      instead, as a Reply does. Files still go as a thread message: a comment, which wakes nobody. */
+  task?: { id: string; to?: string };
 }
 
-type Sent = ChatMessage | { message?: ChatMessage } | { hold?: unknown };
+type Sent = ChatMessage | { message?: ChatMessage } | { comment?: ChatMessage } | { hold?: unknown };
 
 /** `/threads/dm/messages`: the sender's DM with `to_dm`, found or made by the server as it writes (thread_api DM_ADDRESS). */
 const DM_ADDRESS = 'dm';
@@ -155,6 +159,9 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
     return api.post<Sent>('/api/v2/uploads/assistant/messages', f, opts);
   }
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
+  // a session message goes to its agent; a reply goes to whom it answers, never both (the server refuses both)
+  const to = s.task?.to && !s.replyTo ? s.task.to : undefined;
+  if (s.task && !files.length) return api.post<Sent>(`/api/v2/tasks/${enc(s.task.id)}/comments`, { text: s.text, ...(to && { to }), ...reply }, opts);
   const where = s.toDm ? DM_ADDRESS : enc(s.id);
   if (!files.length) return api.post<Sent>(`/api/v2/threads/${where}/messages`, { ...messageBody(s.text, s.from, s.toDm), ...reply }, opts);
   const f = new FormData();
@@ -168,7 +175,7 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
 
 /** The posted message, or null when the server held it (a hold has no id). */
 const answerOf = (r: Sent): ChatMessage | null => {
-  const m = 'message' in r && r.message ? r.message : (r as ChatMessage);
+  const m = 'message' in r && r.message ? r.message : 'comment' in r && r.comment ? r.comment : (r as ChatMessage);
   return m && typeof m.id === 'string' ? m : null;
 };
 
