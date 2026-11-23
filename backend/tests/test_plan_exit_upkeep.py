@@ -450,7 +450,9 @@ def test_connect_resumes_on_the_same_exit_after_a_readiness_drop(api, computers)
     post(api, f"{path}/report", {"state": "waiting"}, token)
 
     heartbeat(api, exit_runner, installed=False)
-    get(api, "runner-logins", token, expected=503)
+    # The paused Connect stays listed (so the runner keeps its session) without a code; the poll itself succeeds.
+    [paused] = get(api, "runner-logins", token)["logins"]
+    assert paused["id"] == lid and "code" not in paused
     post(api, f"{login_path}/code", {"code": "abcdef#ghijkl"}, expected=409)
     post(api, f"{path}/subscription", {"value": full()}, token, expected=503)
     assert get(api, login_path)["state"] == "waiting"

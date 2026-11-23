@@ -674,9 +674,9 @@ def pending(c, runner_id, swept=True):
     """What this runner should be running: every live sign-in, and a pasted code not yet taken."""
     if swept:
         sweep(c)
-    if _stale_connects(c, runner_id, require_ready=True):
-        # A successful poll without the Connect tells the runner to cancel its live session.
-        raise Problem("offline", EXIT_NOT_READY, 503, retryable=True)
+    # A Connect paused while its exit isn't ready stays listed (an unlisted one is canceled on the runner) but its
+    # pasted code is held back until the exit is ready again; the computer's other sign-ins carry on.
+    paused = set(_stale_connects(c, runner_id, require_ready=True))
     rows = c.execute(
         f"SELECT l.*, s.kind AS subscription_kind FROM model_logins l LEFT JOIN subscription_connects s "
         f"ON s.login_id=l.id WHERE l.runner_id=? AND l.{ACTIVE_SQL} "
@@ -690,7 +690,7 @@ def pending(c, runner_id, swept=True):
             "profile": r["profile"],
             "expires_at": r["expires_at"],
             **({"kind": r["kind"]} if r["kind"] != "sign_in" else {}),
-            **({"code": r["pending_code"]} if r["pending_code"] else {}),
+            **({"code": r["pending_code"]} if r["pending_code"] and r["id"] not in paused else {}),
             # A Connect of a full Claude login runs `auth login` and sends its files (backend/claude_login.py).
             **({"subscription_kind": r["subscription_kind"]} if r["subscription_kind"] == "claude_login" else {}),
         }
