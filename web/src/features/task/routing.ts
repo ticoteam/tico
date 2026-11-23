@@ -5,7 +5,7 @@ import { meQuery } from '@/data';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
-import { questionFor, waitSlugs, waitsOnYou } from './waits';
+import { questionsFor, waitSlugs, waitsOnYou } from './waits';
 
 // What the routes use before a task's code loads: its first read, its address and the address check. No components
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
@@ -15,11 +15,11 @@ export { tabAddress as taskAddress, CHAT as CHAT_TAB } from './model';
 /** The open task as its route loaded it, read from what is already there (never a read of its own, so the shell can ask
     on every page): the phone's Agent icon shows its agent, and comes up for a ❓ to the person in its chat (its waits
     name them, whatever its turn shows first: an approval it shares goes first there). */
-export function useLoadedTask(param: string | undefined): { task: TaskData | undefined; asksInChat: boolean } {
+export function useLoadedTask(param: string | undefined): { task: TaskData | undefined; asked: string[] } {
   const id = useQuery({ ...taskRefQuery(param ?? ''), enabled: false }).data;
   const task = useQuery({ ...taskDetailQuery(id), enabled: false }).data;
   const me = useQuery({ ...meQuery, enabled: false }).data?.id;
-  return { task: param ? task : undefined, asksInChat: !!param && !!task?.conversation_id && questionFor(task, me) };
+  return { task: param ? task : undefined, asked: param && task?.conversation_id ? questionsFor(task, me) : [] };
 }
 
 /** A closed task's board for `leaveTask` when nothing is behind it: its pipeline while that is still one, else none

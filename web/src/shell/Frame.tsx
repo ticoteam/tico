@@ -40,6 +40,10 @@ export interface FrameProps {
   marks?: { menu?: ReactNode; chat?: ReactNode };
   /* on the phone: the chat is where the page waits on the person, so it comes up (PhoneCards raiseChat) */
   raiseChat?: boolean;
+  /* on the phone: the ❓s that wait on the person in the chat (PhoneCards asked) */
+  asked?: string;
+  /* on the phone: the chat has no Agent icon yet (an open task's own, until its read shows it has one) */
+  chatLater?: boolean;
   /* on the phone: what sets the chat card again when it changes (an open task and the chat its address names) */
   chatKey?: string;
   /* on the phone: search, from the bar */
@@ -387,9 +391,10 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
         page={p.page}
         tico={p.tico}
         menu={p.menu}
-        chat={p.arr === 'call' ? undefined : p.chat}
+        chat={p.arr === 'call' || p.chatLater ? undefined : p.chat}
         tucked={tucked || lip}
         raiseChat={p.raiseChat}
+        asked={p.asked}
         chatKey={owner?.address ?? p.chatKey}
         onCardChange={onCard}
         labels={owner ? { chat: owner.name } : undefined}

@@ -157,7 +157,7 @@ describe('task route loading', () => {
     }
     const seen: boolean[] = [];
     const Shell = ({ task: n }: { task: string }) => {
-      seen.push(useLoadedTask(n).asksInChat);
+      seen.push(useLoadedTask(n).asked.length > 0);
       return null;
     };
     const { rerender } = render(

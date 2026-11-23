@@ -35,6 +35,9 @@ export interface PhoneCardsProps {
   /** The chat is where the page waits on the person (a ❓ for them in a task's chat, the chat tab's address): it comes
       up when the page opens and whenever this turns true. Turning false never puts it down. */
   raiseChat?: boolean;
+  /** The ❓s that wait on the person in the chat (their ids, by spaces): each new one brings the chat up, even one put
+      down by hand at the same address. */
+  asked?: string;
   /** Whose chat it is (the Agent bar's page key; an open task and the chat its address names): when it changes, the
       chat card is set again from `tucked`, `raiseChat` and the address, even when they are the same as before. A card
       put down by hand stays down until then. */
@@ -80,7 +83,7 @@ function Tab({ name, label, on = false, onClick, children }: { name: string; lab
   );
 }
 
-export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tucked = false, raiseChat = false, chatKey, onSearch, onLeave, onCardChange }: PhoneCardsProps) {
+export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tucked = false, raiseChat = false, asked, chatKey, onSearch, onLeave, onCardChange }: PhoneCardsProps) {
   const router = useRouter({ warn: false });
   // a chat that opens comes up and one that ends goes down. An address that already names one (a shared link, a
   // reload) opens on it. A page's own chat (`tucked`) waits behind its icon unless the address names a chat or the
@@ -96,6 +99,8 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
   const [wasTucked, setWasTucked] = useState(tucked);
   const [wasKey, setWasKey] = useState(chatKey);
   const [wasRaised, setWasRaised] = useState(raiseChat);
+  const [wasAsked, setWasAsked] = useState(asked);
+  const newAsk = !!asked && asked.split(' ').some((q) => !wasAsked?.split(' ').includes(q));
   if (seen !== second) {
     setSeen(second);
     if (comesUp()) setCard('chat');
@@ -105,8 +110,9 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     // an ask from the page's owner waits on you, the address names it), and one that waits again goes down
     if (comesUp()) setCard('chat');
     else if (card === 'chat') setCard('none');
-  } else if (raiseChat && !wasRaised && second) setCard('chat');
+  } else if (((raiseChat && !wasRaised) || newAsk) && second) setCard('chat');
   if (wasTucked !== tucked) setWasTucked(tucked);
+  if (wasAsked !== asked) setWasAsked(asked);
   if (wasKey !== chatKey) setWasKey(chatKey);
   if (wasRaised !== raiseChat) setWasRaised(raiseChat);
 

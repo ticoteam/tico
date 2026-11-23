@@ -18,6 +18,10 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
   --kb:0px;--vv-top:0px;
   --c-tico:var(--surface-tico);--c-menu:var(--surface-nav);--c-chat:var(--surface-chat)}   /* the desktop's layer tones (tokens.css, elevation) */
 
+/* a live call on another page: its bar heads the window, under the status bar, and the phone takes the room under it */
+.shell-col:has(>.phone)>.cb{margin-top:calc(env(safe-area-inset-top,0px) + var(--gap-pane))}
+.shell-col:has(>.cb)>.phone{--sat:0px;--cb-room:calc(env(safe-area-inset-top,0px) + var(--gap-pane) + 52px);top:var(--cb-room);height:calc(100dvh - var(--cb-room))}
+
 /* the page and the cards: the first row, one over another */
 .phone>:is(.pg,.ly){grid-row:1;grid-column:1;position:relative;min-height:0;margin:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px);display:flex;flex-direction:column;overflow:hidden}
 /* the page's own sheet fills it (a call's controls at the bottom, not under its content) */

@@ -290,7 +290,11 @@ function App() {
   // link to a task's chat (`/tasks/<p>/<n>/chat`, `?tab=chat`), or a ❓ in it that waits on the person.
   const chatWho = arrangement === 'agent' ? who : at.chat ? (at.chat === SUPPORT_CHAT ? undefined : bare(at.chat)) : (open.task?.owner_id ?? (callChat ? bare(callChat) : undefined));
   const chatAsked = arrangement === 'task' && (c === CHAT_TAB || at.tab === CHAT_TAB);
-  const raiseChat = chatAsked || open.asksInChat;
+  const asked = open.asked.join(' ') || undefined;
+  const raiseChat = chatAsked || !!asked;
+  // an open task's own chat is the phone's Agent once its read shows it has one: a task that did not load (gone, not
+  // theirs) or has no chat has none. A thread the address names (`?chat=`) is its own.
+  const chatLater = arrangement === 'task' && !at.chat && !open.task?.conversation_id;
   // the chat card is set again when the open task or the chat its address names changes; a tuck holds until then
   const chatKey = task ? `${task}\n${at.chat ?? ''}\n${chatAsked}` : undefined;
   const client = useQueryClient();
@@ -330,6 +334,8 @@ function App() {
           trail={trail}
           marks={{ menu: <CompanyMark />, chat: <ChatFace id={chatWho} /> }}
           raiseChat={raiseChat}
+          asked={asked}
+          chatLater={chatLater}
           chatKey={chatKey}
           onSearch={() => openSearch()}
           onLeave={leave}

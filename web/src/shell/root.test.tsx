@@ -687,9 +687,18 @@ describe('an open task on a phone', () => {
     });
   const bar = () => screen.getByRole('navigation', { name: 'Bar' });
   const icon = (name: string) => within(bar()).getByRole('button', { name });
+  // a task as its route read it: with a chat, and the ❓s in it that wait on Maya
+  const read = (n: number, ...questions: string[]) => {
+    queryClient.setQueryData(['tasks', 'ref', String(n)], `t${n}`);
+    queryClient.setQueryData(['tasks', 'detail', `t${n}`], {
+      id: `t${n}`, number: n, pipeline_id: 'eng', owner_id: 'bot:qa', conversation_id: `c${n}`,
+      waits: questions.map((q) => ({ state: 'person', who: 'human:maya', requirement_id: `qmark:${q}` })),
+    });
+  };
   beforeEach(() => {
     at(390);
     people(MAYA, QA);
+    read(7);
   });
   afterEach(() => at(1024));
 
@@ -734,15 +743,8 @@ describe('an open task on a phone', () => {
   });
 
   it('a ❓ to the person in a task’s chat brings it up on each task it opens, Back and Forward too; put down, it stays down there', async () => {
-    const asked = (n: number) => {
-      queryClient.setQueryData(['tasks', 'ref', String(n)], `t${n}`);
-      queryClient.setQueryData(['tasks', 'detail', `t${n}`], {
-        id: `t${n}`, number: n, pipeline_id: 'eng', owner_id: 'bot:qa', conversation_id: `c${n}`,
-        waits: [{ state: 'person', who: 'human:maya', requirement_id: `qmark:q${n}` }],
-      });
-    };
-    asked(7);
-    asked(8);
+    read(7, 'q7');
+    read(8, 'q8');
     const router = show('/tasks/eng/7');
     expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
     fireEvent.click(icon('Task'));
@@ -752,6 +754,28 @@ describe('an open task on a phone', () => {
     act(() => router.history.back());
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7'));
     expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
+  });
+
+  it('a new ❓ brings the chat up again after it was put down, on the chat’s own address too', async () => {
+    show('/tasks/eng/7/chat');
+    expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => read(7, 'q1'));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy());
+    fireEvent.click(icon('Task'));
+    act(() => read(7, 'q1'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a link to the chat of a task that did not load (gone, not theirs) raises nothing over its error; a thread the address names still comes up', async () => {
+    const router = show('/tasks/eng/9/chat');
+    expect((await screen.findAllByRole('heading', { name: 'An open task' })).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(within(bar()).queryByRole('button', { name: 'Agent' })).toBeNull();
+    expect(screen.queryByText('task chat')).toBeNull();
+    await act(() => router.navigate({ to: '/tasks/eng/9' as never, search: { chat: 'agent:qa' } as never }));
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('a teammate chat')).toBeTruthy();
   });
 
   it('`?tab=chat` on a task’s own address brings its chat up too', async () => {
