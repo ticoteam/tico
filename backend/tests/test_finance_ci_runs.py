@@ -67,9 +67,12 @@ def test_a_job_minute_costs_the_rate_scaled_by_vcpus_and_hosted_runs_are_free():
         job("2026-11-07T10:00:00Z", "2026-11-07T10:05:00Z", ["macos-latest"]),  # hosted too
         job("2026-11-07T10:00:00Z", "2026-11-07T10:00:00Z", ["runs-on=1/runner=4cpu-linux-x64"]),  # zero length
         job(None, None, ["runs-on=1/runner=4cpu-linux-x64"]),  # skipped
+        job(
+            "2026-11-07T10:00:00Z", "2026-11-07T10:50:00Z", ["runs-on=1/runner=16cpu-linux-x64"]
+        ),  # priced by its label
     ]
-    # 51 billed minutes at 4 vCPUs cost 8 cents; 15 hosted minutes count but cost nothing.
-    assert ci_runs.price(jobs, 0.0016) == (66, 8)
+    # 51 billed minutes at 4 vCPUs cost 8 cents and 50 at 16 cost 32; 15 hosted minutes count but cost nothing.
+    assert ci_runs.price(jobs, 0.0016) == (116, 40)
 
 
 def test_the_run_kind_comes_from_its_workflow_file_or_the_merge_queue():
@@ -123,8 +126,9 @@ def test_a_permit_with_a_bad_run_id_size_or_time_limit_is_refused_as_invalid(boo
         task_id = ticket(c)
         with pytest.raises(Problem):
             permit(c, task_id, remote_id="NOT-HEX")
-        with pytest.raises(Problem):
-            permit(c, task_id, cpus=2)
+        for cpus in (2, 16):  # remote.py offers 4 or 8
+            with pytest.raises(Problem):
+                permit(c, task_id, cpus=cpus)
         with pytest.raises(Problem):
             permit(c, task_id, minutes=61)
 
@@ -138,13 +142,13 @@ def test_the_daily_share_refuses_a_run_that_no_longer_fits_and_no_amount_means_n
         set_ci_amount(c, 3_100)  # $31 in October: $1.00 a day
         share = FC.day_share(c, AT)[1]
         assert share == 100
-        # 50 minutes on 16 vCPUs is 32 cents: three fit in $1.00, the fourth does not.
-        for n in range(3):
-            assert permit(c, ticket(c, f"Share run {n}"), remote_id=f"66666666666{n}", cpus=16)["allowed"] is True
-        full = permit(c, ticket(c, "Share run full"), remote_id="777777777777", cpus=16)
+        # 50 minutes on 8 vCPUs is 16 cents: six fit in $1.00, the seventh does not.
+        for n in range(6):
+            assert permit(c, ticket(c, f"Share run {n}"), remote_id=f"66666666666{n}", cpus=8)["allowed"] is True
+        full = permit(c, ticket(c, "Share run full"), remote_id="777777777777", cpus=8)
         assert full["allowed"] is False and "today's CI share" in full["message"]
         held = c.execute("SELECT count(*), sum(amount) FROM fin_holds WHERE source='ci'").fetchone()
-        assert held[0] == 3 and held[1] == 96
+        assert held[0] == 6 and held[1] == 96
 
 
 # ---------------------------------------------------------------------------------------------------- the sweep
@@ -178,7 +182,7 @@ def test_a_builder_run_absorbs_its_permit_hold_when_it_posts(books):
     with books.transaction() as c:
         set_ci_amount(c, 3_100)
         task_id = ticket(c)
-        assert permit(c, task_id, remote_id=RUN, cpus=16)["allowed"] is True
+        assert permit(c, task_id, remote_id=RUN, cpus=8)["allowed"] is True
     runs = [
         {
             "id": 2001,
@@ -188,14 +192,14 @@ def test_a_builder_run_absorbs_its_permit_hold_when_it_posts(books):
             "display_title": f"Remote run {RUN}",
         }
     ]
-    jobs = {2001: [job("2026-10-15T11:00:00Z", "2026-10-15T11:50:00Z", ["runs-on=1/runner=16cpu-linux-x64"])]}
+    jobs = {2001: [job("2026-10-15T11:00:00Z", "2026-10-15T11:50:00Z", ["runs-on=1/runner=8cpu-linux-x64"])]}
     ci_runs.sweep(books, FakeGitHub(runs, jobs), "ticoteam/tico", 0.0016, AT)
     with books.read() as c:
         row = c.execute("SELECT * FROM ci_runs WHERE remote_id=?", (RUN,)).fetchone()
-        assert (row["kind"], row["status"], row["cost_cents"]) == ("builder", "permitted", 32)
+        assert (row["kind"], row["status"], row["cost_cents"]) == ("builder", "permitted", 16)
         hold = c.execute("SELECT status, entry_id FROM fin_holds WHERE source='ci'").fetchone()
         assert hold["status"] == "settled" and hold["entry_id"] is not None  # the hold no longer reserves anything
-        assert FC.day_spent(c, SL.book(c), _budget_of(c), AT) == 32  # posted, and nothing held
+        assert FC.day_spent(c, SL.book(c), _budget_of(c), AT) == 16  # posted, and nothing held
 
 
 def _budget_of(c):
@@ -226,7 +230,7 @@ def test_the_manager_update_carries_one_line_of_ci_today_only_when_there_is_some
         assert ci_runs.digest_line(c, AT) is None  # no CI budget amount, nothing spent or refused
         set_ci_amount(c, 3_100)
         task_id = ticket(c)
-        for n in range(3):  # 32 cents each on 16 vCPUs: the fourth does not fit today's $1.00
-            assert permit(c, task_id, remote_id=f"88888888888{n}", cpus=16)["allowed"] is True
-        assert permit(c, task_id, remote_id="888888888889", cpus=16)["allowed"] is False
+        for n in range(6):  # 16 cents each on 8 vCPUs: the seventh does not fit today's $1.00
+            assert permit(c, ticket(c, f"Digest run {n}"), remote_id=f"88888888888{n}", cpus=8)["allowed"] is True
+        assert permit(c, task_id, remote_id="888888888889", cpus=8)["allowed"] is False
         assert ci_runs.digest_line(c, AT) == "CI today: $0.96 of a $1.00 share; 1 builder run refused."

@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from .store import Store
 
 CPU_BASE = 4  # the vCPUs the rate is quoted for
-CPUS = (4, 8, 16)  # the runner sizes remote.py offers
+CPUS = (4, 8)  # the runner sizes remote.py offers (scripts/remote.py --cpus)
 MINUTES_MAX = 60  # remote.py's --minutes limit
 EXTENSION_PERCENT = 50  # one extension of this share of the ticket's minutes
 RESERVE_HOURS = 12  # a permit's reserve frees itself when its run never reports back
