@@ -67,9 +67,12 @@ def test_a_job_minute_costs_the_rate_scaled_by_vcpus_and_hosted_runs_are_free():
         job("2026-11-07T10:00:00Z", "2026-11-07T10:05:00Z", ["macos-latest"]),  # hosted too
         job("2026-11-07T10:00:00Z", "2026-11-07T10:00:00Z", ["runs-on=1/runner=4cpu-linux-x64"]),  # zero length
         job(None, None, ["runs-on=1/runner=4cpu-linux-x64"]),  # skipped
+        job(
+            "2026-11-07T10:00:00Z", "2026-11-07T10:50:00Z", ["runs-on=1/runner=16cpu-linux-x64"]
+        ),  # priced by its label
     ]
-    # 51 billed minutes at 4 vCPUs cost 8 cents; 15 hosted minutes count but cost nothing.
-    assert ci_runs.price(jobs, 0.0016) == (66, 8)
+    # 51 billed minutes at 4 vCPUs cost 8 cents and 50 at 16 cost 32; 15 hosted minutes count but cost nothing.
+    assert ci_runs.price(jobs, 0.0016) == (116, 40)
 
 
 def test_the_run_kind_comes_from_its_workflow_file_or_the_merge_queue():
@@ -123,8 +126,9 @@ def test_a_permit_with_a_bad_run_id_size_or_time_limit_is_refused_as_invalid(boo
         task_id = ticket(c)
         with pytest.raises(Problem):
             permit(c, task_id, remote_id="NOT-HEX")
-        with pytest.raises(Problem):
-            permit(c, task_id, cpus=2)
+        for cpus in (2, 16):  # remote.py offers 4 or 8
+            with pytest.raises(Problem):
+                permit(c, task_id, cpus=cpus)
         with pytest.raises(Problem):
             permit(c, task_id, minutes=61)
 
