@@ -134,15 +134,14 @@ def test_a_bot_that_stops_early_gets_three_tries_then_its_manager_bot_then_the_l
     assert len(told) == 1 and "Write the launch note" in told[0][0]
     assert _said(c, task_id, BUILDER)[1:] == [
         *(f"You stopped before this task was finished. Try {n} of 3." for n in (1, 2, 3)),
-        "Rule Late: 24 h in To do.",  # the stage's Late rule tells its bot, once a visit, ladder or not
-    ]
+    ]  # no Late wake once the ladder rests at level person: no run of it could start (the manager was told above)
     assert _said(c, task_id, MANAGER) == [
         "builder stopped 3 times without finishing it. It is yours now: do it, reassign it, ask a person, snooze it "
         "or close it. Try 1 of 3.",
         "You stopped before this task was finished. Try 2 of 3.",
         "You stopped before this task was finished. Try 3 of 3.",
     ]
-    assert len(X.wakes(c, task_id)) == 8  # one start, three tries, three for the manager bot, one Late
+    assert len(X.wakes(c, task_id)) == 7  # one start, three tries, three for the manager bot
     kinds = X.events(c, task_id)
     assert kinds.count("woken_again") == 6 and kinds.count("ladder") == 2
 
@@ -1185,7 +1184,7 @@ def test_a_private_task_no_person_can_read_goes_to_no_one_and_health_counts_it_w
     assert all(n.get("task_id") != task_id for n in W.needs(c, ANA))  # its title is in nobody's list
     assert _states(c, task_id)[0] == ("bot", BUILDER)  # the ladder rests with its bot
     assert "woken" not in step(days=30)  # the ladder wakes no bot again
-    assert _said(c, task_id, BUILDER)[-1] == "Rule Late: 24 h in To do."  # the stage's own Late rule, once a visit
+    assert "Rule Late" not in " ".join(_said(c, task_id, BUILDER))  # at level person no run of it could start
     X.ran(c, task_id, BUILDER)
     assert "woken" not in step(days=30) and _queued(c, task_id) == []
     broken = NS.rules_hold(c)

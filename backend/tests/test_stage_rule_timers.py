@@ -509,6 +509,70 @@ def test_a_blocked_task_waiting_on_a_persons_ok_is_not_late(c, time_machine):
     assert _owner_told(c, waiting, "Late") == []  # the person's turn, blocked or not
 
 
+def _ask_and_answer(c, task_id):
+    """An OK asked of Ana now, and her answer to it, given when the returned call is made."""
+    from backend import answers
+
+    asked = X.ok_ask(c, task_id, "bot:builder", ANA, "OK the plan?")
+    return lambda: answers.answer(c, task_id, asked["requirement_id"], ANA, "ok")
+
+
+def test_a_blocked_task_is_late_once_the_persons_ok_it_waited_on_is_answered(c, time_machine):
+    _late(c, minutes=6 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on Ana and on the API")
+    _block(c, blocked, _task(c, "ops", "Build", "bot:fixer", "The API"))
+    answer = _ask_and_answer(c, blocked)
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert _owner_told(c, blocked, "Late") == []  # Ana's turn
+    answer()
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert len(_owner_told(c, blocked, "Late")) == 1  # the bot's again, and its blocker still quiet
+
+
+def test_late_is_told_once_per_visit_though_a_person_answers_after_it(c, time_machine):
+    _late(c, minutes=2 * 60)
+    task_id = _task(c, "eng", "Build", "bot:builder", "Build it")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=3))
+    T.sweep(c)
+    assert len(_owner_told(c, task_id, "Late")) == 1
+    _ask_and_answer(c, task_id)()  # restarts its clock, not its one catch
+    time_machine.shift(timedelta(hours=3))
+    T.sweep(c)
+    assert len(_owner_told(c, task_id, "Late")) == 1
+
+
+def test_a_rule_wake_waits_while_a_person_holds_the_turn(c, time_machine):
+    _late(c, minutes=6 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the API")
+    _block(c, blocked, _task(c, "ops", "Build", "bot:fixer", "The API"))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    (wake,) = c.execute(
+        "SELECT id FROM messages WHERE json_extract(refs, '$.task') = ? AND body LIKE '%Rule Late%'", (blocked,)
+    ).fetchone()
+    X.ok_ask(c, blocked, "bot:builder", ANA, "OK the plan?")  # asked after the wake was written
+    assert not task_wakes.may_start(c, wake)
+
+
+def test_a_private_blocker_the_owner_may_not_open_is_not_named(c, time_machine):
+    _late(c, minutes=6 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the salaries")
+    blocker = _task(c, "ops", "Build", "bot:fixer", "Salary numbers")
+    _block(c, blocked, blocker)
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([ANA]), blocker))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    ((_, body),) = _owner_told(c, blocked, "Late")
+    assert "Blocked by a task you can't open" in body
+    assert task_depends.ref(E.task(c, blocker)) not in body and "Salary" not in " ".join(_history(c, blocked))
+
+
 def test_a_timer_never_messages_a_person(c, time_machine):
     _rule(c, id="tell-anyone", name="Tell anyone", timer={"kind": "quiet", "hours": 1}, then="tell_owner")
     _rule(c, id="tell-boss", name="Tell the boss", timer={"kind": "quiet", "hours": 1}, then="tell_manager")

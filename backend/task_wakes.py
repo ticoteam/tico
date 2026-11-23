@@ -1016,8 +1016,16 @@ def _may_start(
         return False
     if (task["visit"].get("level") or "owner") == "person":
         return False
+    waits = None
     ruled = kind in (STAGE_RULE, FILED) and bot == task.get("owner_id")
-    if not (ruled or _related(conn, task, bot, kind)) and bot not in W.turns(conn, task):
+    if ruled and kind == STAGE_RULE:
+        # A rule's tell runs with no turn of its own (a blocked task's waits are its blockers), not while a person holds
+        # the turn: a person's OK or answer asked since the wake was written comes first.
+        waits = W.of(conn, task)
+        ruled = not (waits and waits[0].state == W.PERSON)
+        if not ruled:
+            return False
+    if not (ruled or _related(conn, task, bot, kind)) and bot not in W.turns(conn, task, waits):
         return False
     return runs_since(conn, task, starting=True, besides=attempt) < RUNS
 

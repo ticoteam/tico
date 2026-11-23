@@ -112,6 +112,7 @@ _BLOCKER_ACTIVE = (
     f"COALESCE((SELECT {_ACTIVE} FROM visits v WHERE v.task_id = t.id AND v.left_at IS NULL), t.updated_at) "
     "FROM tasks t LEFT JOIN pipelines p ON p.id = t.pipeline_id WHERE t.id IN (SELECT value FROM json_each(?))"
 )
+_UNNAMED = "a task you can't open"
 BLOCKED_ASK = "Chase it, take the link off, reassign or re-plan."
 # An auto dream (backend/dream_auto.py): nobody waits on it, so Quiet bot tasks never tells a manager about one; its
 # release policy and the auto pass end it (an index probe on events_action_target).
@@ -256,12 +257,16 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
             return None  # a task it waits on moved within the rule's hours: it is not stalled
         task = {**task, "quiet_blockers": quiet}
         mark = f"{task['visit_id']}@blocked"  # once per visit, however often its blockers go quiet again
+    if rule["timer_kind"] == "in_stage":
+        # Once per visit, blocked or not: a person's answer restarts its clock (`_started`), not its one catch.
+        mark = f"{task['visit_id']}@visit"
     label = str(rule["cond"].get("label") or "")
     if label and _mod("stage_rules")._tagged(conn, {"id": task["id"]}, label):
         mark += f"#{label.lower()}"  # a tag added to a task judged without it is judged again
-    # A rule that did not match is judged again once the task has another owner: a person's task handed to a bot in
-    # the same visit is still caught. A match, told or not, stays once per visit whoever owns it next.
-    unmatched = f"{mark}~{task['owner_id'] or ''}"
+    # A rule that did not match is judged again once the task has another owner or anything happens on it (a person's
+    # answer ends their turn, a reassign, a message): a person's task handed to a bot in the same visit is still caught.
+    # A match, told or not, stays once per visit (or quiet period) whoever owns it next.
+    unmatched = f"{mark}~{task['owner_id'] or ''}~{task['active_at']}"
     if conn.execute(
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark IN (?,?)",
         (rule["id"], task["id"], mark, unmatched),
@@ -303,8 +308,8 @@ def _matches(conn: Any, rule: Row, task: Row) -> bool:
     blocked task's is its owner's, who chases what it waits on); every other key by stage_rules.matches."""
     SR, E, W = _mod("stage_rules"), _mod("task_engine"), _mod("waiting_on")
     row = E.task(conn, task["id"])
-    if not row:
-        return False
+    if not row or not _in_scope(rule, row):
+        return False  # gone, or moved out of the rule's stages earlier in this pass
     turn = rule["cond"].get("turn")
     if turn and task.get("blocked"):
         # Blocked: its owner's turn, who chases what it waits on, unless a person's OK or answer is still asked.
@@ -360,7 +365,11 @@ def _quiet_blockers(conn: Any, task: Row, hours: float, at: str) -> list[tuple[s
         quiet = float((now - last).total_seconds()) / 3600
         if quiet < hours:
             return []
-        out.append((task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix}), quiet))
+        # Named only where everyone who reads the task's thread may open it, as the dependency's own lines are.
+        named = task_depends._named_to_all(conn, task, blocker_id)
+        out.append(
+            (task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix}) if named else _UNNAMED, quiet)
+        )
     return sorted(out, key=lambda one: -one[1])
 
 
@@ -406,11 +415,12 @@ def _tell_owner(conn: Any, rule: Row, task: Row, said: str, done: dict[str, int]
     SR, E, task_wakes = _mod("stage_rules"), _mod("task_engine"), _mod("task_wakes")
     owner = task["owner_id"]
     row = E.task(conn, task["id"])
-    if not H.is_bot(owner) or not row:
-        return False
+    if not H.is_bot(owner) or not row or (row["visit"].get("level") or "owner") == "person":
+        return False  # at level person no run starts (task_wakes.may_start): telling it would say what did not happen
     key = f"{task['id']}:{task['visit_id']}:{task_wakes.STAGE_RULE}:{rule['id']}:{task['active_at']}"
     body = task_wakes.body(conn, row, said, to=owner)
-    task_wakes.add(conn, row, owner, row["visit"], body, wake_key=key, refs=_rule_refs([rule]))
+    if not task_wakes.add(conn, row, owner, row["visit"], body, wake_key=key, refs=_rule_refs([rule])):
+        return False
     SR.record(conn, task["id"], rule, said, H.TICO_ACTOR, "told", {"to": owner})
     done["told"] += 1
     return True
@@ -487,6 +497,7 @@ def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool
         (manager, only_rule, only_rule),
     ).fetchall()
     listed: list[tuple[Row, Row]] = []
+    told: list[Row] = []  # every rule a named mark settles, though a task is listed once
     outcome: dict[tuple[str, str, str], str] = {}  # each pending row's settling: named or dropped
     for rule_id, task_id, mark in pending:
         key = (str(rule_id), str(task_id), str(mark))
@@ -502,6 +513,7 @@ def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool
             outcome[key] = "dropped"
         else:
             outcome[key] = "named"
+            told.append(rule)
             if task_id not in {r["id"] for r, _ in listed}:
                 listed.append((row, rule))
     _settle(conn, [k for k, o in outcome.items() if o == "dropped"], "dropped", None)
@@ -515,7 +527,7 @@ def _wake_manager(conn: Any, manager: str, at: str, only_rule: str = "") -> bool
         body.append(f"- and {n - LISTED} more")
     body.append("Look at each: do it, reassign it, ask a person, snooze it or close it.")
     text = "\n".join(body)
-    refs: Row = {"wake": "stage_rules", "tasks": [row["id"] for row, _ in listed], **_rule_refs(r for _, r in listed)}
+    refs: Row = {"wake": "stage_rules", "tasks": [row["id"] for row, _ in listed], **_rule_refs(told)}
     # Only a bot is told (`_manager`); a person who became the manager since is not, and nothing says they were.
     ok = H.is_bot(manager) and R._tell_bot(conn, "stage-rules", H.actor_id(manager), text, refs, wake=True)[0]
     if not ok:
@@ -601,12 +613,14 @@ def _covered(spans: list[tuple[str, str | None]], start: str, end: str) -> float
 # ----------------------------------------------------------------------------- Late, as a list reads it
 # A task a stall rule caught on its open visit, and that has not changed since: an agent was told (or waits to be) on a
 # mark of this visit after its last change. `%s` is the task's alias; `CAUGHT_SQL` is the condition the Late filter
-# reads, `caught` the rows a list or a task's own read shows.
+# reads, `caught` the rows a list or a task's own read shows. A rule timing a person's wait is not Late: the person
+# still owes the answer, though its manager bot is told.
+_NOT_PERSON_WAIT = "COALESCE(json_extract(r.timer, '$.kind'), '') <> 'waiting_person'"
 CAUGHT_SQL = (
     "EXISTS (SELECT 1 FROM visits cv JOIN stage_rule_marks ck ON ck.task_id = cv.task_id "
-    "AND ck.mark >= cv.id || '@' AND ck.mark < cv.id || 'A' "
+    "AND ck.mark >= cv.id || '@' AND ck.mark < cv.id || 'A' LEFT JOIN stage_rules r ON r.id = ck.rule_id "
     "WHERE cv.task_id = %s.id AND cv.left_at IS NULL AND ck.outcome IN ('told', 'pending') "
-    "AND ck.matched_at >= COALESCE(cv.last_change_at, cv.entered_at))"
+    f"AND ck.matched_at >= COALESCE(cv.last_change_at, cv.entered_at) AND {_NOT_PERSON_WAIT})"
 )
 
 
@@ -623,7 +637,7 @@ def caught(conn: Any, task_ids: Iterable[str]) -> dict[str, Row]:
         "LEFT JOIN stage_rules r ON r.id = ck.rule_id "
         "WHERE cv.task_id IN (SELECT value FROM json_each(?)) AND cv.left_at IS NULL "
         "AND ck.outcome IN ('told', 'pending') AND ck.matched_at >= COALESCE(cv.last_change_at, cv.entered_at) "
-        "ORDER BY ck.matched_at",
+        f"AND {_NOT_PERSON_WAIT} ORDER BY ck.matched_at",
         (json.dumps(ids),),
     ).fetchall():
         out.setdefault(str(task_id), {"since": at, "rule": name})

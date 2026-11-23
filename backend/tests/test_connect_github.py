@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend import never_stuck as NS
+from backend import stage_rule_timers
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.item_sources import github as F
@@ -83,6 +84,7 @@ def test_nobody_is_woken_or_offered_a_snooze_while_it_waits(c, eng, later):
         assert W.turns(c, E.task(c, task_id)) == set() and W.turn(c, E.task(c, task_id), paused=True) is None
     assert later(seconds=10) == {}
     assert later(days=5) == {}  # nobody's turn: Late, on the bot's turn only, passes it by
+    assert stage_rule_timers.caught(c, [first, second]) == {}
     for task_id in (first, second):
         assert X.wakes(c, task_id) == []
         assert dict(H._one(c, "SELECT level, tries FROM visits WHERE task_id=?", (task_id,))) == {
