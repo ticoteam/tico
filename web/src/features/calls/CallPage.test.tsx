@@ -343,6 +343,15 @@ describe('Call window', () => {
     expect(screen.queryByText(/Assistant/)).toBeNull();
   });
 
+  it('Share says coming soon and does nothing yet', async () => {
+    show();
+    await joined();
+    const share = await screen.findByRole('button', { name: 'Share screen, coming soon' });
+    expect((share as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(share);
+    expect(room().localParticipant.setScreenShareEnabled.mock.calls).toEqual([]);
+  });
+
   it('my own shared screen shows on the stage, in Tico’s call too, once it is out', async () => {
     queryClient.setQueryData(callQuery(ROOM).queryKey, call({ thread_id: 'th-tico', bots: ['b1'] }));
     show();
@@ -419,7 +428,7 @@ describe('Call window', () => {
 });
 
 describe('The call bar @s1049', () => {
-  it('Captions hide what is said; Share screen sends the screen and puts it on the stage @s1049', async () => {
+  it('Captions hide what is said; Share screen is not offered yet @s1049', async () => {
     const router = show();
     await joinThenGo(router);
     const bar = await screen.findByRole('banner', { name: 'Call' });
@@ -429,11 +438,7 @@ describe('The call bar @s1049', () => {
     await waitFor(() => expect(within(bar).queryByText('Prices stay')).toBeNull());
     expect(callState().captions).toBe(false);
 
-    fireEvent.click(within(bar).getByRole('button', { name: 'Share screen' }));
-    await waitFor(() => expect(sent().some((x) => x.method === 'PUT' && x.url.endsWith(`/calls/${ROOM}/stage`))).toBe(true));
-    expect(room().localParticipant.setScreenShareEnabled.mock.calls[0]).toEqual([true, { audio: false }]);
-    expect(sent().find((x) => x.method === 'PUT')?.body).toEqual({ kind: 'screen' });
-    expect(await within(bar).findByRole('button', { name: 'Stop sharing' })).toBeTruthy();
+    expect(within(bar).queryByRole('button', { name: 'Share screen' })).toBeNull();
     expect(within(bar).queryByRole('button', { name: 'More' })).toBeNull();
   });
 

@@ -7,7 +7,7 @@ import { CallBars } from '@/tico/dot';
 import { running } from './model';
 import { Face, inCall, press, useCards, useMe, useNameOf, useNow } from './parts';
 import { callQuery } from './queries';
-import { canShare, isActive, useCall, type CallState } from './session';
+import { isActive, useCall, type CallState } from './session';
 import './calls.css';
 
 /**
@@ -101,14 +101,8 @@ function Bar({ room, s }: { room: string; s: CallState }) {
       </div>
       <div className="cb-ctl">
         {mic}
-        {canShare() && (
-          <IconButton
-            icon="share"
-            label={s.sharing ? 'Stop sharing' : 'Share screen'}
-            on={s.sharing}
-            onClick={() => press('calls.share', { id: room, on: !s.sharing })}
-          />
-        )}
+        {/* sharing a screen does not work yet (the call page says coming soon): only one already out can stop */}
+        {s.sharing && <IconButton icon="share" label="Stop sharing" on onClick={() => press('calls.share', { id: room, on: false })} />}
         <IconButton icon="cc" label="Captions" on={s.captions} onClick={() => press('calls.captions', { on: !s.captions })} />
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />

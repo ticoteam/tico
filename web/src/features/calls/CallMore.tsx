@@ -73,6 +73,14 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
   const word = s.sharing ? 'Sharing' : 'Share';
   // a phone's browser cannot send a screen: with nothing to stop either, there is no control
   if (!canShare() && !stoppable) return null;
+  // sharing a screen does not work yet: say so, and still let a screen already out be stopped
+  if (!stoppable)
+    return (
+      <button type="button" className="cc" aria-label="Share screen, coming soon" title="Coming soon" disabled>
+        <Icon name="share" />
+        <span className="cc-l">Coming soon</span>
+      </button>
+    );
   return (
     <Menu
       align="start"
@@ -84,7 +92,6 @@ export function ShareControl({ room, c, s, me }: { room: string; c: Call | undef
         </button>
       }
     >
-      {canShare() && !s.sharing && <MenuItem label="Screen" icon="share" onSelect={() => void press('calls.share', { id: room, on: true })} />}
       {stoppable && <MenuItem label="Stop sharing" icon="close" onSelect={() => void press('calls.stopShow', { id: room })} />}
     </Menu>
   );
