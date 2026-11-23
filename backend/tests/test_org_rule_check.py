@@ -2420,25 +2420,3 @@ def test_a_bots_ask_a_rule_covers_is_refused_with_the_rules_words(ruled):
         headers=headers("ops-test"),
     )
     assert r.status_code == 200 and r.json()["requirement_id"], r.text
-
-
-def test_send_anyway_of_a_persons_task_chat_message_is_their_comment_once(ruled):
-    """A person's message in a task's chat is their comment on it (thread_api `_comment_marks`). Held, nothing of it
-    happens; Send anyway writes it and runs what a comment sets off, once: the bot it wakes works the task with her
-    party rights (H.task_chat_commented, from org_rule_check `_replay_thread`)."""
-    api, _ = ruled
-    rule(
-        api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "escalate", "reviewer": "ben"}
-    )
-    task = task_for_ops(api)
-    lent = (
-        "SELECT count(*) AS n FROM task_delegations WHERE task_id=? AND delegate='bot:ops' AND requested_by='human:ana'"
-    )
-    before = sql(api, lent, (task["id"],))[0]["n"]
-    held = post(api, f"threads/{task['conversation_id']}/messages", {"text": "Our favorite color is gold"})["held"]
-    assert sql(api, lent, (task["id"],))[0]["n"] == before
-    view = get(api, f"rule-holds/{held['id']}", token="ben-test")
-    post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
-    [said] = sql(api, "SELECT id, refs FROM messages WHERE body LIKE '%favorite color is gold%'")
-    assert json.loads(said["refs"])["comment"] is True
-    assert sql(api, lent + " AND message_id=?", (task["id"], said["id"]))[0]["n"] == 1

@@ -3253,7 +3253,6 @@ def _replay_thread(c, bot, hold, replay, ingest, gate=None):
     if recipient:
         args["to_actor"] = recipient
     message = T.post(c, bot, replay.get("thread_id"), replay["body"], checked=None, **args)
-    H.task_chat_commented(c, bot, message)  # a person's comment in a task's chat, as its live post (thread_api)
     return {"id": (message or {}).get("id")}
 
 

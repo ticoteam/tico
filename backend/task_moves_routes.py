@@ -125,14 +125,10 @@ def register(
     """`task_rules` is the org rule check of a task write (backend/task_rule_gate.py): every route here that carries
     words goes through it (`checked`), and Send anyway replays the same write (`replays`)."""
 
-    def acting(c: Any, caller: Any, body: Any, request: Request | None = None) -> Any:
-        """Who the change is made as: the caller, or the person whose request Agent Ops carries (`on_behalf_of`). Not
-        when the request's citation was already weighed and Agent Ops kept its own rights to end its own task
-        (agent_ops_act `ends_own_task`)."""
+    def acting(c: Any, caller: Any, body: Any) -> Any:
+        """Who the change is made as: the caller, or the person whose request Agent Ops carries (`on_behalf_of`)."""
         ref = getattr(body, "on_behalf_of", None)
-        if not ref or (request is not None and getattr(request.state, "own_rights", False)):
-            return caller
-        return delegated_identity(c, caller, ref)
+        return delegated_identity(c, caller, ref) if ref else caller
 
     def answer(c: Any, who: Any, task_id: str, **more: Any) -> dict[str, Any]:
         return {"task": task_view(H.task(c, task_id), c, visible_sql=auth.task_sql(c, who), who=who), **more}
@@ -144,7 +140,7 @@ def register(
         caller: Any = request.state.identity
 
         def write(c: Any) -> dict[str, Any]:
-            who = acting(c, caller, body, request)
+            who = acting(c, caller, body)
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
             more: Any = call(c, who, task_id) or {}
@@ -277,6 +273,10 @@ def register(
         """A route's write: checked outside the store's write, then made through its verdict inside it."""
         spec = writes[operation]
         caller = request.state.identity
+        if getattr(request.state, "own_rights", False) and getattr(body, "on_behalf_of", None):
+            # Agent Ops ends its own task with its own rights: the citation was weighed once (agent_ops_act
+            # `ends_own_task`). Without it, neither this write nor its Send anyway, if a rule holds it, lends again.
+            body = body.model_copy(update={"on_behalf_of": None})
         skip = bool(spec["unchecked"] and spec["unchecked"](caller, params))
         rc = None if skip else check(caller, tid, body, operation, params)
         return work(

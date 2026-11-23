@@ -213,32 +213,6 @@ def _delivery_words(body):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
 
 
-def _comment_marks(c, who, thread_id, body):
-    """The marks that make a person's plain message in a task's own chat their comment on the task (H.comment_on_post),
-    or {}: one write path with POST /api/v2/tasks/{id}/comments, so what the task page and the Thread page send is a
-    comment, and H.task_chat_commented runs what one sets off once it is written. As there, a reader who may not direct
-    the task's bots defers with no deadline (task_comments_routes.comment_write), unless a bot's ❓ there waits on them:
-    their reply goes as any reply to a ❓ does."""
-    task = H.comment_on_post(c, who.actor, thread_id, body.kind, body.parent_message_id, getattr(who, "via", None))
-    if not task:
-        return {}
-    from .chat_goals import may_direct
-
-    marks = {"task": task["id"], "comment": True}
-    asked = c.execute(
-        "SELECT 1 FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL LIMIT 1",
-        (task["id"], who.actor),
-    ).fetchone()
-    if not may_direct(c, who, task) and not asked:
-        marks |= {**H.comment_way_refs("defer", delivery.NEVER), "send_people": True}
-    return marks
-
-
-def _client_refs(refs):
-    """A post's refs as a client sent them, less the comment mark: only the server says a message is a comment."""
-    return {k: v for k, v in (refs or {}).items() if k != "comment"}
-
-
 def _reply_check(c, auth, who, thread_id, body):
     """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
     reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
@@ -1110,7 +1084,7 @@ def install(app, store, auth, mutate, rule_check):
                 target,
                 body.text,
                 kind=body.kind,
-                refs={**_client_refs(body.refs), **marks, **_comment_marks(c, who, target, body)},
+                refs={**body.refs, **marks} if marks else body.refs,
                 parent_message_id=body.parent_message_id,
                 to_actor=body.to,
                 checked=rc,
@@ -1122,7 +1096,6 @@ def install(app, store, auth, mutate, rule_check):
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
-            H.task_chat_commented(c, who, message)
             out = _thread_message(message)
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
@@ -1489,12 +1462,7 @@ def install(app, store, auth, mutate, rule_check):
                 body.text,
                 kind=body.kind,
                 to_actor=body.to,
-                refs={
-                    **marks,
-                    **({"from_page": body.from_page} if body.from_page else {}),
-                    **_comment_marks(c, who, target, body),
-                }
-                or None,
+                refs={**marks, **({"from_page": body.from_page} if body.from_page else {})} or None,
                 parent_message_id=body.parent_message_id,
                 checked=checked["rc"],
                 attachments=items or None,
@@ -1503,7 +1471,6 @@ def install(app, store, auth, mutate, rule_check):
             )
             if "id" not in posted:  # held: its files are in the hold's replay, linked when it is released
                 return posted
-            H.task_chat_commented(c, who, posted)
             message = _thread_message(H.message(c, posted["id"]))
             assert message is not None  # the message just posted
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])

@@ -205,11 +205,12 @@ def test_a_bots_ask_to_a_person_is_plain_words(c):
 
 
 # ----------------------------------------------------------------------------- close and reopen
-def test_a_bot_cannot_close_what_a_person_asked_for_and_a_person_closes_it_with_its_sub_tasks(c):
+def test_a_bot_cannot_close_what_a_person_asked_for_unless_it_owns_it_and_a_person_closes_it_with_its_sub_tasks(c):
     row = _new(c)
     child = _new(c, by=BUILDER, owner=HELPER, title="Gather the numbers", parent_id=row["id"])
+    # The pipeline's manager works the task but does not own it (C8: only its owner bot closes it).
     with _refused("task_needs_person") as refusal:
-        H.task_close(c, BUILDER, row["id"], "Not possible this week.", _version(c, row["id"]))
+        H.task_close(c, MANAGER, row["id"], "Not possible this week.", _version(c, row["id"]))
     assert any("tico task ask" in command for command in refusal.value.extra["next"])
     closed = H.task_close(c, ANA, row["id"])
     assert (closed["status"], closed["closed_by_id"]) == ("closed", ANA)
@@ -401,7 +402,7 @@ def test_a_snoozed_task_wakes_nobody_until_it_is_unsnoozed(c):
 def test_attempt_undoes_a_refused_call_alone(c):
     row = _new(c)
     H.task_update(c, ANA, row["id"], title="Kept")
-    assert H.attempt(c, H.task_close, BUILDER, row["id"], "Not mine to close.", _version(c, row["id"])) is None
+    assert H.attempt(c, H.task_close, MANAGER, row["id"], "Not mine to close.", _version(c, row["id"])) is None
     assert (H.task(c, row["id"])["title"], H.task(c, row["id"])["status"]) == ("Kept", "open")
     assert H.attempt(c, H.task_done, BUILDER, row["id"], "Done.", _version(c, row["id"]))["status"] == "done"
 

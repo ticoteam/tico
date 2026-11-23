@@ -1758,8 +1758,8 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         """Whether this call finishes, closes or sets aside the task this run is on, which the caller owns (done, a move
         to done or closed, a snooze). A bot ends its own task with its own rights (owner decision, 2026-11-23), so when
         no one's request lends Agent Ops theirs, it still does: the route checks the owner's own right to work its task,
-        nothing wider. Only the run's own task (its attempt's, or the one the message that started it is on): words
-        that lend nothing on one task never end another."""
+        nothing wider. Only the run's own task, the one its claim recorded (execution's claim, `task_wakes.message_task`):
+        words that lend nothing on one task never end another."""
         found = OWN_TASK_END.fullmatch(normalize(request.url.path) or "")
         if request.method != "POST" or not found:
             return False
@@ -1774,16 +1774,11 @@ def configure(app, assistant_valid, auth, create_proposal, settings, store):
         except Problem:
             return False
         run = (
-            c.execute(
-                "SELECT a.task_id, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
-                (who.attempt_id,),
-            ).fetchone()
+            c.execute("SELECT task_id FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
             if who.attempt_id
             else None
         )
-        start = H.message(c, run["message_id"]) if run else None
-        on = {run["task_id"] if run else None, H.message_task_id(start) if start else None}
-        return bool(row and row["owner_id"] == who.actor and row["id"] in on)
+        return bool(row and run and run["task_id"] and row["owner_id"] == who.actor and row["id"] == run["task_id"])
 
     def act_for_requester(request, ref):
         """Apply the requester's identity before the route checks its normal permissions."""

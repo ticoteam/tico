@@ -4257,28 +4257,8 @@ def task_comment(
 
         R.check_thread(conn, reach, conv["id"], text)
     msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to)
-    task_commented(
-        conn,
-        actor,
-        row,
-        msg,
-        text,
-        delegate=wake if delegate is None else delegate,
-        sources=refs.get("body_sources", []),
-    )
-    if public:
-        conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
-        msg = message(conn, msg['id'])
-    return msg
-
-
-def task_commented(conn, actor, row, msg, text, *, delegate, sources=()):
-    """What a comment on task `row` sets off once `msg` is written, whichever route wrote it: `task_comment`, or a
-    person's message in the task's own chat (`task_chat_commented`). `delegate`: a person's comment delegates the task
-    to the bots it woke. `sources`: the identities its text copies (sourced_text), never a client's word."""
     from . import wake_rules
 
-    task_id = row["id"]
     wake_rules.own_comment(conn, msg, row)  # token saving 2/9: a bot's own comment never wakes it; log the skip
     hook(
         conn,
@@ -4290,58 +4270,20 @@ def task_commented(conn, actor, row, msg, text, *, delegate, sources=()):
     )
     if actor != TICO_ACTOR:
         conn.execute("UPDATE tasks SET updated_at=? WHERE id=?", (now(), task_id))
-    if not is_human(actor):
-        return
-    woken = _woken_bots(conn, msg)
-    if delegate:
-        delegate_woken(conn, task_id, actor, msg, woken)
-    owner = row["owner_id"]
-    # A reply that cleared a ❓ here started the ladder again already (question_marks.after_reply).
-    answered = conn.execute(
-        "SELECT 1 FROM question_marks WHERE cleared_message_id=? AND task_id=? LIMIT 1", (msg["id"], task_id)
-    ).fetchone()
-    if is_bot(owner) and owner in (bot for bot, _ in woken) and not answered:
+    if is_human(actor) and (wake if delegate is None else delegate):
+        delegate_woken(conn, task_id, actor, msg)
+    if is_human(actor) and is_bot(owner) and owner in (bot for bot, _ in _woken_bots(conn, msg)):
         from . import task_engine
 
         task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
-    from . import ask_ingest
+    if public:
+        conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
+        msg = message(conn, msg['id'])
+    if is_human(actor):
+        from . import ask_ingest
 
-    ask_ingest.on_reply(conn, actor, task_id, text, text_sources=list(sources))
-
-
-def comment_on_post(conn, actor, thread_id, kind="say", parent_message_id=None, via=None):
-    """The task a message posted in thread `thread_id` comments on, or None. A person's own plain message in a task's
-    own chat (not a sub-thread, not relayed) is their comment on the task, as `task_comment` writes one: the thread
-    route marks it `{"task": id, "comment": True}` (thread_api), and `task_chat_commented` runs what a comment sets off
-    once it is written, so the task, its delegation and its stage rules read it as one."""
-    from . import threads
-
-    if not is_human(actor) or via or kind != "say" or parent_message_id or not thread_id:
-        return None
-    thread = threads.thread_row(conn, thread_id)
-    if not thread or thread.get("parent_id") or threads.audience_of(thread) != "task" or not thread.get("task_id"):
-        return None
-    row = task(conn, thread["task_id"])
-    return row if row and row.get("conversation_id") == thread["id"] else None
-
-
-def task_chat_commented(conn, who, msg):
-    """A person's message the thread route marked as a comment (`comment_on_post`), once it is written: live, or on Send
-    anyway after an org rule held it (org_rule_check `_replay_thread`), as `who` is now. The mark was set by the route
-    for the post's own author, never by a client (thread_api drops a client's). Runs `task_commented` once."""
-    refs = _json((msg or {}).get("refs"), {}) or {}
-    if not msg or not msg.get("id") or not refs.get("comment") or not refs.get("task"):
-        return
-    row = comment_on_post(conn, who.actor, msg["conversation_id"], msg.get("kind") or "say")
-    if not row or row["id"] != refs["task"]:
-        return
-    from . import threads
-    from .chat_goals import may_direct
-
-    way, _ = threads.message_way(refs)
-    task_commented(
-        conn, who.actor, row, msg, msg.get("body") or "", delegate=way != "defer" and may_direct(conn, who, row)
-    )
+        ask_ingest.on_reply(conn, actor, task_id, text, text_sources=refs.get("body_sources", []))
+    return msg
 
 
 # The mark on a task's first message: the request it was made with (task_create, the description migration).
@@ -4408,10 +4350,10 @@ def comment_way_refs(way, defer_for=None):
     return {}
 
 
-def delegate_woken(conn, task_id, person, msg, woken=None):
+def delegate_woken(conn, task_id, person, msg):
     """task_delegations: each bot a person's message on the task woke (its own run, or a steer or queue delivery
-    pending for it) acts on the task with party rights for 24 hours. `woken`: `_woken_bots`, when already read."""
-    for recipient, mid in _woken_bots(conn, msg) if woken is None else woken:
+    pending for it) acts on the task with party rights for 24 hours."""
+    for recipient, mid in _woken_bots(conn, msg):
         delegate(conn, task_id, recipient, person, mid)
 
 
@@ -4596,7 +4538,6 @@ def is_comment(msg):
                 "comment",
                 "quiet",
                 "via",
-                "from_page",
                 "rule",
                 "wake_immediate",
                 "delivery",
@@ -4713,7 +4654,8 @@ def task_comment_edit(conn, actor, task_id, message_id, text, approval_id=None):
 def expire_delegations(conn, message_id, ts):
     """A message taken back: the task delegations it lent end now (`delegate_woken`), its own and those of the bots it
     woke beyond the first, each through a carrier (threads.deliver), keyed by the carrier's id. Both deletes call it:
-    a task comment's (`task_comment_delete`) and a thread message's (threads._revise). Returns those message ids."""
+    a task comment's (`task_comment_delete`) and a thread message's (threads._revise), which is how the chat deletes a
+    comment. Returns those message ids."""
     woke = [message_id] + [
         r[0]
         for r in conn.execute(
