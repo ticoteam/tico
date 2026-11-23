@@ -1,23 +1,27 @@
-/* shell/phone/phone.css: the phone. The page, the cards that stand over it (an open chat < the menu < Tico) and the
-   bar of icons under them all. A card up fills what the bar leaves, under the status bar; the others wait out of sight.
+/* shell/phone/phone.css: the phone, three rows. The page with the cards that stand over it (an open chat < the menu <
+   Tico) in one place; under it the dock (what holds the bottom: a task's decision); under that the bar of icons. A card
+   up fills the first row, under the status bar; the others wait out of sight.
 
    State on .phone (React):  data-card="none|tico|menu|chat"
    State on a card (React):  .is-up
-   State on .phone (set by hand, never by React):  data-typing="tico|menu|chat|page"  style --kb  --vv-top */
+   State on .phone (set by hand, never by React):  data-typing="tico|menu|chat|dock|page"  style --kb  --vv-top */
 
 /* the document never scrolls (platforms.md 2.1). The stack clips rather than hides: a hidden box still scrolls when
    something in it takes focus, which strands what is inside mid-screen. */
 html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-behavior:none}
 
 .phone{position:fixed;left:0;right:0;top:0;height:100dvh;overflow:clip;background:var(--ground);isolation:isolate;color:var(--ink);overscroll-behavior:none;
+  display:grid;grid-template-rows:minmax(0,1fr) auto auto;grid-template-columns:minmax(0,1fr);
   --sat:env(safe-area-inset-top,0px);
   --sab:max(env(safe-area-inset-bottom,0px),8px);
-  --bar:calc(var(--sab) + 56px);   /* the bar of icons, with the home indicator's room under it */
+  --tabbar:calc(var(--sab) + 56px);   /* the bar of icons, with the home indicator's room under it */
   --kb:0px;--vv-top:0px;
   --c-tico:var(--surface-tico);--c-menu:var(--surface-nav);--c-chat:var(--surface-chat)}   /* the desktop's layer tones (tokens.css, elevation) */
 
-/* the page and the cards: everything above the bar */
-.phone>:is(.pg,.ly){position:absolute;left:env(safe-area-inset-left,0px);right:env(safe-area-inset-right,0px);top:0;bottom:var(--bar);display:flex;flex-direction:column;overflow:hidden}
+/* the page and the cards: the first row, one over another */
+.phone>:is(.pg,.ly){grid-row:1;grid-column:1;position:relative;min-height:0;margin:0 env(safe-area-inset-right,0px) 0 env(safe-area-inset-left,0px);display:flex;flex-direction:column;overflow:hidden}
+/* the page's own sheet fills it (a call's controls at the bottom, not under its content) */
+.phone>.pg>*{flex:1;min-height:0;height:auto}
 .phone>.pg{z-index:var(--z-page);background:var(--surface-page);--surface:var(--surface-page)}
 .phone>.ly{padding-top:var(--sat);visibility:hidden}
 .phone>.ly.is-up{visibility:visible}
@@ -32,25 +36,26 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 .phone>.pg :is(.page-body,.tl-list)>:has(>.vl-space){padding-bottom:20px}
 /* a message box that belongs to the page (an agent's own page, a thread) */
 .phone>.pg .chat-page>.chat-foot{flex:none;position:relative;padding:6px 10px 10px}
-/* a task's decision holds the page's bottom, right above the bar: the bar keeps the home indicator's room */
-.phone>.pg .dock{padding-bottom:8px}
+/* the dock: a task's decision, right above the bar, whatever card is up but Tico's and the menu's */
+.phone>.ph-dock{grid-row:2;grid-column:1;position:relative;z-index:calc(var(--z-tico) + 1)}
+.phone>.ph-dock:empty,.phone:is([data-card="tico"],[data-card="menu"])>.ph-dock{display:none}
+.phone>.ph-dock>.dock{display:flex;padding-bottom:8px}
 
 /* ---------- the bar: Search · Tico · Company · Agent · Task, icons only ---------- */
-.phone>.tabbar{position:absolute;left:0;right:0;bottom:0;z-index:calc(var(--z-tico) + 1);height:var(--bar);padding:0 calc(env(safe-area-inset-right,0px) + 12px) var(--sab) calc(env(safe-area-inset-left,0px) + 12px);
-  display:flex;align-items:center;justify-content:space-around;gap:4px;background:var(--raised);border-top:1px solid var(--line)}
+.phone>.tabbar{grid-row:3;grid-column:1;position:relative;z-index:calc(var(--z-tico) + 1);height:var(--tabbar);padding:0 calc(env(safe-area-inset-right,0px) + 12px) var(--sab) calc(env(safe-area-inset-left,0px) + 12px);
+  display:flex;align-items:center;justify-content:space-around;gap:4px;background:var(--raised);--surface:var(--raised);border-top:1px solid var(--line)}
 .phone .tab{width:52px;height:44px;border:0;border-radius:12px;background:none;display:grid;place-items:center;padding:0;color:var(--muted);cursor:pointer;-webkit-tap-highlight-color:transparent;
   transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
 .phone .tab>.ico{width:22px;height:22px}
 .phone .tab[aria-current]{background:var(--selected);color:var(--ink)}
 .phone .tab:focus-visible{outline:var(--focus-ring);outline-offset:-2px}
-.phone .tab .co-mark{width:24px;height:24px;border-radius:7px;font-size:12px}
+.phone .tab .co-mark{width:24px;height:24px;border-radius:7px;font-size:12px;background:var(--ink);color:var(--raised)}
 .phone .tab-company{position:relative}
 /* what waits on you, on the company's mark */
 .phone .tab-company .lip-end{position:absolute;right:8px;top:6px;display:flex}
-/* the agent and the task come out as Tico hands work on */
-:root:not([data-motion="off"]) .phone :is(.tab-agent,.tab-task){animation:tab-in 420ms cubic-bezier(.3,1.6,.5,1) both}
+/* the agent comes out as Tico hands work on */
+@media (prefers-reduced-motion:no-preference){:root:not([data-motion="off"]) .phone .tab-agent{animation:tab-in 420ms cubic-bezier(.3,1.6,.5,1) both}}
 @keyframes tab-in{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
-@media (prefers-reduced-motion:reduce){.phone :is(.tab-agent,.tab-task){animation:none}}
 
 /* the page's frame, shared by every page on a phone */
 .phone .composer{min-height:48px;font-size:var(--t-md)}
@@ -59,7 +64,7 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
 /* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4) */
 @media (pointer:coarse){.phone input,.phone textarea,.phone select,.phone [contenteditable]{font-size:max(16px,1em)}}
 /* a call's head is the page's top: it keeps the status bar's room */
-.phone .call-head{flex:none;display:flex;align-items:center;gap:4px;height:calc(var(--sat) + 62px);padding:var(--sat) 6px 0 6px}
+.phone>.pg .cw-head{padding-top:calc(var(--sat) + var(--s-2h))}
 
 /* Tico */
 .phone .ly-tico>.pane{flex:1;min-height:0}
@@ -93,8 +98,8 @@ html:has(.phone),html:has(.phone) body{height:100%;overflow:hidden;overscroll-be
    The system keyboard sets the pace, so what follows it has no transition of its own. The stack is shifted down by
    any pan iOS made, so it fills exactly what can be seen; the bar waits under the keys. */
 .phone[data-typing]{transform:translateY(var(--vv-top))}
-.phone[data-typing]>:is(.pg,.ly){bottom:var(--kb)}
-.phone[data-typing]>.tabbar{visibility:hidden}
+.phone[data-typing]{padding-bottom:var(--kb)}
+.phone[data-typing]>.tabbar,.phone:is([data-typing="tico"],[data-typing="menu"],[data-typing="chat"])>.ph-dock{display:none}
 /* typing to Tico, the latest messages keep the room over the box: the tracker's row and the chips fold away */
 .phone[data-typing="tico"] .ly-tico .tracker,.phone[data-typing="tico"] .ly-tico .qchips{display:none}
 .phone[data-typing] :is(.ly-tico .chat-foot,.dock){padding-bottom:8px}

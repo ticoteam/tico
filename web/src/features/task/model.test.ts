@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TaskDocument, TaskFileView, TaskRequirement } from '@/api/schema';
-import { asksInChat, decisionName, decisionOf, defaultTab, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
+import { decisionName, decisionOf, defaultTab, reasonOf, refusalOf, reviewOf, slugOf, tabAddress, tabsOf } from './model';
 import type { TaskData } from './queries';
 
 const doc = (file_id: string, name: string, more: Partial<TaskDocument> = {}) => ({ file_id, name, version: 2, ...more }) as TaskDocument;
@@ -9,7 +9,7 @@ const req = (id: string, more: Partial<TaskRequirement> = {}) =>
 const task = (more: Partial<TaskData> = {}) => ({ id: 't1', number: 12, pipeline_id: 'p1', documents: [], to_leave: [], ...more }) as TaskData;
 
 describe('the open task', () => {
-  it('lists what waits on the person first, then its other pages with their marks, then Details @approvals', () => {
+  it('lists what waits on the person first, then its other pages with their marks, the chat, then Details @approvals', () => {
     const t = task({
       conversation_id: 'c7',
       documents: [doc('f1', 'Spec', { approved_version: 2 }), doc('f2', 'QA report'), doc('f3', 'Notes', { approved_version: 1 })],
@@ -19,6 +19,7 @@ describe('the open task', () => {
       ['qa-report', 'ask'],
       ['spec', 'ok'],
       ['notes', 'none'],
+      ['chat', undefined],
       ['details', undefined],
     ]);
   });
@@ -36,15 +37,10 @@ describe('the open task', () => {
     expect(defaultTab(tabsOf(task()))).toBe('details');
   });
 
-  it('a ❓ for the person in its chat is theirs to answer there; the chat is never a tab (a phone raises its card)', () => {
+  it('never opens on the chat by itself: a ❓ for the person leaves it to the shell (a phone raises its card)', () => {
     const turn = { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true } as TaskData['turn'];
-    const asked = task({ conversation_id: 'c7', documents: [doc('f1', 'Spec'), doc('f2', 'Chat')], turn });
-    expect(asksInChat(asked, 'human:me')).toBe(true);
-    expect(asksInChat(asked, 'human:ana')).toBe(false);
-    expect(asksInChat({ ...asked, turn: { ...turn!, requirement_id: 'r9' } }, 'human:me')).toBe(false);
-    // a page called Chat keeps clear of the chat's own address
-    expect(tabsOf(asked).map((x) => x.slug)).toEqual(['spec', 'chat-2', 'details']);
-    expect(defaultTab(tabsOf(asked))).toBe('spec');
+    expect(defaultTab(tabsOf(task({ conversation_id: 'c7', documents: [doc('f1', 'Spec')], turn })))).toBe('spec');
+    expect(defaultTab(tabsOf(task({ conversation_id: 'c7', turn })))).toBe('details');
   });
 
   it('opens on the file the ask is about, not a review page it also shows @approvals', () => {

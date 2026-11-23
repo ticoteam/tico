@@ -719,13 +719,44 @@ describe('an open task on a phone', () => {
     expect(icon('Company').getAttribute('aria-current')).toBe('true');
   });
 
-  it('a side thread it was opened from is its Agent, with a link to the task’s own chat in its place', async () => {
-    const router = show('/task/7?chat=agent%3Aqa&via=thread');
+  it('a side thread it was opened from is its Agent, with a link to the task’s own chat in its place; Back brings the thread up again', async () => {
+    const router = show('/tasks/eng/7?chat=agent%3Aqa&via=thread');
     const card = await screen.findByRole('dialog', { name: 'Agent' });
     expect(await within(card).findByText('a teammate chat')).toBeTruthy();
     fireEvent.click(within(card).getByRole('link', { name: 'Task chat' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7/chat'));
     expect(await within(screen.getByRole('dialog', { name: 'Agent' })).findByText('task chat')).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.search).toEqual({ chat: 'agent:qa', via: 'thread' }));
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('a teammate chat')).toBeTruthy();
+  });
+
+  it('a ❓ to the person in a task’s chat brings it up on each task it opens, Back and Forward too; put down, it stays down there', async () => {
+    const asked = (n: number) => {
+      queryClient.setQueryData(['tasks', 'ref', String(n)], `t${n}`);
+      queryClient.setQueryData(['tasks', 'detail', `t${n}`], {
+        id: `t${n}`, number: n, pipeline_id: 'eng', owner_id: 'bot:qa', conversation_id: `c${n}`,
+        waits: [{ state: 'person', who: 'human:maya', requirement_id: `qmark:q${n}` }],
+      });
+    };
+    asked(7);
+    asked(8);
+    const router = show('/tasks/eng/7');
+    expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    fireEvent.click(icon('Task'));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(() => router.navigate({ to: '/tasks/eng/8' as never }));
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy());
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7'));
+    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
+  });
+
+  it('`?tab=chat` on a task’s own address brings its chat up too', async () => {
+    show('/tasks/eng/7/spec?tab=chat');
+    expect(await within(await screen.findByRole('dialog', { name: 'Agent' })).findByText('task chat')).toBeTruthy();
   });
 });
 

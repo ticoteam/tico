@@ -1157,7 +1157,17 @@ describe('on a phone, the decision holds the bottom', () => {
     expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy();
   });
 
-  it('of every tab, the chat’s address too, with the task’s chat open beside it: the chat has none, so there is one box @approvals', async () => {
+  it('of the Chat tab, over its message box @approvals', async () => {
+    shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
+    show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat');
+    const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    // the task's own ask: an email's OK is approved only on its Email tab
+    expect(within(within(chat).getByRole('region', { name: 'The decision' })).getByText('Check the brief?')).toBeTruthy();
+    // one box: the page's own dock steps aside on the Chat tab
+    expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
+  });
+
+  it('on a phone, of the chat’s own address too: it stays the address, the page under the chat card, one box @approvals', async () => {
     shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
     document.documentElement.dataset.layout = 'cards';
     try {
@@ -1169,10 +1179,11 @@ describe('on a phone, the decision holds the bottom', () => {
         '/tasks/p1/12/chat',
       );
       await screen.findByRole('region', { name: 'Chat with Legal Owner' });
-      // the chat's address is no tab: the page opens on what waits, its decision docked
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
-      expect(screen.queryByRole('link', { name: 'Chat' })).toBeNull();
+      // the page opens on what waits (the email), its decision docked; the address stays the chat's, for a reload
       await waitFor(() => expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy());
+      expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
+      expect(router.state.location.pathname).toBe('/tasks/p1/12/chat');
+      expect(screen.queryByRole('link', { name: 'Chat' })).toBeNull();
       expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
     } finally {
       delete document.documentElement.dataset.layout;

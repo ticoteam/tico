@@ -11,8 +11,8 @@ export const slugOf = (name: string): string =>
     .replace(/^-|-$/g, '') || 'page';
 
 export const DETAILS = 'details';
-/** The task's chat in its address (`/tasks/<p>/<n>/chat`): no tab of its own (no page takes the slug); a phone raises
-    the chat for it. */
+/** The task's chat as a tab: never in the tab row. On a computer its address shows the chat as the page; on a phone it
+    raises the chat card over the task's first page. */
 export const CHAT = 'chat';
 
 /** A tab's words: a file's name without its extension (`letter.pdf` reads "letter"); a version number keeps its dot. */
@@ -30,6 +30,8 @@ export interface TaskTab {
   file?: TaskFileView;
   /** An email the task asks about (`email:<id>` in what a requirement shows): its send's id. */
   email?: string;
+  /** The task's chat (its address, `/tasks/<p>/<n>/chat`). */
+  chat?: boolean;
   /** The version the ask pinned (`file:<id>@<n>`): the tab shows it, not a newer one. */
   version?: number;
   /** A file the ask is about that is not one of this task's (another task's): read by its id, as the library reads it. */
@@ -97,7 +99,7 @@ export const emailOf = (r: TaskRequirement | null | undefined): string | null =>
     asks about, the one it is about (`targetOf`, at the version it pinned) before the others it shows; one that is not
     this task's opens as a tab of its own once the files are read (`files` given), never the review page beside it. Then the stage's other pages and Markdown files, each with its state (more.js taskflow); the task's
     other files but its pictures (Details walks those), so a PDF, a Word file or a sound opens as a tab too; the other
-    emails its requirements show; then Details. A page linked in two roles is one tab.
+    emails its requirements show; the chat; then Details. A page linked in two roles is one tab.
     `decision`: what the tabs are marked for and pinned at: the task's first ask that is not an email's (an email's OK
     has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
     comes first. */
@@ -143,6 +145,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     ...asks.filter((x) => isTarget(x)),
     ...asks.filter((x) => !isTarget(x) && !(emailFirst && x.email)),
     ...all.filter((x) => x.mark !== 'ask'),
+    ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },
   ];
 }
@@ -150,15 +153,10 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
 /** A document the server keeps as a page (its pages read answers for it); a Markdown file is a plain file. */
 export const isPage = (doc: TaskDocument): boolean => doc.kind !== 'markdown';
 
-/** With no tab in the address: what waits on the person, else the first page, else Details. */
+/** With no tab in the address: what waits on the person, else the first page, else Details. Never the chat. */
 export function defaultTab(tabs: TaskTab[]): string {
-  return (tabs.find((x) => x.mark === 'ask') ?? tabs[0])?.slug ?? DETAILS;
+  return (tabs.find((x) => x.mark === 'ask') ?? tabs.find((x) => !x.chat))?.slug ?? DETAILS;
 }
-
-/** Whether it is `me`'s turn on the task for a ❓ an agent put to them in its chat (the turn's requirement is a question
-    mark, `qmark:<id>`): they answer it there, in the chat's own message box (on a phone, its chat comes up). */
-export const asksInChat = (t: Pick<TaskData, 'conversation_id' | 'turn'>, me: string | undefined): boolean =>
-  !!me && !!t.conversation_id && t.turn?.state === 'person' && t.turn.who === me && !!t.turn.requirement_id?.startsWith('qmark:');
 
 /** An email's OK task, as the server titles it ("Send: <subject> → <first recipient> +n", backend/email_sending.py
     send_title): the subject without "Send:" and its "Re:"/"Fwd:", and who it goes to. Null for any other title. */

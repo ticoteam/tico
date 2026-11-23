@@ -143,8 +143,10 @@ afterEach(() => {
 
 describe('task route loading', () => {
   it('a ❓ for the person in its chat opens on its page, on a phone too, and the shell reads it from what loaded to raise the chat', async () => {
-    const turn = { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true };
-    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn } as unknown as Partial<TaskData>);
+    // the turn shows an approval the person shares (it goes first, backend/waiting_on.py); their ❓ is in the waits
+    const turn = { state: 'person', who: 'human:me', line: 'Approve the plan?', requirement_id: 'r1', ask: true };
+    const waits = [turn, { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true }];
+    const asked = task({ conversation_id: 'room', documents: [], to_leave: [], turn, waits } as unknown as Partial<TaskData>);
     serve((url) => (url.endsWith('/tasks/%2312') || url.endsWith('/tasks/t1') ? { status: 200, body: detail(asked) } : url.endsWith('/files?all=1') ? { status: 200, body: { files: [] } } : base(url)));
     queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
     document.documentElement.dataset.layout = 'cards';

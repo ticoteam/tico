@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Dock } from '@/kit/Dock';
 import { FlowMark } from '@/kit/FlowMark';
 import { Link } from '@/kit/Link';
 import { useCards } from '@/kit/Popover';
@@ -75,15 +76,8 @@ export function AskCard({ name, note, who, pill, end, asked, asking, actions, er
   );
 }
 
-/** On a phone the card holds the page's bottom (its dock); elsewhere it stands where it is drawn. */
-export const Docked = ({ dock, children }: { dock: boolean; children: ReactNode }) =>
-  dock ? (
-    <div className="dock" data-dock>
-      {children}
-    </div>
-  ) : (
-    children
-  );
+/** On a phone the card holds the bottom, above the bar (kit Dock); elsewhere it stands where it is drawn. */
+export const Docked = ({ dock, children }: { dock: boolean; children: ReactNode }) => (dock ? <Dock>{children}</Dock> : children);
 
 /** Around a card's answer: a refusal is said in the card, or in a toast once the card has gone (never silent). After
     the answer the open task's page decides whether to stay or close, not once the person has moved on. */

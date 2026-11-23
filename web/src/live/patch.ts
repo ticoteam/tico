@@ -265,14 +265,15 @@ function patchTasks(batch: TaskEvent[]): void {
   // A relation (a sub-task filed or taken off) on any event of the batch, not only its last: a later update of the same
   // task in the frame never hides it.
   const related = new Set<string>();
-  // A matter's key date changed or was marked done (an `obligations` change) on any event of the batch, likewise.
+  // A matter's key date changed or was marked done (an `obligations` change), or a ❓ was put or cleared (`question`: who
+  // it waits on is in the task's waits, which the row leaves out), on any event of the batch, likewise.
   const dated = new Set<string>();
   for (const e of batch) {
     const id = e.id ?? e.task_id;
     if (id) last.set(id, e);
     // A paid shot to reconcile came or went (backend/paid_renders.py): the row carries no waits, so the task reads them again.
     if (id && (e.kinds?.includes('relation') || e.kinds?.includes('shots'))) related.add(id);
-    if (id && e.kinds?.includes('obligations')) dated.add(id);
+    if (id && (e.kinds?.includes('obligations') || e.kinds?.includes('question'))) dated.add(id);
   }
   for (const [id, e] of last) {
     const detail = ['tasks', 'detail', id];

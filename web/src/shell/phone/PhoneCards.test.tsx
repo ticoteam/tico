@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+import { Dock } from '@/kit/Dock';
 import { useCards } from '@/kit/Popover';
 import { forgetPlaces, leaveTask, notePlace } from '@/lib';
 import { arrangementFor } from '@/shell/arrangement';
@@ -127,9 +128,34 @@ describe('the phone’s bar', () => {
     await screen.findByRole('heading', { name: 'Fix the export' });
     fireEvent.click(icon('Agent'));
     expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
-    act(() => leaveTask(router, 'eng'));
+    act(() => leaveTask(router, () => 'eng'));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+  });
+
+  it('what the page docks (a task’s decision) stands above the bar, outside the page: in reach with the chat up', () => {
+    render(
+      cards({
+        page: (
+          <>
+            <h1>Fix the export</h1>
+            <Dock>
+              <button type="button">Approve</button>
+            </Dock>
+          </>
+        ),
+        chat: <p>Owner's chat</p>,
+        tucked: true,
+        labels: {},
+        onLeave: () => {},
+      }),
+    );
+    fireEvent.click(icon('Agent'));
+    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
+    const approve = screen.getByRole('button', { name: 'Approve' });
+    expect(approve.closest('.phone > .ph-dock')).toBeTruthy();
+    expect(approve.closest('[inert]')).toBeNull();
+    expect(document.querySelector('.phone > .pg')?.hasAttribute('inert')).toBe(true);
   });
 
   it('Search opens search; the card stays as it was', () => {
@@ -155,10 +181,16 @@ describe('the phone’s bar', () => {
     let during: Element | null = null;
     const look = () => (during = document.activeElement);
     window.addEventListener('click', look);
+    let shown = false;
+    const seen = () => (shown = !!document.activeElement?.closest('.ly-tico.is-up'));
+    window.addEventListener('click', seen);
     fireEvent.click(icon('Tico'));
     window.removeEventListener('click', look);
+    window.removeEventListener('click', seen);
     const field = screen.getByRole('textbox', { name: 'Message Tico' });
     expect(during).toBe(field);
+    // the card is seen before the focus (a box in a hidden card takes none)
+    expect(shown).toBe(true);
     expect(document.activeElement).toBe(field);
     expect(chat.scrollTop).toBe(900);
     expect(screen.getByRole('dialog', { name: 'Tico' })).toBeTruthy();
@@ -192,6 +224,24 @@ describe('the phone’s chat card', () => {
     expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
     rerender(cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {} }));
     expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
+  });
+
+  it('is set again when its key (the open task, the chat its address names) changes; a tuck holds until then', () => {
+    const at = (key: string, raiseChat = false) => cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {}, chatKey: key, raiseChat });
+    const { rerender } = render(at('7', true));
+    expect(up()).toBe('chat');
+    fireEvent.click(icon('Task'));
+    rerender(at('7', true));
+    expect(up()).toBe('none');
+    // another task whose chat waits on the person too
+    rerender(at('8', true));
+    expect(up()).toBe('chat');
+    // back to the first: set again from it
+    fireEvent.click(icon('Task'));
+    rerender(at('7', true));
+    expect(up()).toBe('chat');
+    rerender(at('9'));
+    expect(up()).toBe('none');
   });
 
   it('a page opened from the chat (an approval card) puts it away; a link marked to stay changes the card in place', () => {

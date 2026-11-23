@@ -1,13 +1,15 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { TaskPage } from '@/features/task/exports';
-import { loadTask, taskSearch } from '@/features/task/routing';
+import { CHAT_TAB, loadTask, taskSearch } from '@/features/task/routing';
 
-/* `/tasks/<pipeline>/<n>`: the task, on the page that waits on the person (or its first). */
+/* `/tasks/<pipeline>/<n>`: the task, on the page that waits on the person (or its first); `?tab=chat` (read as written:
+   the search the route keeps drops it), its chat. */
 export const Route = createFileRoute('/tasks/$pipeline/$task/')({
   validateSearch: taskSearch,
   loaderDeps: ({ search }) => search,
   loader: async ({ params, deps, location, preload, context: { queryClient } }) => {
-    const loaded = await loadTask(queryClient, params.task, undefined, !preload && !('chat' in location.search));
+    const chat = new URLSearchParams(location.searchStr).get('tab') === CHAT_TAB ? CHAT_TAB : undefined;
+    const loaded = await loadTask(queryClient, params.task, chat, !preload && !('chat' in location.search));
     if (!loaded) return;
     const { task, tab } = loaded;
     // Resolve the address before mounting the reader so replacing it cannot restart the first page reads.

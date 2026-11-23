@@ -2,9 +2,10 @@ import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { timelineQuery } from '@/conversation';
 import { threadQuery } from '@/features/threads/routing';
 import { meQuery } from '@/data';
-import { asksInChat, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
+import { pipelinesQuery } from '@/features/tasks/routing';
+import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
-import { waitSlugs, waitsOnYou } from './waits';
+import { questionFor, waitSlugs, waitsOnYou } from './waits';
 
 // What the routes use before a task's code loads: its first read, its address and the address check. No components
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
@@ -12,13 +13,24 @@ export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress, CHAT as CHAT_TAB } from './model';
 
 /** The open task as its route loaded it, read from what is already there (never a read of its own, so the shell can ask
-    on every page): the phone's Agent icon shows its agent, and comes up for a ❓ that waits on the person in its chat. */
+    on every page): the phone's Agent icon shows its agent, and comes up for a ❓ to the person in its chat (its waits
+    name them, whatever its turn shows first: an approval it shares goes first there). */
 export function useLoadedTask(param: string | undefined): { task: TaskData | undefined; asksInChat: boolean } {
   const id = useQuery({ ...taskRefQuery(param ?? ''), enabled: false }).data;
   const task = useQuery({ ...taskDetailQuery(id), enabled: false }).data;
   const me = useQuery({ ...meQuery, enabled: false }).data?.id;
-  return { task: param ? task : undefined, asksInChat: !!param && !!task && asksInChat(task, me) };
+  return { task: param ? task : undefined, asksInChat: !!param && !!task?.conversation_id && questionFor(task, me) };
 }
+
+/** A closed task's board for `leaveTask` when nothing is behind it: its pipeline while that is still one, else none
+    (Tasks). Read only when it is needed. */
+export const boardOf =
+  (client: QueryClient, pipeline: string | null | undefined) =>
+  async (): Promise<string | null> => {
+    if (!pipeline) return null;
+    const live = await client.ensureQueryData(pipelinesQuery).catch(() => []);
+    return live.some((p) => p.id === pipeline) ? pipeline : null;
+  };
 
 /** Load the task while the route loads its code. A refused read leaves the page to show the error. */
 export async function loadTask(client: QueryClient, param: string, tab?: string, openChat = false): Promise<{ task: TaskData; tab: string } | null> {
@@ -45,7 +57,7 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     const doc = selected?.doc && (tab || asked || !decisionOf(t)) ? selected.doc : undefined;
     if (doc && isPage(doc)) void client.prefetchQuery(pageShownQuery(id, doc.file_id));
     // Details includes the file list in its body, where inserting the section late shifts the content.
-    if (selected && doc) return { task: t, tab: selected.slug };
+    if (selected && (doc || (tab === CHAT && selected.chat))) return { task: t, tab: selected.slug };
     await files;
     // The files did not load: what the ask is about still opens, read by its id (tabsOf's tab of its own).
     const read = client.getQueryData(fileQuery.queryKey) ?? (client.getQueryState(fileQuery.queryKey)?.status === 'error' ? [] : undefined);

@@ -297,6 +297,7 @@ async function phone(browser: Browser, name: string) {
   // a task: Agent and Task come out, Agent is its chat, Company goes back to the list and they leave
   await page.goto(`${APP}/tasks`);
   await settle(page, 2500);
+  const list = new URL(page.url()).pathname; // Tasks lands on a pipeline's board
   const href = await page.evaluate(() =>
     [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href') ?? '').find((h) => /^\/tasks\/[^/]+\/[^/]+/.test(h) && !h.endsWith('/edit')),
   );
@@ -316,7 +317,7 @@ async function phone(browser: Browser, name: string) {
     }
     await tab('Company').tap();
     await settle(page, 1500);
-    check(new URL(page.url()).pathname === '/tasks' && !(await icons()).includes('Task'), 'Company on a task goes back to the list', `Company on a task: ${page.url()}`);
+    check(new URL(page.url()).pathname === list && !(await icons()).includes('Task'), 'Company on a task goes back to the list', `Company on a task: ${page.url()} (from ${list})`);
   }
   await ctx.close();
 }

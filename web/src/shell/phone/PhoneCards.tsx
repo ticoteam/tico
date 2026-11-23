@@ -5,6 +5,7 @@
 import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import { DockSlot } from '@/kit/Dock';
 import { Icon } from '@/kit/Icon';
 import { Dot } from '@/tico/dot';
 import { TICO_MARK } from '@/shell/layout';
@@ -34,8 +35,9 @@ export interface PhoneCardsProps {
   /** The chat is where the page waits on the person (a ❓ for them in a task's chat, the chat tab's address): it comes
       up when the page opens and whenever this turns true. Turning false never puts it down. */
   raiseChat?: boolean;
-  /** Whose page's chat it is (the Agent bar's page key): moving to another page, the chat card follows that page's
-      `tucked`, even when it is the same as the last page's. */
+  /** Whose chat it is (the Agent bar's page key; an open task and the chat its address names): when it changes, the
+      chat card is set again from `tucked`, `raiseChat` and the address, even when they are the same as before. A card
+      put down by hand stays down until then. */
   chatKey?: string;
   /** Search, from the bar. */
   onSearch?: () => void;
@@ -88,6 +90,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
   const comesUp = () => second && (!tucked || raiseChat || named());
   const [card, setCard] = useState<PhoneCard>(() => (comesUp() ? 'chat' : 'none'));
   const root = useRef<HTMLDivElement>(null);
+  const [dock, setDock] = useState<HTMLElement | null>(null);
 
   const [seen, setSeen] = useState(second);
   const [wasTucked, setWasTucked] = useState(tucked);
@@ -99,9 +102,9 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     else if (card === 'chat') setCard('none');
   } else if ((wasTucked !== tucked || wasKey !== chatKey) && second) {
     // a page's own chat follows its page both ways: one that stops waiting behind its icon comes up (its fold is open,
-    // or an ask from the page's owner waits on you), and one that waits again goes down unless the address names a chat
-    if (!tucked || raiseChat) setCard('chat');
-    else if (card === 'chat' && !named()) setCard('none');
+    // an ask from the page's owner waits on you, the address names it), and one that waits again goes down
+    if (comesUp()) setCard('chat');
+    else if (card === 'chat') setCard('none');
   } else if (raiseChat && !wasRaised && second) setCard('chat');
   if (wasTucked !== tucked) setWasTucked(tucked);
   if (wasKey !== chatKey) setWasKey(chatKey);
@@ -133,6 +136,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     const box = ly?.querySelector<HTMLElement>('.composer textarea, textarea, [contenteditable="true"]');
     if (ly && box) {
       ly.inert = false;
+      ly.classList.add('is-up'); // seen, or the focus does not take
       box.focus({ preventScroll: true });
     }
     toLatest([...(ly?.querySelectorAll<HTMLElement>('[data-scroll], .chat-body') ?? [])]);
@@ -157,7 +161,7 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     const update = () => {
       const active = document.activeElement;
       const inside = active instanceof HTMLElement && el.contains(active) && active.matches(EDITABLE);
-      const ly = inside && keys.up ? active.closest<HTMLElement>('.ly[data-slot]') : null;
+      const ly = inside && keys.up ? active.closest<HTMLElement>('.ly[data-slot], .ph-dock') : null;
       const where = !inside || !keys.up ? null : (ly?.dataset.slot ?? 'page');
       const holder = where === 'page' ? el.querySelector(':scope > .pg') : ly;
       const stuck = stuckToBottom(holder);
@@ -221,35 +225,40 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
 
   return (
     <Ctx value={{ card, raise, tuck }}>
-      <div ref={root} className="phone" data-card={card} onKeyDown={onKeyDown}>
-        <div className="pg" inert={card !== 'none'}>
-          {page}
+      <DockSlot value={dock}>
+        <div ref={root} className="phone" data-card={card} onKeyDown={onKeyDown}>
+          <div className="pg" inert={card !== 'none'}>
+            {page}
+          </div>
+          {chat ? cardOf('chat', chat, labels.chat ?? 'Agent') : null}
+          {cardOf('menu', menu, 'Menu')}
+          {cardOf('tico', tico, 'Tico')}
+          {/* what holds the bottom (a task's decision, kit Dock): above the bar, outside the page and the cards, so it is
+              in reach with the chat up */}
+          <div className="ph-dock" data-slot="dock" ref={setDock} />
+          <nav className="tabbar" aria-label="Bar">
+            <Tab name="search" label="Search" onClick={() => onSearch?.()}>
+              <Icon name="search" />
+            </Tab>
+            <Tab name="tico" label="Tico" on={card === 'tico'} onClick={typeToTico}>
+              <Dot size={TICO_MARK} />
+            </Tab>
+            <Tab name="company" label="Company" on={!onLeave && (card === 'none' || card === 'menu')} onClick={toCompany}>
+              {faces.company ?? <Icon name="company" />}
+            </Tab>
+            {chat ? (
+              <Tab name="agent" label={labels.chat ?? 'Agent'} on={card === 'chat'} onClick={() => raise('chat')}>
+                {faces.chat ?? <Icon name="message" />}
+              </Tab>
+            ) : null}
+            {onLeave ? (
+              <Tab name="task" label="Task" on={card === 'none'} onClick={tuck}>
+                <Icon name="file" />
+              </Tab>
+            ) : null}
+          </nav>
         </div>
-        {chat ? cardOf('chat', chat, labels.chat ?? 'Agent') : null}
-        {cardOf('menu', menu, 'Menu')}
-        {cardOf('tico', tico, 'Tico')}
-        <nav className="tabbar" aria-label="Bar">
-          <Tab name="search" label="Search" onClick={() => onSearch?.()}>
-            <Icon name="search" />
-          </Tab>
-          <Tab name="tico" label="Tico" on={card === 'tico'} onClick={typeToTico}>
-            <Dot size={TICO_MARK} />
-          </Tab>
-          <Tab name="company" label="Company" on={!onLeave && (card === 'none' || card === 'menu')} onClick={toCompany}>
-            {faces.company ?? <Icon name="company" />}
-          </Tab>
-          {chat ? (
-            <Tab name="agent" label={labels.chat ?? 'Agent'} on={card === 'chat'} onClick={() => raise('chat')}>
-              {faces.chat ?? <Icon name="message" />}
-            </Tab>
-          ) : null}
-          {onLeave ? (
-            <Tab name="task" label="Task" on={card === 'none'} onClick={tuck}>
-              <Icon name="file" />
-            </Tab>
-          ) : null}
-        </nav>
-      </div>
+      </DockSlot>
     </Ctx>
   );
 }

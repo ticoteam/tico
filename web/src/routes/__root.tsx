@@ -1,4 +1,4 @@
-import { useInfiniteQuery, useQuery, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
 import { Fragment, Suspense, lazy, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
@@ -11,7 +11,7 @@ import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports
 import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
-import { CHAT_TAB, useLoadedTask } from '@/features/task/routing';
+import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
 import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
@@ -191,7 +191,8 @@ function App() {
   const at = {
     path: useLocation({ select: (l) => l.pathname.replace(/^\/next(?=\/|$)/, '') || '/' }),
     chat: useLocation({ select: (l) => word((l.search as Record<string, unknown>).chat) }),
-    tab: useLocation({ select: (l) => word((l.search as Record<string, unknown>).tab) }),
+    // read from the address as written: a task's own routes drop `tab` from the search they keep
+    tab: useLocation({ select: (l) => new URLSearchParams(l.searchStr).get('tab') ?? undefined }),
   };
   const [, top, a, b, c] = at.path.split('/');
   // A teammate's own page is the `agent` arrangement; a team's old address and your own page are plain pages. Only that
@@ -249,7 +250,7 @@ function App() {
         </Suspense>
       </Sheet>
     ) : at.chat ? (
-      <SecondChat chat={at.chat} task={arrangement === 'task'} />
+      <SecondChat chat={at.chat} task={arrangement === 'task' && top === 'tasks' ? `/tasks/${a}/${b}/${CHAT_TAB}` : undefined} />
     ) : undefined;
   let widgets: ReactNode;
   let side: ReactNode;
@@ -287,9 +288,13 @@ function App() {
   if (callChat) chat = <SecondChat chat={callChat} />;
   // On a phone: whose face the Agent icon shows (the page owner's comes with the bar), and whether the chat comes up: a
   // link to a task's chat (`/tasks/<p>/<n>/chat`, `?tab=chat`), or a ❓ in it that waits on the person.
-  const chatWho = arrangement === 'agent' ? who : at.chat && at.chat !== SUPPORT_CHAT ? bare(at.chat) : (open.task?.owner_id ?? (callChat ? bare(callChat) : undefined));
-  const raiseChat = arrangement === 'task' && (c === CHAT_TAB || at.tab === CHAT_TAB || open.asksInChat);
-  const leave = () => leaveTask(router, open.task?.pipeline_id ?? pipeline);
+  const chatWho = arrangement === 'agent' ? who : at.chat ? (at.chat === SUPPORT_CHAT ? undefined : bare(at.chat)) : (open.task?.owner_id ?? (callChat ? bare(callChat) : undefined));
+  const chatAsked = arrangement === 'task' && (c === CHAT_TAB || at.tab === CHAT_TAB);
+  const raiseChat = chatAsked || open.asksInChat;
+  // the chat card is set again when the open task or the chat its address names changes; a tuck holds until then
+  const chatKey = task ? `${task}\n${at.chat ?? ''}\n${chatAsked}` : undefined;
+  const client = useQueryClient();
+  const leave = () => leaveTask(router, boardOf(client, open.task?.pipeline_id ?? pipeline));
   // Every company page's owner, in the Agent bar beside it (master plan P5): the viewer's own DM with them.
   const place = pageAt(at.path);
   // the phone's card is set again on any change of the full address (path and search); the fold stays per page
@@ -325,6 +330,7 @@ function App() {
           trail={trail}
           marks={{ menu: <CompanyMark />, chat: <ChatFace id={chatWho} /> }}
           raiseChat={raiseChat}
+          chatKey={chatKey}
           onSearch={() => openSearch()}
           onLeave={leave}
           edgeActs={{ tico: <SearchButton /> }}
@@ -590,14 +596,14 @@ function SearchButton() {
 /* ---------------------------------------------------------------- the chats */
 
 /** A chat beside the page. Beside a task on a phone (a side thread a card opened it from), it links to the task's own
-    chat, which takes its place in the same card. */
-function SecondChat({ chat, task = false }: { chat: string; task?: boolean }) {
+    chat (`task`, its address), which takes its place in the same card. */
+function SecondChat({ chat, task }: { chat: string; task?: string }) {
   const who = useActor(bare(chat));
   const phone = usePhoneCards();
   return (
     <Sheet kind="chat" label={`Chat with ${who?.name ?? 'teammate'}`}>
       {task && phone ? (
-        <Link className="bar-ask" data-stay to="." search={(({ chat: _c, via: _v, ...rest }: Record<string, unknown>) => rest) as never}>
+        <Link className="bar-ask" data-stay to={task as never}>
           Task chat
         </Link>
       ) : null}
