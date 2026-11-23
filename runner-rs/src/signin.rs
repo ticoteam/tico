@@ -61,13 +61,13 @@ type RefusalKey = (String, String, String, String);
 /// Whether `runtime` signs each bot in with that bot's own key grant (its manifest's `sign_in_status.check` is
 /// "bot-key", pi and the Gemini CLI). A provider's refusal of such a key is that bot's, not the runtime's.
 pub fn bot_keyed(runtime: &str) -> bool {
-    crate::harness_tools::caps(runtime, "").sign_in_status.check == "bot-key"
+    crate::harness_tools::caps(runtime).sign_in_status.check == "bot-key"
 }
 
 /// The keys that sign `runtime` in on this computer for every bot: its manifest's `auth.api_key_env` when the
 /// computer holds them (`api_keys = "computer"`). Keys each bot holds itself are never a computer's sign-in.
 pub fn headless_names(runtime: &str) -> Vec<String> {
-    if crate::harness_tools::caps(runtime, "").api_keys == "computer" {
+    if crate::harness_tools::caps(runtime).api_keys == "computer" {
         crate::harness_tools::api_key_env(runtime)
     } else {
         vec![]
@@ -264,7 +264,7 @@ impl SignIn {
             Rejection {
                 at,
                 mono: Instant::now(),
-                reason: crate::hosts::rejection_reason(text),
+                reason: crate::hosts::rejection_reason(runtime, text),
             },
         );
         drop(rows);
@@ -897,7 +897,7 @@ impl SignIn {
     /// `codex login --with-api-key`), the key on stdin, never in arguments or logs. A key that failed is not tried
     /// again for KEY_LOGIN_RETRY unless the key or the CLI's home changes.
     pub async fn key_login(&self, runtime: &str, executable: &Path) -> bool {
-        let args = crate::harness_tools::caps(runtime, "").api_key_login;
+        let args = crate::harness_tools::caps(runtime).api_key_login;
         if args.is_empty() {
             return false;
         }
@@ -905,7 +905,7 @@ impl SignIn {
             return false;
         };
         let label = crate::harness_tools::name_for(runtime);
-        let var = crate::harness_tools::caps(runtime, "").profile_home;
+        let var = crate::harness_tools::caps(runtime).profile_home;
         let home = format!(
             "{runtime}:{}",
             if var.is_empty() {

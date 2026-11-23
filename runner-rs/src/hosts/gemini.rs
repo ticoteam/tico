@@ -1117,10 +1117,10 @@ mod tests {
         assert_eq!(error_text(None, 2, ""), "gemini exited 2");
         assert!(uses_gemini_cli(&json!({"runtime": "gemini"})));
         assert!(!uses_gemini_cli(
-            &json!({"runtime": "gemini", "harness": "antigravity"})
+            &json!({"runtime": "antigravity", "harness": "antigravity"})
         ));
         assert!(uses_gemini_cli(
-            &json!({"runtime": "gemini", "harness": "antigravity", "fallback": {"harness": "gemini"}})
+            &json!({"runtime": "antigravity", "harness": "antigravity", "fallback": {"harness": "gemini"}})
         ));
     }
 }

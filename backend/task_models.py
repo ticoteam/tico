@@ -197,11 +197,11 @@ def readiness(c, bot, choice, runner_id=None):
 def why_not(c, settings, bot, choice, runner_id, job_id=None, kept="", loads=None):
     """Why the task model cannot run this turn on `bot`'s computer `runner_id`, or "" when it can. A no from
     `readiness` is a reason (not installed, not signed in). Its "don't know" is not: Grok's sign-in can't be checked
-    without starting it (`check = "none"`) and Antigravity reports no readiness, so a "don't know" would keep them off
-    for good. Such a turn runs, and a refused login comes back through `mark_rejected` as a no for the next claim. A
-    login a usage limit holds, or that another job is probing after one, is a reason too, so the task runs on the
-    bot's model rather than wait on it. `kept` is the bot's saved task model: a held row that is that model still runs
-    (a saved held default keeps running, Dev 693); any other held row is refused as a pick."""
+    without starting it (`check = "none"`), so a "don't know" would keep it off for good. Such a turn runs, and a
+    refused login comes back through `mark_rejected` as a no for the next claim. A login a usage limit holds, or that
+    another job is probing after one, is a reason too, so the task runs on the bot's model rather than wait on it.
+    `kept` is the bot's saved task model: a held row that is that model still runs (a saved held default keeps
+    running, Dev 693); any other held row is refused as a pick."""
     from . import login_holds
 
     row = providers.MODEL_BY_ID.get(choice["model"])

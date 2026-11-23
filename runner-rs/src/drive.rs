@@ -155,7 +155,7 @@ impl Runner {
         }
         // A host whose native goal keeps running across turns (`goal_runs_across_turns`): a completed turn is not
         // the end of the run, and a clear it reports is checked against the goal.
-        let across_turns = crate::harness_tools::caps(d.runtime, "").goal_runs_across_turns;
+        let across_turns = crate::harness_tools::caps(d.runtime).goal_runs_across_turns;
         let scrub = |t: &str| {
             d.redactor
                 .map(|r| r.scrub_text(t).into_owned())
@@ -165,7 +165,7 @@ impl Runner {
             (String::new(), json!({}), "interrupted".to_string());
         let (mut limited, mut capacity, mut retryable, mut acted, mut complete) =
             (false, false, false, false, false);
-        let mut continues = false;
+        let (mut continues, mut tool_ran) = (false, false);
         let mut earlier = String::new();
         let mut earlier_tokens: Option<Value> = None;
         let mut last_flush: Option<Instant> = None;
@@ -332,6 +332,7 @@ impl Runner {
                     tokens: spent(&earlier_tokens, &tokens),
                     limited: false,
                     acted,
+                    tool_ran,
                     capacity: false,
                     continues: false,
                     retryable: false,
@@ -349,6 +350,7 @@ impl Runner {
                     tokens: spent(&earlier_tokens, &tokens),
                     limited: false,
                     acted,
+                    tool_ran,
                     capacity: false,
                     continues: false,
                     retryable: false,
@@ -530,6 +532,11 @@ impl Runner {
                     // Proof the turn reached the model and may have changed something outside this computer.
                     acted = true;
                 }
+                if kind == "tool" {
+                    tool_ran = true;
+                    // Kept on the turn's flags too, so a drive that fails after this still says a tool ran.
+                    d.flags.tool_ran.store(true, Ordering::SeqCst);
+                }
                 if kind == "background_kept" {
                     // Watched after the run; a command still running at the run's time limit is killed then.
                     let deadline = crate::util::epoch_s()
@@ -619,7 +626,7 @@ impl Runner {
                     }
                     // A sign-in the runtime could not renew refuses the turn before it starts, so the job can go
                     // back in the queue; `acted` guards a token that died after the bot had done something.
-                    let rejected = hosts::is_auth_rejected(&error);
+                    let rejected = hosts::is_auth_rejected_on(d.runtime, &error);
                     if rejected {
                         *auth_rejected = Some((d.runtime.to_string(), scrub(&error)));
                     }
@@ -781,6 +788,7 @@ impl Runner {
             tokens: spent(&earlier_tokens, &tokens),
             limited,
             acted,
+            tool_ran,
             capacity,
             continues,
             retryable,
@@ -954,6 +962,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now()),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -2062,11 +2071,12 @@ mod tests {
         tx.send(json!({"kind": "tool", "thread_id": "th-1", "turn_id": "turn-1", "name": "ls"}))
             .unwrap();
         tx.send(json!({"kind": "turn_completed", "thread_id": "th-1", "turn_id": "turn-1", "status": "completed"})).unwrap();
+        let f = flags(true);
         let (drove, _, _) = drive_with(
             &runner,
             &host,
             &mut rx,
-            &flags(true),
+            &f,
             "th-1",
             "claude",
             None,
@@ -2077,6 +2087,8 @@ mod tests {
             panic!("the drain's write should have failed the drive")
         };
         assert!(e.text.starts_with("runner.sqlite:"), "{}", e.text);
+        // The tool it saw before the write failed is still known: no fallback may run the turn again.
+        assert!(f.tool_ran.load(Ordering::SeqCst));
         let kinds: Vec<String> = stored_rows(&runner, "acme-late")
             .into_iter()
             .map(|(_, kind, _)| kind)

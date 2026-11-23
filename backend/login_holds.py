@@ -81,6 +81,13 @@ _RESET_RE = re.compile(
 )
 # An API's own words with a timestamp: "Your usage window resets at 2026-10-19T00:00:00Z".
 _WINDOW_RE = re.compile(r"usage window resets at (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)", re.I)
+# Antigravity's quota refusal, a Google API error: "...metadata:map[quotaResetDelay:3600s
+# quotaResetTimeStamp:2026-11-09T01:05:00Z] reason:QUOTA_EXHAUSTED". The timestamp wins; a delay (a Go duration such as
+# 1h2m3.5s) counts from the hit. Both are bounded, so a long or odd notice costs nothing and falls back to the backoff.
+_QUOTA_STAMP_RE = re.compile(r"\bquotaResetTimeStamp:(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z)")
+_QUOTA_DELAY_RE = re.compile(r"\bquotaResetDelay:((?:\d{1,9}(?:\.\d{1,9})?(?:ns|us|µs|ms|h|m|s)){1,6})(?![\w.])")
+_GO_PART_RE = re.compile(r"(\d{1,9}(?:\.\d{1,9})?)(ns|us|µs|ms|h|m|s)")
+_GO_SECONDS = {"ns": 1e-9, "us": 1e-6, "µs": 1e-6, "ms": 1e-3, "s": 1, "m": 60, "h": 3600}
 
 
 # A plan the provider refuses for its billing, not its usage: Claude Code's "Claude Code can't use your Claude
@@ -255,9 +262,13 @@ def reset_from_text(text, hit):
     """The reset a limit notice names in words, as a UTC datetime, or None. A time with no date is its next
     occurrence after `hit`, unless that is most of a day away: then the time named has just passed."""
     hit = H.parse_ts(hit) if isinstance(hit, str) else hit
-    stamped = _WINDOW_RE.search(text or "")
-    if stamped and hit:
-        return H.parse_ts(stamped[1])
+    stamped = _WINDOW_RE.search(text or "") or _QUOTA_STAMP_RE.search(text or "")
+    if stamped and hit and (at := H.parse_ts(stamped[1])):
+        return at  # one that does not parse falls through to the delay
+    delay = _QUOTA_DELAY_RE.search(text or "")
+    if delay and hit:
+        seconds = sum(float(n) * _GO_SECONDS[unit] for n, unit in _GO_PART_RE.findall(delay[1]))
+        return hit + timedelta(seconds=seconds) if 0 < seconds <= LIMIT_RESET_MAX else None
     match = _RESET_RE.search(text or "")
     if not match or not hit:
         return None

@@ -21,6 +21,8 @@ the Gateway where configured.
 Callers refuse only on can_run False; None never blocks.
 """
 
+from clients import harness_manifests as manifests
+
 from . import model_subscriptions, models_preset, providers, read_cache, runner_online
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H
@@ -135,8 +137,7 @@ def login_warning(readiness, runtime, harness=""):
 
 def own_harness(c, bot, runtime):
     """The bot's own harness when it runs `runtime`, else '': what a check of the runtime the bot already runs passes
-    as `harness`, the way the model picker passes the harness it offers. Without it an Antigravity bot is judged as
-    Gemini CLI and gets a Gemini sign-in hint that is not its own."""
+    as `harness`, the way the model picker passes the harness it offers."""
     harness = resolve_harness(_config(c, bot), runtime)
     return harness if runtime and runtime_of(harness) == runtime else ""
 
@@ -208,9 +209,6 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
 
     if problem := login_upgrade(row, readiness, bot=bot):
         return verdict(False, problem, "Update the runner in Settings > Computers")
-    # A variant reports readiness on its bot's row. The runtime's computer row describes the default CLI.
-    if harness and runtime_of(harness) != harness:
-        return verdict(None, label + " has no computer-wide readiness report for " + harness)
     if readiness.get("schema_version") != 1 or harness_caps(harness, runtime).get("readiness") is False:
         return verdict(None, label + " does not report its AI tools; update it to check")
     if not state.get("installed"):
@@ -233,7 +231,9 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
                 + (": " + str(tool["detail"])[:200] if tool.get("detail") else ""),
                 "Check " + label + " in Settings > Computers, or choose a model it already runs",
             )
-        if tool:
+        # One the runner does not install (no [install] method: Antigravity) waits for the operator, not an install.
+        own = manifests.get(runtime)
+        if tool and (own is None or own["installable"] or tool.get("state") in ("queued", "installing")):
             return verdict(None, (tool.get("name") or str(runtime)) + " is installing on " + label)
         return verdict(
             False,

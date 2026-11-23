@@ -502,13 +502,13 @@ pub fn merge(declared: Vec<Value>, granted: &[Value]) -> Vec<Value> {
 }
 
 /// (name, transports, why) for a harness (mcp_servers.SUPPORT): its manifest's `mcp_transports` and
-/// `mcp_unsupported`, named as its variant or manifest names it.
-fn support(runtime: &str, harness: &str) -> (String, Vec<String>, String) {
-    let caps = crate::harness_tools::caps(runtime, harness);
-    let name = match crate::harness_tools::variant(runtime, harness) {
-        Some(v) => v.name,
-        None if runtime.is_empty() => "This harness".into(),
-        None => crate::harness_tools::name_for(runtime),
+/// `mcp_unsupported`, named as its manifest names it.
+fn support(runtime: &str) -> (String, Vec<String>, String) {
+    let caps = crate::harness_tools::caps(runtime);
+    let name = if runtime.is_empty() {
+        "This harness".into()
+    } else {
+        crate::harness_tools::name_for(runtime)
     };
     let why = if !caps.mcp_unsupported.is_empty() {
         caps.mcp_unsupported
@@ -521,8 +521,8 @@ fn support(runtime: &str, harness: &str) -> (String, Vec<String>, String) {
 }
 
 /// The servers this harness cannot take, as [(server, why)].
-pub fn unsupported(servers: &[Value], runtime: &str, harness: &str) -> Vec<(Value, String)> {
-    let (name, allowed, why) = support(runtime, harness);
+pub fn unsupported(servers: &[Value], runtime: &str) -> Vec<(Value, String)> {
+    let (name, allowed, why) = support(runtime);
     servers
         .iter()
         .filter(|s| !allowed.contains(&text_of(&s["transport"])))
@@ -541,8 +541,8 @@ pub fn unsupported(servers: &[Value], runtime: &str, harness: &str) -> Vec<(Valu
         .collect()
 }
 
-pub fn supported(servers: &[Value], runtime: &str, harness: &str) -> Vec<Value> {
-    let (_, allowed, _) = support(runtime, harness);
+pub fn supported(servers: &[Value], runtime: &str) -> Vec<Value> {
+    let (_, allowed, _) = support(runtime);
     servers
         .iter()
         .filter(|s| allowed.contains(&text_of(&s["transport"])))
@@ -551,9 +551,9 @@ pub fn supported(servers: &[Value], runtime: &str, harness: &str) -> Vec<Value> 
 }
 
 /// Readiness warnings for one bot: each MCP server its harness cannot pass. Needs no credential.
-pub fn warnings_for(tools: &Value, runtime: &str, harness: &str) -> Vec<String> {
+pub fn warnings_for(tools: &Value, runtime: &str) -> Vec<String> {
     let servers: Vec<Value> = declared(tools).iter().map(|(e, m)| json!({"service": service_of(e), "transport": m["transport"], "url": m["url"]})).collect();
-    unsupported(&servers, runtime, harness)
+    unsupported(&servers, runtime)
         .into_iter()
         .map(|(s, why)| {
             format!(
@@ -1080,20 +1080,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["linear", "docs"]
         );
-        assert_eq!(supported(&servers, "claude", "").len(), 2);
-        let codex = unsupported(&servers, "codex", "");
+        assert_eq!(supported(&servers, "claude").len(), 2);
+        let codex = unsupported(&servers, "codex");
         assert_eq!(codex.len(), 1);
         assert_eq!(
             codex[0].1,
             "Codex cannot use it: it takes http servers, not sse"
         );
-        assert_eq!(supported(&servers, "gemini", "antigravity").len(), 0);
+        assert_eq!(supported(&servers, "antigravity").len(), 0);
         // Pi takes streamable HTTP only: the SSE server is named, the HTTP one passes.
-        assert_eq!(supported(&servers, "pi", "").len(), 1);
-        assert!(unsupported(&servers, "pi", "")[0]
+        assert_eq!(supported(&servers, "pi").len(), 1);
+        assert!(unsupported(&servers, "pi")[0]
             .1
             .ends_with("cannot use it: it takes http servers, not sse"));
-        let warnings = warnings_for(&tools(), "codex", "");
+        let warnings = warnings_for(&tools(), "codex");
         assert_eq!(warnings, ["docs: its MCP server is not passed to the bot's runs. Codex cannot use it: it takes http servers, not sse"]);
         let claude = claude_config(&servers);
         assert_eq!(

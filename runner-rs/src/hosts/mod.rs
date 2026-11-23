@@ -90,7 +90,7 @@ pub fn limit_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
         Regex::new(
-            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
+            r"(?i)hit your (?:usage|session|weekly) limit|usage limit|usage_limit_reached|subscription quota exhausted|quota_exhausted|quota exceeded\. check your plan|exceeded your current quota|insufficient[_ ]quota|rate[ _]limit(?:ed|_error)?|spend(?:ing)? limit|monthly (?:usage |spend(?:ing)? )?limit|no capacity available|model is at capacity|\boverloaded(?:_error)?\b|resource_exhausted|\bout_of_credit\b|\b(?:code|status|http) (?:429|503)\b",
         )
         .unwrap()
     })
@@ -129,6 +129,15 @@ fn auth_rejected_re() -> &'static Regex {
             r"(?i)incorrect api key|invalid[ _-]?(?:x-)?api[ _-]?key|api key (?:is )?(?:invalid|revoked|expired)|not logged in|please run /login|invalid authentication credentials|authentication_error|oauth session expired and could not be refreshed|missing meta credentials|missing bearer or basic authentication",
         )
         .unwrap()
+    })
+}
+
+/// Antigravity's own words for a sign-in it has not got or lost: too general to read on any other runtime's errors.
+fn agy_auth_rejected_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"(?i)please sign in to view available models|\bauthentication required\b")
+            .unwrap()
     })
 }
 
@@ -212,16 +221,22 @@ pub fn is_auth_rejected(text: &str) -> bool {
     auth_rejected_re().is_match(text)
 }
 
+/// `is_auth_rejected`, with the words only `runtime`'s CLI says (Antigravity's).
+pub fn is_auth_rejected_on(runtime: &str, text: &str) -> bool {
+    is_auth_rejected(text) || (runtime == "antigravity" && agy_auth_rejected_re().is_match(text))
+}
+
 pub fn is_auth_retryable(text: &str) -> bool {
     auth_retry_re().is_match(text) && !is_auth_rejected(text)
 }
 
-/// One line of the provider's refusal for people to read; keys and tokens are never kept.
-pub fn rejection_reason(text: &str) -> String {
+/// One line of `runtime`'s refusal for people to read (the line `is_auth_rejected_on` finds); keys and tokens are
+/// never kept.
+pub fn rejection_reason(runtime: &str, text: &str) -> String {
     let line = text
         .lines()
         .map(str::trim)
-        .find(|row| is_auth_rejected(row))
+        .find(|row| is_auth_rejected_on(runtime, row))
         .map(String::from)
         .unwrap_or_default();
     let line = if line.is_empty() {
@@ -1132,7 +1147,6 @@ pub enum Host {
     Claude(claude::ClaudeHost),
     Codex(codex::CodexHost),
     Gemini(gemini::GeminiHost),
-    /// The gemini runtime's Antigravity harness, kept warm between turns (crate::warm).
     Antigravity(antigravity::AntigravityHost),
     MuseCode(musecode::MuseCodeHost),
     Pi(pi::PiHost),
@@ -1141,11 +1155,10 @@ pub enum Host {
 }
 
 impl Host {
-    /// Whether the newest turn ran on a harness process already running: a kept Antigravity or pooled pi process.
-    /// Every other harness starts a process for each turn.
+    /// Whether the newest turn ran on a harness process already running: a pooled pi process. Every other harness
+    /// starts a process for each turn.
     pub fn warm(&self) -> bool {
         match self {
-            Host::Antigravity(h) => h.warm(),
             Host::Pi(h) => h.warm(),
             _ => false,
         }
@@ -1243,25 +1256,24 @@ impl Host {
         }
     }
 
-    /// The manifest runtime and variant this host runs, for its declared capabilities.
-    fn harness(&self) -> (&'static str, &'static str) {
+    /// The manifest runtime this host runs, for its declared capabilities.
+    fn runtime(&self) -> &'static str {
         match self {
-            Host::Claude(_) => ("claude", ""),
-            Host::Codex(_) => ("codex", ""),
-            Host::Gemini(_) => ("gemini", ""),
-            Host::Antigravity(_) => ("gemini", "antigravity"),
-            Host::MuseCode(_) => ("musecode", ""),
-            Host::Pi(_) => ("pi", ""),
-            Host::Cursor(_) => ("cursor", ""),
-            Host::Grok(_) => ("grok", ""),
+            Host::Claude(_) => "claude",
+            Host::Codex(_) => "codex",
+            Host::Gemini(_) => "gemini",
+            Host::Antigravity(_) => "antigravity",
+            Host::MuseCode(_) => "musecode",
+            Host::Pi(_) => "pi",
+            Host::Cursor(_) => "cursor",
+            Host::Grok(_) => "grok",
         }
     }
 
     /// A running turn takes new input only when the harness declares `steer`, and for Claude Code only when the
     /// installed CLI echoes its input; otherwise the input waits for the next turn.
     pub fn supports_steer(&self) -> bool {
-        let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).steer
+        crate::harness_tools::caps(self.runtime()).steer
             && match self {
                 Host::Claude(h) => h.supports_steer(),
                 _ => true,
@@ -1393,20 +1405,39 @@ impl Host {
     }
 
     /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
-    /// new session in its place (Claude Code and Gemini find out only when the turn runs).
+    /// new session in its place (Claude Code and Gemini find out only when the turn runs; Antigravity when its process
+    /// names its conversation, before it reads the prompt).
     pub fn restored(&self, thread_id: &str) -> bool {
         match self {
             Host::Claude(h) => h.restored(thread_id),
             Host::Gemini(h) => h.restored(thread_id),
+            Host::Antigravity(h) => h.restored(thread_id),
             _ => false,
+        }
+    }
+
+    /// Whether `thread_id`'s saved conversation lacks the conversation's history (Antigravity: agy began a new one in
+    /// place of the saved one after the model had worked in it, so it holds only that turn). Its record says so, saved
+    /// with the new id; the thread's turns are told everything again until one completes (`history_told`).
+    pub fn needs_history(&self, thread_id: &str) -> bool {
+        match self {
+            Host::Antigravity(h) => h.needs_history(thread_id),
+            _ => false,
+        }
+    }
+
+    /// A turn told `thread_id` everything again and completed: its record no longer asks for the history (unless agy
+    /// moved it to a new conversation again during that turn).
+    pub fn history_told(&self, thread_id: &str) {
+        if let Host::Antigravity(h) = self {
+            h.history_told(thread_id);
         }
     }
 
     /// Whether the harness says in its stream when it compacts a session (`compaction_events`), so a resumed turn
     /// may leave out what the session already holds (crate::prompt::build) and still learn when it no longer does.
     pub fn reports_compaction(&self) -> bool {
-        let (runtime, harness) = self.harness();
-        crate::harness_tools::caps(runtime, harness).compaction_events
+        crate::harness_tools::caps(self.runtime()).compaction_events
             && matches!(self, Host::Claude(_) | Host::Pi(_))
     }
 
@@ -1432,8 +1463,10 @@ impl Host {
     /// What a resumed turn's session is given instead of the turn's prompt if it turns out to be missing and the
     /// harness starts a new one in its place (`restored`): a new session's whole prompt.
     pub fn full_prompt(&self, thread_id: &str, text: Option<String>) {
-        if let Host::Claude(h) = self {
-            h.full_prompt(thread_id, text);
+        match self {
+            Host::Claude(h) => h.full_prompt(thread_id, text),
+            Host::Antigravity(h) => h.full_prompt(thread_id, text),
+            _ => {}
         }
     }
 
@@ -2144,9 +2177,40 @@ pub(crate) mod tests {
         // Codex with no login at all (codex 0.167, cli_contract.rs): nothing was sent, so no retry can help.
         let no_login = "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";
         assert!(is_auth_rejected(no_login) && !is_auth_retryable(no_login));
+        // Antigravity: its account quota (a Google API error naming the reason), and a sign-in it has not got or lost.
+        let quota = "Error 429, Message: Quota exhausted., Details: [map[metadata:map[quotaResetDelay:3600s] reason:QUOTA_EXHAUSTED]]";
+        assert!(is_limit(quota) && !is_capacity(quota));
+        let signed_out =
+            "Error: Please sign in to view available models. Launch the CLI without arguments to sign in.";
+        assert!(is_auth_rejected_on("antigravity", signed_out));
+        assert!(is_auth_rejected_on(
+            "antigravity",
+            "Error: authentication required"
+        ));
+        assert!(is_auth_rejected_on(
+            "antigravity",
+            "UNAUTHENTICATED (code 401): Request had invalid authentication credentials."
+        ));
+        // Its words on any other runtime are a tool's or a page's, not that runtime's login.
+        assert!(!is_auth_rejected_on("claude", signed_out));
+        assert!(!is_auth_rejected_on(
+            "codex",
+            "proxy said: authentication required"
+        ));
+        assert!(!is_auth_rejected(
+            "Please sign in to continue to the dashboard"
+        ));
         assert_eq!(
-            rejection_reason("x\nInvalid API key sk-ant-abcdefghijk"),
+            rejection_reason("claude", "x\nInvalid API key sk-ant-abcdefghijk"),
             "Invalid API key [redacted]"
+        );
+        // Antigravity's own words are its refusal's line.
+        assert_eq!(
+            rejection_reason(
+                "antigravity",
+                "Process exited (exit code 1)\nError: authentication required"
+            ),
+            "Error: authentication required"
         );
         assert_eq!(compact_at(&json!("120000")), 120000);
         assert_eq!(compact_at(&json!(0)), DEFAULT_COMPACT_AT);
@@ -2174,11 +2238,11 @@ pub(crate) mod tests {
             bot_key_problem("gemini", &gemini, "has", &grants),
             Some("Gemini API key required".into())
         );
-        // Antigravity runs on the Gemini runtime with its own sign-in, not a key here.
+        // Antigravity signs in with a Google account, not a key here.
         let antigravity =
-            json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-3.7-flash"});
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
         assert_eq!(
-            bot_key_problem("gemini", &antigravity, "none", &grants),
+            bot_key_problem("antigravity", &antigravity, "none", &grants),
             None
         );
         assert_eq!(

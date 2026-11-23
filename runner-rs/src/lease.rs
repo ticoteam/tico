@@ -101,6 +101,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now()),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         })
     }
 

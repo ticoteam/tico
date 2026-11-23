@@ -28,7 +28,8 @@ DEFAULT = "default"
 # `runtime` is the host a runner starts (runner-rs/src/hosts/<runtime>.rs); `harness` names the tool
 # manifest that installs it (runner-rs/harnesses/<harness>.toml). `login`, what the person types on the runner's
 # machine to sign that runtime in, comes from the manifest. Providers with no CLI of their own share the
-# catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key.
+# catch-all runtime (`catch_all`): pi, reached with an OpenRouter API key. A provider with more than one CLI lists them
+# all in `runtimes`, its own `runtime` first.
 PROVIDERS = (
     {
         "id": "openai",
@@ -48,6 +49,7 @@ PROVIDERS = (
         "id": "google",
         "label": "Google",
         "runtime": "gemini",
+        "runtimes": ("gemini", "antigravity"),
         "harness": "gemini-cli",
         "detail": "Gemini CLI, with a Gemini API key in the bot's secrets",
     },
@@ -112,7 +114,14 @@ PROVIDERS = (
         "detail": "Tico's own models through the Tico AI Gateway, with a gateway key from Tico",
     },
 )
-PROVIDERS = tuple({**row, "login": manifests.caps(row["runtime"]).get("terminal_login", "")} for row in PROVIDERS)
+PROVIDERS = tuple(
+    {
+        **row,
+        "runtimes": tuple(row.get("runtimes") or (row["runtime"],)),
+        "login": manifests.caps(row["runtime"]).get("terminal_login", ""),
+    }
+    for row in PROVIDERS
+)
 PROVIDER_BY_ID = {row["id"]: row for row in PROVIDERS}
 # What a computer's model CLI is called, for the words on Health and in Settings.
 RUNTIME_LABELS = {row["runtime"]: row["name"] for row in manifests.load().values() if row["id"] == row["runtime"]}
@@ -136,8 +145,9 @@ RUNTIME_KEY_NAMES = frozenset(
 # shared runtime, else the only one.
 PROVIDER_BY_RUNTIME = {}
 for _row in PROVIDERS:
-    if _row["runtime"] not in PROVIDER_BY_RUNTIME or _row.get("catch_all"):
-        PROVIDER_BY_RUNTIME[_row["runtime"]] = _row
+    for _runtime in _row["runtimes"]:
+        if _runtime not in PROVIDER_BY_RUNTIME or _row.get("catch_all"):
+            PROVIDER_BY_RUNTIME[_runtime] = _row
 
 # One row per model. `recommended` marks what a provider's bots get when nobody chose;
 # `deprecated` rows stay so bots already on them render, but nothing new may pick them. Rows
@@ -239,10 +249,18 @@ MODEL_CATALOG = tuple(
             "id": "gemini-4-neon",
             "context_tokens": 1_048_576,
             "label": "gemini 4 neon",
-            "runtime": "gemini",
+            "runtime": "antigravity",
             "provider": "google",
-            "harnesses": ("antigravity",),
             "recommended": True,
+            "efforts": ("low", "medium", "high", "xhigh"),
+            "default_effort": "high",
+        },
+        {
+            "id": "gemini-4-hydrogen",
+            "context_tokens": 1_048_576,
+            "label": "gemini 4 hydrogen",
+            "runtime": "antigravity",
+            "provider": "google",
             "efforts": ("low", "medium", "high", "xhigh"),
             "default_effort": "high",
         },
@@ -791,15 +809,19 @@ def provider_models(provider, *, current=True, meeting=False):
 _RECOMMENDED: dict[str, dict | None] = {}
 
 
-def recommended(provider):
-    """The model a provider's bots get when nobody chose one, or None for an unknown provider. Worked out once per
-    provider: the catalog is fixed at import, and resolve asks this for every bot on every page that lists them."""
-    if provider in _RECOMMENDED:
-        return _RECOMMENDED[provider]
+def recommended(provider, runtime=""):
+    """The model a provider's bots get when nobody chose one (one `runtime` runs, when it runs any), or None for an
+    unknown provider. Worked out once per provider and runtime: the catalog is fixed at import, and resolve asks this for every
+    bot on every page that lists them."""
+    key = f"{provider}|{runtime}" if runtime else provider
+    if key in _RECOMMENDED:
+        return _RECOMMENDED[key]
     rows = provider_models(provider)
+    rows = [row for row in rows if row["runtime"] == runtime] or rows
     found = next((row for row in rows if row.get("recommended")), rows[0] if rows else None)
-    if provider in PROVIDER_BY_ID:  # only the catalog's own providers are kept: the cache stays the catalog's size
-        _RECOMMENDED[provider] = found
+    # Only the catalog's own providers and runtimes are kept: the cache stays the catalog's size.
+    if provider in PROVIDER_BY_ID and (not runtime or runtime in PROVIDER_BY_RUNTIME):
+        _RECOMMENDED[key] = found
     return found
 
 
@@ -807,7 +829,7 @@ def runtime_enabled(runtime, enabled, model_row=None):
     """Whether the enabled providers can run `runtime` (and `model_row`, when one is chosen)."""
     if model_row:
         return any(serves(name, model_row) for name in enabled)
-    return any(PROVIDER_BY_ID[name]["runtime"] == runtime for name in enabled)
+    return any(runtime in PROVIDER_BY_ID[name]["runtimes"] for name in enabled)
 
 
 def normalize_enabled(value):
@@ -858,9 +880,12 @@ def complete_choice(enabled, runtime="", model="", kept=""):
                 "runtime", f"Unknown runtime {runtime!r}; choose from " + ", ".join(PROVIDER_BY_RUNTIME), 422
             )
         # The enabled provider that speaks for this runtime, so a company with only Kimi on
-        # the shared pi runtime gets Kimi's model, not OpenRouter's pick.
-        own = next((name for name in enabled if PROVIDER_BY_ID[name]["runtime"] == runtime), provider["id"])
-        model = recommended(own)["id"]
+        # the shared pi runtime gets Kimi's model, not OpenRouter's pick; of its models, one this runtime runs.
+        own = next((name for name in enabled if runtime in PROVIDER_BY_ID[name]["runtimes"]), provider["id"])
+        found = recommended(own, runtime)
+        if found is None:
+            raise ProviderError("runtime", f"No model runs on {runtime!r}", 422)
+        model = found["id"]
     else:
         row = recommended(enabled[0])
         return row["runtime"], row["id"]
@@ -1094,10 +1119,15 @@ def default_fallbacks(record):
     for name in record["enabled"]:
         if PROVIDER_BY_ID[name].get("gateway"):
             continue  # a fallback the bot did not name never spends the company's gateway key
-        runtime = PROVIDER_BY_ID[name]["runtime"]
         # Nor does a company default on a Gateway model reach it through another provider on the same runtime.
-        own = record["model"] if record["runtime"] == runtime and not gateway_model(record["model"]) else ""
+        own = (
+            record["model"]
+            if record["runtime"] in PROVIDER_BY_ID[name]["runtimes"] and not gateway_model(record["model"])
+            else ""
+        )
         model = own or (recommended(name) or {}).get("id")
+        # The runtime is the model's: a provider with more than one CLI runs each model on its own.
+        runtime = (MODEL_BY_ID.get(model) or {}).get("runtime") or PROVIDER_BY_ID[name]["runtime"]
         if runtime in seen or not model:
             continue
         seen.add(runtime)
@@ -1275,7 +1305,7 @@ def resolve(record, config=None, *, what="This bot"):
     if runtime:
         if record["runtime"] == runtime and record["model"]:
             return runtime, gateway_tiers.new_id(record["model"])
-        row = recommended(runtime_provider(runtime))
+        row = recommended(runtime_provider(runtime), runtime)
         if row:
             return runtime, row["id"]
         raise ProviderError("model", f"Choose a model for the {runtime} runtime in Settings", 409)
@@ -1315,13 +1345,16 @@ def wanted_runtimes(record):
     providers'. Empty when the company has not chosen a provider yet."""
     if record["runtime"]:
         return {record["runtime"]}
-    return {row["runtime"] for row in PROVIDERS if row["id"] in record["enabled"]}
+    return {runtime for row in PROVIDERS if row["id"] in record["enabled"] for runtime in row["runtimes"]}
 
 
 def default_runtime(record):
     """The one runtime a computer with no bots installs and is signed in on first: the company's default, else the
-    first of its providers' runtimes by name. Empty before a provider is chosen."""
-    return next(iter(sorted(wanted_runtimes(record))), "")
+    first of its providers' own runtimes by name (a provider's other CLIs, like Google's Antigravity, never win it).
+    Empty before a provider is chosen."""
+    if record["runtime"]:
+        return record["runtime"]
+    return next(iter(sorted(row["runtime"] for row in PROVIDERS if row["id"] in record["enabled"])), "")
 
 
 def runtimes_run_on(c, settings):

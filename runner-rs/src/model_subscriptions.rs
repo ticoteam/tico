@@ -264,7 +264,7 @@ pub fn apply(
         } else {
             let name = text_of(&item["file"]);
             let home_env = text_of(&item["home_env"]);
-            let overrides = crate::harness_tools::caps(&runtime, "").profile_home_overrides;
+            let overrides = crate::harness_tools::caps(&runtime).profile_home_overrides;
             if !FILES.contains(&name.as_str())
                 || (name == CREDENTIALS) == home_env.is_empty()
                 || (!home_env.is_empty() && !overrides.contains(&home_env))
@@ -502,7 +502,7 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
                 env.remove(&key);
             }
         }
-        for key in crate::harness_tools::caps(&d.runtime, "").profile_home_overrides {
+        for key in crate::harness_tools::caps(&d.runtime).profile_home_overrides {
             env.remove(&key);
         }
         env.insert(var, home.display().to_string());

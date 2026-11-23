@@ -286,7 +286,7 @@ fn claim_read(key: &(String, String)) -> bool {
 /// For an `app-server` runtime: start a background `account/read` in `env` when the last one, answered or not, is
 /// older than READ_EVERY, so a heartbeat never waits on it. The answer is picked up by the next report.
 pub fn refresh_in_background(profile: &str, runtime: &str, env: Env) {
-    if crate::harness_tools::caps(runtime, "").account != "app-server" {
+    if crate::harness_tools::caps(runtime).account != "app-server" {
         return;
     }
     let Ok(handle) = tokio::runtime::Handle::try_current() else {

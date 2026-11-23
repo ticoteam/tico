@@ -2805,6 +2805,17 @@ def fallback_uses_primary_login(config, named, primary):
     )
 
 
+def without_unknown_fallback(config, readiness):
+    """`config` without its named Antigravity fallback on a computer whose runner does not report the antigravity
+    runtime: a runner from before Antigravity had a runtime of its own takes that harness for the Gemini CLI and would
+    run Neon or Hydrogen there. Its other fallbacks stay."""
+    named = config.get("fallback")
+    runtimes = (readiness or {}).get("runtimes") or {}
+    if isinstance(named, dict) and named.get("harness") == "antigravity" and "antigravity" not in runtimes:
+        return {key: value for key, value in config.items() if key != "fallback"}
+    return config
+
+
 def restrict_fallbacks(config, paid_tools, caps):
     """Keep a turn on unset tools when it starts on an unset tool."""
     from .harnesses import runtime_of
@@ -2833,6 +2844,13 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
     turned off, none, or one the runner already found not ready in this hold window (`stuck`) means waiting."""
     from .harnesses import runtime_of
 
+    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
+    ready = readiness_document(row["readiness"]) if row else {}
+    # The fallback the bot names, as `complete` remembers it failed (`failed_fallback`): taken before any filtering, so
+    # one the claim drops here still matches the mark and the bot waits out the hold.
+    mark = fallback_mark(config)
+    # The fallbacks the claim hands this computer (without_unknown_fallback), so admission waits on the same ones.
+    config = without_unknown_fallback(config, ready)
     paid_tools = agent_subscriptions.loaded_picks(c, bot, loads)
     if paid_tools:
         record = loads.record if loads is not None else providers.load(c, settings)
@@ -2853,10 +2871,8 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None, 
     if fallback_uses_primary_login(config, named, primary):
         named = {}
     hold = login_holds.get(c, runner_id, own, primary)
-    if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == fallback_mark(config):
+    if bot in hold.get("stuck", []) or (hold.get("failed_fallback") or {}).get(bot) == mark:
         return None
-    row = c.execute("SELECT readiness FROM runners_with_state WHERE id=?", (runner_id,)).fetchone()
-    ready = readiness_document(row["readiness"]) if row else {}
     if named.get("harness"):
         if not named.get("model"):
             return None
@@ -5851,6 +5867,8 @@ class Execution:
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)
         # The Gateway when its plans here run out only where this computer falls back to it (its own switch).
         plans_out = False
+        # First, so the paid-by and Gateway fallbacks below see only fallbacks this computer's runner can run.
+        config = without_unknown_fallback(config, readiness_document(runner["readiness"]))
         if payment is None and not voice_reply:
             config = models_preset.main_config(record, here, config, tier, plans_out)
             if paid_tools:

@@ -1,6 +1,6 @@
 //! What the heartbeat says about this computer (`runtime_readiness`, `preflight` and `readiness` in
 //! the old Python runner). Only the checks the chat path needs: runtime install, version, sign-in and models for
-//! Claude, Codex, Gemini (the Gemini CLI, and `agy` for Antigravity bots), Muse Code, Pi, Cursor and Grok Build, and per bot its repository, AGENT.md and bot.yaml. The server gates claims on these rows.
+//! Claude, Codex, the Gemini CLI, Antigravity, Muse Code, Pi, Cursor and Grok Build, and per bot its repository, AGENT.md and bot.yaml. The server gates claims on these rows.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -109,7 +109,7 @@ async fn runtime_readiness_from(
     profile: Option<&Profile>,
     previous: Option<&Map<String, Value>>,
 ) -> Map<String, Value> {
-    let caps = crate::harness_tools::caps(runtime, "");
+    let caps = crate::harness_tools::caps(runtime);
     let exe = if crate::harness_tools::runtimes()
         .iter()
         .any(|r| r == runtime)
@@ -500,21 +500,6 @@ fn logins(
 /// One probe result per runtime and login: (runtime, profile name, "" for the computer's own login).
 pub type Rows = BTreeMap<(String, String), Map<String, Value>>;
 
-fn assigned_variants(assignments: &[Value]) -> BTreeMap<String, crate::harness_tools::Variant> {
-    assignments
-        .iter()
-        .filter_map(|entry| {
-            let config = &entry["config"];
-            crate::harness_tools::variant(
-                &text_of(&config["runtime"]),
-                &text_of(&config["harness"]),
-            )
-            .filter(|variant| variant.capabilities.readiness)
-            .map(|variant| (variant.id.clone(), variant))
-        })
-        .collect()
-}
-
 /// What a probe reads besides the sign-in state: the runtimes the bots use, the logins used on each with the folder and
 /// sharing its environment is built from, each runtime's bot-key sign-in (read from the bots' grants), the config
 /// entries that pick the logins (`profiles`, `default_profile`, `bot_profiles`), and the server's word on a data problem
@@ -522,10 +507,6 @@ fn assigned_variants(assignments: &[Value]) -> BTreeMap<String, crate::harness_t
 pub fn probe_inputs(config: &Config, assignments: &[Value], computer_logins: bool) -> String {
     let mut parts = vec![
         format!("computer_logins={computer_logins}"),
-        format!(
-            "variants={:?}",
-            assigned_variants(assignments).keys().collect::<Vec<_>>()
-        ),
         format!(
             "server_takes_data_problem={}",
             crate::fallback::server_takes_data_problem()
@@ -598,33 +579,6 @@ pub async fn probe_all(
             .await;
             rows.insert((runtime.clone(), name), row);
         }
-    }
-    let path = std::env::var("PATH").unwrap_or_default();
-    for (id, variant) in assigned_variants(assignments) {
-        let exe = which(&variant.executable, &path);
-        let (authenticated, detail) = match &exe {
-            Some(exe) => {
-                sign_in_state(
-                    &id,
-                    &variant.capabilities,
-                    exe,
-                    sign,
-                    client,
-                    assignments,
-                    None,
-                    None,
-                )
-                .await
-            }
-            None => ("missing", format!("{} CLI is not on PATH", variant.name)),
-        };
-        rows.insert(
-            (id, String::new()),
-            Map::from_iter([
-                ("authenticated".into(), json!(authenticated)),
-                ("detail".into(), json!(detail)),
-            ]),
-        );
     }
     (rows, inputs)
 }
@@ -741,7 +695,6 @@ pub fn runtime_report(
     rows: &Rows,
 ) -> Map<String, Value> {
     let mut report = Map::new();
-    let variants = assigned_variants(assignments);
     for runtime in crate::harness_tools::runtimes() {
         let runtime = runtime.as_str();
         let used = logins(config, assignments, computer_logins, runtime);
@@ -775,8 +728,7 @@ pub fn runtime_report(
             // login holds, since an older one refuses a field it does not know.
             if !name.is_empty()
                 && crate::fallback::server_keeps_holds()
-                && crate::fallback::login(runtime, "", profile.as_ref())
-                    .is_some_and(|l| l.is_empty())
+                && crate::fallback::login(runtime, profile.as_ref()).is_some_and(|l| l.is_empty())
             {
                 status
                     .as_object_mut()
@@ -816,16 +768,7 @@ pub fn runtime_report(
             ""
         };
         let own = crate::profiles::windows_for_server(own_name, runtime);
-        let mut row = computer_row(targets, own, computer_logins);
-        for id in variants
-            .keys()
-            .filter(|id| crate::harness_tools::runtime_of(id) == runtime)
-        {
-            if let Some(variant) = rows.get(&(id.clone(), String::new())) {
-                row["variants"][id] = Value::Object(variant.clone());
-            }
-        }
-        report.insert(runtime.into(), row);
+        report.insert(runtime.into(), computer_row(targets, own, computer_logins));
     }
     report
 }
@@ -911,10 +854,30 @@ pub fn unsupported(entry: &Value) -> Vec<String> {
     let runtime = text_of(&c["runtime"]);
     let mut needs = vec![];
     let harness = text_of(&c["harness"]);
-    if !harness.is_empty() && !crate::harness_tools::is_harness_of(&runtime, &harness) {
+    if !harness.is_empty() && harness != runtime {
         needs.push(format!("the {harness} harness"));
     }
     needs
+}
+
+/// Whether a bot.yaml still declares the Antigravity pick it had when Antigravity ran on the Gemini runtime, for the bot
+/// the server moved to runtime antigravity: exactly what migration 20261123184253 moved (runtime gemini with harness
+/// antigravity, or Neon with no harness), Flash there now Hydrogen. Any other difference is still drift.
+fn legacy_antigravity(declared: &Map<String, Value>, expected: &Value) -> bool {
+    const NEON: &str = "gemini-4-neon";
+    const FLASH: &str = "gemini-3.8-flash";
+    let said = |key: &str| declared.get(key).map(text_of).unwrap_or_default();
+    let model = said("model");
+    let harness = said("harness");
+    let was_agy = harness == "antigravity" || (harness.is_empty() && model == NEON);
+    let now = text_of(&expected["model"]);
+    let same_model =
+        model.is_empty() || model == now || (model == FLASH && now == "gemini-4-hydrogen");
+    // An omitted runtime is unspecified, as in the ordinary comparison; any other than Gemini is drift.
+    text_of(&expected["runtime"]) == "antigravity"
+        && matches!(said("runtime").as_str(), "" | "gemini")
+        && was_agy
+        && same_model
 }
 
 pub fn manifest_path(folder: &Path) -> PathBuf {
@@ -971,7 +934,6 @@ pub async fn preflight(
         let expected = &entry["config"];
         let runtime = text_of(&expected["runtime"]);
         let harness = text_of(&expected["harness"]);
-        let variant = crate::harness_tools::variant(&runtime, &harness);
         let caps = crate::harness_tools::caps_of(expected);
         let known = crate::harness_tools::runtimes().contains(&runtime);
         let path = crate::sessions::local_path(config, &bot, expected);
@@ -1080,19 +1042,6 @@ pub async fn preflight(
             problems.push(NO_RUNTIME.into());
         } else if !known {
             problems.push("Unsupported runtime".into());
-        } else if let Some(variant) = variant {
-            let probe = &runtimes.get(&runtime).unwrap_or(&Value::Null)["variants"][&harness];
-            sign_in = json!(probe["authenticated"].as_str().unwrap_or("unknown"));
-            if caps.readiness && sign_in != "ready" {
-                problems.push(
-                    probe["detail"]
-                        .as_str()
-                        .map(String::from)
-                        .unwrap_or_else(|| {
-                            format!("{} sign-in has not been checked", variant.name)
-                        }),
-                );
-            }
         } else if runtimes
             .get(&runtime)
             .is_none_or(|r| r["installed"] != true)
@@ -1183,8 +1132,8 @@ pub async fn preflight(
                             .is_some_and(|f| crate::sessions::folder_named_from(&f, &name));
                         let known_name = name == bot || (!slug.is_empty() && name == slug) || named;
                         (known_name || (!shared.is_empty() && name == shared))
-                            && same("runtime")
-                            && same("model")
+                            && ((same("runtime") && same("model"))
+                                || legacy_antigravity(&declared, expected))
                     }
                     _ => false,
                 };
@@ -1247,12 +1196,10 @@ pub fn document(
             let mut row = row.clone();
             if let Some(r) = row.as_object_mut() {
                 r.remove("profiles");
-                // The heartbeat carries the variant's sign-in on each assigned bot's row.
-                r.remove("variants");
                 // Where bots run as their own user, whether this tool's turns also each run as their own leased user
                 // ("own") or share the bot user ("bot"), which can enter every bot's checkout (`isolated_user`).
                 if crate::isolation::enabled() && crate::fallback::server_takes_turn_user() {
-                    let own = crate::harness_tools::caps(name, "").isolated_user
+                    let own = crate::harness_tools::caps(name).isolated_user
                         && crate::turn_users::available();
                     r.insert("turn_user".into(), json!(if own { "own" } else { "bot" }));
                 }
@@ -1303,7 +1250,7 @@ pub fn document(
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let offers_skills = crate::harness_tools::caps(&text_of(&row["runtime"]), "").repo_commands
+        let offers_skills = crate::harness_tools::caps(&text_of(&row["runtime"])).repo_commands
             && !builtins.is_empty();
         if offers_skills
             && row["repository_present"] == true
@@ -1483,6 +1430,97 @@ pub fn changed_agent_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bot_yaml_from_before_antigravity_had_its_own_runtime_is_no_drift_but_other_changes_are() {
+        let yaml = |text: &str| match crate::manifest::parse(text).unwrap() {
+            Value::Object(m) => m,
+            other => panic!("{other}"),
+        };
+        let hydrogen = json!({"runtime": "antigravity", "model": "gemini-4-hydrogen"});
+        let neon = json!({"runtime": "antigravity", "model": "gemini-4-neon"});
+        for (declared, expected, ok) in [
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                true,
+            ),
+            // An omitted runtime is unspecified.
+            (
+                "name: ops\nharness: antigravity\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                true,
+            ),
+            (
+                "name: ops\nharness: antigravity\nmodel: gemini-4-neon\n",
+                &neon,
+                true,
+            ),
+            (
+                "name: ops\nharness: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                false,
+            ),
+            // A bare Flash, or an explicit Gemini CLI, was never Antigravity's.
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: gemini\nmodel: gemini-4-neon\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-4-neon\n",
+                &neon,
+                true,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\n",
+                &neon,
+                true,
+            ),
+            // Drift that has nothing to do with the move is still drift.
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nharness: antigravity\nmodel: gemini-3.7-pro\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.7-pro\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: codex\nmodel: gemini-4-neon\n",
+                &neon,
+                false,
+            ),
+            (
+                "name: ops\nruntime: gemini\nmodel: gemini-3.8-flash\n",
+                &json!({"runtime": "gemini", "model": "gemini-3.8-flash"}),
+                false,
+            ),
+        ] {
+            assert_eq!(
+                legacy_antigravity(&yaml(declared), expected),
+                ok,
+                "{declared} for {expected}"
+            );
+        }
+    }
 
     #[test]
     fn only_a_cloud_machine_says_trust_and_only_to_a_server_that_takes_it() {
@@ -1922,7 +1960,7 @@ pub(crate) mod probe_tests {
         let sign = SignIn::new(&root);
         let client = Client::new("http://localhost:1", "", 1, 0).unwrap();
         let assignment = json!({"bot": crate::sessions::RELATIONSHIP_WORKER,
-            "config": {"runtime": "gemini", "harness": "antigravity"}});
+            "config": {"runtime": "antigravity", "harness": "antigravity"}});
         let assignments = [assignment];
         let mut reports = vec![];
         for output in [
@@ -1931,7 +1969,7 @@ pub(crate) mod probe_tests {
         ] {
             std::fs::write(
                 &agy,
-                format!("#!/bin/sh\n[ \"$1\" = models ] || exit 1\necho '{output}'\n"),
+                format!("#!/bin/sh\n[ \"$1\" = --version ] && echo 1.5.15 && exit\n[ \"$1\" = models ] || exit 1\necho '{output}'\n"),
             )
             .unwrap();
             std::fs::set_permissions(&agy, std::fs::Permissions::from_mode(0o755)).unwrap();

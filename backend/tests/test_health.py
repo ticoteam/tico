@@ -524,8 +524,9 @@ def test_a_chat_waiting_on_its_own_model_sign_in_says_so_and_other_waits_keep_th
 
 
 def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
-    """The sign-in hint and Health's stuck check judge the bot's own harness, not its provider's default: an Antigravity
-    bot on Gemini, on a computer where the Gemini sign-in is missing, keeps its own reason and gets no Gemini sign-in fix."""
+    """The sign-in hint and Health's stuck check judge the bot's own runtime, not its provider's default: an Antigravity
+    bot of a company on Gemini, on a computer where the Gemini sign-in is missing, keeps its own reason and gets no
+    Gemini sign-in fix."""
     import json
 
     api = environment()
@@ -550,12 +551,17 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
                     {
                         "schema_version": 1,
                         "runtimes": {
-                            "gemini": {"installed": True, "authenticated": "missing", "detail": "Gemini login required"}
+                            "gemini": {
+                                "installed": True,
+                                "authenticated": "missing",
+                                "detail": "Gemini login required",
+                            },
+                            "antigravity": {"installed": True, "authenticated": "ready"},
                         },
                         "bots": {
                             "scout": {
                                 "ready": False,
-                                "runtime": "gemini",
+                                "runtime": "antigravity",
                                 "problems": ["Missing bot repository or AGENTS.md"],
                             }
                         },
@@ -565,7 +571,7 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
             ),
         )
         c.execute("INSERT INTO bot_config(bot,owner_id) VALUES('scout','ana')")
-        BS.write(c, 'scout', {"runtime": "gemini", "harness": "antigravity"})
+        BS.write(c, 'scout', {"runtime": "antigravity", "harness": "antigravity"})
         c.execute(
             "INSERT INTO assignments(bot,runner_id,generation,updated_at,updated_by) VALUES('scout',?,1,?,'t')",
             (runner, H.now()),
@@ -579,12 +585,10 @@ def test_an_antigravity_bot_is_not_told_to_sign_in_to_gemini_cli(environment):
     [row] = health_of(api)[0]["stuck"]
     assert row["bot"] == "scout" and row["why"] == "Missing bot repository or AGENTS.md on Team box"
     assert "Gemini" not in json.dumps(row) and "login" not in row["fix"] and "move" not in row["fix"]
-    # Judged as Gemini CLI, the same computer's answer is a sign-in: the hint the bot must not get.
     from backend.readiness import can_run
 
     with api.app.state.store.transaction() as c:
-        assert can_run(c, "scout", "gemini")["sign_in"] is True
-        assert "sign_in" not in can_run(c, "scout", "gemini", harness="antigravity")
+        assert "sign_in" not in can_run(c, "scout", "antigravity")
 
 
 def test_computer_sign_in_names_only_a_model_its_bots_run_on(environment):

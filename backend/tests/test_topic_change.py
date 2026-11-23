@@ -181,6 +181,7 @@ def test_the_lifetimes_are_the_documented_ones_and_are_read_per_harness(chat, mo
         "claude": 300,
         "codex": 300,
         "gemini": 300,
+        "antigravity": 300,
         "grok": 300,
         "pi": 300,
         "cursor": 300,

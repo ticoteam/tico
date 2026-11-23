@@ -14,7 +14,7 @@ and holds no harness.
 | Codex | `runner-rs/harnesses/codex.toml` | OpenAI | npm `@openai/codex` | ChatGPT subscription (device code, from Settings) or `OPENAI_API_KEY` |
 | Claude Code | `claude-code.toml` | Anthropic | npm `@anthropic-ai/claude-code` | Claude subscription (link and pasted code, from Settings), `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
 | Gemini CLI | `gemini-cli.toml` | Google | npm `@google/gemini-cli` | `GEMINI_API_KEY` |
-| Antigravity (Gemini variant) | `gemini-cli.toml` `[variants.antigravity]` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`. Readiness checks sign-in with `agy models`. No MCP servers |
+| Antigravity | `antigravity.toml` | Google | Operator installs `agy`; the runner never installs or updates it | Google account, signed in by the operator in `agy`. Readiness checks sign-in with `agy models`. No MCP servers |
 | Grok Build | `grok.toml` | xAI | npm `@xai-official/grok` (xAI's own package) | Grok subscription (device code, from Settings) or `XAI_API_KEY` |
 | Cursor Agent | `cursor-agent.toml` | Cursor | Cursor's install script, run with `HOME` inside the tools directory | Cursor subscription (browser link, from Settings) or `CURSOR_API_KEY` |
 | Muse Code | `muse-code.toml` | Meta | Meta's install script (`dev.meta.ai/install.sh`), run with `HOME` inside the tools directory | Meta account (device code, from Settings) or `META_API_KEY` |
@@ -534,7 +534,7 @@ another bot's home; all turns use the original login in its own home.
 | `voice_session` | The harness can answer live call questions in one resident session | `false` |
 | `voice_session_runner` | Additional heartbeat capability required to place a resident call session on the runner | `voice_sessions_v1` suffices |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
+| `persistent_session` | One process per conversation is kept between turns (pi) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `isolated_user` | The CLI keeps no owner-only sign-in state in the bot's home, so on a Docker runner with a turn-user pool each turn runs as its own leased OS user that cannot enter another bot's checkout. Only pi sets it: Claude Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity keep 0600 sign-in files shared across turns | The turn runs as `bot`; readiness reports it as not isolated |
@@ -578,6 +578,6 @@ Each `Skill` tool call the runner reports carries the skill's name (`skill`) and
 counts a call to a directory skill once per (attempt, tool id); a person's message to a bot that starts with `/name`
 counts as that person's use of the bot's installed skill. Usage rows hold the skill, who, where and when only.
 
-A runtime with a second host (Gemini's Antigravity) declares it as `[variants.<harness>]` in the runtime's manifest,
-with its own `name`, `host`, `executable` and capabilities. The runner never installs a variant.
+A provider may have more than one CLI, each its own manifest and runtime (Google: the Gemini CLI and Antigravity). A
+manifest with no `[install]` names a CLI the operator installs (Antigravity); the runner never installs or updates it.
 

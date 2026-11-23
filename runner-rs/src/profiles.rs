@@ -20,12 +20,12 @@ pub const SIGN_IN_ORDER: &[&str] = &["failed", "missing", "unknown", "ready"];
 
 /// The variable that points `runtime` at a profile's own login folder (`profile_home`), when it has one.
 pub fn home_var(runtime: &str) -> Option<String> {
-    Some(crate::harness_tools::caps(runtime, "").profile_home).filter(|v| !v.is_empty())
+    Some(crate::harness_tools::caps(runtime).profile_home).filter(|v| !v.is_empty())
 }
 
 /// The command a person runs in a terminal to sign `runtime` in (its executable and `terminal_login`), when it has one.
 pub fn login_command(runtime: &str) -> Option<Vec<String>> {
-    let args = crate::harness_tools::caps(runtime, "").terminal_login;
+    let args = crate::harness_tools::caps(runtime).terminal_login;
     (!args.is_empty()).then(|| {
         std::iter::once(crate::harness_tools::executable_for(runtime))
             .chain(args)
@@ -94,7 +94,7 @@ impl Profile {
             env.insert(var, home.display().to_string());
             // Variables the CLI reads ahead of that home (`profile_home_overrides`) would sign it in and run it on some
             // other folder's login.
-            for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+            for key in crate::harness_tools::caps(runtime).profile_home_overrides {
                 env.remove(&key);
             }
         }
@@ -371,7 +371,7 @@ pub fn create(root: &Path, name: &str, share_operator: bool) -> Result<Value, St
     if !share_operator {
         let gitconfig = PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".gitconfig");
         for runtime in crate::harness_tools::profile_runtimes() {
-            let caps = crate::harness_tools::caps(&runtime, "");
+            let caps = crate::harness_tools::caps(&runtime);
             let home = folder.join(&runtime);
             directory(&home, 0o700)?;
             for dir in &caps.profile_dirs {
@@ -622,7 +622,7 @@ fn weekly() -> &'static Mutex<HashMap<(String, String, &'static str), Value>> {
 
 pub fn remember_weekly(profile: &str, runtime: &str, event: &Value) {
     // Only a runtime whose turns or refresh report a weekly window has one to keep.
-    let weekly_usage = crate::harness_tools::caps(runtime, "").weekly_usage;
+    let weekly_usage = crate::harness_tools::caps(runtime).weekly_usage;
     if !["refresh", "turns"].contains(&weekly_usage.as_str()) {
         return;
     }
@@ -816,7 +816,7 @@ pub async fn report(
                     // A sign-in or sign-out while this reads (accounts::forget) makes its answer stale: the account it read
                     // is not kept, and a signed-out answer does not clear the new account.
                     let since = crate::accounts::read_started(&name, runtime);
-                    let status = crate::harness_tools::caps(runtime, "").sign_in_status;
+                    let status = crate::harness_tools::caps(runtime).sign_in_status;
                     let mut signed = Value::Null;
                     let budget = deadline.saturating_duration_since(Instant::now());
                     let exe = crate::env::which(
@@ -826,7 +826,9 @@ pub async fn report(
                     match status.check.as_str() {
                         "command" | "json" => {
                             if let (Some(exe), false) = (exe, budget.is_zero()) {
-                                let env = profile.environment(runtime, &clean);
+                                let mut env = profile.environment(runtime, &clean);
+                                // The manifest's own variables, as a turn has them (Antigravity's no-self-update).
+                                env.extend(crate::harness_tools::env_for(runtime));
                                 // As the bot user, like readiness and turns: the CLI may write in the profile's home.
                                 let mut cmd = crate::isolation::command(exe);
                                 cmd.args(&status.args)
@@ -858,7 +860,7 @@ pub async fn report(
                                             .ok()
                                             .filter(|v| v.is_object())
                                             .map_or(Value::Null, |v| {
-                                                if crate::harness_tools::caps(runtime, "").account
+                                                if crate::harness_tools::caps(runtime).account
                                                     == "status-json"
                                                 {
                                                     match crate::accounts::from_status_json(&v) {

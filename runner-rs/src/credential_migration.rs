@@ -20,7 +20,7 @@ const TEAM_KEYS_FILE: &str = "_team_model.env";
 fn login_only() -> Vec<String> {
     crate::harness_tools::runtimes()
         .into_iter()
-        .filter(|r| !crate::harness_tools::caps(r, "").api_key_login.is_empty())
+        .filter(|r| !crate::harness_tools::caps(r).api_key_login.is_empty())
         .flat_map(|r| crate::harness_tools::api_key_env(&r))
         .collect()
 }
@@ -28,7 +28,7 @@ fn login_only() -> Vec<String> {
 /// The keys a bot of `runtime` reads in its turns: the manifest's `api_key_env` where the runtime takes keys at all
 /// and does not turn them into a login.
 fn runtime_keys(runtime: &str) -> Vec<String> {
-    let caps = crate::harness_tools::caps(runtime, "");
+    let caps = crate::harness_tools::caps(runtime);
     if caps.api_keys.is_empty() || !caps.api_key_login.is_empty() {
         return vec![];
     }

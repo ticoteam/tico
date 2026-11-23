@@ -1,0 +1,17 @@
+[
+ {
+  "kind": "status",
+  "state": "active"
+ },
+ {
+  "kind": "turn_failed",
+  "error": "Process exited (exit code 1): Error: Please sign in to view available models. Launch the CLI without arguments to sign in.",
+  "limit": false,
+  "exit_code": 1,
+  "process_exit": true
+ },
+ {
+  "kind": "status",
+  "state": "idle"
+ }
+]

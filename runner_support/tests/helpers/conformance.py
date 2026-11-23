@@ -52,9 +52,6 @@ GRANTED_KEYS = {
 }
 
 
-RUNTIMES = {"antigravity": "gemini"}
-
-
 @pytest.fixture(scope="session")
 def rust_binary(tmp_path_factory):
     """The release binary, built once per test run: xdist workers share the base temp directory's lock, and the
@@ -101,7 +98,7 @@ class Computer:
         self.api, self.harness, self.binary, self.shim = api, harness, binary, shim
         self.registration = runner(api)
         assign(api, self.registration, "ops")
-        self.runtime = RUNTIMES.get(harness, harness)
+        self.runtime = harness
         with api.app.state.store.transaction() as c:
             BS.write(
                 c,

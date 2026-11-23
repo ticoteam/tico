@@ -222,3 +222,38 @@ def test_a_move_to_a_computer_without_the_harness_is_not_refused_it_installs_the
     assert (answer["can_run"], answer["problem"]) == (None, "Codex is installing on Ben Mac")
     answer = verdict(state="failed", detail="npm is not installed on this computer")
     assert answer["can_run"] is False and "could not be installed" in answer["problem"]
+
+
+def test_a_harness_the_runner_does_not_install_is_not_installed_not_installing(api):
+    # Antigravity has no [install]: the operator installs agy, so a computer without it waits on nobody.
+    from backend.readiness import can_run
+    from backend.tests.helpers.settings_transitions import _company_default
+
+    _company_default(api, "cpo")
+    there = runner(api, "ben", "Ben Mac")
+    agy = {
+        **HARNESS,
+        "name": "Antigravity",
+        "runtime": "antigravity",
+        "installed": False,
+        "version": "",
+        "wanted": False,
+    }
+    post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"antigravity": {"installed": False, "authenticated": "missing"}},
+                "bots": {},
+                "harnesses": {"antigravity": agy},
+            },
+        },
+        token=there["token"],
+    )
+    with api.app.state.store.read() as c:
+        answer = can_run(c, "cpo", "antigravity", runner=there["runner_id"])
+    assert (answer["can_run"], answer["problem"]) == (False, "antigravity is not installed on Ben Mac")

@@ -15,21 +15,29 @@ def test_resolution_order_bot_then_company_then_first_provider_then_error():
     assert P.resolve(company, {"runtime": "default", "model": "default"}) == ("codex", "gpt-6-sol")
     assert P.resolve(company, {"runtime": "claude"}) == ("claude", "claude-opus-5-5")
     first = P._record({"enabled": ["google", "openai"]})
-    assert P.resolve(first, {}) == ("gemini", "gemini-4-neon")
-    assert P.fill(first, {}) == {"runtime": "gemini", "model": "gemini-4-neon", "harness": "antigravity"}
+    assert P.resolve(first, {}) == ("antigravity", "gemini-4-neon")
+    assert P.fill(first, {}) == {"runtime": "antigravity", "model": "gemini-4-neon"}
+    # Google serves two runtimes: a bot on the Gemini CLI gets a model the Gemini CLI runs.
     assert P.fill(first, {"runtime": "gemini", "harness": "gemini"}) == {
         "runtime": "gemini",
-        "model": "gemini-4-neon",
-        "harness": "antigravity",
+        "model": "gemini-3.8-flash",
+        "harness": "gemini",
     }
     assert P.default_fallbacks(first)[0] == {
-        "runtime": "gemini",
+        "runtime": "antigravity",
         "harness": "antigravity",
         "model": "gemini-4-neon",
     }
     with pytest.raises(P.NoProvider) as refused:
         P.resolve(none, {})
     assert "Settings > Computers" in refused.value.detail and refused.value.status == 409
+
+
+def test_a_providers_other_cli_never_becomes_the_computers_first_runtime():
+    # Google also serves Antigravity, which sorts first by name but is only Google's second CLI.
+    assert P.default_runtime(P._record({"enabled": ["anthropic", "google"]})) == "claude"
+    assert P.default_runtime(P._record({"enabled": ["google"]})) == "gemini"
+    assert P.default_runtime(P._record({"enabled": ["google"], "runtime": "antigravity"})) == "antigravity"
 
 
 def test_recommended_is_worked_out_once_and_answers_as_the_catalog_does(monkeypatch):
@@ -207,23 +215,32 @@ def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
 
 
-def test_gemini_4_neon_is_antigravity_only_recommended_and_claims_with_xhigh(api):
+def test_antigravity_runs_neon_and_hydrogen_on_its_own_runtime_and_claims_with_xhigh(api):
     from backend import updates
     from backend.tests.helpers.api import assign, claim, post, put, ready, runner
 
     put(
-        api, "providers", {"enabled": ["google"], "runtime": "gemini", "model": "gemini-4-neon", "expected_revision": 0}
+        api,
+        "providers",
+        {"enabled": ["google"], "runtime": "antigravity", "model": "gemini-4-neon", "expected_revision": 0},
     )
     listed = {
         m["id"]: m for m in api.get("/api/v2/models", headers={"Authorization": "Bearer ana-test"}).json()["models"]
     }
-    neon, flash = listed["gemini-4-neon"], listed["gemini-3.8-flash"]
-    assert neon["harnesses"] == ["antigravity"] and neon["efforts"] == ["low", "medium", "high", "xhigh"]
+    neon, hydrogen, flash = listed["gemini-4-neon"], listed["gemini-4-hydrogen"], listed["gemini-3.8-flash"]
+    for row in (neon, hydrogen):
+        assert row["runtime"] == "antigravity" and row["harnesses"] == ["antigravity"]
+        assert row["efforts"] == ["low", "medium", "high", "xhigh"] and row["default_effort"] == "high"
     assert neon.get("recommended") is True and not flash.get("recommended")
-    assert flash["harnesses"] == ["gemini", "antigravity"]
+    assert flash["runtime"] == "gemini" and flash["harnesses"] == ["gemini"]
+    # Google serves both runtimes; a runtime alone gets a model it runs.
+    assert P.runtime_provider("antigravity") == P.runtime_provider("gemini") == "google"
+    assert P.runtime_enabled("antigravity", ["google"]) and not P.runtime_enabled("antigravity", ["openai"])
+    assert P.complete_choice(["google"], "gemini") == ("gemini", "gemini-3.8-flash")
+    assert P.complete_choice(["google"], "antigravity") == ("antigravity", "gemini-4-neon")
     # Direct Gemini API drafts skip Antigravity-only Neon for a Gemini-harness model.
     assert updates.own_model(
-        P._record({"enabled": ["google"], "runtime": "gemini", "model": "gemini-4-neon"}), {"GEMINI_API_KEY": "k"}
+        P._record({"enabled": ["google"], "runtime": "antigravity", "model": "gemini-4-neon"}), {"GEMINI_API_KEY": "k"}
     ) == (
         "google",
         "k",
@@ -246,7 +263,7 @@ def test_gemini_4_neon_is_antigravity_only_recommended_and_claims_with_xhigh(api
         {"model": "gemini-4-neon", "effort": "xhigh", "expected_revision": revision},
     )
     assert (saved["runtime"], saved["harness"], saved["model"], saved["effort"]) == (
-        "gemini",
+        "antigravity",
         "antigravity",
         "gemini-4-neon",
         "xhigh",
@@ -254,8 +271,119 @@ def test_gemini_4_neon_is_antigravity_only_recommended_and_claims_with_xhigh(api
     post(api, "chat/ops", {"text": "Say hello."})
     config = claim(api, r)["config"]
     assert (config["runtime"], config["harness"], config["model"], config["reasoning_effort"]) == (
-        "gemini",
+        "antigravity",
         "antigravity",
         "gemini-4-neon",
         "xhigh",
     )
+
+
+def test_the_antigravity_migration_moves_every_antigravity_pick_and_flash_to_hydrogen_once():
+    import importlib
+    import json
+    import sqlite3
+
+    migration = importlib.import_module("backend.migrations.20261123184253_antigravity_runtime")
+    c = sqlite3.connect(":memory:")
+    c.executescript(
+        "CREATE TABLE bot_settings(bot_id TEXT PRIMARY KEY, harness TEXT, runtime TEXT, model TEXT, fallback TEXT,"
+        " extra TEXT NOT NULL DEFAULT '{}');"
+        "CREATE TABLE task_run_models(task_id TEXT PRIMARY KEY, runtime TEXT, model TEXT, harness TEXT);"
+        "CREATE TABLE task_check_models(task_id TEXT PRIMARY KEY, runtime TEXT, model TEXT, harness TEXT);"
+        "CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+    )
+    agy_flash = {"harness": "antigravity", "runtime": "gemini", "model": "gemini-3.8-flash"}
+    cli_flash = {"harness": "gemini", "runtime": "gemini", "model": "gemini-3.8-flash"}
+    # Neon on the Gemini runtime with no harness saved: the server took Antigravity for it before the split.
+    bare_neon = {"runtime": "gemini", "model": "gemini-4-neon"}
+    c.executemany(
+        "INSERT INTO bot_settings VALUES (?,?,?,?,?,?)",
+        [
+            ("scout", "antigravity", "gemini", "gemini-3.8-flash", json.dumps(cli_flash), "{}"),
+            ("ops", "antigravity", "gemini", "gemini-4-neon", None, json.dumps({"task_model": agy_flash, "x": 1})),
+            (
+                "cli",
+                "gemini",
+                "gemini",
+                "gemini-3.8-flash",
+                json.dumps(agy_flash),
+                json.dumps({"task_model": cli_flash}),
+            ),
+            ("bare", None, "gemini", "gemini-4-neon", json.dumps(bare_neon), json.dumps({"task_model": bare_neon})),
+            ("empty", "", "gemini", "gemini-4-neon", None, "{}"),
+        ],
+    )
+    c.execute("INSERT INTO task_run_models VALUES ('t1', 'gemini', 'gemini-3.8-flash', 'antigravity')")
+    c.execute("INSERT INTO task_run_models VALUES ('t2', 'gemini', 'gemini-4-neon', '')")
+    c.executemany(
+        "INSERT INTO task_check_models VALUES (?,?,?,?)",
+        [
+            ("t1", "gemini", "gemini-3.8-flash", "antigravity"),
+            ("t2", "gemini", "gemini-4-neon", ""),
+            ("t3", "gemini", "gemini-3.8-flash", "gemini"),
+        ],
+    )
+    c.execute(
+        "INSERT INTO registry_metadata VALUES ('providers', ?)",
+        (
+            json.dumps(
+                {"runtime": "gemini", "model": "gemini-4-neon", "check_models": ["gemini:gemini-4-neon", "grok"]}
+            ),
+        ),
+    )
+    for _ in range(2):
+        migration.up(c)
+    rows = {r[0]: r[1:] for r in c.execute("SELECT bot_id, runtime, model, fallback, extra FROM bot_settings")}
+    hydrogen = {"harness": "antigravity", "runtime": "antigravity", "model": "gemini-4-hydrogen"}
+    assert rows["scout"][:2] == ("antigravity", "gemini-4-hydrogen") and json.loads(rows["scout"][2]) == cli_flash
+    assert rows["ops"][:2] == ("antigravity", "gemini-4-neon")
+    assert json.loads(rows["ops"][3]) == {"task_model": hydrogen, "x": 1}
+    # A Gemini CLI bot keeps its own pick; only its pick on Antigravity moves.
+    assert rows["cli"][:2] == ("gemini", "gemini-3.8-flash") and json.loads(rows["cli"][2]) == hydrogen
+    assert json.loads(rows["cli"][3]) == {"task_model": cli_flash}
+    neon = {"harness": "antigravity", "runtime": "antigravity", "model": "gemini-4-neon"}
+    rows = {r[0]: r[1:] for r in c.execute("SELECT bot_id, harness, runtime, model, fallback, extra FROM bot_settings")}
+    assert rows["bare"][:3] == ("antigravity", "antigravity", "gemini-4-neon")
+    assert json.loads(rows["bare"][3]) == neon and json.loads(rows["bare"][4]) == {"task_model": neon}
+    assert rows["empty"][:3] == ("antigravity", "antigravity", "gemini-4-neon")
+    picks = "SELECT task_id, runtime, model, harness FROM {} ORDER BY task_id"
+    assert c.execute(picks.format("task_run_models")).fetchall() == [
+        ("t1", "antigravity", "gemini-4-hydrogen", "antigravity"),
+        ("t2", "antigravity", "gemini-4-neon", "antigravity"),
+    ]
+    assert c.execute(picks.format("task_check_models")).fetchall() == [
+        ("t1", "antigravity", "gemini-4-hydrogen", "antigravity"),
+        ("t2", "antigravity", "gemini-4-neon", "antigravity"),
+        ("t3", "gemini", "gemini-3.8-flash", "gemini"),
+    ]
+    record = json.loads(c.execute("SELECT value FROM registry_metadata").fetchone()[0])
+    assert record == {
+        "runtime": "antigravity",
+        "model": "gemini-4-neon",
+        "check_models": ["antigravity:gemini-4-neon", "grok"],
+    }
+
+
+def test_a_runner_without_the_antigravity_runtime_is_never_handed_a_named_antigravity_fallback():
+    # A runner from before the split takes harness antigravity for the Gemini CLI: it would run Neon there.
+    from backend.execution import without_unknown_fallback
+
+    config = {"runtime": "claude", "fallback": {"harness": "antigravity", "model": "gemini-4-neon"}}
+    old = {"runtimes": {"claude": {"installed": True}, "gemini": {"installed": True}}}
+    assert without_unknown_fallback(config, old) == {"runtime": "claude"}
+    new = {"runtimes": {**old["runtimes"], "antigravity": {"installed": True}}}
+    assert without_unknown_fallback(config, new) == config
+    # Any other named fallback stays where it is.
+    codex = {"runtime": "claude", "fallback": {"harness": "codex", "model": "gpt-6-sol"}}
+    assert without_unknown_fallback(codex, old) == codex
+
+
+def test_a_paid_by_bot_on_an_older_runner_keeps_its_fallbacks_off_once_its_antigravity_one_is_dropped():
+    # The claim drops the named Antigravity fallback first, so restrict_fallbacks sees a bot with none of its own on a
+    # runner that cannot filter hops per turn: automatic hops stay off, never onto the paid-by tool.
+    from backend.execution import restrict_fallbacks, without_unknown_fallback
+
+    config = {"runtime": "claude", "fallback": {"harness": "antigravity", "model": "gemini-4-neon"}}
+    older = {"runtimes": {"claude": {"installed": True}, "codex": {"installed": True}}}
+    out = restrict_fallbacks(without_unknown_fallback(config, older), {"codex"}, [])
+    assert out["fallback"] == {"off": True} and out["blocked_fallback_runtimes"] == ["codex"]

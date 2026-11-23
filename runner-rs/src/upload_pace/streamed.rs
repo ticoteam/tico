@@ -240,6 +240,7 @@ fn flags() -> Arc<Flags> {
         granted: Mutex::new(None),
         done_notify: Notify::new(),
         deadline: Mutex::new(Instant::now() + Duration::from_secs(3600)),
+        tool_ran: std::sync::atomic::AtomicBool::new(false),
     })
 }
 

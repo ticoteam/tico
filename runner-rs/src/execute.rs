@@ -292,22 +292,11 @@ pub fn billing_for(runtime: &str, detail: &str) -> &'static str {
         return "api";
     }
     // A subscription login's status names it (`subscription_marker`); any other sign-in is billed per call.
-    let marker = crate::harness_tools::caps(runtime, "").subscription_marker;
+    let marker = crate::harness_tools::caps(runtime).subscription_marker;
     if !marker.is_empty() && lower.contains(&marker) {
         "subscription"
     } else {
         "api"
-    }
-}
-
-/// The runtime a bot's threads are saved under: a persistent variant's own (`gemini:antigravity`), whose sessions are
-/// its process's; else the runtime's, whether or not it keeps its process between turns (pi).
-fn thread_runtime(runtime: &str, harness: &str) -> String {
-    let persistent = |h: &str| crate::harness_tools::caps(runtime, h).persistent_session;
-    if persistent(harness) && !persistent("") {
-        format!("{runtime}:{harness}")
-    } else {
-        runtime.to_string()
     }
 }
 
@@ -724,8 +713,9 @@ pub(crate) fn replacement_prompt(
     after: Option<&str>,
     bot: &str,
     key: &str,
+    replay: &str,
 ) -> String {
-    let text = crate::prompt::prompt(attempt, names, after, false);
+    let text = crate::prompt::replayed(attempt, names, after, false, replay);
     let checkpoint = truthy(Some(&attempt["task"]["checkpoint"]));
     let stateless = crate::continuity::stateless(&attempt["config"]);
     let mut notes = String::new();
@@ -1058,6 +1048,9 @@ pub(crate) struct Flags {
     pub(crate) granted: Mutex<Option<Instant>>,
     pub(crate) done_notify: Notify,
     pub(crate) deadline: Mutex<Instant>,
+    /// A tool ran in this turn, on the primary or a hop (set by the drive as it sees one): kept outside the drive's
+    /// own result, so a drive that fails after it still keeps the turn from any fallback.
+    pub(crate) tool_ran: AtomicBool,
 }
 
 pub(crate) struct Drove {
@@ -1067,6 +1060,9 @@ pub(crate) struct Drove {
     pub(crate) limited: bool,
     /// The model produced a message or tool call, so a saved fallback must retain its own work.
     pub(crate) acted: bool,
+    /// A tool ran in the turn: what it did outside this computer may not be done again, so no fallback takes the turn.
+    /// Not `acted`: a quota notice is a message (Claude's), and a turn stopped by one still falls back.
+    pub(crate) tool_ran: bool,
     /// The limit was the provider's temporary model capacity (hosts::is_capacity), not the login's quota.
     pub(crate) capacity: bool,
     /// The model was at capacity after the turn acted: no fallback or fresh thread may take it, but its own thread can
@@ -1088,6 +1084,7 @@ impl Drove {
             tokens: json!({}),
             limited: false,
             acted: false,
+            tool_ran: false,
             capacity: false,
             continues: false,
             retryable: false,
@@ -1117,6 +1114,13 @@ impl Drove {
         };
         (ended, Some(why))
     }
+}
+
+/// Whether a turn may still go to a fallback once it has run: never after a tool ran (in its result, or seen by the
+/// drive before the drive failed: `Flags::tool_ran`), nor after a failure once its turn had started
+/// (`failed_after_start`), when what the harness did is not known.
+fn tools_settled(drove: &Drove, flags: &Flags, failed_after_start: bool) -> bool {
+    !drove.tool_ran && !flags.tool_ran.load(Ordering::SeqCst) && !failed_after_start
 }
 
 /// Whether a turn's start failed because the server will not start it, or it was stopped, before it started: the
@@ -1172,8 +1176,8 @@ fn grant_gone(flags: &Flags) {
 
 /// A host that allocates nothing before the turn's `started` (Claude: no process until `start_turn` spawns it), so an
 /// ask before `started` learns nothing that `started`'s own admission (backend start_places.reserve) does not.
-fn allocates_at_spawn(runtime: &str, session_runtime: &str) -> bool {
-    runtime == "claude" && session_runtime == runtime
+fn allocates_at_spawn(runtime: &str) -> bool {
+    runtime == "claude"
 }
 
 /// Whether a turn takes the cold sign-in path (one at a time on this computer, `claude_cold_start`): its runtime renews
@@ -1186,7 +1190,7 @@ fn cold_sign_in(
     plan_signs_in: bool,
 ) -> bool {
     !plan_signs_in
-        && crate::harness_tools::caps(runtime, "").serial_cold_start
+        && crate::harness_tools::caps(runtime).serial_cold_start
         && crate::hosts::token_cold(runtime, profile)
 }
 
@@ -2079,17 +2083,9 @@ impl Runner {
         env: &Env,
         vault: &crate::env::Vault,
         runtime: &str,
-        config: &Value,
     ) -> Vec<Value> {
-        let (servers, problems) = crate::perbot::mcp_for_run(
-            path,
-            env,
-            &vault.names,
-            runtime,
-            &text_of(&config["harness"]),
-            &vault.tools,
-            &vault.mcp,
-        );
+        let (servers, problems) =
+            crate::perbot::mcp_for_run(path, env, &vault.names, runtime, &vault.tools, &vault.mcp);
         for line in problems {
             self.diagnose(aid, &line);
         }
@@ -2197,6 +2193,10 @@ impl Runner {
             if runtime == "claude" || tests::HOST_CLAUDE.with(|claude| claude.get()) {
                 return Ok(Host::Claude(ClaudeHost::new(bot, command, tx)));
             }
+            if runtime == "antigravity" {
+                let home = self.state.directory.join("agy").join(bot);
+                return Ok(Host::Antigravity(AntigravityHost::new(&home, command, tx)));
+            }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
                 command,
@@ -2226,6 +2226,12 @@ impl Runner {
                 bot,
                 &self.state.directory.join("gemini").join(bot),
                 vec!["gemini".into()],
+                tx,
+            )),
+            // Its conversation records only: each turn starts its own `agy` (hosts/antigravity.rs).
+            "antigravity" => Host::Antigravity(AntigravityHost::new(
+                &self.state.directory.join("agy").join(bot),
+                vec![crate::harness_tools::executable_for("antigravity")],
                 tx,
             )),
             "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
@@ -2277,7 +2283,7 @@ impl Runner {
     /// login of its own (Claude Code) when the key is this computer's own from the app (a person added it in place of
     /// any login) or readiness found no login and reported the key. Never for a subscription with its own home.
     fn turn_key(&self, runtime: &str, profile: Option<&Profile>) -> Option<(String, String)> {
-        let caps = crate::harness_tools::caps(runtime, "");
+        let caps = crate::harness_tools::caps(runtime);
         if profile.is_some_and(|p| !p.share_operator) {
             return None;
         }
@@ -2383,6 +2389,7 @@ impl Runner {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs_f64((lease - 15.0).max(0.0))),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         });
         let wake = Arc::new(Notify::new());
         // On the lease thread, so blocking work on this runtime's two workers cannot starve it (Dev 242).
@@ -2396,10 +2403,6 @@ impl Runner {
             flags.clone(),
         ));
         let runtime = text_of(&config["runtime"]);
-        // A harness that keeps one process per conversation between turns (crate::warm, pi's Pool); a variant that does
-        // (Antigravity) has sessions of its own.
-        let persistent = crate::harness_tools::caps_of(&config).persistent_session;
-        let session_runtime = thread_runtime(&runtime, &text_of(&config["harness"]));
         let mut conv = key.clone();
         // The key a thread of this turn's subscription was saved under before every Claude plan shared one
         // (model_subscriptions::Delivered::legacy_binding).
@@ -2488,8 +2491,16 @@ impl Runner {
             *flags.granted.lock().unwrap() = Some(Instant::now());
         }
         // Where no harness is allocated before `started` (Claude), an ask before it is kept too.
-        let late_allocation = allocates_at_spawn(&runtime, &session_runtime);
+        let late_allocation = allocates_at_spawn(&runtime);
         let mut ran: Result<(), Fail> = async {
+            // Every harness this runner runs is its own runtime (crate::readiness::unsupported): a pair from a server
+            // that has not moved it (runtime gemini, harness antigravity) would start the wrong CLI on its model.
+            let harness = text_of(&config["harness"]);
+            if !harness.is_empty() && harness != runtime {
+                return Err(Fail::runtime(format!(
+                    "This computer runs the {harness} harness as runtime {harness}, not {runtime}: update the server, then run the turn again"
+                )));
+            }
             self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // Pin the home before preparation: a server upgrade or a local edit cannot move a fallback to another account.
             selected = self.turn_profile(&attempt)?;
@@ -2504,7 +2515,7 @@ impl Runner {
             self.during_drain(&aid, self.keep_start_place(&attempt, &flags)).await?;
             // A turn that will run Claude or Codex reads its company skills while it is placed (company_skills::early);
             // dropped unused if it runs on anything else.
-            let mut early_skills = (held.is_none() && session_runtime == runtime && matches!(runtime.as_str(), "claude" | "codex"))
+            let mut early_skills = (held.is_none() && matches!(runtime.as_str(), "claude" | "codex"))
                 .then(|| crate::company_skills::early(&self.client, &self.state.directory, &aid, &bot));
             segments.push(Segment {
                 meter: Meter::default(),
@@ -2516,7 +2527,7 @@ impl Runner {
             });
             let ctx = EnvContext { url: &self.config.url(), projects_dir: &self.config.projects_dir(), state_dir: &self.state.directory };
             // Only the Gateway and harnesses that can sign in without the shared home can use a leased UID.
-            let harness = crate::harness_tools::caps(&runtime, &text_of(&config["harness"]));
+            let harness = crate::harness_tools::caps(&runtime);
             let separation = crate::gateway_relay::separation();
             let isolated = uses_turn_user(&harness, crate::hosts::pi::is_gateway(model.as_deref()), crate::turn_users::available(), separation);
             if isolated {
@@ -2524,7 +2535,7 @@ impl Runner {
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
                 // would drop its lease. Left in the pool, idle eviction releases it the normal way.
                 // A fresh stateless chat turn reclaims no kept pi: it starts its own (crate::continuity::stateless).
-                let kept = if runtime == "pi" && session_runtime == runtime && !fresh_chat && !personal { self.pi.reclaim(&owner) } else { None };
+                let kept = if runtime == "pi" && !fresh_chat && !personal { self.pi.reclaim(&owner) } else { None };
                 if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
                 } else {
@@ -2753,7 +2764,7 @@ impl Runner {
                 // A person cleared a chat (or a settings change reset the bot's sessions): a new provider thread, told
                 // only what came after the clear. A Hub that sends no epoch keeps today's resume.
                 if self.state.epoch_moved(&bot, &conversation_id, &conv, epoch)? {
-                    log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {session_runtime} thread"));
+                    log(&format!("Tico runner: {bot}: session cleared in Tico; starting a new {runtime} thread"));
                     cleared = true;
                 }
             }
@@ -2769,9 +2780,9 @@ impl Runner {
             release_run = (fresh_session || !fork_thread.is_empty()) && continuing.is_empty() && !side_run && !fresh_chat;
             if release_run {
                 let adopted = if conv == key { adopted_key(&key) } else { legacy_conv.clone() };
-                one_off = self.state.session(&bot, &conv, &session_runtime)?.is_some()
+                one_off = self.state.session(&bot, &conv, &runtime)?.is_some()
                     || match adopted {
-                        Some(old) => self.state.session(&bot, &old, &session_runtime)?.is_some(),
+                        Some(old) => self.state.session(&bot, &old, &runtime)?.is_some(),
                         None => false,
                     };
             }
@@ -2780,14 +2791,14 @@ impl Runner {
             let mut previous = if binding_changed || fresh_chat || release_run {
                 None
             } else {
-                self.state.session(&bot, if side_run { &side_conv } else { &conv }, &session_runtime)?
+                self.state.session(&bot, if side_run { &side_conv } else { &conv }, &runtime)?
             };
             if previous.is_none() && can_adopt && conv == key {
                 // The first native-threads turn of a root resumes the thread its conversation had (adopted_key).
                 if let Some(old) = adopted_key(&key) {
-                    previous = self.state.session(&bot, &old, &session_runtime)?;
+                    previous = self.state.session(&bot, &old, &runtime)?;
                     if let Some(thread) = previous.as_ref() {
-                        self.state.save_session(&bot, &key, &session_runtime, thread)?;
+                        self.state.save_session(&bot, &key, &runtime, thread)?;
                     }
                 }
             }
@@ -2800,9 +2811,9 @@ impl Runner {
                         None => false,
                     };
                     if !moved {
-                        previous = self.state.session(&bot, old, &session_runtime)?;
+                        previous = self.state.session(&bot, old, &runtime)?;
                         if let Some(thread) = previous.as_ref() {
-                            self.state.save_session(&bot, &conv, &session_runtime, thread)?;
+                            self.state.save_session(&bot, &conv, &runtime, thread)?;
                         }
                     }
                 }
@@ -2845,18 +2856,13 @@ impl Runner {
                 // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
                 env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
             }
-            let made = if session_runtime != runtime && relationship {
-                Host::Antigravity(AntigravityHost::new(&execution_path.join(".antigravity"), vec!["agy".into()], tx))
-            } else if session_runtime != runtime {
-                let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
-                // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
-                if fresh_chat || personal {
-                    self.warm.discard(&attempt).await;
-                }
-                let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
-                warm.attach(tx);
-                env = turn_env;
-                Host::Antigravity(warm)
+            // A relationship turn keeps its Antigravity conversation records with its execution, removed with it.
+            let made = if runtime == "antigravity" && relationship {
+                Host::Antigravity(AntigravityHost::new(
+                    &execution_path.join(".antigravity"),
+                    vec![crate::harness_tools::executable_for("antigravity")],
+                    tx,
+                ))
             } else {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
@@ -2865,7 +2871,7 @@ impl Runner {
                 let call_id = text_of(&refs["live_meeting"]["voice_call"]);
                 let job = text_of(&attempt["job_id"]);
                 let scope = format!("call-voice:{call_id}:{job}:{conv}");
-                previous = self.state.session(&bot, &scope, &session_runtime)?;
+                previous = self.state.session(&bot, &scope, &runtime)?;
                 voice_scope = Some(scope);
             }
             h.track_allocation(flags.harness_allocated.clone());
@@ -2895,7 +2901,7 @@ impl Runner {
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                 add_dirs: crate::company_skills::with_dir(p.add_dirs.clone(), company_skills.as_deref()),
                 company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime, &config),
+                mcp_servers: self.mcp_servers(&aid, &execution_path, &env, &vault, &runtime),
                 background_wait: hosts::background_wait(&config),
                 require_existing_session: !continuing.is_empty(),
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
@@ -2939,7 +2945,7 @@ impl Runner {
                 if resumed && !voice_call && !other && truthy(config.get("compact_first")) && !truthy(refs.get("command")) {
                     let th = thread.clone().unwrap_or_default();
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
-                    match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, &text_of(&config["harness"]), rx, segments.last_mut().map(|s| &mut s.meter)).await {
+                    match self.compact_saved(&aid, h, &th, effort.as_deref(), &runtime, rx, segments.last_mut().map(|s| &mut s.meter)).await {
                         Ok(()) => session = Some(crate::continuity::Session::compacted()),
                         Err(error) => {
                             resumed = false;
@@ -2988,7 +2994,7 @@ impl Runner {
             fresh = (!resumed && !side_run && !one_off && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
-                runtime: session_runtime.clone(),
+                runtime: runtime.clone(),
                 aid: aid.clone(),
                 told: if thread_updates() { left.clone().or_else(|| previous.clone()).unwrap_or_else(|| th.clone()) } else { th.clone() },
                 left: left.clone(),
@@ -2996,9 +3002,9 @@ impl Runner {
                 source: None,
             });
             if fresh.is_none() && !side_run && !one_off && continuing.is_empty() && !fresh_chat {
-                self.state.save_session(&bot, &conv, &session_runtime, &th)?;
+                self.state.save_session(&bot, &conv, &runtime, &th)?;
                 if let Some(old) = left.as_deref().filter(|old| *old != th) {
-                    self.state.forget_session(&bot, &conv, &session_runtime, old)?;
+                    self.state.forget_session(&bot, &conv, &runtime, old)?;
                 }
             }
             // A turn a company plan signs in (placed above, not held) never reads the computer's own login, so that
@@ -3054,9 +3060,9 @@ impl Runner {
                                 let start = voice::Start { primer: &primer, call: call_id, notes_stamp: stamp, scope, resumed, replacing: previous.is_some() };
                                 match self.codex_voice_session(&d, codex, rx, start, segment).await? {
                                     voice::End::Closed => {
-                                        drop_session(&self.state, &bot, scope, &session_runtime, &th).await?;
+                                        drop_session(&self.state, &bot, scope, &runtime, &th).await?;
                                         if let Some(old) = previous.as_deref().filter(|old| *old != th) {
-                                            drop_session(&self.state, &bot, scope, &session_runtime, old).await?;
+                                            drop_session(&self.state, &bot, scope, &runtime, old).await?;
                                         }
                                         drove.outcome = "completed".into();
                                     }
@@ -3070,13 +3076,18 @@ impl Runner {
                 }).await?;
                 return Ok(());
             }
+            // A resumed thread that its harness moved to a new conversation after a turn's model work had begun
+            // (Antigravity: Host::needs_history, kept in agy's own record beside the id) holds none of what came before:
+            // it is told everything again, as a new one is, until a turn has completed with it.
+            let refresh = resumed && h.needs_history(&th);
+            let told = resumed && !refresh;
             // A resumed thread already holds the repo rules unless they changed since it was given them, or a
             // compaction first may have taken them out.
             let digest = p.rules_digest.clone();
             let compacted_first = session.as_ref().is_some_and(|s| s.why == Some(crate::continuity::COMPACTED));
-            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
+            attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (refresh || compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
             let names = self.names().await;
-            let after = if resumed { self.state.cursor(&th, None)? } else { since.clone() };
+            let after = if told { self.state.cursor(&th, None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
             // The tools this turn calls through the Tico proxy, for their prompt line (crate::prompt `proxied_tools`).
             attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());
@@ -3096,7 +3107,7 @@ impl Runner {
             let prompt_turn = !side_run && !truthy(refs.get("command")) && !truthy(refs.get("goal_action")) && h.reports_compaction();
             let last_context = self.state.repo_rules(&crate::continuity::context_key(&th), None)?.and_then(|c| c.parse::<i64>().ok());
             // A stateless bot gets its whole prompt each turn: the short form points at state.md, which it does not keep.
-            let mut seen = if !stateless && prompt_turn && resumed && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
+            let mut seen = if !stateless && prompt_turn && told && last_context.is_some() && !compacted_first && !side_ran && !after_interrupt {
                 crate::prompt::Seen {
                     standing: self.state.repo_rules(&crate::continuity::standing_key(&th), None)?.unwrap_or_default(),
                     task: self.state.repo_rules(&crate::continuity::task_key(&th), None)?.unwrap_or_default(),
@@ -3124,13 +3135,15 @@ impl Runner {
                 && first_turn_key(&key);
             let replay = if moved_session {
                 crate::fallback::moved_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
-            } else if first_turn {
+            } else if first_turn || refresh || (runtime == "antigravity" && truthy(attempt.get("_replaced"))) {
+                // Also a new Antigravity conversation in place of one not on this computer: it holds nothing of the
+                // conversation, and agy has no transcript of its own to carry over.
                 crate::fallback::first_turn_pack(&attempt, crate::fallback::REPLAY_TOKENS)
             } else { String::new() };
-            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &seen, &context);
+            let mut built = crate::prompt::build(&attempt, &names, after.as_deref(), told, &replay, &seen, &context);
             if built.text != built.full && !crate::continuity::headroom(last_context, built.full.len(), config.get("compact_at").unwrap_or(&Value::Null)) {
                 // Sized by the whole prompt: a compaction during the turn gives it the rest too.
-                built = crate::prompt::build(&attempt, &names, after.as_deref(), resumed, &replay, &crate::prompt::Seen::default(), &context);
+                built = crate::prompt::build(&attempt, &names, after.as_deref(), told, &replay, &crate::prompt::Seen::default(), &context);
             }
             let mut tail = String::new();
             if let Some(note) = session.as_ref().and_then(|s| s.prompt_note(truthy(Some(&attempt["task"]["checkpoint"])), stateless)) {
@@ -3149,12 +3162,18 @@ impl Runner {
             let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
-            // last turn with its own replies, and the new-session note.
+            // last turn with its own replies, and the new-session note. A new Antigravity conversation also gets the
+            // conversation's history, as a fresh one does: agy has no transcript of its own to carry over.
             h.full_prompt(&th, resumed.then(|| {
                 let mut replacing = attempt.clone();
                 replacing["_replaced"] = json!(true);
                 replacing["_side_ran"] = json!(false);
-                replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key)
+                let replay = if runtime == "antigravity" {
+                    crate::fallback::first_turn_pack(&replacing, crate::fallback::REPLAY_TOKENS)
+                } else {
+                    String::new()
+                };
+                replacement_prompt(&replacing, &names, after.as_deref(), &bot, &key, &replay)
             }));
             h.compaction_refresh(&th, Some(built.restore.clone()).filter(|r| prompt_turn && !r.is_empty()));
             // A compaction before this prompt (compact_first's own) is already accounted for above.
@@ -3202,6 +3221,11 @@ impl Runner {
             // The harness compacted the session during the turn, or began a new one in place of a missing one, or the
             // turn did not complete: the next turn is given everything again, the repo rules included.
             let kept = !h.compacted(&th) && !h.restored(&th) && drove.outcome == "completed";
+            // A thread told everything again (`refresh`) holds it once this turn has completed with it, unless agy moved
+            // it to a new conversation again during the turn (the host keeps that mark then).
+            if refresh && drove.outcome == "completed" {
+                h.history_told(&th);
+            }
             // The session holds the rules if it held them already or this turn's prompt carried them; a command's
             // prompt and a goal action carry none.
             let held = resumed && !truthy(attempt.get("_repo_rules_changed"));
@@ -3263,14 +3287,14 @@ impl Runner {
                         &conv,
                         model.as_deref().unwrap_or_default(),
                     );
-                    keep_session(&self.state, &bot, &side_conv, &session_runtime, &saved).await?;
+                    keep_session(&self.state, &bot, &side_conv, &runtime, &saved).await?;
                 } else if continuing.is_empty()
                     && !one_off
                     && fresh
                         .as_ref()
                         .is_none_or(|f| f.confirmed.lock().unwrap().is_some())
                 {
-                    keep_session(&self.state, &bot, &conv, &session_runtime, &saved).await?;
+                    keep_session(&self.state, &bot, &conv, &runtime, &saved).await?;
                 }
                 Ok::<(), Fail>(())
             }
@@ -3334,7 +3358,6 @@ impl Runner {
         if held.is_none() {
             crate::fallback::settle_limit(
                 &runtime,
-                &text_of(&config["harness"]),
                 selected.as_ref(),
                 hit_limit && !drove.capacity,
                 drove.outcome == "completed",
@@ -3345,7 +3368,13 @@ impl Runner {
         } else {
             config.clone()
         };
-        let fallback_allowed = !paid_by && !voice_reply && !native_control && continuing.is_empty();
+        // A turn whose tools ran is never taken again by a fallback, named or the company's: it may already have
+        // changed things.
+        let fallback_allowed = !paid_by
+            && !voice_reply
+            && !native_control
+            && continuing.is_empty()
+            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some());
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
@@ -3446,7 +3475,7 @@ impl Runner {
                     billing: delivered.map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
                     subscription: delivered.map(|d| d.id.clone()),
                 });
-                let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
+                let own = crate::harness_tools::caps(&hop.runtime).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
                     // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
                     // started, so it does not wait for a free user: with none free the fallback runs as `bot`.
@@ -3514,7 +3543,7 @@ impl Runner {
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
                     add_dirs: crate::company_skills::with_dir(place.as_ref().map(|p| p.add_dirs.clone()).unwrap_or_default(), company_skills.as_deref()),
                     company_skills: company_skills.as_ref().map(|d| d.display().to_string()),
-                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime, &hop_config),
+                    mcp_servers: self.mcp_servers(&aid, &execution_path, &hop_env, &vault, &hop.runtime),
                     background_wait: hosts::background_wait(&config),
                     require_existing_session: false,
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
@@ -3524,7 +3553,7 @@ impl Runner {
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
-                let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
+                let kept_runtime = hop.runtime.clone();
                 // A task's hop keeps a side session per model, the one a task-model fallback on that model keeps
                 // (continuity::side_session under `conv`, which names the bot's login and a Clear empties): the task's
                 // next hop on the model resumes it, reading its prompt cache instead of writing it again. Its own
@@ -3587,7 +3616,9 @@ impl Runner {
                 };
                 let note = crate::fallback::prompt_note(&because, &primary, &hop);
                 let fresh_text = crate::prompt::before_header(&attempt, &crate::prompt::replayed(&attempt, &names, None, false, &replay), &format!("\n\n{note}"));
-                let text = if side_resumed {
+                // A side session agy moved to a new conversation holds only its last hop: told everything again, once.
+                let side_refresh = side_resumed && h.needs_history(&th);
+                let text = if side_resumed && !side_refresh {
                     // Resumed: the checkpoint and the room since its last turn here, its own replies included, not the
                     // replay a new thread needs; the repo rules again, since nothing records that this thread holds them.
                     let mut resuming = attempt.clone();
@@ -3648,6 +3679,9 @@ impl Runner {
                     fresh: fallback_fresh.as_ref(),
                 };
                 drove = self.during_drain(&aid, self.drive(&d, rx, t, segments.last_mut().unwrap(), &mut carried, &mut auth_rejected, &mut goal)).await?;
+                if side_refresh && drove.outcome == "completed" {
+                    h.history_told(&th);
+                }
                 if side_resumed && h.restored(&th) {
                     // Claude Code finds out only as the turn runs that the saved session is gone: it began a new one.
                     session = Some(crate::continuity::Session::new(crate::continuity::FALLBACK_SIDE, None));
@@ -3674,7 +3708,7 @@ impl Runner {
                 if (drove.limited && !drove.capacity && drove.acted || drove.continues) && source_continue()
                     && (!h.confirms_threads() || h.confirmed(&th).is_some()) {
                     let saved = h.session_id(&th);
-                    let kept_runtime = thread_runtime(&hop.runtime, &hop.harness);
+                    let kept_runtime = hop.runtime.clone();
                     let scope = crate::source_resume::scope(&attempt, selected.as_ref(),
                         place.as_ref().is_some_and(|p| p.session_path.is_some()));
                     if let Some((conversation, epoch)) = clear_epoch(&attempt, &key) {
@@ -3719,7 +3753,6 @@ impl Runner {
             }
             crate::fallback::settle_limit(
                 &hop.runtime,
-                &hop.harness,
                 selected.as_ref(),
                 drove.limited && !drove.capacity,
                 drove.outcome == "completed",
@@ -3728,6 +3761,7 @@ impl Runner {
             // one segment has used tokens, since a completion reports two at most (backend/models.py RunUsage).
             let spent = segments.iter().filter(|s| s.meter.used()).count();
             if drove.limited
+                && tools_settled(&drove, &flags, false)
                 && hop.default
                 && !native_control
                 && spent < 2
@@ -3875,20 +3909,9 @@ impl Runner {
             }
             // A host that keeps its process between turns gives it back below, after a turn that completed; a fresh
             // stateless chat turn keeps none (crate::continuity::stateless).
-            let keeps = !fresh_chat
-                && !personal
-                && (matches!(h, Host::Pi(_)) || persistent && matches!(h, Host::Antigravity(_)));
+            let keeps = !fresh_chat && !personal && matches!(h, Host::Pi(_));
             if !keeps || drove.outcome != "completed" {
                 self.stop_host(h, &aid).await;
-            }
-            if let Host::Antigravity(warm) = h {
-                // Its token file is blanked; only a turn that completed leaves the process running.
-                self.warm
-                    .release(
-                        warm,
-                        drove.outcome == "completed" && !fresh_chat && !personal,
-                    )
-                    .await;
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
@@ -3951,10 +3974,7 @@ impl Runner {
         // What the next turn on the primary session is told: that this one was cut off, or that a side session ran.
         if host.is_some() && (side_run || fallback.is_some() || drove.outcome == "interrupted") {
             let kept = if side_run || fallback.is_some() {
-                self.state
-                    .session(&bot, &conv, &session_runtime)
-                    .ok()
-                    .flatten()
+                self.state.session(&bot, &conv, &runtime).ok().flatten()
             } else {
                 thread.clone()
             };
@@ -4186,7 +4206,7 @@ impl Runner {
         if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed") {
             completion.insert(
                 "auth_rejected".into(),
-                json!({"runtime": rt, "reason": hosts::rejection_reason(reason)}),
+                json!({"runtime": rt, "reason": hosts::rejection_reason(rt, reason)}),
             );
         }
         let active = self.active.lock().unwrap().len();
@@ -4393,11 +4413,10 @@ impl Runner {
         thread: &str,
         effort: Option<&str>,
         runtime: &str,
-        harness: &str,
         rx: &mut tokio::sync::mpsc::UnboundedReceiver<Value>,
         mut meter: Option<&mut Meter>,
     ) -> Result<(), String> {
-        if !crate::harness_tools::caps(runtime, harness).compaction || !h.can_compact() {
+        if !crate::harness_tools::caps(runtime).compaction || !h.can_compact() {
             return Err("this harness cannot compact a session".into());
         }
         let _ = self.state.append(aid, "diagnostic", &json!({"text": "Compacting the saved session before this turn (the last turn ran out of room)."}));
@@ -4528,6 +4547,7 @@ impl Runner {
             tokens: json!({}),
             limited: false,
             acted: drove.acted,
+            tool_ran: drove.tool_ran,
             capacity: false,
             continues: false,
             retryable: true,
@@ -4626,6 +4646,7 @@ mod tests {
             RUN_RELAY.with(|relay| relay.borrow_mut().take());
             HOST_COMMAND.with(|command| command.borrow_mut().take());
             HOST_COMMANDS.with(|commands| commands.borrow_mut().clear());
+            crate::fallback::TEST_CHOICES.with(|c| c.borrow_mut().take());
             THREAD_UPDATES.with(|on| on.set(None));
             CAPACITY_CONTINUE.with(|on| on.set(None));
             SOURCE_CONTINUE.with(|on| on.set(None));
@@ -5065,6 +5086,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         runner
             .active
@@ -5133,6 +5155,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -5192,9 +5215,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(asks(), 5);
-        assert!(allocates_at_spawn("claude", "claude"));
-        assert!(!allocates_at_spawn("claude", "antigravity"));
-        assert!(!allocates_at_spawn("codex", "codex"));
+        assert!(allocates_at_spawn("claude"));
+        assert!(!allocates_at_spawn("antigravity"));
+        assert!(!allocates_at_spawn("codex"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -5752,6 +5775,7 @@ mod tests {
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(30)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         runner.places.lock().unwrap().insert("a1".into());
         runner
@@ -6766,6 +6790,20 @@ mod tests {
         turns: &[Turn],
         limited: &[usize],
     ) -> Ran {
+        session_turns_playing(task, serves, turns, limited, "pi/error.jsonl", &[]).await
+    }
+
+    /// `session_turns_limited`, with pi playing fixture `refusal` (under tests/fixtures; one outside pi/, which is
+    /// pi's event fixtures with their expected events) for each prompt of `limited`,
+    /// and the runtimes `ready` signed in here for a fallback.
+    async fn session_turns_playing(
+        task: bool,
+        serves: bool,
+        turns: &[Turn],
+        limited: &[usize],
+        refusal: &str,
+        ready: &[&str],
+    ) -> Ran {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(serves)));
         let dir =
@@ -6778,7 +6816,9 @@ mod tests {
         });
         for n in limited {
             std::fs::copy(
-                fixture.with_file_name("error.jsonl"),
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("tests/fixtures")
+                    .join(refusal),
                 dir.join(format!("fixture-{n}")),
             )
             .unwrap();
@@ -6793,6 +6833,12 @@ mod tests {
             client,
             crate::state::State::open(&dir.join("state")).unwrap(),
         ));
+        for runtime in ready {
+            runner.runtime_rows.lock().unwrap().insert(
+                runtime.to_string(),
+                json!({"installed": true, "authenticated": "ready"}),
+            );
+        }
         let history = json!([
             {"id": "m1", "created": "2026-10-22T07:59:00Z", "from_actor": "human:ana@acme.example", "body": "Watch the Acme release.", "refs": {}},
             {"id": "m2", "created": "2026-10-22T08:01:00Z", "from_actor": "bot:ops", "body": "Here's the draft. Send it Friday?", "refs": {}},
@@ -6862,7 +6908,7 @@ mod tests {
         }
         server.abort();
         let sessions = std::fs::read_to_string(dir.join("args.log"))
-            .unwrap()
+            .unwrap_or_default()
             .lines()
             .map(|l| {
                 l.split_whitespace()
@@ -7270,6 +7316,238 @@ mod tests {
             "{:?}",
             ran.saved
         );
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_tool_ran_before_its_quota_ran_out_never_falls_back() {
+        // pi ran a tool (a push), then its login ran out of quota: a fallback would do the push again, so the turn
+        // ends on its limit and no fallback harness starts.
+        let fallback = json!({"fallback": {"harness": "pi", "model": "kimi-k3-fallback"}});
+        let ran = session_turns_playing(
+            true,
+            true,
+            &[("m4", json!({}), fallback)],
+            &[0],
+            "pi_tool_then_limit.jsonl",
+            &[],
+        )
+        .await;
+        assert_eq!(
+            ran.sessions.len(),
+            1,
+            "no fallback started: {:?}",
+            ran.sessions
+        );
+        assert_eq!(
+            ran.completions[0]["outcome"], "failed",
+            "{}",
+            ran.completions[0]
+        );
+        assert!(
+            ran.completions[0]["fallback"].is_null(),
+            "{}",
+            ran.completions[0]
+        );
+    }
+
+    #[test]
+    fn a_tool_the_drive_saw_before_it_failed_keeps_the_turn_from_any_fallback() {
+        // The drive failed (an event write, say), so its result never came: what the flags kept still counts, and a
+        // failure after the turn started leaves its tools unknown.
+        let f = lease_flags();
+        assert!(tools_settled(&Drove::interrupted(), &f, false));
+        assert!(!tools_settled(&Drove::interrupted(), &f, true));
+        f.tool_ran.store(true, Ordering::SeqCst);
+        assert!(!tools_settled(&Drove::interrupted(), &f, false));
+    }
+
+    #[tokio::test]
+    async fn a_turn_whose_tool_ran_never_takes_the_companys_fallback_either() {
+        // No fallback of its own, and another provider (codex) is signed in here: a quota refusal with no tool run
+        // hops there, one after a tool ran does not.
+        for (fixture, hops) in [
+            ("pi/error.jsonl", true),
+            ("pi_tool_then_limit.jsonl", false),
+        ] {
+            crate::fallback::TEST_CHOICES.with(|c| {
+                *c.borrow_mut() = Some(vec![
+                    json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
+                ])
+            });
+            let ran = session_turns_playing(
+                true,
+                true,
+                &[("m4", json!({}), json!({}))],
+                &[0],
+                fixture,
+                &["codex"],
+            )
+            .await;
+            assert_eq!(
+                ran.completions[0]["fallback"] == "codex",
+                hops,
+                "{fixture}: {}",
+                ran.completions[0]
+            );
+            assert_eq!(
+                ran.sessions.len(),
+                if hops { 2 } else { 1 },
+                "{fixture}: {:?}",
+                ran.sessions
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_harness_on_another_runtime_fails_the_turn_without_starting_any_cli() {
+        // A server that has not moved Antigravity to its own runtime sends runtime gemini with harness antigravity:
+        // the Gemini CLI must not run its model.
+        let old = json!({"runtime": "gemini", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(false, true, &[("m4", json!({}), old)]).await;
+        assert!(
+            ran.sessions.is_empty(),
+            "no CLI started: {:?}",
+            ran.sessions
+        );
+        // Ended as a runner failure (report_failure), never run.
+        assert_eq!(
+            ran.completions[0]["outcome"], "interrupted",
+            "{}",
+            ran.completions[0]
+        );
+    }
+
+    /// An `agy` for execute's tests (argv: this script, its folder). It names its conversation before it reads its
+    /// input, as agy does: the `--conversation` it was given, unless `agy-lose-<n>` is there (then one it began). With
+    /// `agy-late-<n>` there it names the one it was given first and one it began only after its first step. It keeps
+    /// each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone
+    /// once the turn ends (as on a computer that lost them).
+    const FAKE_AGY: &str = r#"#!/usr/bin/env python3
+import json, os, sys, uuid
+folder, args = sys.argv[1], sys.argv[2:]
+n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
+conv = args[args.index("--conversation") + 1] if "--conversation" in args else str(uuid.uuid4())
+if os.path.exists(os.path.join(folder, "agy-lose-%d" % n)):
+    conv = str(uuid.uuid4())
+print(json.dumps({"event": "init", "conversation_id": conv}), flush=True)
+line = sys.stdin.readline()
+if not line:
+    sys.exit(0)
+open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
+late = []
+if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
+    conv = str(uuid.uuid4())
+    late = [{"event": "step_update", "step_update": {"conversation_id": conv}}]
+for event in [
+    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Done."}},
+] + late + [
+    {"event": "result", "result": {"status": "SUCCESS", "response": "Done.", "conversation_id": conv,
+                                   "usage": {"input_tokens": 1, "output_tokens": 1}}},
+]:
+    print(json.dumps(event), flush=True)
+sys.stdin.read()
+if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
+    records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
+    for root, _, files in os.walk(records):
+        for name in files:
+            os.remove(os.path.join(root, name))
+"#;
+
+    fn fake_agy_in(folder: &Path) {
+        let fake = folder.join("agy");
+        crate::util::write_script(&fake, FAKE_AGY);
+        HOST_COMMANDS.with(|commands| {
+            commands.borrow_mut().insert(
+                "antigravity".into(),
+                vec![fake.display().to_string(), folder.display().to_string()],
+            )
+        });
+    }
+
+    #[tokio::test]
+    async fn a_new_antigravity_conversation_in_place_of_one_not_on_this_computer_is_told_the_history(
+    ) {
+        // Turn 1's record of its agy conversation is gone when turn 2 comes: turn 2 begins a new conversation, which
+        // holds nothing, so it is given the conversation's history, including what came before the old cursor (m1).
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("agy-forget-0"), "").unwrap();
+        fake_agy_in(&folder);
+        let agy =
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(
+            false,
+            true,
+            &[("m1", json!({}), agy.clone()), ("m4", json!({}), agy)],
+        )
+        .await;
+        for (n, c) in ran.completions.iter().enumerate() {
+            assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
+        }
+        assert_eq!(
+            session_of(&ran.completions[1]).1,
+            json!(crate::continuity::NOT_FOUND),
+            "{}",
+            ran.completions[1]
+        );
+        let told = std::fs::read_to_string(folder.join("agy-prompt-1")).unwrap();
+        assert!(
+            told.contains("latest messages before the current one are replayed here")
+                && told.contains("Watch the Acme release."),
+            "{told}"
+        );
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    #[tokio::test]
+    async fn after_agy_moves_a_thread_to_a_new_conversation_the_next_turn_is_told_everything_once()
+    {
+        // Turn 1's agy names a conversation it began in place of the saved one before it has the prompt: that process
+        // is closed unprompted and a new one is given everything, the conversation's history included, so turn 2 is
+        // not. Turn 3's agy moves to a new conversation only after it did its work: that one holds turn 3 only, so
+        // turn 4 is given the history; turn 5, after turn 4 completed, is not.
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("agy-lose-1"), "").unwrap();
+        std::fs::write(folder.join("agy-late-3"), "").unwrap();
+        fake_agy_in(&folder);
+        let agy =
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
+        let ran = session_turns(
+            false,
+            true,
+            &[
+                ("m1", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy.clone()),
+                ("m4", json!({}), agy),
+            ],
+        )
+        .await;
+        for (n, c) in ran.completions.iter().enumerate() {
+            assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
+        }
+        let prompt =
+            |n: usize| std::fs::read_to_string(folder.join(format!("agy-prompt-{n}"))).unwrap();
+        let replayed = "latest messages before the current one are replayed here";
+        let told = prompt(1);
+        assert!(
+            told.contains(replayed) && told.contains("Watch the Acme release."),
+            "{told}"
+        );
+        assert!(!prompt(2).contains(replayed), "told once: {}", prompt(2));
+        assert!(!prompt(3).contains(replayed), "{}", prompt(3));
+        let told = prompt(4);
+        assert!(
+            told.contains(replayed) && told.contains("Watch the Acme release."),
+            "{told}"
+        );
+        assert!(!prompt(5).contains(replayed), "told once: {}", prompt(5));
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[tokio::test]
@@ -8114,7 +8392,7 @@ mod tests {
             "_repo_rules_changed": false, "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},
             "task": {"id": "t1", "title": "Ship", "checkpoint": "Half done", "checkpoint_at": "2026-10-29T08:00:00Z"},
             "history": [{"id": "m1", "from_actor": "bot:ops", "body": "Started", "refs": {}}, {"id": "m2", "from_actor": "human:ana", "body": "Thanks", "refs": {}}]});
-        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot");
+        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot", "");
         assert!(
             text.starts_with(&crate::prompt::prompt(&attempt, &names, Some("m0"), false)),
             "{text}"
@@ -8140,7 +8418,7 @@ mod tests {
         let attempt = json!({"id": "a1", "bot": "ops", "_replaced": true, "run_header": header,
             "conversation": {"id": "c1", "kind": "task"}, "message": {"id": "m3", "body": "Go"},
             "task": {"id": "t1", "title": "Ship", "checkpoint": "Half done"}, "history": []});
-        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot");
+        let text = replacement_prompt(&attempt, &names, Some("m0"), "ops", "bot", "");
         assert!(text.ends_with(&format!("\n\n{header}")), "{text}");
         let note = text
             .find("New session: your previous session")
@@ -8993,6 +9271,7 @@ for line in sys.stdin:
             granted: Mutex::new(None),
             done_notify: Notify::new(),
             deadline: Mutex::new(Instant::now() + Duration::from_secs(60)),
+            tool_ran: std::sync::atomic::AtomicBool::new(false),
         };
         let wake = Notify::new();
         let d = Drive {
@@ -9172,15 +9451,15 @@ for line in sys.stdin:
             ("claude", "claude"),
             ("codex", "codex"),
             ("gemini", "gemini"),
-            ("gemini", "antigravity"),
+            ("antigravity", "antigravity"),
             ("musecode", "musecode"),
             ("grok", "grok"),
             ("cursor", "cursor"),
         ] {
-            let caps = crate::harness_tools::caps(runtime, harness);
+            let caps = crate::harness_tools::caps(runtime);
             assert!(!uses_turn_user(&caps, false, true, Isolated), "{harness}");
         }
-        let pi = crate::harness_tools::caps("pi", "pi");
+        let pi = crate::harness_tools::caps("pi");
         assert!(uses_turn_user(&pi, false, true, Isolated));
         assert!(!uses_turn_user(&pi, false, false, NoRelay));
         assert!(uses_turn_user(&pi, true, false, Isolated));

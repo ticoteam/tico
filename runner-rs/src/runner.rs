@@ -119,8 +119,6 @@ pub struct Runner {
     /// When the container was told to stop (`docker stop`, a host update): no new claims, the running turns
     /// finish, then the runner exits; a turn still going after STOP_DRAIN_S is interrupted (fn shut_down).
     shutdown: Mutex<Option<Instant>>,
-    /// Persistent Antigravity processes kept between a conversation's turns.
-    pub warm: crate::warm::WarmSessions,
     /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
     pub pi: Arc<crate::hosts::pi::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
@@ -169,6 +167,9 @@ impl Runner {
                 log(&format!("Tico runner: could not save runner.json ({e})"));
             }
         }
+        // The warm Antigravity processes' homes, from before each turn started its own: their conversation records
+        // are keyed by model and effort, so nothing reads them now (hosts/antigravity.rs keeps its own under agy/).
+        let _ = std::fs::remove_dir_all(state.directory.join("antigravity"));
         let projects_dir = config.projects_dir();
         let repositories = Arc::new(crate::repositories::Repositories::new(
             &projects_dir,
@@ -231,10 +232,6 @@ impl Runner {
             restart_since: Mutex::new(None),
             restart_refused: AtomicBool::new(false),
             shutdown: Mutex::new(None),
-            warm: crate::warm::WarmSessions::new(
-                state.directory.join("antigravity"),
-                capacity.max(8),
-            ),
             pi: Arc::new(crate::hosts::pi::Pool::new(
                 state.directory.join("pi"),
                 capacity.max(8),
@@ -1386,7 +1383,6 @@ impl Runner {
         if let Some(m) = maintenance {
             m.abort();
         }
-        self.warm.prune(true).await;
         self.pi.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
@@ -1440,7 +1436,6 @@ impl Runner {
             self.lanes.attempts.lock().unwrap().remove(&aid);
             clock.next_claim = None; // capacity came free: look for the next job now
         }
-        self.warm.prune(false).await;
         self.pi.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
