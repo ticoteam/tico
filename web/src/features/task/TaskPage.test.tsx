@@ -831,6 +831,53 @@ describe('Details: the facts @s58', () => {
     expect((label.parentElement as HTMLElement).textContent).toBe('Waitingon Builder');
   });
 
+  /** Now's Waiting on row, once the task is drawn. */
+  const waitingOn = async () => (await screen.findByText('Waiting on')).parentElement as HTMLElement;
+
+  it('names a task it waits on by its line, linked to it, never by its id', async () => {
+    const id = '3f9c1d2e-7b4a-4c1e-9d2f-0a1b2c3d4e5f';
+    serve(reads(task({ turn: { state: 'tasks', who: id, line: 'Blocked by Matches cause check, in To do', requirement_id: 'dep:x', since: null, until: null, ask: false } } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(row.textContent).not.toContain(id);
+    expect(within(row).getByRole('link', { name: 'Blocked by Matches cause check, in To do' }).getAttribute('href')).toBe(`/task/${id}`);
+    await facts();
+    expect(((await screen.findByText('Waiting')).parentElement as HTMLElement).textContent).not.toContain(id);
+  });
+
+  it('says a task it waits on that the reader may not open only by its line, without a link', async () => {
+    serve(reads(task({ turn: { state: 'tasks', who: null, line: 'A sub-task', requirement_id: 'sub:x', since: null, until: null, ask: false } } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(row.textContent).toBe('Waiting onA sub-task');
+    expect(within(row).queryByRole('link')).toBeNull();
+  });
+
+  it('says On ice for a snooze with no reason and no date, not who snoozed it', async () => {
+    serve(reads(task({ turn: { state: 'snoozed', who: 'human:bo', line: '', requirement_id: null, since: null, until: null, ask: false } } as Partial<TaskData>)));
+    details();
+    expect((await waitingOn()).textContent).toBe('Waiting onOn ice');
+  });
+
+  it('keeps the row for a Paused agent that has the task, with its Fix', async () => {
+    const turn = { state: 'paused', who: 'bot:a1', line: 'Builder has no computer', requirement_id: null, since: null, until: null, ask: false, href: '#/settings/computers' };
+    serve(reads(task({ owner_id: 'bot:a1', turn } as Partial<TaskData>)));
+    details();
+    const row = await waitingOn();
+    expect(within(row).getByText('Builder')).toBeTruthy();
+    expect(within(row).getByText('Builder has no computer')).toBeTruthy();
+    expect(within(row).getByRole('link', { name: 'Fix' }).getAttribute('href')).toBe('/settings/computers');
+  });
+
+  it('leaves out the row when it only repeats who has the task, and draws no face for a requirement on GitHub', async () => {
+    const to_leave = [{ requirement_id: 'ci', line: 'Checks pass', met: false, may: [], who: 'github' }];
+    serve(reads(task({ owner_id: 'bot:a1', to_leave, turn: { state: 'bot', who: 'bot:a1', line: 'Draft the post', requirement_id: null, since: null, until: null, ask: false } } as unknown as Partial<TaskData>)));
+    details();
+    const line = (await screen.findByText('Checks pass')).parentElement as HTMLElement;
+    expect(within(line).queryByRole('img')).toBeNull();
+    expect(screen.queryByText('Waiting on')).toBeNull();
+  });
+
   it('sets the Human in place', async () => {
     serve(base);
     details();

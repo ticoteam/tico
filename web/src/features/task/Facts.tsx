@@ -4,10 +4,12 @@ import { run } from '@/actions';
 import { meQuery, useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
+import { DateText } from '@/kit/DateText';
 import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { Link } from '@/kit/Link';
 import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
@@ -17,7 +19,8 @@ import { pipelinesQuery, roadmapPipeline } from '@/features/tasks/routing';
 import { EditKv, Inline, Kv, PickKv, saved } from './Fact';
 import { ActorItems } from './Head';
 import { failedToast, reasonOf } from './model';
-import { Face, Go, NameOf } from './parts';
+import { Face, Go, isActor, NameOf } from './parts';
+import { fixHref } from './StatusLine';
 import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFacts, type Visible } from './queries';
 
 /* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
@@ -65,8 +68,68 @@ function FaceMenu({ id, label, children }: { id: string; label: string; children
 
 const none = <small>None</small>;
 
+type Turn = NonNullable<TaskData['turn']>;
+
 /** The wait states whose `who` is a teammate; the rest name a task, a stage or a source, which the line says. */
 const ON_SOMEONE = new Set(['person', 'bot', 'paused']);
+
+/** The teammate a wait is on, or null: a task's, a stage's or a snoozer's `who` is never named as what it waits on. */
+const onWhom = (turn: Turn) => (ON_SOMEONE.has(turn.state) && isActor(turn.who) ? turn.who : null);
+
+/** Whether the wait only says again who has the task: its agent at work, or its person's own work. Paused always says
+    more (the agent cannot run). */
+export const repeatsOwner = (turn: Turn, owner: string | null | undefined) => !turn.ask && turn.state !== 'paused' && !!owner && onWhom(turn) === owner;
+
+/** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
+const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*❓️?\s*/u, '');
+
+/** What the open task waits on, in words, for Details' Waiting on and Facts' Waiting: a teammate by name (`short`: only
+    that; else with their face, what is asked of them, and a Paused agent's Fix). Anything else is the server's own
+    line: a task it waits on links to it when the reader may know which, and a snooze says why and until when, or "On
+    ice". Never an id. */
+export function WaitOn({ turn, short = false }: { turn: Turn; short?: boolean }) {
+  const who = onWhom(turn);
+  const line = question(turn.line);
+  if (who && short)
+    return (
+      <>
+        on <NameOf id={who} />
+      </>
+    );
+  if (who) {
+    const fix = turn.state === 'paused' ? fixHref(turn.href) : null;
+    return (
+      <>
+        <Face id={who} />
+        <span>
+          <NameOf id={who} />
+        </span>
+        {line && <small>{line}</small>}
+        {fix && (
+          <Link className="status-fix" href={fix}>
+            Fix
+          </Link>
+        )}
+      </>
+    );
+  }
+  if (turn.state === 'snoozed') {
+    if (!line && !turn.until) return <>On ice</>;
+    return (
+      <>
+        {line}
+        {turn.until && (
+          <>
+            {line ? ' · until ' : 'Until '}
+            <DateText at={turn.until} />
+          </>
+        )}
+      </>
+    );
+  }
+  if (turn.state === 'tasks' && turn.who) return <Go to={`/task/${turn.who}`}>{line}</Go>;
+  return <>{line}</>;
+}
 
 /** One quiet line: who or what the open task waits on, and for how long when its time is the wait's own: an ask
     (when it was asked) or a snooze (when it was set). Another wait's time is its stage's or requirement's, which a
@@ -83,13 +146,7 @@ export function WaitFact({ t }: { t: TaskData }) {
             <Ago at={since} />{' '}
           </>
         )}
-        {turn.who && ON_SOMEONE.has(turn.state) ? (
-          <>
-            on <NameOf id={turn.who} />
-          </>
-        ) : (
-          turn.line
-        )}
+        <WaitOn turn={turn} short />
       </small>
     </Kv>
   );

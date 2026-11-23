@@ -29,7 +29,7 @@ export const lineFor = (t: Shown, me: string | undefined): Line | null => {
 };
 
 /** Where Paused's Fix goes in this app: the server names the old app's page ("#/settings/computers"). */
-const fixHref = (href: string | null | undefined) => (href ? (href.startsWith('#/') ? newAddressFor(href) : href) : null);
+export const fixHref = (href: string | null | undefined) => (href ? (href.startsWith('#/') ? newAddressFor(href) : href) : null);
 
 /** The line. `inLink`: it sits inside a link (a board card), which may not hold another: Fix there is only its place,
     and `CardFix` beside the card is the link. */

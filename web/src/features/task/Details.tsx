@@ -16,10 +16,10 @@ import { toast } from '@/kit/Toast';
 import { PageBody, Section } from '@/pagekinds';
 import { ActorItems, OwnerMenu, tagsOf } from './Head';
 import { EditKv, Inline, Kv, saved } from './Fact';
-import { Meetings, MoreFacts, PublicFacts, SizeFact, WaitFact } from './Facts';
+import { Meetings, MoreFacts, PublicFacts, repeatsOwner, SizeFact, WaitFact, WaitOn } from './Facts';
 import { DETAILS, failedToast, tabAddress } from './model';
 import { NewPage } from './NewPage';
-import { Face, Mark, NameOf, Go } from './parts';
+import { Face, Mark, NameOf, Go, isActor } from './parts';
 import { taskFilesQuery, type TaskData } from './queries';
 
 /* Details (more.js detailsBody): named sections in a fixed order, from what it is judged by, to the work, to the
@@ -103,7 +103,7 @@ function Requirement({ r }: { r: TaskRequirement }) {
     <div className="dt-line">
       <Mark met={r.met} />
       <span className="dt-text">{r.line}</span>
-      <span className="dt-end">{r.who ? <Face id={r.who} /> : null}</span>
+      <span className="dt-end">{isActor(r.who) ? <Face id={r.who} /> : null}</span>
     </div>
   );
 }
@@ -142,9 +142,6 @@ function Reconcile({ task, keys }: { task: string; keys: string[] }) {
     </button>
   );
 }
-
-/** The waiting question as a line: a leading "❓" goes, since the line already says it waits (and the emoji draws in red). */
-const question = (line: string | null | undefined) => (line ?? '').replace(/^\s*\u2753\uFE0F?\s*/u, '');
 
 const paragraphs = (text: string) => text.split(/\n\s*\n/).filter((p) => p.trim());
 
@@ -221,13 +218,9 @@ export function Details({ t, flow, adding = null, onAdding = () => undefined }: 
             }
           />
         </div>
-        {t.turn?.who && t.turn.who !== t.owner_id && !isShots(t.turn) && (
-          <Kv k="Waiting on">
-            <Face id={t.turn.who} />
-            <span>
-              <NameOf id={t.turn.who} />
-            </span>
-            {question(t.turn.line) && <small>{question(t.turn.line)}</small>}
+        {t.turn && !isShots(t.turn) && !repeatsOwner(t.turn, t.owner_id) && (
+          <Kv k="Waiting on" target={`task-wait:${t.id}`}>
+            <WaitOn turn={t.turn} />
           </Kv>
         )}
         {shots && (
