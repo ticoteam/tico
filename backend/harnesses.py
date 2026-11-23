@@ -1,7 +1,7 @@
 """Harness catalog: the runner hosts a bot can run on, and the models each one accepts.
 
-`runtime` stays on bot rows for compatibility. It is derived from harness
-(`antigravity` → `gemini`). Older configs that omit `harness` read as `harness = runtime`.
+`runtime` stays on bot rows for compatibility: each harness runs a runtime of its own name. Older configs that omit
+`harness` read as `harness = runtime`.
 """
 
 from clients import harness_manifests as manifests
@@ -12,7 +12,7 @@ HARNESS_CATALOG = (
     {"id": "codex", "label": "Codex (OpenAI)", "runtime": "codex"},
     {"id": "claude", "label": "Claude Code (Anthropic)", "runtime": "claude"},
     {"id": "gemini", "label": "gemini", "runtime": "gemini", "offered": False},
-    {"id": "antigravity", "label": "antigravity", "runtime": "gemini"},
+    {"id": "antigravity", "label": "antigravity", "runtime": "antigravity"},
     {"id": "grok", "label": "Grok Build (xAI)", "runtime": "grok"},
     {"id": "pi", "label": "pi (openrouter)", "runtime": "pi"},
     {"id": "cursor", "label": "Cursor Agent", "runtime": "cursor", "offered": False},
@@ -72,7 +72,7 @@ def is_external(config, runtime=None):
 
 
 def harnesses_for_runtime(runtime):
-    """Every harness that runs `runtime`: the CLI first, then its variants (Gemini's Antigravity)."""
+    """Every harness that runs `runtime`."""
     return tuple(row["id"] for row in HARNESS_CATALOG if row["runtime"] == runtime)
 
 

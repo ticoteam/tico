@@ -1,0 +1,40 @@
+# Google's Antigravity CLI (`agy`), signed in with a Google account. Google publishes it only through its own updater
+# (a release manifest naming a per-build download), which no install method here reads, so the runner never installs
+# it: the operator does, and readiness finds it on PATH.
+id = "antigravity"
+name = "Antigravity"
+host = "antigravity"
+executable = "agy"
+providers = ["google"]
+
+[version]
+args = ["--version"]
+pattern = '(\d+\.\d+\.\d+)'
+# The oldest release that takes its home from GEMINI_HOME and prints the stream-json events hosts/antigravity.rs reads.
+minimum = "1.5.12"
+
+[update]
+policy = "latest"
+
+[auth]
+methods = ["subscription"]
+
+# The CLI updates itself on every run unless this is set.
+[env]
+AGY_CLI_DISABLE_AUTO_UPDATE = "1"
+
+# What Tico does differently for this CLI (docs/harnesses.md, Capabilities).
+[capabilities]
+subscription_profiles = true
+profile_home = "GEMINI_HOME"
+tool_events = true
+mcp_unsupported = "it reads MCP servers only from a config file in the operator's home, which Tico does not touch (the operator's own servers would reach every bot)"
+resume_command = "agy --conversation"
+
+[capabilities.sign_in_status]
+check = "command"
+args = ["models"]
+not_ready = "please sign in"
+ready_detail = "Antigravity signed in"
+missing_detail = "Antigravity sign-in required"
+timeout_s = 10

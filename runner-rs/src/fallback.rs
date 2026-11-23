@@ -38,7 +38,7 @@ pub fn configured(config: &Value) -> Option<Hop> {
     .map(text_of)
     .find(|e| !e.is_empty());
     Some(Hop {
-        runtime: crate::harness_tools::runtime_of(&harness),
+        runtime: harness.clone(),
         harness,
         model,
         reasoning_effort: effort,
@@ -80,11 +80,8 @@ pub fn limited_config(config: &Value, profile: Option<&crate::profiles::Profile>
     let mut out = config.clone();
     if let Some(hop) = configured(config) {
         let runtime = text_of(&config["runtime"]);
-        let own = login(&runtime, &text_of(&config["harness"]), profile);
-        if hop.runtime == runtime
-            && own.is_some()
-            && own == login(&hop.runtime, &hop.harness, profile)
-        {
+        let own = login(&runtime, profile);
+        if hop.runtime == runtime && own.is_some() && own == login(&hop.runtime, profile) {
             out.as_object_mut().unwrap().remove("fallback");
         }
     }
@@ -182,7 +179,6 @@ fn choose(
         {
             return None;
         }
-        let runtime = crate::harness_tools::runtime_of(&harness);
         // The server's pick for this bot (`gateway_fallback`, its level and Fast) replaces the company row's
         // model when the hop is the Gateway.
         let pick = text_of(&config["gateway_fallback"]);
@@ -264,16 +260,12 @@ pub fn out_of_quota(profile: &str, runtime: &str, now: f64) -> bool {
     limits().lock().unwrap().out_of_quota(profile, runtime, now)
 }
 
-/// The login a turn on `runtime` (`harness`) with `profile` signs in with, as `limits` keeps it: the profile's own
+/// The login a turn on `runtime` with `profile` signs in with, as `limits` keeps it: the profile's own
 /// login, or "" for the computer's own (no profile, or one that shares the operator's logins or has no home of its
 /// own for that runtime). None for a harness that signs in with each bot's own key (`api_keys = "bot"`): that quota
 /// is one bot's, so it is never kept for another bot's turn.
-pub fn login(
-    runtime: &str,
-    harness: &str,
-    profile: Option<&crate::profiles::Profile>,
-) -> Option<String> {
-    if crate::harness_tools::caps(runtime, harness).api_keys == "bot" {
+pub fn login(runtime: &str, profile: Option<&crate::profiles::Profile>) -> Option<String> {
+    if crate::harness_tools::caps(runtime).api_keys == "bot" {
         return None;
     }
     let own = profile
@@ -284,12 +276,11 @@ pub fn login(
 /// What a turn says about its login's quota: a usage limit is kept, a completed turn ends one.
 pub fn settle_limit(
     runtime: &str,
-    harness: &str,
     profile: Option<&crate::profiles::Profile>,
     limited: bool,
     completed: bool,
 ) {
-    let Some(login) = login(runtime, harness, profile) else {
+    let Some(login) = login(runtime, profile) else {
         return;
     };
     if limited {
@@ -302,11 +293,10 @@ pub fn settle_limit(
 /// The key a harness signs in with from the bot's own grant (`api_keys = "bot"`, its preferred `api_key_env`), not a
 /// login on the computer.
 fn bot_key(harness: &str) -> Vec<String> {
-    let runtime = crate::harness_tools::runtime_of(harness);
-    if crate::harness_tools::caps(&runtime, harness).api_keys != "bot" {
+    if crate::harness_tools::caps(harness).api_keys != "bot" {
         return vec![];
     }
-    crate::harness_tools::api_key_env(&runtime)
+    crate::harness_tools::api_key_env(harness)
         .into_iter()
         .take(1)
         .collect()
@@ -648,11 +638,9 @@ impl Runner {
         crate::util::truthy(row.get("installed"))
             && row["authenticated"] == "ready"
             && self.sign_in.rejection(runtime, profile, bot).is_none()
-            && login(runtime, "", profile)
+            && login(runtime, profile)
                 .is_none_or(|l| !out_of_quota(&l, runtime, crate::util::epoch_s()))
-            && (!crate::harness_tools::caps(runtime, "")
-                .api_key_login
-                .is_empty()
+            && (!crate::harness_tools::caps(runtime).api_key_login.is_empty()
                 || self.sign_in.headless_secret(runtime).is_none())
     }
 }
@@ -759,7 +747,7 @@ mod tests {
         let hop = configured(&json!({"reasoning_effort": "high", "fallback": {"harness": "antigravity", "model": "g"}})).unwrap();
         assert_eq!(
             (hop.runtime.as_str(), hop.reasoning_effort.as_deref()),
-            ("gemini", Some("high"))
+            ("antigravity", Some("high"))
         );
         assert_eq!(
             configured(&json!({"fallback": {"harness": "claude", "model": "m", "effort": "low"}}))
@@ -871,7 +859,7 @@ mod tests {
     fn a_key_only_provider_is_skipped_unless_the_turn_carries_its_key() {
         let choices = [
             json!({"runtime": "pi", "harness": "pi", "model": "p"}),
-            json!({"runtime": "gemini", "harness": "antigravity", "model": "g"}),
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "g"}),
         ];
         let config = json!({"runtime": "claude", "harness": "claude"});
         let mut env = crate::env::Env::new();
@@ -1041,7 +1029,7 @@ mod tests {
     ) {
         let choices = [
             json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
-            json!({"runtime": "gemini", "harness": "antigravity", "model": "g"}),
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "g"}),
         ];
         let config = json!({"runtime": "claude", "harness": "claude"});
         let none = crate::env::Env::new();
@@ -1057,7 +1045,7 @@ mod tests {
         limits.remember("", "codex", now, None);
         assert!(
             limits.out_of_quota("", "codex", now + 1.0)
-                && !limits.out_of_quota("", "gemini", now + 1.0)
+                && !limits.out_of_quota("", "antigravity", now + 1.0)
         );
         assert_eq!(
             default_choice(&config, &choices, &none, |rt| !limits.out_of_quota(
@@ -1090,7 +1078,7 @@ mod tests {
         use crate::profiles::Profile;
         let shared = Profile::new("shared", "/tmp/acme-profiles/shared", true);
         let work = Profile::new("work", "/tmp/acme-profiles/work", false);
-        let key = |p: Option<&Profile>| login("codex", "codex", p).unwrap();
+        let key = |p: Option<&Profile>| login("codex", p).unwrap();
         assert_eq!(
             (key(None), key(Some(&shared)), key(Some(&work))),
             (String::new(), String::new(), "work".to_string())
@@ -1118,21 +1106,18 @@ mod tests {
     #[test]
     fn a_bots_own_key_is_never_kept_as_a_login_another_bot_shares() {
         // Gemini CLI and pi sign in with each bot's own key: one bot's spent key says nothing about another's.
-        assert_eq!(
-            (login("pi", "pi", None), login("gemini", "gemini", None)),
-            (None, None)
-        );
+        assert_eq!((login("pi", None), login("gemini", None)), (None, None));
         let now = crate::util::epoch_s();
         let profile =
             crate::profiles::Profile::new("limit-test-key", "/tmp/acme-profiles/key", false);
-        settle_limit("pi", "pi", Some(&profile), true, false);
+        settle_limit("pi", Some(&profile), true, false);
         assert!(
             !out_of_quota("limit-test-key", "pi", now + 1.0) && !out_of_quota("", "pi", now + 1.0)
         );
         // A computer login on the same profile is kept, and a completed turn there clears it.
-        settle_limit("codex", "codex", Some(&profile), true, false);
+        settle_limit("codex", Some(&profile), true, false);
         assert!(out_of_quota("limit-test-key", "codex", now + 1.0));
-        settle_limit("codex", "codex", Some(&profile), false, true);
+        settle_limit("codex", Some(&profile), false, true);
         assert!(!out_of_quota("limit-test-key", "codex", now + 1.0));
     }
 
@@ -1176,7 +1161,7 @@ mod tests {
         let choices = [
             json!({"runtime": "codex", "harness": "codex", "model": "gpt-test"}),
             json!({"runtime": "claude", "harness": "claude", "model": "claude-test"}),
-            json!({"runtime": "gemini", "harness": "antigravity", "model": "g"}),
+            json!({"runtime": "antigravity", "harness": "antigravity", "model": "g"}),
         ];
         let config = json!({"runtime": "claude", "harness": "claude"});
         let none = crate::env::Env::new();
@@ -1193,7 +1178,7 @@ mod tests {
         let all = [
             "claude".to_string(),
             "codex".to_string(),
-            "gemini".to_string(),
+            "antigravity".to_string(),
         ];
         assert!(next_choice(&config, &choices, &none, &all, |_| true).is_none());
         assert_eq!(

@@ -370,7 +370,7 @@ impl Refreshes {
             .flatten();
         // Only a runtime whose weekly window a refresh can read (`weekly_usage = "refresh"`).
         let refreshable =
-            crate::harness_tools::caps(&text_of(&work["runtime"]), "").weekly_usage == "refresh";
+            crate::harness_tools::caps(&text_of(&work["runtime"])).weekly_usage == "refresh";
         // A plan's read (backend/subscription_refresh.py `request_plan_read`): its setup-token travels in the work, for this read only.
         let plan = work["subscription"]
             .as_str()

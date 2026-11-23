@@ -75,6 +75,10 @@ const BUILT_IN: &[(&str, &str)] = &[
         include_str!("../harnesses/muse-code.toml"),
     ),
     ("pi.toml", include_str!("../harnesses/pi.toml")),
+    (
+        "antigravity.toml",
+        include_str!("../harnesses/antigravity.toml"),
+    ),
 ];
 
 fn re(p: &str) -> Regex {
@@ -218,23 +222,12 @@ impl Default for Capabilities {
     }
 }
 
-/// A second host for a runtime (`[variants.<harness>]`, Gemini's Antigravity): never installed by the runner.
-#[derive(Clone, Debug)]
-pub struct Variant {
-    pub id: String,
-    pub name: String,
-    pub host: String,
-    pub executable: String,
-    pub capabilities: Capabilities,
-}
-
 #[derive(Clone, Debug)]
 pub struct Manifest {
     pub id: String,
     pub name: String,
     pub host: String,
     pub executable: String,
-    pub providers: Vec<String>,
     pub catch_all: bool,
     pub install: toml::Table,
     pub version_args: Vec<String>,
@@ -248,7 +241,6 @@ pub struct Manifest {
     /// What bot configs and the server call this harness (`claude` for claude-code.toml).
     pub runtime: String,
     pub capabilities: Capabilities,
-    pub variants: Vec<Variant>,
     /// Variables every command the runner runs with this harness sets (version probes, logins), e.g. an
     /// auto-updater's off switch. Sorted by name.
     pub env: Vec<(String, String)>,
@@ -364,7 +356,6 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         "env",
         "runtime",
         "capabilities",
-        "variants",
     ];
     let mut extra: Vec<&String> = data
         .keys()
@@ -426,10 +417,11 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
     if providers.iter().collect::<HashSet<_>>().len() != providers.len() {
         return Err(format!("{at}: providers lists one twice"));
     }
+    // No `[install]`: the operator installs the CLI and the runner only finds it on PATH.
     let install = table(data, "install", &at)?.into_owned();
     let s = |k: &str| install.get(k).and_then(|v| v.as_str());
     let method = s("method").unwrap_or("");
-    if !METHODS.contains(&method) {
+    if !(install.is_empty() || METHODS.contains(&method)) {
         return Err(format!(
             "{at}: install.method must be one of {}",
             METHODS.join(", ")
@@ -475,7 +467,7 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
                 &[],
             )?;
         }
-        _ => {
+        "binary" => {
             if !https("url") {
                 return Err(format!("{at}: install.url must be an https URL (with {{os}} and {{arch}} for the platform)"));
             }
@@ -494,6 +486,7 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
                 ));
             }
         }
+        _ => {}
     }
     if install.contains_key("latest_url") {
         if !https("latest_url") {
@@ -679,65 +672,11 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         }
     };
     let capabilities = parse_capabilities(data.get("capabilities"), &at)?;
-    let mut variants = vec![];
-    for (vid, raw) in table(data, "variants", &at)?.iter() {
-        let vat = format!("{at} variant {vid}");
-        let Some(raw) = raw.as_table() else {
-            return Err(format!("{at}: [variants.{vid}] must be a table"));
-        };
-        let s = |k: &str| {
-            raw.get(k)
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string()
-        };
-        if !name_re.is_match(vid) {
-            return Err(format!(
-                "{vat}: the variant id must be lowercase letters, digits and hyphens"
-            ));
-        }
-        if !HOSTS.contains(&s("host").as_str()) {
-            return Err(format!(
-                "{vat}: host '{}' is not an adapter in runner-rs/src/hosts/",
-                s("host")
-            ));
-        }
-        if !full(&exe_re, &s("executable")) {
-            return Err(format!("{vat}: executable must be a bare file name"));
-        }
-        let unknown: Vec<&String> = raw
-            .keys()
-            .filter(|k| !["name", "host", "executable", "capabilities"].contains(&k.as_str()))
-            .collect();
-        if !unknown.is_empty() {
-            return Err(format!(
-                "{vat}: unknown field(s) {}",
-                unknown
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ));
-        }
-        let name = if s("name").trim().is_empty() {
-            vid.clone()
-        } else {
-            s("name").trim().to_string()
-        };
-        variants.push(Variant {
-            id: vid.clone(),
-            name,
-            host: s("host"),
-            executable: s("executable"),
-            capabilities: parse_capabilities(raw.get("capabilities"), &vat)?,
-        });
-    }
     Ok(Manifest {
         id: ident.into(),
         name: name.into(),
         host: host.into(),
         executable: executable.into(),
-        providers,
         catch_all: data
             .get("catch_all")
             .and_then(|v| v.as_bool())
@@ -752,7 +691,6 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
         login,
         runtime,
         capabilities,
-        variants,
         env,
     })
 }
@@ -904,16 +842,13 @@ pub fn load_from(files: &[(String, String)]) -> Result<BTreeMap<String, Manifest
         found.insert(m.id.clone(), m);
     }
     let mut claimed: HashMap<(String, String), String> = HashMap::new();
+    // A provider may have more than one CLI (Google: the Gemini CLI and Antigravity); each CLI is one runtime.
     for m in found.values() {
-        let mut pairs: Vec<(&str, &String)> = m.providers.iter().map(|p| ("provider", p)).collect();
-        pairs.push(("host", &m.host));
-        pairs.push(("executable", &m.executable));
-        pairs.push(("runtime", &m.runtime));
-        for v in &m.variants {
-            pairs.push(("host", &v.host));
-            pairs.push(("executable", &v.executable));
-            pairs.push(("harness", &v.id));
-        }
+        let pairs = [
+            ("host", &m.host),
+            ("executable", &m.executable),
+            ("runtime", &m.runtime),
+        ];
         for (kind, value) in pairs {
             if let Some(other) = claimed.insert((kind.into(), value.clone()), m.id.clone()) {
                 return Err(format!(
@@ -1006,22 +941,16 @@ fn manifest_for(runtime: &str) -> Option<&'static Manifest> {
     manifests().values().find(|m| m.runtime == runtime)
 }
 
-/// The capabilities of `harness` on `runtime`: the variant `harness` names, else the runtime's own manifest, else
-/// every fallback (a runtime with no manifest).
-pub fn caps(runtime: &str, harness: &str) -> Capabilities {
-    let Some(m) = manifest_for(runtime) else {
-        return Capabilities::default();
-    };
-    m.variants
-        .iter()
-        .find(|v| v.id == harness)
-        .map(|v| v.capabilities.clone())
-        .unwrap_or_else(|| m.capabilities.clone())
+/// The capabilities of `runtime`'s manifest, else every fallback (a runtime with no manifest).
+pub fn caps(runtime: &str) -> Capabilities {
+    manifest_for(runtime)
+        .map(|m| m.capabilities.clone())
+        .unwrap_or_default()
 }
 
-/// The capabilities of what a bot config runs (its `runtime` and `harness`).
+/// The capabilities of what a bot config runs (its `runtime`).
 pub fn caps_of(config: &Value) -> Capabilities {
-    caps(&text_of(&config["runtime"]), &text_of(&config["harness"]))
+    caps(&text_of(&config["runtime"]))
 }
 
 /// Every runtime a manifest names, sorted.
@@ -1036,7 +965,7 @@ pub fn runtimes() -> Vec<String> {
 pub fn profile_runtimes() -> Vec<String> {
     runtimes()
         .into_iter()
-        .filter(|r| caps(r, "").subscription_profiles)
+        .filter(|r| caps(r).subscription_profiles)
         .collect()
 }
 
@@ -1052,30 +981,6 @@ pub fn api_key_env(runtime: &str) -> Vec<String> {
     manifest_for(runtime)
         .map(|m| m.api_key_env.clone())
         .unwrap_or_default()
-}
-
-/// Whether `harness` runs bots of `runtime`: the runtime's own manifest, or one of its variants.
-pub fn is_harness_of(runtime: &str, harness: &str) -> bool {
-    manifest_for(runtime)
-        .is_some_and(|m| harness == m.runtime || m.variants.iter().any(|v| v.id == harness))
-}
-
-/// The runtime a harness id runs on: a variant's parent runtime, else the id itself.
-pub fn runtime_of(harness: &str) -> String {
-    manifests()
-        .values()
-        .find(|m| m.variants.iter().any(|v| v.id == harness))
-        .map(|m| m.runtime.clone())
-        .unwrap_or_else(|| harness.to_string())
-}
-
-/// A variant's executable and name, for checks of a host the runner does not install.
-pub fn variant(runtime: &str, harness: &str) -> Option<Variant> {
-    manifest_for(runtime)?
-        .variants
-        .iter()
-        .find(|v| v.id == harness)
-        .cloned()
 }
 
 /// Where this runner's tools live: TICO_TOOLS_DIR, the registration's `tools_dir`, else beside runner.json.
@@ -1505,7 +1410,7 @@ impl Harnesses {
     /// The bot problem while this runner installs the runtime's harness ("Codex is installing"), else None.
     pub fn installing(&self, runtime: &str) -> Option<String> {
         let m = self.harness_for_runtime(runtime)?;
-        (self.wanted.contains(&m.id) && !self.backing_off(m))
+        (self.wanted.contains(&m.id) && !m.method().is_empty() && !self.backing_off(m))
             .then(|| format!("{} is installing", m.name))
     }
 
@@ -1787,7 +1692,8 @@ impl Harnesses {
         };
         for id in self.manifests.keys().cloned().collect::<Vec<_>>() {
             let m = self.manifests[&id].clone();
-            if self.backing_off(&m) || self.staged.contains_key(&id) {
+            // One with no install method is the operator's to install and update.
+            if m.method().is_empty() || self.backing_off(&m) || self.staged.contains_key(&id) {
                 continue;
             }
             let (path, source) = self.locate(&m);
@@ -2642,7 +2548,7 @@ mod tests {
     #[test]
     fn shipped_manifests_parse_and_claim_once() {
         let all = built_in();
-        assert_eq!(all.len(), 7);
+        assert_eq!(all.len(), 8);
         let claude = &all["claude-code"];
         assert_eq!(
             (
@@ -2690,18 +2596,33 @@ mod tests {
             .collect();
         assert_eq!(steers, vec!["claude-code", "codex", "pi"]);
         assert!(all["pi"].capabilities.persistent_session && all["pi"].capabilities.compaction);
-        assert!(!all["gemini-cli"].variants[0].capabilities.steer);
-        let gemini = &all["gemini-cli"];
-        assert_eq!(gemini.variants.len(), 1);
-        let agy = &gemini.variants[0];
+        // Antigravity is a runtime of its own, run cold, which the runner never installs.
+        let agy = &all["antigravity"];
         assert_eq!(
-            (agy.id.as_str(), agy.host.as_str(), agy.executable.as_str()),
-            ("antigravity", "antigravity", "agy")
+            (
+                agy.runtime.as_str(),
+                agy.host.as_str(),
+                agy.executable.as_str(),
+                agy.method()
+            ),
+            ("antigravity", "antigravity", "agy", "")
         );
         assert!(
-            agy.capabilities.persistent_session
+            !agy.capabilities.persistent_session
                 && agy.capabilities.readiness
+                && agy.capabilities.subscription_profiles
+                && agy.capabilities.profile_home == "GEMINI_HOME"
                 && agy.capabilities.mcp_transports.is_empty()
+        );
+        assert_eq!(
+            env_for("antigravity"),
+            [("AGY_CLI_DISABLE_AUTO_UPDATE".to_string(), "1".to_string())]
+        );
+        let variants = BUILT_IN[0].1.to_string() + "\n[variants.other]\nhost = \"claude\"\n";
+        assert!(
+            parse(&toml::from_str(&variants).unwrap(), "claude-code.toml")
+                .unwrap_err()
+                .contains("unknown field(s) variants")
         );
         let typo = BUILT_IN[0]
             .1

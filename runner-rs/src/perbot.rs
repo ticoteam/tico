@@ -64,8 +64,7 @@ impl PerBot {
                 row.insert("tools".into(), Value::Array(tools));
             }
             let runtime = text_of(&entry["config"]["runtime"]);
-            let harness = text_of(&entry["config"]["harness"]);
-            let warnings = crate::mcp::warnings_for(&access, &runtime, &harness);
+            let warnings = crate::mcp::warnings_for(&access, &runtime);
             if let Some(Value::Array(list)) = row.get_mut("warnings") {
                 list.extend(warnings.into_iter().map(Value::String));
             }
@@ -106,7 +105,6 @@ pub fn mcp_for_run(
     env: &Env,
     granted: &BTreeSet<String>,
     runtime: &str,
-    harness: &str,
     proxied: &[crate::env::ProxiedTool],
     from_grants: &[Value],
 ) -> (Vec<Value>, Vec<String>) {
@@ -120,15 +118,15 @@ pub fn mcp_for_run(
         .collect();
     let (servers, problems) = crate::mcp::servers_for_run(&tools, &visible, proxied);
     // What the harness can take first; then one server per connection, bot.yaml's first, then the names.
-    let declared = crate::mcp::supported(&servers, runtime, harness);
-    let granted = crate::mcp::supported(from_grants, runtime, harness);
+    let declared = crate::mcp::supported(&servers, runtime);
+    let granted = crate::mcp::supported(from_grants, runtime);
     let mut problems = crate::mcp::drop_covered(problems, &tools, &granted);
     let passed = crate::mcp::merge(declared, &granted);
     // A connection the harness cannot take is said once, and not at all when another way to it is passed.
     let mut told: HashSet<(String, String)> = passed.iter().map(crate::mcp::connection).collect();
-    for (server, why) in crate::mcp::unsupported(&servers, runtime, harness)
+    for (server, why) in crate::mcp::unsupported(&servers, runtime)
         .into_iter()
-        .chain(crate::mcp::unsupported(from_grants, runtime, harness))
+        .chain(crate::mcp::unsupported(from_grants, runtime))
     {
         if told.insert(crate::mcp::connection(&server)) {
             problems.push(format!(
@@ -160,7 +158,7 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         let granted: BTreeSet<String> = ["LINEAR_KEY".to_string()].into_iter().collect();
-        let (servers, problems) = mcp_for_run(&dir, &env, &granted, "codex", "", &[], &[]);
+        let (servers, problems) = mcp_for_run(&dir, &env, &granted, "codex", &[], &[]);
         assert_eq!(
             servers
                 .iter()
@@ -171,7 +169,7 @@ mod tests {
         assert_eq!(problems.len(), 2, "{problems:?}");
         assert!(problems[0].starts_with("notion: MCP server not passed, NOTION_KEY is not granted"));
         assert!(problems[1].starts_with("docs: MCP server not passed. Codex cannot use it"));
-        let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", "", &[], &[]);
+        let (servers, _) = mcp_for_run(&dir, &env, &granted, "claude", &[], &[]);
         assert_eq!(servers.len(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
@@ -197,7 +195,7 @@ mod tests {
             .into_iter()
             .collect();
         let held: BTreeSet<String> = ["NOTION_KEY".to_string()].into_iter().collect();
-        let (servers, problems) = mcp_for_run(&dir, &env, &held, "pi", "", &[], &grants);
+        let (servers, problems) = mcp_for_run(&dir, &env, &held, "pi", &[], &grants);
         assert_eq!(servers.len(), 1);
         assert_eq!(servers[0]["transport"], "http");
         // Passed another way: no "not passed" for the SSE ones.
@@ -220,15 +218,8 @@ mod tests {
             json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
                              "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_TOKEN}"}, "env": "NOTION_TOKEN"}),
         ];
-        let (servers, problems) = mcp_for_run(
-            &dir,
-            &Env::new(),
-            &BTreeSet::new(),
-            "claude",
-            "",
-            &[],
-            &grants,
-        );
+        let (servers, problems) =
+            mcp_for_run(&dir, &Env::new(), &BTreeSet::new(), "claude", &[], &grants);
         assert_eq!(servers.len(), 1);
         assert_eq!(text_of(&servers[0]["env"]), "NOTION_TOKEN");
         // bot.yaml's account (NOTION_KEY) is another connection on that endpoint: still said to be missing.
@@ -242,27 +233,12 @@ mod tests {
             json!({"name": "notion", "service": "notion", "url": "https://mcp.notion.com/mcp",
                            "transport": "http", "headers": {"Authorization": "Bearer ${NOTION_KEY}"}, "env": "NOTION_KEY"}),
         ];
-        let (_, problems) = mcp_for_run(
-            &dir,
-            &Env::new(),
-            &BTreeSet::new(),
-            "claude",
-            "",
-            &[],
-            &same,
-        );
+        let (_, problems) = mcp_for_run(&dir, &Env::new(), &BTreeSet::new(), "claude", &[], &same);
         assert!(problems.is_empty(), "{problems:?}");
         // With no bot.yaml at all, the grant alone brings it.
         let none = dir.join("none");
-        let (servers, problems) = mcp_for_run(
-            &none,
-            &Env::new(),
-            &BTreeSet::new(),
-            "claude",
-            "",
-            &[],
-            &grants,
-        );
+        let (servers, problems) =
+            mcp_for_run(&none, &Env::new(), &BTreeSet::new(), "claude", &[], &grants);
         assert_eq!((servers.len(), problems.len()), (1, 0));
         std::fs::remove_dir_all(dir).ok();
     }

@@ -30,8 +30,8 @@ REACH_TIMEOUT_S = 4
 
 
 def harness_key(runtime, harness=""):
-    """The harness whose manifest says what MCP a bot's runs take: its own harness when that runs its runtime (Gemini's
-    Antigravity), else the runtime's CLI."""
+    """The harness whose manifest says what MCP a bot's runs take: its own harness when that runs its runtime, else the
+    runtime's CLI."""
     row = harness_manifests.get(harness)
     return str(harness) if row and row["runtime"] == str(runtime or "") else str(runtime or "")
 

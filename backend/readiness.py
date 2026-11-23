@@ -135,8 +135,7 @@ def login_warning(readiness, runtime, harness=""):
 
 def own_harness(c, bot, runtime):
     """The bot's own harness when it runs `runtime`, else '': what a check of the runtime the bot already runs passes
-    as `harness`, the way the model picker passes the harness it offers. Without it an Antigravity bot is judged as
-    Gemini CLI and gets a Gemini sign-in hint that is not its own."""
+    as `harness`, the way the model picker passes the harness it offers."""
     harness = resolve_harness(_config(c, bot), runtime)
     return harness if runtime and runtime_of(harness) == runtime else ""
 
@@ -208,9 +207,6 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
 
     if problem := login_upgrade(row, readiness, bot=bot):
         return verdict(False, problem, "Update the runner in Settings > Computers")
-    # A variant reports readiness on its bot's row. The runtime's computer row describes the default CLI.
-    if harness and runtime_of(harness) != harness:
-        return verdict(None, label + " has no computer-wide readiness report for " + harness)
     if readiness.get("schema_version") != 1 or harness_caps(harness, runtime).get("readiness") is False:
         return verdict(None, label + " does not report its AI tools; update it to check")
     if not state.get("installed"):

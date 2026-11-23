@@ -130,20 +130,14 @@ def _row(harness, runtime, data, where, auth=None, login=None):
 
 
 def parse(data, source="manifest"):
-    """The rows one manifest file gives: the harness itself, keyed by its `runtime`, and each `[variants.<id>]`."""
+    """The row one manifest file gives: the harness, keyed by its `runtime`."""
     where = f"{source} ({data.get('id', '?')})"
     runtime = data.get("runtime") or data.get("host")
     if not isinstance(runtime, str) or not runtime:
         raise ManifestError(f"{where}: runtime names what bot configs call this harness")
-    rows = [_row(runtime, runtime, data, where, data.get("auth"), data.get("login"))]
-    rows[0]["manifest"] = data.get("id")
-    for harness, variant in (data.get("variants") or {}).items():
-        if not isinstance(variant, dict):
-            raise ManifestError(f"{where}: [variants.{harness}] must be a table")
-        row = _row(harness, runtime, variant, f"{where} variant {harness}")
-        row["manifest"] = data.get("id")
-        rows.append(row)
-    return rows
+    row = _row(runtime, runtime, data, where, data.get("auth"), data.get("login"))
+    row["manifest"] = data.get("id")
+    return [row]
 
 
 @lru_cache(maxsize=1)

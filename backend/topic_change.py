@@ -56,8 +56,8 @@ RULE = "topic_fresh"
 BUDGET = 1.5
 # The default prompt-cache lifetime: a session whose last turn read the cache this recently is warm.
 WARM_SECONDS = 300
-# Each harness's prompt-cache lifetime in seconds, by the runtime its sessions are kept under (`bot_sessions.runtime`;
-# antigravity runs as gemini). A row is either a lifetime its provider documents (the shortest, when it gives a range:
+# Each harness's prompt-cache lifetime in seconds, by the runtime its sessions are kept under (`bot_sessions.runtime`).
+# A row is either a lifetime its provider documents (the shortest, when it gives a range:
 # a cold reading only asks Decide, a warm one skips it) or, where no provider page gives one, the WARM_SECONDS fallback.
 CACHE_LIFETIME = {
     # Documented: "By default, the cache has a 5-minute lifetime" (1 hour is opt-in).
@@ -70,6 +70,8 @@ CACHE_LIFETIME = {
     # (https://ai.google.dev/gemini-api/docs/caching); OpenRouter's guide reports Gemini's implicit cache lives
     # "on average 3-5 minutes, but will vary".
     "gemini": WARM_SECONDS,
+    # Fallback: Antigravity runs Gemini models on the same Google caching, which gives no lifetime.
+    "antigravity": WARM_SECONDS,
     # Fallback: xAI's models page prices cached input but gives no lifetime (https://docs.x.ai/docs/models). The value
     # does not matter today: the runner's Grok host reports no cached tokens, so its sessions always read cold.
     "grok": WARM_SECONDS,

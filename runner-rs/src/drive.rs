@@ -155,7 +155,7 @@ impl Runner {
         }
         // A host whose native goal keeps running across turns (`goal_runs_across_turns`): a completed turn is not
         // the end of the run, and a clear it reports is checked against the goal.
-        let across_turns = crate::harness_tools::caps(d.runtime, "").goal_runs_across_turns;
+        let across_turns = crate::harness_tools::caps(d.runtime).goal_runs_across_turns;
         let scrub = |t: &str| {
             d.redactor
                 .map(|r| r.scrub_text(t).into_owned())

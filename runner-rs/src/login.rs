@@ -643,7 +643,7 @@ fn model_command(exe: &str, args: &[&str], env: &Env) -> Command {
 
 /// Whether `runtime` is signed in with `env` (the profile's homes), as readiness checks it.
 fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, String) {
-    let command = crate::harness_tools::caps(runtime, "").sign_in_status.check == "command";
+    let command = crate::harness_tools::caps(runtime).sign_in_status.check == "command";
     match sign_in_status(runtime, exe, env) {
         Some((true, detail)) => (true, detail),
         // A status command is the whole answer: a key the CLI turns into a login is not a sign-in until it has.
@@ -683,7 +683,7 @@ fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)>
         }
     };
     // The same status check readiness runs (the manifest's `sign_in_status`), in this sign-in's own homes.
-    let status = crate::harness_tools::caps(runtime, "").sign_in_status;
+    let status = crate::harness_tools::caps(runtime).sign_in_status;
     let args: Vec<&str> = status.args.iter().map(String::as_str).collect();
     let timeout = if status.timeout_s > 0 {
         status.timeout_s
@@ -929,7 +929,7 @@ fn login_env(
             env.remove(&key);
         }
     }
-    if crate::harness_tools::caps(runtime, "").own_config_home {
+    if crate::harness_tools::caps(runtime).own_config_home {
         // Bot turns read this host's login from Tico's own config folder, never the operator's.
         crate::hosts::use_own_config_home(runtime, profile.as_ref(), &mut env);
     }
@@ -1000,7 +1000,7 @@ fn full_login(side: &std::path::Path, env: &Env) -> Option<String> {
 
 /// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default.
 fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
-    let var = crate::harness_tools::caps(runtime, "").profile_home;
+    let var = crate::harness_tools::caps(runtime).profile_home;
     if var.is_empty() {
         return None;
     }
@@ -1023,7 +1023,7 @@ fn begin_switch(
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let login = crate::harness_tools::login_command(runtime)
         .ok_or("Switching accounts is not available")?;
-    let caps = crate::harness_tools::caps(runtime, "");
+    let caps = crate::harness_tools::caps(runtime);
     if caps
         .profile_home_overrides
         .iter()
@@ -1275,7 +1275,7 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
     {
         match begin_switch(&s.runtime, &s.id, &env) {
             Ok((home, side)) => {
-                let var = crate::harness_tools::caps(&s.runtime, "").profile_home;
+                let var = crate::harness_tools::caps(&s.runtime).profile_home;
                 env.insert(var, side.display().to_string());
                 if full {
                     // The seeded settings name the computer's own account: the plan's must come from its sign-in.
@@ -1719,11 +1719,7 @@ pub fn clear_key(
     let logout = crate::harness_tools::login_command(runtime)
         .map(|l| l.logout)
         .unwrap_or_default();
-    if crate::harness_tools::caps(runtime, "")
-        .api_key_login
-        .is_empty()
-        || logout.is_empty()
-    {
+    if crate::harness_tools::caps(runtime).api_key_login.is_empty() || logout.is_empty() {
         return Ok(());
     }
     let Some((exe, env)) = cli else { return Ok(()) };
@@ -1918,7 +1914,7 @@ fn run_use_key(
     let Some(key) = new.values().next().cloned() else {
         return finish("failed", "The new key was not found; add it again");
     };
-    let caps = crate::harness_tools::caps(&s.runtime, "");
+    let caps = crate::harness_tools::caps(&s.runtime);
     let files = crate::harness_tools::login_command(&s.runtime)
         .map(|l| l.files)
         .unwrap_or_default();
@@ -2081,7 +2077,7 @@ fn to_key_in_place(
         .and_then(|(_, _, p)| p);
     // A CLI that turns the key into a login of its own (Codex) puts it in place of the subscription's; one that reads
     // the key from the environment (Claude Code) keeps its subscription's login files aside until it is signed out.
-    let adopt = !crate::harness_tools::caps(&s.runtime, "")
+    let adopt = !crate::harness_tools::caps(&s.runtime)
         .api_key_login
         .is_empty();
     // What `undo` puts back: the files the key's login replaced, or the subscription's files kept aside.
@@ -2547,7 +2543,7 @@ impl Logins {
                 &default,
             );
         } else if named.as_ref().is_some_and(|p| p.share_operator)
-            && !crate::harness_tools::caps(&s.runtime, "").own_config_home
+            && !crate::harness_tools::caps(&s.runtime).own_config_home
         {
             // A host with its own config folder never uses the operator's login, so a shared profile still signs in to Tico's own.
             s.finish(
@@ -5596,11 +5592,11 @@ esac
             let failed = make("sign_out");
             run_sign_out(failed.clone(), runner.clone(), config.clone());
             assert_eq!(state(&failed).0, "failed");
-            assert_eq!(runner.sign_in.signed_out(runtime), crate::harness_tools::caps(runtime, "").sign_in_status.check == "command", "an unknown verdict must keep automatic key login blocked; a confirmed existing login clears the mark");
+            assert_eq!(runner.sign_in.signed_out(runtime), crate::harness_tools::caps(runtime).sign_in_status.check == "command", "an unknown verdict must keep automatic key login blocked; a confirmed existing login clears the mark");
             assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);
             std::fs::remove_file(root.join("logout-error")).unwrap();
             std::fs::remove_file(root.join("status-error")).unwrap();
-            if crate::harness_tools::caps(runtime, "").sign_in_status.check == "file" {
+            if crate::harness_tools::caps(runtime).sign_in_status.check == "file" {
                 std::fs::write(root.join("logout-corrupt"), "").unwrap();
                 let corrupt = make("sign_out");
                 run_sign_out(corrupt.clone(), runner.clone(), config.clone());
@@ -5628,7 +5624,7 @@ esac
             }
             if !use_default {
                 let mut custom = env.clone();
-                for key in crate::harness_tools::caps(runtime, "").profile_home_overrides {
+                for key in crate::harness_tools::caps(runtime).profile_home_overrides {
                     custom.insert(key, root.join("outside").display().to_string());
                 }
                 assert!(begin_switch(runtime, "custom", &custom)

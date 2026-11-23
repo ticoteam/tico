@@ -329,7 +329,7 @@ fn profile_main(action: ProfileAction, config: &mut config::Config) -> i32 {
             }
             let home = profile.home(&runtime).unwrap_or_default();
             let command = profiles::login_command(&runtime).unwrap_or_default();
-            if command.is_empty() && harness_tools::caps(&runtime, "").api_keys == "bot" {
+            if command.is_empty() && harness_tools::caps(&runtime).api_keys == "bot" {
                 let key = harness_tools::api_key_env(&runtime)
                     .into_iter()
                     .next()
