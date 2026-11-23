@@ -303,7 +303,7 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'More, Inbox' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Close all' }));
     await waitFor(() => expect(posts.length).toBe(1));
-    expect(posts[0].body).toEqual({ ids: many.map((x) => x.id), to: 'closed' });
+    expect(posts[0]!.body).toEqual({ ids: many.map((x) => x.id), to: 'closed' });
   });
 
   it('a card and a row say which tasks they block', async () => {

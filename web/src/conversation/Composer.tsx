@@ -1,7 +1,12 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { directoryQuery, type Actor } from '@/data';
+import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { Icon } from '@/kit/Icon';
+import { MenuItemBody } from '@/kit/Menu';
 import { readPref, writePref } from '@/prefs';
+import { mentionAt, mentionMatches, mentionText } from './mentions';
 
 const DRAFT_KEEP_MS = 30 * 86_400_000;
 
@@ -39,10 +44,18 @@ export interface ComposerProps {
   attach?: boolean;
   /** false: the chat has not loaded enough to keep a pending message. */
   canSend?: boolean;
+  /** false: no names after @ (a box whose words reach no teammate). */
+  mentions?: boolean;
+  /** Actor ids the @ list shows ahead of everyone else (a task's people and agents). */
+  mentionFirst?: readonly string[];
 }
 
-/** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. */
-export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true }: ComposerProps) {
+const NOBODY: readonly string[] = [];
+const allActors = (d: { actors: Actor[] }) => d.actors;
+
+/** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. An @ opens the names of the
+    people and agents the viewer may see: arrows move, Enter or Tab picks, Escape closes. */
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true, mentions = true, mentionFirst = NOBODY }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -50,6 +63,26 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
   const picker = useRef<HTMLInputElement>(null);
   const [shownFor, setShownFor] = useState(`${me}:${id}`);
   const [filled, setFilled] = useState(fill);
+  const [caret, setCaret] = useState<number | null>(null);
+  // The @ whose list was closed (Escape, a pick): it stays closed until another @ is typed.
+  const [shut, setShut] = useState<number | null>(null);
+  const [active, setActive] = useState(0);
+  const placeAt = useRef<number | null>(null);
+  const listId = useId();
+
+  const at = mentions && caret !== null ? mentionAt(text, caret) : null;
+  const asking = at !== null && at.start !== shut;
+  // Read only once an @ is typed; the shell has usually read the directory already.
+  const everyone = useQuery({ ...directoryQuery, select: allActors, enabled: asking }).data;
+  const names = asking && everyone ? mentionMatches(everyone, at.query, me, mentionFirst) : [];
+  const open = names.length > 0;
+  const current = Math.min(active, names.length - 1);
+
+  useLayoutEffect(() => {
+    if (placeAt.current === null || !box.current) return;
+    box.current.setSelectionRange(placeAt.current, placeAt.current);
+    placeAt.current = null;
+  });
 
   // Another conversation in the same box: its own draft.
   if (shownFor !== `${me}:${id}`) {
@@ -87,7 +120,46 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     }, () => setSending(false));
   };
 
+  const type = (next: string, at: number | null) => {
+    setText(next);
+    writeDraft(me, id, next);
+    setCaret(at);
+    setActive(0);
+    if (shut !== null && (at === null || mentionAt(next, at)?.start !== shut)) setShut(null);
+  };
+
+  const pick = (who: Actor) => {
+    if (!at || caret === null) return;
+    const put = `${mentionText(who)} `;
+    const next = text.slice(0, at.start) + put + text.slice(caret);
+    const end = at.start + put.length;
+    type(next, end);
+    setShut(at.start);
+    placeAt.current = end;
+    box.current?.focus();
+  };
+
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (open && !e.nativeEvent.isComposing) {
+      const step = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      if (step) {
+        e.preventDefault();
+        setActive((current + step + names.length) % names.length);
+        return;
+      }
+      if ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab') {
+        e.preventDefault();
+        pick(names[current]!);
+        return;
+      }
+      if (e.key === 'Escape') {
+        // Closes the list, not the sheet or dialog the box sits in.
+        e.preventDefault();
+        e.stopPropagation();
+        setShut(at!.start);
+        return;
+      }
+    }
     if (e.key !== 'Enter' || e.shiftKey || e.nativeEvent.isComposing) return;
     e.preventDefault();
     send();
@@ -112,12 +184,34 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           placeholder={label}
           value={text}
           readOnly={sending}
-          onChange={(e) => {
-            setText(e.target.value);
-            writeDraft(me, id, e.target.value);
-          }}
+          onChange={(e) => type(e.target.value, e.target.selectionStart)}
+          onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
+          onBlur={() => setCaret(null)}
           onKeyDown={onKey}
+          aria-autocomplete={mentions ? 'list' : undefined}
+          aria-controls={open ? listId : undefined}
+          aria-expanded={mentions ? open : undefined}
+          aria-activedescendant={open ? `${listId}-${current}` : undefined}
         />
+        {open && (
+          <div id={listId} className="menu mention-pop" role="listbox" aria-label="Mention">
+            {names.map((a, i) => (
+              <a
+                key={a.id}
+                id={`${listId}-${i}`}
+                role="option"
+                aria-selected={i === current}
+                data-highlighted={i === current ? '' : undefined}
+                // The box keeps the focus (and a phone its keyboard) while a name is tapped.
+                onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => pick(a)}
+              >
+                <MenuItemBody label={a.name} lead={<Avatar kind={a.kind} name={a.name} hue={a.hue} size={22} decorative />} />
+              </a>
+            ))}
+          </div>
+        )}
         {attach && (
           <>
             <input

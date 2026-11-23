@@ -46,6 +46,9 @@ textarea.composer-text::placeholder{color:var(--muted)}
 .composer.is-typing textarea.composer-text{overflow-y:auto}
 /* iPhone Safari zooms into a field under 16px (platforms.md 2) */
 @media (pointer:coarse){textarea.composer-text{font-size:var(--t-md)}}
+/* the names after an @: a menu over the box, from its left edge, as wide as a menu and never wider than the box */
+.composer{position:relative}
+.mention-pop{position:absolute;left:0;bottom:calc(100% + var(--s-1h));z-index:var(--z-overlay);width:min(260px,100%);max-height:min(320px,40dvh);overflow-y:auto}
 .composer input[type=file]{display:none}
 .composer-file{max-width:100%}
 .composer-file .ico{flex:none}

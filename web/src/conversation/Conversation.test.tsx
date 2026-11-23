@@ -449,14 +449,15 @@ describe('Conversation loading @s157', () => {
 });
 
 describe('Composer', () => {
+  const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
   it('keeps a draft when the box is closed immediately, and clears it once sent', () => {
     const onSend = vi.fn();
     const box = () => screen.getByRole('textbox', { name: 'Message Tico' }) as HTMLTextAreaElement;
-    const first = render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />);
+    const first = render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />, { wrapper });
     fireEvent.change(box(), { target: { value: 'Half a thought' } });
     first.unmount();
 
-    render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />);
+    render(<Composer id={T} me={ME} to="Tico" onSend={onSend} />, { wrapper });
     expect(box().value).toBe('Half a thought');
 
     fireEvent.keyDown(box(), { key: 'Enter', shiftKey: true });
