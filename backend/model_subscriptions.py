@@ -2646,9 +2646,8 @@ def model_exit_credential(c, vault, sub):
     if sub["kind"] == "claude_token":
         return {"access_token": value}
     if sub["kind"] == "claude_login":
-        parsed = claude_login.parse(value)
-        return {"access_token": parsed["claudeAiOauth"]["accessToken"]} if parsed else None
-    tokens = _codex_login(value)["tokens"]
+        return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
+    tokens = (_codex_login(value) or {}).get("tokens") or {}
     access, account = tokens.get("access_token"), tokens.get("account_id")
     if all(isinstance(v, str) and v for v in (access, account)):
         return {"access_token": access, "account_id": account}
