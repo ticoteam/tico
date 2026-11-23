@@ -4,6 +4,7 @@
 /* A quiet note at a row's right, as the model menu draws it (pages/8-settings/settings.css .mdrop). */
 .menu a em{font-style:normal;font-weight:var(--w-text);margin-left:auto;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .menu a em+.ico{margin-left:0}
+.menu-group-label{padding:var(--s-1) var(--s-2);color:var(--muted);font-size:var(--t-sm)}
 /* a row that opens a second level (pages/1-tasks/list.css) */
 .menu a>.ico.is-next{width:14px;height:14px;color:var(--muted);stroke-width:1.8}
 /* A long press opens the context menu; on touch (and on the phone's cards) it must not also start a text selection or

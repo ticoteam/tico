@@ -575,7 +575,13 @@ def register(
 
             def work(write):
                 if not selected:
-                    return execution.claim(write, request.state.identity, body, maintained=True, failed=failed)
+                    return execution.claim(
+                        write,
+                        request.state.identity,
+                        body,
+                        maintained=True,
+                        failed=failed,
+                    )
                 return execution.claim(
                     write,
                     request.state.identity,
@@ -588,9 +594,34 @@ def register(
 
             answer = mutate(request, body, work)
         # Read after the claim's write, outside it: the card and the person's snapshot as the turn starts.
-        if isinstance(answer, dict) and isinstance(answer.get("attempt"), dict):
-            if header := run_header.build(store, auth, answer["attempt"], request.state.identity.runner_id):
-                answer = {**answer, "attempt": {**answer["attempt"], "run_header": header}}
+        if isinstance(answer, dict) and isinstance(attempt := answer.get("attempt"), dict):
+            runner_id = request.state.identity.runner_id
+            if header := run_header.build(store, auth, attempt, runner_id):
+                answer = {**answer, "attempt": {**attempt, "run_header": header}}
+            primary = attempt.get("attempt_credential_required")
+            shell = any(
+                p["runtime"] == "codex" and p["runtime"] != attempt["config"]["runtime"] and p["source"] == "agent"
+                for p in attempt.get("subscriptions", [])
+            )
+            if primary or shell:
+                from . import model_subscriptions
+
+                vault, aid = request.app.state.vault, attempt["id"]
+                with store.read_transaction() as c:
+                    credential = model_subscriptions.claim_credential(c, vault, runner_id, aid) if primary else {}
+                    shell_value = (
+                        model_subscriptions.claim_credential(c, vault, runner_id, aid, "shell") if shell else None
+                    )
+                if primary and not credential:
+                    store.write(
+                        request.state.identity,
+                        lambda write: execution.return_payer_claim(write, runner_id, attempt["id"]),
+                    )
+                    return {"attempt": None, "waiting": model_subscriptions.PAYER_UNAVAILABLE}
+                if shell_value:
+                    credential = {**(credential or {}), "shell": shell_value}
+                if credential:
+                    answer = {**answer, "attempt": {**answer["attempt"], "attempt_credential": credential}}
         return answer
 
     @app.post("/api/v2/attempts/{aid}/renew")

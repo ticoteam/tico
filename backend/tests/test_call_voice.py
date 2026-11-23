@@ -21,6 +21,7 @@ import pytest
 
 from backend import call_media, call_sessions, call_voice, calls, events, live_meetings, providers, threads
 from backend import bot_settings as BS
+from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.run_diagnostics import RESTART_TEXT
 from backend.store import H, encode
 from backend.tests.helpers.api import assign, get, headers, post, put, ready, runner
@@ -42,12 +43,14 @@ from backend.tests.helpers.live_meetings import live  # noqa: F401
 from backend.tests.helpers.new_bot_flows import create_bot
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.company import company_store
-from backend.tests.helpers.model_subscriptions import add, codex_file, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import TOKEN, add, codex_file, company, give, machine, on, pick
 from backend.tests.helpers.models_preset import connected, on_tico
 from scripts import check_wire_contract
 
 SPEECH = array("h", [3000, -3000] * 160).tobytes()  # 20 ms of speech at 16 kHz
 QUIET = bytes(640)  # 20 ms of silence
+VOICE_CAPS = ("model_subscriptions_v1", PAYER_CAPABILITY, "private_lanes_v1")
+RESIDENT_CAPS = (*VOICE_CAPS, "voice_sessions_v1")
 
 
 def ms(n, frame):
@@ -269,18 +272,48 @@ def test_in_a_one_to_one_call_the_bot_answers_every_question_aloud_one_at_a_time
     assert _states(meet, call_id) == [("ops", "listening", None)]
 
 
+def test_a_one_to_one_call_can_answer_a_queued_question_using_its_computer_binding(meet):
+    cid = _dm(meet)
+    call = start_call(meet, cid, bots=["ops"])
+    _speak(meet, call["id"], 0)
+    [turn] = _turns(meet, call["meeting_id"])
+    worker = _machine(meet, "ops", resident=True, legacy=True)
+    attempt = _claim(meet, worker, "ops")
+    assert attempt["message"]["refs"]["live_meeting"]["turn_id"] == turn["id"]
+    [sent] = get(meet, "credential-runtime", attempt["token"])["subscriptions"]
+    assert sent["value"] == TOKEN and attempt["subscriptions"][0]["source"] == "computer"
+    reply = "I can take the reliability review."
+    _complete(meet, worker, attempt, reply)
+    assert reply in thread_texts(meet, cid)
+    assert [played[0] for played in meet.app.state.call_media.said] == [call["id"]]
+
+
 def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering_a_task(meet):
     from backend import events
-    from backend.tests.helpers.credentials import setup as credential_setup
-    from backend.tests.helpers.model_subscriptions import add, company, give, on
-    from backend.tests.helpers.task_lanes import new_task, task_bot
+    from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task_bot
 
     credential_setup(meet)
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
     machine = task_bot(meet, lanes=True, capacity=5)
-    give(meet, machine, default["runtime"], add(meet)["id"])
+    post(
+        meet,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capacity": 5,
+            "capabilities": [*RUNNER_CAPABILITIES, PAYER_CAPABILITY],
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {default["runtime"]: {"installed": True, "authenticated": "missing"}},
+                "bots": {"ops": {"runtime": default["runtime"], "ready": True}},
+            },
+        },
+        token=machine["token"],
+    )
+    pick(meet, "ops", default["runtime"], add(meet)["id"])
     rid, token = machine["runner_id"], machine["token"]
     task = new_task(meet, "Review the launch")
     claim = {"next_run": True, "start_places": True, "busy_bots": [], "busy_lanes": []}
@@ -441,12 +474,9 @@ def test_each_voice_turn_logs_one_timing_line_with_no_words_in_it(meet, monkeypa
     )
 
 
-def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog):
-    credential_setup(meet)
-    company(meet)
-    on(meet, "ops", "claude", "claude-sonnet-5-5")
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+@pytest.mark.parametrize("legacy", [False, True], ids=["per-attempt-payer", "computer-binding"])
+def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet, monkeypatch, caplog, legacy):
+    worker = _machine(meet, "ops", resident=True, signed_in=False, legacy=legacy)
     token = worker["token"]
     cid = _dm(meet)
     call = start_call(meet, cid)
@@ -455,6 +485,9 @@ def test_call_warms_one_subscription_run_and_speaks_before_the_final_reply(meet,
     path = f"attempts/{attempt['id']}"
     assert attempt["config"]["model"] == "claude-sonnet-5-5"
     assert len(attempt["subscriptions"]) == 1 and attempt["gateway"] is False
+    if legacy:
+        [sent] = get(meet, "credential-runtime", attempt["token"])["subscriptions"]
+        assert sent["value"] == TOKEN and attempt["subscriptions"][0]["source"] == "computer"
     assert post(meet, f"{path}/inputs", {}, token)["call_voice"] == {"closed": False}
     heard = threading.Event()
     media = meet.app.state.call_media
@@ -579,9 +612,8 @@ def test_voice_uses_the_bots_model_with_medium_effort_and_concise_output(meet, r
             "expected_revision": settings["revision"],
         },
     )
-    caps = ("model_subscriptions_v1", "private_lanes_v1") + (("voice_sessions_v1",) if resident else ())
-    worker = machine(meet, caps=caps)
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=RESIDENT_CAPS if resident else VOICE_CAPS)
+    pick(meet, "ops", "claude", add(meet)["id"])
     cid = _dm(meet)
     call = start_call(meet, cid, bots=["ops"], model="claude-opus-5-5", effort="medium")
     assert call["effort"] == "medium"  # what the call shows is what its turns run at
@@ -612,10 +644,10 @@ def test_codex_call_recovers_the_resident_job_without_replaying_its_question(mee
     company(meet)
     model = providers.recommended("openai")["id"]
     on(meet, "ops", "codex", model)
-    caps = ("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_session_resume_v1")
+    caps = (*RESIDENT_CAPS, "voice_session_resume_v1")
     assert not call_sessions.accepts_runner(call_sessions.model_spec(model), list(caps[:-1]))
     worker = machine(meet, caps=caps)
-    give(meet, worker, "codex", add(meet, kind="codex_login", secret=codex_file())["id"])
+    pick(meet, "ops", "codex", add(meet, kind="codex_login", secret=codex_file())["id"])
     token = worker["token"]
     call = start_call(meet, _dm(meet), bots=["ops"])
     attempt = _claim(meet, worker, "ops")
@@ -726,14 +758,14 @@ def test_legacy_voice_refuses_api_credentials_and_turns_fallback_off_on_a_plan(m
     worker = _machine(meet, "ops", subscription=False)
     token = worker["token"]
     key = add(meet, kind="anthropic_key", secret="sk-ant-api03-" + "a" * 48)["id"]
-    give(meet, worker, "claude", key)
+    pick(meet, "ops", "claude", key, kind="key")
     call = start_call(meet, _dm(meet), bots=["ops"])
     _speak(meet, call["id"], 0)
     prep = post(meet, "jobs/claim", {"bot": "ops"}, token)["attempt"]
     assert prep["message"]["refs"]["call_prep"] == call["id"]
     [turn] = _turns(meet, call["meeting_id"])
     assert (turn["status"], turn["skip_reason"]) == ("skipped", "voice_requires_subscription")
-    give(meet, worker, "claude", add(meet)["id"], confirm=True)
+    pick(meet, "ops", "claude", add(meet)["id"])
     meet.app.state.calls.voice.tick()
     _speak(meet, call["id"], 10_000)
     attempt = _claim(meet, worker, "ops")
@@ -748,8 +780,23 @@ def test_pending_resident_question_moves_to_legacy_once_when_runner_loses_capabi
     [turn] = _turns(meet, call["meeting_id"])
     worker = runner(meet, label="Legacy Mac")
     assign(meet, worker, "ops", generation=1)
-    ready(meet, worker, ["ops"], capabilities=("model_subscriptions_v1", "private_lanes_v1"))
-    give(meet, worker, "claude", add(meet, name="Legacy plan")["id"])
+    post(
+        meet,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": ["model_subscriptions_v1", "private_lanes_v1"],
+            "readiness": {
+                "schema_version": 1,
+                "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
+                "bots": {"ops": {"runtime": "claude", "ready": True}},
+            },
+        },
+        token=worker["token"],
+    )
+    sid = get(meet, "bots/ops/subscriptions")["subscriptions"]["claude"]["subscription_id"]
+    give(meet, worker, "claude", sid)  # an older runner can still carry the exact selected plan
     attempt = _claim(meet, worker, "ops")
     assert attempt["message"]["refs"]["live_meeting"]["turn_id"] == turn["id"]
     prep = post(meet, "jobs/claim", {"bot": "ops"}, worker["token"])["attempt"]
@@ -795,8 +842,8 @@ def test_voice_inputs_wake_only_the_runner_holding_the_attempt(meet, tmp_path, a
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=(*RESIDENT_CAPS, "voice_inputs_v1"))
+    pick(meet, "ops", "claude", add(meet)["id"])
     other = runner(meet, label="Other computer")
     ready(meet, other, [], capabilities=("voice_inputs_v1",))
     call = start_call(meet, _dm(meet), bots=["ops"])
@@ -869,8 +916,8 @@ def test_the_runner_stream_names_the_attempt_and_call_a_voice_hint_wakes(meet, m
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=(*RESIDENT_CAPS, "voice_inputs_v1"))
+    pick(meet, "ops", "claude", add(meet)["id"])
     call = start_call(meet, _dm(meet), bots=["ops"])
     attempt = _claim(meet, worker, "ops")
     monkeypatch.setattr(events, "KEEPALIVE_SECONDS", 0.5)  # the server notices the closed stream and stops
@@ -897,8 +944,8 @@ def test_a_warm_reply_that_stalls_mid_sentence_is_cut_off_at_its_deadline(meet, 
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=(*RESIDENT_CAPS, "voice_inputs_v1"))
+    pick(meet, "ops", "claude", add(meet)["id"])
     voice, now = meet.app.state.calls.voice, [1000.0]
     voice.clock = lambda: now[0]
     cid = _dm(meet)
@@ -939,8 +986,8 @@ def _warm(meet):
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=(*RESIDENT_CAPS, "voice_inputs_v1"))
+    pick(meet, "ops", "claude", add(meet)["id"])
     call = start_call(meet, _dm(meet), bots=["ops"])
     attempt = _claim(meet, worker, "ops")
     path, token = f"attempts/{attempt['id']}", worker["token"]
@@ -1883,17 +1930,20 @@ def _speak(api, call_id, start_ms, text=None):
             call_media.transcribe = call_media_transcribe
 
 
-def _machine(api, bot, *, resident=False, subscription=True, label="Test Mac"):
+def _machine(api, bot, *, resident=False, subscription=True, label="Test Mac", signed_in=True, legacy=False):
     credential_setup(api)
     company(api)
     default = get(api, "providers")["default"]
     on(api, bot, default["runtime"], default["model"])
-    caps = ("model_subscriptions_v1", "private_lanes_v1")
-    if resident:
-        caps += ("voice_sessions_v1",)
-    worker = machine(api, signed_in=True, bot=bot, caps=caps, label=label)
+    caps = RESIDENT_CAPS if resident else VOICE_CAPS
+    if legacy:
+        caps = tuple(cap for cap in caps if cap != PAYER_CAPABILITY)
+    worker = machine(api, signed_in=signed_in and not legacy, bot=bot, caps=caps, label=label)
     if subscription:
-        give(api, worker, "claude", add(api, name=label)["id"])
+        sid = add(api, name=label)["id"]
+        if legacy:
+            give(api, worker, default["runtime"], sid)
+        pick(api, bot, default["runtime"], sid)
     return worker
 
 
@@ -1980,8 +2030,8 @@ def _resident_dm(meet, monkeypatch):
     company(meet)
     default = get(meet, "providers")["default"]
     on(meet, "ops", default["runtime"], default["model"])
-    worker = machine(meet, caps=("model_subscriptions_v1", "private_lanes_v1", "voice_sessions_v1", "voice_inputs_v1"))
-    give(meet, worker, "claude", add(meet)["id"])
+    worker = machine(meet, caps=(*RESIDENT_CAPS, "voice_inputs_v1"))
+    pick(meet, "ops", "claude", add(meet)["id"])
     voice, now = meet.app.state.calls.voice, [0.0]
     voice.clock = lambda: now[0]
     call = start_call(meet, _dm(meet), bots=["ops"])

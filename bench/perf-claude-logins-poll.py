@@ -40,7 +40,7 @@ from backend.tests.helpers.model_subscriptions import add, company, on
 
 RUNS = int(os.environ.get("RUNS", 10))
 RUNNERS = 10
-CAPS = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "claude_login_v1"]
+CAPS = ["model_subscriptions_v1", "attempt_credentials_v1", "model_sign_out_v1", "model_connect_v1", "claude_login_v1"]
 OWNERS = {"ana": 6, "ben": 5, "cara": 5}  # plans each person owns
 TURNS = ("ops", "finance", "cpo")  # bots with a turn running, on computers 0-2
 
@@ -102,7 +102,7 @@ def build(api):
     for owner, count in OWNERS.items():
         for _ in range(count):
             n = len(plans)
-            sid = add(api, "claude_login", full(f"plan{n}@acme.example", n), name=None)["id"]
+            sid = add(api, "claude_login", full(f"plan{n}@acme.example", n), name="")["id"]
             plans.append(sid)
             with store.transaction() as c:
                 c.execute("UPDATE model_subscriptions SET owner_id=replace(owner_id,'ana',?) WHERE id=?", (owner, sid))
@@ -113,15 +113,15 @@ def build(api):
             on(api, b, "claude", "claude-sonnet-5-5")
             assign(api, m, b)
         heartbeat(api, m, bots)
-        if n < 4:  # one of Cara's plans each
-            put(
-                api,
-                "computer-subscriptions",
-                {"runner_id": m["runner_id"], "runtime": "claude", "subscription": cara[n]},
-            )
-        else:  # Ana's plans on 4-6, Ben's on 7-9
-            person = "ana" if n < 7 else "ben"
-            put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "person": person})
+        pick = (
+            {"kind": "plan", "subscription_id": cara[n]}
+            if n < 4
+            else {"kind": "pool", "person": "ana" if n < 7 else "ben"}
+        )
+        with store.read() as c:
+            placed = [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (m["runner_id"],))]
+        for bot in placed:
+            put(api, f"bots/{bot}/subscriptions", {"subscriptions": {"claude": pick}})
     # Every plan read 20 minutes ago and due again: the ones next in line get asked, the others stay due.
     with store.transaction() as c:
         for sid in plans:

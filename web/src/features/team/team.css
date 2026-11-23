@@ -201,6 +201,15 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
 .fact-wrap .fact>span:first-child{line-height:30px}
 .fact-wrap .fact-t{white-space:normal;line-height:1.4;padding:var(--s-1h) 0 var(--s-1)}
 .fact-wrap .fact-pick{display:none}
+.facts .paid-by-fact{align-items:start;padding-block:var(--s-1)}
+.paid-by-values{min-width:0;display:grid;gap:var(--s-1)}
+.paid-by-tool{min-width:0;display:flex;align-items:center;gap:var(--s-2)}
+.paid-by-values .paid-by-tool{display:grid;grid-template-columns:5.5em minmax(0,1fr)}
+.paid-by-tool>span{color:var(--ink-2);font-size:var(--t-sm)}
+.paid-by-turn{display:grid;gap:var(--s-0);overflow-wrap:anywhere}
+.paid-by-turn small{color:var(--muted)}
+.paid-by-menu:not(.is-sheet){width:min(320px,var(--available-width));max-height:var(--available-height);overflow:auto;overscroll-behavior:contain}
+:where(html[data-layout="cards"]) .paid-by-values .paid-by-tool{grid-template-columns:minmax(0,1fr);gap:0}
 .fact-face{display:inline-flex;align-items:center;gap:var(--s-2);min-width:0}
 
 /* ---------- Settings: the instructions start under the facts ---------- */

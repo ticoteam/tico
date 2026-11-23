@@ -92,6 +92,7 @@
    "learned": null,
    "lease_seconds": 90,
    "lease_until": "2026-01-01T00:00:00.000000Z",
+   "local_model_keys_only": true,
    "login_class": "other",
    "mailbox_levels": {},
    "mailboxes": [],

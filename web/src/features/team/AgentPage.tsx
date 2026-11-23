@@ -17,6 +17,7 @@ import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
 import { ModelPicker } from './ModelPicker';
+import { PaidBy } from './PaidBy';
 import { ReposSection } from './Repos';
 import { CopiesSection, CopyFacts, CopyPick, useCanMakeCopy } from './Copies';
 import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
@@ -373,6 +374,10 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
               <LabelValue label="Works for" onEdit={manage ? () => setEditing('users') : undefined}>
                 {users.length ? users.map((u) => u.name ?? u.id).join(', ') : 'Nobody'}
               </LabelValue>
+              <LabelValue label="Model" onEdit={manage ? () => setEditing('model') : undefined}>
+                {row ? modelLine(row, models?.models) : ''}
+              </LabelValue>
+              {!row?.agent && <PaidBy bot={botId} />}
               <PickLine
                 label="Computer"
                 options={(computers.data ?? []).map((c) => ({ value: c.id, label: c.label }))}
@@ -386,9 +391,6 @@ function AgentSettings({ slug, actor, row, path, head, pick }: { slug: string; a
                   </Link>
                 }
               />
-              <LabelValue label="Model" onEdit={manage ? () => setEditing('model') : undefined}>
-                {row ? modelLine(row, models?.models) : ''}
-              </LabelValue>
               <PagesLine agent={actor.id} />
             </Facts>
             {instructions.data && (

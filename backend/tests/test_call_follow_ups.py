@@ -6,20 +6,20 @@ import threading
 import httpx
 
 from backend import call_media, call_notes, hubdb as H, run_failures, task_privacy
+from backend.agent_subscriptions import CAPABILITY as PAYER_CAPABILITY
 from backend.tests.helpers.api import assign, get, post, runner, unrelated_task_managers
 from backend.tests.helpers.calls import (
     PCM_ONE_SECOND,
     SILENCE_ONE_SECOND,
     join,
     meet,  # noqa: F401 - installs the external call media and Gateway doubles
-    private_lanes_ready,
     speech_response,
     start_call,
     thread,
 )
 from backend.tests.helpers.credentials import setup as credential_setup
 from backend.tests.helpers.live_meetings import live  # noqa: F401 - the meet fixture needs the live API
-from backend.tests.helpers.model_subscriptions import add, company, give, machine, on
+from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
 from backend.tests.helpers.run_failures import at
 from backend.tests.threads_e2e import add_member, create_thread, ok, remove_member
 
@@ -30,8 +30,10 @@ def _machine(api):
     company(api)
     default = get(api, "providers")["default"]
     on(api, "ops", default["runtime"], default["model"])
-    worker = machine(api, signed_in=True, bot="ops", caps=("model_subscriptions_v1", "private_lanes_v1"))
-    give(api, worker, "claude", add(api)["id"])
+    worker = machine(
+        api, signed_in=True, bot="ops", caps=("model_subscriptions_v1", PAYER_CAPABILITY, "private_lanes_v1")
+    )
+    pick(api, "ops", default["runtime"], add(api)["id"])
     return worker
 
 
@@ -301,7 +303,6 @@ def test_recovery_waits_for_a_retry_and_reports_a_final_disposition_once(meet, m
     with meet.app.state.store.read() as c:
         until = run_failures.get(c, "ops")["until_at"]
     at(monkeypatch, meet, H.shift(until, seconds=1))
-    private_lanes_ready(meet, machine, "ops")
     retry = _claim(meet, machine)
     assert retry["job_id"] == worker["job_id"]
     post(

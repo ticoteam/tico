@@ -1,20 +1,23 @@
-"""A computer given a person's plans for a runtime (backend/model_subscriptions.py `_pick`, `settle`): every plan that
-person owns for it, used one at a time. The plan in use stays while it has usage left; when it is held at its limit or
-needs reconnecting, the next turn moves to the available plan whose weekly reset comes soonest: a runner that resumes a
-Claude thread on another plan keeps the sessions, an older one starts them fresh.
-Spec: Models, "Give a computer a person's plans" (task #226)."""
+"""Paid by pools choose the compatible plan with the soonest reset and more than 0.5% left."""
 
-import json
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import login_holds
+from backend import agent_subscriptions, login_holds
 from backend import model_subscriptions as MS
 from backend.store import H
-from backend.tests.helpers.api import claim, get, post, put
+from backend.tests.helpers.api import claim, get, headers, post
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, machine, on
+from backend.tests.helpers.model_subscriptions import (
+    OTHER,
+    TOKEN,
+    add,
+    company,
+    machine,
+    on,
+    pick,
+)
 
 THIRD = "sk-ant-oat01-" + "c" * 24
 FOURTH = "sk-ant-oat01-" + "d" * 24
@@ -31,11 +34,13 @@ def readings(monkeypatch):
     known = {}
     real = MS._plan_usage
 
-    def usage(c, sub, runtime, ctx):
+    def usage(c, sub, runtime, ctx, windows=None):
         if sub["id"] not in known:
-            return real(c, sub, runtime, ctx)
+            return real(c, sub, runtime, ctx, windows=windows)
         used, days = known[sub["id"]]
         at = _in(days)
+        if windows is not None:
+            windows.append(("week", "", used, H.parse_ts(at), datetime.now(timezone.utc)))
         return {
             "window": "week",
             "used_pct": used,
@@ -65,21 +70,6 @@ def hold(api, sid, days=1, runtime="claude", since=None):
         )
 
 
-def give_person(api, m, person="ana", runtime="claude", confirm=False, token="ana-test", expected=200):
-    return put(
-        api,
-        "computer-subscriptions",
-        {"runner_id": m["runner_id"], "runtime": runtime, "person": person, "confirm": confirm},
-        token,
-        expected=expected,
-    )
-
-
-def cell(api, m, runtime="claude"):
-    view = get(api, "computer-subscriptions")
-    return next(a for a in view["assignments"] if a["runner_id"] == m["runner_id"] and a["runtime"] == runtime)
-
-
 def turn(api, m):
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     found = claim(api, m)
@@ -100,20 +90,6 @@ def finish(api, m, found):
     post(api, f"attempts/{found['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
 
 
-def epoch(api, bot="ops"):
-    with api.app.state.store.read() as c:
-        row = c.execute("SELECT epoch FROM bot_session_epochs WHERE bot=?", (bot,)).fetchone()
-    return row[0] if row else 0
-
-
-def moves(api):
-    with api.app.state.store.read() as c:
-        return [
-            json.loads(r[0])
-            for r in c.execute("SELECT detail FROM events WHERE action='subscription.set_moved' ORDER BY rowid")
-        ]
-
-
 def three_plans(api, readings):
     """The spec's example: Ana owns Plans 1, 2 and 3 for Claude Code. Plan 1 is held until it resets in a day; Plan 2
     resets in 2 days with 50% left; Plan 3 in 3 days with 90% left. Added newest first, so the oldest plan is not the
@@ -126,88 +102,55 @@ def three_plans(api, readings):
     return p1, p2, p3
 
 
-def test_a_persons_plans_run_on_the_soonest_reset_with_usage_left_then_move_on_when_it_is_held(api, readings):
+def test_a_pool_rechecks_soonest_reset_and_strictly_more_than_half_a_percent_each_turn(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    p1, p2, p3 = three_plans(api, readings)
-    m = machine(api, label="Studio Mac")  # no login of its own: only the plans sign it in
-    given = give_person(api, m)
-    assert (given["person"], given["subscription_id"]) == ("human:ana", p2)
-    # AC-1: the turn runs on Plan 2, and the cell says why Plan 1 is passed over.
+    _, p2, p3 = three_plans(api, readings)
+    m = machine(api)
+    pick(api, "ops", "claude", person="ana")
     first = turn(api, m)
     assert signed_with(api, first) == p2
-    state = cell(api, m)["set"]
-    assert (state["on"], state["on_name"], state["plans"]) == (p2, "Plan 2", 3)
-    assert (state["why"]["kind"], state["why"]["plan"]) == ("held", "Plan 1")
     finish(api, m, first)
-    # AC-3: the readings shift so that Plan 3 would sort first; turns stay on Plan 2 while it has usage left.
-    readings[p3] = (10, 0.5)
-    again = turn(api, m)
-    assert signed_with(api, again) == p2 and moves(api) == []
-    finish(api, m, again)
-    # AC-2: Plan 2 is held. The next turn runs on Plan 3, in a fresh session, and the cell says why.
-    before = epoch(api)
-    hold(api, p2, days=2, since=H.shift(H.now(), seconds=5))
-    moved = turn(api, m)
-    assert signed_with(api, moved) == p3
-    assert epoch(api) > before
-    [event] = moves(api)
-    assert (event["from"], event["to"], event["why"], event["person"]) == (p2, p3, "held", "human:ana")
-    state = cell(api, m)["set"]
-    assert (state["on"], state["why"]["kind"], state["why"]["plan"]) == (p3, "held", "Plan 2")
-    finish(api, m, moved)
-    # Staying on Plan 3 is not a move: no fresh session for the turn after.
-    after = epoch(api)
-    finish(api, m, turn(api, m))
-    assert epoch(api) == after and len(moves(api)) == 1
+    readings[p3] = (99.5, 0.5)
+    second = turn(api, m)
+    assert signed_with(api, second) == p2
+    finish(api, m, second)
+    readings[p3] = (99.49, 0.5)
+    third = turn(api, m)
+    assert signed_with(api, third) == p3
+    finish(api, m, third)
 
 
-def sessions(api):
-    """Each conversation's session epoch: a reset moves every one of the bot's."""
-    with api.app.state.store.read() as c:
-        return dict(c.execute("SELECT conversation_id,epoch FROM session_epochs").fetchall())
-
-
-def test_a_move_between_claude_plans_keeps_the_sessions_and_only_a_persons_change_asks(api, readings):
+def test_pool_rotation_preserves_the_agents_claude_session(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    p1, p2, p3 = three_plans(api, readings)
-    m = machine(api, label="Studio Mac", caps=("model_subscriptions_v1", MS.RESUME_CAPABILITY))
-    give_person(api, m)
+    _, p2, p3 = three_plans(api, readings)
+    m = machine(api, caps=("model_subscriptions_v1", agent_subscriptions.CAPABILITY, MS.RESUME_CAPABILITY))
+    pick(api, "ops", "claude", person="ana")
     first = turn(api, m)
     assert signed_with(api, first) == p2
     finish(api, m, first)
-    before, kept = epoch(api), sessions(api)
-    # Plan 2 is held: the next turn runs on Plan 3, and resumes the session Plan 2's turn began (runner-rs execute.rs).
     hold(api, p2, days=2, since=H.shift(H.now(), seconds=5))
-    moved = turn(api, m)
-    assert signed_with(api, moved) == p3
-    assert (epoch(api), sessions(api)) == (before, kept)
-    [event] = moves(api)
-    assert (event["from"], event["to"], event["why"]) == (p2, p3, "held")
-    assert (event["sessions_kept"], event["sessions_reset"]) == (True, 0)
-    # Plan 3 is refused while its turn runs: the set moves on at the next claim, the sessions still kept.
-    with api.app.state.store.transaction() as c:
-        assert MS.turn_rejected(c, api.app.state.store.settings, moved["id"], "ops", "claude", "Token revoked", "")
-    assert (epoch(api), sessions(api)) == (before, kept)
-    # A person's change still asks first, and starts the sessions fresh.
-    one = {"runner_id": m["runner_id"], "runtime": "claude", "subscription": p1}
-    refused = put(api, "computer-subscriptions", one, expected=409)
-    assert refused["error"]["code"] == "confirm_restart" and refused["error"]["running"] == 1
-    assert put(api, "computer-subscriptions", {**one, "confirm": True})["stopped"] == 1
-    assert epoch(api) > before
-
-
-def test_a_codex_move_or_an_older_runner_still_starts_the_sessions_fresh(api):
-    setup(api)
-    m = machine(api, caps=("model_subscriptions_v1", MS.RESUME_CAPABILITY))
+    second = turn(api, m)
+    assert signed_with(api, second) == p3
     with api.app.state.store.read() as c:
-        assert MS.keeps_sessions(c, m["runner_id"], "claude")
-        # Codex keeps its threads in each plan's own home; an older runner keys a thread by its plan.
-        assert not MS.keeps_sessions(c, m["runner_id"], "codex")
-        assert not MS.keeps_sessions(c, "an-older-runner", "claude")
+        session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot='ops' AND runtime='claude'").fetchone()
+    assert session and session["thread_id"] == "t-" + first["id"]
+
+
+def test_an_older_runner_waits_instead_of_using_its_own_login_for_a_pool(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    add(api)
+    m = machine(api, signed_in=True, caps=("model_subscriptions_v1",))
+    pick(api, "ops", "claude", person="ana")
+    post(api, "chat/ops", {"text": "Summarize the account."})
+    assert claim(api, m) is None
+    wait = next(check for check in get(api, "health")["checks"] if check["id"] == "paid_by_wait")
+    assert "Update Test Mac" in str(wait["items"])
 
 
 def limit_met(api, m, found):
@@ -235,21 +178,13 @@ def test_a_plan_that_runs_out_in_a_turn_hands_the_held_work_to_the_next_plan_at_
     on(api, "ops", "claude", "claude-sonnet-5-5")
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     found = turn(api, m)
     assert signed_with(api, found) == p2
-    before = epoch(api)
     limit_met(api, m, found)
-    # AC-2 as a runner reports it: the work Plan 2's limit interrupted does not wait for Plan 2's reset while Plan 3
-    # has usage left. The bot is not Rate limited, and its next turn (no new message) runs on Plan 3, fresh.
-    with api.app.state.store.read() as c:
-        assert (H.status(c, "ops") or {}).get("state") != "limited"
     again = claim(api, m)
-    assert again and again["bot"] == "ops"
+    assert again and again["job_id"] == found["job_id"]
     assert signed_with(api, again) == p3
-    assert epoch(api) > before
-    [event] = moves(api)
-    assert (event["from"], event["to"], event["why"]) == (p2, p3, "held")
 
 
 def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readings):
@@ -259,7 +194,7 @@ def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readi
     p1, p2, p3 = three_plans(api, readings)
     hold(api, p3, days=3)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     found = turn(api, m)
     assert signed_with(api, found) == p2
     limit_met(api, m, found)
@@ -268,30 +203,25 @@ def test_a_limit_with_every_other_plan_held_still_waits_for_the_reset(api, readi
     assert claim(api, m) is None
 
 
-def test_when_every_plan_is_held_the_computers_own_login_signs_in_and_the_first_reset_brings_its_plan_back(
-    api, readings
-):
+def test_when_all_plans_are_held_the_agent_waits_even_with_a_local_login(api, readings):
     setup(api)
     company(api)
-    on(api, "ops", "claude", "claude-sonnet-5-5")
+    model = "claude-sonnet-5-5"
+    on(api, "ops", "claude", model)
     p1, p2, p3 = three_plans(api, readings)
-    m = machine(api, signed_in=True, label="Studio Mac")
-    give_person(api, m)
+    m = machine(api, signed_in=True)
+    pick(api, "ops", "claude", person="ana")
     hold(api, p2, days=2)
     hold(api, p3, days=3)
-    # AC-4: as a held single plan does today, the turn runs on the computer's own login.
-    found = turn(api, m)
-    assert signed_with(api, found) is None
-    state = cell(api, m)["set"]
-    assert state["on"] is None and state["why"]["kind"] == "all_held"
-    with api.app.state.store.read() as c:
-        first_end = login_holds.get(c, "", login_holds.subscription_login(p1), "claude")["until"]
-    assert state["why"]["until"] == first_end
-    finish(api, m, found)
-    # Plan 1's hold ends first: the next turn uses it.
+    post(api, "chat/ops", {"text": "Summarize the account."})
+    assert claim(api, m) is None
     with api.app.state.store.transaction() as c:
+        first_end = login_holds.get(c, "", login_holds.subscription_login(p1), "claude")["until"]
+        payment = agent_subscriptions.resolve(c, "ops", "claude", model)
+        assert payment and payment.until == H.parse_ts(first_end)
         login_holds.try_now(c, "", login_holds.subscription_login(p1), "claude")
-    assert signed_with(api, turn(api, m)) == p1
+    readings[p1] = (0, 1)
+    assert signed_with(api, claim(api, m)) == p1
 
 
 def test_a_plan_with_no_reading_comes_after_every_plan_with_one(api, readings):
@@ -301,7 +231,7 @@ def test_a_plan_with_no_reading_comes_after_every_plan_with_one(api, readings):
     p4 = add(api, secret=FOURTH, name="Plan 4")["id"]  # the oldest, and never read
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     found = turn(api, m)
     assert signed_with(api, found) == p2  # not Plan 4, though it is the oldest
     finish(api, m, found)
@@ -311,109 +241,88 @@ def test_a_plan_with_no_reading_comes_after_every_plan_with_one(api, readings):
     assert signed_with(api, turn(api, m)) == p4
 
 
-def test_a_plan_that_needs_reconnecting_is_skipped_and_the_cell_says_so(api, readings):
+def test_a_plan_that_needs_reconnecting_is_skipped_but_still_lists_its_agents(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     with api.app.state.store.transaction() as c:
         MS._status(c, p2, "needs_reconnect", "Token expired")
-    # AC-6: skipped; Plan 3 signs in, and the cell names the plan that needs reconnecting.
     found = turn(api, m)
     assert signed_with(api, found) == p3
-    state = cell(api, m)["set"]
-    assert (state["on"], state["why"]["kind"], state["why"]["plan"]) == (p3, "reconnect", "Plan 2")
-    assert moves(api)[-1]["why"] == "needs_reconnect"
+    row = next(plan for plan in get(api, "model-subscriptions")["subscriptions"] if plan["id"] == p2)
+    assert row["status"] == "needs_reconnect" and "ops" in {agent["id"] for agent in row["agents"]}
 
 
-def test_a_plan_the_person_adds_joins_their_set_and_one_given_to_someone_else_leaves_it(api, readings):
+def test_a_plan_the_person_adds_joins_their_set_and_ownership_cannot_transfer(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     hold(api, p2, days=2)
-    # AC-7: Plan 3 now belongs to Ben; Ana adds Plan 5. Nothing is given to the computer again.
-    post(api, f"model-subscriptions/{p3}", {"owner_id": "human:ben"})
+    assert post(api, f"model-subscriptions/{p3}", {"owner_id": "human:ben"}, expected=422)["error"]["code"] == "owner"
+    hold(api, p3, days=3)
     p5 = add(api, secret="sk-ant-oat01-" + "e" * 24, name="Plan 5")["id"]
-    found = turn(api, m)
-    assert signed_with(api, found) == p5
-    assert cell(api, m)["set"]["plans"] == 3  # Plans 1, 2 and 5
-    finish(api, m, found)
-    # The plan in use given to someone else leaves the set at the next turn.
-    with api.app.state.store.transaction() as c:
-        login_holds.try_now(c, "", login_holds.subscription_login(p2), "claude")
-    post(api, f"model-subscriptions/{p5}", {"owner_id": "human:ben"})
-    assert signed_with(api, turn(api, m)) == p2
-    assert moves(api)[-1]["why"] == "left_set"
+    assert signed_with(api, turn(api, m)) == p5
 
 
-def test_removing_the_plan_in_use_keeps_the_persons_set_on_the_computer(api, readings):
+def test_removing_a_pool_member_keeps_the_agents_pick(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
-    get(api, f"model-subscriptions", "ana-test")
-    from backend.tests.helpers.api import headers
-
+    pick(api, "ops", "claude", person="ana")
     api.delete(f"/api/v2/model-subscriptions/{p2}", headers=headers("ana-test"))
-    assert cell(api, m)["person"] == "human:ana"
+    assert get(api, "bots/ops/subscriptions")["subscriptions"]["claude"]["person"] == "human:ana"
     assert signed_with(api, turn(api, m)) == p3
-    assert moves(api)[-1]["why"] == "removed"
 
 
-def test_only_a_person_who_owns_a_plan_for_that_tool_is_offered_or_accepted(api):
+def test_an_empty_pool_is_a_valid_pick_but_a_non_person_and_other_owners_pool_are_refused(api):
     setup(api)
     company(api)
-    add(api, name="Ana Max")
+    model = "claude-sonnet-5-5"
+    on(api, "ops", "claude", model)
     add(api, kind="anthropic_key", secret="sk-ant-api03-" + "k" * 24, name="Key")
-    add(api, kind="codex_login", secret=codex_file(), name="Ana ChatGPT", token="ben-test")  # owned by Ben
     m = machine(api)
-    people = {p["id"]: p for p in get(api, "computer-subscriptions")["people"]}
-    assert people["human:ana"].get("claude") == 1 and "codex" not in people["human:ana"]
-    assert people["human:ben"].get("codex") == 1 and "claude" not in people["human:ben"]
-    # AC-9: Ana owns no Codex plan, Ben no Claude one; an API key belongs to nobody's set.
-    assert give_person(api, m, "ana", runtime="codex", expected=422)["error"]["code"] == "person"
-    assert give_person(api, m, "ben", runtime="claude", expected=422)["error"]["code"] == "person"
-    assert give_person(api, m, "bot:ops", expected=422)["error"]["code"] == "person"
-    both = {"runner_id": m["runner_id"], "runtime": "claude", "person": "ana", "subscription": "x"}
-    assert put(api, "computer-subscriptions", both, expected=422)["error"]["code"] == "person"
-    # Owners and admins only, as for a single subscription.
-    give_person(api, m, token="cara-test", expected=403)
+    pick(api, "ops", "claude", person="ana")
+    post(api, "chat/ops", {"text": "Summarize the account."})
+    assert claim(api, m) is None
+    with api.app.state.store.read() as c:
+        payment = agent_subscriptions.resolve(c, "ops", "claude", model)
+        assert payment and "no provider for Claude" in payment.reason
+    pick(api, "ops", "claude", person="bot:ops", expected=422)
+    pick(api, "ops", "claude", person="ana", token="cara-test", expected=403)
 
 
-def test_switching_a_computer_with_runs_going_to_a_persons_plans_asks_first(api, readings):
+def test_a_live_turn_keeps_its_exact_plan_when_paid_by_switches_to_a_pool(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    p1, p2, p3 = three_plans(api, readings)
-    m = machine(api, label="Studio Mac")
-    put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "subscription": p3})
+    _, p2, p3 = three_plans(api, readings)
+    m = machine(api)
+    pick(api, "ops", "claude", p3)
     found = turn(api, m)
+    pick(api, "ops", "claude", person="ana")
     assert signed_with(api, found) == p3
-    # AC-10: the same confirm, with the count of runs it stops, as a change of subscription.
-    refused = give_person(api, m, expected=409)
-    assert refused["error"]["code"] == "confirm_restart" and refused["error"]["running"] == 1
-    assert give_person(api, m, confirm=True)["stopped"] == 1
-    # Giving the same person's plans again changes nothing.
-    assert give_person(api, m)["stopped"] == 0
-    # Taking it off.
-    off = put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": "claude", "subscription": None})
-    assert off["subscription_id"] is None and get(api, "computer-subscriptions")["assignments"] == []
+    assert not post(api, f"attempts/{found['id']}/renew", {}, m["token"]).get("stop")
+    finish(api, m, found)
+    assert signed_with(api, turn(api, m)) == p2
 
 
-def test_the_plan_list_orders_each_owners_plans_and_names_the_computers_using_one(api, readings):
+def test_the_plan_list_names_active_computers_and_agents_selecting_the_pool(api, readings):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     p1, p2, p3 = three_plans(api, readings)
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
+    running = turn(api, m)
+    assert signed_with(api, running) == p2
     rows = {s["id"]: s for s in get(api, "model-subscriptions")["subscriptions"]}
     # AC-8's data: Plan 2 in use on Studio Mac and first, Plan 3 next, Plan 1 held (no place in the order).
     assert [(rows[p]["order"], rows[p]["in_use_on"]) for p in (p2, p3, p1)] == [
@@ -421,55 +330,60 @@ def test_the_plan_list_orders_each_owners_plans_and_names_the_computers_using_on
         (2, []),
         (None, []),
     ]
-    # A plan in a person's set counts as on each computer given the set.
-    assert all(m["runner_id"] in rows[p]["computers"] for p in (p1, p2, p3))
+    # The pool pick is visible on every member plan, including the held one.
+    assert all("ops" in {agent["id"] for agent in rows[p]["agents"]} for p in (p1, p2, p3))
 
 
-def test_a_reading_a_turn_reports_on_a_plan_in_a_persons_set_is_that_plans_usage(api):
+def test_a_pools_turn_report_stays_with_its_plan_after_a_local_login_report(api):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api, name="Plan 2")["id"]
     m = machine(api, label="Studio Mac")
-    give_person(api, m)
+    pick(api, "ops", "claude", person="ana")
     found = turn(api, m)
     assert signed_with(api, found) == sid
     reported = datetime.now(timezone.utc)
-    post(
-        api,
-        "runners/heartbeat",
-        {
-            "version": "test",
-            "platform": "test",
-            "capabilities": ["model_subscriptions_v1", "computer_logins_v1"],
-            "readiness": {
-                "schema_version": 1,
-                "bots": {"ops": {"runtime": "claude", "ready": True}},
-                "computer_profile": "own",
-                "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
-            },
-            "profiles": [
-                {
-                    "name": "own",
-                    "runtimes": {
-                        "claude": {
-                            "signed_in": True,
-                            "weekly": {
-                                "used_percent": 30,
-                                "resets_at": (reported + timedelta(days=2)).isoformat(),
-                                "reported_at": reported.isoformat(),
-                                "origin": "subscription",
-                                "subscription_id": sid,
-                            },
-                        }
-                    },
-                }
-            ],
+    heartbeat = {
+        "version": "test",
+        "platform": "test",
+        "capabilities": ["model_subscriptions_v1", "computer_logins_v1", agent_subscriptions.CAPABILITY],
+        "readiness": {
+            "schema_version": 1,
+            "bots": {"ops": {"runtime": "claude", "ready": True}},
+            "computer_profile": "own",
+            "runtimes": {"claude": {"installed": True, "authenticated": "missing"}},
         },
-        token=m["token"],
-    )
+        "profiles": [
+            {
+                "name": "own",
+                "runtimes": {
+                    "claude": {
+                        "signed_in": True,
+                        "weekly": {
+                            "used_percent": 30,
+                            "resets_at": (reported + timedelta(days=2)).isoformat(),
+                            "reported_at": reported.isoformat(),
+                            "origin": "subscription",
+                            "subscription_id": sid,
+                        },
+                    }
+                },
+            }
+        ],
+    }
+    post(api, "runners/heartbeat", heartbeat, token=m["token"])
     usage = next(s for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == sid)["usage"]
     assert (usage["window"], usage["used_pct"], usage["weekly_used_pct"]) == ("week", 30, 30)
+
+    heartbeat["profiles"][0]["runtimes"]["claude"]["weekly"] = {
+        "origin": "login",
+        "used_percent": 90,
+        "resets_at": (reported + timedelta(days=2)).isoformat(),
+        "reported_at": (reported + timedelta(microseconds=1)).isoformat(),
+    }
+    post(api, "runners/heartbeat", heartbeat, token=m["token"])
+    assert next(s for s in get(api, "model-subscriptions")["subscriptions"] if s["id"] == sid)["usage"] == usage
 
 
 def test_settings_search_finds_the_picker_by_the_name_of_a_person_who_owns_a_plan(api):
@@ -483,7 +397,7 @@ def test_settings_search_finds_the_picker_by_the_name_of_a_person_who_owns_a_pla
         name = H.human(c, "ana")["name"]
     first = name.split()[0]
     # AC-13: a name finds the picker only once that person owns a plan to give.
-    assert "models.computer_subscription" not in found(first)
+    assert "models.agent_subscription" not in found(first)
     add(api, name="Plan 1")
-    assert "models.computer_subscription" in found(first)
-    assert "models.computer_subscription" in found("failover")
+    assert "models.agent_subscription" in found(first)
+    assert "models.agent_subscription" in found("pool")

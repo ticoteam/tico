@@ -1,4 +1,10 @@
 {
+  "settings_keys": {
+    "models.computer_subscription": "models.agent_subscription"
+  },
+  "api_routes": {
+    "PUT /api/v2/computer-subscriptions": "PUT /api/v2/bots/{bot}/subscriptions"
+  },
   "api_fields": {
     "at": "created_at",
     "attempt": "run",

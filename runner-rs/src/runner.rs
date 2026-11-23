@@ -955,21 +955,20 @@ impl Runner {
 
 impl Runner {
     /// Send the heartbeat `body`, and how many posts it took. A server older than this runner refuses what it doesn't
-    /// know (422): only that comes out, held back for ten minutes, and the rest goes again, so a runner updated
+    /// know (422): the refused fields are held back for ten minutes and the rest goes again, so a runner updated
     /// before its server still checks in and claims work (runners and servers update independently).
     async fn post_heartbeat(&self, body: &mut Value) -> (Result<HeartbeatAnswer, ApiError>, u32) {
         let mut tries = 0;
         let beat = loop {
             tries += 1;
             let e = match self.client.post("runners/heartbeat", body, None).await {
-                Err(e) if e.status == 422 && tries < 12 => e,
+                Err(e) if e.status == 422 && tries < crate::lanes::MAX_HEARTBEAT_POSTS => e,
                 other => break other,
             };
-            // An older server refused something optional: only that goes, for ten minutes.
-            if let Some(field) = crate::lanes::refused_field(&e.detail, body) {
-                crate::lanes::hold_back(&field);
-                crate::lanes::drop_held(body);
-            } else if body.get("commit").is_some() && e.detail.contains("body.commit") {
+            if crate::lanes::hold_refused(&e.detail, body) {
+                continue;
+            }
+            if body.get("commit").is_some() && e.detail.contains("body.commit") {
                 // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
                 body.as_object_mut().unwrap().remove("commit");
                 crate::follow::shared().inspect(|f| f.drop_commit());

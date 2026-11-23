@@ -2448,7 +2448,8 @@ impl Runner {
         let mut side_run = false;
         // The server holds the bot's own login after a usage limit and let this turn through for its fallback
         // (backend/execution.py login_refusal): when the hold ends. The held login is never tried.
-        let held = Some(text_of(&config["primary_held"])).filter(|u| !u.is_empty());
+        let paid_by = attempt["attempt_credential_required"] == true;
+        let held = Some(text_of(&config["primary_held"])).filter(|u| !u.is_empty() && !paid_by);
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
         let refs = attempt["message"]["refs"].clone();
@@ -2543,6 +2544,9 @@ impl Runner {
                 },
                 crate::gateway_relay::prefetch(&self.client, &attempt, separation),
             );
+            if let Some(fields) = attempt.as_object_mut() {
+                fields.remove("attempt_credential");
+            }
             env = built.map_err(Fail::runtime)?;
             if relationship || attempt["make_page"]["task"].is_object() {
                 // Captured in base_env too, so every fallback keeps the same disposable workspace.
@@ -2560,6 +2564,9 @@ impl Runner {
             if held.is_none() {
                 let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
                 vault.values.extend(placed);
+            }
+            if paid_by && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_none() {
+                return Err(Fail::runtime(crate::env::PAYER_UNAVAILABLE));
             }
             if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
                 s.billing = d.billing;
@@ -2592,6 +2599,9 @@ impl Runner {
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
                 if crate::model_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
                     continue;   // signed in with the company subscription, never the computer's key
+                }
+                if attempt["local_model_keys_only"] == true && self.sign_in.team_key_only(keyed) {
+                    continue;
                 }
                 if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
                     if env.get(&name).is_none_or(|v| v.is_empty()) {
@@ -3263,8 +3273,16 @@ impl Runner {
             unavailable = true;
         }
 
+        let payer_returned = ran
+            .as_ref()
+            .err()
+            .and_then(|error| error.api.as_ref())
+            .is_some_and(|error| error.code == "payer_wait");
         if let Err(e) = &ran {
-            if self.drain.returning(&aid) || e.text == crate::drain::WAITING {
+            if payer_returned || e.text == crate::env::PAYER_UNAVAILABLE {
+                drove.yielded = true;
+                unavailable = false;
+            } else if self.drain.returning(&aid) || e.text == crate::drain::WAITING {
                 unavailable = false;
             } else if let Some(u) = &e.subscription {
                 self.settle_unavailable(
@@ -3312,7 +3330,7 @@ impl Runner {
         } else {
             config.clone()
         };
-        let fallback_allowed = !voice_reply && !native_control && continuing.is_empty();
+        let fallback_allowed = !paid_by && !voice_reply && !native_control && continuing.is_empty();
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,
@@ -4186,6 +4204,9 @@ impl Runner {
         }
         let settled: Result<(), String> = async {
             let id = aid.clone();
+            if payer_returned {
+                return self.state.off(move |s| s.phase(&id, "historical")).await;
+            }
             let completion = self.state.off(move |s| s.finish(&id, &completion)).await?;
             mark("saved", &aid);
             let sent: Result<(), ApiError> = async {
@@ -6050,7 +6071,7 @@ mod tests {
         Arc<Mutex<Vec<(String, String, Value)>>>,
         tokio::task::JoinHandle<()>,
     ) {
-        recording_server_start_window(hold, revoke_start, None, None).await
+        recording_server_start_window(hold, revoke_start, None, None, false).await
     }
 
     /// A synthetic server clock: renewals keep the delivery alive but cannot extend a hard start deadline.
@@ -6130,6 +6151,7 @@ mod tests {
         revoke_start: Option<bool>,
         window: Option<Arc<Mutex<StartWindow>>>,
         voice: Option<Arc<VoiceFixture>>,
+        payer_wait: bool,
     ) -> (
         String,
         Arc<Mutex<Vec<(String, String, Value)>>>,
@@ -6191,7 +6213,7 @@ mod tests {
                         .as_ref()
                         .and_then(|w| w.lock().unwrap().answer(&path, &body));
                     let rejected = model.as_ref().map_or(
-                        revoke_start.is_some() && path.ends_with("/started"),
+                        (revoke_start.is_some() || payer_wait) && path.ends_with("/started"),
                         |(rejected, _)| *rejected,
                     );
                     let waiting = revoke_start.is_some_and(|after_start| {
@@ -6206,6 +6228,7 @@ mod tests {
                     let answer = match (body["events"].as_array().and_then(|e| e.last()), voice.as_deref()) {
                         (Some(last), _) => json!({"ack_seq": last["seq"]}),
                         (None, _) if model.is_some() => model.unwrap().1,
+                        (None, _) if rejected && payer_wait => json!({"error": {"code": "payer_wait", "detail": "Paid by: the provider credential is unavailable"}}),
                         (None, _) if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         (None, _) if path.ends_with("/start-place") => json!({"reserved": !waiting}),
                         (None, _) if path.contains("/credential-runtime") => granted(&text).unwrap_or_else(|| json!({})),
@@ -6380,6 +6403,33 @@ mod tests {
         lazy_claude_fallback(true).await;
     }
 
+    #[tokio::test]
+    async fn a_paid_turn_returned_at_started_posts_no_completion() {
+        let _home = PrivateHome::claude(true);
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server_start_window(None, None, None, None, true).await;
+        let (runner, dir) = runner_at(&url, "payer-wait");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        runner.runtime_rows.lock().unwrap().insert(
+            "claude".into(),
+            json!({"installed": true, "authenticated": "ready"}),
+        );
+        let attempt = json!({"id": "payer-1", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
+            "start_reservation_seconds": 180, "lease_seconds": 120, "start_reserved": true,
+            "conversation": {"id": "c1", "kind": "chat"}, "history": [],
+            "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+            "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary"},
+            "attempt_credential_required": true,
+            "subscriptions": [{"id": "plan", "runtime": "claude", "revision": 1, "source": "agent"}],
+            "attempt_credential": {"id": "plan", "runtime": "claude", "revision": 1, "billing": "subscription",
+                                   "env": "CLAUDE_CODE_OAUTH_TOKEN", "value": "synthetic-plan-token"}});
+        runner.clone().execute(attempt).await.unwrap();
+        server.abort();
+        assert_eq!(posted(&seen, "/attempts/payer-1/started"), 1);
+        assert_eq!(posted(&seen, "/attempts/payer-1/complete"), 0);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     async fn lazy_claude_fallback(start_reserved: bool) {
         let _home = PrivateHome::claude(true);
         let _controls = RunControls;
@@ -6393,7 +6443,7 @@ mod tests {
             publish_repository: false,
         }));
         let (url, seen, server) =
-            recording_server_start_window(None, None, Some(window), None).await;
+            recording_server_start_window(None, None, Some(window), None, false).await;
         let (runner, dir) = runner_at(&url, "lazy-spawn-fallback");
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
@@ -9741,7 +9791,7 @@ for line in sys.stdin:
             publish_repository: kind == "publish",
         }));
         let (url, seen, server) =
-            recording_server_start_window(None, None, Some(window.clone()), None).await;
+            recording_server_start_window(None, None, Some(window.clone()), None, false).await;
         let (runner, dir) = drain_runner_on(&url, 300).await;
         let bot = format!("wait-{}", uuid::Uuid::new_v4().simple());
         let attempt = json!({"id": "a-placement", "bot": bot, "token": "synthetic", "lease_seconds": 120,
@@ -10304,7 +10354,7 @@ print(json.dumps({'type':'result','subtype':'success','result':'Sent the Acme in
             stream: None,
         });
         let (url, seen, server) =
-            recording_server_start_window(None, None, None, Some(voice)).await;
+            recording_server_start_window(None, None, None, Some(voice), false).await;
         let (runner, dir) = runner_at(&url, "voice-context");
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         let script = dir.join("synthetic_voice.py");
@@ -10451,7 +10501,7 @@ for line in sys.stdin:
             stream: Some(stream.clone()),
         });
         let (url, seen, server) =
-            recording_server_start_window(None, None, None, Some(voice)).await;
+            recording_server_start_window(None, None, None, Some(voice), false).await;
         let (runner, dir) = runner_at(&url, "voice-codex");
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
         crate::util::write_script(

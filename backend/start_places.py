@@ -546,7 +546,7 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
         else:
             out[rid]['queued'] += 1
     from . import read_cache
-    from .execution import claim_refusal, queued_reasons
+    from .execution import PRIME_QUEUED, claim_refusal, queued_reasons
 
     runners = {
         row['id']: row for row in c.execute(f"SELECT * FROM runners_with_state WHERE id IN ({marks})", runner_ids)
@@ -554,12 +554,17 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     statuses = performance.load_statuses(c, runner_ids)
     asleep = resting(c)
     holds = {}  # a computer's hold, asked once and only for a computer with queued work
+    samples = {}
+    oldest_reason = {}
+    overflow = {}
     reasons = {
         'cooling_off': 'quota',
         'limit': 'spending limit',
         'not_ready': 'computer readiness',
         'readiness_unknown': 'computer readiness',
         'sign_in_rejected': 'sign-in',
+        'payer_wait': 'Paid by',
+        'payer_update': 'a runner update',
         'draining': 'bot paused',
         'run_hold': 'stopped runs',
         'backoff': 'a failed run',
@@ -571,7 +576,8 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
     }
     for row in c.execute(
         f"SELECT a.runner_id,j.bot_id,j.held,count(*) n,min(j.created_at) oldest,{BS.CONFIG} AS config,"
-        "b.state bot_state FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
+        "b.state bot_state,EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=j.bot_id) has_payer "
+        "FROM jobs j JOIN assignments a ON a.bot=j.bot_id JOIN bots b ON b.id=j.bot_id "
         f"JOIN bot_config bc ON bc.bot=j.bot_id {BS.JOIN} WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
         "GROUP BY a.runner_id,j.bot_id,j.held",
         runner_ids,
@@ -585,33 +591,82 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
             # it before its release, so it is not queued work the computer leaves waiting.
             add(rid, HELD_WAIT, row['n'], row['oldest'])
             continue
-        if not why and rid in asleep:
-            # A sleeping computer cannot refresh its samples. Explain each job's claim hold instead of its last load.
+        if not why and (rid in asleep or (runner and classify and row['has_payer'])):
+            # Paid by follows the job's tool. A sleeping computer's reported readiness may also be stale.
             counted = 0
+            sleeping = rid in asleep
+            sample = None
+            if not sleeping:
+                if rid not in samples:
+                    samples[rid] = {}
+                    for job in c.execute(
+                        "SELECT j.bot_id,j.id FROM assignments a JOIN jobs j ON j.bot_id=a.bot "
+                        "JOIN bots b ON b.id=a.bot AND b.state='active' "
+                        "WHERE a.runner_id=? AND j.state='queued' AND j.held=0 "
+                        "AND EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=j.bot_id) "
+                        "ORDER BY j.created_at,j.id LIMIT ?",
+                        (rid, PRIME_QUEUED),
+                    ):
+                        samples[rid].setdefault(job['bot_id'], []).append(job['id'])
+                sample = samples[rid].get(row['bot_id'], [])
+                extra = row['n'] - len(sample)
+                if extra:
+                    overflow[rid] = overflow.get(rid, 0) + extra
             if classify:
                 try:
-                    for job, refused in queued_reasons(c, settings, rid, row['bot_id'], default, ignore_refusals=STALE):
-                        reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
-                        add(rid, reason, 1, job['created_at'])
-                        counted += 1
+                    if sample is None or sample:
+                        for job, refused in queued_reasons(
+                            c,
+                            settings,
+                            rid,
+                            row['bot_id'],
+                            default,
+                            ignore_refusals=STALE if sleeping else (),
+                            sample=sample,
+                        ):
+                            if refused or sleeping:
+                                reason = reasons.get(refused, 'pre-start requirements') if refused else ASLEEP
+                                add(rid, reason, 1, job['created_at'])
+                                counted += 1
+                                found = (job['created_at'], job['id'], reason)
+                                if not sleeping and (rid not in oldest_reason or found < oldest_reason[rid]):
+                                    oldest_reason[rid] = found
                 except Exception as exc:
                     if storage_error(exc):
                         raise
                     report('computer queue check', row['bot_id'], exc, logger='tico.health')
-            if counted < row['n']:
+            if counted == row['n']:
+                continue
+            if sleeping:
                 add(rid, ASLEEP, row['n'] - counted, row['oldest'])
+                continue
+            assert sample is not None
+            count = len(sample) - counted
+        else:
+            count = row['n']
+            if not why and runner and classify:
+                refused, _ = claim_refusal(
+                    c, settings, runner, row['bot_id'], row['config'], False, ready, default=default
+                )
+                why = reasons.get(refused, 'pre-start requirements') if refused else ''
+        if not count:
             continue
-        if not why and runner and classify:
-            refused, _ = claim_refusal(c, settings, runner, row['bot_id'], row['config'], False, ready, default=default)
-            why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why:
             if rid not in holds:
                 holds[rid] = computer_hold(c, rid, status=statuses[rid], row=runners.get(rid))
             why = holds[rid][0] if holds[rid] else ''
         if why:
-            add(rid, why, row['n'], row['oldest'])
+            add(rid, why, count, row['oldest'])
         else:
-            out[rid]['queued'] += row['n']
+            out[rid]['queued'] += count
+    for rid, count in overflow.items():
+        if rid in oldest_reason:
+            since, _, why = oldest_reason[rid]
+            add(rid, why, count, since)
+        elif holds.get(rid):
+            add(rid, holds[rid][0], count, groups[rid][holds[rid][0]]['oldest'])
+        else:
+            out[rid]['queued'] += count
     for rid in out:
         out[rid]['waits'] = sorted(groups[rid].values(), key=lambda g: (g['oldest'], g['reason']))
     return out

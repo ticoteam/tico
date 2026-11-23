@@ -7,6 +7,7 @@ export const keys = {
   team: {
     groups: () => ['team', 'groups'] as const,
     agents: () => ['team', 'agents'] as const,
+    paidBy: () => ['team', 'paid-by'] as const,
   },
   tasks: {
     list: (params: unknown) => ['tasks', 'list', params] as const,

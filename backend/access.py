@@ -499,13 +499,16 @@ def check_may_add(c, settings, who_person, role, email, domains_):
         )
 
 
-def leave(c, people, row):
-    """Take one person off the chart: end their tokens and sessions and move their reports up.
+def leave(c, people, row, *, actor=H.TICO_ACTOR, settings=None):
+    """Take one person off the chart: end their tokens, sessions and providers and move their reports up.
     Mutates `people` (the caller's list) and returns the person's new row."""
     row = {**row, "hidden": True}
     # Their API tokens outlive a browser session by up to a year.
     c.execute("UPDATE human_tokens SET revoked_at=? WHERE human=? AND revoked_at IS NULL", (H.now(), row["id"]))
     c.execute("DELETE FROM oidc_sessions WHERE human=?", (row["id"],))
+    from . import model_subscriptions
+
+    model_subscriptions.owner_left(c, settings, actor, H.human_actor(row["id"]))
     # Their reports move up to their manager rather than falling off the chart.
     for j, other in enumerate(people):
         if other.get("reports_to") == row["id"]:

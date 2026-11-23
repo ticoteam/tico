@@ -189,9 +189,10 @@ EMPTY = (
     "tool_calls",
     "tool_oauth_states",  # an MCP tool's sign-in on its way: its sealed PKCE verifier
     "tool_settings",
-    # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
+    # Saved providers, per-agent choices, compatibility bindings and the payer recorded for each attempt
     "model_subscriptions",
     "computer_subscriptions",
+    "agent_subscriptions",
     "attempt_subscriptions",
     "pending_subscription_fallbacks",
     "subscription_connects",

@@ -200,15 +200,18 @@ def prime(c, pairs):
     )
 
 
-def of(c, task_id, bot):
+def of(c, task_id, bot, *, loads=None):
     """The check model `bot`'s turns on the task run on, or None: only the bot that filed the check, while it owns it.
     While its first model would run on the default login that move_on found out of quota, and that login still is, the
     next check model it moved to. A bot moved to another computer, or given a subscription for that tool, tries its
     first model again."""
     first = H.check_model(c, task_id, bot)
+    from .agent_subscriptions import loaded_picks
     from .repositories import metadata
 
-    moved = metadata(c, "check-moved:" + task_id) if first else None
+    moved = (
+        metadata(c, "check-moved:" + task_id) if first and first["runtime"] not in loaded_picks(c, bot, loads) else None
+    )
     if (
         moved
         and _default_login(c, bot, first, moved["runner_id"])
@@ -346,11 +349,13 @@ def apply(config, check):
 
 
 def runs_here(readiness, check):
-    """False when this computer reports the check's runtime signed out. A runtime it has not reported yet is
-    left to the turn, which installs it or fails with the reason, rather than waiting for ever."""
+    """Gateway checks need an installed runtime. Other checks use the reported sign-in.
+    A runtime the computer has yet to report is left for the turn to prepare."""
     state = (readiness.get("runtimes") or {}).get(check["runtime"]) if check else None
     if not isinstance(state, dict):
         return True
+    if providers.gateway_model(check["model"]):
+        return state.get("installed") is True
     return str(state.get("authenticated") or "unknown") not in SIGNED_OUT
 
 

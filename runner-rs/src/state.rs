@@ -152,7 +152,11 @@ impl State {
 
     pub fn record(&self, attempt: &Value) -> Result<(), String> {
         let id = attempt["id"].as_str().unwrap_or_default().to_string();
-        let payload = attempt.to_string();
+        let mut receipt = attempt.clone();
+        if let Some(fields) = receipt.as_object_mut() {
+            fields.remove("attempt_credential");
+        }
+        let payload = receipt.to_string();
         self.with(|c| {
             c.execute(
                 "INSERT OR IGNORE INTO attempts(id,payload,phase) VALUES(?,?,'claimed')",

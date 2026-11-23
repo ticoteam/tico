@@ -5,8 +5,8 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { run } from '@/actions/run';
-import { queryClient } from '@/data';
-import { agentsQuery, computersQuery as teamComputers } from '@/features/team/exports';
+import { keys, queryClient } from '@/data';
+import { agentsQuery, computersQuery as teamComputers, PaidBy } from '@/features/team/exports';
 import { Toasts } from '@/kit/Toast';
 import { dragTo } from '@/test/drag';
 import { AddComputer, Agents, Computers } from './Agents';
@@ -71,8 +71,8 @@ const ACTORS = [
   { id: 'human:p1', kind: 'person', name: 'Ana Test', hue: 3 },
 ];
 const ROWS = [
-  { id: 'a1', slug: 'alpha', harness: 'claude', model: 'model-one', resolved_model_label: 'Model One', revision: 3, can_manage: true, machine: { generation: 7 } },
-  { id: 'b2', slug: 'beta', harness: 'codex', model: 'model-one', resolved_model_label: 'Model One', revision: 5, can_manage: true, machine: { generation: 2 } },
+  { id: 'a1', slug: 'alpha', harness: 'claude', resolved_runtime: 'claude', model: 'model-one', resolved_model_label: 'Model One', revision: 3, can_manage: true, machine: { generation: 7 } },
+  { id: 'b2', slug: 'beta', harness: 'codex', resolved_runtime: 'codex', model: 'model-one', resolved_model_label: 'Model One', revision: 5, can_manage: true, machine: { generation: 2 } },
 ];
 const MODELS = {
   models: [
@@ -103,6 +103,18 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Settings › Agents', () => {
+  it('shows an editable Paid by column for the agent’s current tool', async () => {
+    const path = '/api/v2/bots/a1/subscriptions';
+    serve((url) => url === path ? ok({ can_edit: true, subscriptions: {} }) : undefined);
+    show(<SettingsPage section="agents" />, '/settings/agents');
+    expect(await screen.findByText('Paid by')).toBeTruthy();
+    const alpha = within(await screen.findByTitle('Alpha Agent'));
+    const button = await alpha.findByRole('button', { name: 'Paid by for Claude' });
+    expect(button.textContent).toBe('Not set');
+    fireEvent.click(button);
+    expect(await screen.findByRole('menuitem', { name: 'Not set' })).toBeTruthy();
+  });
+
   it('checking agents shows how many, and Change model moves each one on its own harness @s713', async () => {
     serve(() => ({ status: 200, body: {} }));
     show(<SettingsPage section="agents" />, '/settings/agents');
@@ -221,6 +233,110 @@ describe('Settings › Agents', () => {
 
 describe('Settings › Providers', () => {
   const claude = { kind: 'claude_token' as const, label: 'Claude plan', runtime: 'claude' as const, secret_label: 'Setup token', help: '', owned: true, connect: true };
+
+  const payerPath = '/api/v2/bots/a1/subscriptions';
+
+  it('keeps foreign picks visible and disabled, and saves the chosen tool or Not set immediately', async () => {
+    const mine = { ...plan, owner_name: 'Zoe', can_assign: true };
+    const catalog = { kinds: [claude], subscriptions: [
+      { ...plan, id: 'other', owner_id: 'human:p2', owner_name: 'Abe', name: 'Other plan', can_assign: false },
+      { ...mine, id: 'key', name: 'My key', kind: 'anthropic_key' as const },
+      { ...mine, id: 'codex', name: 'Codex plan', runtime: 'codex' as const, kind: 'codex_login' as const },
+    ] };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    let subscriptions: Record<string, { kind: string; person?: string; subscription_id?: string } | null> = {
+      claude: { kind: 'pool', person: 'human:p2' },
+      codex: { kind: 'plan', subscription_id: 'codex' },
+    };
+    let resolveSave!: () => void;
+    const saved = new Promise<void>((resolve) => { resolveSave = resolve; });
+    serve(async (url, method) => {
+      if (url === '/api/v2/model-subscriptions') return ok(catalog);
+      if (!url.startsWith(payerPath)) return ok({});
+      if (method === 'PUT') {
+        await saved;
+        const { subscriptions: changed } = sent.at(-1)!.body as { subscriptions: typeof subscriptions };
+        subscriptions = { ...subscriptions, ...changed };
+        if (!subscriptions.claude) delete subscriptions.claude;
+      }
+      return ok({
+        can_edit: true,
+        subscriptions,
+        ...(method === 'GET' && {
+          last_turn: { payers: [subscriptions.claude?.kind === 'key' ? 'New payer' : 'Old payer'], at: null, waits: [] },
+        }),
+      });
+    });
+    show(<PaidBy bot="a1" />, '/team/alpha?tab=settings');
+    const picker = await screen.findByRole('button', { name: 'Paid by for Claude' });
+    expect(picker.textContent).toBe("Abe's pool");
+    fireEvent.click(picker);
+    const own = await screen.findByRole('menuitem', { name: /^Zoe's pool/ });
+    const foreign = screen.getByRole('menuitem', { name: /^Abe's pool/ });
+    expect(own.compareDocumentPosition(foreign)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(own.textContent).toContain('0 Claude plans');
+    expect(own.getAttribute('aria-disabled')).not.toBe('true');
+    expect(foreign.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByRole('menuitem', { name: /^Other plan/ }).getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByRole('menuitem', { name: /Codex plan/ })).toBeNull();
+    fireEvent.click(screen.getByRole('menuitem', { name: /^My key/ }));
+    await waitFor(() => expect(sent).toEqual([{
+      url: payerPath, method: 'PUT', body: { subscriptions: { claude: { kind: 'key', subscription_id: 'key' } } },
+    }]));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await act(async () => resolveSave());
+    expect(await screen.findByText('New payer')).toBeTruthy();
+    const select = () => screen.getByRole('button', { name: 'Paid by for Claude' });
+    await waitFor(() => expect(select().textContent).toBe('My key'));
+    fireEvent.click(select());
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Not set' }));
+    await waitFor(() => expect(select().textContent).toBe('Not set'));
+    expect(sent.at(-1)?.body).toEqual({ subscriptions: { claude: null } });
+    expect(screen.getByRole('button', { name: 'Paid by for Codex' }).textContent).toBe('Codex plan');
+  });
+
+  it('shows the removal impact before confirming and refreshes cached agent picks', async () => {
+    const catalog = { kinds: [], subscriptions: [{ ...plan, removal_agents: 1 }] };
+    const payer = [...keys.team.paidBy(), 'a1', false];
+    queryClient.setQueryData(subscriptionsQuery.queryKey, catalog);
+    queryClient.setQueryData(payer, { subscriptions: { claude: { kind: 'plan', subscription_id: plan.id } } });
+    serve((url, method) => url === '/api/v2/model-subscriptions'
+      ? ok(sent.some((s) => s.method === 'DELETE') ? { ...catalog, subscriptions: [] } : catalog)
+      : method === 'DELETE' ? ok({ deleted: true }) : undefined);
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove' }));
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove Work plan?', description: '1 agent will lose Paid by.' });
+    expect(sent).toHaveLength(0);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Remove' }));
+    await waitFor(() => expect(queryClient.getQueryState(payer)?.isInvalidated).toBe(true));
+    expect(sent).toEqual([{ url: `/api/v2/model-subscriptions/${plan.id}?confirm=1`, method: 'DELETE', body: null }]);
+  });
+
+  it('shows who paid the last turn independently of the selected pool', async () => {
+    const at = '2026-11-22T01:00:00Z';
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [] });
+    serve((url) => url.startsWith(payerPath) ? ok({
+      can_edit: false, subscriptions: { claude: { kind: 'pool', person: 'human:p1' } },
+      last_turn: { payers: ['Acme plan'], at, waits: [] },
+    }) : undefined);
+    show(<PaidBy bot="a1" />, '/team/alpha?tab=settings');
+    expect(await screen.findByText('Last turn')).toBeTruthy();
+    expect(screen.getByText('Acme plan').parentElement?.querySelector('time')?.dateTime).toBe(at);
+    fireEvent.click(screen.getByRole('button', { name: 'Paid by for Claude' }));
+    expect((await screen.findByRole('menuitem', { name: 'Not set' })).getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('shows the current wait with the server’s reason, time and fixer', async () => {
+    const until = '2026-11-22T02:00:00Z';
+    const reason = "Ana's pool: next reset Nov 22 02:00 UTC";
+    serve((url) => url.startsWith(payerPath) ? ok({
+      subscriptions: {}, last_turn: { payers: [], at: null, waits: [{ reason, until, fixer: 'Ana or an admin' }] },
+    }) : undefined);
+    show(<PaidBy bot="a1" />, '/team/alpha?tab=settings');
+    expect((await screen.findByText(reason)).getAttribute('datetime')).toBe(until);
+    expect(screen.getByText('Ana or an admin')).toBeTruthy();
+  });
 
   it('adds Claude from the kinds the server lists and offers a setup token when Connect is offline', async () => {
     const catalog = {
@@ -417,23 +533,29 @@ describe('Settings › Providers', () => {
     expect(sent.map(({ url }) => url)).toEqual([connect, cancel]);
   });
 
-  it.each(['member', 'admin'])('shows Add and Reconnect according to the %s role', async (role) => {
+  it.each(['member', 'admin'])('shows Add and controls for another pool according to the %s role', async (role) => {
     queryClient.setQueryData(['me'], { id: 'human:p2', email: 'ben@example.test', role: 'person', slug: null });
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [{ ...plan, can_remove: true }] });
+    const key = { ...claude, kind: 'anthropic_key' as const, label: 'Anthropic API key', secret_label: 'API key', connect: false, owned: false };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude, key], subscriptions: [{ ...plan, can_remove: false }] });
     serve((url) => url === '/api/v2/access'
-      ? role === 'admin' ? ok({ you: role }) : { status: 403, body: { error: { code: 'forbidden' } } }
+      ? role === 'admin' ? ok({ you: role, people: [{ id: 'p1', name: 'Ana Test', sign_in: true, left: false }] }) : { status: 403, body: { error: { code: 'forbidden' } } }
       : undefined);
     show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
     expect(await screen.findByTitle(plan.name)).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    expect(await screen.findByRole('menuitem', { name: /^Claude plan/ })).toBeTruthy();
+    const keyItem = screen.getByRole('menuitem', { name: /^Anthropic key/ });
     if (role === 'admin') {
-      expect(await screen.findByRole('button', { name: 'Add' })).toBeTruthy();
-      fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
-      expect(await screen.findByRole('menuitem', { name: 'Reconnect' })).toBeTruthy();
+      expect(await screen.findByRole('menuitem', { name: 'Add for a teammate' })).toBeTruthy();
     } else {
-      expect(screen.queryByRole('button', { name: 'Add' })).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
-      expect(await screen.findByRole('menuitem', { name: 'Remove' })).toBeTruthy();
-      expect(screen.getAllByRole('menuitem')).toHaveLength(1);
+      expect(screen.queryByRole('menuitem', { name: 'Add for a teammate' })).toBeNull();
+      expect(screen.queryByRole('button', { name: 'More for Work plan' })).toBeNull();
+      fireEvent.click(keyItem);
+      fireEvent.change(await screen.findByLabelText('API key'), { target: { value: 'sk-ant-test-key' } });
+      fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Add' }));
+      await waitFor(() => expect(sent).toEqual([{
+        url: '/api/v2/model-subscriptions', method: 'POST', body: { kind: 'anthropic_key', secret: 'sk-ant-test-key' },
+      }]));
     }
   });
 
@@ -488,8 +610,8 @@ describe('Settings › Providers', () => {
     const legacy = screen.getByRole('region', { name: 'No owner' });
     const company = screen.getByRole('region', { name: 'Company keys' });
     expect(within(mine).getByText('2 plans')).toBeTruthy();
-    expect(within(mine).getByText('Used by 1 agent')).toBeTruthy();
-    expect(within(mine).getAllByText('On 1 agent')).toHaveLength(2);
+    expect(within(mine).getByText('Picked by 1 agent', { selector: '.provider-pool-count' })).toBeTruthy();
+    expect(within(mine).getAllByText('Picked by 1 agent', { selector: '.provider-agents' })).toHaveLength(2);
     const fold = within(other).getByRole('button', { name: "Ben Sample's pool" });
     expect(fold.getAttribute('aria-expanded')).toBe('false');
     expect(within(other).queryByText('Other plan')).toBeNull();
@@ -514,7 +636,7 @@ describe('Settings › Providers', () => {
     serve((url) => url === '/api/v2/model-subscriptions' ? ok(catalog) : undefined);
     show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
     const pool = within(await screen.findByRole('region', { name: 'Your pool' }));
-    expect(pool.getByText('On 2 agents')).toBeTruthy();
+    expect(pool.getByText('Picked by 2 agents', { selector: '.provider-agents' })).toBeTruthy();
     const [fallback] = pool.getAllByText('Fallback');
     expect(fallback?.parentElement?.textContent).toContain('Beta Agent');
   });
@@ -555,8 +677,8 @@ describe('Settings › Providers', () => {
     serve((url, method) => url === '/api/v2/model-subscriptions' ? method === 'POST' ? pending : ok(catalog) : undefined);
     show(<SettingsPage section="providers" />, '/settings/providers');
     const pool = await screen.findByRole('region', { name: 'Your pool' });
-    expect(within(pool).getByText('Add a Claude or ChatGPT plan, or an API key.')).toBeTruthy();
-    expect(within(pool).queryByText('Used by 0 agents')).toBeNull();
+    expect(within(pool).getByText('empty')).toBeTruthy();
+    expect(within(pool).queryByText('Picked by 0 agents', { selector: '.provider-pool-count' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /Anthropic key/ }));
     const dialog = within(await screen.findByRole('dialog', { name: 'Add API key' }));

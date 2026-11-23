@@ -4,10 +4,9 @@
     own_harness(c, bot, runtime) -> str       the bot's own harness for `runtime`, to pass as `harness`
 
 `runner` is a computer id (default: the computer the bot is on). The answer is judged from that computer's last
-heartbeat **for this bot**: its own subscription profile's sign-in when it has one, its own API-key Credential for the
-harnesses that take a key per bot (`api_keys = "bot"`: Gemini CLI, pi), the company subscription the computer is given
-for that runtime while one is in effect there (backend/model_subscriptions.py), and otherwise the computer's shared
-sign-in for that runtime. Another bot's missing key or another profile's sign-in never decides it.
+heartbeat **for this bot** and its Paid by selection for the tool. With Paid by unset, the check uses the bot's
+API-key Credential for harnesses that take one (`api_keys = "bot"`: Gemini CLI, pi), the computer's own sign-in, or
+the Gateway where configured.
 
     can_run      True, False, or None when nothing says (offline, an older computer, not checked yet, not applicable)
     applicable   False for a bot an external agent runs (Hermes, OpenClaw, Grok Bot): no computer check applies
@@ -22,7 +21,7 @@ sign-in for that runtime. Another bot's missing key or another profile's sign-in
 Callers refuse only on can_run False; None never blocks.
 """
 
-from . import models_preset, read_cache, runner_online
+from . import model_subscriptions, models_preset, providers, read_cache, runner_online
 from .harnesses import EXTERNAL_HARNESSES, bot_key, harness_caps, resolve_harness, runtime_of
 from .store import H
 from . import bot_settings as BS
@@ -94,6 +93,19 @@ def computer_login(readiness, runtime):
     return {**state, **profile}
 
 
+def local_sign_ins(ready):
+    """Exclude a legacy shared key while the runner clears its cached copy."""
+    if not isinstance(ready, dict):
+        return ready
+    runtimes = ready.get("runtimes") or {}
+    shared = {
+        runtime: {**state, "authenticated": "missing"}
+        for runtime, state in runtimes.items()
+        if (state.get("key") or {}).get("source") == "shared"
+    }
+    return {**ready, "runtimes": {**runtimes, **shared}} if shared else ready
+
+
 def api_key_login(state):
     """Whether a runtime's login is an API key rather than a plan: the account the runner read says so, or it reports a
     key. An account the runner has not read yet is not known to be a key."""
@@ -137,7 +149,7 @@ def _held(c, bot):
     return {r["env"] for r in read_cache.rows(c, HELD_SQL) if r["id"] in held}
 
 
-def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False):
+def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False, loads=None):
     config = _config(c, bot)
     if resolve_harness({**config, **({"harness": harness} if harness else {})}, runtime or None) in EXTERNAL_HARNESSES:
         return {
@@ -228,6 +240,25 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
             str(runtime) + " is not installed on " + label,
             "Install " + str(runtime) + " on " + label + ", or choose a model it already runs",
         )
+    from . import agent_subscriptions
+
+    payer_model = model or (config.get("model") if config.get("runtime") == runtime else "")
+    if (
+        payment := agent_subscriptions.for_runner(
+            c, row, bot, {**config, "runtime": runtime, "model": payer_model}, loads=loads
+        )
+    ) is not None:
+        if payment.subscription:
+            return verdict(True)
+        out["bot_problems"] = [payment.reason]
+        if payment.until:
+            out["until"] = payment.until.isoformat()
+        if payment.update:
+            return verdict(False, payment.reason, payment.reason, "#/computers/" + row["id"])
+        return verdict(
+            False, payment.reason, "Check the provider or change Paid by on this agent", "#/settings/providers"
+        )
+
     # A Tico model is signed in by the company's Tico AI Gateway connection, which its run is handed; no grant of its own.
     from . import gateway_connection
 
@@ -270,15 +301,8 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
                 "#/tools/keys?show=credentials",
             )
         return verdict(True)
-    # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
-    # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes
-    # there.
-    from . import model_subscriptions
-
-    if model_subscriptions.in_effect(c, row["id"], runtime):
-        return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
-    shared = computer_login(readiness, runtime)
+    shared = computer_login(local_sign_ins(readiness), runtime)
     signed = str(shared.get("authenticated") or "unknown")
     if signed == "ready":
         if warning := login_warning(readiness, runtime, harness):
@@ -288,7 +312,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
     if (
         signed != "rejected"
         and key_caps.get("api_key_in_turn")
-        and set(key_caps.get("api_key_env") or ()) & _held(c, bot)
+        and (set(key_caps.get("api_key_env") or ()) - providers.MODEL_KEY_NAMES) & _held(c, bot)
     ):
         # A granted per-turn key does not depend on the computer's subscription login.
         return verdict(True)
@@ -300,22 +324,19 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
         # Its turns run on the Gateway until it is signed in (backend/models_preset.py): say so, never "login required".
         out["gateway"] = line
         return verdict(True)
-    if signed in SIGNED_OUT and (held := model_subscriptions.plan_hold(c, row["id"], runtime)):
-        problem, fix = model_subscriptions.hold_words(held, label, runtime, manages=manages)
-        out["bot_problems"] = [problem[0].upper() + problem[1:]]
-        return verdict(False, problem[0].upper() + problem[1:], fix, "#/settings/providers")
-    if signed in SIGNED_OUT and (plan := model_subscriptions.company_plan(c, runtime)):
-        return verdict(
-            False,
-            label + " has no " + plan,
-            "An owner or admin can assign one with `tico settings set models.computer_subscription`",
-            "#/settings/providers",
-            sign_in=True,
-        )
     if signed in SIGNED_OUT:
+        problem = shared.get("detail") or (str(runtime) + " is not signed in on " + label)
+        if plan := model_subscriptions.company_plan(c, runtime):
+            return verdict(
+                False,
+                problem,
+                f"Choose a {plan} under Paid by on the agent, or sign in from its Computer tab",
+                "#/settings/providers",
+                sign_in=True,
+            )
         return verdict(
             False,
-            shared.get("detail") or (str(runtime) + " is not signed in on " + label),
+            problem,
             f"Sign in {runtime} on {label} from the agent’s Computer tab, or choose a model it already runs",
             sign_in=True,
         )

@@ -572,7 +572,7 @@ def install(app, store, auth, settings):
         extra = {}
         if q.strip():
             with store.read() as c:
-                extra["models.computer_subscription"] = " ".join(model_subscriptions.owner_names(c))
+                extra["models.agent_subscription"] = " ".join(model_subscriptions.owner_names(c))
         rows = find(q[:200], max(1, min(int(limit), 200)), extra)
         return {"settings": [public(e, settings.public_url) for e in rows]}
 

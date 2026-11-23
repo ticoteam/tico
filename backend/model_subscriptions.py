@@ -1,82 +1,13 @@
-"""Company subscriptions, given to computers (Settings > Providers).
+"""Provider pools in Settings > Providers, local computer keys, and credentials bound to an agent turn.
 
-A subscription is one of the company's model logins or keys, saved once in Tico rather than on a computer: a Claude
-setup-token (`claude setup-token`), a ChatGPT login (Codex's `auth.json` from a `codex login`), or an Anthropic or
-OpenAI API key. It belongs to the company. `added_by` identifies the person who saved it and can remove it. A plan
-(Claude or ChatGPT) has an owner (`owner_id`), the person who adds it unless an owner or admin names another active person of
-the company, then or later. A plan is meant for its owner's own bots, not shared ones (the Add pop-up says so). An API
-key bills per use and has no owner; a company may save many. The value is a service row of the credential vault
-(`credential_id`, CREDENTIAL + the subscription's id; backend/credentials.py `keep_service`), never shown again, never
-in a list, an event or an idempotency receipt (saves go through Vault.change, which keeps only a keyed fingerprint).
-Before D11-11 it was sealed in the subscription's own row (`sealed`, context `model_subscription:<id>`): a row the move
-left (backend/migrations/20261117103033_one_encrypted_store.py) opens as before, and its next save moves it.
+People manage their own plans and API keys. Admins can manage any pool. Everyone can read
+the provider list. Running bots and Agent Ops cannot save or reveal provider secrets.
 
-A computer (runner) is given at most one subscription per runtime (`computer_subscriptions`); one subscription may be
-given to many computers. A bot does not pick one: it runs on its computer, and a turn signs in, for its runtime, its
-named fallback and eligible automatic fallbacks, with
-
-  1. the computer's subscription for that runtime, unless it needs reconnecting (then it is passed over),
-  2. else the login signed in on that computer (as before),
-  3. else the Tico AI Gateway when the company's models choice allows it (backend/models_preset.py),
-  4. else the turn waits.
-
-Changing a computer's subscription for a runtime (giving, switching, taking it off) or removing a subscription in use
-stops that computer's live runs on that runtime and puts their work back in the queue (quarantine_stops.restart), and
-every session of that runtime on that computer starts fresh (`_restart`): nothing begun on the old login is resumed on
-the new one. Automatic fallback candidates alone do not fence a bot's primary conversations: fallback session keys
-already name the subscription home. Runners with activation support fetch an automatic candidate's value only
-when that runtime is about to start. Until then its login can change without stopping the primary. Older runners
-receive values up front, so those runs still stop on a login change to revoke their cached value. The page confirms
-first (409 `confirm_restart` with the counts).
-A bot there that was Rate limited on the
-old sign-in is re-judged against the one it runs on now, so a bot waiting on the old plan's limit resumes on the new
-plan at once (execution.lift_limited_on_computer).
-
-A computer given a person's plans moves to another of them on its own, between turns (`settle`). For Claude that move
-keeps every session: Claude Code keeps a session's transcript in the bot's own `~/.claude/projects` whichever plan
-signs it in (a setup-token from the environment, a full login through a config home that links `projects`), and
-resumes it under another account, of another organization too. A runner that says `plan_switch_resume_v1` keys a
-Claude thread by no one plan, so the next turn on the new plan resumes the same session; should that resume fail (the
-transcript is gone, or Claude refuses it), the turn starts a new session told what the room said since, and says so
-(runner-rs/src/continuity.rs). Codex keeps its threads in each plan's own home, so a move there, or on an older runner,
-still starts that runtime's sessions fresh. Only a person's change asks first (`confirm_restart`) and starts fresh.
-
-Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
-to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
-run on the computer's own login, else the Gateway under the company's choice, else wait. Saving a new value ends its
-hold as Try now does (a new value may be another account); a rename does not.
-
-Connect (`connect`): instead of pasting, an owner or admin signs a plan in from the page. One online computer that can
-runs the CLI through the sign-in relay (backend/model_login.py): `claude setup-token`, or `codex login` in a home of its
-own, so that computer's own login stays as it was. The person gets the link in the page, and the runner sends the
-result (`POST runner-logins/<id>/subscription`), which `connected` seals as the subscription the person named, or as
-the new value of the one they are reconnecting. The browser never holds it.
-
-Owners and admins save, rename, reconnect, remove and give subscriptions. A person who sees Settings > Providers reads the
-list (never a value). A bot, a run or a Tico support session never saves a value; support writes nothing here.
-
-Delivery: the claim records what it handed each attempt (`attempt_subscriptions`) and names it in the attempt
-(`subscriptions`, ids and kinds only). The run reads values with its own run token from `GET credential-runtime`. An
-environment subscription (a token or Anthropic key) is set in the turn's environment for that CLI; a home subscription
-(a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer,
-there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). A ChatGPT login is also handed to every
-turn on its computer, whatever runtime the turn runs, so a bot on Claude can run `codex` from its shell (`for_shell`). Codex refreshes a ChatGPT login in that
-file; the runner sends the refreshed file back (`POST runner-model-subscription-refresh`) so the next computer starts
-from it. Only a live run still given the subscription on that computer, at the revision it was handed, writes back
-(`refreshed`).
-
-Revisions: a run reads only what it was handed. A reconnect (a new value) is a change like any other: it stops the
-live runs given it (confirmed first) and starts their sessions fresh (`_restart`), so a run never reads another
-account's value. A refresh is the same account: a run still going that reads after one gets the refreshed value and
-its record moves with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match
-what it ran on.
-
-One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
-
-A run the provider refuses on a subscription marks it `needs_reconnect` and leaves the computer's own login alone: it is
-passed over until someone saves a new value (Reconnect), and a run on it that completes marks it working. Only a run on
-the subscription's current revision decides either: a late refusal of a value already replaced says nothing of the new
-one.
+An agent's Paid by choice is resolved for its turn's tool (backend/agent_subscriptions.py).
+The claim keeps the payer's id and revision. Modern runners receive the credential with the
+claim. Matching older runners use credential-runtime. A Codex shell can receive the agent's
+own Codex payer. A computer's saved binding is used only for old-runner compatibility.
+Provider usage holds follow the provider across computers.
 """
 
 import base64
@@ -87,10 +18,10 @@ from pydantic import Field, SecretStr
 
 from . import bot_settings as BS
 from . import hubdb as H
-from .credentials import SERVICE, keep_service, may_remove
+from .credentials import SERVICE, keep_service
 from .models import Contract, ID
-from .store import Problem, readiness_document
-from .api_contract import api_v2
+from .store import Problem, encode, readiness_document
+from .api_contract import KEYLESS, api_v2, error
 
 STATUSES = ("new", "working", "needs_reconnect")
 MAX_SUBSCRIPTIONS = 200
@@ -178,9 +109,8 @@ API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") ==
 
 
 class SubscriptionWrite(Contract):
-    """A new subscription, or a saved one's reconnect (a new `secret`), rename or new owner (`owner_id`, a person; a new
-    plan defaults to whoever adds it; an API key has none). `confirm` accepts that a reconnect stops and restarts the
-    live runs on every computer given it."""
+    """Add a provider to your pool, reconnect it with a new `secret`, or rename it. If supplied, `owner_id` must match
+    the provider's owner. `confirm` accepts that a reconnect stops and restarts the live runs on computers given it."""
 
     name: str | None = Field(default=None, max_length=MAX_NAME)
     owner_id: str | None = Field(default=None, max_length=120)
@@ -192,8 +122,8 @@ class SubscriptionWrite(Contract):
 class SubscriptionConnect(Contract):
     """Sign a plan in from the page: a new subscription (`kind`; `name`, else its plan's), or a saved one's new value
     (`subscription`).
-    `owner_id` names the new one's owner (default: whoever connects it). `confirm` accepts that a reconnect stops and
-    restarts the live runs on every computer given it."""
+    A new plan belongs to whoever connects it. If supplied, `owner_id` must match the plan's owner. `confirm` accepts
+    that a reconnect stops and restarts the live runs on computers given it."""
 
     kind: str | None = Field(default=None, max_length=40)
     name: str | None = Field(default=None, max_length=MAX_NAME)
@@ -432,6 +362,8 @@ def _keys_of(given, runner_id):
 
 def _given_rows(c, runner_ids=None):
     """_given's entries, for every computer or (`runner_ids`) for these."""
+    from .subscription_refresh import PLAN_PREFIX
+
     found = {}
     people = set()
     # In table order, whole or for a few computers, so one computer's keys come in the same order either way (for_claim
@@ -450,11 +382,12 @@ def _given_rows(c, runner_ids=None):
     if people:
         members = {}
         for m in c.execute(
-            "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,"
-            "l.access_expires_at AS access_expires_at FROM model_subscriptions s "
+            "SELECT s.id,s.name,s.kind,s.revision,s.status,s.status_at,s.owner_id,s.created_at,s.credential_at,"
+            "coalesce(l.account,'') AS account,l.access_expires_at,m.value AS payer_usage FROM model_subscriptions s "
             "LEFT JOIN claude_logins l ON l.subscription_id=s.id "
+            "LEFT JOIN registry_metadata m ON m.key=?||s.id "
             f"WHERE s.owner_id IN ({','.join('?' * len(people))}) ORDER BY s.created_at, s.id",
-            sorted(people),
+            (PLAN_PREFIX, *sorted(people)),
         ):
             runtime = (KINDS.get(m["kind"]) or {}).get("runtime")
             if owned(m["kind"]):
@@ -469,7 +402,10 @@ def _given_rows(c, runner_ids=None):
                             "status",
                             "status_at",
                             "created_at",
+                            "credential_at",
+                            "account",
                             "access_expires_at",
+                            "payer_usage",
                         )
                     }
                 )
@@ -552,7 +488,7 @@ def _ordered(c, subs, runtime, ctx=None):
     return sorted(subs, key=lambda sub: pick_key(sub, _plan_usage(c, row(c, sub["id"]) or sub, runtime, ctx)))
 
 
-def _pick(c, runner_id, runtime, entry, loads=None):
+def _pick(c, runner_id, runtime, entry, loads=None, *, scoped=False):
     """The plan a turn on `runtime` here signs in with from a person's set (`entry`, as `_given` reads it), or None when
     every plan is held or needs reconnecting. The plan in use stays while it is available, so a bot's session does not
     restart each time the readings shift; else the next is the first available plan in pick order (`pick_key`). Read
@@ -563,11 +499,18 @@ def _pick(c, runner_id, runtime, entry, loads=None):
     if current and available(c, current, runtime, loads):
         return current
     values = read_cache.cache(c)
-    key = ("model_subscriptions.pick", runner_id, runtime)
+    key = ("model_subscriptions.pick", runner_id, runtime, scoped)
     if values is not None and key in values:
         return values[key]
     ready = [m for m in entry["members"] if available(c, m, runtime, loads)]
-    chosen = (_ordered(c, ready, runtime) or [None])[0]
+    if scoped:
+        chosen = min(
+            ready,
+            key=lambda sub: pick_key(sub, _plan_usage(c, sub, runtime, payer_usage_context(sub))),
+            default=None,
+        )
+    else:
+        chosen = (_ordered(c, ready, runtime) or [None])[0]
     if values is not None:
         values[key] = chosen
     return chosen
@@ -604,6 +547,32 @@ def _runner_takes(runner, sub):
         # A runner that cannot put the token in a turn's own file never gets one: its turns run as if none were given.
         return claude_login.takes_turns(runner)
     return bool(runner)
+
+
+def legacy_current(c, runner_id, runtime, caps, loads=None):
+    """The payer an older computer can carry, using only its binding and the bound plans' usage."""
+    from .agent_subscriptions import CAPABILITY
+    from . import claude_login
+
+    if "model_subscriptions_v1" not in caps or CAPABILITY in caps:
+        return None
+    given = loads.given if loads is not None else given_of(c, [runner_id])
+    current = given.get((runner_id, runtime))
+    if current and current.get("person"):
+        current = _pick(c, runner_id, runtime, current, loads, scoped=True)
+    if (
+        current
+        and available(c, current, runtime, loads)
+        and (current["kind"] != "claude_login" or claude_login.CAPABILITY in caps)
+    ):
+        return current
+    return None
+
+
+def legacy_matches(c, runner_id, runtime, sub, caps):
+    """A runner with a shared binding can carry the turn's exact payer and revision."""
+    current = legacy_current(c, runner_id, runtime, caps)
+    return bool(current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]))
 
 
 def held_plan(c, runner_id, runtime, loads=None, profile=""):
@@ -645,14 +614,13 @@ def held_plan(c, runner_id, runtime, loads=None, profile=""):
 
 
 def company_plan(c, runtime):
-    """The label of the company's plan for `runtime` ("Claude plan"), when it holds one a computer could be given, else
-    '': a computer signed out of a runtime the company has a plan for needs that plan, not a sign-in (readiness.can_run)."""
+    """A plan label for this tool when the team has a saved plan, for Paid by guidance in readiness."""
+    from .read_cache import one
+
     kinds = [k for k, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"]
     if not kinds or not _present(c):
         return ""
-    found = c.execute(
-        f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds
-    ).fetchone()
+    found = one(c, f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) LIMIT 1", kinds)
     return KINDS[found["kind"]]["label"] if found else ""
 
 
@@ -781,7 +749,7 @@ def hold_words(held, label, runtime, *, manages=False):
         action = f"reconnect {fix['name']} in Settings > Providers"
     elif fix:
         provider = f"{fix['name']}'s plans" if fix.get("person") else fix["name"]
-        action = f"assign {provider} to {label} with `tico settings set models.computer_subscription`"
+        action = f"select {provider} under Paid by on the agent"
     else:
         action = f"add a {tool} plan with usage left in Settings > Providers"
     words = action[0].upper() + action[1:] if manages else f"An owner or admin can {action}"
@@ -817,10 +785,9 @@ def turn_runtimes(config, record=None):
     return [r for r in dict.fromkeys(out) if r in RUNTIMES]
 
 
-def covered_runtimes(c, runner, config, loads=None):
-    """{runtime: kind} the computer's subscriptions sign in for a bot on `config` there: a covered runtime needs no
-    sign-in on that computer, for the bot's readiness and the claim's check."""
-    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config, loads)}
+def covered_runtimes(c, runner, config, loads=None, *, bot):
+    """{runtime: kind} the agent's selected payer signs in on this computer."""
+    return {item["runtime"]: item["subscription"]["kind"] for item in for_claim(c, runner, config, loads, bot=bot)}
 
 
 def covered(ready, runtimes):
@@ -871,9 +838,8 @@ def _api_costs(c, month, sid=None):
 
 def _listing(c, sid=None):
     """What a plan list reads about plans and their computers, in a fixed number of queries however many plans and
-    computers there are (Settings > Providers shows every plan's usage at once): the grants with their computers, each
-    computer's readiness, its named logins' reported runtimes, the login holds, the API keys' month cost and the
-    registry metadata. With `sid`, only that plan's grants and computers are read."""
+    computers there are. Read agent picks and legacy bindings with their computers, readiness, login reports, holds,
+    API key costs and registry metadata. With `sid`, only that plan's associations and computers are read."""
     from .claim_loads import open_holds
     from .subscriptions import subscription_meta
 
@@ -907,7 +873,21 @@ def _listing(c, sid=None):
         ):
             if owned(m["kind"]):
                 grants.setdefault(m["id"], []).extend(sets.get((m["owner_id"], KINDS[m["kind"]]["runtime"]), []))
-    computers = f"SELECT g.runner_id FROM computer_subscriptions g {where}"
+    pool_match = " OR ".join(
+        f"(s.kind='{kind}' AND p.runtime='{spec['runtime']}')" for kind, spec in KINDS.items() if owned(kind)
+    )
+    picked = (
+        "SELECT s.id AS subscription_id,a.runner_id,p.runtime,min(p.updated_at) AS granted_at "
+        "FROM agent_subscriptions p JOIN assignments a ON a.bot=p.bot JOIN bots b ON b.id=p.bot "
+        "JOIN model_subscriptions s ON (s.id=p.subscription_id OR "
+        f"(p.kind='pool' AND p.person=s.owner_id AND ({pool_match}))) WHERE b.state='active'"
+    )
+    if sid:
+        picked += " AND s.id=?"
+    for grant in H._rows(c.execute(picked + " GROUP BY s.id,a.runner_id,p.runtime", (sid,) if sid else ())):
+        grants.setdefault(grant["subscription_id"], []).append(grant)
+    computers = "SELECT value FROM json_each(?)"
+    args = (encode(sorted({g["runner_id"] for rows in grants.values() for g in rows})),)
     runners = {
         r["id"]: r
         for r in H._rows(
@@ -1036,7 +1016,39 @@ def provenance(reading):
     return {**reading, "origin": None, "subscription_id": None}
 
 
-def _plan_usage(c, sub, runtime, ctx):
+def remember_turn_usage(c, runner_id, runtimes):
+    """Keep each payer's latest window when another agent's reading replaces it on the computer."""
+    from .repositories import metadata, save_metadata
+    from .subscription_refresh import plan_key
+
+    for runtime, state in runtimes.items():
+        for window in ("weekly", "five_hour"):
+            reading = provenance(state.get(window))
+            if not reading or reading.get("origin") != "subscription" or not (sid := reading.get("subscription_id")):
+                continue
+            if not c.execute(
+                "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+                "JOIN model_subscriptions m ON m.id=s.subscription_id "
+                "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
+                "AND a.created_at>=m.credential_at LIMIT 1",
+                (sid, runtime, runner_id),
+            ).fetchone():
+                continue
+            key = plan_key(sid)
+            saved = metadata(c, key) or {}
+            field = "turn_" + window
+            previous = (saved.get(field) or {}).get("reported_at")
+            if not previous or _at(reading["reported_at"]) > _at(previous):
+                save_metadata(c, key, {**saved, field: reading})
+
+
+def payer_usage_context(sub):
+    from .subscription_refresh import plan_key
+
+    return {"runners": {}, "grants": {}, "meta": {plan_key(sub["id"]): H._json(sub["payer_usage"], {})}}
+
+
+def _plan_usage(c, sub, runtime, ctx, windows=None):
     """A plan's used percent from the computers it is given to. Each signs in with it on its turns, and the runner files
     those turns' usage windows under the computer's default profile (runner-rs drive.rs `remember_weekly`, with the
     profile `turn_profile` picks, which the heartbeat names as readiness `computer_profile`; "" is its own home). So that
@@ -1055,13 +1067,22 @@ def _plan_usage(c, sub, runtime, ctx):
 
     runners = ctx["runners"]
     computers = [g for g in ctx["grants"].get(sub["id"], []) if g["runtime"] == runtime and g["runner_id"] in runners]
-    if not computers:
+    meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
+    has_turn_reading = bool(meta.get("turn_weekly") or meta.get("turn_five_hour"))
+    has_own_reading = bool(SR.plan_reading(meta) or meta.get("five_hour"))
+    if not computers and not has_turn_reading and not has_own_reading and windows is None:
         return _reason("Not on a computer yet")
     if sub["status"] == "needs_reconnect":
         return _reason("Reconnect to see usage")
     readers = [g for g in computers if computer_logins(runners[g["runner_id"]], ctx["ready"][g["runner_id"]])]
     # A full login's usage is the plan's own read (backend/claude_login.py), whichever computers it is on.
-    if not readers and sub["kind"] != "claude_login":
+    if (
+        not readers
+        and not has_turn_reading
+        and not has_own_reading
+        and sub["kind"] != "claude_login"
+        and windows is None
+    ):
         return _reason("Update the computer to see usage")
     now = datetime.now(timezone.utc)
     account_of_plan = _plan_identity(sub)
@@ -1095,6 +1116,8 @@ def _plan_usage(c, sub, runtime, ctx):
                 percent_missing = True
                 continue
             candidate = (reading["used_percent"], reported, label, reading.get("resets_at"))
+            if windows is not None:
+                windows.append((label, "", reading["used_percent"], ends, reported))
             if best is None or candidate[:2] > best[:2]:
                 best = candidate
             if window == "weekly" and reading.get("resets_at") and (weekly is None or reported > weekly[1]):
@@ -1102,11 +1125,12 @@ def _plan_usage(c, sub, runtime, ctx):
     # The plan's own read (subscription_refresh.request_plan_read, or a full login's usage read, backend/claude_login.py):
     # this plan's by its asking, and not from before its token was replaced. A full login's read has its 5-hour window
     # and each model's week too.
-    meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
     since = _at(sub["credential_at"] or sub["created_at"])
     for reading, window, label in (
         (SR.plan_reading(meta), "weekly", "week"),
         (meta.get("five_hour") if sub["kind"] == "claude_login" else None, "five_hour", "5h"),
+        (meta.get("turn_weekly"), "weekly", "week"),
+        (meta.get("turn_five_hour"), "five_hour", "5h"),
     ):
         own = weekly_snapshot(reading, window)
         if (
@@ -1118,6 +1142,16 @@ def _plan_usage(c, sub, runtime, ctx):
             continue
         taken = _at(own["reported_at"])
         candidate = (own["used_percent"], taken, label, own["resets_at"])
+        if windows is not None:
+            windows.append(
+                (
+                    label,
+                    "",
+                    own["used_percent"],
+                    _at(own["resets_at"]) if own["resets_at"] else taken + WINDOWS[window],
+                    taken,
+                )
+            )
         if best is None or candidate[:2] > best[:2]:
             best = candidate
         if window == "weekly" and own["resets_at"] and (weekly is None or taken > weekly[1]):
@@ -1127,6 +1161,21 @@ def _plan_usage(c, sub, runtime, ctx):
         for m in (meta.get("models") or [] if sub["kind"] == "claude_login" else [])
         if isinstance(m, dict) and m.get("resets_at") and _at(m["resets_at"]) > now
     ]
+    if windows is not None:
+        reported = (SR.plan_reading(meta) or {}).get("reported_at")
+        if reported and _at(reported) >= since:
+            for model in models:
+                own = weekly_snapshot(
+                    {
+                        "reported_at": reported,
+                        "resets_at": model["resets_at"],
+                        "used_percent": model.get("used_percent"),
+                    }
+                )
+                if own and own["used_percent"] is not None and model.get("model"):
+                    windows.append(
+                        ("model", model["model"], own["used_percent"], _at(model["resets_at"]), _at(reported))
+                    )
     extra = {
         **({"models": models} if models else {}),
         **({"near": True} if sub["kind"] == "claude_login" and claude_login.near(meta) else {}),
@@ -1285,53 +1334,69 @@ def _agents_of(bots, runner_ids, runtime):
 
 
 def listed(c, settings=None):
-    """Every subscription as Settings > Providers lists it, each plan with where it comes in its owner's plans for its
-    runtime (`order`: the plans in use on a computer given that person's plans first, as they stay put, then the
-    other available ones in pick order; None for one held or needing reconnecting) and the computers whose turns sign
-    in with it now (`in_use_on`), and `place`: its place among that person's plans of every tool, those in use first and
-    then by the soonest weekly reset (None when held or needing reconnecting). `agents`: the bots it serves (`_agents_of`)."""
+    """Saved providers, their active computers and assigned agents, and each pool's next eligible plans."""
+    from . import agent_subscriptions
+
     if not _present(c):
         return []
-    subs = H._rows(c.execute(f"SELECT * FROM {SUBS} ORDER BY lower(name), id LIMIT ?", (MAX_SUBSCRIPTIONS,)))
+    subs = H._rows(
+        c.execute(
+            f"SELECT s.* FROM {SUBS} s LEFT JOIN credentials v ON v.id=s.credential_id "
+            "WHERE v.source IS NULL OR v.source NOT LIKE 'computer:%' ORDER BY lower(s.name),s.id LIMIT ?",
+            (MAX_SUBSCRIPTIONS,),
+        )
+    )
     ctx = _listing(c) if subs else None
     views = [view(c, s, ctx) for s in subs]
     if ctx is None:
         return views
-    from types import SimpleNamespace
+    using = {}
+    rotating = set()
+    for attempt in c.execute(
+        "SELECT DISTINCT s.subscription_id,a.runner_id,a.bot_id,s.runtime,a.handed_model,p.person "
+        "FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+        "JOIN model_subscriptions m ON m.id=s.subscription_id "
+        "LEFT JOIN agent_subscriptions p ON p.bot=a.bot_id AND p.runtime=s.runtime "
+        "AND p.kind='pool' AND p.person=m.owner_id AND s.runtime=a.handed_runtime AND s.delivery='claim' "
+        "WHERE s.delivery<>'' AND a.state IN ('leased','running') AND a.lease_until>? AND a.stop_requested_at IS NULL",
+        (H.now(),),
+    ):
+        using.setdefault(attempt["subscription_id"], set()).add(attempt["runner_id"])
+        if attempt["person"]:
+            rotating.add((attempt["bot_id"], attempt["runtime"], attempt["handed_model"], attempt["subscription_id"]))
+    upcoming = set()
+    if rotating:
+        from types import SimpleNamespace
 
-    holds = SimpleNamespace(holds=ctx["holds"])  # read once by `_listing`: no read per computer
-    using, serving, rotating = {}, {}, {}
-    for (runner_id, runtime), entry in _given(c).items():
-        person = entry.get("person")
-        on = _pick(c, runner_id, runtime, entry, holds) if person else entry if entry["id"] else None
-        runner = ctx["runners"].get(runner_id)
-        live = on if on and available(c, on, runtime, holds) and _runner_takes(runner, on) else None
-        if live:
-            using.setdefault(live["id"], []).append(runner_id)
-            if person:
-                rotating.setdefault((person, runtime), []).append((live["id"], runner))
-        # A subscription given to a computer serves its bots whatever its state, so one that needs reconnecting still
-        # shows whose turns stopped; from a person's plans, only the one in use there.
-        served = live if person else on
-        if served:
-            serving.setdefault(served["id"], []).append(runner_id)
-    bots = _agents_on(c, settings, [rid for rids in serving.values() for rid in rids])
+        inputs = agent_subscriptions.read(c, sorted({bot for bot, _, _, _ in rotating}))
+        loads = SimpleNamespace(holds=ctx["holds"])
+        for bot, runtime, model, current in rotating:
+            spare = agent_subscriptions.resolve(
+                c, bot, runtime, model or "", inputs=inputs, loads=loads, exclude=current
+            )
+            if spare and spare.subscription:
+                upcoming.add(spare.subscription["id"])
+    chosen = {}
+    for pick in c.execute(
+        "SELECT p.*,coalesce(nullif(b.display_name,''),b.slug) AS name "
+        "FROM agent_subscriptions p JOIN bots b ON b.id=p.bot AND b.state<>'archived'"
+    ):
+        key = pick["subscription_id"] or (pick["person"], pick["runtime"])
+        chosen.setdefault(key, []).append(pick)
     groups = {}
     for v in views:
-        v["in_use_on"] = using.get(v["id"], [])
-        v["agents"] = _agents_of(bots, serving.get(v["id"], []), v["runtime"])
+        v["in_use_on"] = sorted(using.get(v["id"], ()))
+        selecting = chosen.get(v["id"], [])
+        if owned(v["kind"]):
+            selecting = [*selecting, *chosen.get((v["owner_id"], v["runtime"]), [])]
+        agents = {p["bot"]: {"id": p["bot"], "name": p["name"], "fallback": False} for p in selecting}
+        v["agents"] = sorted(agents.values(), key=lambda a: (a["name"].lower(), a["id"]))
         v["order"] = v["place"] = None
-        v["next_in_rotation"] = False
+        v["next_in_rotation"] = v["id"] in upcoming
         if owned(v["kind"]) and v["owner_id"] and v["available"]:
             groups.setdefault((v["owner_id"], v["runtime"]), []).append(v)
-    for group, plans in groups.items():
-        plans.sort(key=lambda v: pick_key(v, v["usage"]))
-        if len(plans) > 1:
-            for current, runner in rotating.get(group, ()):
-                spare = plans[1] if plans[0]["id"] == current else plans[0]
-                if _runner_takes(runner, spare):
-                    spare["next_in_rotation"] = True
-        plans.sort(key=lambda v: not v["in_use_on"])
+    for plans in groups.values():
+        plans.sort(key=lambda v: (not v["in_use_on"], pick_key(v, v["usage"])))
         for n, v in enumerate(plans, 1):
             v["order"] = n
     # A person's plans of every tool in one list (`place`): the Settings list groups by person and keeps this order.
@@ -1404,30 +1469,98 @@ def set_state(c, runner_id, runtime, entry):
     }
 
 
-def assignments(c):
-    """What `GET computer-subscriptions` answers: every computer's subscription per runtime, and the computers that
-    can take one (the rest need an update). A computer given a person's plans names the person (`person`), the plan in
-    use as its `subscription_id` and its `set` (`set_state`); a single subscription's `person` is '' and its `set` null."""
+def assignments(c, settings=None, *, who=None, auth=None):
+    """The compatibility view of a computer's agents' Paid by selections."""
+    from . import agent_subscriptions, providers
+    from .shared_bots import follow
+
+    rows = c.execute(
+        "SELECT a.runner_id,p.* FROM agent_subscriptions p JOIN assignments a ON a.bot=p.bot "
+        "JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
+        "JOIN bots b ON b.id=p.bot AND b.state<>'archived' ORDER BY a.runner_id,p.runtime,p.bot"
+    )
+    placements = c.execute(
+        "SELECT a.runner_id,a.bot FROM assignments a JOIN bots b ON b.id=a.bot AND b.state<>'archived'"
+    ).fetchall()
+    access = auth.bot_accesses(c, who, [r["bot"] for r in placements]) if auth is not None else None
+    counts = {}
+    for r in placements:
+        if access is None or access[r["bot"]]["read"]:
+            counts[r["runner_id"]] = counts.get(r["runner_id"], 0) + 1
+    groups = {}
+    for r in rows:
+        if access is None or access[r["bot"]]["read"]:
+            groups.setdefault((r["runner_id"], r["runtime"]), []).append(r)
+    record = providers.load(c, settings) if groups else None
+    inputs = agent_subscriptions.read(c, list(dict.fromkeys(r["bot"] for r in placements)))
+    owners = {}
     given = []
-    if _present(c):
-        entries = _given(c)
-        for r in c.execute(
-            "SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
-            "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime"
-        ):
-            entry = entries.get((r["runner_id"], r["runtime"]))
-            if not entry:
-                continue
-            state = set_state(c, r["runner_id"], r["runtime"], entry) if r["person"] else None
-            given.append(
-                {
-                    "runner_id": r["runner_id"],
-                    "runtime": r["runtime"],
-                    "subscription_id": (state["on"] or "") if state else r["subscription_id"],
-                    "person": r["person"] or "",
-                    "set": state,
+    for (runner_id, runtime), picks in groups.items():
+        choices = {(p["kind"], p["person"], p["subscription_id"]) for p in picks}
+        mixed = len(choices) != 1 or len(picks) != counts[runner_id]
+        sid, person, state = "", "", None
+        if not mixed:
+            kind, owner, sid = choices.pop()
+            if kind == "pool":
+                person = owner
+                if runtime not in owners:
+                    owners[runtime] = plan_owners(c, runtime)
+                members = owners[runtime].get(owner, [])
+                payments = []
+                for p in picks:
+                    row = c.execute(BS.ONE_SQL, (p["bot"],)).fetchone()
+                    config = providers.fill(record, follow(c, p["bot"], H._json(row[0], {}) or {})) if row else {}
+                    payments.append(
+                        agent_subscriptions.resolve(
+                            c,
+                            p["bot"],
+                            runtime,
+                            config.get("model", "") if config.get("runtime") == runtime else "",
+                            inputs=inputs,
+                        )
+                    )
+                subs = {p.subscription["id"]: p.subscription for p in payments if p and p.subscription}
+                on = (
+                    next(iter(subs.values()))
+                    if len(subs) == 1 and all(p and p.subscription for p in payments)
+                    else None
+                )
+                reset = min((p.until for p in payments if p and p.until), default=None)
+                sid = on["id"] if on else ""
+                if len(subs) > 1:
+                    given.append(
+                        {
+                            "runner_id": runner_id,
+                            "runtime": runtime,
+                            "subscription_id": "",
+                            "person": "",
+                            "set": None,
+                            "mixed": True,
+                        }
+                    )
+                    continue
+                state = {
+                    "person": person,
+                    "person_name": _name_of(c, person),
+                    "plans": len(members),
+                    "on": sid or None,
+                    "on_name": on["name"] if on else None,
+                    "why": {
+                        "kind": "soonest" if on else "all_held" if members else "none",
+                        "plan": None,
+                        "until": reset.isoformat() if reset else None,
+                    },
                 }
-            )
+        given.append(
+            {
+                "runner_id": runner_id,
+                "runtime": runtime,
+                "subscription_id": sid,
+                "person": person,
+                "set": state,
+                "mixed": mixed,
+            }
+        )
     capable = [r["id"] for r in c.execute("SELECT id FROM runners_with_state WHERE revoked_at IS NULL ORDER BY id")]
     people = {}
     for runtime in RUNTIMES:
@@ -1457,22 +1590,43 @@ def _admin(auth, who, secret=False):
     """An owner or admin. A person pastes their own secret into Settings."""
     if not _may_manage(auth, who):
         raise Problem("forbidden", "Only an owner or admin changes the company's subscriptions", 403)
-    if secret and (who.via or who.attempt_id):
+    if secret:
+        _person_secret(who)
+
+
+def _person_secret(who):
+    _reader(who)
+    if who.support or who.via or who.attempt_id:
         raise Problem("forbidden", "Save a subscription yourself in Settings > Providers", 403)
 
 
 def owned(kind):
-    """Whether a subscription of this kind has an owner: a plan does, an API key does not."""
+    """Whether a subscription is a plan with the legacy plan-owner picker."""
     return (KINDS.get(kind) or {}).get("billing") == "subscription"
 
 
-def owner_of(c, value, kind):
+def _may_manage_provider(auth, who, sub):
+    return _may_manage(auth, who) or (
+        who.role in ("human", "owner") and not who.support and who.actor == sub["owner_id"]
+    )
+
+
+def _manage_provider(c, auth, who, sid):
+    _reader(who)
+    auth.sync_access(c)
+    sub = row(c, sid)
+    if not sub:
+        raise Problem("not_found", "Subscription not found", 404)
+    if not _may_manage_provider(auth, who, sub):
+        raise Problem("forbidden", "Only the provider's owner or an admin can manage it", 403)
+    return sub
+
+
+def owner_of(c, value):
     """`value` (a person's id, or `human:<id>`) as the owner actor, or a Problem: an owner is a person of this company
-    who has not left and whose sign-in is on. Never Tico support, a bot or a service. An API key takes none."""
+    who has not left and whose sign-in is on. Never Tico support, a bot or a service."""
     from .auth import standing
 
-    if not owned(kind):
-        raise Problem("owner", "An API key has no owner", 422)
     text = str(value or "").strip()
     pid = H.actor_id(text)
     if (
@@ -1486,14 +1640,14 @@ def owner_of(c, value, kind):
     return "human:" + pid
 
 
-def _default_owner(c, who, body, kind):
-    """The owner a new subscription is saved with: the one named, else the person adding it; none for an API key."""
-    if body.owner_id is not None:
-        return owner_of(c, body.owner_id, kind)
-    if not owned(kind):
-        return ""
-    actor = str(getattr(who, "actor", "") or "")
-    return actor if actor.startswith("human:") else ""
+def _default_owner(c, auth, who, body):
+    mine = owner_of(c, who.actor)
+    owner = mine if body.owner_id is None else owner_of(c, body.owner_id)
+    if owner != mine:
+        auth.sync_access(c)
+        if not _may_manage(auth, who):
+            raise Problem("owner", "Add providers to your own pool", 422)
+    return owner
 
 
 # ------------------------------------------------------------------------------------------------ restarts
@@ -1519,6 +1673,8 @@ def _live(c, runner_id, runtime):
         pending = c.execute(
             "SELECT 1 FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?", (a["id"], runtime)
         ).fetchone()
+        if given and given["delivery"]:
+            continue  # a computer binding change cannot stop a turn on an agent's payer
         if own or (given and not pending):
             out.append(a)
     return out
@@ -1663,12 +1819,13 @@ def _tick_provider(c, settings, actor, kind):
     )
 
 
-def _confirm_reconnect(c, settings, given):
+def _confirm_reconnect(c, settings, given, attempts=()):
     """A new value stops the runs on each computer signed in with this subscription: with some going, ask first."""
     plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
-    running = sum(p["running"] for p in plans)
+    running = sum(p["running"] for p in plans) + len(attempts)
     if running:
-        _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
+        computers = {runner for runner, _ in given} | {a["runner_id"] for a in attempts}
+        _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(computers)})
 
 
 def default_name(c, kind, owner=""):
@@ -1691,11 +1848,9 @@ def default_name(c, kind, owner=""):
     return name
 
 
-def save(c, vault, settings, who, body, sid=None, signed_on=""):
+def save(c, vault, settings, auth, who, body, sid=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
-    its usage-limit hold as Try now does, a name renames it, an `owner_id` gives it another owner. A plan added or given
-    a new secret goes on the computers that need it (`spread`; `signed_on`: the computer a Connect ran on). Returns its
-    view.
+    its usage-limit hold as Try now does, and a name renames it. Returns its view.
 
     A full Claude login (`claude_login`, backend/claude_login.py) is one plan per account: a new one whose account is
     already connected is a Reconnect of that plan, and a Reconnect with another plan's account is refused. A Reconnect
@@ -1703,27 +1858,30 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
     its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
     path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
-    from . import claude_login
+    from . import claude_login, quarantine_stops
 
+    sub = _manage_provider(c, auth, who, sid) if sid else None
+    admin = _may_manage(auth, who)
+    owner = _default_owner(c, auth, who, body) if sub is None else sub["owner_id"]
+    if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
+        raise Problem("owner", "A provider keeps its owner", 422)
     now = H.now()
-    if sid and not body.kind and body.secret is not None and (row(c, sid) or {}).get("kind") == "claude_login":
+    if sub and not body.kind and body.secret is not None and sub["kind"] == "claude_login":
         if not body.secret.get_secret_value().lstrip().startswith("{"):
             body = body.model_copy(update={"kind": "claude_token"})
-    kind = body.kind or (row(c, sid) or {}).get("kind") if sid else body.kind
+    kind = body.kind or sub["kind"] if sub else body.kind
     login = None
     if kind == "claude_login" and body.secret is not None:
         login = claude_login.facts(checked("claude_login", body.secret.get_secret_value())[0])
         taken = claude_login.same_account(c, login["account"], sid)
-        if taken and sid:
-            raise Problem("account", f"Already connected as {taken['name']}", 409)
         if taken:
-            # A second Connect of the same account: a Reconnect of the plan it is.
-            body = body.model_copy(update={"name": None, "owner_id": None})
-            return save(c, vault, settings, who, body, taken["id"], signed_on)
-    if sid:
-        sub = row(c, sid)
-        if not sub:
-            raise Problem("not_found", "Subscription not found", 404)
+            if not sid and taken["owner_id"] == owner:
+                # A second Connect of the same account reconnects its owner's plan.
+                body = body.model_copy(update={"name": None, "owner_id": None})
+                return save(c, vault, settings, auth, who, body, taken["id"])
+            label = f" as {taken['name']}" if sid and _may_manage_provider(auth, who, taken) else ""
+            raise Problem("account", f"This Claude account is already connected{label}", 409)
+    if sid and sub:
         converting = (
             body.secret is not None
             and {body.kind, sub["kind"]} == {"claude_login", "claude_token"}
@@ -1734,22 +1892,18 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
         name = body.name.strip() if body.name is not None else None
         if body.name is not None and not name:
             raise Problem("name", "Enter a name", 422)
-        owner = owner_of(c, body.owner_id, sub["kind"]) if body.owner_id is not None else None
-        given = []
+        paid_attempts = []
         value = preview = ""
         same = bool(login) and not converting and login["account"] == sub["account"]
         if body.secret is not None:
             value, preview = checked(kind, body.secret.get_secret_value())
             if converting and kind == "claude_login":
                 claude_login.can_convert(c, sid)
-            given = [] if same else _signed_in_with(c, sid)
+            paid_attempts = [] if same else _agent_attempts(c, sid)
             if not body.confirm:
-                _confirm_reconnect(c, settings, given)
+                _confirm_reconnect(c, settings, [], paid_attempts)
         if name is not None:
             c.execute("UPDATE model_subscriptions SET name=?,updated_at=? WHERE id=?", (name, now, sid))
-        if owner is not None and owner != sub["owner_id"]:
-            c.execute("UPDATE model_subscriptions SET owner_id=?,updated_at=? WHERE id=?", (owner, now, sid))
-            H.event(c, who.actor, "subscription.owner_changed", sid, {"from": sub["owner_id"], "to": owner})
         if body.secret is not None and same:
             # The same account signed in again (its monthly Reconnect): a refresh, not a change. Its runs go on and get
             # the new access token; its readings stay.
@@ -1763,8 +1917,7 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             claude_login.forget(c, sid)  # a refresh under way began from the old login
             claude_login.pushed(c, sid)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "same_account": True})
-            spread(c, settings, sid, who.actor, signed_on)
-            _follow(c, settings, who.actor)
+            _follow(c, settings, who.actor, sub["owner_id"])
             return view(c, row(c, sid))
         if body.secret is not None:
             retired = ""
@@ -1802,19 +1955,15 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
             claude_login.drop(c, sid)
             if kind == "claude_login":
                 claude_login.stamp(c, sid, value)
-            # A new value may be another account: its own usage-limit hold ends as Try now does, one probe turn tests it
-            # (login_holds.try_now), before the bots are re-judged. As for a change, every computer given it stops its
-            # live runs on that runtime (their work goes back in the queue; confirmed first) and starts its sessions
-            # there fresh. An older runner never signed in with it, so nothing changes there.
+            # A replacement may be another account. Release its usage hold for a probe and restart its own runs.
             from . import login_holds
 
             login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
-            stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
+            stopped = sum(quarantine_stops.restart(c, a, f"{sub['name']} was reconnected") for a in paid_attempts)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
-            spread(c, settings, sid, who.actor, signed_on)  # one that needed reconnecting works again
             if kind == "claude_login":
                 claude_login.read_soon(c, sid)
-            _follow(c, settings, who.actor)
+            _follow(c, settings, who.actor, sub["owner_id"])
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
         return view(c, row(c, sid))
@@ -1823,7 +1972,6 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     if c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     value, preview = checked(body.kind, body.secret.get_secret_value())
-    owner = _default_owner(c, who, body, body.kind)
     name = (body.name or "").strip() or default_name(c, body.kind, owner)
     sid = H.new_id()
     cid = _keep_value(c, vault, {"id": sid, "credential_id": None}, value, preview, who.actor, now)
@@ -1835,11 +1983,11 @@ def save(c, vault, settings, who, body, sid=None, signed_on=""):
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
-    _tick_provider(c, settings, who.actor, body.kind)
-    spread(c, settings, sid, who.actor, signed_on)
+    if admin:
+        _tick_provider(c, settings, who.actor, body.kind)
     if body.kind == "claude_login":
         claude_login.read_soon(c, sid)
-    _follow(c, settings, who.actor)
+    _follow(c, settings, who.actor, owner)
     return view(c, row(c, sid))
 
 
@@ -1852,20 +2000,56 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
     )
 
 
-def remove(c, settings, who, sid, confirm=False):
-    """Delete a subscription and take it off every computer given it (`computers`, as Settings counts them): those
-    signing in with it stop their live runs on its runtime and start again (confirmed first), their sessions start
-    fresh, and the sealed value is gone. An older runner never signed in with it: nothing there stops."""
+def _agent_attempts(c, sid):
+    return c.execute(
+        "SELECT a.* FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+        "WHERE s.subscription_id=? AND s.delivery<>'' AND a.state IN ('leased','running') "
+        "AND a.stop_requested_at IS NULL",
+        (sid,),
+    ).fetchall()
+
+
+def _provider_attempts(c, sid, picks):
+    """Runs using the removed value or losing their exact pick for the AI tool they are running."""
+    live = "a.state IN ('leased','running') AND a.stop_requested_at IS NULL"
+    attempts = {
+        a["id"]: a
+        for a in c.execute(
+            "SELECT a.* FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+            f"WHERE s.subscription_id=? AND {live} AND NOT EXISTS ("
+            "SELECT 1 FROM pending_subscription_fallbacks p WHERE p.attempt_id=s.attempt_id AND p.runtime=s.runtime)",
+            (sid,),
+        )
+    }
+    for bot, runtime in picks:
+        for a in c.execute(
+            f"SELECT a.* FROM attempts a WHERE a.bot_id=? AND a.handed_runtime=? AND {live}", (bot, runtime)
+        ):
+            attempts.setdefault(a["id"], a)
+    return list(attempts.values())
+
+
+def remove(c, settings, who, sid, confirm=False, *, auth=None):
+    """Delete a provider, clear exact picks or emptied pools, and restart the affected turns."""
+    from . import agent_subscriptions, claude_login, login_holds, quarantine_stops
+    from .execution import lift_limited_on_computer
+
     sub = row(c, sid)
     if not sub:
         raise Problem("not_found", "Subscription not found", 404)
     computers = c.execute("SELECT count(*) FROM computer_subscriptions WHERE subscription_id=?", (sid,)).fetchone()[0]
     given = _signed_in_with(c, sid)
-    if not confirm:
-        plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
-        running = sum(p["running"] for p in plans)
-        if running:
-            _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": computers})
+    picks = agent_subscriptions.for_removal(c, sub)
+    attempts = _provider_attempts(c, sid, picks)
+    if not confirm and (attempts or picks):
+        access = auth.bot_accesses(c, who, [bot for bot, _ in picks]) if auth else None
+        agents = [{"bot": bot, "runtime": runtime} for bot, runtime in picks if access is None or access[bot]["read"]]
+        raise Problem(
+            "confirm_restart",
+            "Remove this provider and clear its agents' Paid by?",
+            409,
+            extra={"running": len(attempts), "sessions": 0, "computers": computers, "agents": agents},
+        )
     # A key kept in the vault reached its computers as their key too (GET runner-model-credentials): each is cleared as
     # Clear key does, so a v0.6.0-rc.1 runner logs out the Codex login the key made instead of keeping it.
     keyed = (
@@ -1878,12 +2062,12 @@ def remove(c, settings, who, sid, confirm=False):
     # A computer given the owner's plans keeps them: its set moves on at the next turn (`settle`).
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sid,))
     c.execute("UPDATE computer_subscriptions SET subscription_id='' WHERE subscription_id=?", (sid,))
-    stopped = reset = 0
-    for runner_id, runtime in given:
-        done = _restart(c, settings, runner_id, runtime)
-        stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
+    agent_subscriptions.unset_removed(c, who.actor, picks)
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
-    from . import claude_login, login_holds
+
+    stopped = sum(quarantine_stops.restart(c, a, f"{sub['name']} was removed") for a in attempts)
+    for runner_id, runtime in given:
+        lift_limited_on_computer(c, settings, H.TICO_ACTOR, runner_id, runtime)
 
     runtime = (KINDS.get(sub["kind"]) or {}).get("runtime", "")
     if runtime and login_holds.get(c, "", login_holds.subscription_login(sid), runtime):
@@ -1900,8 +2084,41 @@ def remove(c, settings, who, sid, confirm=False):
     H.event(
         c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers, "stopped": stopped}
     )
-    _follow(c, settings, who.actor)
-    return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": reset}
+    _follow(c, settings, who.actor, sub["owner_id"])
+    return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": 0}
+
+
+def owner_left(c, settings, actor, owner):
+    """Revoke the departing person's saved providers and pending sign-ins in the roster write."""
+    from types import SimpleNamespace
+
+    from . import model_login
+
+    ended = c.execute(
+        f"UPDATE model_logins SET state='canceled',url='',user_code='',pending_code=NULL,lines='[]',updated_at=? "
+        f"WHERE {model_login.ACTIVE_SQL} AND id IN ("
+        "SELECT x.login_id FROM subscription_connects x JOIN model_logins l ON l.id=x.login_id "
+        "LEFT JOIN model_subscriptions s ON s.id=x.subscription_id "
+        "WHERE x.owner_id=? OR s.owner_id=? OR l.requested_by=?) RETURNING id",
+        (H.now(), owner, owner, owner),
+    ).fetchall()
+    c.executemany("DELETE FROM subscription_connects WHERE login_id=?", ended)
+    lost = c.execute(
+        "SELECT bot,runtime FROM agent_subscriptions WHERE (kind='pool' AND person=?) "
+        "OR subscription_id IN (SELECT id FROM model_subscriptions WHERE owner_id=?)",
+        (owner, owner),
+    ).fetchall()
+    c.execute("DELETE FROM agent_subscriptions WHERE kind='pool' AND person=?", (owner,))
+    c.execute(
+        "UPDATE credential_grants SET revoked_at=?,revoked_by=? WHERE revoked_at IS NULL AND credential_id IN "
+        "(SELECT credential_id FROM model_subscriptions WHERE owner_id=? AND credential_id IS NOT NULL)",
+        (H.now(), actor, owner),
+    )
+    for (sid,) in c.execute("SELECT id FROM model_subscriptions WHERE owner_id=? ORDER BY id", (owner,)).fetchall():
+        remove(c, settings, SimpleNamespace(actor=actor), sid, confirm=True)
+    c.execute("DELETE FROM computer_subscriptions WHERE person=?", (owner,))
+    for bot, runtime in lost:
+        H.event(c, actor, "agent_subscription.owner_left", bot, {"runtime": runtime, "owner": owner})
 
 
 def plan_owners(c, runtime):
@@ -2156,101 +2373,11 @@ def may_grant(c, auth, actor):
     return bool(human) and not standing(c, pid) and str(human.get("email") or "").lower() in auth.bot_admins
 
 
-def lend(c, runner_id, runtime, actor, shared, others, only=None):
-    """Give a computer the company's plan for `runtime` when it has no plan and no working sign-in of its own there, so
-    a bot on it is not left waiting for a sign-in nobody will make. Nothing is replaced, stopped or reset: a computer
-    with a plan, a sign-in that works or has not said (any state but missing, failed or rejected), or a live run on that
-    runtime, is left as it is (returns None, and the next placement asks again). The plan is the first that works,
-    preferring one already given to the shared machine's computer (`shared`), then to another cloud machine's
-    (`others`), then the lowest known used percent, then the most recently added; with `only`, that plan or none. Only
-    subscription plans count (an API key bills per use, so it is never chosen for a computer). Returns the subscription
-    id given, or None when no plan fits."""
-    from . import login_holds
-    from .readiness import SIGNED_OUT
-
-    runner = c.execute(
-        "SELECT readiness FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)
-    ).fetchone()
-    if (
-        not runner
-        or c.execute(
-            "SELECT 1 FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (runner_id, runtime)
-        ).fetchone()
-    ):
-        return None
-    own = (readiness_document(runner["readiness"]).get("runtimes") or {}).get(runtime) or {}
-    if own.get("authenticated") not in (None, *SIGNED_OUT) or _live(c, runner_id, runtime):
-        return None
-    kinds = [
-        kind for kind, spec in KINDS.items() if spec["runtime"] == runtime and spec.get("billing") == "subscription"
-    ]
-    subs = H._rows(
-        c.execute(
-            f"SELECT * FROM {SUBS} WHERE kind IN ({','.join('?' * len(kinds))}) "
-            "AND status<>'needs_reconnect'" + (" AND id=?" if only else "") + " ORDER BY created_at DESC",
-            [*kinds, *([only] if only else [])],
-        )
-    )
-    cloud = {r: 0 if r == shared else 1 for r in [shared, *others] if r}
-    on_cloud = {}
-    for r in c.execute("SELECT runner_id,subscription_id FROM computer_subscriptions WHERE runtime=?", (runtime,)):
-        if r["runner_id"] in cloud:
-            on_cloud[r["subscription_id"]] = min(cloud[r["runner_id"]], on_cloud.get(r["subscription_id"], 1))
-    plans = []
-    ctx = _listing(c) if subs else None
-    for sub in subs:
-        if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
-            continue
-        where = on_cloud.get(sub["id"])
-        tier = 2 if where is None else where  # shared machine's, another cloud machine's, the rest
-        used = (_usage(c, sub, ctx) or {}).get("used_pct")
-        plans.append(((tier, used is None, used or 0), sub))
-    if not plans:
-        return None
-    chosen = min(plans, key=lambda p: p[0])[1]  # min is first-seen on a tie: the newest added
-    _set(c, runner_id, runtime, chosen["id"], actor)
-    H.event(
-        c,
-        actor,
-        "subscription.given",
-        chosen["id"],
-        {"runner": runner_id, "runtime": runtime, "stopped": 0, "sessions_reset": 0},
-    )
-    return chosen["id"]
-
-
-def _follow(c, settings, actor):
-    """The plans the company has changed: the bots that follow them move to their set (backend/plan_models.py)."""
+def _follow(c, settings, actor, owner):
+    """Update the template agents that follow their owner’s plans."""
     from . import plan_models
 
-    plan_models.follow(c, settings, actor)
-
-
-def spread(c, settings, sid, actor, signed_on=""):
-    """A plan just added, connected or reconnected goes on the computers that need it, by `lend`'s rules (nothing
-    replaced, stopped or reset): the computer a Connect signed it in on (`signed_on`), then on a Tico Cloud company each
-    cloud machine's computer, the shared one first; on a company with one computer, that one. With several computers of
-    its own, a company chooses where (Settings > Computers). A plan placed before the bots is otherwise never on a
-    computer, and they run on Tico Medium. Returns the computer ids given it."""
-    from . import cloud_machines
-
-    sub = row(c, sid)
-    if not sub or sub["status"] == "needs_reconnect":
-        return []
-    spec = KINDS.get(sub["kind"]) or {}
-    if spec.get("billing") != "subscription":
-        return []
-    shared, others = cloud_machines.lend_order(c)
-    if cloud_machines.cloud_company(c, settings):
-        computers = [signed_on, shared, *others]
-    else:
-        live = [r[0] for r in c.execute("SELECT id FROM runners WHERE revoked_at IS NULL")]
-        computers = [signed_on, *(live if len(live) == 1 else [])]
-    return [
-        runner_id
-        for runner_id in dict.fromkeys(r for r in computers if r)
-        if lend(c, runner_id, spec["runtime"], actor, shared, others, only=sid)
-    ]
+    plan_models.follow(c, settings, actor, owner=owner)
 
 
 # ------------------------------------------------------------------------------------------------ keys on computers
@@ -2262,7 +2389,7 @@ def spread(c, settings, sid, actor, signed_on=""):
 OWN = "computer:"
 # The key a computer is given for a runtime: its subscription and its vault credential (`id` is the credential's).
 KEY_SQL = (
-    "SELECT cr.*, s.id AS subscription_id, s.revision AS subscription_revision, g.updated_at AS given_at "
+    "SELECT cr.*, s.id AS subscription_id, s.revision AS subscription_revision, g.updated_at AS given_at, g.runtime "
     "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
     "JOIN credentials cr ON cr.id=s.credential_id WHERE g.person='' AND cr.ciphertext IS NOT NULL "
     "AND cr.kind<>'service'"
@@ -2289,13 +2416,19 @@ def before_delete(c, who, credential_id):
     key made, which a v0.6.0-rc.1 runner keeps for Codex until told so."""
     if not _present(c):
         return
-    sub = c.execute("SELECT id FROM model_subscriptions WHERE credential_id=?", (credential_id,)).fetchone()
+    sub = H._one(c, f"SELECT * FROM {SUBS} WHERE credential_id=?", (credential_id,))
     if not sub:
         return
     given = c.execute(
         "SELECT runner_id, runtime FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],)
     ).fetchall()
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=? AND person=''", (sub["id"],))
+    from . import agent_subscriptions, quarantine_stops
+
+    picks = agent_subscriptions.for_removal(c, sub)
+    for attempt in _provider_attempts(c, sub["id"], picks):
+        quarantine_stops.restart(c, attempt, "The model key was removed")
+    agent_subscriptions.unset_removed(c, who.actor, picks)
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sub["id"],))
     from . import claude_login
 
@@ -2328,6 +2461,9 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
     if mark:
         return {"credentials": [], "signed_out": True, **({"clear_key": True} if mark["clear_key"] else {})}, []
     found = c.execute(KEY_SQL + " AND g.runner_id=? AND g.runtime=?", (runner_id, runtime)).fetchone()
+    if found and found["source"] != OWN + runner_id:
+        # An empty shared-key list removes the old cached value without signing out the computer's local login.
+        return {"credentials": []}, []
     if not found or found["env"] not in providers.MODEL_KEYS.get(runtime, ()):
         return {"credentials": []}, []
     source = "computer" if found["source"] == OWN + runner_id else "shared"
@@ -2337,108 +2473,33 @@ def keys_for(c, vault, runner_id, runtime, login_id=""):
 
 
 def key_listing(c):
-    """{runner id: {keys, shared_keys, shared_with}} of every computer given a key, read in one pass for the Computers
-    page (Operations listing); never a value. `keys`: {runtime: {env, preview, since}} of its own keys. `shared_keys`:
-    {runtime: {env, preview}} of the shared key given to it. `shared_with`: {runtime: {id, name, computers}} of the
-    shared key it runs on (not while a person cleared its key or signed it out there) and every live computer that
-    runs on the same one."""
+    """Only computer-local keys appear as sign-ins in Operations. No values are returned."""
     if not _present(c):
         return {}
-    out, served, used = {}, {}, []
-    for row in c.execute(
-        "SELECT g.runner_id, g.runtime, g.updated_at AS given_at, cr.id, cr.name, cr.env, cr.preview, cr.source, "
-        "r.label, r.revoked_at, EXISTS (SELECT 1 FROM model_login_cleared m WHERE m.runner_id=g.runner_id "
-        "AND m.runtime=g.runtime AND m.profile='') AS cleared "
-        "FROM computer_subscriptions g JOIN model_subscriptions s ON s.id=g.subscription_id "
-        "JOIN credentials cr ON cr.id=s.credential_id JOIN runners r ON r.id=g.runner_id "
-        "WHERE g.person='' AND cr.ciphertext IS NOT NULL AND cr.kind<>'service' "
-        "ORDER BY lower(r.label), r.id, g.runtime"
-    ):
-        rid, runtime = row["runner_id"], row["runtime"]
+    out = {}
+    for value in c.execute(KEY_SQL + " AND cr.source='computer:'||g.runner_id ORDER BY g.runner_id,g.runtime"):
+        rid = value["source"].removeprefix(OWN)
+        runtime = value["runtime"]
         found = out.setdefault(rid, {"keys": {}, "shared_keys": {}, "shared_with": {}})
-        if row["source"] == OWN + rid:
-            found["keys"][runtime] = {"env": row["env"], "preview": row["preview"], "since": row["given_at"]}
-            continue
-        found["shared_keys"][runtime] = {"env": row["env"], "preview": row["preview"]}
-        if row["revoked_at"] is None and not row["cleared"]:
-            served.setdefault(row["id"], []).append({"id": rid, "label": row["label"]})
-            used.append((rid, runtime, row))
-    for rid, runtime, row in used:
-        out[rid]["shared_with"][runtime] = {"id": row["id"], "name": row["name"], "computers": served[row["id"]]}
+        found["keys"][runtime] = {"env": value["env"], "preview": value["preview"], "since": value["given_at"]}
     return out
 
 
 # ------------------------------------------------------------------------------------------------ claim and run
-def _bot_key_names(c, bot):
-    """The model key variables `bot`'s own key grants set in its turns (backend/credentials.py `granted`)."""
-    from .credentials import granted
+def for_claim(c, runner, config, loads=None, *, bot):
+    """The chosen payer for this turn, if one was assigned to the agent."""
+    from . import agent_subscriptions
 
-    ids = sorted(granted(c, "bot:" + bot)) if bot else []
-    if not ids:
-        return set()
-    return {
-        r["env"]
-        for part in H.chunks(ids)
-        for r in c.execute(
-            f"SELECT env FROM credentials WHERE id IN ({','.join('?' * len(part))}) AND ciphertext IS NOT NULL", part
-        )
-    }
-
-
-def for_claim(c, runner, config, loads=None, bot=""):
-    """The subscriptions a claimed turn may use, with automatic candidates limited to installed runtimes. `loads`: the
-    claim's loaded values (claim_loads), when the caller has them. A computer's key (one kept in the vault) is not
-    handed to a turn of `bot` when the bot's own key grant names that runtime's key: the grant signs it in, as it
-    always came before the computer's key (v0.6.0-rc.1 runners take out a granted key for a subscription handed)."""
-    given = loads.given if loads is not None else _given(c)
-    if not runner or not given:
-        return []
-    from . import providers
-    from .store import readiness_document
-
-    own = turn_runtimes(config)
-    if loads is not None:
-        row = loads.runner_of(c, runner["id"])
-        record = loads.plain_record(c)
-    else:
-        from .read_cache import one
-
-        row = one(c, RUNNER_READINESS_SQL, (runner["id"],))
-        record = providers.load(c)
-    ready = readiness_document(row["readiness"]) if row else {}
-    out = []
-    runtimes = turn_runtimes(config, record)
-    # A plan login the computer keeps in a home (a ChatGPT login) also signs its CLI in for the turn's own commands:
-    # a bot on Claude runs `codex exec` on it (runner-rs/src/model_subscriptions.rs `for_shell`).
-    shell = [rt for (rid, rt) in _keys_of(given, runner["id"]) if rt in RUNTIMES and rt not in runtimes]
-    for runtime in [*runtimes, *shell]:
-        if runtime not in own and ((ready.get("runtimes") or {}).get(runtime) or {}).get("installed") is not True:
-            continue  # a subscription authenticates a CLI; it cannot install one
-        sub = in_effect(c, runner["id"], runtime, loads=loads)
-        if sub and runtime in shell and not for_shell(sub):
-            continue
-        if (
-            sub
-            and bot
-            and c.execute(
-                f"SELECT 1 FROM model_subscriptions WHERE id=? AND {KEPT_KEY.format('')}", (sub["id"],)
-            ).fetchone()
-            and set(providers.MODEL_KEYS.get(runtime, ())) & _bot_key_names(c, bot)
-        ):
-            continue
-        if sub:
-            # Another runtime's value is sent only if the turn moves to it (`activate`), except a shell login, which
-            # every process of the turn gets from the start.
-            lazy = runtime not in own and not for_shell(sub)
-            out.append({"runtime": runtime, "subscription": sub, "activate": lazy})
-    return out
+    if runner and (payment := agent_subscriptions.for_runner(c, runner, bot, config, loads=loads)):
+        if payment.subscription:
+            return [agent_subscriptions.claim_entry(config["runtime"], payment)]
+    return []
 
 
 def for_shell(sub):
-    """Whether a subscription signs its CLI in for any turn's own commands on its computer: a plan login kept in the
-    CLI's home (a ChatGPT login), never an API key, which spends per use."""
+    """A shell can use the agent's ChatGPT plan in its own CLI home."""
     spec = KINDS.get(sub.get("kind")) or {}
-    return bool(spec.get("file")) and spec.get("billing") == "subscription"
+    return spec.get("runtime") == "codex" and spec.get("billing") == "subscription" and bool(spec.get("file"))
 
 
 def hand_out(c, attempt_id, chosen):
@@ -2446,9 +2507,11 @@ def hand_out(c, attempt_id, chosen):
     out = []
     for item in chosen:
         sub = item["subscription"]
+        delivery = item.get("delivery", "")
         c.execute(
-            "INSERT OR REPLACE INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision) VALUES(?,?,?,?)",
-            (attempt_id, item["runtime"], sub["id"], sub["revision"]),
+            "INSERT OR REPLACE INTO attempt_subscriptions(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) "
+            "VALUES(?,?,?,?,?,?)",
+            (attempt_id, item["runtime"], sub["id"], sub["revision"], delivery, sub.get("payer_parent")),
         )
         if item.get("activate"):
             c.execute(
@@ -2465,7 +2528,7 @@ def hand_out(c, attempt_id, chosen):
                 "name": sub["name"],
                 "revision": sub["revision"],
                 "billing": spec["billing"],
-                "source": "computer",
+                "source": "agent" if delivery and delivery != "legacy" else "computer",
                 **({"env": spec["env"]} if spec.get("env") else {"file": spec["file"]}),
                 **({"home_env": spec["home_env"]} if spec.get("home_env") else {}),
             }
@@ -2473,91 +2536,125 @@ def hand_out(c, attempt_id, chosen):
     return out
 
 
-def run_values(c, vault, who, subscription_runtime=None):
-    """What `GET credential-runtime` adds for the bot run `who`: each subscription its claim handed it, with its value.
-    Only the run's own attempt, only while it is live, only while its computer is still given that subscription, and
-    only the revision it was handed. Automatic candidates on capable runners are metadata until requested by
-    `subscription_runtime`; delivering the value atomically activates the restart fence. A reconnect or a take-off
-    stops every live run already sent that value (`_restart`): such a run
-    gets nothing and ends. A run still going whose subscription moved on was moved by a refresh (`refreshed`, the same
-    account): it gets the refreshed value and its record moves with it, so its home, its write-back and its verdict
-    agree."""
-    if not who.attempt_id or not H._has_table(c, "attempt_subscriptions"):
-        return []
-    attempt = c.execute(
-        "SELECT runner_id,state,bot_id,stop_requested_at FROM attempts WHERE id=?", (who.attempt_id,)
+PAYER_UNAVAILABLE = "Paid by: the provider credential is unavailable"
+
+
+def open_payer(c, cipher, sub):
+    try:
+        return value_of(c, cipher, sub)
+    except Problem:
+        return None
+
+
+def payer_readable(c, sub):
+    from .read_cache import value
+
+    cipher = getattr(c, "credential_cipher", None)
+    return cipher is None or value(
+        c, ("payer_readable", sub["id"], sub["revision"]), lambda: bool(open_payer(c, cipher, sub))
+    )
+
+
+def _leased_payer(c, runner_id, attempt_id, delivery):
+    return c.execute(
+        "SELECT s.runtime,s.subscription_id,s.revision,r.capabilities FROM attempt_subscriptions s "
+        "JOIN attempts a ON a.id=s.attempt_id JOIN runners_with_state r ON r.id=a.runner_id "
+        "JOIN assignments x ON x.bot=a.bot_id AND x.runner_id=a.runner_id AND x.generation=a.generation "
+        "LEFT JOIN credential_grants parent ON parent.id=s.parent_grant "
+        "LEFT JOIN bot_config bc ON bc.bot=a.bot_id "
+        "WHERE (s.parent_grant IS NULL OR (parent.id IS NOT NULL AND parent.revoked_at IS NULL "
+        "AND parent.subject='human:'||bc.owner_id)) AND a.id=? AND a.runner_id=? AND r.revoked_at IS NULL AND a.state IN ('leased','running') "
+        "AND a.stop_requested_at IS NULL AND a.lease_until>? AND s.delivery=?",
+        (attempt_id, runner_id, H.now(), delivery),
     ).fetchone()
-    if not attempt or attempt["state"] not in ("leased", "running") or "bot:" + attempt["bot_id"] != who.actor:
-        return []
-    out = []
-    for given in c.execute(
-        "SELECT * FROM attempt_subscriptions WHERE attempt_id=? ORDER BY runtime", (who.attempt_id,)
-    ).fetchall():
-        pending = c.execute(
-            "SELECT 1 FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?",
-            (who.attempt_id, given["runtime"]),
-        ).fetchone()
-        if pending and subscription_runtime != given["runtime"]:
-            continue
-        sub = row(c, given["subscription_id"])
-        if (
-            not sub
-            or sub["status"] == "needs_reconnect"
-            or not still_given(c, attempt["runner_id"], given["runtime"], sub["id"])
-        ):
-            continue
-        if pending:
-            # Serialized with give/reconnect/remove: once a value leaves, a later change must stop this run.
-            effective = in_effect(c, attempt["runner_id"], given["runtime"])
-            if attempt["stop_requested_at"] or not effective or effective["id"] != sub["id"]:
-                continue
+
+
+def _lease_subscription(c, given):
+    from .agent_subscriptions import portable
+
+    if (
+        given
+        and (sub := row(c, given["subscription_id"]))
+        and (sub["revision"] == given["revision"] and available(c, sub, given["runtime"]) and portable(c, sub))
+    ):
+        return sub
+    return None
+
+
+def payer_ready(c, runner_id, attempt_id, delivery):
+    """Verify the same bound provider still counts before the harness starts."""
+    from .agent_subscriptions import CAPABILITY
+
+    if delivery not in ("claim", "legacy"):
+        return False
+    given = _leased_payer(c, runner_id, attempt_id, delivery)
+    if not (sub := _lease_subscription(c, given)):
+        return False
+    caps = H._json(given["capabilities"], []) or []
+    if delivery == "legacy":
+        return legacy_matches(c, runner_id, given["runtime"], sub, caps)
+    return CAPABILITY in caps
+
+
+def _lease_value(c, vault, given, sub):
+    if not (value := open_payer(c, vault.cipher, sub)):
+        return None
+    return {
+        "id": sub["id"],
+        "runtime": given["runtime"],
+        "kind": sub["kind"],
+        "name": sub["name"],
+        "revision": sub["revision"],
+        "billing": KINDS[sub["kind"]]["billing"],
+        **delivered(sub["kind"], value),
+    }
+
+
+def claim_credential(c, vault, runner_id, attempt_id, delivery="claim"):
+    """Open the lease's payer for the authenticated runner after saving the secret-free receipt."""
+    from .agent_subscriptions import CAPABILITY
+
+    given = _leased_payer(c, runner_id, attempt_id, delivery)
+    if not given or CAPABILITY not in (H._json(given["capabilities"], []) or []):
+        return None
+    sub = _lease_subscription(c, given)
+    return _lease_value(c, vault, given, sub) if sub else None
+
+
+def legacy_credential(c, vault, who):
+    """Open a legacy turn's payer through the computer's current shared binding."""
+    given = _leased_payer(c, who.runner_id, who.attempt_id, "legacy")
+    if not (sub := _lease_subscription(c, given)) or not legacy_matches(
+        c, who.runner_id, given["runtime"], sub, H._json(given["capabilities"], []) or []
+    ):
+        return None
+    if credential := _lease_value(c, vault, given, sub):
+        if given["runtime"] == "claude":
+            # Remember the plan actually delivered so its refresh still has a destination after expiry.
             c.execute(
-                "DELETE FROM pending_subscription_fallbacks WHERE attempt_id=? AND runtime=?",
-                (who.attempt_id, given["runtime"]),
+                "UPDATE computer_subscriptions SET subscription_id=? WHERE runner_id=? AND runtime=? "
+                "AND person=? AND person<>'' AND subscription_id IS NOT ?",
+                (sub["id"], who.runner_id, given["runtime"], sub["owner_id"], sub["id"]),
             )
-        if sub["revision"] != given["revision"]:
-            if attempt["stop_requested_at"]:
-                continue  # stopped (a reconnect restarts its runs): it ends without the newer value
-            c.execute(
-                "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
-                (sub["revision"], who.attempt_id, given["runtime"]),
-            )
-        value = value_of(c, vault.cipher, sub)
-        if value is None:
-            continue
-        spec = KINDS[sub["kind"]]
-        out.append(
-            {
-                "id": sub["id"],
-                "runtime": given["runtime"],
-                "kind": sub["kind"],
-                "name": sub["name"],
-                "revision": sub["revision"],
-                "billing": spec["billing"],
-                **delivered(sub["kind"], value),
-            }
-        )
         H.event(
             c,
             who.actor,
             "subscription.sent_to_computer",
             sub["id"],
-            {"attempt": who.attempt_id, "runner": attempt["runner_id"], "runtime": given["runtime"]},
+            {"attempt": who.attempt_id, "runner": who.runner_id, "runtime": given["runtime"]},
         )
-    return out
+    return credential
 
 
 def refreshed(c, vault, who, body):
     """A runner sends back a ChatGPT login its CLI refreshed in a turn it ran on it. Only from a live run (leased or
-    running on this computer, its lease current, not stopped by Tico) that was handed that subscription and whose
-    computer is still given it for that runtime: a finished, expired, restarted or quarantined run, or a computer the
-    subscription was taken off, writes nothing (409 `stale_lease`). Kept only when the subscription is still at the
-    revision the turn had and the file is the same account; anything else is ignored (another computer refreshed first,
-    or someone reconnected). A kept file moves the run's record to the new revision with it."""
+    running on this computer, with a current lease) that was handed the subscription. Legacy attempts still rely
+    on their computer's binding. The stored revision must match the turn's and the file must belong to the same
+    account. A kept file moves the run's record to the new revision."""
     if who.role != "runner":
         raise Problem("forbidden", "Only a registered computer may send this", 403)
     given = c.execute(
-        "SELECT s.runtime,s.revision,a.state,a.lease_until,a.stop_requested_at FROM attempt_subscriptions s "
+        "SELECT s.runtime,s.revision,s.delivery,a.state,a.lease_until,a.stop_requested_at FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id WHERE s.attempt_id=? AND s.subscription_id=? "
         "AND a.runner_id=? AND NOT EXISTS (SELECT 1 FROM pending_subscription_fallbacks p "
         "WHERE p.attempt_id=s.attempt_id AND p.runtime=s.runtime)",
@@ -2570,11 +2667,14 @@ def refreshed(c, vault, who, body):
         given["state"] not in ("leased", "running")
         or (given["lease_until"] or "") <= H.now()
         or given["stop_requested_at"] == H.TICO_ACTOR
-        or not still_given(c, who.runner_id, given["runtime"], sub["id"])
+        or (given["delivery"] and given["stop_requested_at"])
+        or (not given["delivery"] and not still_given(c, who.runner_id, given["runtime"], sub["id"]))
     ):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
+    if given["delivery"] == "legacy" and not payer_ready(c, who.runner_id, body.attempt, "legacy"):
+        raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     value, preview = checked("codex_login", body.value.get_secret_value())
     old = json.loads(value_of(c, vault.cipher, sub) or "{}")
     account = lambda v: (v.get("tokens") or {}).get("account_id") or ""
@@ -2617,13 +2717,13 @@ def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     revision already replaced while the turn ran (a reconnect, or another computer's refresh) leaves the new value as it
     is. Returns the subscription row, or None when the turn was on the computer's login."""
     found = handed(c, attempt_id, runtime)
-    sub = row(c, found["subscription_id"]) if found else None
-    if not sub:
+    if not found or not (sub := row(c, found["subscription_id"])):
         return None
     if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
-        _effect_changed(c, settings, sub["id"])
-        _follow(c, settings, H.TICO_ACTOR)
+        if not found["delivery"]:
+            _effect_changed(c, settings, sub["id"])
+        _follow(c, settings, H.TICO_ACTOR, sub["owner_id"])
     H.event(
         c,
         H.TICO_ACTOR,
@@ -2644,11 +2744,15 @@ def turn_worked(c, attempt_id, runtime):
         _status(c, sub["id"], "working")
 
 
-def assignment_fields(c, runner, config):
+def assignment_fields(c, runner, config, *, bot="", inputs=None):
     """What `runners/assignments` adds to a bot's entry: {"subscriptions": {runtime: kind}} when the computer's
     subscription covers a runtime, so the runner does not count that runtime's missing sign-in against the bot."""
-    covered_now = covered_runtimes(c, runner, config)
-    return {"subscriptions": covered_now} if covered_now else {}
+    from . import agent_subscriptions
+
+    payment = agent_subscriptions.for_runner(c, runner, bot, config, inputs=inputs) if bot else None
+    return (
+        {"subscriptions": {config["runtime"]: payment.subscription["kind"]}} if payment and payment.subscription else {}
+    )
 
 
 # ------------------------------------------------------------------------------------------------ routes
@@ -2687,7 +2791,7 @@ def connect_ready(c):
     ]
 
 
-def connect(c, settings, who, body):
+def connect(c, settings, auth, who, body):
     """Start a Connect: queue the sign-in on a computer, remembering what its result becomes. Read back, given a code
     and cancelled like any sign-in (backend/model_login.py). Its row says where (`computer`) and what the subscription
     is called (`name`: the one given, else `default_name`). With no computer online on a company whose cloud computer
@@ -2700,24 +2804,20 @@ def connect(c, settings, who, body):
     from . import claude_login, model_login
 
     name, sid = (body.name or "").strip(), body.subscription or ""
-    sub = None
-    if sid:
-        sub = row(c, sid)
-        if not sub:
-            raise Problem("not_found", "Subscription not found", 404)
-        kind = sub["kind"]
-    else:
-        kind = body.kind or ""
+    sub = _manage_provider(c, auth, who, sid) if sid else None
+    kind = sub["kind"] if sub else body.kind or ""
     spec = KINDS.get(kind)
     if not spec or not spec.get("connect"):
         raise Problem("kind", "Connect works for a Claude plan or a ChatGPT plan; paste an API key instead", 422)
     if sid:
         if not body.confirm:
-            _confirm_reconnect(c, settings, _signed_in_with(c, sid))
+            _confirm_reconnect(c, settings, [], _agent_attempts(c, sid))
     elif c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] >= MAX_SUBSCRIPTIONS:
         raise Problem("limit", f"The company has {MAX_SUBSCRIPTIONS} subscriptions; remove one first", 422)
     # A reconnect keeps its owner; a new one is checked now, before anyone signs in.
-    owner = "" if sid else _default_owner(c, who, body, kind)
+    owner = sub["owner_id"] if sub else _default_owner(c, auth, who, body)
+    if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
+        raise Problem("owner", "A provider keeps its owner", 422)
 
     def answer(login, runner, plan_name):
         return {
@@ -2735,10 +2835,10 @@ def connect(c, settings, who, body):
     target = c.execute(
         f"SELECT l.id,s.name,s.kind,s.owner_id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
         f"WHERE l.kind='connect' AND l.requested_by=? AND s.kind IN ({','.join('?' * len(same))}) "
-        f"AND s.subscription_id=? AND {model_login.ACTIVE_SQL}"
+        f"AND s.subscription_id=? AND s.owner_id=? AND {model_login.ACTIVE_SQL}"
         + (" AND s.name=?" if name else "")
         + " ORDER BY l.created_at",
-        (who.actor, *same, sid, *([name] if name else [])),
+        (who.actor, *same, sid, owner, *([name] if name else [])),
     ).fetchone()
     if target:
         if body.confirm:
@@ -2802,12 +2902,10 @@ def connect(c, settings, who, body):
     return answer(login, runner, plan_name)
 
 
-def connected(c, vault, settings, who, login_id, body):
+def connected(c, vault, settings, auth, who, login_id, body):
     """A computer sends what its CLI gave it for a Connect it was asked to run: saved as the person asked, as if they
     had pasted it, and the job is done. A job cancelled or run out by now saves nothing. A value that does not check
     out fails the job, saying why (never the value)."""
-    from types import SimpleNamespace
-
     from . import model_login
 
     model_login.sweep(c)
@@ -2831,14 +2929,16 @@ def connected(c, vault, settings, who, login_id, body):
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
         try:
+            auth.sync_access(c)
+            requester = auth.identity_for_actor(c, login["requested_by"])
             save(
                 c,
                 vault,
                 settings,
-                SimpleNamespace(actor=login["requested_by"]),
+                auth,
+                requester,
                 write,
                 target["subscription_id"] or None,
-                signed_on=who.runner_id,
             )
         except Problem as problem:
             # A fixed word for the history: never the value, nor what the provider said about it.
@@ -2886,17 +2986,35 @@ def install(app, store, auth, mutate, settings):
         ),
     )
     def list_subscriptions(request: Request):
+        from .agent_subscriptions import can_assign, for_removal
+
         who = request.state.identity
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            manages = _may_manage(auth, who)
             subscriptions = listed(c, settings)
-            bots = {agent["id"] for sub in subscriptions for agent in sub["agents"]}
-            access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
+            removal = {}
             for sub in subscriptions:
-                sub["can_remove"] = may_remove(who, sub["added_by"], manages=manages)
-                if not manages and (not owned(sub["kind"]) or sub["owner_id"] != who.actor):
+                sub["can_remove"] = _may_manage_provider(auth, who, sub)
+                if sub["can_remove"]:
+                    removal[sub["id"]] = {bot for bot, _ in for_removal(c, sub)}
+            bots = {agent["id"] for sub in subscriptions for agent in sub["agents"]}
+            bots.update(bot for affected in removal.values() for bot in affected)
+            access = auth.bot_accesses(c, who, sorted(bots)) if bots else {}
+            assignable = {}
+            for sub in subscriptions:
+                owner = sub["owner_id"]
+                if owner not in assignable:
+                    assignable[owner] = can_assign(auth, who, owner)
+                    if owner and assignable[owner]:
+                        try:
+                            owner_of(c, owner)
+                        except Problem:
+                            assignable[owner] = False
+                sub["can_assign"] = assignable[owner]
+                if sub["can_remove"]:
+                    sub["removal_agents"] = sum(access[bot]["read"] for bot in removal[sub["id"]])
+                else:
                     sub["preview"] = ""
                     if sub["status_detail"]:
                         sub["status_detail"] = "The provider refused it"
@@ -2908,48 +3026,57 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "addModelSubscription",
-            "Add a subscription: a kind, a name, the pasted value and, for a plan, optionally its owner, a person (default: you; an API key has none; owners and admins)",
+            "Save a plan or API key in your pool. Owners and admins can specify another person. The value is required and never returned.",
             "ModelSubscription",
         ),
     )
     def add(request: Request, body: SubscriptionWrite):
         who = request.state.identity
-        _admin(auth, who, secret=True)
+        _person_secret(who)
+
+        def authorize(c, actor):
+            auth.sync_access(c)
+            _default_owner(c, auth, actor, body)
+
         return vault.change(
             who,
             request.url.path,
             request.headers.get("idempotency-key"),
             body,
-            lambda c, w: None,
-            lambda c: save(c, vault, settings, who, body),
+            authorize,
+            lambda c: save(c, vault, settings, auth, who, body),
         )
 
     # Declared before `/{sid}`. It carries no value: that comes from the computer, to the route below.
     @app.post("/api/v2/model-subscriptions/connect")
     def start_connect(request: Request, body: SubscriptionConnect):
         who = request.state.identity
-        _admin(auth, who, secret=True)
-        return mutate(request, body, lambda c: connect(c, settings, who, body))
+        _person_secret(who)
+        return mutate(request, body, lambda c: connect(c, settings, auth, who, body))
 
     @app.post(
         "/api/v2/model-subscriptions/{sid}",
         **api_v2(
             "Model subscriptions",
             "changeModelSubscription",
-            "Rename a subscription, change a plan owner and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
+            "Rename or reconnect a subscription as its owner or an admin. A reconnect answers 409 "
+            "`confirm_restart` while runs would stop unless `confirm` is true",
             "ModelSubscription",
         ),
     )
     def change(request: Request, sid: str, body: SubscriptionWrite):
         who = request.state.identity
-        _admin(auth, who, secret=body.secret is not None)
+        _reader(who)
+        if body.secret is not None:
+            _person_secret(who)
+
         return vault.change(
             who,
             request.url.path,
             request.headers.get("idempotency-key"),
             body,
-            lambda c, w: None,
-            lambda c: save(c, vault, settings, who, body, sid),
+            lambda c, actor: _manage_provider(c, auth, actor, sid),
+            lambda c: save(c, vault, settings, auth, who, body, sid),
         )
 
     @app.delete(
@@ -2957,7 +3084,7 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "removeModelSubscription",
-            "Remove a subscription from every computer (its adder or an admin). "
+            "Remove a subscription as its owner or an admin. "
             "Returns 409 `confirm_restart` if runs would stop without `confirm=1`",
             "ModelSubscriptionDeleted",
         ),
@@ -2966,17 +3093,12 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
 
         def work(c):
-            auth.domain(who)
-            if not _may_manage(auth, who):
-                _reader(who)
-                sub = row(c, sid)
-                if sub is None or not may_remove(who, sub["added_by"]):
-                    _admin(auth, who)
-            return remove(c, settings, who, sid, confirm)
+            _manage_provider(c, auth, who, sid)
+            return remove(c, settings, who, sid, confirm, auth=auth)
 
         return mutate(request, Empty(), work)
 
-    # Read a Claude plan's week now (subscription_refresh.request_plan_read): admins, as for changing the plan.
+    # Read a Claude plan's week now (subscription_refresh.request_plan_read).
     @app.post("/api/v2/model-subscriptions/{sid}/usage-refresh")
     def refresh_usage(request: Request, sid: str):
         from . import subscription_refresh as SR
@@ -2984,8 +3106,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
 
         def work(c):
-            auth.domain(who)
-            _admin(auth, who)
+            _manage_provider(c, auth, who, sid)
             return SR.request_plan_read(c, sid, who.actor)
 
         return mutate(request, Empty(), work)
@@ -2995,7 +3116,7 @@ def install(app, store, auth, mutate, settings):
         **api_v2(
             "Model subscriptions",
             "listComputerSubscriptions",
-            "Which subscription each computer uses per runtime (for a person's plans: the plan in use and why), the people who own plans per runtime, and the computers that can take one",
+            "Read-only compatibility view of the Paid by choices of agents on each computer, per AI tool",
             "ComputerSubscriptionList",
         ),
     )
@@ -3004,26 +3125,23 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         _reader(who)
         with store.read() as c:
-            return assignments(c)
+            return assignments(c, settings, who=who, auth=auth)
 
     @app.put(
         "/api/v2/computer-subscriptions",
+        status_code=410,
+        deprecated=True,
         **api_v2(
             "Model subscriptions",
             "setComputerSubscription",
-            "Give a computer a subscription for one runtime, or a person's plans for it (`person`: used in turn, the soonest weekly reset with usage left first), switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
-            "ComputerSubscriptionResult",
+            "Use PUT /api/v2/bots/{bot}/subscriptions",
+            responses={"410": error("The computer picker moved to the agent's Paid by")},
+            idempotency=KEYLESS,
         ),
     )
-    def set_computer_subscription(request: Request, body: ComputerSubscription):
-        who = request.state.identity
-
-        def work(c):
-            auth.domain(who)
-            _admin(auth, who)
-            return give(c, settings, who, body)
-
-        return mutate(request, body, work)
+    def set_computer_subscription(request: Request):
+        auth.domain(request.state.identity)
+        raise Problem("gone", "Set the agent's Paid by with PUT /api/v2/bots/{bot}/subscriptions", 410)
 
     # Not through `mutate`: a value is kept in no request receipt, as for the refresh below.
     @app.post("/api/v2/runner-logins/{lid}/subscription")
@@ -3035,7 +3153,7 @@ def install(app, store, auth, mutate, settings):
                 or not c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (who.runner_id,)).fetchone()
             ):
                 raise Problem("forbidden", "Only a registered computer may send this", 403)
-            return connected(c, vault, settings, who, lid, body)
+            return connected(c, vault, settings, auth, who, lid, body)
 
     @app.post("/api/v2/runner-model-subscription-refresh")
     def refresh(request: Request, body: SubscriptionRefresh):

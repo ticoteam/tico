@@ -2,12 +2,14 @@
 
 from datetime import datetime, timedelta, timezone
 
-from backend import subscription_refresh as SR
+import pytest
+
+from backend import agent_subscriptions, subscription_refresh as SR
 from backend.tests.helpers.api import assign, get, headers, post, runner
-from backend.tests.helpers.model_subscriptions import TOKEN, add, give
+from backend.tests.helpers.model_subscriptions import TOKEN, add, give, pick
 
 
-def computer(api):
+def computer(api, *, legacy=False):
     """A computer that names its own login (as `beat({})` does) and can read a plan's week."""
     m = runner(api, label="Plan Mac")
     assign(api, m, "ops")
@@ -17,7 +19,12 @@ def computer(api):
         {
             "version": "test",
             "platform": "test",
-            "capabilities": ["model_subscriptions_v1", "computer_logins_v1", SR.PLAN_CAPABILITY],
+            "capabilities": [
+                "model_subscriptions_v1",
+                "computer_logins_v1",
+                SR.PLAN_CAPABILITY,
+                *([] if legacy else [agent_subscriptions.CAPABILITY]),
+            ],
             "readiness": {
                 "schema_version": 1,
                 "bots": {"ops": {"runtime": "claude", "ready": True}},
@@ -39,10 +46,14 @@ def reset_in(days):
     return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
 
-def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_plans_reading(api):
+@pytest.mark.parametrize("legacy", [False, True], ids=["per-attempt-payer", "computer-binding"])
+def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_plans_reading(api, legacy):
     sid = add(api)["id"]
-    m = computer(api)
-    give(api, m, "claude", sid)
+    assert post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)["error"]["code"] == "no_computer"
+    m = computer(api, legacy=legacy)
+    if legacy:
+        give(api, m, "claude", sid)
+    pick(api, "ops", "claude", person="human:ana")
     asked = post(api, f"model-subscriptions/{sid}/usage-refresh", {})
     assert asked["state"] == "requested"
     # The computer is told at once (a `runner` change), not left to its five-minute backup poll, after the read lapsed.
@@ -74,7 +85,7 @@ def test_an_admin_reads_a_claude_plans_week_on_its_computer_and_it_becomes_the_p
 def test_only_an_admin_asks_one_read_at_a_time_and_another_request_is_refused(api):
     sid = add(api)["id"]
     m = computer(api)
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     refused = api.post(f"/api/v2/model-subscriptions/{sid}/usage-refresh", json={}, headers=headers("cara-test"))
     assert refused.status_code == 403
     first = post(api, f"model-subscriptions/{sid}/usage-refresh", {})
@@ -93,7 +104,7 @@ def test_only_an_admin_asks_one_read_at_a_time_and_another_request_is_refused(ap
 def test_a_read_whose_reset_is_not_within_a_week_is_refused(api):
     sid = add(api)["id"]
     m = computer(api)
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, f"model-subscriptions/{sid}/usage-refresh", {})
     [read] = get(api, "runner-subscription-refreshes", m["token"])["refreshes"]
     for at in (reset_in(-1), reset_in(9)):

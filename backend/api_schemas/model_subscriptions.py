@@ -30,7 +30,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'description': 'What a person must fix on a plan that still counts, in a few words ("Payment past due"), '
             'else empty',
         },
-        'preview': {'type': 'string', 'description': 'Visible to admins and, for a plan, its owner'},
+        'preview': {'type': 'string', 'description': 'Visible to the provider owner and admins'},
         'revision': 'i',
         'computers': items({'type': 'string'}),
         'usage': {
@@ -60,6 +60,14 @@ SCHEMAS['ModelSubscription'] = obj(
         'added_by': 's',
         'added_by_name': 's',
         'can_remove': 'b',
+        'removal_agents': {
+            'type': 'integer',
+            'description': "Readable agents whose Paid by would be cleared by removal, for viewers who can remove it",
+        },
+        'can_assign': {
+            'type': 'boolean',
+            'description': 'Whether the viewer may assign this provider to an agent they manage',
+        },
         'owner_id': 's',
         'owner_name': 's',
         'created_at': 's',
@@ -69,13 +77,11 @@ SCHEMAS['ModelSubscription'] = obj(
         'available': {'type': 'boolean', 'description': 'Whether the credential can be selected now'},
         'next_in_rotation': {
             'type': 'boolean',
-            'description': "At least one computer using this person's other plans can switch to this plan next",
+            'description': "An agent using another plan from this pool can use this plan next",
         },
         'agents': {
             **items(obj({'id': 's', 'name': 's', 'fallback': 'b'}, required=['id', 'name', 'fallback'])),
-            'description': "The bots it serves that the viewer can read, by name: those on a computer given it "
-            "(from a person's plans, the computers using it now) whose turns, tasks or named fallback run its "
-            'runtime; `fallback` when only the fallback does',
+            'description': "Agents the viewer can read whose Paid by selects this provider or its pool for the tool",
         },
         'expired': 'b',
         'reconnect_by': 'n',
@@ -138,6 +144,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
                     'subscription_id': 's',
                     'person': 's',
                     'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
+                    'mixed': 'b',
                 }
             )
         ),
@@ -146,13 +153,38 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
     }
 )
 
-SCHEMAS['ComputerSubscriptionResult'] = obj(
+SCHEMAS['AgentSubscriptionList'] = obj(
     {
-        'runner_id': 's',
-        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
-        'subscription_id': 'n',
-        'person': 's',
-        'stopped': 'i',
-        'sessions_reset': 'i',
-    }
+        'can_edit': 'b',
+        'last_turn': {
+            'anyOf': [
+                obj(
+                    {
+                        'payers': items({'type': 'string'}),
+                        'at': 'n',
+                        'waits': items(
+                            obj({'reason': 's', 'until': 'n', 'fixer': 's'}, required=['reason', 'until', 'fixer'])
+                        ),
+                    },
+                    required=['payers', 'at', 'waits'],
+                ),
+                {'type': 'null'},
+            ]
+        },
+        'subscriptions': {
+            'type': 'object',
+            'additionalProperties': obj(
+                {
+                    'bot': 's',
+                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'kind': {'enum': ['pool', 'plan', 'key']},
+                    'person': 's',
+                    'subscription_id': 's',
+                    'set_by': 's',
+                    'updated_at': 's',
+                }
+            ),
+        },
+    },
+    required=['subscriptions'],
 )

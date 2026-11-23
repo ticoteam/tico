@@ -13,6 +13,7 @@ the same way.
 """
 
 import json
+from sqlite3 import Connection, Row
 
 from .store import H
 
@@ -60,7 +61,7 @@ def stop(c, row):
     ).fetchone()
 
 
-def restart(c, row, line):
+def restart(c: Connection, row: Row, line: str) -> bool:
     """Record a Tico Stop on a live attempt whose computer's sign-in for its runtime changed: the run ends, its work
     goes back in the queue (`requeues`) and starts fresh. A Stop already recorded stands. Returns whether it was new."""
     if row["stop_requested_at"]:

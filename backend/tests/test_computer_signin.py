@@ -1,4 +1,4 @@
-"""A new computer signs its model in from the team's model credential, and says so on Health when it cannot."""
+"""Computer sign-in keeps shared provider keys and agent credentials out of its fetch."""
 
 from backend.tests.helpers.getting_started import add_bot, heartbeat  # noqa: F401
 from backend.tests.helpers.onboarding import environment, signed_in
@@ -11,14 +11,14 @@ def on_shared(name):
     return {"installed": True, "authenticated": "ready", "key": {"name": name, "source": "shared"}}
 
 
-def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment):
+def test_a_computer_gets_neither_the_team_provider_key_nor_credentials_a_bot_holds(environment):
     api = environment()
     vault(api)
     add_bot(api, "mailer")
     team = store(api, "OPENAI_API_KEY", "sk-team-key-0123456789")
     private = store(api, "OPENAI_API_KEY", "sk-only-for-mailer-999999", name="Mailer's own key")
     other = store(api, "POSTHOG_API_KEY", "phx-mailer-secret-123456")
-    grant(api, private, "bot:mailer")
+    grant(api, private, "bot:mailer", expected=422)
     grant(api, other, "bot:mailer")
     machine = new_computer(api)
     # Shared with every computer in Credentials before keys became subscriptions, and the computer said it ran on it.
@@ -26,9 +26,7 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     shared_before(api, team)
     got = computer_asks(api, machine["token"])
     assert got.status_code == 200
-    assert got.json() == {
-        "credentials": [{"env": "OPENAI_API_KEY", "value": "sk-team-key-0123456789", "source": "shared"}]
-    }
+    assert got.json() == {"credentials": []}
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
     assert computer_asks(api, machine["token"], "gemini").status_code == 422
     # Only a computer asks, and the event that records it never holds the key.
@@ -37,14 +35,14 @@ def test_a_computer_gets_the_team_model_key_and_nothing_a_bot_holds(environment)
     )
     with api.app.state.store.read() as c:
         dump = str([tuple(r) for r in c.execute("SELECT * FROM events WHERE action='credential.sent_to_computer'")])
-    assert machine["runner_id"] in dump and "sk-team-key" not in dump
+    assert dump == "[]"
     # Once the runner has signed in, Health has nothing to say about it.
     heartbeat(api, machine["runner_id"], runtimes={"codex": {"installed": True, "authenticated": "ready"}})
     checks = {c["id"]: c for c in api.get("/api/v2/health", headers=signed_in()).json()["checks"]}
     assert "computer_signin" not in checks
 
 
-def test_a_model_key_goes_to_computers_from_settings_models_not_a_grant(environment):
+def test_model_key_grants_do_not_put_a_provider_on_a_computer(environment):
     api = environment()
     vault(api)
     grant(api, store(api, "POSTHOG_API_KEY", "phx-mailer-secret-123456"), "computers", expected=422)
@@ -55,16 +53,9 @@ def test_a_model_key_goes_to_computers_from_settings_models_not_a_grant(environm
     cid = store(api, "ANTHROPIC_API_KEY", "sk-ant-team-0123456789", name="Claude key")
     refused = grant(api, cid, "computers", expected=422).json()
     assert "Settings > Providers" in refused["error"]["detail"]
-    assert "tico settings set models.computer_subscription" in refused["error"]["detail"]
+    assert "Paid by" in refused["error"]["detail"]
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}
-    # The old grant became a subscription: unassigning it takes the key back.
+    # A binding left by the old key migration still cannot supply a computer-wide provider.
     heartbeat(api, machine["runner_id"], runtimes={"claude": on_shared("ANTHROPIC_API_KEY")})
     shared_before(api, cid)
-    assert computer_asks(api, machine["token"], "claude").json()["credentials"][0]["env"] == "ANTHROPIC_API_KEY"
-    took = api.put(
-        "/api/v2/computer-subscriptions",
-        json={"runner_id": machine["runner_id"], "runtime": "claude", "subscription": None, "confirm": True},
-        headers=signed_in(),
-    )
-    assert took.status_code == 200, took.text
     assert computer_asks(api, machine["token"], "claude").json() == {"credentials": []}

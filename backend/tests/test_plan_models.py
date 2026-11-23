@@ -1,4 +1,4 @@
-"""Bots follow the company's Claude and ChatGPT plans (backend/plan_models.py): each bot nobody set by hand runs on its
+"""Bots follow their owner's Claude and ChatGPT plans (backend/plan_models.py): each bot nobody set by hand runs on its
 role's pick for the plans connected now, its tasks on its role's task pick, and both move when a plan comes or goes."""
 
 import json
@@ -24,6 +24,7 @@ def bots(api):
         spare = next(b for b in ids if b > "cpo" and b not in roles)  # sorts after cpo: the second reviewer
         roles[spare] = "reviewer"
         for bot, template in roles.items():
+            c.execute("UPDATE bot_config SET owner_id='ana' WHERE bot=?", (bot,))
             BS.update(
                 c, bot, {"template": template, "runtime": "claude", "harness": "claude", "model": "claude-opus-5-5"}
             )
@@ -54,6 +55,22 @@ def plan_moves(api):
             for r in c.execute("SELECT detail FROM events WHERE action='bot.model_changed' ORDER BY rowid")
             if json.loads(r[0]).get("why") == "plans"
         ]
+
+
+def test_a_member_plan_changes_only_their_template_agents(api):
+    bots(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
+        c.execute(
+            "INSERT INTO bot_sessions(bot,runtime,model,thread_id,updated_at) VALUES('cpo','claude','synthetic','kept',?)",
+            (H.now(),),
+        )
+    before = on(api, "cpo")
+    add(api, "codex_login", codex_file(), token="cara-test")
+    assert on(api, "ops")[2] == "codex"
+    assert on(api, "cpo") == before
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT thread_id FROM bot_sessions WHERE bot='cpo'").fetchone()[0] == "kept"
 
 
 def test_a_claude_plan_puts_the_bots_on_the_claude_set(api):

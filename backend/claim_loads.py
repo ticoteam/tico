@@ -16,7 +16,7 @@ class Loads:
     `runners` is {id: runners row}; `holds` is every open hold, by (kind, holdable_type, holdable_id, bot_id or ''),
     so a missing key is no hold."""
 
-    def __init__(self, record, plain, access, given, runners, limits, failing, held, holds, company=None):
+    def __init__(self, record, plain, access, given, runners, limits, failing, held, holds, company=None, payers=None):
         self.record = record  # providers.load(c, settings): the company's choice, the environment's seed included
         self.plain = plain  # providers.load(c): the same without the seed (for_claim reads it so); None if unread
         self.access = access  # cloud_access.access(c)
@@ -26,6 +26,7 @@ class Loads:
         self.failing = failing  # {bot: its open `failing` hold, None when none} (run_failures.get reads it)
         self.held = held  # {bot: turns it holds on every computer}
         self.holds = holds  # {(kind, holdable_type, holdable_id, bot_id or ''): open holds row}
+        self.payers = payers
         self.company = company  # company_pause.record(c): the company's pause on record, None while it runs
 
     def runner_of(self, c, runner_id, live=False):
@@ -109,22 +110,28 @@ class Part(Mapping):
         return bool(self.whole())
 
 
-def read(c, settings, runners, bots, narrow=False):
+def read(c, settings, runners, bots, narrow=False, job=None):
     """The Loads for `bots` (their ids) and `runners` ({id: runners row}), in fixed set queries: the company's values
     once, then each bot's rows in chunks of 500 bots (one statement while there are fewer). `narrow`: the holds and
     grants of these bots and computers only (`Part`), for a check of one job."""
     from . import providers, cloud_access, usage_limits, start_places
-    from . import model_subscriptions, company_pause
+    from . import agent_subscriptions, model_subscriptions, company_pause
 
     bots = list(dict.fromkeys(bots))
     record = providers.load(c, settings)
-    given = model_subscriptions.given_of(c, list(runners)) if narrow else model_subscriptions._given(c)
-    plain = providers.load(c) if given else None
+    old = [
+        rid
+        for rid, runner in runners.items()
+        if (caps := model_subscriptions.H._json(runner["capabilities"], []))
+        and "model_subscriptions_v1" in caps
+        and agent_subscriptions.CAPABILITY not in caps
+    ]
+    given = model_subscriptions.given_of(c, old) if old else {}
     access = cloud_access.access(c)
     holds = open_holds_of(c, bots) if narrow else open_holds(c)
     return Loads(
         record,
-        plain,
+        None,
         access,
         given,
         dict(runners),
@@ -133,6 +140,7 @@ def read(c, settings, runners, bots, narrow=False):
         start_places.held_counts(c, bots),
         holds,
         company_pause.record(c),
+        agent_subscriptions.read(c, bots, job),
     )
 
 

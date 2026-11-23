@@ -188,72 +188,21 @@ def test_cloud_replace_needs_the_machines_exact_name():
     assert tool("tico_cloud_replace", empty, confirm="x")["replaced"] is False
 
 
-def test_subscription_list_names_computers_and_never_a_value():
+def test_subscription_tools_read_and_change_the_agents_paid_by():
+    current = {"subscriptions": {"claude": {"kind": "pool", "person": "human:ana"}}}
     api = Api(
         {
             ("GET", "model-subscriptions"): {
-                "subscriptions": [
-                    {
-                        "id": "s1",
-                        "name": "Team Max",
-                        "kind": "claude_max",
-                        "label": "Claude Max",
-                        "runtime": "claude",
-                        "status": "ok",
-                        "preview": "sk-...abcd",
-                        "computers": ["r1"],
-                        "added_by_name": "Ana",
-                        "usage": {"secret": "x"},
-                    }
-                ]
+                "subscriptions": [{"id": "s1", "name": "Team Max", "owner_id": "human:ana"}]
             },
-            ("GET", "computer-subscriptions"): {"assignments": [], "capable": ["r1"]},
-            ("GET", "computers"): COMPUTERS,
+            ("GET", "bots/ops/subscriptions"): current,
+            ("PUT", "bots/ops/subscriptions"): {"subscriptions": {}},
         }
     )
-    got = tool("tico_subscription_list", api)
-    assert got["subscriptions"][0]["computers"] == ["Shared cloud machine"] and "usage" not in got["subscriptions"][0]
-    assert got["cannot_take_one"] == ["Ana's Mac"]
-
-
-def test_subscription_list_names_each_computer_given_a_persons_plans_the_plan_in_use_and_why():
-    api = Api(
-        {
-            ("GET", "model-subscriptions"): {"subscriptions": []},
-            ("GET", "computer-subscriptions"): {
-                "assignments": [
-                    {"runner_id": "r1", "runtime": "claude", "subscription_id": "s1", "person": "", "set": None},
-                    {
-                        "runner_id": "r2",
-                        "runtime": "claude",
-                        "subscription_id": "p2",
-                        "person": "human:ana",
-                        "set": {
-                            "person": "human:ana",
-                            "person_name": "Ana",
-                            "plans": 3,
-                            "on": "p2",
-                            "on_name": "Plan 2",
-                            "why": {"kind": "held", "plan": "Plan 1", "until": "2026-11-13T09:00:00Z"},
-                        },
-                    },
-                ],
-                "capable": ["r1", "r2"],
-            },
-            ("GET", "computers"): COMPUTERS,
-        }
-    )
-    got = tool("tico_subscription_list", api)
-    assert got["people_plans"] == [
-        {
-            "computer": "Ana's Mac",
-            "tool": "claude",
-            "plans": "Ana's plans",
-            "count": 3,
-            "on": "Plan 2",
-            "why": "Plan 1 at its limit until 2026-11-13T09:00:00Z",
-        }
-    ]
+    assert tool("tico_subscription_list", api)["subscriptions"][0]["id"] == "s1"
+    assert tool("tico_subscription_show", api, bot="ops") == current
+    assert tool("tico_subscription_set", api, bot="ops", runtime="claude", kind="unset")["subscriptions"] == {}
+    assert api.calls[-1][:3] == ("PUT", "bots/ops/subscriptions", {"subscriptions": {"claude": None}})
 
 
 def test_over_mcp_a_required_key_sent_as_null_resets_where_its_schema_allows_null_and_integers_read_as_json_numbers():

@@ -124,13 +124,15 @@ def _gateway_connection_and_models_in_use_per_level(built):
         assert all(pick["bots"] >= 1 for pick in body["picks"])
 
 
-def _company_subscription_is_given_to_the_macbook(built):
+def _macbook_agents_choose_the_provider(built):
     with as_ana(built) as api:
         subs = api.get("/api/v2/model-subscriptions").json()["subscriptions"]
         assert [row["name"] for row in subs] == ["Acme Claude team plan"]
         assigned = api.get("/api/v2/computer-subscriptions").json()["assignments"]
-        assert [row["subscription_id"] for row in assigned] == [subs[0]["id"]]
-        assert assigned[0]["runtime"] == "claude"
+        assert any(
+            row["runtime"] == "claude" and row["subscription_id"] == subs[0]["id"] and not row["mixed"]
+            for row in assigned
+        )
 
 
 def _github_and_slack_show_as_connected(built):
@@ -325,7 +327,7 @@ def test_the_demo_services_tell_their_story(built, subtests):
         _letters_out_keeps_a_local_proof_and_a_provider_receipt_in_the_demo,
         _letters_carry_the_mailing_address_and_reach_their_owners,
         _gateway_connection_and_models_in_use_per_level,
-        _company_subscription_is_given_to_the_macbook,
+        _macbook_agents_choose_the_provider,
         _github_and_slack_show_as_connected,
         _bots_declare_their_mcp_tools_as_ready,
         _the_demo_never_asks_the_gateway_its_catalog_or_github,

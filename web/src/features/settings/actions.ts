@@ -439,7 +439,7 @@ export const connect = defineAction({
   title: 'Connect a Claude or ChatGPT plan',
   kind: 'change',
   input: z.union([
-    z.strictObject({ kind: z.enum(SIGN_IN_KINDS) }),
+    z.strictObject({ kind: z.enum(SIGN_IN_KINDS), owner_id: z.optional(id('a person id')) }),
     z.strictObject({ subscription: id('a subscription id'), confirm: z.optional(z.boolean()) }),
   ]),
   // The sign-in opens the provider's page in the person's own browser, signed in as them.
@@ -456,14 +456,14 @@ export const pastePlan = defineAction({
   title: 'Paste a provider credential',
   kind: 'change',
   input: z.union([
-    z.strictObject({ kind: z.enum(['claude_token', 'codex_login']), secret: planSecret }),
+    z.strictObject({ kind: z.enum(['claude_token', 'codex_login']), secret: planSecret, owner: z.optional(id('a person id')) }),
     z.strictObject({ subscription: id('a subscription id'), secret: planSecret, confirm: z.optional(z.boolean()) }),
   ]),
   tico: false,
   run: async (ctx, input) => {
     const saved = 'subscription' in input
       ? await replaceSubscriptionSecret(input.subscription, input.secret, input.confirm)
-      : await addSubscription(input.kind, input.secret);
+      : await addSubscription(input.kind, input.secret, undefined, input.owner);
     void ctx.queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
     return saved;
   },
@@ -496,10 +496,10 @@ export const addKey = defineAction({
   id: 'settings.addKey',
   title: 'Add a model key',
   kind: 'change',
-  input: z.strictObject({ kind: id('a subscription kind'), secret: z.string().check(z.minLength(8), z.maxLength(20000), z.describe('the key')), name: z.optional(subscriptionName) }),
+  input: z.strictObject({ kind: id('a subscription kind'), secret: z.string().check(z.minLength(8), z.maxLength(20000), z.describe('the key')), name: z.optional(subscriptionName), owner: z.optional(id('a person id')) }),
   tico: false,
-  run: async (ctx, { kind, secret, name }) => {
-    const added = await addSubscription(kind, secret, name);
+  run: async (ctx, { kind, secret, name, owner }) => {
+    const added = await addSubscription(kind, secret, name, owner);
     void ctx.queryClient.invalidateQueries({ queryKey: subscriptionsQuery.queryKey });
     return added;
   },

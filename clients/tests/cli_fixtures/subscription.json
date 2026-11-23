@@ -22,19 +22,123 @@
     "GET",
     "model-subscriptions",
     null
-   ],
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "subscription",
+   "show",
+   "ops"
+  ],
+  "tools": [
+   [
+    "tico_subscription_show",
+    {
+     "bot": "ops",
+     "operation_id": null
+    }
+   ]
+  ],
+  "http": [
    [
     "GET",
-    "computer-subscriptions",
+    "me",
     null
    ],
    [
     "GET",
-    "computers",
+    "bots/ops/subscriptions",
     null
    ]
   ],
-  "stdout": "{\n  \"subscriptions\": [],\n  \"people_plans\": [],\n  \"cannot_take_one\": [],\n  \"detail\": \"Give one, or a person's plans (`person`), to a computer: tico settings set models.computer_subscription\"\n}\n",
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "subscription",
+   "set",
+   "ops",
+   "claude",
+   "pool",
+   "ana"
+  ],
+  "tools": [
+   [
+    "tico_subscription_set",
+    {
+     "bot": "ops",
+     "kind": "pool",
+     "operation_id": null,
+     "runtime": "claude",
+     "target": "ana"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "bots/ops/subscriptions",
+    {
+     "subscriptions": {
+      "claude": {
+       "kind": "pool",
+       "person": "ana"
+      }
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "subscription",
+   "set",
+   "ops",
+   "claude",
+   "unset"
+  ],
+  "tools": [
+   [
+    "tico_subscription_set",
+    {
+     "bot": "ops",
+     "kind": "unset",
+     "operation_id": null,
+     "runtime": "claude"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PUT",
+    "bots/ops/subscriptions",
+    {
+     "subscriptions": {
+      "claude": null
+     }
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
   "stderr": "",
   "exit": 0
  }

@@ -419,9 +419,8 @@ DO = _routes(
     ("PUT", r"providers/gateway"),
     ("DELETE", r"providers/gateway"),
     ("POST", r"providers/gateway/automatic"),
-    # Giving a computer a company subscription, or removing one: an owner's or an admin's call, which the route checks;
-    # a Confirm card (backend/settings_entries.py), since it restarts that computer's runs. Saving a value is refused there.
-    ("PUT", r"computer-subscriptions"),
+    # Paid by uses the requesting person's rights and takes effect on the next turn.
+    ("PUT", rf"bots/{_S}/subscriptions"),
     ("DELETE", rf"model-subscriptions/{_S}"),
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),

@@ -1,6 +1,7 @@
 import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
+  AgentSubscriptionList,
   BotDreamView,
   BotRepositories,
   BotFileList,
@@ -25,6 +26,7 @@ import type {
   SeatAgent,
   SeatCanceled,
   SeatList,
+  SetBotSubscriptionsBody,
   Task,
   TeammateAccessView,
 } from '@/api/schema';
@@ -61,6 +63,7 @@ export interface AgentRow {
   model?: string;
   reasoning_effort?: string;
   resolved_model?: string;
+  resolved_runtime?: string;
   resolved_model_label?: string;
   resolved_effort?: string;
   /** 'bot' when the agent picked its own model; otherwise it follows the company's default for its plan. */
@@ -82,6 +85,44 @@ export const agentsQuery = queryOptions({
   queryKey: keys.team.agents(),
   queryFn: ({ signal }) => api.get<AgentRow[]>('/api/employees', { signal }),
 });
+
+const paidByPath = (bot: string) => `/api/v2/bots/${at(bot)}/subscriptions` as const;
+export const paidByQuery = (bot: string, lastTurn = false) =>
+  queryOptions<AgentSubscriptionList>({
+    queryKey: [...keys.team.paidBy(), bot, lastTurn] as const,
+    queryFn: ({ signal }) => api.get<AgentSubscriptionList>(`${paidByPath(bot)}${lastTurn ? '?last_turn=true' : ''}`, { signal }),
+    ...(lastTurn && {
+      staleTime: 0,
+      refetchInterval: ({ state }) => {
+        const read = Math.max(state.dataUpdatedAt, state.errorUpdatedAt);
+        const resets = (state.data?.last_turn?.waits ?? []).map((wait) => Date.parse(wait.until ?? ''));
+        const next = Math.min(...resets.filter((at) => at > read));
+        return Number.isFinite(next) ? Math.min(2_147_483_647, Math.max(1, next - Date.now())) : false;
+      },
+      refetchIntervalInBackground: true,
+    }),
+  });
+
+export type PayerPick = SetBotSubscriptionsBody['subscriptions'][string];
+
+export const setPaidBy = (bot: string, runtime: string, pick: PayerPick) =>
+  write<AgentSubscriptionList>({
+    key: [paidByQuery(bot).queryKey, paidByQuery(bot, true).queryKey],
+    wait: true,
+    optimistic: (current: AgentSubscriptionList | undefined) => current,
+    settle: (current: AgentSubscriptionList | undefined, saved) => {
+      if (!current) return current;
+      const subscriptions = { ...current.subscriptions };
+      const updated = saved.subscriptions[runtime];
+      if (updated) subscriptions[runtime] = updated;
+      else delete subscriptions[runtime];
+      return { ...current, subscriptions };
+    },
+    send: (idempotencyKey) => api.put<AgentSubscriptionList>(paidByPath(bot), { subscriptions: { [runtime]: pick } }, { idempotencyKey }),
+  }).then(() => {
+    void queryClient.invalidateQueries({ queryKey: ['settings', 'subscriptions'] });
+    void queryClient.invalidateQueries({ queryKey: paidByQuery(bot, true).queryKey }, { cancelRefetch: false });
+  });
 
 /** One agent (GET /api/v2/bots/{slug}): what it is on, why it cannot run, who it reports to. */
 export interface AgentDetail {

@@ -21,7 +21,7 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask Agent Ops to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Add a subscription (Connect or paste) and give it to computers | Settings → Providers → Add, then `tico settings set models.computer_subscription` ([Subscriptions](computers.md#subscriptions)) |
+| Add a subscription (Connect or paste) and choose it for an agent | Settings → Providers → Add, then **Paid by** on the agent or `tico subscription set` ([Subscriptions](computers.md#subscriptions)) |
 | Sign a computer in to an AI tool | Agent → Computer → This computer’s sign-in ([Computers](computers.md)) |
 | Change company turn limits | Usage → Limits |
 | Check problems and recovery | Settings → General → Health → Details (`#/settings/health`) |

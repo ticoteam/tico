@@ -157,16 +157,9 @@ def canonical(c, runner_id, profile, runtime, subscription=True, loads=None):
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile.
     Inside a transaction it is answered once: a claim scan asks it per bot and per job, and the runner's readiness
     document is parsed each time. Writes clear the read cache (backend/read_cache.py), so a changed runner is re-read.
-    The computer's subscription for `runtime`, while one is in effect there, is the login whatever the profile
-    (`subscription=False` asks for the computer's own login)."""
+    Paid-by holds name the subscription explicitly."""
     from .read_cache import cache
 
-    if subscription:
-        from .model_subscriptions import in_effect
-
-        found = in_effect(c, runner_id, runtime, loads=loads)
-        if found:
-            return subscription_login(found["id"])
     if loads is not None:
         return _canonical(c, runner_id, profile, runtime, loads)
     values = cache(c)
@@ -417,10 +410,12 @@ def probing(c, hold, now=None):
 
 
 def _probe_live(c, hold, now):
+    from .read_cache import one
+
     job = hold.get("probe_job")
     if not job:
         return False
-    row = c.execute("SELECT state FROM jobs WHERE id=?", (job,)).fetchone()
+    row = one(c, "SELECT state FROM jobs WHERE id=?", (job,))
     if not row:
         return False
     if row["state"] in LIVE_JOB:

@@ -3,6 +3,7 @@
 import json
 from fastapi import Request
 from . import (
+    agent_subscriptions,
     bot_settings as BS,
     company_billing,
     company_pause,
@@ -23,6 +24,73 @@ from .store import H, Problem
 from .api_contract import api_v2, error
 
 
+def _last_turn(c, settings, auth, who, bot, chosen):
+    from . import read_cache as RC, shared_bots, usage_facts
+    from .execution import PLACE_SQL, RUNNER_SQL, waiting_payers
+
+    actor = privacy.actor(who)
+
+    def reads_room(room):
+        if not room:
+            return True
+        try:
+            auth.conversation(c, who, room)
+        except Problem:
+            return False
+        return True
+
+    if chosen and (place := RC.one(c, PLACE_SQL, (bot,))) and place["runner_id"]:
+        runner = RC.one(c, RUNNER_SQL, (place["runner_id"],))
+        config = RC.one(c, BS.ONE_SQL, (bot,))
+        if runner and not runner["revoked_at"] and config:
+            followed = shared_bots.follow(c, bot, H._json(config["config"], {}) or {})
+            waits = [
+                {
+                    "reason": payment.reason,
+                    "until": payment.until.isoformat() if payment.until else None,
+                    "fixer": agent_subscriptions.wait_fixer(c, runner, chosen[runtime], payment),
+                }
+                for runtime, payment in waiting_payers(
+                    c,
+                    settings,
+                    runner,
+                    bot,
+                    followed,
+                    readable=lambda m: reads_room(m["conversation_id"]) and privacy.message_readable(c, actor, m),
+                )
+            ]
+            if waits:
+                return {"payers": [], "at": None, "waits": waits}
+
+    for turn in c.execute(
+        "SELECT a.id,a.settled_at,m.conversation_id FROM attempts a "
+        "LEFT JOIN jobs j ON j.id=a.job_id LEFT JOIN messages m ON m.id=j.message_id "
+        "WHERE a.bot_id=? AND a.started_at IS NOT NULL AND a.settled_at IS NOT NULL "
+        "ORDER BY a.settled_at DESC,a.id DESC LIMIT 50",
+        (bot,),
+    ):
+        if not reads_room(turn["conversation_id"]) or not privacy.attempt_readable(c, actor, turn["id"]):
+            continue
+        payers = []
+        for segment in c.execute(
+            "SELECT f.model,f.billing,s.subscription_id,p.name FROM usage_facts f "
+            "LEFT JOIN attempt_subscriptions s ON s.attempt_id=f.run_id AND s.runtime=f.runtime "
+            "LEFT JOIN model_subscriptions p ON p.id=s.subscription_id "
+            "WHERE f.run_id=? AND f.source='estimate' ORDER BY f.position",
+            (turn["id"],),
+        ):
+            if usage_facts.gateway_billed(segment["model"], segment["billing"]):
+                payer = "Tico Gateway"
+            elif segment["subscription_id"]:
+                payer = segment["name"] or "Unknown"
+            else:
+                payer = "Computer sign-in" if segment["billing"] == "subscription" else "Unknown"
+            if payer not in payers:
+                payers.append(payer)
+        return {"payers": payers or ["Unknown"], "at": turn["settled_at"], "waits": []}
+    return None
+
+
 def register(
     app,
     admin_only,
@@ -39,6 +107,57 @@ def register(
     store,
     reset_bot_sessions,
 ):
+    def payer_bot(c, who, bot):
+        auth.domain(who)
+        model_subscriptions._reader(who)
+        found = H.resolve_bot(c, bot)
+        if not found:
+            raise Problem("not_found", "Agent not found", 404)
+        auth.require(c, who, found["id"], "read")
+        return found["id"]
+
+    @app.get(
+        "/api/v2/bots/{bot}/subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "getBotSubscriptions",
+            "An agent's Paid by per AI tool",
+            "AgentSubscriptionList",
+            responses={"403": error("This person cannot read Paid by"), "404": error("Agent not found")},
+        ),
+    )
+    def get_bot_subscriptions(request: Request, bot: str, last_turn: bool = False):
+        who = request.state.identity
+        with store.read() as c:
+            target = payer_bot(c, who, bot)
+            picks = agent_subscriptions.picks(c, target)
+            answer = {"subscriptions": picks, "can_edit": agent_subscriptions.can_edit(c, auth, who, target)}
+            if last_turn:
+                answer["last_turn"] = _last_turn(c, settings, auth, who, target, picks)
+            return answer
+
+    @app.put(
+        "/api/v2/bots/{bot}/subscriptions",
+        **api_v2(
+            "Model subscriptions",
+            "setBotSubscriptions",
+            "Change Paid by for the supplied AI tools. Use null to clear a tool. Changes apply at the next turn.",
+            "AgentSubscriptionList",
+            responses={
+                "403": error("Only a pool owner or admin managing the agent can assign its payer"),
+                "404": error("Agent or provider not found"),
+            },
+        ),
+    )
+    def set_bot_subscriptions(request: Request, bot: str, body: agent_subscriptions.ChangePicks):
+        who = request.state.identity
+
+        def work(c):
+            target = payer_bot(c, who, bot)
+            return {"subscriptions": agent_subscriptions.save(c, auth, who, target, body.subscriptions)}
+
+        return mutate(request, body, work, check=lambda c: payer_bot(c, who, bot))
+
     @app.post("/api/v2/bots/{bot}/placement")
     def placement(request: Request, bot: str, body: M.BotPlacement):
         caller = request.state.identity

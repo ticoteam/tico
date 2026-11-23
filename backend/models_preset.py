@@ -96,20 +96,6 @@ def computer_falls_back(c, runner_id):
     return bool(row and row[0])
 
 
-def plans_out(c, runner_id, config, loads=None):
-    """Whether a turn on `config` here waits for a plan instead of running on the Gateway: every plan given this
-    computer for its runtime is passed over (at its limit, or needing reconnecting) and the computer does not fall
-    back to the Gateway. Without it the turn would read as not signed in yet and `waiting` would send it there."""
-    from . import model_subscriptions
-
-    runtime = str((config or {}).get("runtime") or "")
-    return (
-        runtime in SUBSCRIPTION_RUNTIMES
-        and model_subscriptions.passed_over(c, runner_id, runtime, loads)
-        and not computer_falls_back(c, runner_id)
-    )
-
-
 def pick(model=None):
     """The Gateway model a waiting or fallback turn runs on: `model` (an id, or a function that finds it only when it
     is needed), else the company-wide Medium."""
@@ -200,10 +186,6 @@ def gateway_line(c, bot, ready, settings=None, config=None):
         row = c.execute(BS.ONE_SQL, (bot,)).fetchone()
         config = fill(record, json.loads(row[0] or "{}") if row else {})
     if not waiting(record, ready, config):
-        return ""
-    # Its plans on its computer ran out and the computer does not fall back to the Gateway: the claim holds the turn.
-    row = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    if row and plans_out(c, row[0], config):
         return ""
     return (
         "Using Tico AI Gateway; sign in to "

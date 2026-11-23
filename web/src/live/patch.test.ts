@@ -27,6 +27,17 @@ afterEach(() => {
 const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
+it('refreshes only the agent whose run state changed', () => {
+  const payer = (bot: string) => [...keys.team.paidBy(), bot, true];
+  queryClient.setQueryData(payer('ops'), { last_turn: null });
+  queryClient.setQueryData(payer('sales'), { last_turn: null });
+  FakeEventSource.last.feed(frame(901, 'runs', { bot_id: 'sales', output: { kind: 'text' } }));
+  FakeEventSource.last.feed(frame(902, 'runs', { bot_id: 'ops', state: 'queued' }));
+  flushFrame();
+  expect(queryClient.getQueryState(payer('ops'))?.isInvalidated).toBe(true);
+  expect(queryClient.getQueryState(payer('sales'))?.isInvalidated).toBe(false);
+});
+
 describe('tasks', () => {
   it('keep a task’s children current: one filed is read again, one that ends or reopens lands in place', async () => {
     const parent = ['tasks', 'detail', 't1'];

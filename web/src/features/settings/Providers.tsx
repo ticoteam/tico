@@ -8,7 +8,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts } from '@/kit/LabelValue';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { SectionHead } from '@/kit/SectionHead';
 import { fmtDate } from '@/lib';
@@ -18,14 +18,15 @@ import { ConnectPlan } from './ConnectPlan';
 import { GatewayLines } from './Gateway';
 import { Line, Meter, act, agentsWord, usd, useAdmin } from './parts';
 import { limitReset, needsReconnect, providerBadge } from './providerStatus';
-import { SIGN_IN_KINDS, subscriptionsQuery, type SignInKind, type Subscription } from './queries';
+import { accessQuery, SIGN_IN_KINDS, subscriptionsQuery, type SignInKind, type Subscription } from './queries';
 
 const isPlan = (kind: string): kind is SignInKind => (SIGN_IN_KINDS as readonly string[]).includes(kind);
 
-type Adding = { sign: SignInKind } | { key: string; label: string };
+type Owner = { id: string; name: string };
+type Adding = ({ sign: SignInKind } | { key: string; label: string }) & { owner?: Owner };
 type Change = 'reconnect' | 'replace' | 'rename' | 'remove';
 
-function KeyDialog({ kind, label, subscription, onClose }: { kind: string; label: string; subscription?: Subscription; onClose: () => void }) {
+function KeyDialog({ kind, label, subscription, owner, onClose }: { kind: string; label: string; subscription?: Subscription; owner?: Owner; onClose: () => void }) {
   const [secret, setSecret] = useState('');
   const [restart, setRestart] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +35,7 @@ function KeyDialog({ kind, label, subscription, onClose }: { kind: string; label
     setBusy(true);
     try {
       if (!subscription) {
-        if (await act('settings.addKey', { kind, secret: secret.trim() })) onClose();
+        if (await act('settings.addKey', { kind, secret: secret.trim(), ...(owner && { owner: owner.id }) })) onClose();
         return;
       }
       const result = await run('settings.pastePlan', { subscription: subscription.id, secret: secret.trim(), ...(confirm && { confirm: true }) }, { via: 'click' });
@@ -54,7 +55,7 @@ function KeyDialog({ kind, label, subscription, onClose }: { kind: string; label
     <Dialog
       open
       onOpenChange={(o) => !o && !busy && onClose()}
-      title={restart ? 'Restart runs?' : subscription ? `Replace key for ${subscription.name}` : `Add ${label}`}
+      title={restart ? 'Restart runs?' : subscription ? `Replace key for ${subscription.name}` : `Add ${label}${owner ? ` for ${owner.name}` : ''}`}
       alert={!!restart}
       description={restart ?? error ?? undefined}
       actions={
@@ -113,16 +114,17 @@ function Usage({ s }: { s: Subscription }) {
   return <span className="provider-usage">{u?.cost_usd_month != null ? `${usd(u.cost_usd_month)} this month` : u?.reason || '—'}</span>;
 }
 
-function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open: boolean }) {
+function ProviderRow({ s, admin, own, open }: { s: Subscription; admin: boolean; own: boolean; open: boolean }) {
   const [changing, setChanging] = useState<Change | null>(null);
   const plan = isPlan(s.kind);
   const agents = s.agents ?? [];
   const badge = providerBadge(s);
   const expandable = !!badge.detail || agents.length > 0;
   const by = plan ? (s.owner_id ? s.owner_name || 'A teammate' : `Added by ${s.added_by_name || 'A teammate'}`) : '';
-  const preview = plan || admin ? s.preview : '';
+  const preview = s.preview;
   const byWhen = s.reconnect_by && !needsReconnect(s) && fmtDate(s.reconnect_by);
-  const mayRemove = s.can_remove ?? admin;
+  const manage = admin || own;
+  const mayRemove = s.can_remove ?? manage;
   const close = () => setChanging(null);
   return (
     <>
@@ -145,15 +147,15 @@ function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open
         <span className="provider-kind">{plan ? (s.kind === 'codex_login' ? 'ChatGPT plan' : 'Claude plan') : 'API key'}</span>
         {badge.label !== 'Reconnect needed' && badge.label !== 'Problem' ? <Usage s={s} /> : <span className="provider-usage" />}
         <span className="provider-badge"><Pill flag={badge.label === 'Problem' || needsReconnect(s)} title={badge.detail}>{badge.label}</Pill></span>
-        <span className="provider-agents">On {agentsWord(agents.length)}</span>
+        <span className="provider-agents">Picked by {agentsWord(agents.length)}</span>
         <span className="provider-more">
-          {(admin || mayRemove) && (
+          {(manage || mayRemove) && (
             <Menu trigger={<IconButton icon="more" label={`More for ${s.name}`} size="sm" quiet />}>
-              {admin && <MenuItem label={plan ? 'Reconnect' : 'Replace key'} onSelect={() => setChanging(plan ? 'reconnect' : 'replace')} />}
-              {admin && s.runtime === 'claude' && plan && !needsReconnect(s) && (
+              {manage && <MenuItem label={plan ? 'Reconnect' : 'Replace key'} onSelect={() => setChanging(plan ? 'reconnect' : 'replace')} />}
+              {manage && s.runtime === 'claude' && plan && !needsReconnect(s) && (
                 <MenuItem label="Check use" onSelect={() => void act('settings.refreshUsage', { subscription: s.id })} />
               )}
-              {admin && <MenuItem label="Rename" onSelect={() => setChanging('rename')} />}
+              {manage && <MenuItem label="Rename" onSelect={() => setChanging('rename')} />}
               {mayRemove && <MenuItem label="Remove" onSelect={() => setChanging('remove')} />}
             </Menu>
           )}
@@ -163,7 +165,7 @@ function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open
         <Facts label={s.name}>
           {badge.detail && <Line label="State">{badge.detail}</Line>}
           {agents.length > 0 && (
-            <Line label="Agents on it">
+            <Line label="Picked by">
               {agents.map((a, i) => (
                 <span key={a.id}>
                   {i > 0 && ', '}
@@ -175,16 +177,16 @@ function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open
           )}
         </Facts>
       )}
-      {changing === 'reconnect' && admin && isPlan(s.kind) && <ConnectPlan kind={s.kind} subscription={s.id} onClose={close} />}
-      {changing === 'replace' && admin && <KeyDialog kind={s.kind} label="API key" subscription={s} onClose={close} />}
-      {changing === 'rename' && admin && <RenameDialog s={s} onClose={close} />}
+      {changing === 'reconnect' && manage && isPlan(s.kind) && <ConnectPlan kind={s.kind} subscription={s.id} onClose={close} />}
+      {changing === 'replace' && manage && <KeyDialog kind={s.kind} label="API key" subscription={s} onClose={close} />}
+      {changing === 'rename' && manage && <RenameDialog s={s} onClose={close} />}
       {changing === 'remove' && mayRemove && (
         <Dialog
           open
           onOpenChange={(o) => !o && close()}
           alert
           title={`Remove ${s.name}?`}
-          description="Agents on it stop, and their sessions start fresh on what is left."
+          description={s.removal_agents === undefined ? undefined : `${agentsWord(s.removal_agents)} will lose Paid by.`}
           actions={
             <>
               <Button variant="quiet" onClick={close}>Cancel</Button>
@@ -197,7 +199,7 @@ function ProviderRow({ s, admin, open }: { s: Subscription; admin: boolean; open
   );
 }
 
-function Pool({ name, list, admin, open, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; open?: string; defaultExpanded?: boolean }) {
+function Pool({ name, list, admin, own = false, open, defaultExpanded = true }: { name: string; list: Subscription[]; admin: boolean; own?: boolean; open?: string; defaultExpanded?: boolean }) {
   const content = useId();
   const opened = open?.replace(/^subscription:/, '');
   const addressed = list.some((s) => s.id === opened) ? opened : undefined;
@@ -216,13 +218,12 @@ function Pool({ name, list, admin, open, defaultExpanded = true }: { name: strin
       <header className="provider-pool-head">
         <SectionHead level={2} name={name} open={expanded} controls={content} onToggle={() => setToggle({ addressed, expanded: !expanded })} />
         <span>{summary}</span>
-        {list.length > 0 && <span className="provider-pool-count">Used by {agentsWord(agents.size)}</span>}
+        {list.length > 0 && <span className="provider-pool-count">Picked by {agentsWord(agents.size)}</span>}
       </header>
       <div id={content} hidden={!expanded}>
         {expanded && [...sorted, ...keys].map((s) => (
-          <ProviderRow key={s.id} s={s} admin={admin} open={addressed === s.id} />
+          <ProviderRow key={s.id} s={s} admin={admin} own={own} open={addressed === s.id} />
         ))}
-        {expanded && !list.length && <div className="provider-pool-note">{admin ? 'Add a Claude or ChatGPT plan, or an API key.' : 'Ask an owner or admin to add a plan.'}</div>}
       </div>
     </section>
   );
@@ -232,6 +233,7 @@ export function Providers({ open }: { open?: string }) {
   const { data } = useQuery(subscriptionsQuery);
   const { data: me } = useQuery(meQuery);
   const admin = useAdmin();
+  const { data: access } = useQuery({ ...accessQuery, retry: false, enabled: admin });
   const [adding, setAdding] = useState<Adding | null>(null);
   if (!data) return null;
   const mine: Subscription[] = [];
@@ -249,18 +251,32 @@ export function Providers({ open }: { open?: string }) {
   }
   const signIns = data.kinds.filter((k): k is typeof k & { kind: SignInKind } => k.connect && isPlan(k.kind));
   const keys = data.kinds.filter((k) => !k.connect);
-  const add = admin && (
-    <Menu trigger={<Button icon="plus" variant="primary">Add</Button>}>
-      {signIns.map((k) => <MenuItem key={k.kind} label={k.label} meta="Sign in" onSelect={() => setAdding({ sign: k.kind })} />)}
+  const addKinds = (owner?: Owner) => (
+    <>
+      {signIns.map((k) => <MenuItem key={k.kind} label={k.label} meta="Sign in" onSelect={() => setAdding({ sign: k.kind, owner })} />)}
       {signIns.length > 0 && keys.length > 0 && <MenuRule />}
-      {keys.map((k) => <MenuItem key={k.kind} label={k.label.replace(/ API key$/, ' key')} meta="Paste" onSelect={() => setAdding({ key: k.kind, label: k.secret_label || k.label })} />)}
+      {keys.map((k) => <MenuItem key={k.kind} label={k.label.replace(/ API key$/, ' key')} meta="Paste" onSelect={() => setAdding({ key: k.kind, label: k.secret_label || k.label, owner })} />)}
+    </>
+  );
+  const people = admin ? (access?.people ?? []).filter((p) => !p.left && p.sign_in && `human:${p.id}` !== me?.id) : [];
+  const add = (
+    <Menu trigger={<Button icon="plus" variant="primary">Add</Button>}>
+      {addKinds()}
+      {people.length > 0 && (
+        <>
+          <MenuRule />
+          <MenuSub label="Add for a teammate">
+            {people.map((p) => <MenuSub key={p.id} label={p.name}>{addKinds(p)}</MenuSub>)}
+          </MenuSub>
+        </>
+      )}
     </Menu>
   );
   return (
     <>
       <div className="provider-pools" data-target="setting:subscriptions">
         <SectionHead name="Providers" actions={add} />
-        <Pool name="Your pool" list={mine} admin={admin} open={open} />
+        <Pool name="Your pool" list={mine} admin={admin} own open={open} />
         {[...other].sort(([, a], [, b]) => a.name.localeCompare(b.name)).map(([id, pool]) => (
           <Pool key={id} name={`${pool.name}'s pool`} list={pool.list} admin={admin} open={open} defaultExpanded={false} />
         ))}
@@ -273,8 +289,8 @@ export function Providers({ open }: { open?: string }) {
           <Line label="Gateway limit"><Link className="verb" to="/company/usage" search={{ view: 'limits' }}>Limits</Link></Line>
         </Facts>
       </Section>
-      {admin && adding && 'sign' in adding && <ConnectPlan kind={adding.sign} onClose={() => setAdding(null)} />}
-      {admin && adding && 'key' in adding && <KeyDialog kind={adding.key} label={adding.label} onClose={() => setAdding(null)} />}
+      {adding && 'sign' in adding && <ConnectPlan kind={adding.sign} owner={adding.owner} onClose={() => setAdding(null)} />}
+      {adding && 'key' in adding && <KeyDialog kind={adding.key} label={adding.label} owner={adding.owner} onClose={() => setAdding(null)} />}
     </>
   );
 }

@@ -210,6 +210,7 @@ def _login_dependencies(c, settings):
     from .shared_bots import follow
 
     record, found = providers.load(c, settings), {}
+    paid = {(row["bot"], row["runtime"]) for row in read_cache.rows(c, "SELECT bot,runtime FROM agent_subscriptions")}
     for row in read_cache.rows(c, ACTIVE_CONFIGS_SQL):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
@@ -218,6 +219,7 @@ def _login_dependencies(c, settings):
             caps = harness_caps(resolve_harness(choice, runtime), runtime)
             if (
                 runtime
+                and (row["bot"], runtime) not in paid
                 and not gateway_connection.is_tico(choice.get('model'))
                 and caps.get('readiness') is not False
                 and caps.get('api_keys') != 'bot'
@@ -295,9 +297,7 @@ def _computers(c, runners_online, settings, limits=None):
     default = providers.default_runtime(providers.load(c, settings))
     wanted = {default} - {""}
     from .cloud_machines import resting as resting_machines
-    from .model_subscriptions import KINDS, RUNNER_CAPABILITIES_SQL, in_effect, plan_hold
     from .performance import latest_disks
-    from .read_cache import prime
 
     resting = resting_machines(c)
     found = c.execute(
@@ -305,7 +305,6 @@ def _computers(c, runners_online, settings, limits=None):
         "coalesce(nullif(h.name,''),r.owner_id) AS owner_id FROM runners_with_state r "
         "LEFT JOIN humans h ON h.id=r.owner_id WHERE r.revoked_at IS NULL ORDER BY r.label"
     ).fetchall()
-    prime(c, RUNNER_CAPABILITIES_SQL, {(r["id"],): r for r in found})  # in_effect's runner read, for every computer
     # The disk as of its last minute's sample: readiness sends the disk again only when something else changed.
     disks = latest_disks(c, [r["id"] for r in found])
     # Runtimes whose bots the Gateway runs meanwhile, since their subscription is not signed in (models_preset).
@@ -313,19 +312,6 @@ def _computers(c, runners_online, settings, limits=None):
     for r in found:
         document = read_cache.readiness(c, r["id"], r["readiness"])
         runtimes = document.get("runtimes") or {}
-        # A runtime the company's plan signs in on this computer (model_subscriptions.in_effect, what a claim uses)
-        # needs no sign-in of its own: its missing login is not a problem.
-        plan = {n: KINDS[sub["kind"]]["billing"] for n in runtimes if (sub := in_effect(c, r["id"], n))}
-        # A runtime whose given plans are all held at their usage limit, with no sign-in of its own to run on meanwhile:
-        # its bots wait for a plan, not a sign-in (model_subscriptions.plan_hold).
-        held = {
-            n: found
-            for n, v in runtimes.items()
-            if n not in plan
-            and v.get("authenticated") != "ready"
-            and n not in covered.get(r["id"], ())
-            and (found := plan_hold(c, r["id"], n))
-        }
         rows.append(
             {
                 "id": r["id"],
@@ -350,40 +336,32 @@ def _computers(c, runners_online, settings, limits=None):
                         "name": n,
                         "installed": bool(v.get("installed")),
                         "needed": n in wanted or n in assigned.get(r["id"], ()),
-                        "ready": bool(v.get("installed")) and (v.get("authenticated") == "ready" or n in plan),
-                        "rejected": v.get("authenticated") == "rejected" and n not in plan,
-                        "plan": plan.get(n, ""),  # "subscription" or "api": the company's
+                        "ready": bool(v.get("installed")) and (v.get("authenticated") == "ready"),
+                        "rejected": v.get("authenticated") == "rejected",
+                        "plan": "",
                         "rejected_at": v.get("rejected_at") or "" if v.get("authenticated") == "rejected" else "",
                         "rejected_reason": v.get("rejected_reason") or ""
                         if v.get("authenticated") == "rejected"
                         else "",
                         "credential_source": v.get("credential_source") or "",
-                        "login_warning": login_warning(document, n)
-                        if n in run_on.get(r["id"], ()) and n not in plan
-                        else "",
+                        "login_warning": login_warning(document, n) if n in run_on.get(r["id"], ()) else "",
                         "login_unavailable": (
                             n in run_on.get(r["id"], ())
-                            and n not in plan
                             and n not in covered.get(r["id"], ())
-                            and n not in held
                             and computer_login(document, n).get("authenticated") in SIGNED_OUT
                         ),
                         "gateway_covered": n in covered.get(r["id"], ()),
-                        "plan_held": held.get(n),
+                        "plan_held": None,
                         "login_problem": _login_problem(computer_login(document, n)),
                         "signable": bool(v.get("installed"))
                         and v.get("authenticated") != "ready"
-                        and n in model_login.RUNTIMES
-                        and n not in plan,
-                        # A model this computer runs that it has no sign-in for, and that no key from the
-                        # company gave it either: one its active bots run on, or the company's default while
-                        # it has none yet. A default its bots don't use is only `signable`.
+                        and n in model_login.RUNTIMES,
+                        # Ask for local sign-in on a primary tool that needs it, or the default on an empty computer.
                         "sign_in": bool(v.get("installed"))
                         and v.get("authenticated") == "missing"
                         and n in model_login.RUNTIMES
-                        and n not in plan
-                        and n not in held
-                        and n in assigned.get(r["id"], {default}),
+                        and n in assigned.get(r["id"], {default})
+                        and (r["id"] not in assigned or n in run_on.get(r["id"], ())),
                     }
                     for n, v in sorted(runtimes.items())
                     if v.get("installed")
@@ -1279,13 +1257,13 @@ def _movable(c, who, online_ids):
     ]
 
 
-def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, manages=False):
+def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, manages=False, loads=None):
     """What Settings and Health show for running `runtime` on this bot's computer, from the one rule
     (backend/readiness.py `can_run`): the answer, a short label, and at most one way out: sign in there (a computer's
     shared sign-in for a runtime that signs in from the browser) or a computer `who` may move it to that can run it."""
     from .readiness import can_run
 
-    answer = can_run(c, bot, runtime, harness=harness, model=model, manages=manages)
+    answer = can_run(c, bot, runtime, harness=harness, model=model, manages=manages, loads=loads)
     view = {key: answer.get(key) for key in ("can_run", "problem", "fix", "link")}
     if answer.get("warning"):
         view["warning"] = answer["warning"]
@@ -1314,7 +1292,7 @@ def runtime_choice(c, bot, runtime, who, computers, harness="", model="", *, man
             {"id": rid, "label": label}
             for rid, label in computers
             if rid != here.get("id")
-            and can_run(c, bot, runtime, runner=rid, harness=harness, model=model)["can_run"] is True
+            and can_run(c, bot, runtime, runner=rid, harness=harness, model=model, loads=loads)["can_run"] is True
         ),
         None,
     )
@@ -1357,6 +1335,8 @@ HELD = {
     # A person limited the bot's claims to one task (execution.scoped_sql): the rest waits for the scope's release.
     "scoped": ("Limited to one task: its other work starts when the limit is lifted", BOT_SETTINGS),
     "cooling_off": ("Waiting out a usage limit, or a Tico AI Gateway outage, before it tries again", RUNS),
+    "payer_wait": ("Waiting for the agent's Paid by", BOT_SETTINGS),
+    "payer_update": ("Update {computer}", COMPUTERS),
     "readiness_unknown": ("{computer} has not said whether it can run this bot", COMPUTERS),
     "sign_in_rejected": ("Its model sign-in was rejected on {computer}", COMPUTERS),
     # The computer read a plan's sign-in as ready, and no plan signs it in now (execution.signed_in_by_lapsed_plan).
@@ -1396,7 +1376,7 @@ HELD = {
 }
 
 
-def _stuck(c, rows, online_ids, who, full, auth=None):
+def _stuck(c, rows, online_ids, who, full, auth=None, loads=None):
     """Each stuck bot with a reason in plain words and one fix: sign in, move to a computer that can run it,
     or the settings page that can. Only administrators get fixes; a Bot administrator moves only to their own computers.
     A bot stuck in onboarding is the exception: whoever may manage it gets "Finish with defaults"."""
@@ -1474,14 +1454,21 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                     (
                         {"id": rid, "label": name}
                         for rid, name in computers
-                        if rid != row["runner_id"] and _can(c, row["bot"], runtime, rid, harness)
+                        if rid != row["runner_id"] and _can(c, row["bot"], runtime, rid, harness, loads=loads)
                     ),
                     None,
                 )
         elif reason == "not_ready":
             choice = (
                 runtime_choice(
-                    c, row["bot"], runtime, who, computers, harness=harness, manages=full and not who.support
+                    c,
+                    row["bot"],
+                    runtime,
+                    who,
+                    computers,
+                    harness=harness,
+                    manages=full and not who.support,
+                    loads=loads,
                 )
                 if runtime
                 else {}
@@ -1651,10 +1638,10 @@ def updating_words(row, advise=True):
     return f"{row['computer']} is updating{to}"
 
 
-def _can(c, bot, runtime, runner, harness=""):
+def _can(c, bot, runtime, runner, harness="", *, loads=None):
     from .readiness import can_run
 
-    return can_run(c, bot, runtime, runner=runner, harness=harness)["can_run"] is True
+    return can_run(c, bot, runtime, runner=runner, harness=harness, loads=loads)["can_run"] is True
 
 
 TOKEN_CACHE_SECONDS = 300
@@ -2941,6 +2928,72 @@ def _prime_claims(c, settings=None):
     return claim_loads.read(c, settings, runners, slugs)
 
 
+def _payer_waits(c, who, auth, loads, settings):
+    from . import agent_subscriptions
+    from .execution import waiting_payers
+    from .shared_bots import follow
+
+    rows = c.execute(
+        f"SELECT DISTINCT b.id,b.slug,b.display_name,a.runner_id,{BS.CONFIG} AS config "
+        f"FROM bots b JOIN bot_config bc ON bc.bot=b.id {BS.JOIN} JOIN assignments a ON a.bot=b.id "
+        "WHERE b.state='active' AND EXISTS (SELECT 1 FROM agent_subscriptions p WHERE p.bot=b.id) "
+        "AND EXISTS (SELECT 1 FROM jobs j WHERE j.bot_id=b.id AND j.state='queued' AND j.held=0) "
+        "ORDER BY b.slug"
+    ).fetchall()
+    access = auth.bot_accesses(c, who, [r["id"] for r in rows]) if rows else {}
+    items = []
+    for r in rows:
+        if not access[r["id"]]["read"] or not (runner := loads.runner_of(c, r["runner_id"], live=True)):
+            continue
+        config = follow(c, r["id"], H._json(r["config"], {}) or {})
+        picks = agent_subscriptions.loaded_picks(c, r["id"], loads)
+        for runtime, payment in waiting_payers(c, settings, runner, r["id"], config, loads):
+            fixer = agent_subscriptions.wait_fixer(c, runner, picks[runtime], payment)
+            fix = (
+                _fix("Open Computers", "#/settings", "devices")
+                if payment.update
+                else _fix("Open Providers", "#/settings/providers")
+            )
+            text = f"{r['display_name'] or r['slug']}: {payment.reason}. {fixer} can help."
+            items.append({"bot": r["id"], "text": text, "fixes": [fix]})
+            if len(items) == DIAGNOSTIC_LIMIT:
+                return _check("paid_by_wait", "Waiting for Paid by", "warn", "", items=items)
+    return _check("paid_by_wait", "Waiting for Paid by", "warn", "", items=items) if items else None
+
+
+def _lost_payers(c, who, auth):
+    """Only unresolved removals on active agents. An explicit clear supersedes an older removal."""
+    from .model_subscriptions import RUNTIME_LABELS
+
+    cursor = c.execute(
+        "WITH removed AS ("
+        "SELECT target AS bot, json_extract(detail,'$.runtime') AS runtime, max(rowid) AS seq "
+        "FROM events WHERE action IN ('agent_subscription.provider_removed','agent_subscription.owner_left',"
+        "'agent_subscription.cleared_on_move') GROUP BY target,runtime) "
+        "SELECT r.bot,r.runtime,b.slug,b.display_name FROM removed r JOIN bots b ON b.id=r.bot AND b.state='active' "
+        "WHERE NOT EXISTS (SELECT 1 FROM agent_subscriptions s WHERE s.bot=r.bot AND s.runtime=r.runtime) "
+        "AND NOT EXISTS (SELECT 1 FROM events e WHERE e.action='agent_subscription.cleared' "
+        "AND e.target=r.bot AND e.rowid>r.seq AND json_extract(e.detail,'$.runtime')=r.runtime) "
+        "ORDER BY r.seq DESC"
+    )
+    items = []
+    while len(items) < DIAGNOSTIC_LIMIT and (rows := cursor.fetchmany(DIAGNOSTIC_LIMIT)):
+        access = auth.bot_accesses(c, who, sorted({row["bot"] for row in rows}))
+        items.extend(
+            {
+                "bot": row["bot"],
+                "text": f"{row['display_name'] or row['slug']} · {RUNTIME_LABELS.get(row['runtime'], row['runtime'])}",
+                "fixes": [_fix("Open agent settings", "#/bot/" + row["slug"] + "/settings")],
+            }
+            for row in rows
+            if access[row["bot"]]["read"]
+        )
+    items = items[:DIAGNOSTIC_LIMIT]
+    if items:
+        return _check("paid_by_unset", "Paid by unset", "warn", "An admin can assign a provider.", items=items)
+    return None
+
+
 def view(c, who, settings, auth, github, config, filing=False, updates_stuck=frozenset()):
     # `filing` is Check health's read (maintenance_steps/check_health.py `_page_findings`). Its two offline checks, computers and
     # waiting, then describe only the computers no silent-computer finding reports: computer_silent files the silent ones.
@@ -2963,7 +3016,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     if not full and stuck_rows:  # someone who is not an administrator hears only about the bots they may read
         readable = auth.bot_accesses(c, who, [row["bot"] for row in stuck_rows])
         stuck_rows = [row for row in stuck_rows if readable.get(row["bot"], auth.FULL)["read"]]
-    blocked = _stuck(c, stuck_rows, online_ids, who, full, auth)
+    blocked = _stuck(c, stuck_rows, online_ids, who, full, auth, loads=loads)
     on_fallback, limited, carrying = _fallbacks(c, settings, loads) if kind != "bot" else ([], [], set())
     if not full and (on_fallback or limited):  # the same rule as `stuck`: only bots the caller may read
         readable = auth.bot_accesses(c, who, sorted({row["bot"] for row in on_fallback + limited}))
@@ -2971,6 +3024,10 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         limited = [row for row in limited if readable.get(row["bot"], auth.FULL)["read"]]
     failed, failures = _failed(c)
     checks = []
+    if wait := _payer_waits(c, who, auth, loads, settings):
+        checks.append(wait)
+    if full and not who.support and (lost := _lost_payers(c, who, auth)):
+        checks.append(lost)
     # What bots run on when it is not what they are set to: two reviewers set to different models that both run on
     # the Gateway are not independent, and a person reads that here.
     if running_on := _fallback_lines(c, settings, on_fallback, carrying):
@@ -3510,7 +3567,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
     from .cloud_machines import resting as resting_machines
 
     resting_ids = resting_machines(c)
-    loads = load_statuses(c, [computer["id"] for computer in computers])  # one read for every computer
+    computer_loads = load_statuses(c, [computer["id"] for computer in computers])  # one read for every computer
     rows = hold_rows(c, [computer["id"] for computer in computers])  # and their runner rows, once
     for computer in computers:
         if full or kind == "bot":
@@ -3526,7 +3583,7 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         # Its last boot's load cannot hold a machine that is asleep on purpose.
         hold = None
         if computer["id"] not in resting_ids:
-            hold = computer_hold(c, computer["id"], status=loads[computer["id"]], row=rows.get(computer["id"]))
+            hold = computer_hold(c, computer["id"], status=computer_loads[computer["id"]], row=rows.get(computer["id"]))
             if not hold:
                 # Runner-local memory admission still reports a wait when diagnostics are off.
                 local_memory = next(
@@ -3782,8 +3839,8 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
                     for label, runtime, _ in unsigned[:5]
                 )
                 + ("." if len(unsigned) <= 5 else f"; and {len(unsigned) - 5} more.")
-                + " Sign in on an agent’s Computer tab (Agent Ops can start it). For a shared model key, add it in "
-                "Settings > Providers and assign it with `tico settings set models.computer_subscription`.",
+                + " Sign in on an agent’s Computer tab (Agent Ops can start it). To use a saved key, add or replace "
+                "it in Settings > Providers and select it under Paid by on the agent.",
                 [*_computer_login_fixes(c, settings, unsigned), _fix("Open Providers", "#/settings/providers")],
             )
         )
@@ -3931,9 +3988,16 @@ def view(c, who, settings, auth, github, config, filing=False, updates_stuck=fro
         who,
         full,
         auth,
+        loads=loads,
     )
     resting_rows = _stuck(
-        c, [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]], online_ids, who, full, auth
+        c,
+        [row for row in resting if full or readable.get(row["bot"], auth.FULL)["read"]],
+        online_ids,
+        who,
+        full,
+        auth,
+        loads=loads,
     )
     if blocking:
         items = _queue_items(blocking + busy_rows + resting_rows, full, kind == "bot") if full or kind == "bot" else []

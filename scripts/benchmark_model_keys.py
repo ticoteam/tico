@@ -11,22 +11,25 @@ both: each computer's own Claude key as Settings > Computers kept it (`computer_
 computer, Settings > Models subscriptions given for Codex, and a key granted to each bot. A checkout with the
 D11-4 migration (20261117061243) then moves those keys into subscriptions, as an upgrade does, and one with the D11-5
 migration (20261117085930) drops the old key tables. `computer_keys` and `model_login_key_off` are made again for the seed where a checkout has
-dropped them already.
+dropped them already. B1 converts the synthetic agents' old grants and bindings into Paid by selections.
 """
 
 import argparse
 import importlib
 import json
 from pathlib import Path
+from sqlite3 import Connection
 import statistics
 import sys
 import tempfile
 import time
+from typing import cast
 import uuid
 
 NOW = "2026-11-17T00:00:00.000000Z"
 MOVE = "20261117061243_computer_keys_to_subscriptions"
 DROP = "20261117085930_drop_computer_keys"
+POOLS = "20261122220441_agent_subscriptions"
 LEGACY = (
     "CREATE TABLE IF NOT EXISTS computer_keys(credential_id TEXT PRIMARY KEY REFERENCES credentials(id), "
     "runner_id TEXT NOT NULL REFERENCES runners(id), runtime TEXT NOT NULL, state TEXT NOT NULL, login_id TEXT, "
@@ -165,6 +168,20 @@ def seed(c, vault, computers, subscriptions, bots):
     return runners, names
 
 
+def seed_agent_payers(c, runners, bots):
+    migration = importlib.import_module("backend.migrations." + POOLS)
+    c.execute("UPDATE model_subscriptions SET owner_id='human:ana' WHERE owner_id='' AND kind='codex_login'")
+    c.executemany("INSERT INTO bot_config(bot,owner_id) VALUES(?,'ana')", [(bot,) for bot in bots])
+    c.executemany(
+        "INSERT INTO assignments VALUES(?,?,1,?,'human:ana')",
+        [(bot, runners[i % len(runners)], NOW) for i, bot in enumerate(bots)],
+    )
+    people = migration.active_people(c)
+    migration.copy_bindings(c, people)
+    migration.copy_key_grants(c, people)
+    migration.revoke_key_grants(c)
+
+
 def percentile(values, p):
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, round(p / 100 * (len(ordered) - 1)))]
@@ -233,7 +250,11 @@ def main():
             if present:
                 with store.transaction() as c:
                     importlib.import_module("backend.migrations." + name).up(c, NOW)
-        with store.transaction() as c:
+        pools = (args.repo / f"backend/migrations/{POOLS}.py").exists()
+        with store.transaction() as connection:
+            c = cast(Connection, connection)
+            if pools:
+                seed_agent_payers(c, runners, bots)
             c.execute("ANALYZE")
             counts = {
                 t: c.execute(f"SELECT count(*) FROM {t}").fetchone()[0]
@@ -249,29 +270,31 @@ def main():
         claim_bot = "bot" in model_subscriptions.for_claim.__code__.co_varnames
         if hasattr(model_subscriptions, "key_listing"):
             keys_for = model_subscriptions.keys_for
-
-            def key_listing(c):
-                return model_subscriptions.key_listing(c)
-
+            key_listing = model_subscriptions.key_listing
         else:
             computer_keys = importlib.import_module("backend.computer_keys")
             keys_for = computer_keys.keys_for
 
-            def key_listing(c):
+            def legacy_listing(c):
                 # What the Operations listing read for keys before D11-5: two passes, then one read per computer.
                 served, own = computer_keys.serving(c), computer_keys.listing_by_runner(c)
                 rows = c.execute("SELECT * FROM runners_with_state ORDER BY lower(label), id").fetchall()
                 return served, own, [computer_keys.shared_listing(c, row) for row in rows]
 
+            key_listing = legacy_listing
+
         def keys(c, i):
-            reply, _ = keys_for(c, vault, runners[i % len(runners)], "claude")
-            assert reply["credentials"], reply
+            index = i % len(runners)
+            reply, _ = keys_for(c, vault, runners[index], "claude")
+            assert bool(reply["credentials"]) == (not pools or index < len(runners) * 4 // 5), reply
 
         def listing(c, _):
-            assert key_listing(c)
+            key_listing(c)
 
         def claim(c, i):
             runner = {"id": runners[i % len(runners)]}
+            if pools:
+                runner["capabilities"] = '["attempt_credentials_v1"]'
             extra = {"bot": bots[i % len(bots)]} if claim_bot else {}
             model_subscriptions.for_claim(c, runner, {"runtime": ("claude", "codex")[i % 2]}, **extra)
 
@@ -279,6 +302,7 @@ def main():
             "repo": str(args.repo),
             "d11_4": migrated,
             "d11_5": dropped,
+            "agent_payers": pools,
             "rows": counts,
             "keys_for": timed(store, args.rounds, keys),
             "for_claim": timed(store, args.rounds, claim),

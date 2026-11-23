@@ -182,10 +182,10 @@ def stamp(c: Any, sid: str, value: Any, refreshed: bool = False) -> None:
 
 
 def same_account(c: Any, account: str, sid: str | None = None) -> Row | None:
-    """The plan already connected as `account` (another than `sid`): its id and name, or None."""
+    """The plan already connected as `account` (another than `sid`): its id, name and owner, or None."""
     return H._one(
         c,
-        "SELECT s.id,s.name FROM claude_logins l JOIN model_subscriptions s ON s.id=l.subscription_id "
+        "SELECT s.id,s.name,s.owner_id FROM claude_logins l JOIN model_subscriptions s ON s.id=l.subscription_id "
         "WHERE l.account=? AND s.id<>?",
         (account, sid or ""),
     )
@@ -230,19 +230,14 @@ def _computers(c: Any, sid: str) -> list[tuple[Any, bool]]:
         r[0]
         for r in c.execute(
             "SELECT DISTINCT a.runner_id FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
-            "WHERE s.subscription_id=? AND a.state IN ('leased','running')",
+            "WHERE s.subscription_id=? AND s.delivery<>'' AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL",
             (sid,),
         )
     }
-    given = {
-        r[0]
-        for r in c.execute(
-            "SELECT g.runner_id FROM computer_subscriptions g WHERE g.runtime='claude' AND (g.subscription_id=? "
-            "OR (g.person<>'' AND g.person=(SELECT owner_id FROM model_subscriptions WHERE id=?)))",
-            (sid, sid),
-        )
-    }
-    ids = sorted(live | given)
+    from .agent_subscriptions import provider_runners
+
+    sub = _MS().row(c, sid)
+    ids = sorted(provider_runners(c, sub)) if sub else []
     if not ids:
         return []
     rows = c.execute(
@@ -395,7 +390,15 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[R
     ):
         lease: Row = _lease(c, sub["id"])
         quiet = ""
+        computers = _computers(c, sub["id"])
         if lease.get("lease_id"):
+            destination = lease["lease_runner"]
+            if destination and not any(r["id"] == destination for r, _ in computers):
+                if not write:
+                    raise _Write
+                # Keep the uncertainty window and the issued receipt in case the runner already rotated the token.
+                _put_lease(c, sub["id"], lease_runner="")
+                lease = {**lease, "lease_runner": ""}
             mine = lease["lease_runner"] == runner_id
             if (lease["lease_until"] or "") > now:
                 if not mine:
@@ -414,7 +417,6 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[R
         if not lease.get("lease_id"):
             if (lease.get("retry_at") or "") > now:
                 continue
-            computers = _computers(c, sub["id"])
             others = [x for x in computers if x[0]["id"] != quiet and can_sign_in(x[0])]
             if _chosen(others or computers, can_sign_in, lease.get("failures") or 0) != runner_id:
                 continue
@@ -496,7 +498,7 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
         H.event(c, "runner:" + runner_id, "subscription.refreshed", sid, {"revision": sub["revision"] + 1})
         pushed(c, sid)
         return {"stored": True, "revision": sub["revision"] + 1}
-    if not holds:
+    if not holds or not any(r["id"] == runner_id for r, _ in _computers(c, sid)):
         return {"stored": False}
     failures = (lease.get("failures") or 0) + 1
     _put_lease(
@@ -561,23 +563,45 @@ def gap(c: Any, attempt_id: str, runtime: str) -> bool:
 PARKED_SQL = (
     "EXISTS(SELECT 1 FROM claude_login_parks p JOIN model_subscriptions ps ON ps.id=p.subscription_id "
     "JOIN claude_logins pl ON pl.subscription_id=p.subscription_id WHERE p.job_id=j.id "
-    "AND p.until>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND ps.revision=p.revision AND pl.lease_id<>'')"
+    "AND p.until>strftime('%Y-%m-%dT%H:%M:%fZ','now') AND ps.revision=p.revision AND pl.lease_id<>'' "
+    "AND NOT EXISTS (SELECT 1 FROM attempt_subscriptions s WHERE s.attempt_id=p.attempt_id "
+    "AND s.subscription_id=p.subscription_id AND s.delivery<>''))"
 )
+
+
+def paid_parks(c: Any, bots: list[str], job: str | None = None) -> set[tuple[str, str]]:
+    """Queued jobs whose current Claude plan is still waiting for its refresh."""
+    scope = "j.id=?" if job else f"j.bot_id IN ({','.join('?' * len(bots))})"
+    return {
+        (r[0], r[1])
+        for r in c.execute(
+            "SELECT p.job_id,p.subscription_id FROM claude_login_parks p JOIN jobs j ON j.id=p.job_id "
+            "JOIN model_subscriptions ps ON ps.id=p.subscription_id "
+            "JOIN claude_logins pl ON pl.subscription_id=p.subscription_id "
+            f"WHERE {scope} AND j.state='queued' AND p.until>? AND ps.revision=p.revision AND pl.lease_id<>''",
+            (*([job] if job else bots), H.now()),
+        )
+    }
 
 
 # ------------------------------------------------------------------------------------------------ tokens
 def _tokens(c: Any, runner_id: str, live: "list[LiveToken]") -> list[Row]:
     """The new access token for each plan this computer runs turns on whose revision it has is behind."""
+    from .agent_subscriptions import provider_runners
+
     out: list[Row] = []
     for item in live[:MAX_LIVE]:
         sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (item.subscription,))
         if not sub or sub["kind"] != KIND or sub["status"] == "needs_reconnect" or sub["revision"] <= item.revision:
             continue
-        if not c.execute(
-            "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
-            "AND a.runner_id=? AND a.state IN ('leased','running') LIMIT 1",
-            (sub["id"], runner_id),
-        ).fetchone():
+        if (
+            runner_id not in provider_runners(c, sub)
+            or not c.execute(
+                "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
+                "AND a.runner_id=? AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL LIMIT 1",
+                (sub["id"], runner_id),
+            ).fetchone()
+        ):
             continue
         out.append(sub)
     return out
@@ -680,7 +704,10 @@ class _Line:
 def _wanted(c: Any, sid: str, schedule: Row, line: _Line) -> bool:
     """Whether a plan's usage is read on its schedule: never read yet, in use (a turn runs on it, or a computer signs in
     with it now), or next in line in a person's set (`line`, the poll's). Others wait for ↻ or their turn to come up."""
-    if not schedule.get("read_at"):
+    from .agent_subscriptions import provider_runners
+
+    sub = _MS().row(c, sid)
+    if not schedule.get("read_at") or (sub and provider_runners(c, sub)):
         return True
     if c.execute(
         "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id WHERE s.subscription_id=? "
@@ -704,17 +731,23 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool = True) -> list[
             (KIND, fresh),
         )
     ):
-        lease = _lease(c, sub["id"])
-        if lease.get("lease_id") and (lease.get("lease_until") or "") > now:
-            continue  # its token is about to change
         value = _usage_meta(c, sub["id"])
         request: Row = value.get("request") or {}
         live = request.get("state") == "requested" and request.get("expires_at", "") > now
+        computers = _computers(c, sub["id"])
+        if live and not any(r["id"] == request.get("runner_id") for r, _ in computers):
+            if not write:
+                raise _Write
+            value.pop("request")
+            _save_usage_meta(c, sub["id"], value)
+            live = False
+        lease = _lease(c, sub["id"])
+        if lease.get("lease_id") and (lease.get("lease_until") or "") > now:
+            continue  # its token is about to change
         if not live:
             schedule: Row = value.get("schedule") or {}
             if (schedule.get("next_at") or "") > now or not _wanted(c, sub["id"], schedule, line):
                 continue
-            computers = _computers(c, sub["id"])
             if _chosen(computers, lambda r: takes_turns(r) and _online(r), schedule.get("failures") or 0) != runner_id:
                 continue
             if not write:
@@ -783,7 +816,12 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
     sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (sid,))
     value = _usage_meta(c, sid)
     request: Row = value.get("request") or {}
-    if not sub or request.get("id") != body.id or request.get("runner_id") != runner_id:
+    if (
+        not sub
+        or request.get("id") != body.id
+        or request.get("runner_id") != runner_id
+        or (request.get("state") == "requested" and not any(r["id"] == runner_id for r, _ in _computers(c, sid)))
+    ):
         raise Problem("not_found", "Usage request not found", 404)
     now = H.now()
     schedule: Row = dict(value.get("schedule") or {})

@@ -70,6 +70,41 @@ def test_health_below_warning_counts_queued_work_without_asking_each_bot_why(api
     assert line['turn_counts']['waiting'] + line['turn_counts']['queued'] == 2
 
 
+def test_awake_computer_uses_the_oldest_sampled_reason_for_queue_overflow(api, monkeypatch):
+    from backend import execution, start_places
+    from backend.tests.helpers.credentials import setup
+    from backend.tests.helpers.model_subscriptions import add, company, machine, on, pick
+
+    setup(api)
+    company(api)
+    computer = machine(api, signed_in=True)
+    assign(api, computer, 'cpo')
+    sid = add(api)['id']
+    on(api, 'ops', 'claude', 'claude-sonnet-5-5')
+    on(api, 'cpo', 'claude', 'claude-sonnet-5-5')
+    pick(api, 'ops', 'claude', person='cara')
+    pick(api, 'cpo', 'claude', sid)
+    ready(api, computer, ['ops', 'cpo'], capabilities=['attempt_credentials_v1'])
+    jobs = [
+        post(api, 'chat/' + bot, {'text': f'Queue sample {i}'})['id']
+        for i, bot in enumerate(('ops', 'cpo', 'cpo', 'ops'))
+    ]
+    monkeypatch.setattr(execution, 'PRIME_QUEUED', 2)
+    store = api.app.state.store
+    with store.transaction() as c:
+        for i, job in enumerate(jobs):
+            c.execute("UPDATE jobs SET created_at=? WHERE id=?", (H.shift(H.now(), seconds=i), job))
+        c.execute(
+            "UPDATE runner_states SET readiness=json_set(readiness,'$.runtimes.claude',"
+            "json('{\"installed\":true,\"authenticated\":\"ready\"}')) WHERE runner_id=?",
+            (computer['runner_id'],),
+        )
+    with store.read_transaction() as c:
+        result = start_places.summary(c, computer['runner_id'], store.settings)
+    assert result['queued'] == 1
+    assert [(wait['reason'], wait['count']) for wait in result['waits']] == [('Paid by', 3)]
+
+
 def test_parked_logins_take_no_start_place_so_another_login_starts_and_claims_go_on(api):
     """37 logins parked on a shared login and 3 running on a 40-turn computer: the parked ones take no start place, so
     another login starts at once (free_turn stays ''), and its claim goes through below twice the limit (80)."""

@@ -17,6 +17,7 @@ from typing import Literal
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from pydantic import ConfigDict, Field, SecretStr
 
 from . import providers
@@ -77,11 +78,8 @@ BOTS = 'bots'
 # A grant to every computer, present and future: a model API key or token that signs each computer's model CLI in
 # (runner-rs/src/signin.rs `team_model_keys`). Never a bot's: a bot still gets only what is granted to it.
 COMPUTERS = 'computers'
-# A model key for computers is a subscription now (backend/model_subscriptions.py).
-MODELS_FOR_COMPUTERS = (
-    'Add or replace model keys in Settings > Providers. Assign or unassign them with '
-    '`tico settings set models.computer_subscription`.'
-)
+# Save a portable model key in a provider pool (backend/model_subscriptions.py).
+MODELS_FOR_COMPUTERS = 'Add or replace model keys in Settings > Providers. Choose the key under Paid by on the agent.'
 FILE_MIGRATION = 'credential-file-migration-v1'
 # 0.2.30 reserved every HUB_ name, so a team's own HUB_ keys (HUB_BUCKET) were left out of v1. v2 adds only those.
 HUB_MIGRATION = 'credential-file-migration-v2-hub'
@@ -995,6 +993,14 @@ class Vault:
         # grant a holder passing it on to a bot they own hangs it on.
         parent = TA.require(c, who, TA.key(cid), subject, TA.GRANT, admins=self.admins, auth=self.auth).parent
         inferred = model_env(row['name'], row['kind'], row['env'])
+        if (
+            subject.startswith('bot:')
+            and subject != 'bot:' + H.RELATIONSHIP_WORKER
+            and row['kind'] in ('api_key', 'token')
+            and not row['tool_id']
+            and inferred in providers.MODEL_KEY_NAMES
+        ):
+            raise Problem('subject', "Choose the key as the agent's Paid by in Settings > Agents", 422)
         if inferred and not row['env']:
             # Older name-only model keys gain a variable only when someone grants them.
             c.execute(
@@ -1281,6 +1287,7 @@ def _is_id(c, cipher, row):
 
 def install_credentials(app, store, delegate=None, propose=None):
     vault = app.state.vault = Vault(store, auth=getattr(app.state, 'auth', None))
+    store.credential_vault = vault
 
     def migration_runner(c, who):
         if (
@@ -1608,7 +1615,6 @@ def install_credentials(app, store, delegate=None, propose=None):
         from .tools_delegation import DELEGATE_VIAS
 
         if body.subject == COMPUTERS:
-            # A model key for computers is a subscription now (backend/model_subscriptions.py), given in Settings > Providers.
             raise Problem('subject', MODELS_FOR_COMPUTERS, 422)
         if who.via in DELEGATE_VIAS and not who.confirmed and propose:
             # Agent Ops giving a bot a stored credential for a credential administrator who asked in chat runs at once, as
@@ -1663,6 +1669,9 @@ def install_credentials(app, store, delegate=None, propose=None):
                 'UPDATE credential_grants SET revoked_at=coalesce(revoked_at,?),revoked_by=? WHERE id=?',
                 (H.now(), who.actor, gid),
             )
+            from .agent_subscriptions import revoke_parent
+
+            revoke_parent(c, who.actor, gid)
             H.event(c, who.actor, 'credential.revoked', cid, {'grant': gid, 'subject': row['subject']})
             if vault.row(c, cid)['kind'] == LOGIN:
                 from .website_tools import _close
@@ -1710,12 +1719,31 @@ def install_credentials(app, store, delegate=None, propose=None):
     @app.get('/api/v2/credential-runtime')
     def runtime(request: Request, subscription_runtime: Literal["claude", "codex", "cursor", "musecode"] | None = None):
         from . import relationship_runs, tool_proxy
+        from .providers import MODEL_KEY_NAMES
 
         who = request.state.identity
         if who.role != 'bot':
             raise Problem('forbidden', 'An active bot run is required', 403)
         with store.transaction() as c:
             validate_identity(c, who)
+            from . import model_subscriptions
+
+            subscriptions = []
+            if who.attempt_id and (
+                payer := c.execute(
+                    "SELECT s.delivery FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+                    "WHERE s.attempt_id=? AND s.runtime=a.handed_runtime AND s.delivery IN ('','agent','legacy') "
+                    "AND (? IS NULL OR s.runtime=?)",
+                    (who.attempt_id, subscription_runtime, subscription_runtime),
+                ).fetchone()
+            ):
+                if payer["delivery"] == "legacy" and (legacy := model_subscriptions.legacy_credential(c, vault, who)):
+                    subscriptions.append(legacy)
+                else:
+                    request.app.state.execution.return_payer_claim(c, who.runner_id, who.attempt_id)
+                    return JSONResponse(
+                        {"error": "payer_wait", "detail": model_subscriptions.PAYER_UNAVAILABLE}, status_code=409
+                    )
             values = []
             relationship = who.actor == relationship_runs.ACTOR
             explicit = explicitly_granted(c, who.actor)
@@ -1725,6 +1753,12 @@ def install_credentials(app, store, delegate=None, propose=None):
             # A website account never reaches a run: its browser commands type it (backend/website_tools.py).
             for row in c.execute(RUN_ROWS):
                 if row['ciphertext'] is not None and row['id'] in held:
+                    if (
+                        not relationship
+                        and model_env(row['name'], row['kind'], row['env']) in MODEL_KEY_NAMES
+                        and row['tool_id'] is None
+                    ):
+                        continue  # Computer runtime providers reach a turn only through Paid by.
                     if relationship and not relationship_model_key(row):
                         continue
                     tool, way = held_at_read(c, proxied, row, who.actor, vault.cipher)
@@ -1772,10 +1806,6 @@ def install_credentials(app, store, delegate=None, propose=None):
             if relationship:
                 return {'credentials': values}
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
-            # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
-            from .model_subscriptions import run_values
-
-            subscriptions = run_values(c, vault, who, subscription_runtime)
             # Each held key of an MCP tool brings its server, with no bot.yaml entry (backend/mcp_connect.py).
             from .mcp_connect import runtime_servers
 
@@ -1786,13 +1816,9 @@ def install_credentials(app, store, delegate=None, propose=None):
             values += tool_settings.runtime_items(c, held, {v['env'] for v in values if v.get('env')})
             return {
                 'credentials': values,
-                **({'mcp_servers': servers} if servers else {}),
                 **({'subscriptions': subscriptions} if subscriptions else {}),
-                **(
-                    {'subscription_activated': any(s['runtime'] == subscription_runtime for s in subscriptions)}
-                    if subscription_runtime
-                    else {}
-                ),
+                **({'mcp_servers': servers} if servers else {}),
+                **({'subscription_activated': False} if subscription_runtime else {}),
             }
 
     @app.get('/api/v2/runner-gateway-credentials')

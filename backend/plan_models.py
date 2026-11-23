@@ -1,13 +1,8 @@
 # pyright: strict
-"""The models bots run on follow the company's Claude and ChatGPT plans.
+"""Template agents follow their owner's connected Claude and ChatGPT plans.
 
-A company that connects only a ChatGPT plan must not keep its bots on Claude models: with no Claude sign-in, every turn
-runs on the paid fallback. So each bot a person never moved by hand runs on the set for the plans the company has now:
-Claude only, ChatGPT only, or both (SETS below, the one table), and so do its tasks (`task_model`, TASK_SETS): a heavy
-role's own turns run on a cheap model and its tasks on a strong one. It follows when a plan is added, connected or
-reconnected (model_subscriptions.save, beside `spread`), when one is removed or the provider refuses it
-(`needs_reconnect`), and on every start (onboarding.complete_company), which also brings a company that had a plan before
-this table existed onto it. With no plan, nothing moves: a bot keeps its model and runs on the Gateway path it has.
+Each agent nobody set by hand runs on the set for its owner's plans (Claude only, ChatGPT only, or both).
+With no plan, or with Paid by set for its current tool, the model stays where it is.
 
 - A bot a person set stays: one with a model change in its settings history that is not undone (`settings_changes`,
   field `model`, written by Settings, `POST /api/v2/bots/{bot}/model`, a manager bot or the Assistant). Undoing that
@@ -88,23 +83,22 @@ TASK_SETS: dict[str, dict[str, tuple[str, str]]] = {
 }
 
 
-def connected(c: sqlite3.Connection) -> str:
-    """CLAUDE, CHATGPT, BOTH or '' : the plans the company has that work (a subscription, not an API key, that does not
-    need reconnecting; one at its usage limit still counts)."""
+def connected(c: sqlite3.Connection) -> dict[str, str]:
+    """Connected plan tools by owner. A plan at its usage limit still counts."""
     from . import model_subscriptions
 
     MS: Any = model_subscriptions
     KINDS: dict[str, dict[str, str]] = MS.KINDS
     kinds = [kind for kind, spec in KINDS.items() if spec.get("billing") == "subscription"]
-    have = {
-        PLAN_OF_RUNTIME.get(KINDS[str(r[0])]["runtime"], "")
-        for r in c.execute(
-            f"SELECT kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
-            "AND status<>'needs_reconnect'",
-            kinds,
-        )
-    } - {""}
-    return BOTH if len(have) > 1 else next(iter(have), "")
+    have: dict[str, set[str]] = {}
+    for owner, kind in c.execute(
+        f"SELECT DISTINCT owner_id, kind FROM model_subscriptions WHERE kind IN ({','.join('?' * len(kinds))}) "
+        "AND owner_id<>'' AND status<>'needs_reconnect'",
+        kinds,
+    ):
+        if tool := PLAN_OF_RUNTIME.get(KINDS[str(kind)]["runtime"]):
+            have.setdefault(str(owner), set()).add(tool)
+    return {owner: BOTH if len(tools) > 1 else next(iter(tools)) for owner, tools in have.items()}
 
 
 def _offered(model: str) -> bool:
@@ -168,12 +162,14 @@ def _reviewer_2(c: sqlite3.Connection) -> str:
 
 
 def follow(
-    c: sqlite3.Connection, settings: Any, actor: str, bots: set[str] | None = None
+    c: sqlite3.Connection, settings: Any, actor: str, bots: set[str] | None = None, *, owner: str | None = None
 ) -> list[tuple[str, str, str]]:
     """Move each bot that follows the plans (module doc) onto its pick for the plans connected now, its own model and
-    its task model; `bots` limits it to those ids. Returns [(bot, model, effort)] for each bot whose own model moved."""
-    plans = connected(c)
-    if not plans:
+    its task model. A provider change only revisits its owner's agents. Returns [(bot, model, effort)] for each bot whose own model moved."""
+    from .agent_subscriptions import picks
+
+    by_owner = connected(c)
+    if not by_owner:
         return []
     rows = c.execute(
         "SELECT b.id, s.template FROM bots b JOIN bot_settings s ON s.bot_id=b.id "
@@ -188,8 +184,13 @@ def follow(
         row = c.execute(BS.ROW_SQL + " WHERE bc.bot=?", (bot,)).fetchone()
         if not row:
             continue
+        person = "human:" + row["owner_id"]
+        if (owner is not None and owner != person) or not (plans := by_owner.get(person)):
+            continue
         config: dict[str, Any] = json.loads(row["config"] or "{}")
         if config.get("shared_from"):
+            continue
+        if str(P.bot_choice(c, settings, config)[0]) in picks(c, bot):
             continue
         role = role_of(template, bot == second)
         if set_by_person(c, bot):

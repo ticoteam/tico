@@ -27,6 +27,7 @@ SMOKE = "Acme smoke"
 # A tool's call needs state that nothing seeds: its refusal is recorded, and its argument set is listed here.
 # Each entry sets arguments the schema alone cannot pick (a value that must exist or match a rule).
 OVERRIDES = {
+    "tico_subscription_show": {"bot": "missing-provider-agent"},
     # A thread's audience defaults to its members, and every thread needs a title but a DM with one teammate (PR #2371).
     "tico_thread_create": {"title": SMOKE},
 }

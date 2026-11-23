@@ -23,7 +23,8 @@ from backend.tests.helpers.model_keys import (
 )
 from backend.tests.helpers.computer_signin import store
 from backend.tests.helpers.getting_started import add_bot
-from backend.tests.helpers.onboarding import as_person, environment, signed_in  # noqa: F401 - pytest fixture
+from backend.tests.helpers.model_subscriptions import pick
+from backend.tests.helpers.onboarding import TOKEN, as_person, environment, signed_in  # noqa: F401 - pytest fixture
 
 OWN = "sk-proj-own-key-0123456789"
 TEAM = "sk-ant-team-key-0123456789"
@@ -169,12 +170,10 @@ def test_computer_keys_move_into_subscriptions_and_each_computer_keeps_what_it_r
         # 3. Codex on Alpha signs in from a home of its own now: its sessions start fresh.
         assert c.execute("SELECT count(*) FROM bot_sessions").fetchone()[0] == 0
         assert c.execute("SELECT epoch FROM bot_session_epochs WHERE bot=?", (bot,)).fetchone()[0] == 1
-    # Each computer fetches what it fetched before, in the reply runners of v0.6.0-rc.1 read.
+    # Only the local computer key is exposed to a computer-wide fetch.
     assert fetch(api, alpha) == {"credentials": [{"env": "OPENAI_API_KEY", "value": OWN, "source": "computer"}]}
-    assert fetch(api, bravo, runtime="claude") == {
-        "credentials": [{"env": "ANTHROPIC_API_KEY", "value": TEAM, "source": "shared"}]
-    }
-    assert fetch(api, named, runtime="claude")["credentials"][0]["value"] == NAMED
+    for box in (bravo, named):
+        assert fetch(api, box, runtime="claude") == {"credentials": []}
     assert fetch(api, cleared, runtime="claude") == {"credentials": [], "signed_out": True}
     assert fetch(api, terminal, runtime="claude") == {"credentials": []}
     assert fetch(api, held) == {"credentials": []}, "a Settings > Providers subscription is not sent here"
@@ -211,30 +210,24 @@ def test_a_moved_key_reads_from_the_vault_and_a_new_computer_gets_none_by_itself
     # A computer enrolled after the upgrade is not given the shared key by itself.
     fresh = computer(api, "Bravo", beat=False)
     assert fetch(api, fresh) == {"credentials": []}
-    # Settings > Providers lists both, each with its kind; no value leaves.
+    # Providers lists the portable key; the local key stays in the computer sign-in.
     body = call(api, "GET", "model-subscriptions")
-    kinds = {s["id"]: s["kind"] for s in body["subscriptions"]}
-    assert {kinds[sub["id"]], kinds[shared["id"]]} == {"cursor_key", "openai_key"}
+    kinds = {item["id"]: item["kind"] for item in body["subscriptions"]}
+    assert kinds[shared["id"]] == "openai_key" and sub["id"] not in kinds
     assert OWN not in json.dumps(body) and "cursor-key" not in json.dumps(body)
-    # Given from there, it reaches that computer, from the vault.
-    call(
-        api,
-        "PUT",
-        "computer-subscriptions",
-        {"runner_id": fresh["runner_id"], "runtime": "codex", "subscription": shared["id"], "confirm": True},
-    )
-    assert fetch(api, fresh)["credentials"] == [{"env": "OPENAI_API_KEY", "value": OWN, "source": "shared"}]
-    # Deleting it in Settings > Providers takes it off the computers and out of the vault, and each computer it was on is
-    # told to clear its copy: a v0.6.0-rc.1 runner logs out the Codex login the key made instead of keeping auth.json.
+    add_bot(api, "mailer")
+    result = pick(api, "mailer", "codex", shared["id"], kind="key", token=TOKEN)
+    assert result["subscriptions"]["codex"]["subscription_id"] == shared["id"]
+    assert fetch(api, fresh) == {"credentials": []}
     call(api, "DELETE", f"model-subscriptions/{shared['id']}?confirm=true")
-    assert fetch(api, fresh) == {"credentials": [], "signed_out": True, "clear_key": True}
+    assert call(api, "GET", "bots/mailer/subscriptions")["subscriptions"] == {}
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (team,)).fetchone()
 
 
-def test_cursor_and_meta_keys_are_subscriptions_a_computer_takes(environment):
+def test_cursor_and_meta_keys_can_be_selected_per_agent(environment):
     api = setup(environment)
-    box = computer(api, "Team box", beat=False)
+    add_bot(api, "mailer")
     kinds = {k["kind"]: k for k in call(api, "GET", "model-subscriptions")["kinds"]}
     assert (kinds["cursor_key"]["runtime"], kinds["meta_key"]["runtime"]) == ("cursor", "musecode")
     for kind, runtime, secret in (
@@ -242,25 +235,10 @@ def test_cursor_and_meta_keys_are_subscriptions_a_computer_takes(environment):
         ("meta_key", "musecode", "meta-01234567"),
     ):
         sid = call(api, "POST", "model-subscriptions", {"name": kind, "kind": kind, "secret": secret})["id"]
-        call(
-            api,
-            "PUT",
-            "computer-subscriptions",
-            {"runner_id": box["runner_id"], "runtime": runtime, "subscription": sid, "confirm": True},
+        assert (
+            pick(api, "mailer", runtime, sid, kind="key", token=TOKEN)["subscriptions"][runtime]["subscription_id"]
+            == sid
         )
-    runtimes = {
-        g["runtime"]
-        for g in call(api, "GET", "computer-subscriptions")["assignments"]
-        if g["runner_id"] == box["runner_id"]
-    }
-    assert runtimes == {"cursor", "musecode"}
-    # A runtime it has no kind for stays refused.
-    r = api.put(
-        "/api/v2/computer-subscriptions",
-        json={"runner_id": box["runner_id"], "runtime": "gemini", "subscription": None},
-        headers=signed_in(),
-    )
-    assert r.status_code == 422
 
 
 def given_to(api, machine, runtime="codex"):
@@ -282,10 +260,7 @@ def cleared_here(api, machine, runtime="codex", clear_key=0):
         )
 
 
-def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(environment):
-    """Use the shared key lifts a sign-out, here and on the computer (the job a v0.6.0-rc.1 runner needs to drop its own
-    mark), and the key the computer is given in Settings > Providers reaches it again. With none given it hands nothing:
-    no company key is put on a computer from here, by anyone."""
+def test_a_legacy_request_can_lift_a_signout_without_restoring_the_shared_key(environment):
     api = setup(environment)
     quinn = as_person(api, "quinn")
     mine = computer(api, "Quinn's box", operator="quinn", source="shared")
@@ -297,7 +272,7 @@ def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(envir
     assert given_to(api, mine) == before, "a sign-out keeps the key given, held back"
     used = call(api, "POST", f"computers/{mine['runner_id']}/shared-key", {"runtime": "codex"}, who=quinn)
     assert used["kind"] == "use_shared_key"
-    assert fetch(api, mine)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
+    assert fetch(api, mine) == {"credentials": []}
     for who in (quinn, None):  # the operator, then an administrator
         cleared_here(api, laptop)
         job = call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"}, who=who)
@@ -307,27 +282,42 @@ def test_use_the_shared_key_brings_back_only_the_key_the_computer_is_given(envir
     call(api, "POST", f"computers/{laptop['runner_id']}/shared-key", {"runtime": "codex"}, expected=409)
 
 
-def test_a_bots_own_key_grant_signs_its_turns_in_before_the_computers_key(environment):
-    """A bot granted its own model key ran on it before the computer's key (v0.6.0-rc.1 runners set
-    the computer's key only where no grant set one). A computer's key, now a subscription, is not handed to that bot's
-    turns, since a runner takes the granted key out for a subscription handed; other bots still get it."""
+def test_a_converted_bot_grant_becomes_an_exact_paid_by_key(environment):
+    from importlib import import_module
+
     api = setup(environment)
     box = computer(api, "Alpha", source="shared")
-    shared_before(api)
-    add_bot(api, "mailer")
-    add_bot(api, "writer")
-    with api.app.state.store.transaction() as c:
+    team = shared_before(api)
+    for bot in ("mailer", "writer"):
+        add_bot(api, bot)
+    with api.app.state.store.read() as c:
         mailer = H.resolve_bot(c, "mailer")["id"]
         writer = H.resolve_bot(c, "writer")["id"]
-    granted(api, store(api, "OPENAI_API_KEY", "sk-proj-mailer-0123456789", name="Mailer key"), "bot:" + mailer)
-    # A grant of another runtime's key leaves its Codex turns on the computer's key.
-    granted(api, store(api, "ANTHROPIC_API_KEY", "sk-ant-writer-0123456789", name="Writer key"), "bot:" + writer)
-    config = {"runtime": "codex", "harness": "codex", "model": "gpt-5.5"}
-    runner, sid = {"id": box["runner_id"]}, given_to(api, box)
-    with api.app.state.store.read() as c:
-        assert MS.for_claim(c, runner, config, bot=mailer) == []
-        [item] = MS.for_claim(c, runner, config, bot=writer)
-        assert item["runtime"] == "codex" and item["subscription"]["id"] == sid
+    private = store(api, "OPENAI_API_KEY", "sk-proj-mailer-0123456789", name="Mailer key")
+    shared_before(api, private, subject="bot:" + mailer)
+    other = store(api, "ANTHROPIC_API_KEY", "sk-ant-writer-0123456789", name="Writer key")
+    shared_before(api, other, subject="bot:" + writer)
+    with api.app.state.store.transaction() as c:
+        migration = import_module("backend.migrations.20261122220441_agent_subscriptions")
+        c.execute(
+            "INSERT INTO bot_config(bot,owner_id) VALUES(?,'morgan'),(?,'morgan') "
+            "ON CONFLICT(bot) DO UPDATE SET owner_id=excluded.owner_id",
+            (mailer, writer),
+        )
+        c.executemany(
+            "INSERT INTO assignments VALUES(?,?,1,?,?)",
+            [(bot, box["runner_id"], H.now(), "human:owner") for bot in (mailer, writer)],
+        )
+        c.execute("DELETE FROM agent_subscriptions WHERE bot IN (?,?)", (mailer, writer))
+        people = migration.active_people(c)
+        migration.copy_bindings(c, people)
+        migration.copy_key_grants(c, people)
+        providers = dict(c.execute("SELECT credential_id,id FROM model_subscriptions").fetchall())
+    assert (
+        call(api, "GET", "bots/mailer/subscriptions")["subscriptions"]["codex"]["subscription_id"] == providers[private]
+    )
+    assert call(api, "GET", "bots/writer/subscriptions")["subscriptions"]["codex"]["subscription_id"] == providers[team]
+    assert fetch(api, box) == {"credentials": []}
 
 
 def test_deleting_a_shared_codex_key_in_credentials_clears_it_on_each_computer(environment):
@@ -463,7 +453,7 @@ def test_a_switch_to_a_subscription_with_a_lost_commit_keeps_the_key_it_runs_on(
         ] * 2
     for box, lid, verdict in zip(boxes, jobs, ("failed", "signed_in")):
         assert report(api, box, lid, verdict)["state"] == verdict
-        assert fetch(api, box)["credentials"] == [{"env": "OPENAI_API_KEY", "value": SHARED, "source": "shared"}]
+        assert fetch(api, box) == {"credentials": []}
     assert given(api) == {(box["runner_id"], "codex"): ("Team OpenAI", team) for box in boxes}
 
 
@@ -489,38 +479,19 @@ def test_the_computer_key_routes_say_where_keys_are_changed_now(environment):
     assert given_to(api, box) is None
 
 
-def test_a_computers_operator_reads_which_computers_share_its_key_but_not_the_key(environment):
-    """Settings > Computers shows the key each computer is given in Settings > Providers: its own key with a preview for
-    whoever may change the computer, and the shared one with every live computer it signs in (one read for the page).
-    Someone who is not a credential administrator sees which computers share it, not its name or preview."""
+def test_a_computers_operator_sees_its_local_key_preview_and_no_shared_provider(environment):
     api = setup(environment)
     quinn = as_person(api, "quinn")
     box = computer(api, "Quinn's box", operator="quinn", source="computer")
     laptop = computer(
         api, "Quinn's laptop", operator="quinn", source="shared", runtime="claude", name="ANTHROPIC_API_KEY"
     )
-    one = computer(api, "alpha", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
-    two = computer(api, "Bravo", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
-    gone = computer(api, "Charlie", source="shared", runtime="claude", name="ANTHROPIC_API_KEY")
     own_key(api, box, "codex", "OPENAI_API_KEY", OWN)
-    team = shared_before(api, store(api, "ANTHROPIC_API_KEY", TEAM, name="Team Claude key"))
-    cleared_here(api, gone, runtime="claude")
-    sharing = [{"id": m["runner_id"], "label": label} for m, label in ((one, "alpha"), (two, "Bravo"))]
-    sharing.append({"id": laptop["runner_id"], "label": "Quinn's laptop"})
-    seen = listed(api, two)
-    assert seen["shared_with"] == {"claude": {"id": team, "name": "Team Claude key", "computers": sharing}}
-    assert seen["shared_keys"]["claude"]["env"] == "ANTHROPIC_API_KEY" and seen["shared_keys"]["claude"]["preview"]
-    assert seen["keys"] == {}
-    # Signed out here: it still shows the key it is given, but it signs nothing in.
-    out = listed(api, gone)
-    assert out["shared_with"] == {} and out["shared_keys"]["claude"]["env"] == "ANTHROPIC_API_KEY"
-    mine = listed(api, box)
-    assert mine["keys"]["codex"]["env"] == "OPENAI_API_KEY" and mine["keys"]["codex"]["preview"]
-    # Quinn's view.
+    shared_before(api, store(api, "ANTHROPIC_API_KEY", TEAM, name="Team Claude key"))
     page = call(api, "GET", "operations", who=quinn)
     hers = next(m for m in page["computers"] if m["id"] == laptop["runner_id"])
     assert hers["may_manage"] is True
-    assert hers["shared_with"] == {"claude": {"computers": sharing}}
-    assert hers["shared_keys"] == {"claude": {"env": "ANTHROPIC_API_KEY"}}
-    assert next(m for m in page["computers"] if m["id"] == box["runner_id"])["keys"]["codex"]["preview"]
+    assert hers["shared_with"] == {} and hers["shared_keys"] == {}
+    mine = next(m for m in page["computers"] if m["id"] == box["runner_id"])
+    assert mine["keys"]["codex"]["env"] == "OPENAI_API_KEY" and mine["keys"]["codex"]["preview"]
     assert OWN not in json.dumps(page) and TEAM not in json.dumps(page)

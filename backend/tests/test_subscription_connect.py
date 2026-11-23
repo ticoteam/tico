@@ -1,5 +1,4 @@
-"""Connect in Settings > Models: a computer runs a plan's sign-in and the server seals the result as a company
-subscription, which the browser never holds (backend/model_subscriptions.py `connect`, backend/model_login.py)."""
+"""Connect in Settings > Providers: a computer runs the sign-in and the server saves the plan in the person's pool."""
 
 import json
 
@@ -11,9 +10,9 @@ from backend.auth import Identity
 from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, headers, post, runner
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, give, on
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, codex_file, company, on, pick
 
-CAPS = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1"]
+CAPS = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "attempt_credentials_v1"]
 
 
 def computer(api, caps=CAPS, label="Test Mac", operator="ana", claude=True, bot=None):
@@ -107,9 +106,9 @@ def test_a_chatgpt_plan_connects_on_the_codex_sign_in(api):
     setup(api)
     company(api)
     m = computer(api)
-    login = post(api, "model-subscriptions/connect", {"kind": "codex_login", "owner_id": "ben"})
+    login = post(api, "model-subscriptions/connect", {"kind": "codex_login"}, "ben-test")
     assert (login["runtime"], login["name"]) == ("codex", "Ben's ChatGPT plan")
-    pasted = post(api, "model-subscriptions", {"kind": "codex_login", "secret": codex_file(), "owner_id": "ben"})
+    pasted = post(api, "model-subscriptions", {"kind": "codex_login", "secret": codex_file()}, "ben-test")
     assert pasted["name"] == login["name"]
     assert send(api, m, login, codex_file())["state"] == "done"
     saved = get(api, "model-subscriptions")["subscriptions"]
@@ -124,7 +123,7 @@ def test_reconnect_asks_before_the_sign_in_when_runs_would_restart_and_replaces_
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = computer(api, bot="ops")
     sid = post(api, "model-subscriptions", {"kind": "claude_token", "name": "Max", "secret": TOKEN})["id"]
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-one"}, m["token"])
@@ -147,7 +146,7 @@ def test_reconnect_rechecks_runs_that_started_during_sign_in(api, approve_restar
     on(api, "ops", "claude", "claude-sonnet-5-5")
     m = computer(api, bot="ops")
     sid = post(api, "model-subscriptions", {"kind": "claude_token", "secret": TOKEN})["id"]
-    give(api, m, "claude", sid)
+    pick(api, "ops", "claude", sid)
     start = {"subscription": sid}
     login = post(api, "model-subscriptions/connect", start)
     post(api, "chat/ops", {"text": "Summarize the account."})
@@ -176,7 +175,6 @@ def test_only_a_person_who_may_save_starts_one_and_only_for_a_plan(api):
     setup(api)
     company(api)
     computer(api)
-    post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Max"}, "cara-test", expected=403)
     api.app.state.store.settings.test_identities["assistant"] = Identity(
         "human:ana", "owner", email="ana@acme.example", via="assistant"
     )
@@ -362,25 +360,47 @@ def test_a_cancelled_or_expired_job_a_wrong_computer_or_a_bad_value_saves_nothin
         assert c.execute("SELECT count(*) FROM model_subscriptions").fetchone()[0] == 0
 
 
-def test_connect_saves_the_owner_named_up_front_and_refuses_one_who_is_not_a_person_here(api):
+def test_a_member_connects_their_own_plan_on_a_shared_computer(api):
     setup(api)
     company(api)
     m = computer(api)
-    refused = post(
+    start = {"kind": "claude_token", "name": "Max"}
+    post(api, "model-subscriptions/connect", {**start, "owner_id": "ben"}, "cara-test", expected=422)
+    assert asked(api, m) == []
+    login = post(api, "model-subscriptions/connect", start, "cara-test")
+    path = f"computers/{m['runner_id']}/logins/{login['id']}"
+    post(
         api,
-        "model-subscriptions/connect",
-        {"kind": "claude_token", "name": "Max", "owner_id": "human:eve"},
-        expected=422,
+        f"runner-logins/{login['id']}/report",
+        {"state": "waiting", "url": "https://claude.example/authorize"},
+        m["token"],
     )
-    assert refused["error"]["code"] == "owner" and asked(api, m) == []  # checked before anyone signs in
-    login = post(api, "model-subscriptions/connect", {"kind": "claude_token", "name": "Ben Max", "owner_id": "ben"})
+    get(api, path, "ben-test", expected=403)
+    get(api, path, expected=403)
+    post(api, f"{path}/code", {"code": "abc123#state"}, "ben-test", expected=403)
+    post(api, f"{path}/cancel", {}, "unrecognized-token", expected=401)
+    assert get(api, path, "cara-test")["accepts_code"]
+    post(api, f"{path}/code", {"code": "abc123#state"}, "cara-test")
     assert send(api, m, login)["state"] == "done"
-    saved = get(api, "model-subscriptions")["subscriptions"]
-    assert [(s["name"], s["added_by"], s["owner_id"]) for s in saved] == [("Ben Max", "human:ana", "human:ben")]
-    # A reconnect keeps the owner.
-    login = post(api, "model-subscriptions/connect", {"subscription": saved[0]["id"]})
-    assert send(api, m, login, OTHER)["state"] == "done"
-    assert get(api, "model-subscriptions")["subscriptions"][0]["owner_id"] == "human:ben"
+    [saved] = get(api, "model-subscriptions")["subscriptions"]
+    assert saved["owner_id"] == "human:cara"
+    assert not saved["computers"]
+    reconnect = {"subscription": saved["id"]}
+    cancel_me = post(api, "model-subscriptions/connect", reconnect, "cara-test")
+    cancel_path = f"computers/{m['runner_id']}/logins/{cancel_me['id']}/cancel"
+    assert post(api, cancel_path, {}, "ben-test")["state"] == "canceled"
+    assert send(api, m, cancel_me, OTHER, expected=409)["error"]["code"] == "state"
+    for token in ("cara-test", "ben-test"):
+        login = post(api, "model-subscriptions/connect", reconnect, token)
+        assert send(api, m, login, OTHER)["state"] == "done"
+    [saved] = get(api, "model-subscriptions")["subscriptions"]
+    assert saved["owner_id"] == "human:cara" and saved["revision"] == 3
+
+    # Losing admin rights during the sign-in also loses the right to write its result.
+    login = post(api, "model-subscriptions/connect", reconnect, "ben-test")
+    post(api, "access/humans/ben", {"role": "member"})
+    assert send(api, m, login)["state"] == "failed"
+    assert get(api, "model-subscriptions")["subscriptions"][0]["revision"] == 3
 
 
 def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the_second(api):
@@ -402,3 +422,22 @@ def test_a_plan_added_with_no_name_is_named_after_its_plan_and_numbered_from_the
     saved = [s for s in get(api, "model-subscriptions")["subscriptions"] if s["kind"] == "claude_token"]
     assert sorted(s["name"] for s in saved) == ["Ana's Claude plan", "Ana's Claude plan 2", "Team Max"]
     assert {s["owner_id"] for s in saved} == {"human:ana"}
+
+
+def test_admin_connect_for_teammate_keeps_the_target_and_rechecks_rights(api):
+    setup(api)
+    company(api)
+    m = computer(api)
+    path = "model-subscriptions/connect"
+    start = {"kind": "claude_token", "owner_id": "cara"}
+    login = post(api, path, start, "ben-test")
+    assert post(api, path, start, "ben-test")["id"] == login["id"]
+    post(api, path, {"kind": "claude_token"}, "ben-test", expected=409)
+    assert send(api, m, login)["state"] == "done"
+    [saved] = get(api, "model-subscriptions")["subscriptions"]
+    assert saved["owner_id"] == "human:cara" and saved["added_by"] == "human:ben"
+
+    login = post(api, path, start, "ben-test")
+    post(api, "access/humans/ben", {"role": "member"})
+    assert send(api, m, login, OTHER)["state"] == "failed"
+    assert len(get(api, "model-subscriptions")["subscriptions"]) == 1

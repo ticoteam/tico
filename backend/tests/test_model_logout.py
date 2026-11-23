@@ -1,5 +1,4 @@
-"""Sign out and Switch account from the app: the sign-in relay's other kinds, and a login signed out on purpose stays
-signed out, even when the company gives every computer a model key."""
+"""Sign out and Switch account from the app, including the legacy shared-key job."""
 
 from backend.store import H
 from backend.tests.helpers.api import get, headers, post, runner  # noqa: F401
@@ -91,15 +90,14 @@ def put_config(api, bot, runtime):
         BS.write(c, bot, {'runtime': runtime})
 
 
-def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_so(environment):
-    """Cleared stays cleared: the company's "Every computer" key does not sign a signed-out login back in."""
+def test_the_legacy_shared_key_job_clears_sign_out_without_sharing_the_key(environment):
     api = environment()
     vault(api)
     machine = new_computer(api)
     rid, token = machine["runner_id"], machine["token"]
     beat(api, token, auth={"Authorization": "Bearer " + token}, readiness=ON_SHARED)
     shared_before(api, store(api, "OPENAI_API_KEY", "sk-team-key-0123456789"))
-    assert computer_asks(api, token).json()["credentials"]
+    assert computer_asks(api, token).json() == {"credentials": []}
     r = api.post(f"/api/v2/computers/{rid}/logouts", json={"runtime": "codex"}, headers=signed_in())
     assert r.status_code == 200, r.text
     assert computer_asks(api, token).json() == {"credentials": [], "signed_out": True}
@@ -107,11 +105,11 @@ def test_a_signed_out_computer_is_not_given_the_shared_key_until_a_person_says_s
     assert "signed_out" not in computer_asks(api, token, "claude").json()
     as_computer(api, token, f"runner-logins/{r.json()['id']}/report", {"state": "signed_out"})
     assert computer_asks(api, token).json()["credentials"] == []
-    # "Use the shared key" is the person saying so.
+    # Older clients can still lift the sign-out marker. Shared keys are delivered to agent turns.
     used = api.post(f"/api/v2/computers/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
     assert used.status_code == 200, used.text
     assert used.json()["kind"] == "use_shared_key"
-    assert computer_asks(api, token).json()["credentials"][0]["value"] == "sk-team-key-0123456789"
+    assert computer_asks(api, token).json() == {"credentials": []}
     # Nothing to restore once it is no longer signed out.
     as_computer(api, token, f"runner-logins/{used.json()['id']}/report", {"state": "done"})
     again = api.post(f"/api/v2/computers/{rid}/shared-key", json={"runtime": "codex"}, headers=signed_in())
