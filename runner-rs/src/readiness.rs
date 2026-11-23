@@ -873,8 +873,9 @@ fn legacy_antigravity(declared: &Map<String, Value>, expected: &Value) -> bool {
     let now = text_of(&expected["model"]);
     let same_model =
         model.is_empty() || model == now || (model == FLASH && now == "gemini-4-hydrogen");
+    // An omitted runtime is unspecified, as in the ordinary comparison; any other than Gemini is drift.
     text_of(&expected["runtime"]) == "antigravity"
-        && said("runtime") == "gemini"
+        && matches!(said("runtime").as_str(), "" | "gemini")
         && was_agy
         && same_model
 }
@@ -1443,6 +1444,22 @@ mod tests {
                 "name: ops\nruntime: gemini\nharness: antigravity\nmodel: gemini-3.8-flash\n",
                 &hydrogen,
                 true,
+            ),
+            // An omitted runtime is unspecified.
+            (
+                "name: ops\nharness: antigravity\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                true,
+            ),
+            (
+                "name: ops\nharness: antigravity\nmodel: gemini-4-neon\n",
+                &neon,
+                true,
+            ),
+            (
+                "name: ops\nharness: gemini\nmodel: gemini-3.8-flash\n",
+                &hydrogen,
+                false,
             ),
             // A bare Flash, or an explicit Gemini CLI, was never Antigravity's.
             (

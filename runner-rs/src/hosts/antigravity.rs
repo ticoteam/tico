@@ -161,6 +161,8 @@ struct Stream {
     new_message: bool,
     /// Per-step usage emitted by `step_update`, keyed by `step_index`.
     step_usage: BTreeMap<i64, Value>,
+    /// Usage on steps with no `step_index`: each counts on its own.
+    unindexed_usage: Vec<Value>,
     /// A step other than the prompt's own (`user_input`) has run: the model worked in this conversation.
     worked: bool,
     /// `agy` named its conversation (`init`) and the turn may go on: its held prompt is sent.
@@ -172,6 +174,8 @@ struct Stream {
     replacing: bool,
     /// The conversation a `replacing` process began: once the turn succeeds there, it holds everything.
     fresh: Option<String>,
+    /// The first conversation a new thread's process named: its own, which holds the whole turn.
+    begun: Option<String>,
     skipped: Vec<String>,
     skipped_count: usize,
 }
@@ -377,8 +381,8 @@ impl AntigravityHost {
         Ok(())
     }
 
-    /// A conversation `agy` named, on any event. The first one a new thread hears of is saved. Another than the saved
-    /// one ends a turn that must continue it (`Mismatch`); on any other it is staged (`commit`).
+    /// A conversation `agy` named, on any event, staged until the model works or the turn succeeds (`commit`); naming
+    /// the saved one again unstages it. Another than the saved one ends a turn that must continue it (`Mismatch`).
     fn named(
         &self,
         inner: &mut Inner,
@@ -388,8 +392,15 @@ impl AntigravityHost {
     ) -> Result<Option<End>, String> {
         let cid = canonical(cid).ok_or("not a conversation id")?;
         match inner.provider.clone() {
-            None => self.save(inner, &cid, false)?,
-            Some(saved) if saved == cid => {}
+            // A new thread's first conversation is staged too: a refusal before any work leaves no record.
+            None => {
+                if stream.begun.is_none() {
+                    stream.begun = Some(cid.clone());
+                }
+                stream.staged = Some(cid);
+            }
+            // Back on the saved one: whatever another event named is not where the turn went.
+            Some(saved) if saved == cid => stream.staged = None,
             Some(_) if must_continue => return Ok(Some(End::Mismatch(LOST))),
             Some(_) => {
                 if stream.replacing && stream.fresh.is_none() {
@@ -407,6 +418,10 @@ impl AntigravityHost {
     /// once the prompt went, so no work runs twice.
     fn commit(&self, inner: &mut Inner, stream: &mut Stream) -> Result<(), String> {
         if let Some(cid) = stream.staged.take() {
+            if inner.provider.is_none() && stream.begun.as_deref() == Some(cid.as_str()) {
+                // A new thread's own conversation: nothing was replaced.
+                return self.save(inner, &cid, false);
+            }
             inner.restored = true;
             self.save(inner, &cid, true)?;
         }
@@ -582,6 +597,8 @@ impl AntigravityHost {
                         )
                         .await;
                     }
+                    // Gone, its group with it, before the turn ends: the next turn is never admitted beside it.
+                    self.reap_current().await;
                     running.stderr.drained().await;
                     self.finish(tid, turn, &result, &stream, &running.stderr.tail());
                     let _ = tokio::time::timeout(DRAIN, async {
@@ -603,6 +620,7 @@ impl AntigravityHost {
                     } else {
                         None
                     };
+                    self.reap_current().await;
                     running.stderr.drained().await;
                     self.fail_closed(
                         tid,
@@ -692,6 +710,15 @@ impl AntigravityHost {
                     }
                 }
             }
+        }
+    }
+
+    /// Stop the turn's process if it is still running and wait until it and its group are gone. It stays on the host
+    /// meanwhile, so a stop waits for it too.
+    async fn reap_current(&self) {
+        let proc = self.inner().proc.clone();
+        if let Some(p) = proc {
+            p.reap().await;
         }
     }
 
@@ -828,11 +855,13 @@ impl AntigravityHost {
         }
         let (tid, turn) = (Some(tid), Some(turn));
         if let Some(usage) = step.get("usage").filter(|u| u.is_object()) {
-            let idx = step
-                .get("step_index")
-                .and_then(Value::as_i64)
-                .unwrap_or_else(|| stream.step_usage.len() as i64);
-            stream.step_usage.insert(idx, usage.clone());
+            // A repeated index is a newer snapshot of that step; one with none is a step of its own.
+            match step.get("step_index").and_then(Value::as_i64) {
+                Some(idx) => {
+                    stream.step_usage.insert(idx, usage.clone());
+                }
+                None => stream.unindexed_usage.push(usage.clone()),
+            }
         }
         if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
             let text = text_of(&step["text_delta"]);
@@ -910,12 +939,13 @@ impl AntigravityHost {
         // agy reports per-step usage on step_update and conversation-cumulative usage on result (across --conversation
         // resumes too), so this turn's steps are summed; an older build without steps reports this process's total.
         let spent = |k: &str| {
-            if stream.step_usage.is_empty() {
+            if stream.step_usage.is_empty() && stream.unindexed_usage.is_empty() {
                 count(&usage[k]).max(0)
             } else {
                 stream
                     .step_usage
                     .values()
+                    .chain(&stream.unindexed_usage)
                     .map(|u| count(&u[k]))
                     .sum::<i64>()
                     .max(0)
@@ -1115,7 +1145,7 @@ mod tests {
     /// instead; with `$LATE` it names the asked one first and the other only after a step; with `$NOINIT` it names none;
     /// with `$SLOWINIT` it names it only after INIT_WAIT. With `$REFUSE_FRESH`, one begun without `--conversation` refuses
     /// the prompt.
-    /// With `$STUCK` it ignores SIGTERM and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM in its
+    /// With `$STUCK` it ignores SIGTERM (then writes `.ready`) and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM in its
     /// group. It exits when stdin closes.
     fn fake_agy(dir: &Path) -> String {
         let path = dir.join("fake-agy");
@@ -1125,7 +1155,7 @@ mod tests {
                 r##"#!/bin/sh
 echo "$@" >> "$ARGS_LOG"
 echo $$ > "$ARGS_LOG.pid"
-if [ -n "$STUCK" ]; then trap '' TERM; while :; do sleep 1; done; fi
+if [ -n "$STUCK" ]; then trap '' TERM; : > "$ARGS_LOG.ready"; while :; do sleep 1; done; fi
 if [ -n "$ORPHAN" ]; then (trap '' TERM; exec sleep 30) >/dev/null 2>&1 & echo $! > "$ARGS_LOG.orphan"; fi
 if [ -n "$FIXTURE" ]; then
   cat "$FIXTURE"
@@ -1425,6 +1455,114 @@ read -r _
         );
     }
 
+    /// A turn whose `agy` prints `lines` (JSON events, one per line), on `thread` of `host`; its events.
+    async fn played(
+        rig: &Rig,
+        name: &str,
+        lines: &[Value],
+        saved: Option<&str>,
+    ) -> (AntigravityHost, String, Vec<Value>) {
+        let dir = rig.dir.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("turn.jsonl");
+        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        std::fs::write(&fixture, text).unwrap();
+        let s = rig.settings(&[("FIXTURE", fixture.display().to_string())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        if let Some(cid) = saved {
+            host.save(&mut host.inner(), cid, false).unwrap();
+        }
+        host.start_turn(&thread, "hi", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        (host, thread, events)
+    }
+
+    #[tokio::test]
+    async fn a_new_threads_refusal_before_any_work_leaves_no_record() {
+        let rig = Rig::new();
+        let (host, thread, events) = played(
+            &rig,
+            "new-refusal",
+            &[
+                json!({"event": "init", "conversation_id": OTHER}),
+                json!({"event": "result", "result": {"status": "ERROR", "error": "no", "conversation_id": OTHER}}),
+            ],
+            None,
+        )
+        .await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_failed"));
+        assert!(!host.path(&thread).unwrap().exists());
+        assert!(!host.restored(&thread));
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_new_threads_first_conversation_is_kept_once_the_turn_succeeds() {
+        let rig = Rig::new();
+        let (host, thread, events) = played(
+            &rig,
+            "new-success",
+            &[
+                json!({"event": "init", "conversation_id": OTHER}),
+                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok", "conversation_id": OTHER}}),
+            ],
+            None,
+        )
+        .await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
+        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+        assert!(
+            record.contains(OTHER) && !record.contains("needs_history"),
+            "{record}"
+        );
+        assert!(!host.restored(&thread) && !host.needs_history(&thread));
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_success_back_on_the_saved_conversation_drops_another_one_named_before() {
+        let rig = Rig::new();
+        let (host, thread, events) = played(
+            &rig,
+            "back",
+            &[
+                json!({"event": "init", "conversation_id": SAVED}),
+                json!({"event": "step_update", "step_update": {"step_type": "user_input", "conversation_id": OTHER}}),
+                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok", "conversation_id": SAVED}}),
+            ],
+            Some(SAVED),
+        )
+        .await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
+        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+        assert!(record.contains(SAVED) && !record.contains(OTHER), "{record}");
+        assert!(!host.restored(&thread));
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn usage_on_a_step_with_no_index_adds_to_the_indexed_ones() {
+        let rig = Rig::new();
+        let (host, _thread, events) = played(
+            &rig,
+            "usage",
+            &[
+                json!({"event": "init", "conversation_id": OTHER}),
+                json!({"event": "step_update", "step_update": {"step_index": 1, "step_type": "agent_response", "text_delta": "a", "usage": {"input_tokens": 10, "output_tokens": 1}}}),
+                json!({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "b", "usage": {"input_tokens": 20, "output_tokens": 2}}}),
+                json!({"event": "step_update", "step_update": {"step_index": 1, "step_type": "agent_response", "usage": {"input_tokens": 12, "output_tokens": 1}}}),
+                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ab", "usage": {"input_tokens": 999, "output_tokens": 999}}}),
+            ],
+            None,
+        )
+        .await;
+        let tokens = events.iter().find(|e| e["kind"] == "tokens").unwrap();
+        assert_eq!(tokens["input"], 32, "{tokens}");
+        assert_eq!(tokens["output"], 3, "{tokens}");
+        host.stop().await;
+    }
+
     #[tokio::test]
     async fn a_tool_left_in_agys_group_goes_with_it_when_agy_exits_first() {
         let rig = Rig::new();
@@ -1538,16 +1676,18 @@ read -r _
         let (host, _rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "hi", None).unwrap();
-        let pid_file = rig.dir.join("args.log.pid");
-        let pid = loop {
-            if let Some(pid) = std::fs::read_to_string(&pid_file)
-                .ok()
-                .and_then(|p| p.trim().parse::<i32>().ok())
-            {
-                break pid;
-            }
-            tokio::task::yield_now().await;
-        };
+        // Its SIGTERM trap is in place once it says it is ready, so the stop must escalate.
+        let ready = rig.dir.join("args.log.ready");
+        let by = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            assert!(std::time::Instant::now() < by, "the fake never got ready");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let pid: i32 = std::fs::read_to_string(rig.dir.join("args.log.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         host.stop().await;
         assert_eq!(
             unsafe { libc::kill(pid, 0) },
