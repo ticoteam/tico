@@ -1800,9 +1800,14 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         from . import question_marks
 
         named = {r["actor"] for r in reached} | {primary}
+        # Each by the message's way, as `plan` builds an addressed bot's entry: a Defer keeps its deadline.
+        due = plan_defer_for(root, defer_for) if way == "defer" else None
+        mode = "queue" if due == "never" else way or "steer"
         for bot in question_marks.cleared_askers(c, (root or {}).get("task_id") or "", message["id"]):
             if bot not in named and bot.startswith("bot:"):
-                reached.append({"actor": bot, "reason": "reply", "mode": "steer", "defer_for": None})
+                reached.append(
+                    {"actor": bot, "reason": "reply", "mode": mode, "defer_for": due if mode == "defer" else None}
+                )
     seq = (message.get("seq") or 1) - 1
     out = []
     entry = next((r for r in reached if r["actor"] == primary), None) if primary else None
@@ -2506,7 +2511,7 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     """A Tico notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
-    and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
+    and its legacy audience is copied. In a task's own thread it is stamped as `bot`'s session message. `way` (named_way): a queued carrier stays out of a running turn
     (execution.inputs); a deferred one is quiet, and starts no run until its deadline."""
     if not _source_readable(c, thread, message, bot):
         return None
@@ -2532,10 +2537,24 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     )
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
+    # In a task's own thread a carrier is a message in the session of the agent it was written for: it copies words
+    # from another session (or a comment), and no other agent's replay shows it (task_privacy.page `session`).
+    own = thread.get("kind") == "task" and thread.get("task_id") and not thread.get("parent_id")
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
-        "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
-        (cid, thread["id"], H.TICO_ACTOR, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
+        "origin_id,revision,restricted,legacy_audience,session_agent_id) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?,?)",
+        (
+            cid,
+            thread["id"],
+            H.TICO_ACTOR,
+            bot,
+            body,
+            dumped,
+            created,
+            mint_origin(c),
+            legacy[0] if legacy else None,
+            bot if own else None,
+        ),
     )
     from .enqueue import enqueue
 

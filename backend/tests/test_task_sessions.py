@@ -222,6 +222,27 @@ def test_two_agents_each_have_their_own_session_and_replay_skips_the_other(api):
     assert to_ops["id"] in seen and plain["id"] in seen and to_finance["id"] not in seen
 
 
+def test_a_carrier_is_in_the_session_of_the_agent_it_was_written_for(api):
+    """Ana writes in Ops's session and mentions Finance: Tico's carrier that wakes Finance copies her words, so it is
+    Finance's session message, never CPO's (who is on the ticket too, but was not mentioned)."""
+    row = ticket(api)
+    said = comment(api, row["id"], "@finance please check the refund totals first.", to="ops")["comment"]
+    [carrier] = rows(
+        api,
+        "SELECT id, session_agent_id FROM messages WHERE json_extract(refs,'$.carries')=? AND recipient_id='bot:finance'",
+        said["id"],
+    )
+    assert carrier["session_agent_id"] == "bot:finance"
+
+    def replay(bot):
+        with api.app.state.store.read() as c:
+            page = task_privacy.page(c, Identity(bot, "bot"), row["conversation_id"], limit=100, session=bot)
+        return {m["id"] for m in page["messages"]}
+
+    assert carrier["id"] not in replay("bot:cpo") and said["id"] not in replay("bot:cpo")
+    assert carrier["id"] in replay("bot:finance") and said["id"] in replay("bot:finance")
+
+
 def test_a_session_message_is_refused_to_whoever_may_not_direct_and_for_an_agent_off_the_ticket(api):
     row = ticket(api)
     comment(api, row["id"], "Ship it.", token="ben-test", to="ops", expected=403)
@@ -307,6 +328,20 @@ def test_a_plain_comment_that_clears_two_agents_asks_reaches_both(api):
     assert {r["recipient"] for r in reached} == {"bot:ops", "bot:finance"}
 
 
+@pytest.mark.parametrize("way", ["defer", "queue"])
+def test_a_plain_comment_that_clears_asks_reaches_each_asker_by_its_way(api, way):
+    row = ticket(api)
+    asks(api, row["id"], "bot:ops", "bot:finance")
+    more = {"delivery": way, **({"defer_for": "2h"} if way == "defer" else {})}
+    sent = comment(api, row["id"], "Use the Chase feed for both.", **more)["comment"]
+    reached = rows(
+        api,
+        "SELECT recipient, mode FROM message_deliveries WHERE message_id=? AND recipient LIKE 'bot:%' ORDER BY recipient",
+        sent["id"],
+    )
+    assert reached == [{"recipient": "bot:finance", "mode": way}, {"recipient": "bot:ops", "mode": way}]
+
+
 def test_a_message_in_one_agents_session_clears_only_that_agents_ask(api):
     row = ticket(api)
     asks(api, row["id"], "bot:ops", "bot:finance")
@@ -385,3 +420,35 @@ def test_the_end_line_reaches_only_the_requesters_whoever_the_note_mentions(api)
     [line] = rows(api, "SELECT id FROM messages WHERE wake_key LIKE ?", f"{row['id']}:%:told")
     reached = rows(api, "SELECT recipient FROM message_deliveries WHERE message_id=?", line["id"])
     assert [r["recipient"] for r in reached] == ["human:ben"]
+
+
+def _turn_for(api, row, text, bot="ops"):
+    """A person's message to `bot`'s session on the ticket, and the turn it starts, begun."""
+    comment(api, row["id"], text, to=bot)
+    machine = runner(api)
+    assign(api, machine, bot)
+    ready(api, machine, [bot])
+    turn = claim(api, machine, bot)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-" + turn["id"][:8]}, machine["token"])
+    return machine, turn
+
+
+def _finish(api, machine, turn, text):
+    body = {"outcome": "completed", "last_seq": 0, "text": text}
+    post(api, f"attempts/{turn['id']}/complete", body, machine["token"], key="completion")
+    return rows(api, "SELECT recipient_id FROM messages WHERE sender_id='bot:ops' AND body=?", text)
+
+
+@pytest.mark.parametrize("mid_turn", ["Uploaded the bank export.", "@ana uploaded the bank export.", "ask"])
+def test_a_turn_answers_the_person_who_started_it_unless_its_post_already_reached_someone(api, mid_turn):
+    row = ticket(api)
+    machine, turn = _turn_for(api, row, "Please reconcile the bank feed.")
+    if mid_turn == "ask":
+        post(api, f"tasks/{row['id']}/questions", {"to": "ana", "text": "Which month first?"}, turn["token"])
+    else:
+        agent_says(api, "bot:ops", row["id"], mid_turn)  # a comment with files, say: the turn may post those
+    answered = _finish(api, machine, turn, "Reconciled; two items differ.")
+    if mid_turn == "Uploaded the bank export.":
+        assert answered == [{"recipient_id": "human:ana"}], "a post that reached nobody is no answer"
+    else:
+        assert answered == [], "its mention or ❓ already reached ana: the turn does not post twice"

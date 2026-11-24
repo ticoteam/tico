@@ -3568,15 +3568,23 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
-def turn_wrote(c, aid, conversation_id, actor):
-    """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too."""
+def turn_wrote(c, aid, conversation_id, actor, reached=False):
+    """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too.
+    `reached`: only a post that reached someone counts (it was delivered: written `to` an agent, a Reply, a mention,
+    a ❓); a plain comment on a task reaches nobody, so it answers nobody either."""
     started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
     if not started or not started[0]:
         return False
+    delivered = (
+        " AND (EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id=m.id AND d.recipient<>m.sender_id)"
+        " OR EXISTS (SELECT 1 FROM question_marks q WHERE q.message_id=m.id))"
+        if reached
+        else ""
+    )
     return (
         c.execute(
-            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND deleted_at IS NULL "
-            "LIMIT 1",
+            "SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.sender_id=? AND m.created_at>=? "
+            "AND m.deleted_at IS NULL" + delivered + " LIMIT 1",
             (conversation_id, actor, started[0]),
         ).fetchone()
         is not None
@@ -7875,12 +7883,12 @@ class Execution:
                     # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
                     # the open task; once the owner marked the work done; or, for a finished turn that came in after
                     # its lease lapsed, once the task was closed under it: no later turn will answer that room. On
-                    # its own open task, a turn that already wrote in that room (its own comment or ❓ says it) posts
-                    # nothing more, wherever the room is.
+                    # its own open task, a turn that already reached someone from that room (a ❓, a mention, a Reply)
+                    # posts nothing more, wherever the room is; a plain comment reached nobody, so it answers nobody.
                     wrote = (
                         actor == task["owner_id"]
                         and task["status"] == "open"
-                        and turn_wrote(c, aid, (conv or {}).get("id"), actor)
+                        and turn_wrote(c, aid, (conv or {}).get("id"), actor, reached=True)
                     )
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
@@ -7918,10 +7926,11 @@ class Execution:
                     and task
                     and task["status"] == "open"
                     and (conv or {}).get("task_id") == task["id"]
-                    and turn_wrote(c, aid, conv["id"], actor)
+                    and turn_wrote(c, aid, conv["id"], actor, reached=True)
                 ):
-                    # Any turn on an open task that already wrote in its room (a ❓, a comment with files) posts nothing
-                    # more: an agent woken on a task never posts twice.
+                    # Any turn on an open task that already reached someone from its room (a ❓, a mention, a Reply)
+                    # posts nothing more: an agent woken on a task never posts twice. A post that reached nobody (a
+                    # plain comment with files) is no answer: the person who started the turn still gets one.
                     replyable = False
                 # A turn a Stop reached after its task was closed (end_task_work) files its answer on the run
                 # instead: the closed room takes no more posts from work that was stopped.

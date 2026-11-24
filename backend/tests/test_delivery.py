@@ -22,8 +22,8 @@ def test_a_deadline_starts_one_run_for_its_session_once(api):
         },
     )
     path = f"tasks/{task['id']}/comments"
-    first = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
-    second = post(api, path, {"text": "Then the docs.", "delivery": "defer", "defer_for": "2h"})["comment"]
+    first = post(api, path, {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
+    second = post(api, path, {"to": "ops", "text": "Then the docs.", "delivery": "defer", "defer_for": "2h"})["comment"]
     assert job_of(api, first["id"]) is None and job_of(api, second["id"]) is None
 
     tick(api, 20)
@@ -48,7 +48,9 @@ def test_a_paused_bot_is_not_woken_until_it_is_active_again(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     held = post(
-        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"}
+        api,
+        f"tasks/{task['id']}/comments",
+        {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "30m"},
     )["comment"]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bots SET state='paused' WHERE slug='ops'")
@@ -66,7 +68,9 @@ def test_a_deferred_item_already_gone_starts_nothing(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     held = post(
-        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"}
+        api,
+        f"tasks/{task['id']}/comments",
+        {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "30m"},
     )["comment"]
     post(api, f"tasks/{task['id']}/comments/{held['id']}/delete", {})
     tick(api, 31)
@@ -78,7 +82,9 @@ def test_ending_a_task_cancels_its_deferrals_permanently(api):
     for status in H.TASK_ENDED:
         task = post(api, "tasks", {"owner": "ops", "title": f"Plan the launch {status}", "body": "For the team."})
         held = post(
-            api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+            api,
+            f"tasks/{task['id']}/comments",
+            {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "24h"},
         )["comment"]
         with api.app.state.store.transaction() as c:
             seen = H.task(c, task["id"])["version"]
@@ -110,7 +116,9 @@ def test_a_closed_tasks_deferred_message_is_moot_without_the_close_hook(api):
             },
         )
         held = post(
-            api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+            api,
+            f"tasks/{task['id']}/comments",
+            {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "24h"},
         )["comment"]
         with api.app.state.store.transaction() as c:
             if via == "room":
@@ -172,7 +180,9 @@ def test_an_open_tasks_deferred_comment_still_fires(api):
         },
     )
     held = post(
-        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "24h"}
+        api,
+        f"tasks/{task['id']}/comments",
+        {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "24h"},
     )["comment"]
     with api.app.state.store.transaction() as c:
         assert delivery.due(c, H.shift(H.now(), hours=25)) == [held["id"]]
@@ -188,13 +198,17 @@ def test_closing_a_task_cancels_its_queued_runs(api, state):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     held = post(
-        api, f"tasks/{task['id']}/comments", {"text": "Billing first.", "delivery": "defer", "defer_for": "1h"}
+        api,
+        f"tasks/{task['id']}/comments",
+        {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "1h"},
     )["comment"]
     with api.app.state.store.transaction() as c:
         # Task-thread messages use the same cancellation rule as comments.
         c.execute("UPDATE deferrals SET kind='message' WHERE item=?", (held["id"],))
         assert delivery.due(c, H.shift(H.now(), hours=2)) == [held["id"]]
-    ordinary = post(api, f"tasks/{task['id']}/comments", {"text": "Start now.", "delivery": "queue"})["comment"]
+    ordinary = post(api, f"tasks/{task['id']}/comments", {"to": "ops", "text": "Start now.", "delivery": "queue"})[
+        "comment"
+    ]
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state=? WHERE message_id=?", (state, held["id"]))
         H.task_close(c, "human:ana", task["id"], "Not needed.", H.task(c, task["id"])["version"])
@@ -211,11 +225,11 @@ def test_a_defer_rides_along_only_on_a_turn_in_its_own_session(api):
     other = post(api, "tasks", {"owner": "ops", "title": "Draft the FAQ", "body": "For the site."})
 
     # The bot is at work on another task: this waits for a turn on its own.
-    elsewhere = post(api, f"tasks/{other['id']}/comments", {"text": "When you can.", "delivery": "defer"})
+    elsewhere = post(api, f"tasks/{other['id']}/comments", {"to": "ops", "text": "When you can.", "delivery": "defer"})
     assert elsewhere["sent_as"]["delivery"] == "defer" and elsewhere["woke"] is False
     assert job_of(api, elsewhere["comment"]["id"]) is None
     # On the task it is working, it goes right after this turn.
-    here = post(api, f"tasks/{working['id']}/comments", {"text": "And the API page.", "delivery": "defer"})
+    here = post(api, f"tasks/{working['id']}/comments", {"to": "ops", "text": "And the API page.", "delivery": "defer"})
     assert here["sent_as"] == {"delivery": "queue", "until": None} and here["woke"] is True
     assert rows(api, item=here["comment"]["id"]) == []
 
@@ -237,9 +251,9 @@ def test_on_a_task_a_bot_filed_a_comment_reaches_it_only_by_an_at_mention(api):
         token="ben-test",
     )
     assert chosen["woke"] is True and chosen["sent_as"] == {"delivery": "queue", "until": None}
-    # Mentioned once, the bot follows: a later plain comment steers it.
+    # Mentioned or not, a later plain comment is in the log only: it reaches nobody (comments are a log).
     later = post(api, f"tasks/{task['id']}/comments", {"text": "Fixed it."}, token="ben-test")
-    assert later["sent_as"]["delivery"] == "steer"
+    assert later["woke"] is False and "sent_as" not in later
 
 
 def test_a_chat_message_steers_by_default_queues_when_asked_and_defers_with_no_deadline(api):
@@ -290,22 +304,23 @@ def test_someone_off_the_task_cannot_wake_its_bot_with_a_deadline(api):
     setup(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Plan the launch", "body": "For the team."})
     path = f"tasks/{task['id']}/comments"
-    # Ben is not on the task: a deadline would wake the bot as a steer would.
+    # Ben is not on the task: he may not write to its bot's session, so no deadline of his can wake it.
     r = api.post(
         f"/api/v2/{path}",
-        json={"text": "Mine first.", "delivery": "defer", "defer_for": "1m"},
+        json={"to": "ops", "text": "Mine first.", "delivery": "defer", "defer_for": "1m"},
         headers=headers("ben-test"),
     )
-    assert r.status_code == 403 and "delivery" in r.text, r.text
-    # A defer with no deadline named takes none from him (a person on the task gets a day).
+    assert r.status_code == 403, r.text
+    # His plain comments, deadline or not, are in the log only.
     held = post(api, path, {"text": "When you can.", "delivery": "defer"}, token="ben-test")
-    assert held["sent_as"] == {"delivery": "defer", "until": None}
     never = post(api, path, {"text": "Whenever.", "delivery": "defer", "defer_for": "never"}, token="ben-test")
-    assert never["sent_as"] == {"delivery": "defer", "until": None}
+    assert (held["woke"], never["woke"]) == (False, False)
     tick(api, 2 * 24 * 60)
     assert fired(api) == [] and job_of(api, held["comment"]["id"]) is None
     # Ana, on the task, still sets one.
-    assert post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "1m"})["sent_as"]["until"]
+    assert post(api, path, {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "1m"})["sent_as"][
+        "until"
+    ]
 
 
 def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropped(api, monkeypatch):
@@ -320,12 +335,12 @@ def test_deferred_comments_older_than_the_history_page_are_written_out_not_dropp
         },
     )
     path = f"tasks/{task['id']}/comments"
-    old = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
+    old = post(api, path, {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
     # The room fills past one history page before the bot's next turn.
     for n in range(60):
-        post(api, path, {"text": f"Note {n}.", "delivery": "defer", "defer_for": "never"})
+        post(api, path, {"to": "ops", "text": f"Note {n}.", "delivery": "defer", "defer_for": "never"})
     monkeypatch.setattr(delivery, "ITEMS", 5, raising=False)
-    trigger = post(api, path, {"text": "Start now.", "delivery": "steer"})["comment"]
+    trigger = post(api, path, {"to": "ops", "text": "Start now.", "delivery": "steer"})["comment"]
     attempt = post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]
     assert attempt["message"]["id"] == trigger["id"]
     assert old["id"] not in {m["id"] for m in attempt["history"]}, "the page does not reach it"
@@ -349,18 +364,18 @@ def test_deadlines_in_one_session_share_one_run_and_another_turn_cancels_it(api)
         },
     )
     path = f"tasks/{task['id']}/comments"
-    first = post(api, path, {"text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
+    first = post(api, path, {"to": "ops", "text": "Billing first.", "delivery": "defer", "defer_for": "30m"})["comment"]
     tick(api, 31)
     assert job_of(api, first["id"])[1] == "queued"
     # A later item comes due while that run is still queued: it joins the run rather than starting a second.
-    second = post(api, path, {"text": "Then the docs.", "delivery": "defer", "defer_for": "1m"})["comment"]
+    second = post(api, path, {"to": "ops", "text": "Then the docs.", "delivery": "defer", "defer_for": "1m"})["comment"]
     tick(api, 32)
     assert fired(api) == [first["id"]] and job_of(api, second["id"]) is None
     assert {r["fired_job"] for r in rows(api, kind="comment")} == {first["id"]}
 
     # A turn there in another way carries both (the run's job is stamped at the deadline, so this one goes first):
     # the deadline run is no longer needed.
-    trigger = post(api, path, {"text": "Start now.", "delivery": "steer"})["comment"]
+    trigger = post(api, path, {"to": "ops", "text": "Start now.", "delivery": "steer"})["comment"]
     attempt = post(api, "jobs/claim", {"next_run": True}, token=machine["token"])["attempt"]
     assert attempt["message"]["id"] == trigger["id"]
     assert "Billing first." in attempt["deferred"] and "Then the docs." in attempt["deferred"]

@@ -2174,7 +2174,8 @@ def session_of(agent, sender=None):
 def session_stamp(conn, actor, conv, refs):
     """The agent whose session a message `actor` writes in `conv` belongs to, or None for a comment. Only in a task's
     own thread: what a writer named (`session_of`), else, for a run's own tool call (RUN), its agent when it writes
-    on the task that run works. A carrier (refs.carries), Tico's word that starts a run, is never anyone's."""
+    on the task that run works. A carrier (refs.carries), Tico's word that starts a run, is stamped where it is written
+    (threads._carrier): it is the session message of the agent it wakes."""
     if not conv or conv.get("kind") != "task" or not conv.get("task_id") or conv.get("parent_id"):
         return None
     if isinstance(refs, dict) and refs.get("carries"):

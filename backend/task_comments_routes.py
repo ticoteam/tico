@@ -399,8 +399,8 @@ def register(
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
-        deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
-        (threads.plan). A question to a person is a ❓ (`POST /api/v2/tasks/{tid}/questions`). A bot does not comment
+        deadline for a reader who may not direct the task's bots. It reaches only whom it addresses (threads.plan): a
+        plain comment reaches nobody. A question to a person is a ❓ (`POST /api/v2/tasks/{tid}/questions`). A bot does not comment
         on its own open task during its turn there: its reply at the end of the turn is posted on the task (`OWN_TURN`);
         a comment that carries files still goes."""
         who = request.state.identity
