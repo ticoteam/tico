@@ -708,7 +708,10 @@ export function installPatchers(): void {
   onTopic<TaskEvent>('tasks', patchSends);
   onTopic<MessageEvent>('messages', patchMessages);
   onRefetch('calendar', () => [['calendar']]);
-  onRefetch<{ area?: string }>('setup', (e) => e.area === 'availability' ? [] : [['setup']]);
+  onRefetch<{ area?: string }>('setup', (e) => e.area === 'availability' || e.area === 'stage_order' ? [] : [['setup']]);
+  // Tico saved a new order of a stage for this person (backend/stage_order.py): their lists of it by priority read again.
+  onRefetch<{ area?: string; stage?: string }>('setup', (e) =>
+    e.area === 'stage_order' && e.stage ? [keys.tasks.list({ stage: e.stage, sort: 'priority' })] : [], true);
   onRefetch<{ area?: string }>('setup', (e) =>
     e.area === 'availability' ? [['tasks', 'flow', { claimable: 'true' }]] : [], true);
   // A letter out changed: Tools' mailing address reads its list again.

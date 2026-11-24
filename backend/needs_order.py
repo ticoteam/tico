@@ -3,7 +3,8 @@
 
 The list shows at once in the person's last saved order (`arrange`). An item the saved order does not hold yet goes in
 by a quick rule: due soon first, then one that holds up another open task the person may read, both above the saved
-items; any other new item goes below them, oldest first.
+items; any other new item goes below them, oldest first. A stage's list by priority (backend/stage_order.py) is sorted
+with the same machinery, from its own table (`Orders`).
 
 The Needs you page asks for a sort (`POST /api/v2/needs-you/sort` with the ids it shows, `start`): the person
 themselves, never a view, support or an agent. It is due when the list has two items or more and the last sort (or
@@ -25,6 +26,7 @@ order is saved and nothing is called."""
 import json
 import logging
 import threading
+from dataclasses import dataclass
 from typing import Any, Callable, cast
 
 from . import ask_snoozes as ask_snoozes_
@@ -65,10 +67,34 @@ SYSTEM = (
 )
 
 
-def _saved(c: Any, person: str) -> Any:
+@dataclass(frozen=True)
+class Orders:
+    """Where one kind of list keeps each person's saved order, and so its sorts: `table`, one row per `keys` (the
+    person's id first, then the list's own, as a stage's), the ids as JSON in `ids`.
+    Needs you's is NEEDS; a stage's is backend/stage_order.py's. The claim, the due rules, the one call and the save
+    are the same for each (`load`, `claim`, `ranked`, `finish`, `begin`)."""
+
+    table: str
+    keys: tuple[str, ...]
+    ids: str
+
+    def where(self) -> str:
+        return " AND ".join(f"{k}=?" for k in self.keys)
+
+
+NEEDS = Orders("needs_you_orders", ("person_id",), "item_ids")
+
+
+def load(c: Any, orders: Orders, key: tuple[str, ...]) -> Any:
+    """The saved row of `key` (its ids as `item_ids`), or None."""
     return c.execute(
-        "SELECT item_ids, sorted_at, started_at, updated_at FROM needs_you_orders WHERE person_id=?", (person,)
+        f"SELECT {orders.ids} AS item_ids, sorted_at, started_at, updated_at FROM {orders.table} WHERE {orders.where()}",
+        key,
     ).fetchone()
+
+
+def _saved(c: Any, person: str) -> Any:
+    return load(c, NEEDS, (person,))
 
 
 def saved(c: Any, who: Any) -> Any:
@@ -76,7 +102,7 @@ def saved(c: Any, who: Any) -> Any:
     return _saved(c, str(who.actor))
 
 
-def _ids_of(row: Any) -> list[str]:
+def ids_of(row: Any) -> list[str]:
     held: list[Any] = json.loads(row["item_ids"]) if row else []
     return [str(i) for i in held]
 
@@ -115,7 +141,7 @@ def arrange(c: Any, auth: Any, who: Any, items: list[Row], row: Any = ...) -> li
     the quick rule."""
     if row is ...:
         row = saved(c, who) if items else None
-    rank = {i: n for n, i in enumerate(_ids_of(row))}
+    rank = {i: n for n, i in enumerate(ids_of(row))}
     placed = sorted((x for x in items if str(x["id"]) in rank), key=lambda x: rank[str(x["id"])])
     new = [x for x in items if str(x["id"]) not in rank]
     if not new:
@@ -146,7 +172,7 @@ def due(row: Any, ids: list[str], now: str) -> bool:
     if str(row["updated_at"] or "") > H.shift(now, minutes=-NEW_MINUTES):
         return False
     last = _last(row)
-    return not last or last < H.shift(now, hours=-FRESH_HOURS) or bool(set(ids) - set(_ids_of(row)))
+    return not last or last < H.shift(now, hours=-FRESH_HOURS) or bool(set(ids) - set(ids_of(row)))
 
 
 def _running(row: Any, now: str) -> bool:
@@ -232,24 +258,15 @@ def _ask(
     worker's (or too old to hold the call), they may no longer sign in or the list is no longer due against the order
     saved `before` the claim (its only new item answered or snoozed). The model orders the first RANK_MAX items of the
     list as it is; the rest keep their order after them. No order with no model to ask. The one call is one attempt
-    (`J.one_try`): its connection is shut at DEADLINE, so it returns by then; when it fails, no order, and an answer cut
-    short (not JSON) leaves the order unstamped, to be tried again NEW_MINUTES on (`due`)."""
-    from clients import judge as J_
-
+    (`ranked`)."""
     from . import views as views_
 
     views: Any = views_
-    J: Any = J_
 
     def build() -> tuple[Any, list[str], list[str], str]:
         with store.read_transaction() as c:
             now = str(H.now())
-            held = _saved(c, person)
-            if (
-                held is None
-                or held["started_at"] != claimed
-                or claimed < H.shift(now, seconds=DEADLINE - CLAIM_SECONDS)
-            ):
+            if not holds(_saved(c, person), claimed, now):
                 return None, [], [], ""  # the claim is gone, or too old to hold the call: no paid call
             try:
                 who = auth.identity_for_actor(c, person)
@@ -269,34 +286,72 @@ def _ask(
         return None, None, False
     if write is False:
         return None, ids, True
+    order, stamp = ranked(store, write, SYSTEM, user, LABEL, top)
+    return (order + ids[len(top) :] if order else None), ids, stamp
+
+
+def holds(row: Any, claimed: str, now: str) -> bool:
+    """Whether the claim made at `claimed` is still the row's and young enough to hold a call to its DEADLINE: a worker
+    that waited past it (on the lane, say) while another took the list asks no model, one paid call per claim."""
+    return (
+        row is not None and row["started_at"] == claimed and claimed >= H.shift(now, seconds=DEADLINE - CLAIM_SECONDS)
+    )
+
+
+def ranked(
+    store: Any, write: Writer, system: str, user: str, label: str, top: list[str]
+) -> tuple[list[str] | None, bool]:
+    """(the model's order of `top`, whether to stamp `sorted_at`): one attempt (`J.one_try`), whose connection is shut
+    at DEADLINE, metered under `label` at the provider's reported usage. On any failure no order, and an answer cut short
+    (not JSON) leaves the order unstamped, to be tried again NEW_MINUTES on (`due`)."""
+    from clients import judge as J_
+
+    J: Any = J_
     model = str(getattr(write, "model", "") or "")
 
     def call() -> Row:
-        answer = write(SYSTEM, user)
+        answer = write(system, user)
         return {"answers": True, "model": model, "answer": answer, "usage": getattr(answer, "usage", None) or {}}
 
     try:
         with J.one_try(DEADLINE):
-            order = read(judge.metered(store, [model], user, SYSTEM, LABEL, call)["answer"], top)
-        return (order + ids[len(top) :] if order else None), ids, True
+            return read(judge.metered(store, [model], user, system, label, call)["answer"], top), True
     except Exception as exc:  # noqa: BLE001 - a model failure, the cap or the deadline: the shown order stands
-        LOG.warning("Needs you sort failed: %s", type(exc).__name__)
-        return None, ids, getattr(exc, "code", "") != "shape"
+        LOG.warning("%s sort failed: %s", label, type(exc).__name__)
+        return None, getattr(exc, "code", "") != "shape"
+
+
+def claim(store: Any, orders: Orders, key: tuple[str, ...], ids: list[str], now: str) -> tuple[Any, bool]:
+    """(the saved row as it was, whether this call claimed a sort): claimed (`started_at`) when none runs and the list
+    of `ids` is due, in one write transaction, so one sort per list runs at a time."""
+    with store.transaction() as c:
+        row = load(c, orders, key)
+        if _running(row, now) or not due(row, ids, now):
+            return row, False
+        columns = ", ".join(orders.keys)
+        c.execute(
+            f"INSERT INTO {orders.table} ({columns}, started_at, created_at, updated_at) "
+            f"VALUES ({', '.join('?' * len(orders.keys))},?,?,?) "
+            f"ON CONFLICT ({columns}) DO UPDATE SET started_at=excluded.started_at, updated_at=excluded.updated_at",
+            (*key, now, now, now),
+        )
+    return row, True
+
+
+def finish(c: Any, orders: Orders, key: tuple[str, ...], ids: list[str], claimed: str, sorted_: bool) -> bool:
+    """Save `ids` as the order of `key`, stamp `sorted_at` when a sort was made or tried (`sorted_`) and clear the claim,
+    when the claim is still the one made at `claimed`; whether it was."""
+    now = H.now()
+    found = c.execute(
+        f"UPDATE {orders.table} SET {orders.ids}=?, sorted_at=COALESCE(?, sorted_at), started_at=NULL, updated_at=? "
+        f"WHERE {orders.where()} AND started_at IS ?",
+        (json.dumps(ids), now if sorted_ else None, now, *key, claimed),
+    )
+    return bool(found.rowcount)
 
 
 def _claim(store: Any, person: str, ids: list[str], now: str) -> tuple[Any, bool]:
-    """(the saved row as it was, whether this call claimed a sort): claimed (`started_at`) when none runs and the list
-    of `ids` is due, in one write transaction, so one sort per person runs at a time."""
-    with store.transaction() as c:
-        row = _saved(c, person)
-        if _running(row, now) or not due(row, ids, now):
-            return row, False
-        c.execute(
-            "INSERT INTO needs_you_orders (person_id, started_at, created_at, updated_at) VALUES (?,?,?,?) "
-            "ON CONFLICT (person_id) DO UPDATE SET started_at=excluded.started_at, updated_at=excluded.updated_at",
-            (person, now, now, now),
-        )
-    return row, True
+    return claim(store, NEEDS, (person,), ids, now)
 
 
 def _snoozed(c: Any, person: str, hidden: list[str]) -> set[str]:
@@ -327,22 +382,10 @@ def _merged(order: list[str], kept: list[str], snoozed: set[str]) -> list[str]:
 def _save(store: Any, person: str, order: list[str] | None, claimed: str, sorted_: bool) -> None:
     """Save `order` (None: keep the saved one) with the snoozed ids it had in their places, stamp `sorted_at` when a
     sort was made or tried (`sorted_`), clear the claim and tell open pages."""
-    now = H.now()
     with store.transaction(notify=True) as c:
-        kept = _ids_of(_saved(c, person))
+        kept = ids_of(_saved(c, person))
         snoozed = _snoozed(c, person, kept) if order is not None else set[str]()
-        found = c.execute(
-            "UPDATE needs_you_orders SET item_ids=?, sorted_at=COALESCE(?, sorted_at), started_at=NULL, updated_at=? "
-            "WHERE person_id=? AND started_at IS ?",
-            (
-                json.dumps(kept if order is None else _merged(order, kept, snoozed)),
-                now if sorted_ else None,
-                now,
-                person,
-                claimed,
-            ),
-        )
-        if found.rowcount:
+        if finish(c, NEEDS, (person,), kept if order is None else _merged(order, kept, snoozed), claimed, sorted_):
             events.needs_moved(c, [person], "sorted")
 
 
@@ -365,22 +408,50 @@ def start(store: Any, auth: Any, who: Any, ids: list[str], lane: Any = None) -> 
     """The Needs you page's ask (`POST /api/v2/needs-you/sort` with the ids it shows): claim the person's sort when it is
     due by their saved row alone (no list is built here; the worker reads the real list) and hand it to a thread; never
     waits on it. {sorting, sorting_until} as the page shows it."""
-    now = str(H.now())
+    person = sorter(store, who)
+    if person is None:
+        return state(None)
+    return begin(
+        lambda now: _claim(store, person, ids, now),
+        lambda now, row: work(store, auth, person, now, row, lane),
+        lambda now: _save(store, person, None, now, False),
+    )
+
+
+def sorter(store: Any, who: Any) -> str | None:
+    """The person whose own list `who` may sort, or None: the person themselves, never a view, support, an agent or
+    their Assistant (a sort is paid for, and only their own page asks), and none in a demo or a copy, which asks no
+    model and keeps nothing."""
     if store.settings.demo or store.settings.rehearsal:
-        return state(None, now)  # a demo or a copy asks no model and keeps nothing: nothing to start
+        return None
+    return person_of(who)
+
+
+def person_of(who: Any) -> str | None:
+    """`who`'s own person, signed in as themselves, or None: a view, support, an agent, Agent Ops or their Assistant
+    acting for them (`via`, `task_actor`) carries their actor but is not them. A saved order, its sort and its events
+    are the person's own."""
     try:
         person = str(ask_snoozes.person(who))
     except Problem:
-        return state(None, now)  # only the person sorts their own list: a view, support or an agent reads it as it is
-    if getattr(who, "via", ""):
-        return state(None, now)  # nor their Assistant: a sort is paid for, and only the person's own page asks
-    row, claimed = _claim(store, person, ids, now)
+        return None
+    return None if getattr(who, "via", "") or getattr(who, "task_actor", "") else person
+
+
+def begin(
+    claim_: Callable[[str], tuple[Any, bool]], work_: Callable[[str, Any], None], release: Callable[[str], None]
+) -> Row:
+    """Claim a sort (`claim_(now)`: the saved row as it was, whether claimed) and hand `work_(now, row)` to a thread;
+    never waits on it. With no thread to be had the claim goes (`release(now)`) and the next ask tries again.
+    {sorting, sorting_until} as the page shows it."""
+    now = str(H.now())
+    row, claimed = claim_(now)
     if not claimed:
         return state(row, now)
     try:
-        spawn(lambda: work(store, auth, person, now, row, lane))
-    except RuntimeError:  # no thread to be had: the claim goes, the next ask tries again
-        _save(store, person, None, now, False)
+        spawn(lambda: work_(now, row))
+    except RuntimeError:
+        release(now)
         return state(None, now)
     return state({"started_at": now}, now)
 

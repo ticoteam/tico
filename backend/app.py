@@ -2385,10 +2385,11 @@ def _install_features(
     from . import setup_gaps
 
     setup_gaps.install(app, store, auth)  # what of the setup still waits on a person, and which bot asks for it
-    from . import ask_snoozes, needs_order
+    from . import ask_snoozes, needs_order, stage_order
 
     ask_snoozes.install(app, store, auth, mutate)  # a person's snooze of one ask in their own Needs you
     needs_order.install(app, store, auth)  # the Needs you page's ask for Tico to sort it
+    stage_order.install(app, store, auth)  # a stage list's ask for Tico to sort it by priority, for its person
     from . import maintenance, system_routines
 
     system_routines.install(app, store, auth, mutate)

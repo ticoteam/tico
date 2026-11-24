@@ -405,6 +405,12 @@ class TaskList(TypedDict):
     """On reads: display names for every actor id in the answer, {"human:ana": "Ana Alvarez"}"""
     counts: NotRequired[TaskListCounts]
     """With counts=stage only: one grouped count of every task the same filters select, by the same reader's rules, whatever page this is"""
+    sorting: NotRequired[bool]
+    """With sort=priority only: Tico is sorting the stage for the reader; a `setup` event (area `stage_order`) follows"""
+    sorting_until: NotRequired[str | None]
+    """With sort=priority, while `sorting`: when the sort's claim runs out; stop showing it then"""
+    truncated: NotRequired[bool]
+    """With sort=priority: the stage holds more rows than the answer's `limit` (at most 500); the rest are left out"""
 
 
 @answer

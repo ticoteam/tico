@@ -166,6 +166,23 @@ def needs_moved(c, people, kind):
     )
 
 
+def stage_order_moved(c, person, stage):
+    """A `setup` row (area `stage_order`, the stage as its `ref`) for the person alone (`subject_id`, as `needs` rows
+    are): Tico saved a new order of the stage for them (backend/stage_order.py), so their open lists of it read again."""
+    c.execute(
+        "INSERT INTO changes(topic,kind,subject_id,ref,created_at) VALUES('setup','stage_order',?,?,?)",
+        (person, stage, H.now()),
+    )
+
+
+def _own(who):
+    """The person a stream's stage orders are for: `who` signed in as themselves, or None for anyone acting for them
+    (an agent, Agent Ops, their Assistant, a view), whose stream is sent none (needs_order.person_of)."""
+    from . import needs_order
+
+    return needs_order.person_of(who)
+
+
 def _changed(*columns):
     return " OR ".join(f"OLD.{column} IS NOT NEW.{column}" for column in columns)
 
@@ -3260,6 +3277,7 @@ class _Snapshot:
             )
         # The conditions of _read_changes, one for one.
         follow_tasks = bool(tasks) and not parties
+        own = _own(who)
         rows = []
         for row in self.tail[bisect_right(self.seqs, after) :]:
             topic = row["topic"]
@@ -3284,6 +3302,9 @@ class _Snapshot:
                 and row["ref"] not in places
                 or topic in ("needs", "screen")
                 and row["subject_id"] != who.actor
+                or topic == "setup"
+                and row["kind"] == "stage_order"
+                and row["subject_id"] != own
             ):
                 continue
             rows.append(row)
@@ -3324,6 +3345,9 @@ class _Snapshot:
             if own in topics:
                 clauses.append(f"(topic!='{own}' OR subject_id=?)")
                 args.append(who.actor)
+        if "setup" in topics:  # a stage's new order is its person's alone (stage_order_moved)
+            clauses.append("(topic!='setup' OR kind IS NOT 'stage_order' OR subject_id=?)")
+            args.append(_own(who))
         return _change_rows(self.c, clauses, args, limit)
 
 
@@ -3574,7 +3598,11 @@ def read_in(
         picked.append(("calendar", row, {"calendar": row["ref"], "id": row["subject_id"], "kind": row["kind"]}))
     for row in by_topic.get("setup", []):
         # Which area may have moved. Its lists apply the caller's access when they read again.
-        entry = {"area": row["subject_id"]}
+        entry = (
+            {"area": "stage_order", "stage": row["ref"]}
+            if row["kind"] == "stage_order"
+            else {"area": row["subject_id"]}
+        )
         if row["subject_id"] == "availability":
             # The signal goes to every reader of a claimable list, regardless of whose availability changed.
             entry["actor"] = None
