@@ -455,7 +455,7 @@ describe('The call bar @s1049', () => {
   });
 
   it('on my call with only agents left, Leave is End call: it ends the call at once; a person in the room makes it Leave again', async () => {
-    base = { connector: 'human:me', bots: ['gm'], participants: [{ actor: 'human:me', in_call: true, joined_at: '2026-11-18T10:00:00Z', left_at: null }] };
+    base = { connector: 'human:me', bots: ['gm'], participants: [{ actor: 'human:me', in_call: true, joined_at: '2026-11-18T10:00:00Z', left_at: null, removed_at: null }] };
     queryClient.setQueryData(callQuery(ROOM).queryKey, call());
     show();
     await joined();
