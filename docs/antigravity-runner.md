@@ -21,7 +21,7 @@ output, a `TMPDIR` of its own (removed once it has exited) and, on Linux, a CA b
 `GEMINI_API_KEY` signs in with the Gemini API key, a `GOOGLE_API_KEY` or Application Default Credentials (`AGY_ADC_AUTH`,
 `GOOGLE_APPLICATION_CREDENTIALS`) with Google Cloud, else the Google account), resumes the thread's conversation (`session/resume`)
 or begins one (`session/new`, given the bot's MCP servers of a transport `agy` offers, none so far), sets the model
-and thinking level as the session's config options, and sends `session/prompt`; tool permissions are given as asked.
+and thinking level as the session's config options when the session offers them (else `agy`'s own stay), and sends `session/prompt`; tool permissions are given as asked.
 A sign-in `agy` has not got (`Authentication required`, or "No browser is available here") fails the turn as a
 sign-in, and `QUOTA_EXHAUSTED` (or a typed `refusal`) as a usage limit. `agy` streams a failed model call as chat
 text and ends the turn as answered, so, as T3 Code does, the turn reads the steps its prompt added to the

@@ -342,11 +342,13 @@ fn steps<T>(
     read(&db).ok().map(Some)
 }
 
-/// The log's last step before the prompt: -1 when it has none yet (a conversation agy begins with this turn); None when
-/// it cannot be read, and only the prompt's typed answer counts.
+/// The log's last step before the prompt: -1 when there is no log yet (a conversation agy begins with this turn); None
+/// when it cannot be read, and only the prompt's typed answer counts, so no earlier step is taken for this turn's.
 fn last_step(log: &Path) -> Option<i64> {
-    if std::fs::symlink_metadata(log).is_err() {
-        return Some(-1);
+    match std::fs::symlink_metadata(log) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(-1),
+        Err(_) => return None,
+        Ok(_) => {}
     }
     let last = steps(log, |db| {
         db.query_row("SELECT coalesce(max(idx), -1) FROM steps", [], |r| r.get(0))
@@ -395,14 +397,29 @@ fn step_failure(text: &str, scrub: &crate::redact::Redactor) -> String {
         (None, Some(c)) => (c[2].to_string(), c[3].to_string(), c[1].to_string()),
         (None, None) => return "Antigravity stopped this turn because of an error".into(),
     };
-    let message: String = crate::run_diagnostics::safe(message.trim(), scrub)
-        .chars()
-        .take(ERROR_CHARS)
-        .collect();
+    let bounded = |text: &str, most: usize| -> String {
+        crate::run_diagnostics::safe(text.trim(), scrub)
+            .chars()
+            .take(most)
+            .collect()
+    };
     format!(
-        "Antigravity stopped this turn: HTTP {code} {}: {message}",
-        name.trim()
+        "Antigravity stopped this turn: HTTP {code} {}: {}",
+        bounded(&name, KEPT_CHARS),
+        bounded(&message, ERROR_CHARS)
     )
+}
+
+/// What a stop reason that ends the turn unfinished means, as the turn's failure: None for `end_turn` and `cancelled`.
+fn stopped(stop: &str) -> Option<String> {
+    let why = match stop {
+        "refusal" => QUOTA,
+        "error" => "Antigravity stopped: error",
+        "max_tokens" => "Antigravity stopped: the answer reached the model's output token limit",
+        "max_turn_requests" => "Antigravity stopped: the turn reached its limit of model requests",
+        _ => return None,
+    };
+    Some(why.into())
 }
 
 /// Python's `str(uuid.UUID(text))`: the canonical lower-case hyphenated form, or None when it is no uuid.
@@ -523,6 +540,8 @@ struct Stream {
     told_all: bool,
     skipped: Vec<String>,
     skipped_count: usize,
+    /// The tool calls reported (by `toolCallId`): each once, from its `tool_call` or an update that came first.
+    tools: Vec<Value>,
 }
 
 /// How a turn's stream ended.
@@ -585,6 +604,8 @@ struct Inner {
 }
 
 struct Shared {
+    /// Held while `session/prompt` is written, and by `stop` while it records the stop: no prompt goes after one.
+    gate: tokio::sync::Mutex<()>,
     allocation: super::Allocation,
     home: PathBuf,
     cmd: Vec<String>,
@@ -597,6 +618,7 @@ pub struct AntigravityHost(Arc<Shared>);
 impl AntigravityHost {
     pub fn new(home: &Path, cmd: Vec<String>, tx: Events) -> AntigravityHost {
         AntigravityHost(Arc::new(Shared {
+            gate: tokio::sync::Mutex::new(()),
             allocation: super::Allocation::default(),
             home: home.to_path_buf(),
             cmd,
@@ -1067,7 +1089,12 @@ impl AntigravityHost {
                     Ok(a) => return End::Failed(refused("session/new", a, &c.scrub)),
                     Err(why) => return End::Closed(why),
                 };
-                let Some(id) = v["sessionId"].as_str().and_then(conversation) else {
+                // Kept as agy named it, which its updates name it by too.
+                let Some(id) = v["sessionId"]
+                    .as_str()
+                    .filter(|id| conversation(id).is_some())
+                    .map(String::from)
+                else {
                     return End::Failed("Antigravity session/new named no conversation".into());
                 };
                 c.stream.staged = Some(id.clone());
@@ -1122,13 +1149,17 @@ impl AntigravityHost {
         c.stream.prompting = true;
         let params = json!({"sessionId": session, "prompt": [{"type": "text", "text": prompt}]});
         let answer = match self.call(c, "session/prompt", params, None).await {
+            // An answer with neither a result nor an error is no answer.
+            Ok(Answer::Ok(result)) if !result.is_object() => {
+                Answer::Err(json!({"message": "Antigravity answered the prompt with no result"}))
+            }
             Ok(a) => a,
             Err(why) => return End::Closed(why),
         };
         // An end_turn whose last step records an error: the model API failed and agy streamed that as its answer.
         let failure = match (&answer, native, before) {
             (Answer::Ok(result), Some(log), Some(before))
-                if !matches!(result["stopReason"].as_str(), Some("refusal" | "error")) =>
+                if stopped(result["stopReason"].as_str().unwrap_or_default()).is_none() =>
             {
                 tokio::task::spawn_blocking(move || step_error(&log, before))
                     .await
@@ -1142,19 +1173,27 @@ impl AntigravityHost {
         let stream = &mut *c.stream;
         match answer {
             Answer::Ok(result) => {
-                let ok = failure.is_none()
-                    && !matches!(result["stopReason"].as_str(), Some("refusal" | "error"));
+                let stop = result["stopReason"].as_str().unwrap_or_default();
+                let ok = failure.is_none() && stopped(stop).is_none();
                 // A refusal before any work leaves the saved conversation as it was.
                 if ok || stream.worked {
                     if let Err(e) = self.commit(&mut inner, stream) {
                         return End::Closed(Some(e));
                     }
                 }
-                // A turn told everything that succeeded in the conversation it began holds the history.
-                if ok && stream.restored && stream.told_all && inner.needs_history {
+                // A turn told everything that completed in the conversation it began holds the history. Its answer
+                // stands if that is not written down: the next turn is told everything again.
+                if ok
+                    && stop != "cancelled"
+                    && stream.restored
+                    && stream.told_all
+                    && inner.needs_history
+                {
                     let cid = inner.provider.clone().unwrap_or_default();
                     if let Err(e) = self.save(&mut inner, &cid, false) {
-                        return End::Closed(Some(e));
+                        log(&format!(
+                            "Antigravity: could not note the conversation holds its history: {e}"
+                        ));
                     }
                 }
                 End::Result(result, failure)
@@ -1206,11 +1245,19 @@ impl AntigravityHost {
     ) -> Result<Answer, Option<String>> {
         c.io.next += 1;
         let id = c.io.next;
+        let gate = match method {
+            "session/prompt" => Some(self.0.gate.lock().await),
+            _ => None,
+        };
+        if gate.is_some() && !self.inner().up {
+            return Err(None);
+        }
         write(
             c.io,
             &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
         )
         .await?;
+        drop(gate);
         let by = wait.map(|w| tokio::time::Instant::now() + w);
         loop {
             let next = match by {
@@ -1342,18 +1389,32 @@ impl AntigravityHost {
                     ));
                 }
             }
-            "tool_call" => {
-                // A tool call ends the message before it; it is reported by its kind, never its title or input.
+            // A tool call ends the message before it. It is reported once, by its kind, never its title or input:
+            // from its update when that comes first, so a tool that ran always counts as one.
+            kind @ ("tool_call" | "tool_call_update") => {
                 stream.worked = true;
-                stream.new_message = true;
-                let kind = u
-                    .get("kind")
-                    .filter(|k| truthy(Some(k)))
-                    .map(text_of)
-                    .unwrap_or_else(|| "tool".into());
-                let _ = inner.tx.send(event("tool", tid, turn, json!({"tool": kind, "status": "started", "item_id": u.get("toolCallId").cloned().unwrap_or(Value::Null)})));
+                if kind == "tool_call" {
+                    stream.new_message = true;
+                }
+                let id = u.get("toolCallId").cloned().unwrap_or(Value::Null);
+                if id.is_null() || !stream.tools.contains(&id) {
+                    if !id.is_null() {
+                        stream.tools.push(id.clone());
+                    }
+                    let kind = u
+                        .get("kind")
+                        .filter(|k| truthy(Some(k)))
+                        .map(text_of)
+                        .unwrap_or_else(|| "tool".into());
+                    let _ = inner.tx.send(event(
+                        "tool",
+                        tid,
+                        turn,
+                        json!({"tool": kind, "status": "started", "item_id": id}),
+                    ));
+                }
             }
-            "tool_call_update" | "plan" => stream.worked = true,
+            "plan" => stream.worked = true,
             _ => {}
         }
         if stream.worked {
@@ -1406,11 +1467,7 @@ impl AntigravityHost {
             ));
         }
         let stop = result["stopReason"].as_str().unwrap_or("end_turn");
-        let failure = match stop {
-            "refusal" => Some(QUOTA.to_string()),
-            "error" => Some("Antigravity stopped: error".to_string()),
-            _ => failure,
-        };
+        let failure = stopped(stop).or(failure);
         if let Some(failure) = failure {
             return self.fail(tid, turn, &failure, stderr);
         }
@@ -1440,6 +1497,8 @@ impl AntigravityHost {
     /// A turn agy refused: one failure carrying what it printed too (stderr, redacted and bounded:
     /// run_diagnostics::Stderr), which may name the reason a refusal does not, a sign-in or a quota.
     fn fail(&self, tid: &str, turn: &str, error: &str, stderr: &str) {
+        // The quota (a typed refusal, or the session log's QUOTA_EXHAUSTED) is a usage limit whatever stderr says.
+        let quota = error == QUOTA;
         let said = stderr.trim();
         let error = if said.is_empty() {
             error.to_string()
@@ -1453,7 +1512,7 @@ impl AntigravityHost {
                 "turn_failed",
                 Some(tid),
                 Some(turn),
-                json!({"error": error, "limit": is_limit(&error)}),
+                json!({"error": error, "limit": quota || is_limit(&error)}),
             ),
         );
     }
@@ -1527,12 +1586,15 @@ impl AntigravityHost {
 
     /// Stop the turn's process (Proc::reap) and its reader.
     pub async fn stop(&self) {
+        // A prompt being written finishes first, unless agy has stopped reading it: its stop ends that write.
+        let gate = tokio::time::timeout(STOP_GRACE, self.0.gate.lock()).await;
         let (proc, reader) = {
             let mut inner = self.inner();
             inner.up = false;
             inner.turn = None;
             (inner.proc.take(), inner.reader.take())
         };
+        drop(gate);
         if let Some(p) = proc {
             p.reap().await;
         }
@@ -1656,7 +1718,7 @@ for line in sys.stdin:
         answer(i, INIT)
     elif method == "authenticate":
         if env("LINK"):
-            send_line("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/auth?state=s1")
+            send_line("Open the following link to authenticate the ACP server: https://accounts.acme.example/o/oauth2/auth?state=s1")
         if env("SIGNED_OUT") or (env("LINK") and p["methodId"] == "oauth-personal"):
             refuse(i, -32603, NO_BROWSER)
         else:
@@ -2048,7 +2110,7 @@ for line in sys.stdin:
             );
             assert!(events
                 .iter()
-                .all(|e| !e.to_string().contains("accounts.google.com")));
+                .all(|e| !e.to_string().contains("accounts.acme.example")));
             host.stop().await;
             assert!(
                 rig.read(".calls")
@@ -2266,6 +2328,78 @@ for line in sys.stdin:
         host.start_turn(&thread, "hi", None).unwrap();
         let events = turn_events(&mut rx).await;
         (host, thread, events)
+    }
+
+    #[tokio::test]
+    async fn a_turn_cut_short_fails_and_a_tool_seen_only_in_an_update_still_ran() {
+        let rig = Rig::new();
+        let chunk = json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@",
+                           "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial"}}}});
+        let failed = |events: &[Value]| {
+            events
+                .iter()
+                .find(|e| e["kind"] == "turn_failed")
+                .cloned()
+                .unwrap_or_else(|| panic!("{events:?}"))
+        };
+        // A truncated answer is not a completed turn, and an answer with no result is none.
+        for (name, result) in [
+            ("max-tokens", json!({"stopReason": "max_tokens"})),
+            ("max-requests", json!({"stopReason": "max_turn_requests"})),
+            ("no-result", Value::Null),
+        ] {
+            let answer = json!({"jsonrpc": "2.0", "id": "@ID@", "result": result});
+            let (host, _, events) = played(&rig, name, &[chunk.clone(), answer], None).await;
+            assert!(events.iter().all(|e| e["kind"] != "message"), "{events:?}");
+            assert_eq!(failed(&events)["limit"], false, "{name}");
+            host.stop().await;
+        }
+        // A completed tool agy reports only by its update ran, and is reported once; the quota after it stays a limit.
+        let update = json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@",
+                            "update": {"sessionUpdate": "tool_call_update", "toolCallId": "t9", "status": "completed"}}});
+        let refusal = json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "refusal"}});
+        let (host, _, events) = played(
+            &rig,
+            "update-only",
+            &[update.clone(), update, refusal],
+            None,
+        )
+        .await;
+        let tools: Vec<&Value> = events.iter().filter(|e| e["kind"] == "tool").collect();
+        assert_eq!(
+            tools,
+            [&json!({"kind": "tool", "tool": "tool", "status": "started", "item_id": "t9"})]
+        );
+        assert_eq!(failed(&events)["limit"], true);
+        host.stop().await;
+        // A session id agy names in capitals is kept as it is, so its updates are the turn's.
+        let upper = OTHER.to_uppercase();
+        let dir = rig.dir.join("upper");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("turn.jsonl");
+        std::fs::write(
+            &fixture,
+            format!(
+                "{chunk}\n{}\n",
+                json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "end_turn"}})
+            )
+            .replace(r#""@ID@""#, "@ID@"),
+        )
+        .unwrap();
+        let s = rig.settings(&[
+            ("FIXTURE", fixture.display().to_string()),
+            ("NEW", upper.clone()),
+        ]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "partial", "final": true})));
+        host.stop().await;
+        assert!(std::fs::read_to_string(host.path(&thread).unwrap())
+            .unwrap()
+            .contains(&upper));
     }
 
     #[tokio::test]
