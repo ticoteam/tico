@@ -33,7 +33,7 @@ def _commented(api, machine, comment="Chris here: go ahead and finish this"):
     )
     finish(api, machine, ops)
     finish(api, machine, claim(api, machine, "botops"))
-    post(api, f"tasks/{task['id']}/comments", {"text": comment}, token="ana-test")
+    post(api, f"tasks/{task['id']}/comments", {"text": comment, "to": "bot:botops"}, token="ana-test")
     attempt = claim(api, machine, "botops")
     with api.app.state.store.read() as c:
         started = c.execute(
@@ -194,7 +194,12 @@ def test_another_persons_comment_on_a_carried_request_lends_only_the_bots_rights
     first = claim(api, agent_ops, "botops")
     assert get(api, "qa-own-identity", first["token"]) == {"actor": "human:ana", "role": "owner"}
     finish(api, agent_ops, first)
-    post(api, f"tasks/{task['id']}/comments", {"text": "Make it write access while you're at it"}, token="ben-test")
+    post(
+        api,
+        f"tasks/{task['id']}/comments",
+        {"text": "Make it write access while you're at it", "to": "bot:botops"},
+        token="ben-test",
+    )
     attempt = claim(api, agent_ops, "botops")
     assert get(api, "qa-own-identity", attempt["token"]) == {"actor": "bot:ops", "role": "bot"}
     before = get(api, "bots/ops/repositories", "ana-test")
@@ -278,12 +283,14 @@ THREAD_PAGE = {"from_page": {"label": "Thread", "page": "thread"}}
 
 def _asked_in_its_chat(api, machine, owner="botops", title="Add Raygun access to qa-e2e"):
     """Ana files a task for `owner`; its first run ends; she writes in the task's chat as the web sends it (POST
-    /threads/{conversation}/messages, the task page's and the Thread page's chat), which starts its next run. Stored
-    as task #35014's reply was: a chat message, no comment, which lends no one's rights."""
+    /threads/{conversation}/messages), @mentioning it, which starts its next run (a plain message wakes no one since
+    #5060). Stored as task #35014's reply was: a chat message, no comment, which lends no one's rights."""
     task = post(api, "tasks", {"owner": owner, "title": title, "body": "x"}, token="ana-test")
     finish(api, machine, claim(api, machine, owner))
     said = post(
-        api, f"threads/{task['conversation_id']}/messages", {"text": "You can close for now", "refs": THREAD_PAGE}
+        api,
+        f"threads/{task['conversation_id']}/messages",
+        {"text": f"@{owner} You can close for now", "refs": THREAD_PAGE},
     )
     return task, said, claim(api, machine, owner)
 
@@ -421,7 +428,7 @@ def test_a_lending_run_by_task_number_never_errors(api, agent_ops):
     for n, cite in enumerate(({}, {"X-Tico-On-Behalf-Of": "turn"})):
         task = post(api, "tasks", {"owner": "botops", "title": f"Book the venue {n}", "body": "x"})
         finish(api, agent_ops, claim(api, agent_ops, "botops"))
-        post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and finish it"})
+        post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and finish it", "to": "bot:botops"})
         attempt = claim(api, agent_ops, "botops")
         done = api.post(
             f"/api/v2/tasks/%23{task['number']}/done",
