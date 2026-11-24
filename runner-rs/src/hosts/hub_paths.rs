@@ -803,6 +803,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "service-key revoke",
     "settings",
     "settings find",
+    "settings plan-exit-routing",
     "settings set",
     "settings show",
     "setup",
