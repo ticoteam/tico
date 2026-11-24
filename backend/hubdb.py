@@ -4785,21 +4785,21 @@ def task_human(conn, actor, value):
 
 
 def human_roles(conn, actor, value, roles):
-    """`roles` ({role: [actors]}) with the old `human` field folded in: {"human": [person]}, or [] for "" (takes the role
-    off); `roles` as it is when `human` was not sent (None). The role is a label, written as task_roles writes every
-    role, so naming someone who cannot read a private task is refused there. Sent both ways, `human` and
-    `roles.human` must name the same people, else the write is refused."""
+    """`roles` ({role: [actors]}, each role name as task_roles stores it) with the old `human` field folded in:
+    {"human": [person]}, or [] for "" (takes the role off); `roles` as it is when `human` was not sent (None). The role
+    is a label, written as task_roles writes every role, so naming someone who cannot read a private task is refused
+    there. Sent both ways (`roles.Human` is `roles.human`), they must name the same people, else the write is
+    refused."""
     if value is None:
         return roles
     wanted = [task_human(conn, actor, value)] if value else []
-    if roles and "human" in roles:
-        try:
-            given = (TRo.clean({"human": roles["human"]}) or {}).get("human") or []
-        except ValueError as exc:
-            refuse(conn, actor, "kind", str(exc))
-        if [resolve_actor(conn, who) or who for who in given] != wanted:
-            refuse(conn, actor, "kind", "human and roles.human name different people: send one of them")
-    return {**(roles or {}), "human": wanted}
+    try:
+        named = TRo.clean(roles) or {}
+    except ValueError as exc:
+        refuse(conn, actor, "kind", str(exc))
+    if "human" in named and [resolve_actor(conn, who) or who for who in named["human"]] != wanted:
+        refuse(conn, actor, "kind", "human and roles.human name different people: send one of them")
+    return {**named, "human": wanted}
 
 
 def task_create(

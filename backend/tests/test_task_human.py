@@ -171,6 +171,9 @@ def test_human_and_roles_human_must_agree_on_create_and_update(api):
     assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara", "roles": {"human": ["ben"]}}, expected=422)
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "", "roles": {"human": ["ben"]}}, expected=422)
+    # A role name is stored lower-case, so `Human` is the same role and cannot slip another person in.
+    post(api, "tasks", {**body, "human": "ben", "roles": {"Human": ["cara"]}}, expected=422)
+    post(api, "tasks/" + t["id"], {"version": t["version"], "human": "ben", "roles": {"Human": ["cara"]}}, expected=422)
     assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
 
 
@@ -220,6 +223,41 @@ def test_restoring_a_ticket_trashed_before_the_human_was_retired_moves_its_human
     assert (public, "OK the spec") in _asks(api, "ben-test")
     assert _roles(api, public) == {}
     assert _roles(api, private) == {"human": [BEN]}
+
+
+def test_a_legacy_ticket_restored_into_a_pipeline_gone_private_keeps_its_human_as_a_label(dev):
+    """A company ticket trashed before the upgrade, whose pipeline went private while it was in the trash, comes back
+    private: its Human goes into the `human` role, never the assignee, so it gains no read of the ticket."""
+    api = dev
+    task_id = _file(api, "Add CSV export", "dev", private=False)["id"]
+    post(api, f"tasks/{task_id}/delete", {})
+    with api.app.state.store.transaction() as c:
+        snap = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (task_id,)).fetchone()[0])
+        snap["rows"]["tasks"][0].update(human_id=BEN, assignee_id=None)
+        c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snap), task_id))
+        c.execute("UPDATE pipelines SET private=1 WHERE id='dev'")
+    post(api, f"tasks/{task_id}/restore", {})
+    with api.app.state.store.read() as c:
+        row = H.task(c, task_id)
+        assert row["assignee_id"] != BEN and H.task_private(c, row)
+        assert not H.task_private_readable(c, BEN, row)
+        assert TRo.roles_of(c, task_id) == {"human": [BEN]}
+    get(api, f"tasks/{task_id}", token="ben-test", expected=404)
+
+
+def test_an_agent_filing_for_a_person_names_the_human_role_while_another_agent_holds_it(dev):
+    """ops files Ben's own ask for him (requester Ben, from his message) into Development, whose Spec the Build agent
+    holds: filing it is the right to name its `human` role, as it was for the Human, so ops need not be a party."""
+    from backend.tests.helpers.task_caps import as_bot
+
+    api = dev
+    as_bot(api, "ops", "ops-test")
+    said = post(api, "messages", {"to": "ops", "text": "Can you get the CSV export built?"}, token="ben-test")
+    body = {"title": "Build the CSV export", "body": "x", "owner": "builder", "pipeline": "dev", "human": "ben"}
+    filed = post(api, "tasks", {**body, "for_actor": BEN, "from_message": said["id"]}, token="ops-test")
+    filed = filed.get("task", filed)
+    assert (filed["requester_id"], filed["owner_id"]) == (BEN, "bot:builder")
+    assert _roles(api, filed["id"]) == {"human": [BEN]}
 
 
 def test_a_role_named_on_create_is_judged_on_the_privacy_its_first_stage_gives_it(dev):

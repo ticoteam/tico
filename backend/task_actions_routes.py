@@ -939,14 +939,17 @@ def register_core(
             )
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
-        # The old `human` field is the `human` role, set as every role is: after the task entered its first stage, so
-        # who may be in it is judged on the privacy it has there.
-        roles = H.human_roles(c, who.actor, body.human or None, body.roles)
-        if roles:
+        # The old `human` field is the `human` role: checked against `roles` first, then written once the task entered its
+        # first stage, so the person is judged on the privacy it has there. Filing it is the right to name them, as it
+        # was for the Human; `roles` keeps its own check.
+        folded = H.human_roles(c, who.actor, body.human or None, body.roles)
+        if body.roles:
             try:
-                TRo.set_roles(c, who.actor, row["id"], roles, mover=mover(c, who) or None)
+                TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
+        if body.human and folded:
+            TRo.set_roles(c, who.actor, row["id"], {"human": folded["human"]}, checked=True)
         if close_read:
             close_items.save(c, close_read)
         note = " ".join(
