@@ -334,7 +334,8 @@ def loading_references(data):
 # unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
 # its look. It runs as the page's last script.
 # Escape the page itself leaves unhandled is passed on (`ticoVisualKey`), so the large view around it closes as it does
-# on Escape outside the page.
+# on Escape outside the page. It looks once the key's handlers have all run (a task later), so a handler the page
+# adds after this script (a module script's) still wins.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 
 
@@ -698,7 +699,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
     waiting = []
     for message in messages:
         if message:
-            shown = readable_page_refs(c, files.auth, who, message)
+            shown = readable_page_refs(c, files.auth, who, message, cache=cache)
             if shown != message:
                 message.clear()
                 message.update(shown)

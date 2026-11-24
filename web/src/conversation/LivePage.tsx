@@ -41,13 +41,21 @@ const originOf = (url: string | null | undefined) => {
   }
 };
 
+const hostOf = (url: string | null | undefined) => {
+  try {
+    return url ? new URL(url).hostname : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
  * The address a page shows live from, or null for the plain card. Only one of this install's own visual addresses
  * counts, so a sender can't put another site in a chat as a Tico page: the visual address or the company's files
  * address, or, with Tico file hosting, the app's own `/visuals/<token>` route, which checks the reader and sends the
- * frame on to the files address (it never serves a page itself). Never a page on the app's own origin otherwise: a
- * visual address that is the app's loopback twin (127.0.0.1 and localhost), with the app opened there, would run the
- * page beside the app's cookies and window.
+ * frame on to the files address (it never serves a page itself). Never a page on the app's own host name otherwise,
+ * whatever its port: cookies are kept per host name, so a visual address on another port of the app's host (or its
+ * loopback twin, 127.0.0.1 and localhost, with the app opened there) would run the page beside the app's cookies.
  */
 export function liveSrc(src: unknown, config: Visuals | undefined): string | null {
   if (typeof src !== 'string' || !config) return null;
@@ -59,7 +67,10 @@ export function liveSrc(src: unknown, config: Visuals | undefined): string | nul
   }
   if (!/^\/visuals\/[A-Za-z0-9_.-]+$/.test(url.pathname) || url.search || url.hash || url.username || url.password) return null;
   const at = url.origin;
-  if (at === location.origin) return !config.visual_origin && config.visual_files && src.startsWith('/visuals/') ? url.href : null;
+  if (url.hostname === location.hostname) {
+    const hosted = at === location.origin && !config.visual_origin && config.visual_files && src.startsWith('/visuals/');
+    return hosted && hostOf(config.visual_files) !== location.hostname ? url.href : null;
+  }
   return at === originOf(config.visual_origin) || at === originOf(config.visual_files) ? url.href : null;
 }
 
@@ -127,21 +138,26 @@ function LiveFrame({ src, title, id, fallback }: { src: string; title: string; i
     };
   }, [heard, failed]);
 
-  if (failed) return fallback;
   const cut = height !== null && height > MAX_HEIGHT;
+  // An open large view stays when the card falls back: a page whose own policy blocks the height reporter still runs
+  // there. The card is the fragment's first child either way, so the large view is never drawn again.
   return (
     <>
-      <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
-        <div className="lpage-view" style={{ height: height === null ? LOADING_HEIGHT : clampHeight(height) }}>
-          <iframe ref={frame} src={first + CARD} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
-          {cut && <span className="lpage-fade" aria-hidden="true" />}
+      {failed ? (
+        fallback
+      ) : (
+        <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
+          <div className="lpage-view" style={{ height: height === null ? LOADING_HEIGHT : clampHeight(height) }}>
+            <iframe ref={frame} src={first + CARD} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
+            {cut && <span className="lpage-fade" aria-hidden="true" />}
+          </div>
+          <span className="pcard-foot">
+            <Icon name="tobar" />
+            <span>{title}</span>
+            <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setOpen(src)} />
+          </span>
         </div>
-        <span className="pcard-foot">
-          <Icon name="tobar" />
-          <span>{title}</span>
-          <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setOpen(src)} />
-        </span>
-      </div>
+      )}
       {open && (
         <span className="fcard-layer" onClick={stop} onContextMenu={stop} onTouchStart={stop} onPointerDown={stop}>
           <Viewer

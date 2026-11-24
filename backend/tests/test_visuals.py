@@ -11,6 +11,8 @@ import pytest
 from backend import visuals as V
 from backend.tests.helpers.api import assign, claim, headers, post, ready, runner  # noqa: F401  (fixtures)
 from backend.tests.helpers.files import publish, turn
+from backend.tests.helpers.page_audience import edit
+from backend.tests.helpers.pages import page
 from backend.tests.helpers.events import live  # noqa: F401  (fixture)
 from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
@@ -85,7 +87,8 @@ def test_thread_history_and_the_file_info_carry_a_pages_address_for_a_reader_who
 def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api, monkeypatch):
     """The timeline decorates every visual on a page of messages (up to 50): its files, versions and page audiences
     are read one query per table, not one each per attachment (review of #5198: 50 page attachments took ~766
-    statements). Each attachment's read check then answers from what was read."""
+    statements). Each attachment's read check then answers from what was read, for HTML files, pages and pages with
+    an audience alike."""
     _, attempt = turn(api)
     seen, real = [], V.decorate
 
@@ -106,11 +109,19 @@ def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api,
     counts, conversation = [], None
     for done, total in ((0, 2), (2, 12)):
         for i in range(done, total):
-            made = publish(api, attempt, name=f"page{i}.html", text=f"<p>page {i}</p>")
+            # an HTML file, a page (a `pages` row) and a page with an audience, in turn
+            if i % 3:
+                made = page(api, attempt, name=f"page{i}.html", data=f"<p>page {i}</p>".encode())
+                fid = made.json()["page"]["file_id"]
+            else:
+                made = publish(api, attempt, name=f"page{i}.html", text=f"<p>page {i}</p>")
+                fid = made.json()["file"]["id"]
             assert made.status_code == 200, made.text
-            sent = bot_reply(api, attempt, attachments=[{"ref": f"{made.json()['file']['id']}@1", "title": f"P{i}"}])
+            sent = bot_reply(api, attempt, attachments=[{"ref": f"{fid}@1", "title": f"P{i}"}])
             assert sent.status_code == 200, sent.text
             conversation = sent.json()["conversation_id"]
+            if i % 3 == 2:
+                edit(api, fid, {"people": ["ben"]})
         seen.clear()
         timeline = api.get(f"/api/v2/threads/{conversation}/timeline?flat=1", headers=headers("ben-test"))
         assert timeline.status_code == 200, timeline.text
@@ -120,6 +131,8 @@ def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api,
         counts.append((len(plain), sum(1 for sql in plain if sql.startswith(lookups))))
     (few, few_lookups), (many, many_lookups) = counts
     print("statements for 2 and 12 pages:", counts)
+    if (many - few) / 10 > PER_PAGE:  # what grew, to name it in the failure
+        print("\n".join(sorted(seen)))
     assert many_lookups == few_lookups, counts
     assert (many - few) / 10 <= PER_PAGE, counts
 

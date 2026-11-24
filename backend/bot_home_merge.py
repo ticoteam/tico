@@ -178,12 +178,15 @@ def _covered_bot(c, ref):
 
 def _moved(c, conversation_id):
     """(home id, bot id, home closed_at, home archived_at) of a room that moved, else None."""
-    try:
-        return c.execute(
+    from . import read_cache
+
+    try:  # kept for the snapshot until a write (read_cache): a page of history asks it of the same rooms often
+        return read_cache.one(
+            c,
             "SELECT m.home_id, m.bot_id, h.closed_at, h.archived_at FROM home_merges m "
             "LEFT JOIN conversations h ON h.id=m.home_id WHERE m.conversation_id=?",
             (conversation_id,),
-        ).fetchone()
+        )
     except sqlite3.OperationalError:  # a database from before migration 0067
         return None
 

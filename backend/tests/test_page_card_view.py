@@ -84,16 +84,21 @@ global.window = {};
 global.addEventListener = (type, fn) => { (listeners[type] = listeners[type] || []).push(fn); };
 global.parent = {postMessage(message) { sent.push(message); }};
 eval(fs.readFileSync(process.argv[2], 'utf8'));
-for (const e of [{key: 'Escape', defaultPrevented: true}, {key: 'Enter'}, {key: 'Escape', defaultPrevented: false}]) {
+// the page's own handler, added after the reporter (a module script runs once the page is parsed): it closes its own
+// dialog on the second Escape
+let n = 0;
+addEventListener('keydown', (e) => { if (e.key === 'Escape' && ++n === 2) e.defaultPrevented = true; });
+for (const e of [{key: 'Escape', defaultPrevented: true}, {key: 'Enter'}, {key: 'Escape'}, {key: 'Escape'}]) {
+  e.defaultPrevented = !!e.defaultPrevented;
   for (const fn of listeners.keydown || []) fn(e);
 }
-console.log(JSON.stringify(sent));
+setTimeout(() => console.log(JSON.stringify(sent)));
 """
 
 
 def test_escape_the_page_leaves_unhandled_is_passed_to_the_frame_around_it(tmp_path):
     """The large view closes on Escape inside the page (web LivePage): the reporter passes it on, but not an Escape
-    the page handled itself (its own dialog closing)."""
+    the page handled itself (its own dialog closing), even with a handler added after the reporter's."""
     node = shutil.which("node")
     if node is None:
         pytest.skip("node runs the page's own script")

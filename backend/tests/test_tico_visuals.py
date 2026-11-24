@@ -346,6 +346,47 @@ def test_an_svgs_hosted_copy_keeps_its_name_and_closed_template_so_an_edge_not_y
     assert page != path and page_meta["tico-visual-policy-version"] == "2"
 
 
+def test_purging_a_deleted_page_removes_its_copy_from_before_pages_ran_as_written_too(tmp_path):
+    """A page copied before this release has its copy at the old name (copy 2, policy 1, the reporter of then in its
+    script slot). Nothing reads it now, so purging the page's bytes deletes that copy as well as the current one; an
+    SVG has one name."""
+    import threading
+    from types import SimpleNamespace
+
+    from backend.blobs import Blobs
+
+    digest, ancestors = "cd" * 32, ["'self'", "https://tico.acme.example"]
+    old = hashlib.sha256(
+        "\n".join(["tico-visual", "2", "page", digest, " ".join(ancestors), tico_storage.OLD_PAGE_SCRIPT]).encode()
+    ).hexdigest()
+    deleted = []
+    s3 = SimpleNamespace(delete_object=lambda **kw: deleted.append(kw["Key"]))
+    place = SimpleNamespace(blob_bucket="tico-files", blob_prefix="acme")
+    blobs = SimpleNamespace(
+        directory=tmp_path,
+        key=Blobs.key,
+        s3_key=lambda d, settings=None: "acme/" + Blobs.key(d),
+        settings=place,
+        _sources=None,
+        _s3=s3,
+        _earlier=[],
+        _write_lock=threading.Lock(),
+        edge={"location": "tico-files/acme"},
+        visual_ancestors=ancestors,
+        _edge_seen={},
+    )
+    current = tico_storage._visual(digest, "page", ancestors)[0]
+    Blobs.purge(blobs, digest, "page")
+    assert deleted == [
+        f"acme/blobs/{digest[:2]}/{digest}",
+        "acme" + current,
+        f"acme/visuals/{old[:2]}/{old}",
+    ]
+    deleted.clear()
+    Blobs.purge(blobs, digest, "svg")
+    assert deleted == [f"acme/blobs/{digest[:2]}/{digest}", "acme" + tico_storage._visual(digest, "svg", ancestors)[0]]
+
+
 def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):
     """A local install's address is http://127.0.0.1:8765, and the same app opens at localhost:8765 (or the desktop
     app is pointed there): the copy's ancestors slot names both, and the edge accepts both (docs/files.md)."""

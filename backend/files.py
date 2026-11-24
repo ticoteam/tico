@@ -599,8 +599,10 @@ def page_blobs(c, bid):
     return [rows[fid] for fid in ids if fid in rows]
 
 
-def page_blob_visible(c, auth, who, bid):
-    return all(file_visible(c, auth, who, row, {}) for row in page_blobs(c, bid))
+def page_blob_visible(c, auth, who, bid, cache=None):
+    """Whether `who` may see every page this blob's bytes belong to. `cache` is file_visible's, for one read by `who`."""
+    cache = {} if cache is None else cache
+    return all(file_visible(c, auth, who, row, cache) for row in page_blobs(c, bid))
 
 
 def stored_version(c, fid, number):
@@ -627,7 +629,7 @@ def version_refusal(c, auth, who, row, number, v, cache=None):
             return "file_fence"
     elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, cache):  # as file_visible reads it
         return "audience"
-    if v and not page_blob_visible(c, auth, who, v["blob_id"]):
+    if v and not page_blob_visible(c, auth, who, v["blob_id"], cache):
         return "blob_fence"
     from . import postal_mail
 
@@ -995,7 +997,9 @@ def _primed_names_none(c, value):
     return True
 
 
-def page_ref_denials(c, auth, who, refs):
+def page_ref_denials(c, auth, who, refs, cache=None):
+    """{page id: its placeholder label} for each page `refs` name that `who` may not open. `cache` is file_visible's, for
+    one read by `who` (a page of messages)."""
     ids = page_references(refs, c)
     if not ids:
         return {}
@@ -1003,7 +1007,7 @@ def page_ref_denials(c, auth, who, refs):
 
     relationship = who.actor == relationship_runs.ACTOR
     pages = page_rows(c, ids) if relationship else restricted_page_rows(c, ids)
-    cache = {}
+    cache = {} if cache is None else cache
     bound = relationship_runs.scope(c, who.attempt_id) if relationship and not auth else None
     sponsor = teammate_access._viewer_for(c, bound.sponsor) if bound else None
 
@@ -1054,11 +1058,12 @@ def _marked(value):
     return False
 
 
-def readable_page_refs(c, auth, who, refs, *, task_id=None):
-    """Remove the entire metadata object of a denied page, even on undecorated message transports."""
+def readable_page_refs(c, auth, who, refs, *, task_id=None, cache=None):
+    """Remove the entire metadata object of a denied page, even on undecorated message transports. `cache` is
+    file_visible's, for one read by `who`."""
     original = refs
     refs = H._json(refs, {}) if isinstance(refs, str) else refs
-    denied = page_ref_denials(c, auth, who, refs)
+    denied = page_ref_denials(c, auth, who, refs, cache)
 
     def removed_page(value):
         if isinstance(value, dict):
@@ -1192,7 +1197,7 @@ def readable_page_refs(c, auth, who, refs, *, task_id=None):
         if isinstance(value, list):
             return [clean(v, parent, tid, context) for v in value]
         if isinstance(value, str) and value.startswith(("{", "[")):
-            return readable_page_refs(c, auth, who, value, task_id=tid)
+            return readable_page_refs(c, auth, who, value, task_id=tid, cache=cache)
         if direct:
             return {"removed": True, "label": denied[sorted(direct)[0]]}
         return value

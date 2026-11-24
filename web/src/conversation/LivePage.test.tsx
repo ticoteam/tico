@@ -42,6 +42,11 @@ describe('an agent’s page live in a chat', () => {
     const twin = { visual_origin: location.origin, visual_files: FILES };
     expect(liveSrc(`${location.origin}/visuals/abc`, twin)).toBeNull();
     expect(liveSrc('/visuals/abc', twin)).toBeNull();
+    // another port of the app's own host name shares its cookies: never live there either
+    const port = `${location.protocol}//${location.hostname}:${location.port === '9001' ? '9002' : '9001'}`;
+    expect(liveSrc(`${port}/visuals/abc`, { visual_origin: port, visual_files: null })).toBeNull();
+    expect(liveSrc(`${port}/visuals/abc`, { visual_origin: null, visual_files: port })).toBeNull();
+    expect(liveSrc('/visuals/abc', { visual_origin: null, visual_files: port })).toBeNull();
 
     const { container } = show('https://evil.example/visuals/abc');
     expect(container.querySelector('iframe')).toBeNull();
@@ -76,6 +81,18 @@ describe('an agent’s page live in a chat', () => {
     act(() => vi.advanceTimersByTime(1));
     expect(container.querySelector('iframe')).toBeNull();
     expect(screen.getByText('plain card')).toBeTruthy();
+  });
+
+  it('keeps an open large view when the card falls back (a page whose own policy blocks the height reporter)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    render(page(`${VISUAL}/visuals/tok`, 'kept@1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    await act(async () => {});
+    const inside = screen.getByRole('dialog', { name: 'Report' }).querySelector('iframe');
+    expect(inside).toBeTruthy();
+    act(() => vi.advanceTimersByTime(WAIT_MS));
+    expect(screen.getByText('plain card')).toBeTruthy();
+    expect(screen.getByRole('dialog', { name: 'Report' }).querySelector('iframe')).toBe(inside);
   });
 
   it('keeps a page that reports in time, a page fixed to the viewport (height 0) included', () => {

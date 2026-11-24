@@ -602,6 +602,23 @@ def _visual(digest, kind, ancestors):
     return f"/visuals/{name[:2]}/{name}", meta
 
 
+# The script slot of a page's copy made before pages ran as written (copy 2, policy 1): the hash of the height reporter
+# released then. Such a copy is no longer read, but a deleted page's purge removes it too (`visual_paths`).
+OLD_PAGE_SCRIPT = "'sha256-CGsvWZjIPhztoFjn2PxxlX/LGUIoZ4mKDQcJ16au+Aw='"
+
+
+def visual_paths(digest, kind, ancestors):
+    """Every path a copy of `digest` may be held at for these ancestors: its own, and for a page the one its copy had
+    before pages ran as written (Blobs.purge removes both)."""
+    path, meta = _visual(digest, kind, ancestors)
+    if kind != "page":
+        return [path]
+    old = hashlib.sha256(
+        "\n".join(["tico-visual", "2", kind, digest, meta["tico-visual-ancestors"], OLD_PAGE_SCRIPT]).encode()
+    ).hexdigest()
+    return [path, f"/visuals/{old[:2]}/{old}"]
+
+
 def _visual_ok(head, kind, meta, sha=None, size=None):
     """Whether a HEAD of a copy shows it whole as made: S3's SHA-256 of what it received is the one it was written
     with (`sha`, else the one in its metadata), and its type, disposition and policy slots are this kind's."""

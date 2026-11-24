@@ -65,12 +65,18 @@ def test_a_page_stored_cleaned_before_is_stored_as_written_when_published_again_
     source. The same source published again now stores the page as written, so it runs; again after that is no change."""
     _, attempt = turn(api)
     fid = page(api, attempt).json()["page"]["file_id"]
+    # A version as an old publish stored it: cleaned bytes, with the source's digest beside them.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_file_versions SET digest=? WHERE file_id=?", ("0" * 64, fid))  # as a cleaned copy was
+        old = dict(c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=1", (fid,)).fetchone())
+        old |= {"version": 2, "digest": "0" * 64, "source_digest": hashlib.sha256(HTML).hexdigest()}
+        c.execute(
+            f"INSERT INTO bot_file_versions({','.join(old)}) VALUES({','.join('?' * len(old))})", tuple(old.values())
+        )
+        c.execute("UPDATE bot_files SET current_version=2 WHERE id=?", (fid,))
     again = page(api, attempt).json()["page"]
-    assert again["version"] == 2
+    assert again["version"] == 3
     assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content == HTML
-    assert page(api, attempt).json()["page"]["version"] == 2
+    assert page(api, attempt).json()["page"]["version"] == 3
 
 
 def test_a_page_has_an_inline_address_only_with_a_visual_address(api):
