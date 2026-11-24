@@ -2721,7 +2721,8 @@ for line in sys.stdin:
     }
 
     /// An app server whose `LONG` turn runs until `turn/interrupt`, which it answers and then ends the turn; any other
-    /// turn ends at once. Each call goes to `FAKE_CALLS`.
+    /// turn ends at once. A turn's `ERR:` text goes to its stderr first; `CLOSE` closes its output and `DIE` ends it,
+    /// with no answer. Each call goes to `FAKE_CALLS`.
     const FAKE_KEPT: &str = r#"#!/usr/bin/env python3
 import json, os, sys
 def say(m): print(json.dumps(m), flush=True)
@@ -2731,8 +2732,17 @@ for line in sys.stdin:
     method, p = msg.get("method"), msg.get("params") or {}
     if method is None or "id" not in msg:
         continue
-    open(os.environ["FAKE_CALLS"], "a").write(json.dumps({"method": method, "pid": os.getpid()}) + "\n")
+    open(os.environ["FAKE_CALLS"], "a").write(json.dumps({"method": method, "pid": os.getpid(), "params": p}) + "\n")
     i = msg["id"]
+    text = (p.get("input") or [{}])[0].get("text", "")
+    if method == "turn/start" and text.startswith("ERR:"):
+        sys.stderr.write(text[4:])
+        sys.stderr.flush()
+    if method == "turn/start" and text == "CLOSE":
+        os.close(1)
+        continue
+    if method == "turn/start" and text == "DIE":
+        os._exit(1)
     if method == "thread/start":
         say({"id": i, "result": {"thread": {"id": "th-1"}}})
     elif method == "turn/start":
@@ -2821,7 +2831,8 @@ for line in sys.stdin:
         let two = turn_settings("turn-2", "gpt-5.5");
         let kept = next.take_kept(Some(&th), &two).await.expect("warm");
         assert!(Arc::ptr_eq(&kept.0, &first.0) && kept.warm() && kept.alive());
-        assert_eq!(std::fs::read_to_string(&file).unwrap(), "turn-2");
+        // What the previous turn left running cannot read the next turn's token before the hub has started it.
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
         assert_eq!(kept.resume_thread(&th, &two).await.unwrap(), th);
         let turn = kept.start_turn(&th, "Go on", None).await.unwrap();
         ended(&kept, &turn).await;
@@ -2848,40 +2859,105 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// A ChatGPT plan's sign-in file stays in its home while the keeper holds the app-server on it, after the turn that
-    /// placed it ended, and goes once the app-server has idled out.
-    #[tokio::test]
-    async fn a_kept_app_servers_plan_home_keeps_its_sign_in_until_the_keeper_lets_it_go() {
-        let (dir, mut env) = kept_rig("codex-kept-plan");
-        let state = dir.join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        let id = format!("kept-{}", uuid::Uuid::new_v4().simple());
-        let item = json!([{"id": id, "runtime": "codex", "kind": "codex_login", "file": "auth.json",
-                           "value": "{\"tokens\":1}", "revision": 1, "billing": "subscription"}]);
+    /// Each call the fake app server got.
+    fn calls(dir: &std::path::Path) -> Vec<Value> {
+        std::fs::read_to_string(dir.join("calls.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+
+    fn thread_calls(dir: &std::path::Path) -> Vec<String> {
+        calls(dir)
+            .iter()
+            .map(|c| text_of(&c["method"]))
+            .filter(|m| m.starts_with("thread/") || m.starts_with("turn/"))
+            .collect()
+    }
+
+    /// A first turn of `th` on `host` (cold), ended and given to the keeper.
+    async fn first_turn(host: &CodexHost, settings: &Settings, text: &str) -> String {
+        assert!(host.take_kept(None, settings).await.is_none());
+        host.start().await.unwrap();
+        let th = host.start_thread("ops", settings).await.unwrap();
+        let turn = host.start_turn(&th, text, None).await.unwrap();
+        ended(host, &turn).await;
+        th
+    }
+
+    /// A plan login handed to `env` for one turn, as model_subscriptions hands it: in a home of the turn's own when
+    /// `own`, else in the plan's home its turns share.
+    fn plan_turn(
+        state: &std::path::Path,
+        id: &str,
+        own: bool,
+        env: &mut Env,
+    ) -> Vec<crate::model_subscriptions::Delivered> {
+        let mut item = json!({"id": id, "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                              "value": "{\"tokens\":1}", "revision": 1, "billing": "subscription"});
+        if own {
+            item["source"] = json!("attempt");
+        }
         let mut delivered = crate::model_subscriptions::apply(
-            &state,
-            &item,
-            &mut env,
+            state,
+            &json!([item]),
+            env,
             &mut vec![],
             &mut Default::default(),
         );
-        crate::model_subscriptions::start(&mut delivered, "codex", &mut env).unwrap();
-        let file = delivered[0].file.clone().unwrap();
-        assert!(file.exists());
+        crate::model_subscriptions::start(&mut delivered, "codex", env).unwrap();
+        delivered
+    }
 
+    /// A plan's sign-in in a home made for one turn stays while the keeper holds the app-server started on it: through
+    /// the thread's next turn, which goes on in that app-server with a home of its own, until the app-server goes.
+    #[tokio::test]
+    async fn a_kept_app_server_keeps_its_own_turns_plan_home_through_the_next_turn_until_it_goes() {
+        let (dir, base) = kept_rig("codex-kept-plan");
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let id = format!("kept-{}", uuid::Uuid::new_v4().simple());
         let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
-        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None)
+        let events = || tokio::sync::mpsc::unbounded_channel().0;
+
+        let mut env = base.clone();
+        let mut delivered = plan_turn(&state, &id, true, &mut env);
+        let first_file = delivered[0].file.clone().unwrap();
+        assert!(crate::model_subscriptions::turn_only(
+            first_file.parent().unwrap()
+        ));
+        let first = CodexHost::on_home(env, events(), None)
             .with_keeper(keeper.clone())
             .unwrap();
-        let settings = turn_settings("turn-1", "gpt-5.5");
-        assert!(host.take_kept(None, &settings).await.is_none());
-        host.start().await.unwrap();
-        let th = host.start_thread("ops", &settings).await.unwrap();
-        let turn = host.start_turn(&th, "Hi", None).await.unwrap();
-        ended(&host, &turn).await;
-        assert!(host.release(Some(&th), None).await);
+        let th = first_turn(&first, &turn_settings("turn-1", "gpt-5.5"), "Hi").await;
+        assert!(first.release(Some(&th), None).await);
         crate::model_subscriptions::finish(&mut delivered);
-        assert!(file.exists(), "the kept app-server still signs in from it");
+        assert!(
+            first_file.exists(),
+            "the kept app-server still signs in from it"
+        );
+
+        let mut env = base.clone();
+        let mut delivered = plan_turn(&state, &id, true, &mut env);
+        let next_file = delivered[0].file.clone().unwrap();
+        assert_ne!(next_file, first_file);
+        let next = CodexHost::on_home(env, events(), None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let kept = next
+            .take_kept(Some(&th), &turn_settings("turn-2", "gpt-5.5"))
+            .await
+            .expect("warm");
+        assert!(
+            first_file.exists(),
+            "its app-server goes on signed in there"
+        );
+        let turn = kept.start_turn(&th, "Go on", None).await.unwrap();
+        ended(&kept, &turn).await;
+        assert!(kept.release(Some(&th), None).await);
+        crate::model_subscriptions::finish(&mut delivered);
+        assert!(!next_file.exists() && first_file.exists());
 
         keeper
             .prune_at(
@@ -2890,9 +2966,233 @@ for line in sys.stdin:
             )
             .await;
         assert_eq!(keeper.count(), 0);
-        assert!(!host.alive());
-        assert!(!file.exists(), "no copy left behind");
-        drop(host);
+        assert!(!kept.alive());
+        assert!(
+            !first_file.parent().unwrap().exists(),
+            "no copy left behind"
+        );
+        drop((first, next, kept));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A plan's home its turns share (a legacy `codex_login` file), which another thread's turn or a newer revision can
+    /// rewrite, keeps no app-server: it stops at the end of its turn, as before.
+    #[tokio::test]
+    async fn an_app_server_on_a_plan_home_its_turns_share_is_not_kept() {
+        let (dir, mut env) = kept_rig("codex-shared-plan");
+        let state = dir.join("state");
+        std::fs::create_dir_all(&state).unwrap();
+        let id = format!("shared-{}", uuid::Uuid::new_v4().simple());
+        let mut delivered = plan_turn(&state, &id, false, &mut env);
+        let file = delivered[0].file.clone().unwrap();
+        assert!(!crate::model_subscriptions::turn_only(
+            file.parent().unwrap()
+        ));
+        let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let th = first_turn(&host, &turn_settings("turn-1", "gpt-5.5"), "Hi").await;
+        assert!(!host.release(Some(&th), None).await);
+        assert_eq!(keeper.count(), 0);
+        host.finish_turn().await;
+        crate::model_subscriptions::finish(&mut delivered);
+        assert!(!file.exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A kept app-server that dies after the next turn took it, before that turn went on there: a new one resumes the
+    /// thread (it never loaded it) and the turn runs there, once.
+    #[tokio::test]
+    async fn a_kept_app_server_that_dies_before_the_next_turn_goes_on_resumes_the_thread_in_a_new_one(
+    ) {
+        let (dir, env) = kept_rig("codex-kept-died");
+        let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
+        let events = || tokio::sync::mpsc::unbounded_channel().0;
+        let first = CodexHost::on_home(env.clone(), events(), None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let th = first_turn(&first, &turn_settings("turn-1", "gpt-5.5"), "Hi").await;
+        assert!(first.release(Some(&th), None).await);
+        let next = CodexHost::on_home(env, events(), None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let two = turn_settings("turn-2", "gpt-5.5");
+        let kept = next.take_kept(Some(&th), &two).await.expect("warm");
+        let stopper = kept
+            .0
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(s, _)| s.clone());
+        stopper.unwrap().terminate(Duration::ZERO);
+        let by = tokio::time::Instant::now() + Duration::from_secs(10);
+        while kept.alive() {
+            assert!(tokio::time::Instant::now() < by, "never died");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(kept.resume_thread(&th, &two).await.unwrap(), th);
+        let turn = kept.start_turn(&th, "Go on", None).await.unwrap();
+        ended(&kept, &turn).await;
+        assert_eq!(
+            thread_calls(&dir),
+            ["thread/start", "turn/start", "thread/resume", "turn/start"]
+        );
+        let pids: Vec<Value> = calls(&dir).iter().map(|c| c["pid"].clone()).collect();
+        assert_ne!(pids.first(), pids.last());
+        assert!(!kept.warm());
+        kept.finish_turn().await;
+        drop((first, next, kept));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Background work is its own turn's: a later turn's interrupt ends what that turn started, never a tool call an
+    /// earlier completed turn left running.
+    #[tokio::test]
+    async fn an_interrupt_ends_only_its_own_turns_background_work() {
+        let host = CodexHost::on_home(Env::new(), tokio::sync::mpsc::unbounded_channel().0, None);
+        let started = |id: &str, turn: &str| {
+            json!({"method": "item/started", "params": {"threadId": "th", "turnId": turn,
+            "item": {"type": "commandExecution", "id": id, "command": "sleep 600", "status": "inProgress"}}})
+        };
+        let completed = |turn: &str, status: &str| {
+            json!({"method": "turn/completed",
+            "params": {"threadId": "th", "turn": {"id": turn, "status": status}}})
+        };
+        host.on_message(started("c1", "t1")).await;
+        host.on_message(completed("t1", "completed")).await;
+        host.on_message(started("c2", "t2")).await;
+        host.on_message(completed("t2", "interrupted")).await;
+        let running: Vec<String> = host.0.running.lock().unwrap().keys().cloned().collect();
+        assert_eq!(running, ["c1"]);
+    }
+
+    /// A process whose output closed is killed and waited for until it has been reaped, not only until its output ended.
+    #[tokio::test]
+    async fn a_kept_app_servers_kill_waits_until_it_has_been_reaped() {
+        let (dir, env) = kept_rig("codex-kept-kill");
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        let th = host
+            .start_thread("ops", &turn_settings("t", "gpt-5.5"))
+            .await
+            .unwrap();
+        assert!(host.start_turn(&th, "CLOSE", None).await.is_err());
+        let gone = host
+            .0
+            .child
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(_, g)| g.clone())
+            .unwrap();
+        let kept = Kept(Some(host.clone()));
+        (kept.kill())().await;
+        assert!(gone.load(Ordering::SeqCst), "killed and reaped");
+        drop((kept, host));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A bot's MCP server whose header names HUB_TOKEN holds the turn's own token in the app-server's config: that
+    /// app-server stops with its turn.
+    #[tokio::test]
+    async fn an_app_server_whose_mcp_server_holds_the_turns_token_is_not_kept() {
+        let (dir, mut env) = kept_rig("codex-kept-mcp");
+        env.insert("HUB_TOKEN".into(), "turn-1".into());
+        let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let mut one = turn_settings("turn-1", "gpt-5.5");
+        one.mcp_servers = vec![json!({"name": "ops", "url": "https://mcp.example/ops",
+                                      "headers": {"Authorization": "Bearer ${HUB_TOKEN}"}})];
+        let th = first_turn(&host, &one, "Hi").await;
+        assert!(!host.release(Some(&th), None).await);
+        assert_eq!(keeper.count(), 0);
+        host.finish_turn().await;
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Each turn stages its company skills in a folder of its own: the next turn still goes on in the kept app-server,
+    /// told that turn's folder.
+    #[tokio::test]
+    async fn a_turns_own_company_skills_folder_keeps_the_app_server_and_is_given_to_it() {
+        let (dir, env) = kept_rig("codex-kept-skills");
+        let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
+        let events = || tokio::sync::mpsc::unbounded_channel().0;
+        let with_skills = |token: &str, folder: &str| Settings {
+            company_skills: Some(dir.join(folder).display().to_string()),
+            ..turn_settings(token, "gpt-5.5")
+        };
+        let first = CodexHost::on_home(env.clone(), events(), None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let th = first_turn(&first, &with_skills("turn-1", "skills-1"), "Hi").await;
+        assert!(first.release(Some(&th), None).await);
+        let next = CodexHost::on_home(env, events(), None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let two = with_skills("turn-2", "skills-2");
+        let kept = next.take_kept(Some(&th), &two).await.expect("warm");
+        assert_eq!(kept.resume_thread(&th, &two).await.unwrap(), th);
+        let roots: Vec<Value> = calls(&dir)
+            .iter()
+            .filter(|c| c["method"] == "skills/extraRoots/set")
+            .map(|c| c["params"]["extraRoots"].clone())
+            .collect();
+        assert_eq!(roots.last(), Some(&json!(skill_roots(&two))), "{roots:?}");
+        kept.finish_turn().await;
+        drop((first, next, kept));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// What a kept app-server wrote to stderr in an earlier turn, a line it left unfinished included, is not the next
+    /// turn's: that turn's diagnostics carry only its own.
+    #[tokio::test]
+    async fn a_kept_app_servers_next_turn_carries_only_its_own_stderr() {
+        let (dir, env) = kept_rig("codex-kept-stderr");
+        let keeper = Arc::new(Keeper::new(dir.join("kept"), 8));
+        let first = CodexHost::on_home(env.clone(), tokio::sync::mpsc::unbounded_channel().0, None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let th = first_turn(
+            &first,
+            &turn_settings("turn-1", "gpt-5.5"),
+            "ERR:noise-1\npart",
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(first.release(Some(&th), None).await);
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let next = CodexHost::on_home(env, tx, None)
+            .with_keeper(keeper.clone())
+            .unwrap();
+        let kept = next
+            .take_kept(Some(&th), &turn_settings("turn-2", "gpt-5.5"))
+            .await
+            .expect("warm");
+        let turn = kept
+            .start_turn(&th, "ERR:ial\nnoise-2\n", None)
+            .await
+            .unwrap();
+        ended(&kept, &turn).await;
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let mut tails = vec![];
+        while let Ok(event) = rx.try_recv() {
+            if let Some(tail) = event["stderr_tail"].as_str() {
+                tails.push(tail.to_string());
+            }
+        }
+        assert!(tails.iter().any(|t| t.contains("noise-2")), "{tails:?}");
+        assert!(
+            tails
+                .iter()
+                .all(|t| !t.contains("noise-1") && !t.contains("part")),
+            "{tails:?}"
+        );
+        kept.finish_turn().await;
+        drop((first, next, kept));
         std::fs::remove_dir_all(dir).ok();
     }
 }
