@@ -2269,10 +2269,12 @@ def carrier_current(c, carrier, bot):
     source = H.message(c, refs.get("carries")) if isinstance(refs, dict) and refs.get("carries") else None
     if not source or source.get("conversation_id") != carrier.get("conversation_id"):
         return False
-    return _source_readable(c, thread_row(c, source["conversation_id"]), source, bot)
+    return source_readable(c, thread_row(c, source["conversation_id"]), source, bot)
 
 
-def _source_readable(c, thread, message, bot):
+def source_readable(c, thread, message, bot):
+    """Whether `bot` may receive `message` written in `thread`: it is in the thread's audience and reads the message (the
+    check a carrier needs, `_carrier`; question_marks.replied clears only the ❓ of an agent that passes it)."""
     if thread is None or not audience_has(c, thread, bot):
         return False
     from . import task_privacy
@@ -2368,7 +2370,7 @@ def note_readable(c, note, bot):
     message = H.message(c, mid)
     if not message:
         return False
-    return _source_readable(c, thread_row(c, message["conversation_id"]), message, bot)
+    return source_readable(c, thread_row(c, message["conversation_id"]), message, bot)
 
 
 def revalidate_notes(c, bot, notes):
@@ -2517,7 +2519,7 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
     and its legacy audience is copied. In a task's own thread it is stamped as `bot`'s session message. `way` (named_way): a queued carrier stays out of a running turn
     (execution.inputs); a deferred one is quiet, and starts no run until its deadline."""
-    if not _source_readable(c, thread, message, bot):
+    if not source_readable(c, thread, message, bot):
         return None
     cid = _new_id()
     refs = {"carries": message["id"], "wake": wake, "reason": reason, "from": message.get("sender_id")}
@@ -5639,7 +5641,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
                     rows_of[1]["depth"],
                     st["count"],
                     int(st["last_seq"] or 0) + 1,
-                    int(st["last_seq"] or 0) > int(st["last_read_seq"] or 0),
+                    st["unread"] > 0,  # its unread count, of what this view keeps (`_branch_stats`)
                 ),
             ]
             bytes_of = sum(len(json.dumps(r, default=str)) for r in rows_of)

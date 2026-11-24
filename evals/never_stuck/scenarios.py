@@ -129,6 +129,18 @@ class Rig:
         expect(len(found) <= 1, f"{len(found)} jobs bring {text!r} to {bot}")
         return str(found[0][0]) if found else None
 
+    def live(self, task: str, bot: str) -> list[str]:
+        """The bot's running attempts on this task, oldest first."""
+        return [
+            str(r[0])
+            for r in self.w.read(
+                lambda c: c.execute(
+                    "SELECT id FROM attempts WHERE task_id=? AND bot_id=? AND state='running' ORDER BY created_at, id",
+                    (task, bot.split(":", 1)[1]),
+                ).fetchall()
+            )
+        ]
+
     def jobs_of(self, runs: list[str]) -> list[str]:
         """The jobs these runs took, in order."""
         return [
@@ -1061,12 +1073,11 @@ def s39(r: Rig) -> None:
     from backend import task_engine as E
 
     task = r.task(ANA, "Fix the invoice", assignee=BUILDER)
-    r.ran(task, BUILDER)
-    # The question is the bot's message on the task's chat marked ❓; Ben's reply there queues the bot's wake.
-    r.ok(BUILDER, lambda c: Q.ask(c, BUILDER, task, BEN, "Which client?", checked=False), "the bot asks")
-    runs = r.start(task, BUILDER) or r.raw(lambda c: [])
-    r.later(minutes=3)
     runs = r.start(task, BUILDER)
+    expect(len(runs) == 1, "Builder has no run on the task")
+    # The question is the bot's message on the task's chat marked ❓, asked in its run; Ben answers while it runs.
+    r.ok(BUILDER, lambda c: Q.ask(c, BUILDER, task, BEN, "Which client?", checked=False), "the bot asks")
+    expect(r.live(task, BUILDER) == runs, "Builder's run is not live when Ben answers")
     r.ok(BEN, lambda c: _h().task_comment(c, BEN, task, "Acme"), "Ben answers while the bot runs")
     expect(r.answer_job(task, BUILDER, "Acme") is not None, "nothing was queued for the bot")
     seen = r.row(task)["version"]
@@ -1074,6 +1085,7 @@ def s39(r: Rig) -> None:
     # Ben's reply reaches the old owner because it clears its ❓: it is not a wake of the task's own, so the
     # reassign does not drop it (only the owner's wakes keyed to the visit and owner go).
     expect(r.queued(task, BUILDER) == 0, "the old owner's queued wake was not dropped")
+    expect(r.live(task, BUILDER) == runs, "the old owner's run did not last through the reassignment")
     rid = r.requirement(task, "owner_done")
     r.refused(
         BUILDER,

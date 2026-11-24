@@ -547,3 +547,35 @@ def test_a_view_of_a_tasks_thread_filters_its_branches_too(api):
     comments = page(comments="true")
     assert logged["id"] in comments and stamped not in comments, "a session message under a comment is not a comment"
     assert (comments[logged["id"]].get("sub_thread") or {}).get("count", 0) == 0
+
+
+def test_a_collapsed_branch_in_a_session_view_is_unread_only_for_what_that_view_shows(api):
+    """A branch too big for the page collapses to one row: in Ops's session view its unread mark counts only what that
+    view keeps, never Ben's later comment there that the session leaves out."""
+    row = ticket(api)
+    thread = row["conversation_id"]
+    to_ops = comment(api, row["id"], "Ship the fix once the checks pass.", to="ops")["comment"]
+
+    def under(text, token="ana-test", stamp=None):
+        r = api.post(
+            f"/api/v2/threads/{thread}/messages",
+            json={"text": text, "parent_message_id": to_ops["id"]},
+            headers=headers(token),
+        )
+        assert r.status_code == 200, r.text
+        if stamp:
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE messages SET session_agent_id=? WHERE id=?", (stamp, r.json()["id"]))
+        return r.json()["id"]
+
+    under("Ana for Ops: " + "the full checklist. " * 400, stamp="bot:ops")  # hers: never unread for her
+    under("Ben, in passing.", token="ben-test")
+
+    def collapsed(**params):
+        r = api.get(f"/api/v2/threads/{thread}/timeline", params={"max_bytes": 2000, **params}, headers=headers())
+        assert r.status_code == 200, r.text
+        [more] = [m for m in r.json()["messages"] if m.get("collapsed")]
+        return more
+
+    assert collapsed()["unread"] is True, "unfiltered, Ben's comment is unread"
+    assert collapsed(session="bot:ops")["unread"] is False, "Ops's session leaves Ben's comment out"

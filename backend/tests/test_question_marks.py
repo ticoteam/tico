@@ -539,10 +539,12 @@ def test_a_reply_in_a_shared_chat_resumes_the_task_whose_mark_it_cleared(c, gene
     assert not E.task(c, task["id"]).get("snooze")
 
 
-def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, general):
-    """Ana's chat with Builder holds a task filed there; Reviewer asked her a ❓ on it in that chat. Her plain reply to
-    Builder clears Reviewer's ❓ too, so it reaches Reviewer: no ❓ closes without its answer reaching the asker."""
-    said = H.say(c, ANA, BUILDER, "Please help with the launch.")
+def _shared_chat_ask(c, *members):
+    """A chat of Ana's with `members` (Builder first) holding a task filed there; Reviewer asked her a ❓ on it."""
+    from backend import threads
+
+    room = threads.dm(c, ANA, list(members), title="Launch")["id"] if len(members) > 1 else None
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.", conversation_id=room)
     task = H.task_create(
         c,
         ANA,
@@ -553,13 +555,39 @@ def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, ge
         own_room=False,
         lint=False,
     )
-    mark = _ask(c, task["id"], bot="bot:reviewer")
-    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=said["conversation_id"])
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    return said["conversation_id"], _ask(c, task["id"], bot="bot:reviewer")
+
+
+def _reviewer_jobs(c, message_id):
+    return c.execute(
+        "SELECT j.message_id FROM jobs j JOIN message_deliveries d ON d.carrier_id=j.message_id "
+        "WHERE d.message_id=? AND d.recipient='bot:reviewer' AND j.bot_id='reviewer' AND j.state='queued'",
+        (message_id,),
+    ).fetchall()
+
+
+def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, general):
+    """Reviewer is in Ana's chat with Builder: her plain reply to Builder clears Reviewer's ❓ there too, and reaches
+    Reviewer, one carrier and one job: no ❓ closes without its answer reaching the asker."""
+    room, mark = _shared_chat_ask(c, BUILDER, "bot:reviewer")
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=room)
     assert Q.get(c, mark["id"])["cleared_message_id"] == reply["id"]
     reached = c.execute(
-        "SELECT reason FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'", (reply["id"],)
+        "SELECT state, carrier_id FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'",
+        (reply["id"],),
     ).fetchall()
-    assert [r[0] for r in reached] == ["reply"], "the asker whose ❓ it cleared hears the answer"
+    assert [(r[0], bool(r[1])) for r in reached] == [("pending", True)], "one live delivery, carried"
+    assert len(_reviewer_jobs(c, reply["id"])) == 1, "and one job"
+
+
+def test_a_reply_its_asker_may_not_read_leaves_the_question_open(c, general):
+    """Ana's chat with Builder alone: Reviewer, outside it, may not read her reply, so its ❓ stays open, not cleared
+    by an answer it never gets."""
+    room, mark = _shared_chat_ask(c, BUILDER)
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=room)
+    assert Q.get(c, mark["id"])["cleared_at"] is None
+    assert _reviewer_jobs(c, reply["id"]) == []
 
 
 def test_a_question_for_someone_who_left_clears_and_hands_the_task_back(c, general):
