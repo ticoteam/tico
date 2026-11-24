@@ -109,7 +109,8 @@ def register(
     def session_target(c, who, row, body):
         """The agent a session message (`to`) is written to: an active agent the writer may see that reads the task,
         else 422 (the same answer whether or not it exists). A person who may not direct the task's agents gets 403
-        first, so they learn nothing about which agents exist or read it."""
+        first, so they learn nothing about which agents exist or read it; a writer without Write on the agent gets the
+        403 any send to it gets."""
         if not body.to:
             return None
         from .chat_goals import may_direct
@@ -131,6 +132,9 @@ def register(
             or not H.task_private_readable(c, agent, row)
         ):
             raise Problem("validation", "No agent by that name can read this task", 422)
+        # A session message is a request to the agent, as a message to it anywhere is (recipients.require_recipient):
+        # Write on it, else the same 403 every send gives. Being on the task (may_direct) is not Write on its agents.
+        auth.require_write(c, who, H.actor_id(agent), missing="No agent by that name can read this task")
         return agent
 
     def recipients(c, who, row, body, session, replied, asked):

@@ -1795,16 +1795,17 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         exclude=message["id"],
         people_notified=bool(refs.get("send_people")),
     )
-    if _cause(author) == "human" and audience_of(root) == "task" and not system:
-        # Whatever clears an agent's ❓ reaches it (question_marks.replied), plain comment or not: no asker is left
-        # waiting on an answer it never got.
+    if _cause(author) == "human" and not system:
+        # Whatever clears an agent's ❓ reaches it (question_marks.replied), plain comment or not, on a task's thread or
+        # in a shared chat: the same marks the write cleared (by this message), so no asker is left waiting on an
+        # answer it never got.
         from . import question_marks
 
         named = {r["actor"] for r in reached} | {primary}
         # Each by the message's way, as `plan` builds an addressed bot's entry: a Defer keeps its deadline.
         due = plan_defer_for(root, defer_for) if way == "defer" else None
         mode = "queue" if due == "never" else way or "steer"
-        for bot in question_marks.cleared_askers(c, (root or {}).get("task_id") or "", message["id"]):
+        for bot in question_marks.cleared_askers(c, message["id"]):
             if bot not in named and bot.startswith("bot:"):
                 reached.append(
                     {"actor": bot, "reason": "reply", "mode": mode, "defer_for": due if mode == "defer" else None}
@@ -5363,26 +5364,33 @@ def _timeline_rows(c, v, rows, thread_id, depth):
     return out
 
 
-def _branch_tails(c, ids):
-    """The latest BRANCH_TAIL messages of each of these threads, newest first in each: one query, whatever the count."""
+def _branch_tails(c, ids, view=(None, False)):
+    """The latest BRANCH_TAIL messages of each of these threads, newest first in each: one query, whatever the count.
+    `view` (session, comments): only the messages that view of a task's thread keeps (`session_sql`)."""
     marks = ",".join("?" * len(ids))
     tails = {i: [] for i in ids}
+    outer, outer_args = session_sql(ids, *view, m="m")
+    inner, inner_args = session_sql(ids, *view, m="x")
     for m in c.execute(
-        "SELECT m.* FROM conversations t JOIN messages m ON m.conversation_id=t.id AND m.seq IS NOT NULL AND m.seq>="
-        "COALESCE((SELECT x.seq FROM messages x WHERE x.conversation_id=t.id AND x.seq IS NOT NULL "
-        f"ORDER BY x.seq DESC LIMIT 1 OFFSET ?),0) WHERE t.id IN ({marks}) ORDER BY m.conversation_id, m.seq DESC",
-        (BRANCH_TAIL - 1, *ids),
+        f"SELECT m.* FROM conversations t JOIN messages m ON m.conversation_id=t.id AND m.seq IS NOT NULL{outer} "
+        "AND m.seq>=COALESCE((SELECT x.seq FROM messages x WHERE x.conversation_id=t.id AND x.seq IS NOT NULL"
+        f"{inner} ORDER BY x.seq DESC LIMIT 1 OFFSET ?),0) WHERE t.id IN ({marks}) ORDER BY m.conversation_id, m.seq DESC",
+        (*outer_args, *inner_args, BRANCH_TAIL - 1, *ids),
     ):
         tails[m["conversation_id"]].append(dict(m))
     return tails
 
 
-def _branch_stats(c, v, branches, below):
+def _branch_stats(c, v, branches, below, view=(None, False)):
     """{thread id: {"count", "older", "unseen", "unread"}} of the messages the viewer reads: how many there are, how many
     sit below the rendered tail (`below`, a seq per thread), how many of those are past the viewer's mark, and the unread
     count (`unread`'s rule). The counts come from one query. Only the rows it can't decide, restricted or from an old
-    room, are checked one by one, up to BRANCH_CHECKS, so a count never gives away a message the viewer can't read."""
+    room, are checked one by one, up to BRANCH_CHECKS, so a count never gives away a message the viewer can't read.
+    `view` (session, comments): only the messages that view of a task's thread keeps (`session_sql`)."""
     me = v.actor
+    ids = [b["id"] for b in branches]
+    kept, kept_args = session_sql(ids, *view, m="m")
+    checked, checked_args = session_sql(ids, *view)
     cuts = ",".join(["(?,?,?)"] * len(branches))
     args = [x for b in branches for x in (b["id"], below[b["id"]], b["mark"])]
     stats = {b["id"]: {"count": 0, "older": 0, "unseen": 0, "unread": 0} for b in branches}
@@ -5393,16 +5401,15 @@ def _branch_stats(c, v, branches, below):
         "message_deliveries d WHERE d.message_id=m.id AND d.recipient=? "
         f"AND {H.delivery_counts_sql('m', 'd.recipient', 'd.reason')}))) "
         "FROM cut JOIN messages m ON m.conversation_id=cut.tid WHERE m.seq IS NOT NULL AND m.deleted_at IS NULL "
-        "AND m.restricted=0 AND m.legacy_audience IS NULL GROUP BY cut.tid",
-        (*args, me, me, me),
+        f"AND m.restricted=0 AND m.legacy_audience IS NULL{kept} GROUP BY cut.tid",
+        (*args, me, me, me, *kept_args),
     ):
         stats[r[0]].update(count=r[1], older=r[2] or 0, unseen=r[3] or 0, unread=r[4] or 0)
-    ids = [b["id"] for b in branches]
     marks = {b["id"]: b["mark"] for b in branches}
     for m in c.execute(
         f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(ids))}) AND seq IS NOT NULL "
-        "AND deleted_at IS NULL AND (restricted<>0 OR legacy_audience IS NOT NULL) ORDER BY seq DESC LIMIT ?",
-        (*ids, BRANCH_CHECKS),
+        f"AND deleted_at IS NULL AND (restricted<>0 OR legacy_audience IS NOT NULL){checked} ORDER BY seq DESC LIMIT ?",
+        (*ids, *checked_args, BRANCH_CHECKS),
     ).fetchall():
         m = dict(m)
         if not message_readable(c, v, m, thread_checked=True):
@@ -5449,10 +5456,11 @@ def _own_titles(c, found):
     }
 
 
-def _branches(c, v, tops):
+def _branches(c, v, tops, view=(None, False)):
     """{parent message id: {"sub_thread", "more", "rows"}} for these timeline rows and the rows under them. It walks one
     level of the tree at a time, so the queries follow the tree's depth, not its number of branches. Past MAX_INLINE_ROWS
-    or MAX_BRANCH_LEVELS a branch comes as its summary and one "N more" row."""
+    or MAX_BRANCH_LEVELS a branch comes as its summary and one "N more" row. `view` (session, comments): a view of a
+    task's thread keeps the same messages in its branches as at the top (`session_sql`), in their rows and counts."""
     out = {}
     frontier, total, level = [t["id"] for t in tops if not t.get("hidden")], 0, 0
     while frontier:
@@ -5478,14 +5486,14 @@ def _branches(c, v, tops):
         }
         for b in found:
             b["mark"] = int(read.get(b["id"]) or 0)
-        tails = _branch_tails(c, ids) if total < MAX_INLINE_ROWS and level < MAX_BRANCH_LEVELS else {}
+        tails = _branch_tails(c, ids, view) if total < MAX_INLINE_ROWS and level < MAX_BRANCH_LEVELS else {}
         from .files import prime_page_references
 
         prime_page_references(c, [_message_out(m) for tail in tails.values() for m in tail])  # one per level
         below = {
             b["id"]: (tails[b["id"]][-1]["seq"] if tails.get(b["id"]) else int(b["last_seq"] or 0) + 1) for b in found
         }
-        stats = _branch_stats(c, v, found, below)
+        stats = _branch_stats(c, v, found, below, view)
         titles = _own_titles(c, found)
         frontier = []
         for b in found:
@@ -5591,7 +5599,7 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         branches = {}
     else:
         tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
-        branches = {} if old_only else _branches(c, v, tops)
+        branches = {} if old_only else _branches(c, v, tops, (session, comments))
     every = tops + [r for b in branches.values() for r in b["rows"]]
     shown = [r["id"] for r in every if not r.get("hidden")]
     marks = reactions(c, shown)

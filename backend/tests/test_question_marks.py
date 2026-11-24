@@ -539,6 +539,29 @@ def test_a_reply_in_a_shared_chat_resumes_the_task_whose_mark_it_cleared(c, gene
     assert not E.task(c, task["id"]).get("snooze")
 
 
+def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, general):
+    """Ana's chat with Builder holds a task filed there; Reviewer asked her a ❓ on it in that chat. Her plain reply to
+    Builder clears Reviewer's ❓ too, so it reaches Reviewer: no ❓ closes without its answer reaching the asker."""
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.")
+    task = H.task_create(
+        c,
+        ANA,
+        "Write the launch note",
+        "Draft the note.",
+        BUILDER,
+        conversation_id=said["conversation_id"],
+        own_room=False,
+        lint=False,
+    )
+    mark = _ask(c, task["id"], bot="bot:reviewer")
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=said["conversation_id"])
+    assert Q.get(c, mark["id"])["cleared_message_id"] == reply["id"]
+    reached = c.execute(
+        "SELECT reason FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'", (reply["id"],)
+    ).fetchall()
+    assert [r[0] for r in reached] == ["reply"], "the asker whose ❓ it cleared hears the answer"
+
+
 def test_a_question_for_someone_who_left_clears_and_hands_the_task_back(c, general):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     mark = _ask(c, task_id, person="human:ben")

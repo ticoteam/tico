@@ -113,20 +113,28 @@ class Rig:
             )
         )
 
-    def reply_jobs(self, task: str, bot: str) -> int:
-        """Jobs queued for a bot's run on a person's comment in the task's chat: on the comment, or on the line that
-        carries it to a bot it does not name (a reply that clears the bot's ❓ reaches it so, threads.deliver)."""
-        return int(
-            self.w.read(
-                lambda c: c.execute(
-                    "SELECT COUNT(*) FROM jobs j JOIN messages m ON m.id = j.message_id JOIN tasks t ON t.conversation_id "
-                    "= m.conversation_id WHERE j.state='queued' AND t.id=? AND 'bot:' || j.bot_id=? AND (m.sender_id "
-                    "LIKE 'human:%' OR m.id IN (SELECT d.carrier_id FROM message_deliveries d JOIN messages p ON "
-                    "p.id = d.message_id WHERE d.recipient=? AND p.sender_id LIKE 'human:%'))",
-                    (task, bot, bot),
-                ).fetchone()[0]
-            )
+    def answer_job(self, task: str, bot: str, text: str) -> str | None:
+        """The queued job that brings a person's comment `text` on the task to the bot: on the comment, or on the
+        carrier that carries it to a bot it does not name (a reply that clears the bot's ❓ reaches it so,
+        threads.deliver). None when there is none."""
+        found = self.w.read(
+            lambda c: c.execute(
+                "SELECT j.id FROM jobs j JOIN messages m ON m.id = j.message_id JOIN tasks t ON t.conversation_id "
+                "= m.conversation_id WHERE j.state='queued' AND t.id=? AND 'bot:' || j.bot_id=? AND EXISTS (SELECT 1 "
+                "FROM messages p WHERE p.sender_id LIKE 'human:%' AND p.body=? AND p.conversation_id = m.conversation_id "
+                "AND (p.id = m.id OR p.id = json_extract(m.refs, '$.carries'))) ORDER BY j.created_at, j.id",
+                (task, bot, text),
+            ).fetchall()
         )
+        expect(len(found) <= 1, f"{len(found)} jobs bring {text!r} to {bot}")
+        return str(found[0][0]) if found else None
+
+    def jobs_of(self, runs: list[str]) -> list[str]:
+        """The jobs these runs took, in order."""
+        return [
+            str(self.w.read(lambda c, r=r: c.execute("SELECT job_id FROM attempts WHERE id=?", (r,)).fetchone()[0]))
+            for r in runs
+        ]
 
     def events(self, task: str) -> list[dict[str, Any]]:
         rows = self.w.read(
@@ -220,10 +228,13 @@ class Rig:
         lease = H.shift(now, seconds=90)
 
         def take(c: sqlite3.Connection) -> list[str]:
+            # A wake about the task, or a line in its thread (a person's comment, or Tico's carrier for one,
+            # threads.deliver): a carrier has no wake key of the task's, and a real runner takes it all the same.
             rows = c.execute(
                 "SELECT j.id, j.message_id FROM jobs j JOIN messages m ON m.id = j.message_id "
-                "WHERE j.state='queued' AND j.bot_id=? AND m.wake_key LIKE ? ORDER BY j.created_at, j.id",
-                (bot.split(":", 1)[1], task + ":%"),
+                "WHERE j.state='queued' AND j.bot_id=? AND (m.wake_key LIKE ? OR m.conversation_id = "
+                "(SELECT conversation_id FROM tasks WHERE id=?)) ORDER BY j.created_at, j.id",
+                (bot.split(":", 1)[1], task + ":%", task),
             ).fetchall()
             out: list[str] = []
             for job, message in rows[:1]:  # one run at a time per bot
@@ -620,13 +631,16 @@ def s08(r: Rig) -> None:
     r.ok(BUILDER, lambda c: Q.ask(c, BUILDER, task, BEN, "Which city?", checked=False), "the bot asks Ben")
     r.raw(lambda c: c.execute("UPDATE bots SET state='paused' WHERE id='builder'"))
     r.ok(BEN, lambda c: _h().task_comment(c, BEN, task, "Lisbon"), "Ben answers")
-    expect(r.reply_jobs(task, BUILDER) == 1, "the answer was not queued for the bot")
+    answer = r.answer_job(task, BUILDER, "Lisbon")
+    expect(answer is not None, "the answer was not queued for the bot")
     r.later(hours=2)
     expect(r.waits(task) == [("paused", BUILDER)], f"while paused the task waits on {r.waits(task)}")
-    expect(r.reply_jobs(task, BUILDER) == 1, "the answer's wake was dropped while the bot was paused")
+    expect(r.answer_job(task, BUILDER, "Lisbon") == answer, "the answer's wake was dropped while the bot was paused")
     r.raw(lambda c: c.execute("UPDATE bots SET state='active' WHERE id='builder'"))
     r.check()
-    expect(r.ran(task, BUILDER) == 1, "the answer was not delivered when the bot could run")
+    runs = r.start(task, BUILDER)
+    expect(r.jobs_of(runs) == [answer], "the answer was not delivered when the bot could run")
+    r.end(runs)
 
 
 @scenario(9, "11 refusals about tasks for one bot")
@@ -1054,7 +1068,7 @@ def s39(r: Rig) -> None:
     r.later(minutes=3)
     runs = r.start(task, BUILDER)
     r.ok(BEN, lambda c: _h().task_comment(c, BEN, task, "Acme"), "Ben answers while the bot runs")
-    expect(r.reply_jobs(task, BUILDER) >= 1, "nothing was queued for the bot")
+    expect(r.answer_job(task, BUILDER, "Acme") is not None, "nothing was queued for the bot")
     seen = r.row(task)["version"]
     r.ok(ANA, lambda c: E.reassign(c, task, WRITER, ANA, "Writer knows the client"), "Ana reassigns")
     # Ben's reply reaches the old owner because it clears its ❓: it is not a wake of the task's own, so the
