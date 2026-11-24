@@ -76,6 +76,23 @@ def register(
             return marked["bot_id"], marked["person_id"] == who.actor
         raise Problem("validation", "That is not a bot's question on this task", 422)
 
+    def askers(c, who, task_id, body, session=None):
+        """Every agent whose ❓ this comment settles, as the write clears them (question_marks.replied) and delivers to
+        each (threads.deliver): the one `ask` names; else, for a person's plain comment, each agent's open ❓ to them on
+        the task (only `session`'s in a session message). The org rules read the same list."""
+        asker, _ = replying_to(c, who, task_id, body, session)
+        if body.ask or not asker:
+            return [asker] if asker else []
+        only = " AND bot_id=?" if session else ""
+        return [
+            str(r[0])
+            for r in c.execute(
+                "SELECT DISTINCT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL"
+                f"{only} ORDER BY bot_id",
+                (task_id, who.actor, *((session,) if session else ())),
+            )
+        ]
+
     def reply_target(c, who, row, body):
         """The message a Reply answers (`in_reply_to`): one on this task the writer reads, else 422."""
         if not body.in_reply_to:
@@ -116,13 +133,14 @@ def register(
             raise Problem("validation", "No agent by that name can read this task", 422)
         return agent
 
-    def recipients(c, who, row, body, session, replied, asker):
-        """Everyone a comment is written to, once its `to` (`session`), Reply (`replied`) and ❓ answer (`asker`) are
-        checked: that agent, the author it answers, the asker, and whom its text @mentions, agents and people. The org
-        rule check's audience reads this one list in the preflight, the write and Send anyway's replay."""
+    def recipients(c, who, row, body, session, replied, asked):
+        """Everyone a comment is written to, once its `to` (`session`), Reply (`replied`) and ❓ answers (`asked`, the
+        askers it settles) are checked: that agent, the author it answers, each asker, and whom its text @mentions,
+        agents and people. The org rule check's audience reads this one list (`comment_audience`) in the preflight, the
+        write and Send anyway's replay."""
         from . import threads
 
-        out = [session, asker]
+        out = [session, *asked]
         if replied and str(replied.get("sender_id") or "").startswith(("human:", "bot:")):
             out.append(replied["sender_id"])
         conv = H.conversation(c, row["conversation_id"]) if row.get("conversation_id") else None
@@ -164,7 +182,9 @@ def register(
         if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
             question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        also = ((ask_to,) if ask_to else ()) + tuple(recipients(c, who, row, body, session, replied, asker))
+        also = ((ask_to,) if ask_to else ()) + tuple(
+            recipients(c, who, row, body, session, replied, askers(c, who, task_id, body, session))
+        )
         audience = rule_comment_audience(c, who, row, body.text, *also) if rc is not None else None
         rule = org_rule_check.apply(
             c,
@@ -330,16 +350,21 @@ def register(
         if row and found and found[0] == task_id and row["status"] == "open":
             raise Problem("own_turn", OWN_TURN, 409)
 
-    def comment_audience(c, who, tid, body):
-        """A comment's audience as the org rule check's preflight reads it (`comment_write` counts the same). Its `to`,
-        Reply and ❓ answer are checked first, so a refused one is refused before any rule reads who it names."""
+    def comment_audience(c, who, tid, body, ask_to=None):
+        """A comment's audience as the org rules read it, in the preflight and in Send anyway's replay; `comment_write`
+        counts the same at the write. Its `to`, Reply and ❓ answer are checked first, so a refused one is refused before
+        any rule reads who it names. `ask_to`: the person a ❓ on it asks (`question_write`)."""
         row = auth.task(c, who, auth.resolve_task(c, who, tid))
         session = session_target(c, who, row, body)
         replied = reply_target(c, who, row, body)
-        asker, _ = replying_to(c, who, row["id"], body, session)
-        return rule_comment_audience(c, who, row, body.text, *recipients(c, who, row, body, session, replied, asker))
+        asked = askers(c, who, row["id"], body, session)
+        found = recipients(c, who, row, body, session, replied, asked)
+        return rule_comment_audience(c, who, row, body.text, *((ask_to,) if ask_to else ()), *found)
 
-    @org_rule_check.replayer("comment")
+    def rule_comment_replay_audience(c, bot, replay):
+        return comment_audience(c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("comment", audience=rule_comment_replay_audience)
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
         return comment_write(
             c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
@@ -464,7 +489,7 @@ def register(
             who,
             "question",
             question_marks.with_choices(text, body.choices),  # its suggested answers are shown, and sent, as words
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
+            lambda c: comment_audience(c, who, tid, M.TaskComment(text=text), ask_to=to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
@@ -518,8 +543,8 @@ def register(
         return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
 
     def rule_question_audience(c, bot, replay):
-        row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
-        return rule_comment_audience(c, bot, row, replay["body"].get("text") or "", replay["to"])
+        text = replay["body"].get("text") or ""
+        return comment_audience(c, bot, replay["task"], M.TaskComment(text=text), ask_to=replay["to"])
 
     @org_rule_check.replayer("question", audience=rule_question_audience)
     def rule_replay_question(c, bot, hold, replay, ingest, gate=None):

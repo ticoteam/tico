@@ -387,7 +387,6 @@ def _configure_app(
         auth,
         execution,
         mutate,
-        rule_comment_audience,
         rule_message_audience,
         rule_public,
         rule_target,

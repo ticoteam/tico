@@ -365,17 +365,21 @@ def register_core(
             return {"execution": task_execution(c, who, row, bot)}
 
     # One row per agent on a task: the holder when an agent, every agent with a stamped message on its thread, every
-    # agent woken there by an @mention or a reply (its deliveries, on messages not deleted), and every agent with a run
-    # on the task; `last_seq` is the newest message its session view shows (NULL for a run alone). Each part reads
-    # by index (messages_session_agent covers the first; message_deliveries_thread, attempts_task).
+    # agent woken there by an @mention or a reply (its deliveries, on messages not deleted), every agent with a run on
+    # the task or a job waiting on its thread. `last_seq` is the newest message its session view shows
+    # (threads.session_sql: stamped for it, or an @mention of it), NULL when it shows none yet. Each part reads by index
+    # (messages_session_agent covers the first; message_deliveries_thread, attempts_task, and jobs_queued first:
+    # the waiting jobs are few, the thread's messages many, so CROSS JOIN keeps that order).
     SESSIONS_SQL = (
         "SELECT agent, MAX(seq), MIN(n) FROM ("
         "SELECT session_agent_id AS agent, MAX(seq) AS seq, 1 AS n FROM messages WHERE conversation_id=? "
         "AND session_agent_id IS NOT NULL AND deleted_at IS NULL GROUP BY session_agent_id "
-        "UNION ALL SELECT d.recipient, MAX(m.seq), 1 FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-        "WHERE d.thread_id=? AND d.recipient LIKE 'bot:%' AND d.reason IN ('mention','reply') "
-        "AND m.deleted_at IS NULL GROUP BY d.recipient "
+        "UNION ALL SELECT d.recipient, MAX(CASE WHEN d.reason='mention' THEN m.seq END), 1 FROM message_deliveries d "
+        "JOIN messages m ON m.id=d.message_id WHERE d.thread_id=? AND d.recipient LIKE 'bot:%' "
+        "AND d.reason IN ('mention','reply') AND m.deleted_at IS NULL GROUP BY d.recipient "
         "UNION ALL SELECT DISTINCT 'bot:'||bot_id, NULL, 1 FROM attempts WHERE task_id=? "
+        "UNION ALL SELECT DISTINCT 'bot:'||j.bot_id, NULL, 1 FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued' AND m.conversation_id=? "
         "UNION ALL SELECT ?, NULL, 0 WHERE ? LIKE 'bot:%'"
         ") GROUP BY agent ORDER BY MIN(n), MAX(seq) DESC, agent"
     )
@@ -387,7 +391,7 @@ def register_core(
         if not cid:
             return []
         owner = row["owner_id"] or ""
-        found = [(r[0], r[1]) for r in c.execute(SESSIONS_SQL, (cid, cid, row["id"], owner, owner))]
+        found = [(r[0], r[1]) for r in c.execute(SESSIONS_SQL, (cid, cid, row["id"], cid, owner, owner))]
         unseen = teammate_access.Known(c, who, auth).unseen_of([a for a, _ in found])
         return [{"agent": a, "last_seq": seq} for a, seq in found if a not in unseen]
 

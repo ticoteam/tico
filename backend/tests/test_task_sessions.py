@@ -144,6 +144,25 @@ def test_the_sessions_list_names_an_agent_by_its_mentions_not_deleted_and_by_a_r
     assert sessions(api, row["id"])["bot:cpo"] is None
 
 
+def test_the_sessions_list_names_an_agent_with_a_waiting_job_and_dates_it_by_what_its_view_shows(api):
+    row = ticket(api)
+    [mark] = asks(api, row["id"], "bot:finance")
+    answer = comment(api, row["id"], "Use the Chase feed.", ask=mark)["comment"]
+    assert jobs(api, "finance") == [answer["id"]]
+    assert "bot:finance" in sessions(api, row["id"]), "the asker the pinned answer woke, before its run is claimed"
+    # An agent's reply to another agent reaches it at its next turn (reason reply): not in that agent's session view,
+    # so it dates nothing there.
+    with api.app.state.store.transaction() as c:
+        theirs = H.task_comment(c, "bot:cpo", row["id"], "Starting on the refunds.")
+        c.execute("UPDATE messages SET session_agent_id='bot:cpo' WHERE id=?", (theirs["id"],))  # as its run's would be
+        reply = H.task_comment(c, "bot:ops", row["id"], "Thanks, noted.", in_reply_to=theirs["id"])
+    assert rows(
+        api, "SELECT reason FROM message_deliveries WHERE message_id=? AND recipient='bot:cpo'", reply["id"]
+    ) == [{"reason": "reply"}]
+    assert reply["id"] not in view(api, row["id"], session="bot:cpo")
+    assert sessions(api, row["id"])["bot:cpo"] == theirs["seq"]
+
+
 def test_two_agents_each_have_their_own_session_and_replay_skips_the_other(api):
     row = ticket(api)
     to_ops = comment(api, row["id"], "Ship the fix once the checks pass.", to="ops")["comment"]

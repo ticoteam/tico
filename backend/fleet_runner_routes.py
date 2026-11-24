@@ -1061,7 +1061,6 @@ def register_completion(
     auth,
     execution,
     mutate,
-    rule_comment_audience,
     rule_message_audience,
     rule_public,
     rule_target,
@@ -1155,10 +1154,6 @@ def register_completion(
         def task_update(c, bot, replay):
             return rule_update_audience(c, bot, M.TaskUpdate.model_validate(replay["body"]), task_row(c, bot, replay))
 
-        def comment(c, bot, replay):
-            body = M.TaskComment.model_validate(replay["body"])
-            return rule_comment_audience(c, bot, task_row(c, bot, replay), body.text)
-
         def comment_edit(c, bot, replay):
             body = M.TaskComment.model_validate(replay["body"])
             return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text)
@@ -1170,7 +1165,7 @@ def register_completion(
             "task_update": task_update,
             # A hand-off (task_owner) and the other v3 task writes count their own: backend/task_moves_routes.py.
             "bulk": task_update,
-            "comment": comment,
+            # A comment counts its own (task_comments_routes.comment_audience: its to, Reply, askers and @mentions).
             "comment_edit": comment_edit,
             "reply": reply_audience,
         }

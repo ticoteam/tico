@@ -1565,6 +1565,10 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
         check_refs(c, who, body.refs)
         body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
+        if conversation_id and str(to).startswith("bot:"):
+            # A message to an agent in a task's thread is a session message: only the task's own route writes one
+            # (`_no_task_to`), Send anyway's replay included, since it writes through here too.
+            _no_task_to(c, conversation_id, body)
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if (
             way == "defer"
