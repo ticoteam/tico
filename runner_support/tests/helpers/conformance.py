@@ -208,7 +208,13 @@ class Computer:
             self.process = subprocess.Popen(
                 command, cwd=ROOT, env=self.env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
             )
-        until(lambda: self.readiness().get("ops", {}).get("ready") or self.died(), "the runner's first heartbeat")
+        try:
+            until(lambda: self.readiness().get("ops", {}).get("ready") or self.died(), "the runner's first heartbeat")
+        except AssertionError as timed_out:
+            # The runner's own log says why it never got ready; without it a timeout here cannot be diagnosed.
+            raise AssertionError(
+                f"{timed_out}; readiness {self.readiness()}; runner log:\n{self.output.read_text()[-3000:]}"
+            ) from None
         assert not self.died(), self.output.read_text()[-3000:]
         assert self.readiness()["ops"]["ready"], self.readiness()["ops"]
         settled(self.api, self.registration)  # past the server's wake-up settle, so it is given work
