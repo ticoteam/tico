@@ -399,14 +399,19 @@ class HQ:
                 sizes.append(parse_size(row))
             except ValueError:
                 continue
-        caps = answer.get("caps") if isinstance(answer.get("caps"), dict) else {}
+        raw_caps = answer.get("caps")
+        caps: dict[Any, Any] = raw_caps if isinstance(raw_caps, dict) else {}
         budget = caps.get("daily_budget_usd")
         return {
             "machines": machines,
             "sizes": sizes,
             "caps": {
                 **{k: v for k, v in caps.items() if isinstance(k, str) and type(v) is int},
-                **({"daily_budget_usd": budget} if type(budget) in (int, float) and 0 <= budget <= 100_000 else {}),
+                **(
+                    {"daily_budget_usd": budget}
+                    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and 0 <= budget <= 100_000
+                    else {}
+                ),
             },
         }
 
@@ -2056,6 +2061,8 @@ class Manager:
         from .models import Claim
 
         current = row(c, SHARED)
+        if current is None:
+            return False
         if current["deleting"] or cloud_access.frozen(c) or current["problem"] == "out_of_credit":
             return False
         if (
@@ -2186,8 +2193,11 @@ class Manager:
             if not self.burst_launchable(c, workers, job, at):
                 return
             base = self.burst_base(c)
+            burst_entry: Any = job["burst"] if job else None
+            if not burst_entry:
+                return
             image = c.execute(
-                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (job["burst"]["runner_id"],)
+                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (burst_entry["runner_id"],)
             ).fetchone()
             live = (
                 compute_pool.candidate(c, self.execution, image, job=job, demand=True, company_paid=True)
@@ -2712,7 +2722,7 @@ class Manager:
                     and at >= current["enroll_by"]
                 )
                 launching = managed and current["burst_launch_at"] is not None and current["state"] in ON
-                timed_out = launching and at >= current["burst_launch_at"] + CREATE_HOLD
+                timed_out = launching and at >= (current["burst_launch_at"] or 0) + CREATE_HOLD
                 ready = launching and self.burst_ready(c, current, at)
             if not current["machine_id"]:
                 return None
@@ -3164,7 +3174,7 @@ class Manager:
             with self.store.transaction() as c:
                 live = row(c, key)
                 if not burst_key(key) or (live and live["machine_id"] == current["machine_id"]):
-                    if burst and live["burst_managed"]:
+                    if burst and live and live["burst_managed"]:
                         self.finish_burst_launch(c, live, at, failed=True)
                     deleted(c, live, H.TICO_ACTOR, replacing=not burst_key(key), execution=self.execution)
             return

@@ -5990,6 +5990,8 @@ class Execution:
         )
         wake = wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))
         if burst:
+            from . import cloud_machines
+
             wake["burst"] = True
             if cloud_machines.burst_managed(c, who.runner_id):
                 wake["burst_readiness"] = compute_pool.checkout_readiness(runner["readiness"], row["bot_id"])
