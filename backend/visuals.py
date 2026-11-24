@@ -753,10 +753,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
                 inline = full or a["kind"] in MEDIA
                 # A page or SVG Tico file hosting may show: an Open card until `_settle` finds its copy there.
                 hostable = (
-                    not inline
-                    and fid not in restricted_page_rows(c, [fid])
-                    and hosted is not None
-                    and here is not None
+                    not inline and fid not in restricted_page_rows(c, [fid]) and hosted is not None and here is not None
                 )
                 delegated = getattr(who, "task_actor", "")
                 src = (
