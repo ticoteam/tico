@@ -199,9 +199,9 @@ def reconnect_by(sub: Any) -> str | None:
     return None
 
 
-def expired(sub: Any) -> bool:
+def expired(sub: Any, *, codex: bool = False) -> bool:
     """A full login whose access token has run out (its refresh has failed for an hour): passed over until refreshed."""
-    if sub.get("kind") != KIND or not sub.get("access_expires_at"):
+    if sub.get("kind") not in ((KIND, plan_exits.CODEX_KIND) if codex else (KIND,)) or not sub.get("access_expires_at"):
         return False
     return sub["access_expires_at"] <= H.shift(H.now(), seconds=60)
 
@@ -313,7 +313,18 @@ def read_soon(c: Any, sid: str) -> None:
     """A new login's usage is read now, not on a computer's next 5-minute poll: each computer that can read it is told
     (a plan never read is due at once, `_wanted`)."""
     sub = _MS().row(c, sid)
-    _tell(c, [r["id"] for r, _ in _computers(c, sub, plan_exits.routed(c, sub)) if takes_turns(r) and _online(r)])
+    route = plan_exits.routed(c, sub)
+    codex = sub and sub["kind"] == plan_exits.CODEX_KIND
+    if codex and not route:
+        return
+    _tell(
+        c,
+        [
+            r["id"]
+            for r, _ in _computers(c, sub, route)
+            if (plan_exits.CODEX_CAPABILITY in _caps(r) if codex else takes_turns(r)) and _online(r)
+        ],
+    )
 
 
 def pushed(c: Any, sid: str) -> None:
@@ -359,6 +370,10 @@ def _lease(c: Any, sid: str) -> Row:
     )
 
 
+def refresh_pending(c: Any, sid: str) -> bool:
+    return bool(_lease(c, sid).get("lease_id"))
+
+
 def _put_lease(c: Any, sid: str, **fields: Any) -> None:
     now = H.now()
     c.execute(
@@ -370,6 +385,10 @@ def _put_lease(c: Any, sid: str, **fields: Any) -> None:
         f"UPDATE claude_logins SET {sets},updated_at=? WHERE subscription_id=?",
         (*fields.values(), now, sid),
     )
+
+
+def stamp_codex(c: Any, sid: str, value: str, now: str | None = None) -> None:
+    _put_lease(c, sid, access_expires_at=_MS().codex_access_expires(value), refreshed_at=now)
 
 
 def _backoff(failures: int) -> int:
@@ -411,22 +430,38 @@ def _value(c: Any, vault: Any, sub: Any, write: bool) -> str | None:
     return _MS().value_of(c, vault.cipher, sub)
 
 
-def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> list[Row]:
+def _upkeep_kinds(claude: bool, codex: bool) -> tuple[str, str]:
+    return (KIND if claude else "", plan_exits.CODEX_KIND if codex else "")
+
+
+def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row, kinds: tuple[str, str]) -> list[Row]:
     """The refreshes this computer is to make now, each with the plan's login: a lease it holds, or one it takes."""
     now = H.now()
     due = H.shift(now, seconds=REFRESH_BEFORE.total_seconds())
     out: list[Row] = []
     for sub in H._rows(
         c.execute(
-            f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' "
+            f"SELECT * FROM {_MS().SUBS} WHERE kind IN (?,?) AND status<>'needs_reconnect' "
             "AND (access_expires_at IS NULL OR access_expires_at<=?)",
-            (KIND, due),
+            (*kinds, due),
         )
     ):
         route = plan_exits.routed(c, sub, exits)
-        if route and route.runner_id != runner_id:
+        codex = sub["kind"] == plan_exits.CODEX_KIND
+        if (codex and not route) or (route and route.runner_id != runner_id):
             continue
         lease: Row = _lease(c, sub["id"])
+        if codex and not sub["access_expires_at"]:
+            value = _value(c, vault, sub, write)
+            if not value:
+                continue
+            expiry = _MS().codex_access_expires(value)
+            if expiry:
+                if not write:
+                    raise _Write
+                _put_lease(c, sub["id"], access_expires_at=expiry)
+                if expiry > due:
+                    continue
         quiet = ""
         computers = _computers(c, sub, route)
         if lease.get("lease_id"):
@@ -456,11 +491,23 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> l
                 quiet = lease["lease_runner"]
                 lease = {**lease, "lease_id": ""}
         if not lease.get("lease_id"):
+            if (
+                codex
+                and c.execute(
+                    "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+                    "WHERE s.subscription_id=? AND s.delivery<>'model_exit' AND a.state IN ('leased','running') "
+                    "AND NOT EXISTS (SELECT 1 FROM plan_exit_bindings b WHERE b.kind='attempt' AND b.ref_id=a.id "
+                    "AND s.delivery<>'shell') LIMIT 1",
+                    (sub["id"],),
+                ).fetchone()
+            ):
+                continue  # a direct hosted turn may still rotate the login it was handed
             if (lease.get("retry_at") or "") > now:
                 continue
-            others = [x for x in computers if x[0]["id"] != quiet and can_sign_in(x[0])]
-            if _chosen(others or computers, can_sign_in, lease.get("failures") or 0) != runner_id:
-                continue
+            if not codex:
+                others = [x for x in computers if x[0]["id"] != quiet and can_sign_in(x[0])]
+                if _chosen(others or computers, can_sign_in, lease.get("failures") or 0) != runner_id:
+                    continue
             if not write:
                 raise _Write
             lease = {"lease_id": H.new_id(), "lease_revision": sub["revision"]}
@@ -494,7 +541,15 @@ def _refreshes(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> l
         value = _value(c, vault, sub, write)
         if value is None:
             continue
-        out.append({"lease": lease["lease_id"], "subscription": sub["id"], "revision": sub["revision"], "value": value})
+        out.append(
+            {
+                "lease": lease["lease_id"],
+                "subscription": sub["id"],
+                "revision": sub["revision"],
+                "value": value,
+                **({"provider": "codex"} if codex else {}),
+            }
+        )
     return out
 
 
@@ -508,8 +563,9 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
     MS = _MS()
 
     sub = MS.row(c, sid)
-    if not sub or sub["kind"] != KIND:
-        raise Problem("not_found", "That plan is not a full Claude login", 404)
+    if not sub or sub["kind"] not in (KIND, plan_exits.CODEX_KIND):
+        raise Problem("not_found", "That plan has no managed login", 404)
+    codex = sub["kind"] == plan_exits.CODEX_KIND
     issued = H._one(
         c,
         "SELECT l.*,e.exit_generation FROM claude_login_leases l "
@@ -538,11 +594,26 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
             raise Problem("value", "A refreshed login carries its value", 422)
         if body.revision != sub["revision"]:
             return {"stored": False}
-        value, preview = MS.checked(KIND, body.value.get_secret_value())
-        if facts(value)["account"] != sub["account"]:
+        value, preview = MS.checked(sub["kind"], body.value.get_secret_value())
+        if codex:
+            old = MS.value_of(c, vault.cipher, sub)
+            before, after = MS.codex_access(old) if old else None, MS.codex_access(value)
+            refresh = json.loads(value)["tokens"].get("refresh_token")
+            if (
+                not before
+                or not after
+                or before["account_id"] != after["account_id"]
+                or not isinstance(refresh, str)
+                or not refresh
+                or (before == after and refresh == json.loads(old)["tokens"].get("refresh_token"))
+            ):
+                return {"stored": False}
+            stamp_codex(c, sid, value, now)
+        elif facts(value)["account"] != sub["account"]:
             return {"stored": False}
+        else:
+            stamp(c, sid, value, refreshed=True)
         MS.store_refreshed(c, vault, sub, value, preview, "runner:" + runner_id, now)
-        stamp(c, sid, value, refreshed=True)
         if sub["status"] == "needs_reconnect":
             # A late result after a lost lease brings the login back.
             c.execute("UPDATE model_subscriptions SET status='new',status_detail='',status_at=? WHERE id=?", (now, sid))
@@ -559,6 +630,8 @@ def refresh_result(c: Any, vault: Any, runner_id: str, sid: str, body: "RefreshR
         )
         H.event(c, "runner:" + runner_id, "subscription.refreshed", sid, {"revision": sub["revision"] + 1})
         pushed(c, sid)
+        if codex and plan_exits.enabled(c):
+            plan_exits.wake_payers(c, [sub["owner_id"].removeprefix("human:")])
         return {"stored": True, "revision": sub["revision"] + 1}
     if not holds or not any(r["id"] == runner_id for r, _ in _computers(c, sub, route)):
         return {"stored": False}
@@ -588,7 +661,11 @@ def gap(c: Any, attempt_id: str, runtime: str) -> bool:
 
     handed = MS.handed(c, attempt_id, runtime)
     sub = MS.row(c, handed["subscription_id"]) if handed else None
-    if not handed or not sub or sub["kind"] != KIND:
+    if (
+        not handed
+        or not sub
+        or (sub["kind"] != KIND and (sub["kind"] != plan_exits.CODEX_KIND or not plan_exits.enabled(c)))
+    ):
         return False
     attempt: Row = H._one(c, "SELECT job_id FROM attempts WHERE id=?", (attempt_id,)) or {}
     job: str = attempt.get("job_id") or ""
@@ -599,7 +676,7 @@ def gap(c: Any, attempt_id: str, runtime: str) -> bool:
         return False
     now = H.now()
     moved = sub["revision"] > handed["revision"]
-    leased = bool(_lease(c, sub["id"]).get("lease_id"))
+    leased = refresh_pending(c, sub["id"])
     recent = bool(sub["refreshed_at"]) and sub["refreshed_at"] > H.shift(now, seconds=-GAP_SECONDS)
     if not (moved or leased or recent):
         return False
@@ -632,7 +709,7 @@ PARKED_SQL = (
 
 
 def paid_parks(c: Any, bots: list[str], job: str | None = None) -> set[tuple[str, str]]:
-    """Queued jobs whose current Claude plan is still waiting for its refresh."""
+    """Queued jobs whose current plan is still waiting for its login refresh."""
     scope = "j.id=?" if job else f"j.bot_id IN ({','.join('?' * len(bots))})"
     return {
         (r[0], r[1])
@@ -654,7 +731,7 @@ def _live_plans(
     plans: list[tuple[LiveToken, Row, int | None]] = []
     for item in live[:MAX_LIVE]:
         sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (item.subscription,))
-        if not sub:
+        if not sub or sub["kind"] != KIND:
             continue
         route = plan_exits.for_turn(c, sub, runner_id, exits)
         if route is None or route.runner_id == runner_id:
@@ -701,7 +778,11 @@ def ask_usage(c: Any, sid: str, actor: str) -> Any:
     if not sub:
         raise Problem("not_found", "Subscription not found", 404)
     route = plan_exits.routed(c, sub)
-    ready = [r["id"] for r, _ in _computers(c, sub, route) if takes_turns(r) and _online(r)]
+    ready = (
+        ([route.runner_id] if route and route.runner_id and _online(plan_exits.selected(c, sub)) else [])
+        if sub["kind"] == plan_exits.CODEX_KIND
+        else [r["id"] for r, _ in _computers(c, sub, route) if takes_turns(r) and _online(r)]
+    )
     if not ready:
         if route:
             raise Problem("offline", "Waiting for the plan's exit computer", 409)
@@ -800,7 +881,7 @@ def _wanted(c: Any, sub: Row, schedule: Row, line: _Line) -> bool:
     return sub["id"] in line
 
 
-def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> list[Row]:
+def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row, kinds: tuple[str, str]) -> list[Row]:
     """The usage reads this computer is to make now, each with the plan's access token for this read only: one asked of
     it, or one due on the plan's schedule whose turn is this computer's."""
     now = H.now()
@@ -809,12 +890,13 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> 
     line = _Line(c, exits)
     for sub in H._rows(
         c.execute(
-            f"SELECT * FROM {_MS().SUBS} WHERE kind=? AND status<>'needs_reconnect' AND access_expires_at>?",
-            (KIND, fresh),
+            f"SELECT * FROM {_MS().SUBS} WHERE kind IN (?,?) AND status<>'needs_reconnect' AND access_expires_at>?",
+            (*kinds, fresh),
         )
     ):
         route = plan_exits.routed(c, sub, exits)
-        if route and route.runner_id != runner_id:
+        codex = sub["kind"] == plan_exits.CODEX_KIND
+        if (codex and not route) or (route and route.runner_id != runner_id):
             continue
         value = _usage_meta(c, sub["id"])
         request: Row = value.get("request") or {}
@@ -836,7 +918,11 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> 
             schedule: Row = value.get("schedule") or {}
             if (schedule.get("next_at") or "") > now or not _wanted(c, sub, schedule, line):
                 continue
-            if _chosen(computers, lambda r: takes_turns(r) and _online(r), schedule.get("failures") or 0) != runner_id:
+            if (
+                not codex
+                and _chosen(computers, lambda r: takes_turns(r) and _online(r), schedule.get("failures") or 0)
+                != runner_id
+            ):
                 continue
             if not write:
                 raise _Write
@@ -847,12 +933,18 @@ def _usage_jobs(c: Any, vault: Any, runner_id: str, write: bool, exits: Row) -> 
         secret = _value(c, vault, sub, write)
         if secret is None:
             continue
+        if codex:
+            if not (access := _MS().codex_access(secret)):
+                continue
+            auth = {"provider": "codex", "token": access["access_token"], "account_id": access["account_id"]}
+        else:
+            auth = {"token": json.loads(secret)["claudeAiOauth"]["accessToken"]}
         out.append(
             {
                 "id": request["id"],
                 "subscription": sub["id"],
                 "revision": sub["revision"],
-                "token": json.loads(secret)["claudeAiOauth"]["accessToken"],
+                **auth,
             }
         )
     return out
@@ -942,11 +1034,12 @@ def usage_result(c: Any, runner_id: str, sid: str, body: "UsageResult") -> Any:
 
             LH: Any = login_holds
             login: str = LH.subscription_login(sid)
-            held: dict[str, Any] = LH.get(c, "", login, "claude")
+            runtime = plan_exits.provider(sub)
+            held: dict[str, Any] = LH.get(c, "", login, runtime)
             # Only a read asked after the refusal: one already out says nothing of the plan since.
             if held and LH.payment(held.get("error")) and request["requested_at"] >= (held.get("since") or ""):
                 # The plan answers again (it was paid): its next turn tries it now rather than at the next wait's end.
-                LH.try_now(c, "", login, "claude", now)
+                LH.try_now(c, "", login, runtime, now)
     else:
         failures = (schedule.get("failures") or 0) + 1
         wait = _backoff(failures)
@@ -1021,7 +1114,9 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
     """A computer's poll: the access tokens its running turns need, the refreshes and usage reads it is to make. With
     `write` False, on a read snapshot: the same answer when it writes nothing, else `_Write` before any change."""
     runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()
-    if not takes_turns(runner):
+    claude = takes_turns(runner)
+    codex = bool(runner and plan_exits.CODEX_CAPABILITY in _caps(runner) and plan_exits.enabled(c))
+    if not (claude or codex):
         return {"tokens": [], "refreshes": [], "usage": []}
     # What the computer's turns hold now: their record moves with it, so a later refusal is judged against the token
     # they really had (`gap`).
@@ -1048,8 +1143,10 @@ def poll(c: Any, vault: Any, runner_id: str, body: "Poll", write: bool = True) -
             tokens.append({"subscription": sub["id"], "revision": sub["revision"], "value": turn_file(value)})
     return {
         "tokens": tokens,
-        "refreshes": _refreshes(c, vault, runner_id, write, exits) if can_sign_in(runner) else [],
-        "usage": _usage_jobs(c, vault, runner_id, write, exits),
+        "refreshes": _refreshes(c, vault, runner_id, write, exits, _upkeep_kinds(can_sign_in(runner), codex))
+        if can_sign_in(runner) or codex
+        else [],
+        "usage": _usage_jobs(c, vault, runner_id, write, exits, _upkeep_kinds(claude, codex)),
     }
 
 

@@ -34,12 +34,15 @@ retired, Tico picks the next eligible personal computer.
 Use `tico subscription exit <person>` to read the setting and `tico subscription set-exit <person> <computer-id>`
 to change it.
 
-Company admins can enable Claude plan routing and exit-only upkeep together with
+Company admins can enable Claude and ChatGPT plan routing with exit-only upkeep using
 `tico settings plan-exit-routing on`. The company setting starts off and enabling it requires a healthy screen relay.
-A Claude turn on another personal computer then uses the selected exit's model link. If the link is down,
+A Claude Code or Codex turn on another personal computer then uses the selected exit's model link. If the link is down,
 the turn shows **Waiting for** followed by the exit computer's name. It can be claimed again when the link returns.
-Both computers need current runners. Turns on the exit itself, cloud and hosted computers, ChatGPT plans, and API keys use
-direct delivery. Full Claude logins also run direct when the selected exit is a Mac. Claude keeps the login in
+Both computers need current runners. Codex routing requires Codex 0.170.0 or later on both computers. Turns on the exit itself,
+cloud and hosted computers, and turns on API keys send model requests directly.
+A routed Codex turn uses a temporary login that only works with its runner's loopback relay.
+To use the plan from a shell on another personal computer, start a separate Tico turn.
+Full Claude logins also run direct when the selected exit is a Mac. Claude keeps the login in
 the Mac's keychain, where the exit runner can't refresh a separate copy from a file. Claude setup tokens can
 route through any selected exit.
 
@@ -638,7 +641,7 @@ The rest of this page is for administrators and integrators: where readings come
 
 Weekly reports are scoped to a Computer, profile and runtime. Codex reports its seven-day window when its running host emits one. Claude Code may report the seven-day reset and limit state without a percentage; that percentage stays unknown. No API calls or token-to-percentage estimates are used to invent a provider balance. Usage elsewhere on the same provider account counts toward that allowance.
 
-The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh Codex weekly usage directly; other providers need a supported subscription-backed run or a manual reading. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → General → Health → Details** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
+The last provider report includes its observation time and reset. Reports older than a day are labelled as possibly out of date. After reset they stay labelled as the previous week and never read as a fresh allowance. Reports survive a runner restart on the server. An updated computer can refresh its Codex login’s weekly usage directly. For a routed ChatGPT plan, the exit reads its weekly and 5-hour usage. An unnamed computer-default login has no named subscription snapshot; it remains unknown rather than being assigned to another profile. When that default login keeps stopping on a usage limit, **Settings → General → Health → Details** says it is out of quota ([Check health](health-monitor.md), `default_login_limited`).
 
 Computers report the account each login is signed in to: email, plan and organization from `claude auth status --json`, and email and plan from Codex app-server's `account/read`, always requested with `refreshToken: false`. A Codex turn's or refresh's `planType` keeps the plan current. This deliberately reverses the earlier rule that Tico kept no account records: it is the first stored account identity, so the page can show which account each Computer and profile uses (`signed in as <email> · <plan>`). Credential files and `codex login status` output are never read for it, only allow-listed fields are kept, and a value that looks like a key or token is dropped on the computer and refused by the server, without affecting the sign-in state. The account is read alongside the existing one-minute sign-in probe; Codex's app-server read runs in the background at most every ten minutes. A signed-out login shows no account. An account stays one login's report: two profiles that show the same email are not merged.
 

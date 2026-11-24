@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::client::Client;
 use crate::util::text_of;
@@ -262,6 +262,10 @@ impl Vault {
         let Some(exit) = &self.model_exit else {
             return Ok(());
         };
+        if exit.provider == crate::model_exit::Provider::Codex {
+            bypass_loopback_proxy(env);
+            return Ok(()); // Codex uses its per-attempt subscription home (hosts/codex.rs).
+        }
         let home = crate::model_subscriptions::ClaudeConfig::new(state, env)?;
         env.retain(|key, _| !competing_claude_env(key));
         env.insert("CLAUDE_CONFIG_DIR".into(), home.path.display().to_string());
@@ -271,21 +275,7 @@ impl Vault {
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
             "1".into(),
         );
-        let inherited = env
-            .get("NO_PROXY")
-            .or_else(|| env.get("no_proxy"))
-            .cloned()
-            .unwrap_or_default();
-        for key in ["NO_PROXY", "no_proxy"] {
-            let bypass = env.entry(key.into()).or_insert_with(|| inherited.clone());
-            if bypass.trim() == "*" {
-                continue;
-            }
-            if !bypass.is_empty() {
-                bypass.push(',');
-            }
-            bypass.push_str("127.0.0.1,localhost,::1");
-        }
+        bypass_loopback_proxy(env);
         self.model_exit_home = Some(home);
         Ok(())
     }
@@ -450,6 +440,28 @@ fn competing_claude_env(key: &str) -> bool {
         )
 }
 
+fn bypass_loopback_proxy(env: &mut Env) {
+    let inherited = env
+        .get("NO_PROXY")
+        .or_else(|| env.get("no_proxy"))
+        .cloned()
+        .unwrap_or_default();
+    for key in ["NO_PROXY", "no_proxy"] {
+        let bypass = env.entry(key.into()).or_insert_with(|| inherited.clone());
+        if bypass.trim() == "*" {
+            continue;
+        }
+        if !bypass.is_empty() {
+            bypass.push(',');
+        }
+        bypass.push_str("127.0.0.1,localhost,::1");
+    }
+}
+
+pub(crate) fn competing_codex_env(key: &str) -> bool {
+    key.starts_with("OPENAI_") || key.starts_with("CODEX_") || key.starts_with("CHATGPT_")
+}
+
 fn matching_credential(
     credential: &Value,
     expected: &Value,
@@ -515,8 +527,12 @@ async fn environment_from(
             .into_iter()
             .flatten()
             .filter(|item| {
-                model_exit.is_none()
-                    || !competing_claude_env(item["env"].as_str().unwrap_or_default())
+                let key = item["env"].as_str().unwrap_or_default();
+                match model_exit.and_then(|entry| entry["runtime"].as_str()) {
+                    Some("claude") => !competing_claude_env(key),
+                    Some("codex") => !competing_codex_env(key),
+                    _ => true,
+                }
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -650,14 +666,13 @@ async fn environment_from(
             .as_u64()
             .filter(|g| *g > 0)
             .ok_or(PAYER_UNAVAILABLE)?;
-        if attempt["config"]["runtime"] != "claude"
-            || entry["runtime"] != "claude"
-            || !matches!(
-                entry["kind"].as_str(),
-                Some("claude_token" | "claude_login")
-            )
-            || !vault.subscriptions.is_empty()
-        {
+        use crate::model_exit::Provider;
+        let provider = match (entry["runtime"].as_str(), entry["kind"].as_str()) {
+            (Some("claude"), Some("claude_token" | "claude_login")) => Provider::Claude,
+            (Some("codex"), Some("codex_login")) => Provider::Codex,
+            _ => return Err(PAYER_UNAVAILABLE.into()),
+        };
+        if attempt["config"]["runtime"] != entry["runtime"] || !vault.subscriptions.is_empty() {
             return Err(PAYER_UNAVAILABLE.into());
         }
         let uid = vault
@@ -666,18 +681,22 @@ async fn environment_from(
             .map(|user| user.identity())
             .or_else(crate::isolation::identity)
             .map(|(uid, _)| uid);
-        let exit = crate::model_exit::start(
-            hub.clone(),
-            id.into(),
-            generation,
-            crate::model_exit::Provider::Claude,
-            uid,
-        )
-        .await
-        .map_err(|e| format!("Cannot start the plan exit listener: {e}"))?;
+        let exit = crate::model_exit::start(hub.clone(), id.into(), generation, provider, uid)
+            .await
+            .map_err(|e| format!("Cannot start the plan exit listener: {e}"))?;
         let mut projected = entry.clone();
-        projected["value"] = Value::String(exit.token.clone());
-        projected["env"] = Value::String("CLAUDE_CODE_OAUTH_TOKEN".into());
+        if provider == Provider::Codex {
+            projected["source"] = json!("attempt");
+            projected["file"] = json!("auth.json");
+            projected["value"] = json!(json!({
+                "auth_mode": "chatgptAuthTokens",
+                "tokens": {"access_token": exit.token, "account_id": "tico-exit"},
+            })
+            .to_string());
+        } else {
+            projected["value"] = json!(exit.token);
+            projected["env"] = json!("CLAUDE_CODE_OAUTH_TOKEN");
+        }
         vault.subscriptions = crate::model_subscriptions::apply(
             ctx.state_dir,
             &Value::Array(vec![projected]),

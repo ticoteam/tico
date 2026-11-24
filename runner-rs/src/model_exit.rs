@@ -25,6 +25,7 @@ use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
 pub const CAPABILITY: &str = "model_exit_v1";
 pub const CLAUDE_CAPABILITY: &str = "model_exit_claude_v1";
+pub const CODEX_CAPABILITY: &str = "model_exit_codex_v1";
 const TIME: Duration = Duration::from_secs(25);
 const BODY: usize = 32 * 1024 * 1024;
 const BUDGET_WAIT: Duration = Duration::from_millis(250);
@@ -51,7 +52,7 @@ async fn reserve_body(
         .map_err(|_| BUSY)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Provider {
     Claude,
     Codex,
@@ -80,12 +81,27 @@ impl Provider {
             (Self::Codex, "/backend-api/codex/responses") => {
                 Some("https://chatgpt.com/backend-api/codex/responses")
             }
+            (Self::Codex, "/backend-api/codex/responses/compact") => {
+                Some("https://chatgpt.com/backend-api/codex/responses/compact")
+            }
             _ => None,
         }
     }
 }
 
+pub const CODEX_PROVIDER: &str = "tico_exit";
+
+fn codex_token(nonce: &str) -> String {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let claims = serde_json::json!({"nonce": nonce, "email": "placeholder@example.invalid"});
+    format!(
+        "eyJhbGciOiJub25lIn0.{}.cGxhY2Vob2xkZXI",
+        URL_SAFE_NO_PAD.encode(claims.to_string())
+    )
+}
+
 pub struct Local {
+    pub provider: Provider,
     pub url: String,
     pub token: String,
     transport: Arc<ModelTransport>,
@@ -110,6 +126,7 @@ impl Local {
         let (shutdown, stopping) = oneshot::channel();
         Self {
             url: "http://127.0.0.1:34567".into(),
+            provider: Provider::Claude,
             token: turn_token(),
             transport: Arc::default(),
             shutdown: Some(shutdown),
@@ -138,7 +155,10 @@ pub async fn start(
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let authority = listener.local_addr()?.to_string();
     let url = format!("http://{authority}");
-    let token = turn_token();
+    let mut token = turn_token();
+    if provider == Provider::Codex {
+        token = codex_token(&token);
+    }
     let transport = Arc::new(ModelTransport::default());
     let turn = Arc::new(Turn {
         client,
@@ -169,6 +189,7 @@ pub async fn start(
         calls.shutdown().await;
     });
     Ok(Local {
+        provider,
         url,
         token,
         transport,
@@ -199,7 +220,13 @@ struct ModelTransportState {
 
 impl ModelTransport {
     fn request(&self, path: &str) -> Option<ModelRequest<'_>> {
-        if !matches!(path, "/v1/messages" | "/v1/messages?beta=true") {
+        if !matches!(
+            path,
+            "/v1/messages"
+                | "/v1/messages?beta=true"
+                | "/backend-api/codex/responses"
+                | "/backend-api/codex/responses/compact"
+        ) {
             return None;
         }
         let mut state = self.0.lock().unwrap();
@@ -297,7 +324,13 @@ impl<'a> Request<'a> {
     fn protocol_headers(&self, provider: Provider) -> HeaderMap {
         let names: &[&str] = match provider {
             Provider::Claude => &["anthropic-version", "anthropic-beta"],
-            Provider::Codex => &["openai-beta", "originator", "session_id", "conversation_id"],
+            Provider::Codex => &[
+                "openai-beta",
+                "originator",
+                "session_id",
+                "conversation_id",
+                "x-codex-turn-state",
+            ],
         };
         ["content-type", "accept"]
             .into_iter()

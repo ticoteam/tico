@@ -5876,7 +5876,7 @@ class Execution:
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         if "codex" in paid_tools and handed[0] != "codex" and agent_subscriptions.CAPABILITY in caps:
             shell = agent_subscriptions.resolve(c, bot, "codex", "", enforce_live_limit=False)
-            if shell and shell.subscription and model_subscriptions.for_shell(shell.subscription):
+            if shell and shell.subscription and model_subscriptions.for_shell(c, shell.subscription, runner["id"]):
                 subscribed.append({"runtime": "codex", "subscription": shell.subscription, "delivery": "shell"})
         # Its tier (Medium unless its bot.yaml `gateway:` says otherwise) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot_id"], followed)

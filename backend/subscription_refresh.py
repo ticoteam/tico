@@ -240,7 +240,10 @@ def request_plan_read(c, sid, actor):
     sub = MS.row(c, sid)
     if not sub:
         raise Problem('not_found', 'Subscription not found', 404)
-    if sub['kind'] == 'claude_login' and sub['status'] != 'needs_reconnect':
+    routed_codex = sub['kind'] == plan_exits.CODEX_KIND and plan_exits.selected(c, sub)
+    if routed_codex and sub['status'] == 'needs_reconnect':
+        raise Problem('signed_out', 'Sign in again before reading this plan', 409)
+    if (sub['kind'] == 'claude_login' or routed_codex) and sub['status'] != 'needs_reconnect':
         from . import claude_login
 
         # A full login's usage is read from its computers with its access token (claude_login.ask_usage).

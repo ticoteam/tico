@@ -687,7 +687,7 @@ SEAT = (
 # `tico settings ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
 @tool(
     "tico_settings_plan_exit_routing",
-    "Read or change company Claude plan exit routing. Only the company owner and admins.",
+    "Read or change company Claude and ChatGPT plan exit routing. Only the company owner and admins.",
     {"mode": {"type": "string", "enum": ["on", "off"], "description": "Enable or disable routing. Omit to read."}},
     writes=True,
 )
@@ -703,7 +703,7 @@ SETTINGS = (
     Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
     Command(
         "settings plan-exit-routing",
-        "read or change company Claude plan exit routing (admin)",
+        "read or change company Claude and ChatGPT plan exit routing (admin)",
         args=(Arg("mode", positional=True, nargs="?"),),
         example="tico settings plan-exit-routing on",
     ),

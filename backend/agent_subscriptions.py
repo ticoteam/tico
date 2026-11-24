@@ -297,7 +297,16 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             (*batch, *batch, PLAN_PREFIX),
         ):
             result.candidates.setdefault((row["bot"], row["runtime"]), []).append(dict(row))
-        if any(row["kind"] == "claude_login" for bot in batch for row in result.candidates.get((bot, "claude"), [])):
+        if any(
+            row["kind"] == "claude_login" for bot in batch for row in result.candidates.get((bot, "claude"), [])
+        ) or (
+            plan_exits.enabled(c)
+            and any(
+                row["kind"] == plan_exits.CODEX_KIND
+                for bot in batch
+                for row in result.candidates.get((bot, "codex"), [])
+            )
+        ):
             result.parked.update(claude_login.paid_parks(c, batch, job))
     return result
 
@@ -457,13 +466,21 @@ def for_runner(
         return Payment(
             None, f"Update {MS.RUNTIME_LABELS[runtime]} on {runner['label'] or 'this computer'}", update=True
         )
-    if (route := plan_exits.for_turn(c, sub, runner["id"])) and route.runner_id != runner["id"]:
-        if not {plan_exits.MODEL_CAPABILITY, plan_exits.CLAUDE_CAPABILITY}.issubset(caps):
+    route = plan_exits.for_turn(c, sub, runner["id"])
+    if route and sub["kind"] == plan_exits.CODEX_KIND and not plan_exits.carries(runner, sub):
+        return Payment(None, f"Update Codex and Tico on {runner['label'] or 'this computer'}", update=True)
+    if route and route.runner_id != runner["id"]:
+        if plan_exits.MODEL_CAPABILITY not in caps or not plan_exits.carries(runner, sub):
             return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
         if not plan_exits.remotely_ready(c, sub, route):
             exit_computer = plan_exits.selected(c, sub)
             return Payment(None, plan_exits.waiting(exit_computer), exit_computer=exit_computer)
         return replace(payment, delivery="model_exit")
+    if route is None and sub["kind"] == plan_exits.CODEX_KIND and plan_exits.selected(c, sub):
+        from . import claude_login
+
+        if claude_login.refresh_pending(c, sub["id"]):
+            return Payment(None, f"{sub['name']}: refreshing sign-in")
     if per_turn:
         return payment
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):

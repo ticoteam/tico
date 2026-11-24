@@ -227,14 +227,18 @@ def _keep_value(c, vault, sub, value, preview, actor, now):
     return cid
 
 
-def _jwt_email(token):
-    """The email in a ChatGPT login's id_token, for the list's preview only. Not verified."""
+def _jwt_claims(token):
+    """Unverified claims used for display and refresh scheduling."""
     try:
         part = str(token).split(".")[1]
         claims = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
     except (IndexError, ValueError, TypeError):
-        return ""
-    email = claims.get("email") if isinstance(claims, dict) else ""
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def _jwt_email(token):
+    email = _jwt_claims(token).get("email")
     return email if isinstance(email, str) and "@" in email and len(email) <= 200 else ""
 
 
@@ -245,8 +249,10 @@ def _codex_login(text):
     except ValueError:
         value = None
     tokens = value.get("tokens") if isinstance(value, dict) else None
-    if not isinstance(tokens, dict) or not any(
-        isinstance(tokens.get(k), str) and tokens[k] for k in ("refresh_token", "access_token")
+    if (
+        not isinstance(value, dict)
+        or not isinstance(tokens, dict)
+        or not any(isinstance(tokens.get(k), str) and tokens[k] for k in ("refresh_token", "access_token"))
     ):
         raise Problem(
             "secret",
@@ -254,6 +260,24 @@ def _codex_login(text):
             422,
         )
     return value
+
+
+def codex_access(value):
+    tokens = _codex_login(value)["tokens"]
+    access, account = tokens.get("access_token"), tokens.get("account_id")
+    if not account:
+        claims = _jwt_claims(access).get("https://api.openai.com/auth")
+        account = claims.get("chatgpt_account_id") if isinstance(claims, dict) else None
+    if not isinstance(access, str) or not access or not isinstance(account, str) or not account:
+        return None
+    return {"access_token": access, "account_id": account}
+
+
+def codex_access_expires(value):
+    exp = _jwt_claims(json.loads(value)["tokens"].get("access_token")).get("exp")
+    if isinstance(exp, int) and 0 < exp < 253402300800:
+        return datetime.fromtimestamp(exp, timezone.utc).isoformat().replace("+00:00", "Z")
+    return None
 
 
 def _antigravity_login(text):
@@ -420,10 +444,10 @@ def _given_rows(c, runner_ids=None):
     only = f" AND g.runner_id IN ({','.join('?' * len(runner_ids))})" if runner_ids is not None else ""
     for r in c.execute(
         "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-        "s.status,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only + " ORDER BY g.rowid",
+        "s.status,s.owner_id,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only + " ORDER BY g.rowid",
         list(runner_ids or ()),
     ):
-        sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
+        sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "owner_id", "access_expires_at")}
         if r["person"]:
             sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
             people.add(r["person"])
@@ -495,17 +519,27 @@ def _hold_end(c, sid, runtime, loads=None):
     return login_holds.get(c, "", login_holds.subscription_login(sid), runtime, loads).get("until") or ""
 
 
-def available(c, sub, runtime, loads=None):
-    """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
-    of that runtime, and, for a full Claude login, with an access token that has not run out (its refresh is late)."""
+def _expired(c, sub, runtime, exits=None):
     from . import claude_login
 
+    codex = runtime == "codex" and plan_exits.enabled(c)
+    if not claude_login.expired(sub, codex=codex):
+        return False
+    if codex:
+        selected = plan_exits.selected(c, sub, exits)
+        return bool(selected and selected["id"])
+    return True
+
+
+def available(c, sub, runtime, loads=None, *, exits=None):
+    """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
+    of that runtime, with a current access token for logins whose refresh is managed by Tico."""
     return (
         bool(sub)
         and bool(sub.get("id"))
         and sub["status"] != "needs_reconnect"
         and KINDS.get(sub["kind"], {}).get("runtime") == runtime
-        and not claude_login.expired(sub)
+        and not _expired(c, sub, runtime, exits)
         and not _held(c, sub["id"], runtime, loads)
     )
 
@@ -729,7 +763,6 @@ def plan_hold(c, runner_id, runtime, loads=None):
     {"person", "name"} for the plan owner's plans in turn when the owner has another plan for the runtime with usage
     left (the computer moves between them by itself, `settle`), {"plan", "name"} for another plan with usage left, or
     None when no plan has any."""
-    from . import claude_login
     from . import login_holds
 
     given = loads.given if loads is not None else _given(c)
@@ -748,7 +781,7 @@ def plan_hold(c, runner_id, runtime, loads=None):
         if not sub.get("id") or sub.get("status") == "needs_reconnect" or not _held(c, sub["id"], runtime, loads):
             return None
         first, owner, mine = sub, (row(c, sub["id"]) or {}).get("owner_id") or "", {sub["id"]}
-        stuck = [sub] if claude_login.expired(sub) else []
+        stuck = [sub] if _expired(c, sub, runtime) else []
     hold = login_holds.get(c, "", login_holds.subscription_login(first["id"]), runtime, loads)
     kind = login_holds.window(hold.get("error") or "")
     others = [
@@ -1115,7 +1148,7 @@ def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, *, routing):
         c.execute(
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
             "JOIN model_subscriptions m ON m.id=s.subscription_id "
-            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id AND s.runtime='claude' "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id AND s.delivery<>'shell' "
             "LEFT JOIN registry_metadata r ON r.key=? || s.subscription_id "
             "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
             "AND a.created_at>=m.credential_at "
@@ -1203,6 +1236,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
         if not route and g["runtime"] == runtime and g["runner_id"] in runners
     ]
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
+    if not route and sub["kind"] == plan_exits.CODEX_KIND and (meta.get("request") or {}).get("kind") == "oauth_usage":
+        meta = {k: v for k, v in meta.items() if k not in ("reading", "five_hour", "request")}
     turn_weekly, turn_five_hour = (
         meta.get(field)
         if meta.get(field + "_exit") is None
@@ -1278,7 +1313,7 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     since = _at(sub["credential_at"] or sub["created_at"])
     for reading, window, label in (
         (SR.plan_reading(meta), "weekly", "week"),
-        (meta.get("five_hour") if sub["kind"] == "claude_login" else None, "five_hour", "5h"),
+        (meta.get("five_hour") if sub["kind"] == "claude_login" or route else None, "five_hour", "5h"),
         (turn_weekly, "weekly", "week"),
         (turn_five_hour, "five_hour", "5h"),
     ):
@@ -1328,7 +1363,7 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
                     )
     extra = {
         **({"models": models} if models else {}),
-        **({"near": True} if sub["kind"] == "claude_login" and claude_login.near(meta) else {}),
+        **({"near": True} if (sub["kind"] == "claude_login" or route) and claude_login.near(meta) else {}),
     }
     if best:
         used, _, label, resets = best
@@ -1402,6 +1437,7 @@ def view(c, sub, ctx=None):
 
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
+    runtime = spec.get("runtime", "")
     computers = [g["runner_id"] for g in ctx["grants"].get(sub["id"], [])]
     added = _person(c, ctx, sub["added_by"])
     owner = _person(c, ctx, sub["owner_id"]) if sub.get("owner_id") else {}
@@ -1410,7 +1446,7 @@ def view(c, sub, ctx=None):
         "name": sub["name"],
         "kind": sub["kind"],
         **({"max_live_turns": sub["max_live_turns"]} if owned(sub["kind"]) else {}),
-        "runtime": spec.get("runtime", ""),
+        "runtime": runtime,
         "label": spec.get("label", sub["kind"]),
         "status": sub["status"],
         "status_detail": sub["status_detail"],
@@ -1421,8 +1457,8 @@ def view(c, sub, ctx=None):
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
         "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
-        "available": available(c, sub, spec.get("runtime", ""), SimpleNamespace(holds=ctx["holds"])),
-        "expired": claude_login.expired(sub),
+        "available": available(c, sub, runtime, SimpleNamespace(holds=ctx["holds"]), exits=ctx["exits"]),
+        "expired": _expired(c, sub, runtime, ctx["exits"]),
         # A full login runs out about a month after its sign-in: when to reconnect, shown a few days before.
         "reconnect_by": claude_login.reconnect_by(sub),
         "added_by": sub["added_by"],
@@ -2126,15 +2162,18 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
                 drop_credential(c, retired)
             # A new value may be another account, or no longer a full login: the old one's account, times and lease go.
             claude_login.drop(c, sid)
+            codex_upkeep = kind == plan_exits.CODEX_KIND and plan_exits.enabled(c)
             if kind == "claude_login":
                 claude_login.stamp(c, sid, value)
+            elif codex_upkeep:
+                claude_login.stamp_codex(c, sid, value)
             # A replacement may be another account. Release its usage hold for a probe and restart its own runs.
             from . import login_holds
 
             login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
             stopped = sum(quarantine_stops.restart(c, a, f"{sub['name']} was reconnected") for a in paid_attempts)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
-            if kind == "claude_login":
+            if kind == "claude_login" or codex_upkeep:
                 claude_login.read_soon(c, sid)
             _follow(c, settings, who.actor, sub["owner_id"])
             return view(c, row(c, sid))
@@ -2169,12 +2208,15 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
         from .plan_exits import ensure_default
 
         ensure_default(c, H.actor_id(owner))
+    codex_upkeep = body.kind == plan_exits.CODEX_KIND and plan_exits.enabled(c)
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
+    elif codex_upkeep:
+        claude_login.stamp_codex(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     if admin:
         _tick_provider(c, settings, who.actor, body.kind)
-    if body.kind == "claude_login":
+    if body.kind == "claude_login" or codex_upkeep:
         claude_login.read_soon(c, sid)
     _follow(c, settings, who.actor, owner)
     return view(c, row(c, sid))
@@ -2701,10 +2743,18 @@ def for_claim(c, runner, config, loads=None, *, bot, enforce_live_limit=True):
     return []
 
 
-def for_shell(sub):
+def for_shell(c, sub, runner_id):
     """A shell can use the agent's ChatGPT plan in its own CLI home."""
+    from . import claude_login
+
     spec = KINDS.get(sub.get("kind")) or {}
-    return spec.get("runtime") == "codex" and spec.get("billing") == "subscription" and bool(spec.get("file"))
+    return (
+        spec.get("runtime") == "codex"
+        and spec.get("billing") == "subscription"
+        and bool(spec.get("file"))
+        and plan_exits.for_turn(c, sub, runner_id) is None
+        and not (plan_exits.selected(c, sub) and claude_login.refresh_pending(c, sub["id"]))
+    )
 
 
 def hand_out(c, attempt_id, chosen, runner_id):
@@ -2781,9 +2831,9 @@ def payer_readable(c, sub):
 
 def _leased_payer(c, runner_id, attempt_id, delivery):
     return c.execute(
-        "SELECT s.runtime,s.subscription_id,s.revision,r.capabilities,e.exit_generation FROM attempt_subscriptions s "
+        "SELECT s.runtime,s.subscription_id,s.revision,r.capabilities,r.readiness,e.exit_generation FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id JOIN runners_with_state r ON r.id=a.runner_id "
-        "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.runtime='claude' "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.delivery<>'shell' "
         "JOIN assignments x ON x.bot=a.bot_id AND x.runner_id=a.runner_id AND x.generation=a.generation "
         "LEFT JOIN credential_grants parent ON parent.id=s.parent_grant "
         "LEFT JOIN bot_config bc ON bc.bot=a.bot_id "
@@ -2811,9 +2861,8 @@ def model_exit_payer(c, runner_id, attempt_id, generation=None):
     sub = _lease_subscription(c, given)
     if (
         sub
-        and {plan_exits.MODEL_CAPABILITY, plan_exits.CLAUDE_CAPABILITY}.issubset(
-            H._json(given["capabilities"], []) or []
-        )
+        and plan_exits.MODEL_CAPABILITY in (H._json(given["capabilities"], []) or [])
+        and plan_exits.carries(given, sub)
         and (route := plan_exits.for_turn(c, sub, runner_id))
         and route.runner_id not in (None, runner_id)
         and route.generation == given["exit_generation"]
@@ -2831,6 +2880,8 @@ def model_exit_credential(c, vault, sub):
     if sub["kind"] == "claude_token":
         return {"access_token": value}
     try:
+        if sub["kind"] == plan_exits.CODEX_KIND:
+            return codex_access(value)
         return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
     except Problem:
         return None
@@ -2866,6 +2917,12 @@ def _direct_payer(c, runner_id, given, sub):
 def _lease_value(c, vault, given, sub):
     if not (value := open_payer(c, vault.cipher, sub)):
         return None
+    payload = delivered(sub["kind"], value)
+    if sub["kind"] == plan_exits.CODEX_KIND and given["exit_generation"] is not None:
+        if not plan_exits.carries(given, sub) or not (access := codex_access(value)):
+            return None
+        # A managed turn can sign in but cannot rotate the plan's refresh token.
+        payload["value"] = json.dumps({"tokens": access, "auth_mode": "chatgptAuthTokens"})
     return {
         "id": sub["id"],
         "runtime": given["runtime"],
@@ -2873,7 +2930,7 @@ def _lease_value(c, vault, given, sub):
         "name": sub["name"],
         "revision": sub["revision"],
         "billing": KINDS[sub["kind"]]["billing"],
-        **delivered(sub["kind"], value),
+        **payload,
     }
 
 
@@ -2888,7 +2945,12 @@ def claim_credential(c, vault, runner_id, attempt_id, delivery="claim"):
     if not given or CAPABILITY not in caps:
         return None
     sub = _lease_subscription(c, given)
-    if not sub or not carries(sub["kind"], caps) or not _direct_payer(c, runner_id, given, sub):
+    if (
+        not sub
+        or not carries(sub["kind"], caps)
+        or not _direct_payer(c, runner_id, given, sub)
+        or (delivery == "shell" and not for_shell(c, sub, runner_id))
+    ):
         return None
     return _lease_value(c, vault, given, sub)
 
@@ -2946,6 +3008,9 @@ def refreshed(c, vault, who, body):
         or (not given["delivery"] and not still_given(c, who.runner_id, given["runtime"], sub["id"]))
     ):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
+    route = plan_exits.for_turn(c, sub, who.runner_id)
+    if route:
+        return {"stored": False}  # only the exit's refresh lease can update a managed turn
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
     if given["delivery"] == "legacy" and payer_refusal(c, who.runner_id, body.attempt, "legacy"):
@@ -2958,14 +3023,16 @@ def refreshed(c, vault, who, body):
     if value == json.dumps(old, separators=(",", ":")):
         return {"stored": False}
     now = H.now()
-    c.execute(
-        "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
-        (_keep_value(c, vault, sub, value, preview, who.actor, now), preview, now, sub["id"]),
-    )
+    store_refreshed(c, vault, sub, value, preview, who.actor, now)
     c.execute(
         "UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
         (sub["revision"] + 1, body.attempt, given["runtime"]),
     )
+    if plan_exits.selected(c, sub):
+        from . import claude_login
+
+        claude_login.stamp_codex(c, sub["id"], value, now)
+        plan_exits.wake_payers(c, [sub["owner_id"].removeprefix("human:")])
     H.event(c, who.actor, "subscription.refreshed", sub["id"], {"attempt": body.attempt})
     return {"stored": True, "revision": sub["revision"] + 1}
 
@@ -3147,7 +3214,9 @@ def connect(c, settings, auth, who, body):
         raise Problem("owner", "A provider keeps its owner", 422)
     route = plan_exits.routed(c, sub or {"owner_id": owner, "kind": kind})
     if route and route.runner_id is None:
-        raise Problem("offline", "The plan's exit needs to be online with Claude Code installed", 409)
+        raise Problem(
+            "offline", f"The plan's exit needs to be online with {RUNTIME_LABELS[spec['runtime']]} installed", 409
+        )
     exit_id, exit_generation = route or (None, None)
 
     def answer(login, runner, plan_name):
@@ -3188,7 +3257,9 @@ def connect(c, settings, auth, who, body):
             computers, kind = full, "claude_login"
     plan_name = sub["name"] if sub else name or default_name(c, kind, owner)
     if exit_id and not computers:
-        raise Problem("offline", "The plan's exit needs to be online with Claude Code installed", 409)
+        raise Problem(
+            "offline", f"The plan's exit needs to be online with {RUNTIME_LABELS[spec['runtime']]} installed", 409
+        )
     if not computers and kind == "claude_login" and sub and sub["kind"] == "claude_login":
         raise Problem(
             "offline",
@@ -3490,7 +3561,7 @@ def install(app, store, auth, mutate, settings):
 
         return mutate(request, Empty(), work)
 
-    # Read a Claude plan's week now (subscription_refresh.request_plan_read).
+    # Ask for the plan’s current usage windows (subscription_refresh.request_plan_read).
     @app.post("/api/v2/model-subscriptions/{sid}/usage-refresh")
     def refresh_usage(request: Request, sid: str):
         from . import subscription_refresh as SR
