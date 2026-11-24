@@ -12,6 +12,7 @@ const toServer = { target: server, changeOrigin: false, headers: { origin: serve
 /* What the page preloads. The page itself: only the entry's own imports; the browser finds the next level as those
    arrive. A later page's code: only what the first load did not already bring. Preloading more gained nothing, and
    WebKit then reports each extra one as "preloaded but not used" on every later visit (run 3). */
+const page = fileURLToPath(new URL('./index.html', import.meta.url));
 const firstLoad = new Set<string>();
 const entryImports = new Set<string>();
 const preloads: Plugin = {
@@ -23,7 +24,8 @@ const preloads: Plugin = {
       firstLoad.clear();
       entryImports.clear();
       const chunks = Object.values(bundle).flatMap((c) => (c.type === 'chunk' ? [c] : []));
-      const entry = chunks.find((c) => c.isEntry);
+      const entry = chunks.find((c) => c.isEntry && c.facadeModuleId === page);
+      if (!entry) this.warn('no entry chunk for index.html: its preloads are left as Vite wrote them');
       for (const f of entry?.imports ?? []) entryImports.add(f);
       const walk = (file: string) => {
         if (firstLoad.has(file)) return;
@@ -35,8 +37,8 @@ const preloads: Plugin = {
   },
   transformIndexHtml: {
     order: 'post',
-    handler: (html) =>
-      entryImports.size
+    handler: (html, { filename }) =>
+      entryImports.size && filename === page
         ? html.replace(/[ \t]*<link rel="modulepreload"[^>]*href="\/next\/([^"]+)"[^>]*>\n?/g, (tag, file: string) => (entryImports.has(file) ? tag : ''))
         : html,
   },
@@ -57,6 +59,9 @@ export default defineConfig(({ command }) => ({
     outDir: fileURLToPath(new URL('../build/web', import.meta.url)),
     emptyOutDir: true,
     manifest: true,
+    /* The diagram frame (src/kit/Markdown/diagram.ts) is a page of its own, with Mermaid only in its chunks; the
+       server finds its files in the manifest (backend/web_routes.py). */
+    rolldownOptions: { input: { index: page, 'mermaid-sandbox': fileURLToPath(new URL('./mermaid-sandbox.html', import.meta.url)) } },
     modulePreload: { resolveDependencies: (_file, deps, { hostType }) => (hostType === 'js' ? deps.filter((d) => !firstLoad.has(d)) : deps) },
   },
   server: {

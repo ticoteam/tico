@@ -1,6 +1,8 @@
 """The web app at / (backend/web_routes.py): its build's files under /next/, its page for every app address, and an
 address from when it lived at /next sent on to the same page without it."""
 
+import json
+
 import pytest
 
 from backend import web_routes
@@ -115,3 +117,34 @@ def test_without_a_build_the_page_is_a_404_and_the_old_page_is_gone(api, tmp_pat
     assert api.get("/next/tasks", headers=AUTH, follow_redirects=False).status_code == 308
     for old in ("/tico/ui/", "/tico/ui/index.html", "/vendor/marked.min.js", "/styles/tokens.css"):
         assert api.get(old, headers=AUTH).status_code == 404, old
+
+
+def test_the_diagram_frame_s_files_alone_pass_without_sign_in_under_their_own_policy(web):
+    root = web.app.state.store.settings.web_dir
+    (root / ".vite").mkdir()
+    (root / web_routes.SANDBOX_PAGE).write_text('<script type="module" src="/next/assets/sandbox-1.js"></script>')
+    (root / "assets" / "sandbox-1.js").write_text("import('./flow-2.js');\n")
+    (root / "assets" / "flow-2.js").write_text("export const flow = 1;\n")
+    manifest = {
+        "mermaid-sandbox.html": {"file": "assets/sandbox-1.js", "isEntry": True, "dynamicImports": ["_flow.js"]},
+        "_flow.js": {"file": "assets/flow-2.js"},
+        "index.html": {"file": "assets/index-1a2b3c.js", "isEntry": True},
+    }
+    (root / ".vite" / "manifest.json").write_text(json.dumps(manifest))
+
+    page = web.get("/next/mermaid-sandbox.html")
+    assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
+    policy = page.headers["content-security-policy"]
+    assert policy == web_routes.SANDBOX_POLICY and "default-src 'none'" in policy and "script-src 'self'" in policy
+    assert "access-control-allow-origin" not in page.headers
+    for script in ("/next/assets/sandbox-1.js", "/next/assets/flow-2.js"):
+        r = web.get(script)
+        assert r.status_code == 200 and r.headers["access-control-allow-origin"] == "*", script
+        assert r.headers["cache-control"] == web_routes.IMMUTABLE
+    # The app's own files still need a session, and a manifest without the frame opens nothing.
+    assert web.get("/next/assets/index-1a2b3c.js").status_code == 401
+    assert web.get("/next/.vite/manifest.json").status_code == 401
+    del manifest["mermaid-sandbox.html"]
+    (root / ".vite" / "manifest.json").write_text(json.dumps(manifest) + " ")
+    assert web.get("/next/mermaid-sandbox.html").status_code == 401
+    assert web.get("/next/assets/flow-2.js").status_code == 401

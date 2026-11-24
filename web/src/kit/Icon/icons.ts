@@ -76,4 +76,5 @@ export const ICONS = {
   tobar: [['rect', { x: '3.5', y: '4.5', width: '17', height: '15', rx: '2.5' }], ['path', { d: 'M3.5 9.5h17M7 7h.2' }]],
   updates: [['rect', { x: '4', y: '4', width: '12', height: '12', rx: '2' }], ['path', { d: 'M8 20h10a2 2 0 002-2V8' }]],
   video: [['rect', { x: '3.5', y: '6.5', width: '12', height: '11', rx: '2.5' }], ['path', { d: 'M15.5 10.5l5-3v9l-5-3' }]],
+  wrap: [['path', { d: 'M4 6.5h16M4 12h12.5a3.5 3.5 0 010 7H13M15.5 16.5L13 19l2.5 2.5M4 17.5h5' }]],
 } as const satisfies Record<string, readonly Shape[]>;

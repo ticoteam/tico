@@ -2,15 +2,18 @@ import { Fragment, useState, type ReactNode } from 'react';
 import { Lexer, Tokenizer, type MarkedToken, type Token, type Tokens } from 'marked';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { toast } from '@/kit/Toast';
 import { Viewer } from '@/kit/Viewer';
+import { ChatCode, ChatDiff } from './Code';
+import { MATH, type MathToken } from './math';
+import { ChatDiagram, ChatMath } from './Figures';
 import './Markdown.css';
 
 /* The one Markdown: a chat message (compact) and a doc or a skill (the reading page's `.read` parts). marked's lexer
    reads the text (GFM) and this file draws its tokens as React elements, never as HTML, so raw HTML in the text shows
    as text. Links keep to safe addresses; anything else shows as its words. Images only from the app's own /api/: a
    picture from anywhere else would call that server the moment the text is drawn (a way to leak what a message
-   holds), so it shows as a link to press. Never cut: a message shows in full. */
+   holds), so it shows as a link to press. Never cut: a message shows in full. A chat also draws code coloured, diffs,
+   Mermaid diagrams and `$$` formulas once its message has settled (Code.tsx, Figures.tsx). */
 
 const SAFE_URL = /^(https?:|mailto:|\/|#)/i;
 const SAFE_SRC = /^\/api\//i;
@@ -27,7 +30,7 @@ class NoHtml extends Tokenizer {
   }
 }
 const DOC = { gfm: true, tokenizer: new NoHtml() };
-const CHAT = { ...DOC, breaks: true };
+const CHAT = { ...DOC, breaks: true, extensions: MATH };
 const lex = (text: string, compact = false) => Lexer.lex(text, compact ? CHAT : DOC) as MarkedToken[];
 
 // ---------------------------------------------------------------- headings
@@ -88,6 +91,8 @@ export type LinkRender = (href: string, words: ReactNode, bare: boolean) => Reac
 
 interface Ctx {
   compact: boolean;
+  /** The text is whole (not a reply still being written): colour, diagrams and formulas may draw. */
+  settled: boolean;
   ids: Map<Tokens.Heading, string>;
   link?: LinkRender;
 }
@@ -141,6 +146,7 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
   const read = c.compact ? undefined : 't-read';
   return (tokens as MarkedToken[]).map((t, i) => {
     const key = `${k}.${i}`;
+    if ((t as Token).type === 'math') return <ChatMath key={key} text={(t as unknown as MathToken).text} settled={c.settled} />;
     switch (t.type) {
       case 'paragraph':
         return (
@@ -170,7 +176,7 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
         );
       }
       case 'code':
-        if (c.compact) return <ChatCode key={key} text={t.text} />;
+        if (c.compact) return fence(t, key, c);
         return (
           <pre key={key} className="read-code">
             <code>{t.text}</code>
@@ -229,23 +235,13 @@ function blocks(tokens: Token[], k: string, c: Ctx, tail?: ReactNode): ReactNode
   });
 }
 
-/** Code in a chat: Copy at its corner, under the pointer (always there on a phone). */
-function ChatCode({ text }: { text: string }) {
-  const copy = () =>
-    (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject(new Error('no clipboard'))).then(
-      () => toast({ text: 'Copied' }),
-      () => toast({ text: "Couldn't copy", kind: 'failed' }),
-    );
-  return (
-    <div className="md-block">
-      <pre>
-        <code>{text}</code>
-      </pre>
-      <span className="md-tools">
-        <IconButton icon="copy" label="Copy" size="sm" quiet onClick={() => void copy()} />
-      </span>
-    </div>
-  );
+/** A fenced block in a chat, by the language its fence names. */
+function fence(t: Tokens.Code, key: string, c: Ctx) {
+  const lang = (t.lang ?? '').trim().split(/\s+/)[0]!.toLowerCase();
+  if (lang === 'diff' || lang === 'patch') return <ChatDiff key={key} text={t.text} />;
+  if (lang === 'math') return <ChatMath key={key} text={t.text} settled={c.settled} />;
+  if (lang === 'mermaid' && c.settled) return <ChatDiagram key={key} text={t.text} />;
+  return <ChatCode key={key} text={t.text} lang={lang} settled={c.settled} />;
 }
 
 /** A table in a chat scrolls sideways in the message; Expand shows it full screen, every column at its width. */
@@ -277,14 +273,16 @@ export interface MarkdownProps {
   tail?: ReactNode;
   /** Draws each safe link its own way (a chat's chips); a plain link when left out. */
   link?: LinkRender;
+  /** A reply still being written: its code stays plain and its diagrams and formulas show as their source. */
+  streaming?: boolean;
 }
 
-export function Markdown({ text, compact = false, tail, link }: MarkdownProps) {
+export function Markdown({ text, compact = false, tail, link, streaming = false }: MarkdownProps) {
   const tokens = lex(text, compact).filter((t) => t.type !== 'space' && t.type !== 'def');
   const tailOwn = tail != null && tokens[tokens.length - 1]?.type !== 'paragraph';
   return (
     <>
-      {blocks(tokens, 'b', { compact, ids: ids(tokens), link }, tail)}
+      {blocks(tokens, 'b', { compact, settled: !streaming, ids: ids(tokens), link }, tail)}
       {tailOwn && <p>{tail}</p>}
     </>
   );

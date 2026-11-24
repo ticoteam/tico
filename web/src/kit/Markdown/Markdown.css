@@ -18,3 +18,43 @@
 .md-table.is-full{max-width:none;height:100%;margin:0;padding:var(--s-4) var(--s-6);overflow:auto;overscroll-behavior:contain;scrollbar-width:auto}
 .md-table.is-full .table th{white-space:nowrap}
 .md-table.is-full .table td{min-width:16ch}
+/* A chat's code block (Code.tsx): a well with a slim head (its language, then Wrap, Copy and Expand, under the pointer
+   or always on a phone) over the code. Colours are the app's greys by token kind (highlight.ts), so light and dark
+   follow the theme. */
+.md-code{margin:var(--s-2) 0 0;border-radius:var(--r-block);background:var(--well);color:var(--ink-2)}
+.md-code-head{display:flex;align-items:center;min-height:var(--ctl-sm);padding:0 var(--s-1) 0 var(--s-3)}
+.md-lang{flex:1;min-width:0;overflow:hidden;color:var(--faint);font-family:var(--font-code);font-size:var(--t-micro);white-space:nowrap;text-overflow:ellipsis}
+.md-code-head .md-tools{display:flex;opacity:0;transition:opacity var(--dur-fast) var(--ease)}
+.md-code:hover .md-tools,.md-code-head .md-tools:focus-within{opacity:1}
+@media (hover:none){.md-code-head .md-tools{opacity:1}}
+.md-block.md-code>pre,.md-code.is-full>pre{margin:0;padding:0 var(--s-3) var(--s-2h);border-radius:0;background:none;color:inherit;font-family:var(--font-code);font-size:var(--t-xs);line-height:var(--lh-code);overflow:auto;scrollbar-width:none}
+:where(html[data-layout="cards"]) .md-block.md-code>pre{font-size:var(--t-micro)} /* a phone's chat code, as parts.css */
+.md-code pre.is-nowrap{white-space:pre;overflow-wrap:normal}
+.md-code pre.is-wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.md-code.is-full{border-radius:0;background:none}
+.md-code.is-full>pre{padding:var(--s-4) var(--s-6);font-size:var(--t-sm);overflow:visible}
+.hl-keyword{color:var(--ink);font-weight:var(--w-strong)}
+.hl-function,.hl-constant{color:var(--ink)}
+.hl-parameter{color:var(--ink-2)}
+.hl-string,.hl-string-expression,.hl-punctuation{color:var(--muted)}
+.hl-comment{color:var(--faint);font-style:italic}
+.hl-link{text-decoration:underline}
+/* A diff: one line per row with its sign in a gutter; added rows in full ink on a band, removed rows dim and struck.
+   No colour: the app's greys only. */
+.md-diff pre code{display:block}
+.md-diff pre.is-nowrap code{display:inline-block;min-width:100%}
+.dl{display:flex;margin:0 calc(-1 * var(--s-3));padding:0 var(--s-3)}
+.dl-sign{flex:none;width:2ch;color:var(--muted);user-select:none}
+.dl-text{min-width:0;white-space:inherit}
+.dl.is-add{background:var(--well-2);color:var(--ink);font-weight:var(--w-strong)}
+.dl.is-del{color:var(--faint)}
+.dl.is-del .dl-text{text-decoration:line-through;text-decoration-color:var(--faint)}
+.dl.is-hunk,.dl.is-note{color:var(--faint)}
+.dl.is-file{color:var(--muted);font-weight:var(--w-strong)}
+.md-code.is-full .dl{margin:0 calc(-1 * var(--s-6));padding:0 var(--s-6)}
+/* A formula (KaTeX) scrolls sideways when wider than the message; a diagram is a picture that opens to zoom. */
+.md-math{max-width:100%;margin:var(--s-2) 0 0;overflow:auto hidden;scrollbar-width:none;color:var(--ink)}
+.md-math .katex-display{margin:0}
+.md-diagram{margin:var(--s-2) 0 0;padding:var(--s-3);border-radius:var(--r-block);background:var(--well)}
+.md-diagram-face{display:block;max-width:100%;padding:0;border:0;background:none;cursor:zoom-in}
+.md-diagram-face img{display:block;max-width:100%;height:auto}
