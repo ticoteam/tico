@@ -56,4 +56,5 @@ example_output: knowledge/examples/win-loss.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, uses_meetings, has_pipeline]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-a-sales-deal

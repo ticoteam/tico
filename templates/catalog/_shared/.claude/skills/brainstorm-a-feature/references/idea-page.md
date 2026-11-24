@@ -1,22 +1,23 @@
 # The ideas page
 
-One HTML file, `ideas/<slug>.html`, published on the task with `tico page publish`. It runs no script and loads nothing from outside. Charts are inline SVG; pictures are `data:` addresses. Use the app's colour tokens (`var(--ink)`, `var(--muted)`, `var(--surface)`, `var(--line)`) so it reads in light and dark. Put the headline first: a card in Tico shows only the top of the page.
-
-Keep it under about 600 words. A reader should finish it in two minutes.
+One HTML file, `ideas/<slug>.html`, built and checked with `.claude/skills/build-the-page` (its eight rules, its CSS
+and `page.py check`) and published on the task with `tico page publish`. Keep it under about 600 words: a reader
+finishes it in two minutes.
 
 ## Order
 
-**1. The top (three lines, at most 70 words)**
+**1. Title, its line, contents**
 
-- Line 1: the frame. Who is blocked, how, and the number today with its date.
-- Line 2: the recommendation in one sentence.
-- Line 3: what happens next ("Going to scope and spec" or "Pick one: ...").
+- The title: the problem in a few words ("Invoices sent twice").
+- The line under it, one sentence: "This is the ideas page for <who is blocked, the number today>: we recommend <the
+  candidate>." It is the summary; no other top block.
+- Contents linking every H2 below.
 
 **2. The screen today** (only when the problem shows on a screen)
 
 One real screenshot of the app as it is, with a one-line caption saying what goes wrong there. Never a drawing or a mock-up.
 
-**3. The candidates** (a table, two or three rows, the recommended one first)
+**3. The candidates** (an H2 with a table, two or three rows, the recommended one first)
 
 | Column | What goes in it |
 |---|---|
@@ -61,6 +62,7 @@ Each source, its date range, and anything that could not be read.
 - A customer is an account id and a type ("account 4417, solo electrician"), never a name or an email address.
 - A guess is labelled "guess" where it stands.
 - No sentence that would fit any other ideas page. No "overview", "summary" or "next steps" section.
+- Each part above is an H2 section, in this order, linked from the contents. Numbers as a chart, not a sentence.
 
 ## `knowledge/ideas.md` line format
 

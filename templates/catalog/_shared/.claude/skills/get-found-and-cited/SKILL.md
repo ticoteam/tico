@@ -171,8 +171,10 @@ Needs an OK (one ask, with the page shown):
 
 ## Output
 
-- **The monthly page**, "Search and AI answers" (HTML, `tico page publish ... --cadence monthly --as-of <date>`):
-  1. Three lines on top: what moved, what shipped, what is next.
+- **The monthly page**, "Search and AI answers" (HTML in the `.claude/skills/build-the-page` shape, `tico page
+  publish ... --cadence monthly --as-of <date>`), each part an H2 linked from the contents:
+  1. The line under the title: "This is the search and AI answers page for <month>: <what moved>." Shipped and
+     next go in their own sections.
   2. A grid: panel questions down, assistants across, each cell "named n of m, cited n of m", shaded by count, with
      last month's count beside it.
   3. Who is cited instead: the competitors and third-party pages named most, with counts.

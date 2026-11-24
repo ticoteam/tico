@@ -59,5 +59,6 @@ example_output: knowledge/examples/raise-review.md
 reasoning_effort: medium
 recommend_when: [sells_software, uses_crm, uses_meetings]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/forecast-cash-and-budget
   - .claude/skills/write-investor-and-board-updates

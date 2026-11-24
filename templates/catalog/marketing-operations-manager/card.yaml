@@ -56,4 +56,5 @@ example_output: knowledge/examples/marketing-data-check.md
 reasoning_effort: medium
 recommend_when: [uses_crm, has_pipeline, sells_to_businesses]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-lifecycle-and-paid

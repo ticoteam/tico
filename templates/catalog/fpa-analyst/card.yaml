@@ -58,6 +58,7 @@ example_output: knowledge/examples/spend-report.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_slack, sells_software]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/count-a-notice-deadline
   - .claude/skills/build-the-pnl
   - .claude/skills/forecast-cash-and-budget

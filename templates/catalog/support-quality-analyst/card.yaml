@@ -56,4 +56,5 @@ reasoning_effort: medium
 recommend_when: [has_support_inbox, uses_tickets, uses_email, sells_to_consumers]
 when: "A support team whose replies nobody reviews, or whose quality depends on who happens to answer."
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/answer-a-customer

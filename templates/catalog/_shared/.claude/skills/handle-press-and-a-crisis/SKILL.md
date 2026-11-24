@@ -190,11 +190,13 @@ Needs an OK (one ask, with the page shown):
 
 ## Output
 
-- **For an announcement**: the kit under `reports/<announcement>/` and one page (HTML, `tico page publish ...`) with
-  the story in three lines, a table of reporters (outlet, why them with the dated piece, pitch status, reply), and
+- **For an announcement**: the kit under `reports/<announcement>/` and one page (HTML in the
+  `.claude/skills/build-the-page` shape, `tico page publish ...`): a line under the title saying the story in one
+  sentence, then a table of reporters (outlet, why them with the dated piece, pitch status, reply), and
   the timeline to launch day. Afterwards, a coverage table with links and what each piece referred.
-- **For a crisis**: one live page on the crisis task, updated in place:
-  1. A banner: severity, the time of the last update, the time of the next one.
+- **For a crisis**: one live page on the crisis task, in the same shape, updated in place:
+  1. The line under the title: "This is the live page for <what happened>: severity <n>, updated <time>, next update
+     <time>." No banner.
   2. The current statement, its approver and speaker.
   3. The fact log as a table in three colours: confirmed, not yet known, rumour.
   4. A checklist of channels with the time each was published.

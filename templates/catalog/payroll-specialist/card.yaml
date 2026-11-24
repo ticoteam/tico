@@ -55,5 +55,6 @@ example_output: knowledge/examples/payroll-changes.md
 reasoning_effort: medium
 recommend_when: [small_team, uses_docs]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/close-the-month
   - .claude/skills/run-payroll

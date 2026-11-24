@@ -58,6 +58,7 @@ example_output: knowledge/examples/vendor-page.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/count-a-notice-deadline
   - .claude/skills/manage-insurance
   - .claude/skills/manage-leases-and-real-estate

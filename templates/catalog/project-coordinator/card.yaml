@@ -53,4 +53,5 @@ example_output: knowledge/examples/meeting-summary.md
 reasoning_effort: medium
 recommend_when: [uses_meetings]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-the-operating-cadence

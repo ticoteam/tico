@@ -27,5 +27,6 @@ recommend_when: [always]
 # Base files (templates/catalog/_base) this template does not take.
 base_skip: [knowledge/README.md, playbooks/README.md]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-the-operating-cadence
   - .claude/skills/fill-a-role

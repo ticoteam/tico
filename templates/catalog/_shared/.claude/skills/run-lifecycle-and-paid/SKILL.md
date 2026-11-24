@@ -185,8 +185,10 @@ Needs an OK (one ask, with the page shown):
 
 ## Output
 
-- **The monthly page**, "Lifecycle and paid" (HTML, `tico page publish ... --cadence monthly --as-of <date>`):
-  1. Three lines on top: what it cost, what it returned, what changes next month.
+- **The monthly page**, "Lifecycle and paid" (HTML in the `.claude/skills/build-the-page` shape, `tico page publish
+  ... --cadence monthly --as-of <date>`), each part an H2 linked from the contents:
+  1. The line under the title: "This is the lifecycle and paid page for <month>: <cost>, <return>." What changes
+     next month gets its own section.
   2. A table per channel and programme: spend, new paying customers (from records), cost per customer against target
      and break-even as a bar, and the verdict. Paid search shows brand and non-brand as separate rows, and every paid
      total is given for non-brand with brand beside it, never blended.

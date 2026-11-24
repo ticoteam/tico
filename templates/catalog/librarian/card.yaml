@@ -24,3 +24,5 @@ never:
 model: claude-haiku-5-5
 reasoning_effort: medium
 recommend_when: [always]
+shared_files:
+  - .claude/skills/build-the-page

@@ -51,3 +51,5 @@ first_routine:
 example_output: knowledge/examples/mail-brief.md
 reasoning_effort: medium
 recommend_when: [uses_email, has_personal_inbox]
+shared_files:
+  - .claude/skills/build-the-page

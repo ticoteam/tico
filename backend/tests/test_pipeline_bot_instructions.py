@@ -286,6 +286,14 @@ def test_every_bot_that_writes_a_page_a_person_reads_uses_the_one_page_skill():
     assert "a person never does the QA" in validate and "gh pr checks <pull request link>" in validate
 
 
+def test_every_agent_has_the_page_skill():
+    # Any agent may write a page a person reads (a report, a plan, findings), so every role takes the one page skill.
+    templates = sorted(p.parent.name for p in CATALOG.glob("*/card.yaml"))
+    assert len(templates) > 100
+    missing = [t for t in templates if f".claude/skills/{PAGE_SKILL}/SKILL.md" not in catalog.files(t)]
+    assert missing == []
+
+
 def png(path, width, height):
     import struct
     import zlib

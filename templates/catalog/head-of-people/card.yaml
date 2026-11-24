@@ -62,5 +62,6 @@ example_output: knowledge/examples/people-summary.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-payroll
   - .claude/skills/fill-a-role
