@@ -455,7 +455,7 @@ describe('The call bar @s1049', () => {
   });
 
   it('on my call with only agents left, Leave is End call: it ends the call at once; a person in the room makes it Leave again', async () => {
-    base = { connector: 'human:me', bots: ['gm'] };
+    base = { connector: 'human:me', bots: ['gm'], participants: [{ actor: 'human:me', in_call: true, joined_at: '2026-11-18T10:00:00Z', left_at: null }] };
     queryClient.setQueryData(callQuery(ROOM).queryKey, call());
     show();
     await joined();
@@ -472,7 +472,19 @@ describe('The call bar @s1049', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'End call' }));
     await waitFor(() => expect(sent().some((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/end`))).toBe(true));
     expect(screen.queryByRole('alertdialog')).toBeNull();
-    await waitFor(() => expect(room().disconnect).toHaveBeenCalled());
+    expect(room().disconnect).toHaveBeenCalled();
+    // this window hung up first, then ended the call
+    const order = sent().map((x) => x.url.split('/').pop());
+    expect(order.indexOf('leave')).toBeLessThan(order.indexOf('end'));
+  });
+
+  it('a person the server says is in my call keeps Leave, even before the room names them', async () => {
+    base = { connector: 'human:me', bots: ['gm'] };
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call());
+    show();
+    await joined();
+    expect(screen.getByRole('button', { name: 'Leave' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'End call' })).toBeNull();
   });
 
   it('More’s Add agent brings the agent in; End is not there for someone else’s call, and Tico may not end it either @s1049', async () => {

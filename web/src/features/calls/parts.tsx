@@ -47,15 +47,17 @@ export const useMe = (): string | undefined => useQuery(meQuery).data?.id;
  */
 export function endsOnLeave(s: CallState, c: Call | undefined, me: string | undefined): boolean {
   const mine = s.me ?? me;
-  return (
-    !!c && !!mine && s.callId === c.id && s.phase === 'live' && c.provider !== 'google_meet' && c.connector === mine && c.bots.length > 0 && s.others.length === 0
-  );
+  if (!c || !mine || s.callId !== c.id || s.phase !== 'live' || c.provider === 'google_meet' || c.connector !== mine) return false;
+  // nobody else, as the room and as the server see it
+  const people = s.others.length > 0 || c.participants.some((p) => p.in_call && p.actor !== mine);
+  return c.bots.length > 0 && !people;
 }
 
-/** Leave, or End when {@link endsOnLeave}: the call ends for its agents too, and this window hangs up at once. */
+/** Leave, or End when {@link endsOnLeave}: this window hangs up first, then the call ends for its agents too. */
 export async function hangUp(s: CallState, c: Call | undefined, me: string | undefined): Promise<void> {
-  if (c && endsOnLeave(s, c, me) && !(await press('calls.end', { id: c.id }))) return;
+  const end = !!c && endsOnLeave(s, c, me);
   await press('calls.leave', {});
+  if (end && c) await press('calls.end', { id: c.id });
 }
 
 // The server sends its feature flags with config, outside the generated schema.
