@@ -5,14 +5,15 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { CallBars } from '@/tico/dot';
 import { running } from './model';
-import { Face, inCall, press, useCards, useMe, useNameOf, useNow } from './parts';
+import { endsOnLeave, Face, hangUp, inCall, press, useCards, useMe, useNameOf, useNow } from './parts';
 import { callQuery } from './queries';
 import { isActive, useCall, type CallState } from './session';
 import './calls.css';
 
 /**
  * The call bar (calls.js callBar): on every page while a call is on, except the call's own page. Open the call, mute,
- * leave. Moving between pages keeps the call; only Leave, closing the window or joining another hangs up.
+ * leave (End call when only agents are left on my call). Moving between pages keeps the call; only Leave, closing the
+ * window or joining another hangs up.
  */
 export function CallBar() {
   const s = useCall();
@@ -51,6 +52,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
   const talker = who.find((x) => x.talks && x.id !== s.me) ?? who.find((x) => x.talks);
   const first = (id: string) => nameOf(id).split(' ')[0];
   const word = s.muted ? 'Unmute' : 'Mute';
+  const hang = endsOnLeave(s, c, me) ? 'End call' : 'Leave';
   const mic = <IconButton icon={s.muted ? 'micoff' : 'mic'} label={word} on={s.muted} onClick={() => press('calls.toggleMute', {})} />;
 
   if (cards)
@@ -64,7 +66,7 @@ function Bar({ room, s }: { room: string; s: CallState }) {
           </span>
         </Link>
         {mic}
-        <IconButton icon="leave" label="Leave" className="cb-hang" onClick={() => press('calls.leave', {})} />
+        <IconButton icon="leave" label={hang} className="cb-hang" onClick={() => void hangUp(s, c, me)} />
       </header>
     );
 
@@ -107,9 +109,9 @@ function Bar({ room, s }: { room: string; s: CallState }) {
         <Link to="/call/$room" params={{ room }} className="ib" aria-label="Open call" title="Open call">
           <Icon name="popout" />
         </Link>
-        <button type="button" className="btn btn-sm cb-leave" onClick={() => void press('calls.leave', {})}>
+        <button type="button" className="btn btn-sm cb-leave" onClick={() => void hangUp(s, c, me)}>
           <Icon name="leave" />
-          Leave
+          {hang}
         </button>
       </div>
     </header>

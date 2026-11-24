@@ -17,7 +17,7 @@ import { CallBars, Dot, dot } from '@/tico/dot';
 import { BarMore, ShareControl, Shared } from './CallMore';
 import { CallSide, Transcript } from './CallSide';
 import { running } from './model';
-import { Face, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, useTicoBot, type InCall } from './parts';
+import { endsOnLeave, Face, hangUp, inCall, press, SMALL_WINDOW, useCards, useMe, useNameOf, useNow, useOut, useSmallWindow, useTicoBot, type InCall } from './parts';
 import { PeoplePick } from './PeoplePick';
 import { callItemsQuery, callQuery, itemKey, notesQuery } from './queries';
 import { callState, forget, isActive, levelOf, useCall, type CallState, type Phase } from './session';
@@ -448,8 +448,8 @@ function Controls({ room, c, s, phase, isTico, onBack }: { room: string; c: Call
           {isTico ? 'Back to Tico' : 'Back to bar'}
         </Button>
       )}
-      <Button variant="primary" className="cc-leave" onClick={() => press('calls.leave', {})}>
-        Leave
+      <Button variant="primary" className="cc-leave" onClick={() => void hangUp(s, c, me)}>
+        {endsOnLeave(s, c, me) ? 'End call' : 'Leave'}
       </Button>
     </footer>
   );
