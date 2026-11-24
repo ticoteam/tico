@@ -42,10 +42,10 @@ function request(uri = visualPath, address = host, expiry = now + 300) {
 }
 
 const script = "'sha256-" + crypto.createHash('sha256').update('reporter()').digest('base64') + "'";
-function origin(kind = 'text/html') {
+function origin(kind = 'text/html', version = '1') {
     return {statusCode: 200, headers: {
         'content-type': {value: kind},
-        'x-amz-meta-tico-visual-policy-version': {value: '1'},
+        'x-amz-meta-tico-visual-policy-version': {value: version},
         'x-amz-meta-tico-visual-ancestors': {value: "'self' https://app.example http://localhost:8765"},
         'x-amz-meta-tico-visual-script': {value: script}}, body: {encoding: 'text', data: '<p>clean visual</p>'}};
 }
@@ -166,7 +166,8 @@ test('hostile object headers, metadata and body never widen the ceiling or set c
     assert.equal(limited.match(/sha256-/g).length, 4);
     for (const mutate of [
         r => delete r.headers['x-amz-meta-tico-visual-policy-version'],
-        r => r.headers['x-amz-meta-tico-visual-policy-version'].value = '2',
+        r => r.headers['x-amz-meta-tico-visual-policy-version'].value = '3',
+        r => r.headers['x-amz-meta-tico-visual-policy-version'].value = '2 ',
         r => r.headers['content-type'].value = 'application/javascript',
         r => r.headers['content-type'].multiValue = [{value: 'text/html'}],
         r => r.statusCode = 206,
@@ -180,6 +181,33 @@ test('hostile object headers, metadata and body never widen the ceiling or set c
         assert.equal(result.headers.location, undefined);
         assert.equal(csp(result), "default-src 'none'; sandbox");
     }
+});
+
+test('version 2 runs a page as written on the files host, from a fixed template the metadata cannot widen', async () => {
+    const respond = load('VisualsResponse');
+    const open = 'sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox ' +
+        "allow-downloads allow-modals; frame-ancestors 'self' https://app.example http://localhost:8765";
+    const page = origin('text/html', '2');
+    page.headers['set-cookie'] = {value: 's=1; Domain=files.example'};
+    page.cookies = {s: {value: '1'}};
+    page.headers['content-security-policy'] = {value: "default-src *; sandbox allow-top-navigation"};
+    const out = await respond({response: page});
+    assert.equal(out.statusCode, 200);
+    assert.equal(csp(out), open);
+    assert.equal(out.headers['content-type'].value, 'text/html; charset=utf-8');
+    assert.equal(out.headers['set-cookie'], undefined);
+    assert.deepEqual(out.cookies, {});
+    assert.ok(!Object.keys(out.headers).some(x => x.startsWith('x-amz-meta-')));
+    assert.equal(out.headers['access-control-allow-origin'], undefined);
+    // Hostile slots: an ancestor or token that is not one the edge keeps is dropped, never a new directive.
+    const hostile = origin('text/html', '2');
+    hostile.headers['x-amz-meta-tico-visual-ancestors'].value = '* https: https://a.example; allow-top-navigation';
+    assert.equal(csp(await respond({response: hostile})), open.replace(/frame-ancestors .*/, "frame-ancestors 'none'"));
+    // An SVG keeps its closed template under either version.
+    const svg = await respond({response: origin('image/svg+xml', '2')});
+    assert.equal(svg.statusCode, 200);
+    ceiling(svg);
+    assert.ok(csp(svg).endsWith('; sandbox'));
 });
 
 test('distribution wiring preserves files and error fallback without stacking the visual CSP', async () => {

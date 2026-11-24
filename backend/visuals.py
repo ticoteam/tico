@@ -1,5 +1,5 @@
-"""Visuals in replies (Dev 245, Visual replies 1/4): what may show inline, the page clean-up done when a visual is
-attached, and the signed, cookie-free address a visual is shown from.
+"""Visuals in replies (Dev 245, Visual replies 1/4): what may show inline, the SVG clean-up done when a visual is
+attached, and the signed, cookie-free address a visual is shown from. A page runs as its author wrote it (`policy`).
 
 A visual is a normal versioned file on its task or conversation. A message stores the file, the version it was posted
 with and a title (backend/app.py attach_visuals). Readers get a fresh `src` on /visuals/<token>: the token names the
@@ -79,7 +79,8 @@ def kind_of(mime, size, head=b""):
     return kind
 
 
-# ---------------------------------------------------------------------------------------------- page clean-up
+# ---------------------------------------------------------------------------------------------- clean-up
+# An SVG's clean-up; pages are no longer cleaned when shown (`policy`), though `clean` still takes one.
 # Attributes that make a browser fetch something. A value that is not a data: URI (or an in-page #fragment) is
 # removed and reported. Links (<a href>) are clicks, not loads: they stay and open in a new tab.
 LOADS = {
@@ -320,8 +321,7 @@ def loading_references(data):
 
 
 # ---------------------------------------------------------------------------------------------- reporter
-# The one script a visual page runs (lead, Oct 19): it tells the frame around it how tall the page is. Its hash is
-# the only script the page's content policy allows, so the page's own scripts and inline handlers stay dead. A frame
+# The script added at the end of every visual page: it tells the frame around it how tall the page is. A frame
 # laid out at zero width reports an inflated height the app cannot shrink back from, so it sends nothing until the
 # page has a width and reports again on every resize (ui/tests/visual-reporter.cts runs the same file). It reports
 # the content's own height when the content fits the frame, not scrollHeight, which never goes below the frame: a
@@ -334,21 +334,23 @@ def loading_references(data):
 # unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
 # its look. It runs as the page's last script.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
-REPORTER_HASH = "sha256-" + base64.b64encode(hashlib.sha256(REPORTER.encode()).digest()).decode()
 
 
 def with_reporter(data):
     return data + b"<script>" + REPORTER.encode() + b"</script>"
 
 
+# A page runs as its author wrote it: its scripts, inline handlers, forms, storage, popups, downloads, dialogs and loads
+# from the web all work. What keeps it from the app is its host: it is only ever served from the visual address or the
+# company's files address, both apart from the app's (check_origin), so same-origin gives it storage of its own, never
+# the app's cookies or window. The edge's version 2 template is this same rule (infra/files-edge/response.js).
+PAGE_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
+
+
 def policy(kind, ancestors):
     frames = "frame-ancestors " + (" ".join(ancestors) or "'none'")
     if kind == "page":
-        return (
-            "default-src 'none'; script-src '" + REPORTER_HASH + "'; img-src data:; font-src data:; "
-            "media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; "
-            "base-uri 'none'; " + frames + "; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        )
+        return "sandbox " + PAGE_SANDBOX + "; " + frames
     if kind == "svg":
         return (
             "default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; "
@@ -551,9 +553,9 @@ NOT_IN_ROOM = (
 def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     """The stored attachments for a message, in the order given, and what each page left unembedded.
 
-    Each is a version of a file on that task (files.comment_file's rule) or in that conversation. A page or SVG
-    whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
-    posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
+    Each is a version of a file on that task (files.comment_file's rule) or in that conversation. A page is posted
+    as written; an SVG whose bytes would still load something from elsewhere gets a cleaned new version, and that
+    version is the one posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
     from .bot_home_merge import file_in_room
     from .counsel import no_attachments
     from .store import H, Problem
@@ -586,9 +588,9 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
         if not c.execute("SELECT 1 FROM bot_files WHERE id=?", (fid,)).fetchone():
             kind = "file"  # a legacy task attachment (task_assets) is not a versioned file: it stays a chip
         unembedded = []
-        if kind in ("page", "svg"):
+        if kind == "svg":
             data = blobs.get(digest)
-            cleaned, unembedded = clean(data, kind, base=False)  # <base> is added where it is shown
+            cleaned, unembedded = clean(data, kind, base=False)
             if cleaned != data:
                 version = _clean_version(c, who, files, blobs, fid, version, cleaned, mime)
                 kind = kind_of(mime, version["size"]) if len(cleaned) <= LIMITS[kind] else "file"
@@ -839,7 +841,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     came in on the visual address (`visual_origin`, in full mode); anywhere else, the app's own address and the whole
     fallback (`full` False), the route serves media only. A poster or preview that is not a picture is refused.
     A page or SVG held in Tico file hosting's bucket is never served from here, in either mode: once the reader is
-    checked, they are sent (302) to a four-minute link to its cleaned copy on the company's address
+    checked, they are sent (302) to a four-minute link to its hosted copy on the company's address
     (tico_storage.visual_link)."""
     from fastapi.responses import Response
     from .file_delivery import serve as deliver
@@ -902,9 +904,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             # Filled in for this reader alone, with what they may see now.
             with store.read() as c:
                 data = fill_live(text, c, who, auth, files).encode("utf-8")
-        data, _ = clean(data, kind)
-        if kind == "page":
-            data = with_reporter(data)
+        data = with_reporter(data) if kind == "page" else clean(data, kind)[0]
         response = Response(
             data if request.method != "HEAD" else b"",
             media_type=mime,

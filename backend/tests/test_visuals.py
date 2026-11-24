@@ -2,7 +2,6 @@
 cookie-free address and who may open it. Spec tests 1-4, 18, 19 and 22 (Product roadmap "Visual replies")."""
 
 import base64
-import hashlib
 import pathlib
 import re
 from dataclasses import replace
@@ -59,6 +58,29 @@ def test_a_bots_chat_reply_carries_a_titled_versioned_visual_and_reading_returns
     assert row["scope"] == "conversation:" + message["conversation_id"]
 
 
+def test_thread_history_and_the_file_info_carry_a_pages_address_for_a_reader_who_may_open_it(api):
+    """History agrees with the live stream and a send's answer: a page on a bot's reply has its `src` in the thread
+    timeline too, so it shows live after a reload. A page a message only points at gets one from its info read
+    (`visual_src`, for its current version); a reader the file is hidden from gets a 404."""
+    _, attempt = turn(api)
+    made = publish(api, attempt, name="plan.html", text="<p>plan</p>")
+    assert made.status_code == 200, made.text
+    fid = made.json()["file"]["id"]
+    sent = bot_reply(api, attempt, attachments=[{"ref": f"{fid}@1", "title": "Plan"}]).json()
+    timeline = api.get(f"/api/v2/threads/{sent['conversation_id']}/timeline?flat=1", headers=headers("ben-test"))
+    assert timeline.status_code == 200, timeline.text
+    [item] = next(m for m in timeline.json()["messages"] if m["id"] == sent["id"])["refs"]["attachments"]
+    assert item["kind"] == "page" and item["src"].startswith(VISUALS + "/visuals/")
+    assert api.get(item["src"]).status_code == 200
+    info = api.get(f"/api/v2/files/{fid}/info", headers=headers("ben-test"))
+    assert info.status_code == 200, info.text
+    assert info.json()["file"]["visual_src"].startswith(VISUALS + "/visuals/")
+    assert api.get(info.json()["file"]["visual_src"]).status_code == 200
+    assert api.get(f"/api/v2/files/{fid}/info", headers=headers("cara-test")).status_code == 404
+    picture, _ = png(api, attempt)
+    assert "visual_src" not in api.get(f"/api/v2/files/{picture}/info", headers=headers("ben-test")).json()["file"]
+
+
 def test_a_chat_reply_cannot_attach_a_file_from_another_conversation(api):
     _, attempt = turn(api)
     fid, _ = png(api, attempt)
@@ -82,35 +104,37 @@ def test_a_task_comment_page_gets_its_local_images_embedded_and_reports_nothing_
     assert item["title"] == "Funnel" and item["kind"] == "page" and item["version"] == number
 
 
-def test_a_remote_reference_is_named_and_the_stored_page_loads_nothing(api):
-    """Spec 3: the attach result names each remote reference; the stored file has none that loads."""
+def test_a_page_posts_as_written_and_an_svg_remote_reference_is_named_and_removed(api):
+    """A page runs as its author wrote it: its scripts and outside loads stay, and the version posted is the one given.
+    An SVG is still cleaned: the attach result names each remote reference and the version posted loads nothing."""
     page = (
-        '<html><head><link rel="stylesheet" href="https://cdn.example/a.css"><style>@import "https://f.example/x.css";'
-        'body{background:url(https://img.example/bg.png)}</style></head><body><img src="https://img.example/a.png">'
-        '<img srcset="//img.example/b.png 2x"><script src="https://js.example/x.js"></script>'
-        '<a href="https://example.com/more">more</a></body></html>'
+        '<html><head><link rel="stylesheet" href="https://cdn.example/a.css"></head><body>'
+        '<button onclick="go()">Go</button><script src="https://js.example/x.js"></script></body></html>'
     )
     tid, fid, number = task_with_file(api, private=False, text=page)
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg"><image href="https://img.example/a.png"/>'
+        '<script>steal()</script><rect width="1" height="1"/></svg>'
+    )
+    made = api.post(f"/api/v2/tasks/{tid}/files", json={"name": "logo.svg", "text": svg}, headers=headers("ben-test"))
+    assert made.status_code == 200, made.text
+    sid = made.json()["file_id"]
     r = api.post(
         f"/api/v2/tasks/{tid}/comments",
-        json={"text": "Page", "attachments": [f"{fid}@{number}"]},
+        json={"text": "Page", "attachments": [f"{fid}@{number}", f"{sid}@1"]},
         headers=headers("ben-test"),
     )
     assert r.status_code == 200, r.text
-    [report] = r.json()["visuals"]
-    assert report["unembedded"] == [
-        "https://cdn.example/a.css",
-        "https://f.example/x.css",
-        "https://img.example/bg.png",
-        "https://img.example/a.png",
-        "//img.example/b.png",
+    assert r.json()["visuals"] == [
+        {"ref": f"{fid}@{number}", "kind": "page", "unembedded": []},
+        {"ref": f"{sid}@2", "kind": "svg", "unembedded": ["https://img.example/a.png"]},
     ]
-    [item] = r.json()["comment"]["refs"]["attachments"]
-    assert item["version"] == number + 1  # the cleaned copy is the version posted
-    stored = api.get(f"/api/v2/files/{fid}/versions/{item['version']}", headers=headers("ben-test"))
-    assert stored.status_code == 200
-    assert V.loading_references(stored.content) == [] and b"<script" not in stored.content
-    assert b'href="https://example.com/more"' in stored.content  # a link is a click, not a load
+    [shown, drawn] = r.json()["comment"]["refs"]["attachments"]
+    assert shown["version"] == number and drawn["version"] == 2  # the cleaned SVG is the version posted
+    stored = api.get(f"/api/v2/files/{fid}/versions/{number}", headers=headers("ben-test"))
+    assert stored.content == page.encode()
+    cleaned = api.get(f"/api/v2/files/{sid}/versions/2", headers=headers("ben-test")).content
+    assert V.loading_references(cleaned) == [] and b"<script" not in cleaned
 
 
 def test_over_the_limit_or_another_type_is_a_plain_file_never_a_visual(api, monkeypatch):
@@ -336,27 +360,28 @@ def test_an_older_task_attachment_stays_a_plain_file(api):
 
 
 # ---------------------------------------------------------------------------------------------- serving (22)
-def test_the_visual_route_is_apart_from_the_sign_in_with_a_policy_that_blocks_scripts_and_loads(api):
-    """Spec 22: the response carries a policy with no network loads and only the height reporter's script hash;
-    it never sets a cookie, and the app's own sign-in does not open it."""
+def test_the_visual_route_is_apart_from_the_sign_in_and_runs_the_page_as_written(api):
+    """Spec 22, as changed for live pages: the page runs as written (scripts, forms, storage, loads) under a sandbox
+    that keeps same-origin for the visual address alone, framed only by the app; it never sets a cookie, and the app's
+    own sign-in does not open it."""
     tid, fid, comment = visual_on_task(api, private=False)
     src = comment["refs"]["attachments"][0]["src"]
     r = api.get(src)
     rule = r.headers["content-security-policy"]
-    assert "default-src 'none'" in rule and "connect-src 'none'" in rule and "form-action 'none'" in rule
-    assert re.search(r"script-src 'sha256-[A-Za-z0-9+/=]+';", rule) and "unsafe-inline' data:; connect" in rule
-    assert "'unsafe-inline'" not in rule.split("script-src", 1)[1].split(";", 1)[0]
-    assert "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox" in rule
-    assert "allow-same-origin" not in rule and "allow-forms" not in rule and "allow-top-navigation" not in rule
+    ancestors = " ".join(V.ancestors(api.app.state.store.settings))
+    assert rule == (
+        "sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox "
+        f"allow-downloads allow-modals; frame-ancestors {ancestors}"
+    )
+    assert "allow-top-navigation" not in rule and "default-src" not in rule
     assert "set-cookie" not in r.headers and r.headers["referrer-policy"] == "no-referrer"
     assert r.headers["cross-origin-resource-policy"] == "cross-origin"
     assert "no-transform" in r.headers["cache-control"].split(", ")  # Cloudflare leaves the page's bytes alone
-    assert b'<base target="_blank">' in r.content and V.REPORTER.encode() in r.content
-    # The hash is the served script's own, taken from backend/visual-reporter.js, never typed in by hand.
+    stored = api.get(f"/api/v2/files/{fid}", headers=headers("ben-test")).content
     script = (pathlib.Path(V.__file__).with_name("visual-reporter.js")).read_text().strip()
-    assert V.REPORTER == script and f"script-src '{V.REPORTER_HASH}';" in rule
-    assert V.REPORTER_HASH == "sha256-" + base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-    assert f"<script>{script}</script>".encode() in r.content
+    assert V.REPORTER == script and r.content == stored + f"<script>{script}</script>".encode()
+    svg = V.policy("svg", ["'self'"])
+    assert svg.startswith("default-src 'none'") and svg.endswith("; sandbox"), "an SVG stays closed"
     # The signed-in app has no way in without the token, and the token needs no cookie.
     assert api.get("/visuals/", headers=headers("ben-test")).status_code == 404
     assert api.get("/visuals/nonsense", headers=headers("ben-test")).status_code == 404

@@ -348,31 +348,39 @@ The v1 edge contract is:
   `Cross-Origin-Resource-Policy: cross-origin` and `Referrer-Policy: no-referrer`.
 - Visuals have their own behavior and response function. The stored Content-Type selects HTML or SVG
   (case-insensitive, before `;`); HTML is normalized to `text/html; charset=utf-8`, SVG to `image/svg+xml`.
-  Missing/unsupported type or `x-amz-meta-tico-visual-policy-version` other than exactly `1` returns an
-  empty 404. HTML without a charset is accepted and normalized. Partial visual responses and redirects
-  are refused. The app writes cleaned bytes, with its reporter script appended for HTML; the edge does
-  not clean or inspect the body.
+  Missing/unsupported type or `x-amz-meta-tico-visual-policy-version` other than exactly `1` or `2`
+  returns an empty 404. HTML without a charset is accepted and normalized. Partial visual responses and
+  redirects are refused. The app writes a page as written with its reporter script appended (version 2;
+  version 1 copies were cleaned first) and an SVG cleaned; the edge does not clean or inspect the body.
 - Policy source is object metadata. `x-amz-meta-tico-visual-ancestors` supplies up to eight whitespace
   separated tokens, each exactly `'self'`, an HTTPS origin matching
   `https://[a-z0-9.-]+(:[0-9]{1,5})?`, or HTTP localhost/127.0.0.1 with an optional port.
   `x-amz-meta-tico-visual-script` supplies up to four quoted SHA256 hashes matching
   `^'sha256-[A-Za-z0-9+/]{43}='$`. Invalid tokens are dropped; an empty slot becomes `'none'`.
   Metadata cannot supply a full CSP or sandbox tokens. Contract changes require a new version at
-  the edge first.
+  the edge first: the app writes version 2 from `VISUAL_COPY` 3 on, and an edge that still knows
+  only version 1 answers those copies with a 404 until it is redeployed (the chat's card then falls
+  back to its plain page card by itself).
 
 The fixed visual templates (only `<script>` and `<ancestors>` are substituted) are:
 
 ```text
-HTML: default-src 'none'; script-src <script>; img-src data:; font-src data:; media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors <ancestors>; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox
-SVG: default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; frame-ancestors <ancestors>; sandbox
+HTML v2: sandbox allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals; frame-ancestors <ancestors>
+HTML v1: default-src 'none'; script-src <script>; img-src data:; font-src data:; media-src data:; style-src 'unsafe-inline' data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-ancestors <ancestors>; sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox
+SVG (v1 and v2): default-src 'none'; img-src data:; font-src data:; style-src 'unsafe-inline' data:; frame-ancestors <ancestors>; sandbox
 ```
+
+Version 2 runs a page as its author wrote it: scripts, forms, storage, popups, downloads, dialogs and
+loads from the web. What keeps it from the app is the host: `<workspace>-files.<FilesDomain>` is a
+separate site from the app, so `allow-same-origin` gives the page this host's storage, never the app's
+cookies, storage or window.
 
 Every visual response sets inline disposition, `nosniff`, `no-referrer`, CORP cross-origin and
 `Cache-Control: private, no-cache`, with no CORS. Response functions remove all object metadata,
 origin CSP/report-only values (including repeated values), and both header and CloudFront cookie-object
 representations of Set-Cookie. They replace CSP with exactly one header. Arbitrary object writers cannot
-introduce a directive or `allow-same-origin`: the document stays in an opaque origin. Body CSP meta tags
-can only restrict this policy; Set-Cookie meta tags do not set cookies. The app still owns body cleaning.
+introduce a directive or sandbox token: a version 1 document stays in an opaque origin, and a version 2
+one gets exactly the template above. Body CSP meta tags can only restrict this policy.
 
 Both behaviors also attach an overriding restrictive response policy and remove Set-Cookie/report-only
 at the policy layer. CloudFront applies policies **before** the viewer-response function, so the visual
@@ -385,8 +393,10 @@ requires checking metadata invalidation and the same security boundaries.
 Run the synthetic handler and wiring checks with `node --test infra/files-edge/edge.test.cjs`.
 They execute the exact generated function code with only the key store and clock replaced. No AWS or
 team database is used. With Playwright and Chromium installed, the optional builder check
-`node infra/files-edge/browser-check.cjs` verifies that a hostile HTML fixture cannot read/write cookies
-or reach its same-host parent, even with body/meta/header/metadata attempts to add `allow-same-origin`.
+`node infra/files-edge/browser-check.cjs` frames a hostile HTML fixture from another site, as the app
+frames the files host: under version 1 it cannot read or write cookies or reach its parent, even with
+body/meta/header/metadata attempts to add `allow-same-origin`; under version 2 it has its own origin and
+storage but never sees the app's cookies or reaches the app's window.
 After approval, stand-up additionally needs actual CloudFront validation and
 origin-error/header readback before activation; a local harness cannot prove AWS runtime acceptance.
 

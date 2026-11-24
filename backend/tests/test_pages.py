@@ -16,15 +16,14 @@ from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.pages import HTML, page, read
 
 
-def test_a_published_page_is_cleaned_and_reads_with_its_status_fields_only_for_whoever_may_see_it(api):
+def test_a_published_page_is_stored_as_written_and_reads_with_its_status_fields_only_for_whoever_may_see_it(api):
     _, attempt = turn(api)  # ben's chat with ops
     made = page(api, attempt, title="Engineering weekly", cadence="weekly", as_of="2026-10-27")
     assert made.status_code == 200, made.text
     body = made.json()
     fid = body["page"]["file_id"]
-    assert body["unembedded"] == ["https://cdn.acme.example/x.png"]
-    stored = api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content
-    assert b"<script" not in stored and b"cdn.acme.example" not in stored and b"42 deals" in stored
+    assert body["unembedded"] == []
+    assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content == HTML
     seen = read(api, fid, "ben-test").json()["page"]
     assert set(seen) >= {
         "file_id",

@@ -535,6 +535,8 @@ export interface FileFacts {
   library_kind?: string;
   size: number | null;
   version?: number;
+  /** A page's signed address to show its current version live from (backend/files.py `info`). */
+  visual_src?: string | null;
 }
 export const fileFactsQuery = (id: string) =>
   queryOptions({

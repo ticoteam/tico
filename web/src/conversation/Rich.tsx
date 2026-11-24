@@ -10,6 +10,7 @@ import { Tooltip } from '@/kit/Tooltip';
 import { Viewer } from '@/kit/Viewer';
 import { besideThread, fileKind } from '@/lib';
 import { FileCard, isCardKind } from './FileCard';
+import { LivePage } from './LivePage';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
 import { fileFactsQuery, officePreviewQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
@@ -169,7 +170,17 @@ function RefCard({ p }: { p: Extract<Pointer, { kind: 'file' }> }) {
   if (!facts) return null;
   const title = facts.title || facts.name || 'Page';
   const src = fileHrefOf(p.file, p.version);
-  if (isPage(facts.mime, facts.library_kind)) return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
+  // live only at its current version, the one its address shows; a ref to an older one is that version's plain card
+  const current = !p.version || p.version === facts.version;
+  if (isPage(facts.mime, facts.library_kind))
+    return (
+      <LivePage
+        src={current ? facts.visual_src : null}
+        title={title}
+        id={`${p.file}@${facts.version ?? ''}`}
+        fallback={<PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />}
+      />
+    );
   if (fileKind(facts.mime, facts.name, facts.library_kind) === 'image') return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
   return null;
 }
@@ -454,7 +465,8 @@ function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
   if (face === 'video') return <VideoCard f={f} own={own} />;
   if (face === 'audio') return <AudioBar f={f} own={own} />;
   if (face === 'pdf') return <PdfCard f={f} own={own} />;
-  if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />;
+  if (face === 'page')
+    return <LivePage src={f.src} title={name} id={url} fallback={<PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />} />;
   if (face === 'docx' || face === 'xlsx') return <OfficeCard f={f} own={own} kind={face} />;
   const kind = fileKind(f.content_type, f.name);
   if (isCardKind(kind)) return <FileCard kind={kind} url={url} name={name} mime={f.content_type ?? ''} {...(typeof f.size === 'number' && { size: f.size })} />;

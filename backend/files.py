@@ -2912,10 +2912,24 @@ class Files:
         return row
 
     def info(self, who, fid):
-        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md)."""
+        """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md). A page
+        also has `visual_src`, the address its current version shows live from (visuals.src_for, the reader checked as
+        for a message's page); null where this install can't show it inline."""
+        from . import visuals
+
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
-            return {"file": self.view(c, who, row, {"task": {}, "repo": {}})}
+            shown = self.view(c, who, row, {"task": {}, "repo": {}})
+            number = int(row["current_version"] or 0)
+            v = c.execute(
+                "SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
+            ).fetchone()
+            if v and visuals.kind_of(v["mime"], v["size"]) == "page":
+                live = not row["archived"] and row["locator"] == "tico_blob"
+                shown["visual_src"] = (
+                    visuals.src_for(self.app, self.store.settings, c, who, fid, number) if live else None
+                )
+            return {"file": shown}
 
     def versions(self, who, fid):
         with self.store.read() as c:

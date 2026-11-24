@@ -9,8 +9,8 @@ Pictures, SVG and visual pages show inline as cards. Video and audio play inside
 visual address or [Tico file hosting](files.md#tico-file-hosting), pages and SVG are cards with **Open** instead
 ([details](#with-and-without-a-visual-address)).
 
-A page a bot keeps current, with a cadence and a status line Tico draws, is a [page](pages.md): the same frame and
-the same clean-up, published with `tico page publish`.
+A page a bot keeps current, with a cadence and a status line Tico draws, is a [page](pages.md): the same frame,
+published with `tico page publish`.
 
 ## When a bot adds a visual
 
@@ -39,9 +39,13 @@ audio are cards too (see [Video and audio](#video-and-audio)) and count toward t
 
 - **Caption.** The visual's title, or its file name when it has none.
 - **Menu** (**⋯**, labelled **More**, next to the caption): **Expand**, **Open in file viewer**, **Download**.
-- **A visual page** shows at its own height, up to 480 px (60% of the screen on a phone). A taller page is cut
-  there with a fade and an **Expand** button. The page can't run its own scripts, open forms, load anything or
-  reach the app. A link in it opens a new tab, and only when clicked.
+- **A visual page** runs as written, at its own height between 120 and 480 px. A taller page is cut there with a
+  fade; **Expand** is always under it. Its scripts, forms, storage, pop-ups and downloads work, and it may load from
+  other sites. What keeps it from the app is its address: it is only ever shown from the visual address or the
+  company's files address, never the app's own, so it can't read the app's cookies or reach the app's window. A link
+  without `target="_blank"` opens inside the card. A page that sends no height within 8 seconds shows as the plain
+  page card with **Open**.
+- **Expand** on a page opens it full size in a dialog (the whole screen on a phone), with **Open in new tab**.
 - **Expand** opens the visual full screen; so does a click or tap on a picture, or a tap on a page on a touch
   screen. Pictures zoom: click or tap for 2×,
   pinch or Ctrl + scroll up to 6×. Pages scroll. **Close**, Esc, a swipe down or Back returns you to the same place
@@ -138,21 +142,21 @@ and fonts it refers to (PNG, JPEG, GIF, WebP, SVG, WOFF, WOFF2, TTF, OTF), read 
 checkout. They come from `src`, `href`, `poster`, `xlink:href` and `srcset` values and CSS `url()`. Each embedded
 file is at most 10 MB and passes the same checkout checks as the page.
 
-When the page is attached, Tico removes everything that would load from somewhere else:
+A page is stored and posted as written: its scripts run and its remote references load when it is shown. An SVG is
+cleaned when it is attached:
 
 - **Remote references** (an `https://` image, a stylesheet, an `@import`, a font on a CDN) are not embedded and not
   fetched. They are removed, and the result lists each one.
-- **Scripts don't run.** `<script>`, frames, `<object>`, `<embed>`, `<noscript>`, inline event handlers (`onclick`)
-  and meta refresh are dropped. The page is static.
-- Links (`<a href>`) stay. In the card, a link opens a new tab, and only when clicked.
+- **Scripts don't run.** `<script>`, frames, `<object>`, `<embed>`, inline event handlers (`onclick`) and
+  meta refresh are dropped. The SVG is static.
 
-If anything was removed, Tico saves the cleaned page as a new version of the file, and that version is the one
-posted. The stored visual never loads anything from the network.
+If anything was removed, Tico saves the cleaned SVG as a new version of the file, and that version is the one
+posted.
 
 The result tells you what happened:
 
 - `visuals`: one entry per attachment, with its `ref` (the version posted), its `kind`, and `unembedded`, the
-  references removed from it.
+  references removed from it (always empty for a page).
 - `visuals_local`: for each page attached from a path, the references the hub tools on your Computer could not
   embed: remote addresses, and local files that are missing, too big or refused.
 
@@ -230,7 +234,7 @@ their visuals. `TICO_VISUAL_SAME_ORIGIN` is no longer read. No response on the v
 `TICO_VISUAL_ORIGIN`, pages and SVG show inline from the company's `ticofiles.com` address
 ([Tico file hosting](files.md#tico-file-hosting)). Their address is still on the app's own `/visuals/<token>` route,
 made for one reader. Each load checks that reader again and sends the frame on to a four-minute link to the page's
-cleaned copy there; the app's own address never serves the page. That copy allows framing only by the app's own
+hosted copy there; the app's own address never serves the page. That copy allows framing only by the app's own
 address (`TICO_PUBLIC_URL`, and on a loopback address both `127.0.0.1` and `localhost`) and `TICO_CORS_ORIGINS`;
 only HTTPS addresses and loopback qualify. Open the app at an address other than these and pages don't show.
 

@@ -17,6 +17,8 @@ export interface ViewerProps {
       (a picture). */
   look?: 'sheet' | 'bare';
   onKeyDown?: (e: KeyboardEvent) => void;
+  /** Its own size beside the look (a live page's dialog). */
+  className?: string;
   children?: ReactNode;
 }
 
@@ -32,7 +34,7 @@ const LET_GO = 96;
  * fills the rest. Escape, Close or a click on the dim closes it; on a phone it fills the screen and a pull down on its
  * bar closes it. Focus stays inside while it is open and goes back after.
  */
-export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', onKeyDown, children }: ViewerProps) {
+export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
   const [pull, setPull] = useState(0);
   const from = useRef<number | null>(null);
   const down = (e: PointerEvent<HTMLDivElement>) => {
@@ -56,7 +58,7 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
         <BaseDialog.Backdrop className="scrim kit-scrim vw-scrim" />
         <BaseDialog.Viewport className="scrim kit-viewport vw-viewport" onClick={(e) => e.target === e.currentTarget && onClose()}>
           <BaseDialog.Popup
-            className={`vw is-${look}`}
+            className={`vw is-${look}${className ? ` ${className}` : ''}`}
             aria-label={title}
             onKeyDown={onKeyDown}
             data-pulled={pull > 0 || undefined}

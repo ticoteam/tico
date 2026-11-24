@@ -12,6 +12,8 @@ export interface Attachment {
   /** Where its bytes are (`/api/v2/files/<id>…`). */
   url?: string;
   size?: number;
+  /** A page's signed address to show it live from (backend/visuals.py), fresh on each read; null when it can't. */
+  src?: string | null;
 }
 
 /** What a message's `refs` holds that this module reads; the server sends more. */

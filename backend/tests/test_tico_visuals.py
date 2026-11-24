@@ -1,5 +1,5 @@
 """Tico file hosting 1b, the app half (Dev 458): a page or SVG held in Tico's bucket shows inline from the company's
-ticofiles.com address, from a cleaned copy stored beside it with the policy slots the edge reads (Dev 457, docs/files.md),
+ticofiles.com address, from a hosted copy stored beside it with the policy slots the edge reads (Dev 457, docs/files.md),
 through a five-minute signed link handed out only after the reader is checked. Fake S3, HQ and edge: no network."""
 
 import base64
@@ -81,7 +81,7 @@ def follow(api, src, who_ok=True):
 
 
 def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_companys_address(api, tico):
-    """Spec 1b: stored there at upload with a cleaned copy beside it, typed, inline and with the policy slots; the
+    """Spec 1b: stored there at upload with its hosted copy beside it, typed, inline and with the policy slots; the
     reader gets a `src` on the app's own route, which sends them to a signed link to the copy. Making and checking
     the copy reads nothing back through the edge, so nothing is counted as delivered for it."""
     made, hq, sync = tico
@@ -91,8 +91,8 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
     tid, files, comment = page_and_svg(api)
     bucket = made["AKIATICOHOSTING0001"]
     copies = visuals_in(bucket)
-    # Each page and SVG stored there: the page as uploaded, the version posting it made (references removed) and the SVG.
-    assert len(copies) == 3, sorted(bucket.objects)
+    # Each page and SVG stored there: the page as written (posted as it is) and the SVG.
+    assert len(copies) == 2, sorted(bucket.objects)
     delivered = hq.edge.delivered.get(ADDRESS, 0)
 
     class Unread:  # a read there is through the company's address, as delivery
@@ -115,10 +115,9 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         key = "c/acme" + path
         assert key in copies, (key, sorted(copies))
         body = copies[key]
-        assert b"tracker.example" not in body and b"steal()" not in body, "the cleaned bytes, not the upload"
         kind_type, how = bucket.meta[key]
         meta = bucket.metadata[key]
-        assert how == "inline" and meta["tico-visual-policy-version"] == "1"
+        assert how == "inline" and meta["tico-visual-policy-version"] == "2" and "tico-visual-script" not in meta
         assert meta["sha256"] == hashlib.sha256(body).hexdigest()
         assert (
             meta["tico-visual-ancestors"].split()
@@ -126,10 +125,11 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         )
         if kind == "page":
             assert kind_type == "text/html; charset=utf-8"
-            assert meta["tico-visual-script"] == "'" + V.REPORTER_HASH + "'"
-            assert body.endswith(b"<script>" + V.REPORTER.encode() + b"</script>"), "the height reporter is appended"
+            assert body == PAGE.encode() + b"<script>" + V.REPORTER.encode() + b"</script>", (
+                "as written, plus the reporter"
+            )
         else:
-            assert kind_type == "image/svg+xml" and "tico-visual-script" not in meta
+            assert kind_type == "image/svg+xml"
             assert body == V.clean(SVG.encode(), "svg")[0]
         # The edge serves the copy on that link.
         served = hq.edge(urllib.request.Request(location), 60).read()
@@ -180,7 +180,7 @@ def test_an_old_page_in_tico_storage_gets_its_copy_on_first_view(api, tico):
     follow(api, shown["svg"]["src"])
     assert len(visuals_in(bucket)) == 2
     first = hq.edge.delivered[ADDRESS] - before
-    assert first == shown["page"]["size"] + shown["svg"]["size"], "each posted version read once, to clean it"
+    assert first == shown["page"]["size"] + shown["svg"]["size"], "each posted version read once, to copy it"
     follow(api, shown["page"]["src"])
     assert hq.edge.delivered[ADDRESS] - before == first, "later views use the copy"
 
@@ -204,7 +204,7 @@ def test_move_existing_files_stores_the_copy_and_until_then_a_page_on_disk_stays
     tico_storage.start_move(api.app.state.store, api.app.state.blobs, Owner(), size, wait=True)
     assert hq.edge.delivered == delivered, "the copies are made from the bytes moved, nothing read back"
     bucket = made["AKIATICOHOSTING0001"]
-    assert len(visuals_in(bucket)) == 3, "the page as uploaded, the version posted and the SVG"
+    assert len(visuals_in(bucket)) == 2, "the page as written and the SVG"
     shown = items(api, tid, comment)
     for kind in ("page", "svg"):
         follow(api, shown[kind]["src"])

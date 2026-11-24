@@ -83,10 +83,9 @@ and `tico meeting read ID` (`--notes` for saved meeting notes).
 
 Each read checks current access; a task link or pin grants no additional access.
 
-**What a page may hold.** One `.html` file, up to 10 MB. It runs no script and loads nothing from elsewhere. Tico
-removes scripts and outside addresses when the page is published, and the answer lists what it removed
-(`unembedded`). Charts are inline SVG and pictures are `data:` addresses, as in
-[Visuals in replies](visuals.md#what-gets-embedded-in-a-page). Put the headline and the key numbers first: a card
+**What a page may hold.** One `.html` file, up to 10 MB. It is stored and runs as written: scripts, forms and
+storage work, from the visual or files address, never the app's own
+([Visuals in replies](visuals.md#in-a-chat-or-task-conversation)). The answer's `unembedded` is always empty. Put the headline and the key numbers first: a card
 shows the top of the page.
 
 ## Who can see it
@@ -127,7 +126,7 @@ Tico draws one line above every page, as a card and at full size. The page canno
 ## Live blocks
 
 A page can carry four live tags. The server replaces each one, when the page is shown, with a short list made for
-the one person or bot viewing it. The page itself stays static: no script runs and nothing is fetched.
+the one person or bot viewing it. The tags themselves fetch nothing: the lists are in the page when it loads.
 
 - `<tico-tasks waiting-on="viewer" [bot="SLUG"] [parent="TASK"] [limit="N"]></tico-tasks>`: the tasks waiting on the
   viewer, as links. Empty, it says "Nothing waiting on you".
@@ -207,7 +206,7 @@ gets a different page.
 
 Pages show inline when the install has a visual address (`TICO_VISUAL_ORIGIN`) or Tico file hosting
 ([Visuals in replies](visuals.md#self-hosting)). Without either, a page is an **Open** card with its title and status
-line, and opens in the file viewer's sandboxed preview. Pages have no scripts, so they look the same there.
+line, and opens in the file viewer's sandboxed preview, where its scripts run but it has no storage of its own.
 
 ## Archiving
 
