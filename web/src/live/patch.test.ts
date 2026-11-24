@@ -5,7 +5,7 @@ import { queryClient } from '@/data/query-client';
 import { keys } from '@/data/keys';
 import { FakeEventSource, frame, message, messageFrame, opening, task, taskFrame, AT } from './fake-stream';
 import { flushFrame } from './frame';
-import { type TaskList, type Timeline, patchTaskList, removeMessage, taskMatches, upsertMessage } from './patch';
+import { type TaskList, type Timeline, onRefetch, patchTaskList, removeMessage, taskMatches, upsertMessage } from './patch';
 import { startLive, stopLive } from './stream';
 
 beforeEach(() => {
@@ -269,6 +269,28 @@ describe('read-again topics', () => {
     FakeEventSource.last.feed(frame(901, 'setup', { seq: 901, actor: 'human:p1', at: AT, area: 'org' }));
     flushFrame();
     expect(rosters.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, true, true, true]);
+  });
+
+  it('keeps a read-after-the-one-in-flight ask that comes while a read already waits for its gap', async () => {
+    queryClient.setQueryData(['needs'], { items: [] });
+    // a plain read of the same key, after the stream's own (which reads after the read in flight)
+    const off = onRefetch('needs', () => [['needs']]);
+    const spy = vi.spyOn(queryClient, 'invalidateQueries');
+    try {
+      // the first event reads at once (after-read) and leaves a plain read waiting for the gap; the second asks again
+      FakeEventSource.last.feed(frame(901, 'needs', { seq: 901, actor: 'human:p1', at: AT }));
+      flushFrame();
+      FakeEventSource.last.feed(frame(902, 'needs', { seq: 902, actor: 'human:p1', at: AT }));
+      flushFrame();
+      spy.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+      // the waiting read is made the after-read way (each held query, exactly), not the plain one
+      expect(spy.mock.calls.map(([f]) => f)).toContainEqual({ queryKey: ['needs'], exact: true });
+      expect(spy.mock.calls.some(([f]) => (f as { refetchType?: string })?.refetchType === 'active')).toBe(false);
+    } finally {
+      off();
+      spy.mockRestore();
+    }
   });
 
   it('mark the letters list stale on a letters event', () => {

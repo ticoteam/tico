@@ -178,6 +178,33 @@ describe('one read mark per task', () => {
     await waitFor(() => expect(calls.find((c) => c.method === 'POST')).toEqual({ url: '/api/v2/threads/c9/read', method: 'POST', body: { seq: 9 } }));
   });
 
+  it('marks a task opened in a tab behind once that tab comes forward, and not after the page has gone', async () => {
+    let seen: DocumentVisibilityState = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => seen });
+    try {
+      queryClient.setQueryData(commentsOf('c10'), page(3, [2, 6], 'c10'));
+      const view = show(<Marks t={on('c10')} own />, '/tasks/p1/12');
+      await act(async () => {});
+      expect(calls.some((c) => c.method === 'POST')).toBe(false);
+      seen = 'visible';
+      act(() => void document.dispatchEvent(new Event('visibilitychange')));
+      expect(calls.filter((c) => c.method === 'POST')).toEqual([{ url: '/api/v2/threads/c10/read', method: 'POST', body: { seq: 9 } }]);
+      // gone: the tab coming forward again marks nothing (another task's thread, nothing marked there yet)
+      view.unmount();
+      queryClient.setQueryData(commentsOf('c11'), page(3, [2, 6], 'c11'));
+      seen = 'hidden';
+      const other = show(<Marks t={on('c11')} own />, '/tasks/p1/12');
+      await act(async () => {});
+      other.unmount();
+      seen = 'visible';
+      act(() => void document.dispatchEvent(new Event('visibilitychange')));
+      expect(calls.some((c) => c.url === '/api/v2/threads/c11/read')).toBe(false);
+    } finally {
+      // back to jsdom's own (always visible)
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
+  });
+
   it('marks nothing on a task filed in its owner’s main chat', async () => {
     queryClient.setQueryData(['thread', 'c7', 'timeline'], page(3, [2, 6]));
     show(<Marks t={t} own={false} />, '/tasks/p1/12');

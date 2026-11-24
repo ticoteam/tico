@@ -41,6 +41,8 @@ export function dispatch(channel: string, batch: unknown[]): void {
 const REFETCH_GAP_MS = 1000;
 const refetchedAt = new Map<string, number>();
 const trailing = new Map<string, ReturnType<typeof setTimeout>>();
+/** The keys a waiting read was asked to make after the read in flight (`afterRead`), by key. */
+const trailingAfterRead = new Set<string>();
 let pendingRefetch = new WeakSet<Promise<unknown>>();
 
 function refetchAfterRead(key: QueryKey): void {
@@ -66,12 +68,14 @@ function refetchAfterRead(key: QueryKey): void {
 
 function refetchSoon(key: QueryKey, afterRead = false): void {
   const id = JSON.stringify(key);
+  // a read already waiting takes this one's ask too: after the read in flight, if either asked so
+  if (afterRead) trailingAfterRead.add(id);
   if (trailing.has(id)) return;
   const wait = (refetchedAt.get(id) ?? -Infinity) + REFETCH_GAP_MS - Date.now();
   const go = () => {
     trailing.delete(id);
     refetchedAt.set(id, Date.now());
-    if (afterRead) refetchAfterRead(key);
+    if (trailingAfterRead.delete(id)) refetchAfterRead(key);
     else void queryClient.invalidateQueries({ queryKey: key, refetchType: 'active' }, { cancelRefetch: false });
   };
   if (wait <= 0) return go();
@@ -92,6 +96,7 @@ export function onRefetch<E = LiveEvent>(topic: Topic, keysFor: (event: E) => Qu
 export function resetPatchState(): void {
   for (const t of trailing.values()) clearTimeout(t);
   trailing.clear();
+  trailingAfterRead.clear();
   refetchedAt.clear();
   pendingRefetch = new WeakSet();
 }

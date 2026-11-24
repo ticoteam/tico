@@ -78,8 +78,15 @@ export function useTaskReadMark(t: Pick<TaskData, 'conversation_id' | 'sessions'
   );
   const old = useOpenedMark(thread);
   const newest = Math.max(0, ...rowsOf(data).map((m) => m.seq ?? 0), ...t.sessions.map((s) => s.last_seq ?? 0));
+  // only while the page is seen: a task opened in a tab behind is marked read once that tab comes forward
   useEffect(() => {
-    if (thread && old !== null && newest > old && document.visibilityState === 'visible') markRead(thread, newest);
+    if (!thread || old === null || newest <= old) return;
+    const mark = () => {
+      if (document.visibilityState === 'visible') markRead(thread, newest);
+    };
+    mark();
+    document.addEventListener('visibilitychange', mark);
+    return () => document.removeEventListener('visibilitychange', mark);
   }, [thread, old, newest]);
 }
 

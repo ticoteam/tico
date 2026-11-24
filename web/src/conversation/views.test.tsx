@@ -22,6 +22,8 @@ const msg = (seq: number, sender: string, body: string, extra: Partial<ChatMessa
 /** What the stand-in server answers: the timeline per view (by its address), who a Reply reaches, a posted comment. */
 let pages: { comments: ChatMessage[]; session: ChatMessage[] };
 let reach: { actor: string }[];
+/** The thread's read mark the timeline reads with. */
+let mark: number;
 let calls: { url: string; method: string; body: unknown }[];
 const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
 
@@ -31,7 +33,7 @@ function serve() {
     calls.push({ url, method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     if (url.includes('/timeline')) {
       const messages = url.includes('comments=true') ? pages.comments : url.includes('session=') ? pages.session : [...pages.comments, ...pages.session];
-      return json({ messages, next_cursor: null, read_marks: { [T]: 1 } });
+      return json({ messages, next_cursor: null, read_marks: { [T]: mark } });
     }
     if (url.includes('/reach')) return json({ thread_id: T, reaches: reach, outside: [] });
     if (url.includes('/comments')) {
@@ -96,6 +98,7 @@ afterAll(() => {
 beforeEach(() => {
   calls = [];
   reach = [{ actor: 'bot:qa' }];
+  mark = 1;
   pages = {
     comments: [
       msg(1, 'human:ana', 'Ship it Friday?'),
@@ -126,6 +129,15 @@ describe("a task's comments", () => {
     expect(order).toEqual(['message:m1', 'message:m4', 'message:m5', 'message:m2', 'message:m6']);
     const under = [...document.querySelectorAll('.msg-under [data-target]')].map((e) => e.getAttribute('data-target'));
     expect(under).toEqual(['message:m4', 'message:m5']);
+  });
+
+  it('draws the New line once, before the first unread message as the list reads: a reply under an older comment', async () => {
+    // read up to m4: unread are m5 (a reply under m1, drawn before m2) and m6
+    mark = 4;
+    show({ comments: true });
+    await screen.findByText('Thanks');
+    const order = [...document.querySelectorAll('[data-target^="message:"], .day.is-new')].map((e) => e.getAttribute('data-target') ?? 'New');
+    expect(order).toEqual(['message:m1', 'message:m4', 'New', 'message:m5', 'message:m2', 'message:m6']);
   });
 
   it('has Reply on a person’s and an agent’s comment, never on a Tico line', async () => {

@@ -136,10 +136,22 @@ function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, i
   let newShown = false;
   let last: ChatMessage | null = null;
   const ordered = nested ? nest(rows) : rows.map((m) => ({ m, under: undefined }));
+  // the "New" line, once: before the first message past the read mark as the list reads, a reply under an older
+  // comment included
+  const isNew = (m: ChatMessage) => {
+    const mark = marks?.get(m.thread_id || id) ?? marks?.get(id);
+    return !newShown && mark != null && typeof m.seq === 'number' && m.seq > mark && m.sender_id !== me && !m.pending;
+  };
   for (const { m, under } of ordered) {
     if (m.hidden) continue;
     if (under) {
-      if (m.deleted || (m.body ?? '').trim() || m.refs?.attachments?.length) out.push({ k: 'msg', key: m.id, m, cont: false, under });
+      if (m.deleted || (m.body ?? '').trim() || m.refs?.attachments?.length) {
+        if (isNew(m)) {
+          newShown = true;
+          out.push({ k: 'day', key: 'new', label: 'New', isNew: true });
+        }
+        out.push({ k: 'msg', key: m.id, m, cont: false, under });
+      }
       last = null;
       continue;
     }
@@ -149,8 +161,7 @@ function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, i
       out.push({ k: 'day', key: `day:${d}`, label: dayLabel(m.created_at), isNew: false });
       last = null;
     }
-    const mark = marks?.get(m.thread_id || id) ?? marks?.get(id);
-    if (!newShown && mark != null && typeof m.seq === 'number' && m.seq > mark && m.sender_id !== me && !m.pending) {
+    if (isNew(m)) {
       newShown = true;
       out.push({ k: 'day', key: 'new', label: 'New', isNew: true });
       last = null;
