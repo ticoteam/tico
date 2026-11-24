@@ -5,7 +5,6 @@ import { useAction } from '@/actions';
 import { meQuery } from '@/data';
 import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
-import { pressListRow } from '@/lib';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { announce, useDrag } from '@/kit/Drag';
@@ -385,11 +384,9 @@ function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; m
       title={t.title}
       data-target={`task:${t.number ?? t.id}`}
       aria-pressed={onPick ? !!picked : undefined}
-      onClick={(e) => {
-        onPick?.(e);
-        // opened from its board: an answer that leaves nothing on it goes on to the task below it in the list beside it
-        pressListRow(p.id, String(t.number ?? t.id), e);
-      }}
+      onClick={onPick}
+      // opened from its board, its list is the board's pipeline
+      data-list={p.id}
       // the card's wrapper drags it, not the link (while picking nothing drags)
       draggable={picked === undefined ? false : undefined}
     >
@@ -520,11 +517,9 @@ function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, to
                       mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, needs)}
                       selected={picking?.has(t.id)}
                       aria-pressed={picking ? picking.has(t.id) : undefined}
-                      onClick={(e) => {
-                        picker(toggle, t.id)?.(e);
-                        // opened from its board, as its card does (TaskPage goes on down the list beside it)
-                        pressListRow(p.id, String(t.number ?? t.id), e);
-                      }}
+                      onClick={picker(toggle, t.id)}
+                      // opened from its board, as its card is
+                      data-list={p.id}
                       late={!!t.late}
                       pills={<Blocks t={t} />}
                       avatar={<Face actor={t.owner_id} />}

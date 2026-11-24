@@ -118,7 +118,8 @@ export const tasksSearch = defineSearch({
         name: exact.includes(t) ? words : `#${t.number}`,
         meta: (t.stage_id && stages.get(t.stage_id)) || (t.pipeline_id && names.get(t.pipeline_id)) || undefined,
         lead: owner ? faceOf(owner) : { icon: 'tasks' as const },
-        run: { id: 'task.open', input: t.pipeline_id ? { task: t.number, pipeline: t.pipeline_id } : { task: t.number } },
+        // opened from here, its list is this search's hits
+        run: { id: 'task.open', input: { task: t.number, list: `search:${words}` } },
       };
     });
   },

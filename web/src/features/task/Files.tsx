@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useNavigate } from '@tanstack/react-router';
+import { useNavigate } from '@tanstack/react-router';
 import { useRef, useState } from 'react';
 import { run } from '@/actions';
 import type { TaskFileResult } from '@/api/schema';
@@ -11,7 +11,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
-import { fmtDate } from '@/lib';
+import { changeWords, fmtDate } from '@/lib';
 import { DETAILS, failedToast, isPage, reasonOf, tabAddress } from './model';
 import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import type { Versions } from './Versions';
@@ -31,14 +31,10 @@ export function download(url: string, name: string) {
   a.remove();
 }
 
-/** Where Details is from the address on screen: the task's own tab. */
+/** The open task's Details. */
 function useToDetails() {
   const navigate = useNavigate();
-  const { pathname } = useLocation();
-  return () => {
-    const m = /^(\/tasks\/[^/]+\/[^/]+)/.exec(pathname);
-    return m ? navigate({ to: `${m[1]}/${DETAILS}` as never }) : undefined;
-  };
+  return () => navigate({ to: '.', search: changeWords(() => ({ tab: DETAILS })) as never, replace: true });
 }
 
 const clock = new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' });

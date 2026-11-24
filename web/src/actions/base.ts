@@ -1,5 +1,6 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
+import { withOpen } from '@/lib';
 import { openSearch } from '@/search';
 import { resetSheetSizes } from '@/shell';
 import { bound } from './bind';
@@ -81,16 +82,24 @@ export const resetSizes = defineAction({
   target: () => ({ kind: 'setting', id: 'sizes' }),
 });
 
+/** A task over the page you are on (router.tsx opens a task's address there); `list`: the list it opens with, the
+    one it was found in (`search:<words>`), else Needs you. */
+const openOver = (router: AnyRouter, task: number, pipeline?: string, list?: string) =>
+  list
+    ? router.navigate({ to: '.', search: ((s: Record<string, unknown>) => withOpen(s, { task: String(task), list })) as never })
+    : router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` });
+
 export const openTask = defineAction({
   id: 'task.open',
   title: copy.openTask,
   kind: 'view',
-  input: z.strictObject({ task: z.int().check(z.minimum(1)), pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
-  run: ({ router }, { task, pipeline }) =>
-    // Without a pipeline the deep-link route finds it and redirects with replace (architecture.md 3).
-    router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` }),
-  show: ({ router }, { task, pipeline }) =>
-    router.navigate({ to: pipeline ? `/tasks/${encodeURIComponent(pipeline)}/${task}` : `/task/${task}` }),
+  input: z.strictObject({
+    task: z.int().check(z.minimum(1)),
+    pipeline: z.optional(z.string().check(z.minLength(1), z.maxLength(100))),
+    list: z.optional(z.string().check(z.minLength(1), z.maxLength(220))),
+  }),
+  run: ({ router }, { task, pipeline, list }) => openOver(router, task, pipeline, list),
+  show: ({ router }, { task, pipeline, list }) => openOver(router, task, pipeline, list),
   did: ({ task }) => copy.didOpenTask(task),
   target: ({ task }) => ({ kind: 'task', id: task }),
 });

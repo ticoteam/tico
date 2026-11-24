@@ -1,9 +1,11 @@
 import { lazy } from 'react';
 
 // One open task, everywhere it appears. The only file other code imports from this feature.
-export { TaskPage, TaskById, type TaskPageProps, type TaskChatProps } from './TaskPage';
+export { TaskPage, type TaskPageProps, type TaskChatProps } from './TaskPage';
 export const TaskChat = lazy(() => import('./TaskPage').then((m) => ({ default: m.TaskChat })));
-export { loadTask, taskRefQuery, taskDetailQuery, taskAddress, taskSearch, type TaskSearch } from './routing';
+/** A task open over any page (`?task=`): drawn by the root, its code loaded the first time one opens. */
+export const TaskModal = lazy(() => import('./TaskModal').then((m) => ({ default: m.TaskModal })));
+export { loadTask, taskRefQuery, taskDetailQuery, taskAddress } from './routing';
 export { useApprovalCards, approvalCard, type ApprovalScope } from './ThreadCards';
 export { AskCard } from './AskCard';
 export { ChatQuestions } from './ChatQuestions';

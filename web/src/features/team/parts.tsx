@@ -32,6 +32,8 @@ export function OwnRow({ task, waits, sub }: { task: OwnTask; waits: boolean; su
       title={task.title ?? ''}
       href={taskHref(task)}
       target={`task:${task.number ?? task.id}`}
+      // opened from here, the task's list is its owner's open tasks
+      data-list={task.owner_id ?? undefined}
       mark={waits ? <FlowMark /> : undefined}
       late={task.status === 'open' && !!task.late}
       pills={sub ? <span className="row-stage">{sub}</span> : undefined}

@@ -1,7 +1,10 @@
 import { useQuery, type QueryClient } from '@tanstack/react-query';
+import { redirect, useRouterState } from '@tanstack/react-router';
+import { useMemo } from 'react';
 import { timelineQuery } from '@/conversation';
 import { threadQuery } from '@/features/threads/routing';
 import { meQuery } from '@/data';
+import { coldOf, coldPage, openOf, type TaskWords } from '@/lib';
 import { pipelinesQuery } from '@/features/tasks/routing';
 import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
@@ -11,26 +14,6 @@ import { questionsFor, waitSlugs, waitsOnYou } from './waits';
 // here: the first load imports this file, and the task page comes through exports.ts with its route.
 export { taskRefQuery, taskDetailQuery };
 export { tabAddress as taskAddress, CHAT as CHAT_TAB } from './model';
-
-/** The open task as its route loaded it, read from what is already there (never a read of its own, so the shell can ask
-    on every page): the phone's Agent icon shows its agent, and comes up for a ❓ to the person in its chat (its waits
-    name them, whatever its turn shows first: an approval it shares goes first there). */
-export function useLoadedTask(param: string | undefined): { task: TaskData | undefined; asked: string[] } {
-  const id = useQuery({ ...taskRefQuery(param ?? ''), enabled: false }).data;
-  const task = useQuery({ ...taskDetailQuery(id), enabled: false }).data;
-  const me = useQuery({ ...meQuery, enabled: false }).data?.id;
-  return { task: param ? task : undefined, asked: param && task?.conversation_id ? questionsFor(task, me) : [] };
-}
-
-/** A closed task's board for `leaveTask` when nothing is behind it: its pipeline while that is still one, else none
-    (Tasks). Read only when it is needed. */
-export const boardOf =
-  (client: QueryClient, pipeline: string | null | undefined) =>
-  async (): Promise<string | null> => {
-    if (!pipeline) return null;
-    const live = await client.ensureQueryData(pipelinesQuery).catch(() => []);
-    return live.some((p) => p.id === pipeline) ? pipeline : null;
-  };
 
 /** Load the task while the route loads its code, and with `openChat` the view its chat opens on: the comments, or the
     agent's session the address names (`?session=`). A refused read leaves the page to show the error. */
@@ -80,56 +63,20 @@ export async function loadTask(
   }
 }
 
-/** Where `/task/<n>` goes: the task under its pipeline, on the tab its address names (`?tab=`) or the one loadTask
-    opens, with the address's other words (an ask, a version, a thread beside it). Null when the task did not load. */
-export async function ownAddress(client: QueryClient, param: string, search: Record<string, unknown>, openChat = false) {
-  const { tab: named, ...rest } = search;
-  const loaded = await loadTask(client, param, typeof named === 'string' && named ? named : undefined, openChat, rest.session);
-  if (!loaded) return null;
-  const { task, tab } = loaded;
-  return {
-    to: '/tasks/$pipeline/$task/$tab' as const,
-    params: { pipeline: task.pipeline_id ?? 'all', task: String(task.number ?? task.id), tab },
-    search: rest,
-  };
+const NO_WORDS: TaskWords & { list?: string } = Object.freeze({});
+
+/** The open task's own words (lib openOf: its tab, an ask, a version, a session) and the list it was opened from. */
+export function useTaskWords(): TaskWords & { list?: string } {
+  const search = useRouterState({ select: (s) => s.location.search as Record<string, unknown> });
+  return useMemo(() => {
+    const open = openOf(search);
+    return open ? { ...open.words, ...(open.list && { list: open.list }) } : NO_WORDS;
+  }, [search]);
 }
 
-/**
- * What a task's address may carry: a file opened from Details (`full` shows a picture full size), the version of the
- * open page (`v`) with the one its changes are marked against (`vs`), and an email's file opened from its Email tab
- * (`part`).
- */
-export interface TaskSearch {
-  file?: string;
-  full?: string;
-  v?: number;
-  vs?: number;
-  part?: number;
-  /** The ask a card opened the task for (its requirement id): its tab, the version it pinned and its Approve. */
-  ask?: string;
-  /** The agent whose session the task's chat shows (`bot:<id>`); none: the comments. */
-  session?: string;
-}
-
-const whole = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN);
-const n = (x: unknown): number | undefined => {
-  const v = whole(x);
-  return Number.isInteger(v) && v > 0 ? v : undefined;
-};
-
-/** `validateSearch` for the task routes: keeps the words it knows, drops anything else. */
-export function taskSearch(raw: Record<string, unknown>): TaskSearch {
-  const out: TaskSearch = {};
-  if (typeof raw.file === 'string' && raw.file) out.file = raw.file;
-  if (typeof raw.full === 'string' && raw.full) out.full = raw.full;
-  if (typeof raw.ask === 'string' && raw.ask) out.ask = raw.ask;
-  if (typeof raw.session === 'string' && raw.session.startsWith('bot:')) out.session = raw.session;
-  const v = n(raw.v);
-  const vs = n(raw.vs);
-  if (v) out.v = v;
-  if (vs) out.vs = vs;
-  // An email's files count from 0.
-  const part = whole(raw.part);
-  if (Number.isInteger(part) && part >= 0) out.part = part;
-  return out;
+/** A task's own address loaded with nothing on screen (a link, a bookmark, a reload, a new tab): the task over the page
+    it belongs on, its board or Tasks (lib coldPage). In the app its links open over the page they are on (router.tsx). */
+export function openCold({ location }: { location: { pathname: string; search: unknown } }): never {
+  const cold = coldOf(location.pathname.replace(/^\/next(?=\/|$)/, ''), location.search as Record<string, unknown>);
+  throw redirect({ ...(cold ? coldPage(cold, location.search as Record<string, unknown>) : { to: '/tasks' }), replace: true } as never);
 }

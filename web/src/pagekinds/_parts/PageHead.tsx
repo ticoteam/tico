@@ -1,7 +1,8 @@
 import { Link, useLocation, useRouter, type LinkProps } from '@tanstack/react-router';
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { InViewer } from '@/kit/Viewer';
 import { stepBackIs, watchSteps } from '@/lib';
 import { upOf, useSheet, useTrail } from '@/shell';
 import { showPageName } from '@/tico/pageName';
@@ -40,8 +41,10 @@ export function PageHead({ title, path, lead, after, actions, search, more, onRe
   // the page's own way back (an open task's) also closes it when it was opened from a thread
   const leave = onBack ?? (() => closeArtifact(router, back?.to));
   const [renaming, setRenaming] = useState(false);
-  // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names
-  useEffect(() => showPageName(title), [title]);
+  // a name that arrives after the route drew (its data came later, a rename) reaches the tab title and the page a message to Tico names;
+  // a page over another (a task open over it) leaves that page's name
+  const over = use(InViewer);
+  useEffect(() => (over ? undefined : showPageName(title)), [title, over]);
   useEffect(() => watchSteps(router), [router]);
   return (
     <header className="page-head pk-head">

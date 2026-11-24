@@ -57,7 +57,7 @@ export function PageTabs({ tabs, label, after }: PageTabsProps) {
   // a page opened from a thread keeps it beside every tab (lib besideThread)
   const beside = search.via === 'thread' && typeof search.chat === 'string' ? { chat: search.chat, via: 'thread' } : null;
   const keyOf = (t: PageTab) => `${t.to}?${new URLSearchParams(t.search).toString()}`;
-  const onKey = tabs.filter((t) => isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
+  const onKey = tabs.filter((t) => t.on ?? isOn(t, at.pathname, search, rowKeys)).map(keyOf)[0] ?? '';
   const row = useRef<HTMLDivElement>(null);
 
   // the open tab in view, each time it changes

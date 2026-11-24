@@ -1,0 +1,40 @@
+/* A task open over a page (plan: the task modal): the list it came from, the agent's chat on it and the task, side by
+   side on the Viewer's sheet. Each column scrolls itself. Under 1100px the list folds to a tab at the left edge and
+   pulls out over the chat; on a phone the task and its chat are tabs and the list pulls up from the bottom. */
+.vw-body>.tmd{position:relative;display:grid;grid-template-columns:288px minmax(320px,1fr) minmax(0,1.7fr);grid-template-rows:minmax(0,1fr);min-height:0;min-width:0;overflow:hidden}
+.tmd>.pane{border-radius:0;box-shadow:none;min-height:0;height:auto}
+.tmd>.tmd-list{grid-column:1;border-right:1px solid var(--line)}
+.tmd>.tmd-chat{grid-column:2;border-right:1px solid var(--line)}
+.tmd>.tmd-task{grid-column:3}
+.tmd .tmd-fold,.tmd>.tmd-tab,.tmd>.tmd-more,.tmd>.tmd-panes,.tmd>.tmd-dim{display:none}
+/* the task's own way back is the layer's Close */
+.tmd .pk-back{display:none}
+/* a file opened from Details, one layer up */
+.vw-body>.tv-layer{min-height:0;display:flex;flex-direction:column;overflow:hidden}
+
+@media (width < 1100px){
+  .vw-body>.tmd{grid-template-columns:minmax(300px,1fr) minmax(0,1.5fr)}
+  .tmd>.tmd-chat{grid-column:1}
+  .tmd>.tmd-task{grid-column:2}
+  .tmd>.tmd-list{position:absolute;inset:0 auto 0 0;width:300px;z-index:var(--z-pop);background:var(--sheet);box-shadow:var(--lift-3);transform:translateX(-100%);visibility:hidden;transition:transform var(--dur-enter) var(--ease-arrive),visibility 0s linear var(--dur-enter)}
+  .tmd.is-list-up>.tmd-list{transform:none;visibility:visible;transition:transform var(--dur-enter) var(--ease-arrive)}
+  .tmd.is-list-up>.tmd-dim{display:block;position:absolute;inset:0;z-index:var(--z-stick);border:0;padding:0;background:var(--scrim);opacity:.25}
+  .tmd .tmd-fold{display:inline-flex}
+  .tmd>.tmd-tab{display:flex;align-items:center;justify-content:center;position:absolute;left:0;top:var(--s-3);z-index:var(--z-stick);width:28px;height:var(--s-10);padding:0;border:1px solid var(--line);border-left:0;border-radius:0 var(--r-ctl) var(--r-ctl) 0;background:var(--raised);color:var(--muted);cursor:pointer}
+  .tmd>.tmd-tab:hover{color:var(--ink)}
+  .tmd>.tmd-chat .side-head{padding-left:var(--s-8)}
+}
+
+:where(html[data-layout="cards"]){
+  .vw-body>.tmd{display:flex;flex-direction:column}
+  .tmd>.tmd-panes{display:flex;justify-content:center;flex:none;padding:0 var(--s-4) var(--s-2)}
+  .tmd>.tmd-chat,.tmd>.tmd-task{flex:1;border:0}
+  .tmd[data-pane="task"]>.tmd-chat,.tmd[data-pane="chat"]>.tmd-task{display:none}
+  .tmd>.tmd-tab{display:none}
+  .tmd>.tmd-dock{flex:none}
+  .tmd>.tmd-dock>.dock{display:flex;padding-bottom:var(--s-2)}
+  .tmd>.tmd-more{display:flex;align-items:center;justify-content:center;gap:var(--s-1);flex:none;height:44px;padding:0 0 calc(env(safe-area-inset-bottom));border:0;border-top:1px solid var(--line);background:var(--raised);color:var(--muted);font-size:var(--t-sm);cursor:pointer}
+  .tmd>.tmd-list{position:absolute;inset:auto 0 0;width:auto;height:70%;z-index:var(--z-pop);border:0;border-radius:var(--r-pane) var(--r-pane) 0 0;box-shadow:var(--lift-3);transform:translateY(100%);visibility:hidden}
+  .tmd.is-list-up>.tmd-list{transform:none;visibility:visible}
+  .tmd .page,.tmd .tv{height:auto}
+}

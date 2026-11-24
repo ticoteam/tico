@@ -208,7 +208,8 @@ function Mine({ sorting, bare = false }: { sorting: boolean; bare?: boolean }) {
   return (
     <>
       {rows.length > 0 && (bare ? list : (
-        <section className="stage pk-sec flow-mine" aria-label="Needs you">
+        // a task opened from here opens with Needs you as its list (router.tsx)
+        <section className="stage pk-sec flow-mine" aria-label="Needs you" data-list="">
           {list}
         </section>
       ))}

@@ -7,7 +7,7 @@ import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
 import { useFollow } from '@/live/follow';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
-import { loadTask, useLoadedTask } from './routing';
+import { loadTask } from './routing';
 import { TaskPage } from './TaskPage';
 
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
@@ -146,7 +146,7 @@ afterEach(() => {
 });
 
 describe('task route loading', () => {
-  it('a ❓ for the person in its chat opens on its page, on a phone too, and the shell reads it from what loaded to raise the chat', async () => {
+  it('a ❓ for the person in its chat opens on its page, on a phone too', async () => {
     // the turn shows an approval the person shares (it goes first, backend/waiting_on.py); their ❓ is in the waits
     const turn = { state: 'person', who: 'human:me', line: 'Approve the plan?', requirement_id: 'r1', ask: true };
     const waits = [turn, { state: 'person', who: 'human:me', line: 'Keep it?', requirement_id: 'qmark:q1', ask: true }];
@@ -159,24 +159,6 @@ describe('task route loading', () => {
     } finally {
       delete document.documentElement.dataset.layout;
     }
-    const seen: boolean[] = [];
-    const Shell = ({ task: n }: { task: string }) => {
-      seen.push(useLoadedTask(n).asked.length > 0);
-      return null;
-    };
-    const { rerender } = render(
-      <QueryClientProvider client={queryClient}>
-        <Shell task="12" />
-      </QueryClientProvider>,
-    );
-    expect(seen.at(-1)).toBe(true);
-    queryClient.setQueryData(['me'], { id: 'human:ana', email: '', role: 'person', slug: null });
-    rerender(
-      <QueryClientProvider client={queryClient}>
-        <Shell task="12" />
-      </QueryClientProvider>,
-    );
-    await waitFor(() => expect(seen.at(-1)).toBe(false));
   });
 
   it('reuses a task read from an older id link when redirecting to its numbered address', async () => {
