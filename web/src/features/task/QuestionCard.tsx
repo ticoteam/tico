@@ -22,6 +22,8 @@ export interface QuestionCardProps {
   task: string;
   /** The agent's line: the question. */
   line: string;
+  /** The message's lines after it, when it has more (numbered questions): shown whole under it. */
+  detail?: string;
   /** Up to three answers, the agent's pick first. */
   choices?: readonly string[];
   /** The agent that asks. */
@@ -37,7 +39,7 @@ const heldReplies = new Map<string, { hold: string; why: string }>();
     this is the five-minute backstop the app polls at, never faster. */
 export const HELD_EVERY_MS = 5 * 60_000;
 
-export function QuestionCard({ id, task, line, choices = [], who }: QuestionCardProps) {
+export function QuestionCard({ id, task, line, detail, choices = [], who }: QuestionCardProps) {
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [state, setNow] = useState<State>(() => {
@@ -115,6 +117,8 @@ export function QuestionCard({ id, task, line, choices = [], who }: QuestionCard
           )}
         </>
       }
-    />
+    >
+      {detail && <p className="askcard-what askcard-text">{detail}</p>}
+    </AskCard>
   );
 }

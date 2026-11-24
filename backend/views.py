@@ -2042,6 +2042,9 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
     from . import threads
 
     reader = threads.actor_viewer(c, who.actor) if questions else None
+    # The ❓'s words beyond its line (its answers, its other lines) only for the request's own viewer (its Auth, an
+    # Assistant run's scope and all: question_marks.offered_to), never one rebuilt from the actor id; none for a count.
+    own = threads.viewer(auth, who) if questions and not count_only else None
     for it in questions:
         if it.get("task_id") and it["task_id"] not in readable:
             continue
@@ -2055,6 +2058,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
         shows = (
             [str(r) for r in refs.get("shows") or [] if str(r).startswith("browser:")] if isinstance(refs, dict) else []
         )
+        words = own is not None and threads.message_readable(c, own, message)
+        detail = question_marks.detail_of(message) if words else ""
         items.append(
             {
                 "kind": "question",
@@ -2066,7 +2071,8 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "task_id": it.get("task_id"),
                 "from_id": it["bot_id"],
                 "line": it["line"],
-                "choices": it.get("choices") or [],
+                "choices": (it.get("choices") or []) if words else [],
+                **({"detail": detail} if detail else {}),
                 "since": it["since"],
                 "task": briefs.get(it.get("task_id")),
                 **({"shows": shows} if shows else {}),

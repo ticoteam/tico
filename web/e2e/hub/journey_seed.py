@@ -9,8 +9,10 @@
 - Anthropic and OpenAI on as the company's providers, as onboarding leaves them, so Settings > Models has models.
 - A thread Dana opened with Omar.
 
-seed() returns the ids a journey needs. It also adds two test routes on the server: POST /_e2e/drain (one pass of the
-email queue, as the server's own sender runs it) and GET /_e2e/sent (what reached the fake Gmail).
+seed() returns the ids a journey needs. It also adds test routes on the server: POST /_e2e/drain (one pass of the
+email queue, as the server's own sender runs it), GET /_e2e/sent (what reached the fake Gmail) and POST /_e2e/ask (a
+Launch task on which the Engineering Lead asks Dana a ❓, two numbered questions under it, with three suggested answers; only the journey that answers one
+calls it, so the others' Needs you holds the two emails alone).
 """
 
 import base64
@@ -155,6 +157,32 @@ def board(world):
     return {"pipeline": "launch", "tasks": made}
 
 
+QUESTION = "Ship the launch note on Friday?\n1. Is the pricing line final?\n2. Should the beta list get it too?"
+ANSWERS = [
+    "Yes, ship it on Friday morning as planned",
+    "Not yet, wait for the pricing page update",
+    "Ship it now and skip the Friday review",
+]
+
+
+def asks(world):
+    """POST /_e2e/ask?title=...: a Launch task on which the Engineering Lead asks Dana a ❓ (a line, then two numbered
+    questions), offering three answers."""
+    from backend import hubdb as H, question_marks
+
+    def ask(title: str):
+        made = world.api("post", "/api/v2/tasks", {"title": title, "owner": DANA_ID, "pipeline": "launch"}, who=DANA)
+        task = _ok(made, title)
+        task = task.get("task", task)
+        lead = "bot:" + LEAD_ID
+        with world.store.transaction() as c:
+            said = H.task_comment(c, lead, task["id"], QUESTION, wake=False, checked=False)
+            mark = question_marks.mark(c, lead, said["id"], "human:" + DANA_ID, checked=False, choices=ANSWERS)
+        return JSONResponse({"id": task["id"], "number": task["number"], "title": title, "mark": mark["id"]})
+
+    _route(world, "/_e2e/ask", ask, ["POST"])
+
+
 def providers(world):
     _ok(
         world.api(
@@ -174,4 +202,5 @@ def thread(world):
 
 def seed(world):
     providers(world)
+    asks(world)
     return {"mail": mail(world), "board": board(world), "thread": thread(world)}

@@ -148,6 +148,15 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .flow-wait{opacity:.45}
 .flow-sorting{min-height:1lh;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 :where(html[data-layout="cards"]) .flow-request .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
+/* a task row's ❓ card right under its title, answered there; the row carries the Dot */
+.flow-card{padding:0 var(--page-x) var(--s-2)}
+.flow-card:empty{display:none}
+.flow-card .askcard-top>.dot.flow{display:none}
+:where(html[data-layout="cards"]) .flow-card .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
+/* on a phone a ❓'s reply box takes its own line, so its answers keep theirs whole */
+:where(html[data-layout="cards"]) .flow-card .askcard-reply{flex-basis:100%;height:44px}
+/* and its answers share a line while they fit, each wrapping whole onto the next rather than squeezed into a column */
+:where(html[data-layout="cards"]) .flow-card .an-row .btn.askcard-choice{flex:1 0 auto}
 
 /* Needs you on top of Tasks: Mine's rows straight under the section's head; its head links the other views. On a
    phone a row's Why here sits at the end of its second line, so the title keeps the row's width. */

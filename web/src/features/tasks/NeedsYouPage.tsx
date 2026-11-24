@@ -2,7 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useSuspenseQuery } from '@tans
 import { Link, useLocation } from '@tanstack/react-router';
 import { useEffect, useRef, useSyncExternalStore, type SyntheticEvent } from 'react';
 import { hearPlaces, heldRow, holdRow } from '@/lib';
-import { RequestCard } from '@/features/task/exports';
+import { QuestionCard, RequestCard } from '@/features/task/exports';
 import { Button, FillContext } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
@@ -13,7 +13,7 @@ import { List, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { useNeedsYouDrawn } from './needs';
 import { Blocks, Face } from './parts';
-import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useContactNames, useFlowGroups, useNeedsYouSort, type Flow, type FlowItem, type FlowRequest } from './queries';
+import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useContactNames, useNeedsYouSort, type Flow, type FlowItem, type FlowRequest } from './queries';
 import './tasks.css';
 
 /** How many rows stay live while Tico sorts the list (backend/needs_order.py); the rest wait for the new order. */
@@ -70,9 +70,21 @@ function OriginDetails({ it }: { it: FlowItem }) {
   );
 }
 
+/** Whether a task's row is answered in place, by a card under it: an open ❓ on it. An approval is not: what it
+    approves (a page, a file, an email, a payment) is shown on the task, where Approve opens the next one. */
+const answersHere = (it: FlowItem): boolean => !!it.questions?.length;
+
+/** The card under a task's row (answersHere): its first ❓, whole, with the answers the agent offers and a reply box.
+    Answered, it leaves the row, and the next ❓ there shows; the last takes the row out of Needs you. */
+function RowCard({ it }: { it: FlowItem }) {
+  const q = it.questions?.[0];
+  return q ? <QuestionCard key={q.id} id={q.id} task={it.id} line={q.line} detail={q.detail} choices={q.choices} who={q.by} /> : null;
+}
+
 function FlowRow({ it, mine, contact }: { it: FlowItem; mine: boolean; contact?: string }) {
   const title = it.about || it.title;
-  const reason = it.reason;
+  // a ❓'s card under the row asks it: the row does not say it again
+  const reason = it.questions?.some((q) => q.line === it.reason) ? undefined : it.reason;
   return (
     <div className="flow-row">
       <TaskRow
@@ -92,26 +104,24 @@ function FlowRow({ it, mine, contact }: { it: FlowItem; mine: boolean; contact?:
   );
 }
 
-function RelationshipSections({ items, pages, mine = false }: {
-  items: readonly FlowItem[];
-  pages?: Parameters<typeof useFlowGroups>[1];
-  mine?: boolean;
-}) {
+/** The tasks of a view (All, Snoozed, Done) as one list, each row with its relationship's name as a chip. */
+function TaskRows({ items, pages }: { items: readonly FlowItem[]; pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] }) {
   const cards = useCards();
-  return useFlowGroups(items, pages).map((g) => (
-    <Section key={g.key} name={g.name} count={g.items.length}>
+  const names = useContactNames(pages);
+  return (
+    <Section name="Tasks" count={items.length}>
       <Capped
-        list={g.items}
+        list={items}
         cap={LIST_CAP}
         show={LIST_SHOW}
         height={cards ? PHONE_ROW_H : ROW_H}
         measure={cards}
         more={undefined}
-        draw={(it) => <FlowRow key={it.id} it={it} mine={mine} />}
+        draw={(it) => <FlowRow key={it.id} it={it} mine={false} contact={it.entity_id ? names.get(it.entity_id) : undefined} />}
         moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />}
       />
     </Section>
-  ));
+  );
 }
 
 function TaskSections({ read }: { read: ReturnType<typeof useFlowList> }) {
@@ -119,7 +129,7 @@ function TaskSections({ read }: { read: ReturnType<typeof useFlowList> }) {
   const items = new Map(pages?.flatMap((tasks) => tasks.map((task) => [task.id, flowTask(task)] as const)));
   return (
     <>
-      <RelationshipSections items={[...items.values()]} pages={pages} />
+      <TaskRows items={[...items.values()]} pages={pages ?? []} />
       {read.hasNextPage && <Button variant="quiet" disabled={read.isFetching} onClick={() => void read.fetchNextPage()}>
         {read.isFetchingNextPage ? 'Loading' : read.isFetchNextPageError ? 'Try again' : 'Show more'}
       </Button>}
@@ -167,21 +177,27 @@ function SnoozedAsks() {
 }
 
 /** What waits on you, as one list in Tico's order: requests' cards and tasks' rows, each task with its relationship's
-    name. While Tico sorts it, rows past the top LIVE wait, dimmed. */
+    name, and under a task's row the card for its ❓ when it has one (answersHere). The first card has the filled
+    button. While Tico sorts it, rows past the top LIVE wait, dimmed. */
 function Mine({ sorting, bare = false }: { sorting: boolean; bare?: boolean }) {
   const flow = useSuspenseQuery(flowQuery).data;
   const { rows, on, held } = useTicoOrder(flow);
   const names = useContactNames([flow.items]);
   const cards = useCards();
   const at = new Map(rows.map((row, i) => [row.id, i] as const));
-  const firstRequest = rows.find((row) => row.request)?.id;
+  const firstCard = rows.find((row) => row.request || answersHere(row.task))?.id;
   const shownTo = held ? (at.get(held) ?? -1) + 1 : 0; // the rows down to the one the person is on stay drawn
   const draw = (row: MineRow) => (
     <div key={row.id} className={sorting && rows.length > LIVE && (at.get(row.id) ?? 0) >= LIVE ? 'flow-item flow-wait' : 'flow-item'}
       onPointerDownCapture={on(row.id)} onFocusCapture={on(row.id)}>
-      {row.request
-        ? <FillContext value={row.id === firstRequest}><div className="flow-request"><RequestCard it={row.request} /></div></FillContext>
-        : <FlowRow it={row.task} mine contact={row.task.entity_id ? names.get(row.task.entity_id) : undefined} />}
+      <FillContext value={row.id === firstCard}>
+        {row.request
+          ? <div className="flow-request"><RequestCard it={row.request} /></div>
+          : <>
+            <FlowRow it={row.task} mine contact={row.task.entity_id ? names.get(row.task.entity_id) : undefined} />
+            {answersHere(row.task) && <div className="flow-card"><RowCard it={row.task} /></div>}
+          </>}
+      </FillContext>
     </div>
   );
   // `bare`: inside a section of its own (Tasks' Needs you), with its head

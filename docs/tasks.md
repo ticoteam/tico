@@ -264,6 +264,14 @@ you as the list beside it (title only, in the same order). Once you approve and 
 again. A new order that lands while you are on a row, or have a task from the list open, moves only the rows below it.
 The order holds on a phone, with the list tucked away, and past the list's cap.
 
+A task with an open ❓ to you has its card right under its row, so you answer it without leaving the list: the agent's
+whole question (its first line and any numbered questions after it), up to three answers to tap and a reply box. It
+shows whatever item the row stands for; answered, the task's next ❓ shows, and the last takes the row out of Needs
+you at once. An approval stays a row that opens the task, where what it approves is shown and Approve opens the next
+one. Requests (access, keys, key proposals) are cards of their own. The row's title always opens the task. The ❓'s
+lines after its first come in the Needs you read as `detail` (up to 2,000 characters, whole lines, then "…"), and its
+answers as `choices`, only when the request itself may read its message (an Assistant's run included).
+
 The Dot means one thing everywhere: Needs you names the task. A board's cards and column counts, the list beside a
 task, a task's own status line, Roadmap, Tags, a teammate's tasks, the Company floor's stage and Tico's tracker all read
 the same set (a paused agent's row names each of its tasks). A task that is your turn with nothing asked of you has no
@@ -271,8 +279,9 @@ Dot.
 
 Needs you's head on Tasks links **All · Snoozed · Done** (`/needs-you?view=all|snoozed|done`). **All** shows your team's
 open work and public Support tasks with no assignee or an assignee who is off. **Snoozed** and **Done** show your own
-tasks; Snoozed also shows asks you snoozed in Needs you. An ask returns when its snooze ends, or sooner if you choose
-Unsnooze. Plain `/needs-you` and old `/flow` links open Tasks (`/flow?view=all` opens All), and `/flow/<n>` the task.
+tasks; each view is one list, a task's relationship a chip on its row; Snoozed also shows asks you snoozed in Needs you.
+An ask returns when its snooze ends, or sooner if you choose Unsnooze. Plain `/needs-you` and old `/flow` links open
+Tasks (`/flow?view=all` opens All), and `/flow/<n>` the task.
 Task changes follow the usual permissions.
 
 The same All scope is available via `GET /api/v2/tasks?status=open&claimable=true`, `tico task list --status open

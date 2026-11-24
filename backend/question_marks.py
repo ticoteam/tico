@@ -44,6 +44,8 @@ H: Any = _hubdb  # untyped module, through Any as in ask_quality.py
 Row = dict[str, Any]
 
 
+DETAIL_MAX = 2000  # the most of a ❓'s lines after its first a list carries (detail_of), in characters
+
 PREFIX = "qmark:"  # a ❓'s wait and Needs-you item id: "qmark:<mark id>"
 SNOOZE_VISIT = "qmark"  # ask_snoozes.visit_id of a snoozed ❓; its requirement_id is the mark's id
 LINE_MAX = 160
@@ -479,6 +481,27 @@ def first_line(body: object) -> str:
     lines = str(body or "").strip().splitlines()
     one = " ".join((lines[0] if lines else "").split())
     return one if len(one) <= LINE_MAX else one[: LINE_MAX - 1].rstrip() + "…"
+
+
+def detail_of(message: Mapping[str, Any]) -> str:
+    """The marked message's lines after its first (`first_line` is the question): the rest of what it asks, numbered
+    questions included (ask_shape), as the person reads it in the chat; "" when it has none. A Warn rule's line the rule
+    check put before the bot's words is not part of it. At most DETAIL_MAX characters: whole lines while they fit (the
+    first cut short when it alone is longer), then "…"; the whole message is on the task's chat."""
+    from . import org_rule_check as _org_rule_check
+
+    body = str(cast(Any, _org_rule_check).unwarned(str(message.get("body") or "")))
+    rest = "\n".join(body.strip().splitlines()[1:]).strip()
+    if len(rest) <= DETAIL_MAX:
+        return rest
+    kept: list[str] = []
+    size = 0
+    for line in rest.splitlines():
+        if size + len(line) + 1 > DETAIL_MAX - 1:
+            break
+        kept.append(line)
+        size += len(line) + 1
+    return ("\n".join(kept).rstrip() if kept else rest[: DETAIL_MAX - 1].rstrip()) + "…"
 
 
 def room_of(conv: Mapping[str, Any]) -> str:

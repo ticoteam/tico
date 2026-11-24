@@ -11,14 +11,28 @@ import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { follow, resetFollows } from '@/live/follow';
 import { forgetPlaces, nextInList, noteList, notePlace } from '@/lib';
 import { dragTo } from '@/test/drag';
+import type * as VirtualListModule from '@/kit/VirtualList';
 import { ArchivedSections } from './Archived';
-import { useNeedsYou } from './needs';
+import { leaveNeedsYou, needsYouWithout, useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
 import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, pipelinesQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
+type VirtualLists = typeof VirtualListModule;
+// The real long list, with what each draw was asked to do kept (a long Needs you measures its rows).
+const virtual = vi.hoisted(() => ({ measure: [] as (boolean | undefined)[] }));
+vi.mock('@/kit/VirtualList', async (orig) => {
+  const real = await orig<VirtualLists>();
+  return {
+    ...real,
+    VirtualList: (p: Parameters<typeof real.VirtualList>[0]) => {
+      virtual.measure.push(p.measure);
+      return real.VirtualList(p);
+    },
+  };
+});
 
 type Reply = { status: number; body: unknown };
 let posts: { url: string; body: unknown }[] = [];
@@ -925,7 +939,7 @@ describe('Needs you @s5 @s112', () => {
     expect(screen.getByTitle('Task 12')).toBeTruthy();
   });
 
-  it('lists Mine as one list, each row with its relationship, and groups All by relationship', async () => {
+  it('lists Mine as one list, each row with its relationship', async () => {
     serve(() => ({ status: 200, body: { names: { 'organization/acme': 'Acme', 'organization/acme-partners': 'Acme' } } }));
     const entity = { entity_id: 'organization/acme' };
     queryClient.setQueryData(['flow'], { count: 4, items: [
@@ -945,6 +959,78 @@ describe('Needs you @s5 @s112', () => {
     expect(posts).toEqual([{ url: '/api/v2/entities/names', body: { ids: ['organization/acme', 'organization/acme-partners'] } }]);
   });
 
+  it('answers a ❓ in place: its answers and a reply box under the row, a tap sends one and the row leaves Needs you', async () => {
+    const question = { kind: 'question', id: 'qmark:q1', task_id: 't1', from_id: 'bot:gm', line: '❓ Switch the HeyGen check to the new address?', detail: '1. Keep the old one as a fallback?', choices: ['Yes', 'Not now'], since: ago(5),
+      task: { id: 't1', number: 7, title: 'Fix the HeyGen check', pipeline_id: 'eng', stage_id: 's2', owner_id: 'bot:gm' } };
+    let answered = false;
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/tasks/t1/comments') {
+        answered = true;
+        return { status: 200, body: { comment: { id: 'm9' } } };
+      }
+      // Needs you read again after the answer never comes back: the row leaves without it
+      if (url.includes('/needs-you?limit=')) return answered ? new Promise<Reply>(() => {}) : { status: 200, body: { items: [question], next: null } };
+      return { status: 200, body: { items: [] } };
+    });
+    show(<NeedsYouPage />, '/needs-you');
+    const row = await screen.findByTitle('Fix the HeyGen check');
+    expect(row.closest('a')?.getAttribute('href')).toBe('/task/7'); // the title still opens the task
+    expect(within(row).queryByText(/Switch the HeyGen check/)).toBeNull(); // the card asks it, not the row
+    const card = screen.getByRole('region', { name: 'Question' });
+    expect(within(card).getByText('Switch the HeyGen check to the new address?')).toBeTruthy();
+    expect(within(card).getByText('1. Keep the old one as a fallback?')).toBeTruthy(); // the whole question, not its first line
+    expect(within(card).getByRole('textbox', { name: 'Reply' })).toBeTruthy();
+    fireEvent.click(within(card).getByRole('button', { name: 'Yes' }));
+    await waitFor(() => expect(screen.queryByTitle('Fix the HeyGen check')).toBeNull());
+    expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(0);
+    expect(posts).toContainEqual({ url: '/api/v2/tasks/t1/comments', body: { text: 'Yes', ask: 'qmark:q1' } });
+  });
+
+  it('a ❓ answered on a task that waits on another keeps its row, and its card shows the next ❓', () => {
+    const one = { id: 'qmark:q1', line: 'Switch it?', choices: ['Yes'], by: 'bot:gm' };
+    const two = { id: 'qmark:q2', line: 'Keep the old one?', choices: [], by: 'bot:gm' };
+    const row = { ...item, id: 't1', reason: 'Switch it?', questions: [one, two] };
+    const read = { count: 1, items: [row], waits: { t1: ['qmark:q1', 'qmark:q2'] }, task_ids: ['t1'], order: ['t1'] };
+    const after = needsYouWithout('t1', 'qmark:q1', read)(read) as typeof read;
+    expect(after.items.map((w) => [w.id, w.questions, w.reason])).toEqual([['t1', [two], undefined]]);
+    expect(after.waits.t1).toEqual(['qmark:q2']);
+    expect(after.count).toBe(1);
+  });
+
+  it('the menu count takes the list\'s own count when an answer leaves it, so a live count read meanwhile never falls twice', () => {
+    const q = (id: string) => ({ ...item, id, number: null, questions: [{ id: `qmark:${id}`, line: 'Ship it?', choices: [], by: 'bot:gm' }] });
+    queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [q('t1'), q('t2')], waits: { t1: ['qmark:t1'], t2: ['qmark:t2'] }, task_ids: ['t1', 't2'], order: ['t1', 't2'] });
+    // a live event already read the count without the answered ❓; the list still has its row
+    queryClient.setQueryData(flowCountQuery.queryKey, { count: 1, wakeAt: null });
+    leaveNeedsYou('t1', 'qmark:t1');
+    expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
+    expect(queryClient.getQueryData<{ count: number }>(flowCountQuery.queryKey)?.count).toBe(1);
+  });
+
+  it('a long Needs you, opened past its cap, measures each row it draws, so a ❓ card never overlaps the rows below', async () => {
+    virtual.measure.length = 0;
+    const rows = Array.from({ length: 120 }, (_, n) => ({ ...item, id: `t${n}`, number: n + 1, title: `Task ${n + 1}` }));
+    rows[0] = { ...rows[0]!, questions: [{ id: 'qmark:q1', line: 'Ship it on Friday?', choices: ['Yes'], by: 'bot:gm' }] } as (typeof rows)[number];
+    queryClient.setQueryData(flowQuery.queryKey, { count: rows.length, items: rows, order: rows.map((r) => r.id) });
+    serve(() => ({ status: 200, body: { items: [] } }));
+    show(<NeedsYouPage />, '/needs-you');
+    fireEvent.click(await screen.findByRole('button', { name: '110 more' }));
+    await waitFor(() => expect(virtual.measure.length).toBeGreaterThan(0));
+    expect(virtual.measure.every((m) => m === true)).toBe(true); // a computer as a phone: no fixed 34 px rows
+  });
+
+  it('shows a task\'s ❓ under its row even when another item on the task comes first in the order', async () => {
+    const task = { id: 't1', number: 7, title: 'Reply to Dana', pipeline_id: 'eng', stage_id: 's2', owner_id: 'bot:so' };
+    const email = { kind: 'ask', id: 'ask:t1', task_id: 't1', requirement_id: 'r-mail', line: 'Send this email?', since: ago(9),
+      ask: { requirement_id: 'r-mail', kind: 'ok', line: 'Send this email?', met: false, may: ['ok', 'no'], shows: ['email:s1'], asked_by: 'bot:so', answer: null }, task };
+    const question = { kind: 'question', id: 'qmark:q1', task_id: 't1', from_id: 'bot:so', line: 'Cc the landlord too?', choices: ['Yes', 'No'], since: ago(5), task };
+    serve((url) => (url.includes('/needs-you?limit=') ? { status: 200, body: { items: [email, question], next: null } } : { status: 200, body: { items: [] } }));
+    show(<NeedsYouPage />, '/needs-you');
+    const row = await screen.findByTitle('Reply to Dana');
+    expect(within(row).getByText('Send this email?')).toBeTruthy(); // what the row stands for still shows
+    expect(within(screen.getByRole('region', { name: 'Question' })).getByText('Cc the landlord too?')).toBeTruthy();
+  });
+
   it('All (its link picks it) lists claimable work and explains a row on demand; no tabs, no archive of its own', async () => {
     const reads: string[] = [];
     const relationship = { entity_id: 'organization/acme' };
@@ -959,7 +1045,10 @@ describe('Needs you @s5 @s112', () => {
     show(<NeedsYouPage />, '/needs-you?view=all');
     expect((await screen.findByTitle('Help with the order')).getAttribute('href')).toBe('/task/8');
     expect(screen.getByRole('heading', { level: 1, name: 'All' })).toBeTruthy();
-    expect(await screen.findByRole('region', { name: 'Acme' })).toBeTruthy();
+    // one list, each row's relationship a chip on it, never a section of its own
+    await waitFor(() => expect(within(screen.getByTitle('Help with the order')).getByText('Acme')).toBeTruthy());
+    expect(screen.queryByRole('region', { name: 'Acme' })).toBeNull();
+    expect(within(screen.getByRole('region', { name: 'Tasks' })).getByTitle('Help with the order')).toBeTruthy();
     // the link in Needs you's head on Tasks picked the view; Snoozed and Done are its other links
     for (const name of ['Mine', 'All']) expect(screen.queryByRole('link', { name })).toBeNull();
     for (const name of ['Snoozed', 'Done', 'Hide archive']) expect(screen.queryByRole('button', { name })).toBeNull();
@@ -1037,7 +1126,7 @@ describe('Needs you @s5 @s112', () => {
     expect(reads).toBe(2);
   });
 
-  it('puts a revoked relationship under Other when Contacts is read again', async () => {
+  it('drops a revoked relationship\'s chip when Contacts is read again', async () => {
     const related = { ...item, entity_id: 'organization/acme-shop' };
     const shelf = task('a3', 9, 'Send the quote', 's1', { owner_id: ME, snoozed: true, entity_id: related.entity_id });
     let visible = true;
@@ -1060,7 +1149,7 @@ describe('Needs you @s5 @s112', () => {
     await act(() => queryClient.invalidateQueries({ queryKey: ['contacts', 'names'] }));
     await waitFor(() => expect(screen.queryByText('Acme Shop')).toBeNull());
     expect(within(screen.getByRole('region', { name: 'Needs you' })).getByTitle('Approve the copy')).toBeTruthy();
-    expect(within(screen.getByRole('region', { name: 'Other' })).getByTitle('Send the quote')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Tasks' })).getByTitle('Send the quote')).toBeTruthy();
     expect(taskReads).toBe(2);
   });
 

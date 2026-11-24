@@ -60,6 +60,7 @@ def test_an_ask_with_choices_shows_them_and_a_tap_answers_and_clears_it(ruled):
     assert mark["choices"] == CHOICES
     [item] = questions(api)
     assert (item["line"], item["choices"]) == (ASKED, CHOICES)
+    assert "detail" not in item  # one line: nothing more to show
     [wait] = [w for w in get(api, f"tasks/{task['id']}")["task"]["waits"] if w["requirement_id"] == item["id"]]
     assert wait["choices"] == CHOICES  # the task's own card reads them too
 
@@ -69,6 +70,48 @@ def test_an_ask_with_choices_shows_them_and_a_tap_answers_and_clears_it(ruled):
     [row] = sql(api, "SELECT cleared_reason, cleared_message_id FROM question_marks WHERE id=?", (mark["id"],))
     assert row == {"cleared_reason": "replied", "cleared_message_id": r.json()["comment"]["id"]}
     assert [m["body"] for m in replies(api, mark)] == ["Yes, Friday"]
+
+
+def test_a_question_with_numbered_lines_lists_them_whole(ruled):
+    # A card answered from Needs you shows every question the ❓ asks, not its first line alone (ask_shape).
+    api, _ = ruled
+    ask(api, task_for_ops(api), text=f"{ASKED}\n1. Is the price line final?\n2. Should beta users get it too?")
+    [item] = questions(api)
+    assert item["line"] == ASKED
+    assert item["detail"] == "1. Is the price line final?\n2. Should beta users get it too?"
+
+
+def test_a_long_question_lists_whole_lines_up_to_its_cap():
+    # A ❓ may run to many lines: the list carries whole lines up to DETAIL_MAX, then "…" (the chat has it all).
+    lines = [f"{n}. " + "word " * 40 for n in range(1, 40)]
+    detail = Q.detail_of({"body": ASKED + "\n" + "\n".join(lines)})
+    assert len(detail) <= Q.DETAIL_MAX and detail.endswith("…")
+    kept = [line.rstrip() for line in detail[:-1].splitlines()]
+    assert len(kept) > 1 and kept == [line.rstrip() for line in lines[: len(kept)]]  # whole lines, in order
+    one = Q.detail_of({"body": ASKED + "\n" + "x" * 5000})  # one line longer than the cap: cut short
+    assert len(one) == Q.DETAIL_MAX and one.endswith("…")
+    assert Q.detail_of({"body": ASKED + "\n1. Short?"}) == "1. Short?"
+
+
+def test_a_questions_words_beyond_its_line_reach_only_who_may_read_its_message(ruled, monkeypatch):
+    """Needs you lists a ❓'s answers and its lines after the first only when the request's own viewer (its Auth: an
+    Assistant run's scope, an external credential) may read the marked message, as a read of it would; never by a
+    viewer rebuilt from the actor id. Here the request's scope is denied it: the ❓ still lists, its line alone."""
+    from backend import threads
+
+    api, _ = ruled
+    mark = ask(api, task_for_ops(api), text=f"{ASKED}\n1. Is the price line final?")
+    real = threads.message_readable
+
+    def scoped(c, v, message, **k):
+        if message["id"] == mark["message_id"] and getattr(v, "auth", None) is not None:
+            return False
+        return real(c, v, message, **k)
+
+    monkeypatch.setattr(threads, "message_readable", scoped)
+    [item] = questions(api)
+    assert item["line"] == ASKED
+    assert item["choices"] == [] and "detail" not in item
 
 
 def test_more_than_three_choices_are_refused_and_nothing_is_asked(ruled):

@@ -38,6 +38,8 @@ const row = (id: string, number: number, title: string) => ({ ...brief(id, numbe
 const SNOOZED_ASK = { ...ask(brief('t9', 9, 'Pay the plumber', 'eng')), line: 'Approve the transfer', snoozed_until: '2099-01-01T00:00:00Z' };
 let snoozedAsks: unknown[] = [];
 let posts: { url: string; body: unknown }[] = [];
+// every address read or written, in order
+let reads: string[] = [];
 // how Needs you's own read answers: as it is, never (still on its way), or refused
 let needsRead: 'ok' | 'hang' | 'fail' = 'ok';
 
@@ -72,10 +74,12 @@ beforeEach(() => {
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
   snoozedAsks = [SNOOZED_ASK];
   posts = [];
+  reads = [];
   needsRead = 'ok';
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = new URL(String(url), 'http://x');
     const q = u.searchParams;
+    reads.push(u.pathname);
     if (init?.method === 'POST') {
       posts.push({ url: u.pathname, body: JSON.parse(String(init.body)) });
       if (u.pathname === '/api/v2/needs-you/unsnooze') snoozedAsks = [];
@@ -131,6 +135,21 @@ describe('Tasks', () => {
     const router = show('/tasks');
     await opens();
     expect(router.state.location.pathname).toBe('/tasks');
+  });
+
+  it('an approval stays a row that opens its task: no decision box, and no read of its preview or its task', async () => {
+    const ok = (task: ReturnType<typeof brief>, kind: string, shows: string[]) => ({
+      ...ask(task),
+      requirement_id: `r-${task.id}`,
+      ask: { requirement_id: `r-${task.id}`, kind, line: 'Ship it?', met: false, may: ['ok', 'no'], shows, asked_by: 'bot:qa', answer: null },
+    });
+    needs = [ok(brief('t7', 7, 'Ship the export', 'eng'), 'ok', []), ok(brief('t12', 12, 'Renew the lease', 'ops'), 'page', ['page:f1@2'])];
+    show('/tasks');
+    await opens();
+    expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    // reading an OK's preview counts as showing it to the person (GET /oks/{id}): never from the list
+    expect(reads.filter((path) => path.startsWith('/api/v2/oks/') || /^\/api\/v2\/tasks\/[^/]+$/.test(path))).toEqual([]);
   });
 
   it('on a phone, Needs you is the top of the same stack', async () => {

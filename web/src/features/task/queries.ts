@@ -330,12 +330,24 @@ const reread = (id: string) => queryClient.invalidateQueries({ queryKey: keys.ta
 /** A person's answer to a ❓ from its card (POST /api/v2/tasks/{tid}/comments with `ask`): their reply on the task's
     chat to the agent that asked, which wakes it. The server sends it only while that ❓ is open (409 `answered` once
     it is not: one reply, however many taps), and it clears that ❓ alone. Resolves with the hold (its id and reason)
-    when a company rule held the reply (nothing sent yet), else null; the task and Needs you are read again. */
+    when a company rule held the reply (nothing sent yet), else null. Sent, the ❓ leaves Needs you at once (its row,
+    Dot and count, as an approval's answer does); refused, Needs you is read again. The task is read again either way. */
 export async function answerQuestion(task: string, question: string, text: string): Promise<{ id: string; reason: string } | null> {
-  const r = await api.post<{ comment?: { id?: string }; held?: { id?: string; reason?: string } }>(`${taskPath(task)}/comments`, { text, ask: question }, { idempotencyKey: newId() });
+  let r: { comment?: { id?: string }; held?: { id?: string; reason?: string } };
+  try {
+    r = await api.post<typeof r>(`${taskPath(task)}/comments`, { text, ask: question }, { idempotencyKey: newId() });
+  } catch (e) {
+    settleNeedsYou();
+    throw e;
+  }
   void reread(task);
+  if (r.comment?.id) {
+    leaveNeedsYou(task, question);
+    settleNeedsYou({ task, wait: question });
+    return null;
+  }
   void queryClient.invalidateQueries({ queryKey: ['flow'] });
-  return r.comment?.id ? null : { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+  return { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
 }
 
 /** A task as a person names it: its number (412, #412) or its id. */
