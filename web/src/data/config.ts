@@ -1,6 +1,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import type { GetConfigResponse } from '@/api/schema';
+import { quietRoot } from './optimistic';
 
 export interface ReleaseOffer {
   current: string;
@@ -8,9 +9,12 @@ export interface ReleaseOffer {
   available: boolean;
   held: string;
   managed: boolean;
+  scheduled?: string;
 }
 
 type Config = GetConfigResponse & { update?: ReleaseOffer };
+
+quietRoot('config');
 
 /** The company's settings and release offer (GET /api/v2/config). */
 export const configQuery = queryOptions({
@@ -18,6 +22,3 @@ export const configQuery = queryOptions({
   queryFn: ({ signal }) => api.get<Config>('/api/v2/config', { signal }),
   staleTime: Infinity,
 });
-
-/** The release checker fills its cache in the background, between reads of the config. */
-export const releaseConfigQuery = { ...configQuery, staleTime: 60_000, refetchInterval: 60_000 };

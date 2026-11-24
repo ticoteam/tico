@@ -29,6 +29,7 @@ const OLD: ReadonlyArray<readonly [RegExp, (m: RegExpExecArray) => string]> = [
 
 /** Where a fix goes in this app, an outside page, or null for words only. */
 export function fixHref(f: HealthFix): string | null {
+  if (f.click === '#new-version') return '/settings/general?open=tico-version';
   const href = f.href ?? '';
   if (/^https:\/\//.test(href)) return href;
   if (href === '#/settings') return (f.tab && SETTINGS_TAB[f.tab]) || null;

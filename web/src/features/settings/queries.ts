@@ -77,6 +77,8 @@ interface UpdateStatus {
   state: string;
   to?: string;
   running?: string;
+  message?: string;
+  command?: string;
 }
 
 const UPDATE_PROGRESS: Readonly<Record<string, string | undefined>> = {
@@ -93,12 +95,11 @@ export const updateStatusQuery = queryOptions({
   queryFn: ({ signal }) => api.get<UpdateStatus>(UPDATE, { signal, once: true }),
   refetchOnMount: 'always',
   retry: false,
-  refetchInterval: ({ state }) => (updateProgress(state.data) ? 3_000 : false),
   refetchIntervalInBackground: true,
 });
 
 export const startUpdate = (version: string) => api.post<UpdateStatus>(UPDATE, { version });
-export const checkForUpdate = () => api.post(`${UPDATE}/check`);
+export const checkForUpdate = () => api.post<{ checking: boolean; available: boolean; held?: string }>(`${UPDATE}/check`);
 
 const patchPerson = (pid: string, change: Partial<AccessPerson>) => (v: AccessView | undefined) =>
   v && { ...v, people: v.people.map((p) => (p.id === pid ? { ...p, ...change } : p)) };

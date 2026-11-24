@@ -978,7 +978,7 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-When a release is available, owners and admins see a notice in the menu. It opens the Version row in **Settings → General → Tico**, where the owner can **Check for updates** or choose **Update now**. The row shows progress through the restart and reports the outcome when Tico returns.
+When a release is available, owners and admins see a notice in the menu. It opens the Version row in **Settings → General → Tico**, where the owner can **Check now** or choose **Update now**. The row shows progress through the restart and reports the outcome when Tico returns.
 
 You can also run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
@@ -994,7 +994,8 @@ configure). After an update the updater also recreates Caddy itself, a moment in
 
 A server Tico hosts (`TICO_HOSTED`) never follows new releases by itself either. Tico support can schedule a release
 for it: the server reads it from Tico HQ with its Gateway key every 15 minutes, waits until no bot turn runs (two hours
-at most), and updates through the same updater as **Update now**. A failed or rolled-back update is reported to support and is not tried again until they
+at most), and updates through the same updater as **Update now**. Settings and Health say "Tico will update this server
+to vX when idle" meanwhile. A failed or rolled-back update is reported to support and is not tried again until they
 schedule it again. A self-run server never asks.
 
 ### One-click updates
