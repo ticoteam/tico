@@ -453,11 +453,8 @@ def from_document(doc):
         for p in people
     ]
     chosen = {}
-    employees, folded = D.fold_managers(_rows(doc, "employees"), "department")
-    for at, b in enumerate(employees):
-        if isinstance(b.get("template"), str) and b["template"] in D.RETIRED:
-            continue  # its built-in comes with every install, as draft.check lets it go
-        b = D.renamed(b)  # an older release's slug reads as the template that has it now, its old default title too
+    for at, b in enumerate(_rows(doc, "employees")):
+        b = D.renamed(b)  # a 0.6 release's old slug reads as the template that has it now, its old default title too
         template = b.get("template")
         role = (
             next((r for r in D.ROLES if r["slug"] == template), None)
@@ -518,7 +515,7 @@ def from_document(doc):
         goal = {
             "id": _str(g.get("id")),
             "title": _str(g.get("title")),
-            "owner": folded.get(_str(g.get("owner")), _str(g.get("owner"))),
+            "owner": _str(g.get("owner")),
             "measure": _str(g.get("measure")),
             "unit": _str(g.get("unit")),
             "direction": g.get("direction") or "up",
@@ -542,12 +539,10 @@ def from_document(doc):
     draft["seq"] = len(draft["people"]) + len(draft["bots"]) + len(draft["goals"]) + 1
     if isinstance(doc.get("strategy"), dict):
         draft["strategy"] = _strategy(doc["strategy"])
-    # A draft's agent is the role as this release names it: a folded Pipeline Manager's is its team's Manager (check).
     drafts = [
         {
             "id": _str(d.get("id")),
-            # A bot that is not text is left as it is, for D.check to refuse.
-            "bot": folded.get(bot, bot) if isinstance(bot := _str(d.get("bot")), str) else bot,
+            "bot": _str(d.get("bot")),
             "kind": _str(d.get("kind")),
             "title": _str(d.get("title")),
             "body": _str(d.get("body")),
