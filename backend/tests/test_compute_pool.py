@@ -836,6 +836,17 @@ def test_autoscale_backs_off_company_after_never_enrolled_worker(api, fleet, sca
     assert hq.machines[worker]["state"] == "deleted"
 
 
+def test_burst_backoff_keeps_the_later_deadline_exactly(company):
+    """The scaler reopens launches at the very deadline it wrote. On SQLite 3.45 (CI's Ubuntu 24.04) a later deadline
+    kept by an SQL max() came back as 15 digits, a few microseconds late: this value read 1795546269.91224."""
+    later = 1795546269.9122357
+    with company.transaction() as c:
+        for at in (later - 3570, later, later - 1):
+            cloud_machines.burst_backoff(c, at)
+        (value,) = c.execute("SELECT value FROM registry_metadata WHERE key=?", (cloud_machines.BURST_NEXT,)).fetchone()
+    assert float(value) == later
+
+
 def test_launch_failures_stop_scaling_across_keys_until_reenabled(api, fleet, scaler):
     store, base, _ = fleet
     manager, hq, clock = scaler
