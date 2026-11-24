@@ -85,7 +85,8 @@ customers behind it.
 Each load replaces the last one: a customer left out is deleted, which is how you remove someone who asks to be
 forgotten. A customer who left and came back is a second row with the same key and a new became customer date, after
 the first row's churned date. A customer counts where they were when they became a customer; a later load that moves
-them to another channel, segment or plan does not move them between cohorts. Only the owner and admins load or delete
+them to another channel, segment or plan does not move them between cohorts. One that names a channel, segment or
+plan the first load left blank fills it in. Only the owner and admins load or delete
 customer facts (`tico growth customers delete` deletes them all; the figures go back to typed values).
 
 **From a synced source.** A source connected with `--sync file --map customers` takes the same columns: each file you

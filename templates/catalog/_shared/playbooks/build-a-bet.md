@@ -3,7 +3,7 @@
 Your task is in Growth Experiments' Building stage. Budget: one or two runs.
 
 Outcome: the real thing made but not live (the page change, the post, the email, the ad), the brand check passed, and a
-Go-live page attached. Jev checks the page, then a person OKs it. Nothing goes live in this stage.
+Release report attached. Jev checks the page, then a person OKs it. Nothing goes live in this stage.
 
 The same text is shipped to every channel Owner. What you may make and who applies it are in
 `knowledge/channel-playbook.md`.
@@ -30,7 +30,7 @@ yours: writing to the Content Owner, design to the Design Owner.
 ## 3. Pass the brand check
 
 Run `tico brand show`. When no brand card is published yet, there is nothing to check against: file no brand check,
-and say so on the Go-live page (step 4).
+and say so on the Release report (step 4).
 
 Otherwise run `tico brand check -` on every outward word and fix each hit. Check each claim against
 `tico brand show --section claims`. Then ask the Design Owner for the brand check:
@@ -40,7 +40,7 @@ Otherwise run `tico brand check -` on every outward word and fix each hit. Check
 The task waits on it. Fix what it sends back. Write that the brand check passed only once the Design Owner's task says
 so.
 
-## 4. Write the Go-live page
+## 4. Write the Release report
 
 One HTML page a person can read in two minutes (Tico refuses a Markdown page for an OK), with simple inline CSS and
 nothing from elsewhere. At the top, two or three lines say what goes live and what the person decides. Then it shows:
@@ -59,7 +59,7 @@ nothing from elsewhere. At the top, two or three lines say what goes live and wh
 Publish it on the task and attach it to the requirement:
 
     tico page publish reports/<task>-go-live.html --title "Go-live: <title>" --task <id>
-    tico task attach <id> page:<file id> --req "Go-live page" --version N
+    tico task attach <id> page:<file id> --req "Release report" --version N
 
 ## 5. Wait for the OK
 
