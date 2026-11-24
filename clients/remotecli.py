@@ -469,6 +469,7 @@ def run(args, who=None):
                 "labels": [x.strip() for one in args.label or [] for x in one.split(",") if x.strip()] or None,
                 "links": list(args.link) if args.link else None,
                 "readers": list(args.readers) if getattr(args, "readers", None) else None,
+                "shared_with": list(args.shared_with) if getattr(args, "shared_with", None) else None,
                 "operation_id": key,
             }
             for field in (

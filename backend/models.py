@@ -166,6 +166,24 @@ class TaskRelationRef(Contract):
 
 
 ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
+
+
+def one_reader_list(model: Any) -> Any:
+    """`shared_with` is `readers` by the name the task read answers with, checked once both are validated: either name
+    sets the list; both, naming different people, is refused; both naming the same people keeps `readers` as sent.
+    Whether it was sent is `model_fields_set`: a null is refused as a list (only [] clears). `shared_with` is never
+    dumped, so an idempotency hash reads the same whichever name was sent."""
+    sent = model.model_fields_set
+    if "shared_with" not in sent:
+        return model
+    if "readers" in sent:
+        if sorted(model.readers) != sorted(model.shared_with):
+            raise ValueError("readers and shared_with are one list, and these differ: send one of them")
+        return model
+    model.readers = list(model.shared_with)
+    return model
+
+
 # The version of the task the caller was shown. A bot's own command always carries it; a person may leave it out.
 Version = Annotated[int, Field(strict=True, ge=0)]
 Why = Annotated[str, Field(min_length=1, max_length=20_000)]
@@ -215,8 +233,10 @@ class TaskCreate(Contract):
     number: TaskNumber | None = None
     # Who else is on the task, by role: {role: [actors]} (backend/task_roles.py).
     roles: dict[str, list[str]] | None = None
-    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers).
+    # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers). `shared_with` is its newer
+    # name (one_reader_list).
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+    shared_with: list[ReaderName] = Field(default_factory=list, exclude=True, max_length=50)
     # The filer follows it too (backend/task_followers.py); its owner follows anyway.
     follow: StrictBool = False
     # With a model, the bot's own check session; review alone is a normal sub-task.
@@ -235,6 +255,10 @@ class TaskCreate(Contract):
     # `from_message` the message the person sent it in, which the bot must read. Both or neither.
     for_actor: ID | None = None
     from_message: ID | None = None
+
+    @model_validator(mode="after")
+    def same_readers(self):
+        return one_reader_list(self)
 
     @model_validator(mode="after")
     def for_a_person(self):
@@ -729,9 +753,15 @@ class TaskReaders(Contract):
 
 
 class TaskReaderList(Contract):
-    """The whole reader list of a private task, replacing what it had."""
+    """The whole reader list of a private task, replacing what it had. `shared_with` is its newer name."""
 
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
+    # `readers` by its newer name (one_reader_list); never dumped.
+    shared_with: list[ReaderName] = Field(default_factory=list, exclude=True, max_length=50)
+
+    @model_validator(mode="after")
+    def same_readers(self):
+        return one_reader_list(self)
 
 
 class TaskFollower(Contract):

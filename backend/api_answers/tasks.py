@@ -208,6 +208,8 @@ class TaskFields(TypedDict):
     """The task's number, unique across the team"""
     readers: NotRequired[list[str]]
     """Who else can see a private task besides its requester and owner: people, bots and group:<id>s (a group by its members now). Empty on a company task. GET/PUT /api/v2/tasks/{id}/readers reads and changes it"""
+    shared_with: NotRequired[list[str]]
+    """`readers` by its newer name, on the task's own read and the answers that carry the whole task"""
     roles: NotRequired[dict[str, list[str]]]
     """Who is on the task, by role: each role a short name the team chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task update and create take the same shape to replace a role's people ([] clears one)"""
     tags: NotRequired[list[Tag]]

@@ -264,6 +264,7 @@ def test_who_can_see_add_remove_replace_and_history(api):
         "owner_id": "bot:ops",
         "assignee_id": None,  # an agent assignee reads nothing more
         "readers": [],
+        "shared_with": [],
     }
     assert readers(api, row["id"]) == {"ana"}
     r = change(api, row["id"], {"add": ["ben"]})
@@ -313,6 +314,7 @@ def test_a_company_task_is_public_and_has_no_reader_list(api):
         "owner_id": "bot:ops",
         "assignee_id": None,
         "readers": [],
+        "shared_with": [],
     }
     r = change(api, open_task["id"], {"add": ["ben"]})
     assert r.status_code == 422 and "make it private to choose who sees it" in r.text, r.text
@@ -359,6 +361,49 @@ def test_create_a_private_task_with_readers(api):
         headers=headers(),
     )
     assert r.status_code == 422 and "make it private" in r.text, r.text
+
+
+def test_shared_with_is_the_reader_list_by_its_newer_name(api):
+    """`shared_with` sets and reads the same list as `readers` on create, the task read and the /readers routes;
+    naming both with different people is refused and changes nothing."""
+    body = {"owner": "ops", "title": "Draft the offer letter", "body": "For the new hire.", "private": True}
+    made = post(api, "tasks", {**body, "shared_with": ["ben"]})
+    assert made["readers"] == made["shared_with"] == ["human:ben"]
+    assert readers(api, made["id"]) == {"ana", "ben"}
+    shown = get(api, "tasks/" + made["id"])["task"]
+    assert shown["shared_with"] == shown["readers"] == ["human:ben"]
+    # Both names, the same people in any order (spaces stripped), is one list, kept as `readers` sent it: a retry
+    # under the same key naming it either way is the same request, never a 409.
+    first = {**body, "title": "Draft the offer", "readers": [" ben ", "cara"]}
+    both = post(api, "tasks", {**first, "shared_with": ["cara", "ben"]}, key="offer-both-names")
+    assert both["shared_with"] == ["human:ben", "human:cara"]
+    for retry in (first, {**body, "title": "Draft the offer", "shared_with": ["ben", "cara"]}):
+        assert post(api, "tasks", retry, key="offer-both-names")["id"] == both["id"]
+    # Different people, or a bad `readers` beside a good `shared_with`, is refused, never dropped.
+    for bad in (["cara"], []):
+        r = api.post("/api/v2/tasks", json={**body, "readers": ["ben"], "shared_with": bad}, headers=headers())
+        assert r.status_code == 422 and "readers and shared_with are one list" in r.text, r.text
+    for wrong in ("bad", None, [123]):
+        r = api.post("/api/v2/tasks", json={**body, "readers": wrong, "shared_with": ["ben"]}, headers=headers())
+        assert r.status_code == 422, (wrong, r.text)
+
+    r = change(api, made["id"], {"shared_with": ["cara"]}, method="put")
+    assert r.status_code == 200 and r.json()["shared_with"] == r.json()["readers"] == ["human:cara"], r.text
+    assert readers(api, made["id"]) == {"ana", "cara"}
+    # A refused replace changes nothing: different lists, a bad `readers`, or a null, which never clears it.
+    for refused in (
+        {"readers": ["ben"], "shared_with": ["cara"]},
+        {"readers": "bad", "shared_with": []},
+        {"shared_with": None},
+    ):
+        r = change(api, made["id"], refused, method="put")
+        assert r.status_code == 422, (refused, r.text)
+    assert who_sees(api, made["id"])["shared_with"] == ["human:cara"]
+    r = change(api, made["id"], {"shared_with": []}, method="put")
+    assert r.status_code == 200 and r.json()["shared_with"] == [], r.text
+    # The spec says what is taken: a list, never null.
+    spec = get(api, "openapi.json")["components"]["schemas"]["TaskFile"]["properties"]["shared_with"]
+    assert spec["type"] == "array" and "anyOf" not in spec, spec
 
 
 def test_a_bot_adds_anyone_to_a_task_it_owns_others_within_its_reach_and_never_a_group(api):

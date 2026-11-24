@@ -344,6 +344,7 @@
       "requester_id": "human:ana",
       "requester_name": "Ana",
       "roles": {},
+      "shared_with": [],
       "short_id": "<task-short>",
       "size": null,
       "snooze": null,

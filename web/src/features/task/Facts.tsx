@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useState, type ReactNode } from 'react';
 import { run } from '@/actions';
-import { meQuery, useActors } from '@/data';
+import { useActors } from '@/data';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { DateText } from '@/kit/DateText';
@@ -25,7 +25,7 @@ import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFa
 import { questionLine } from './waits';
 
 /* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
-   Developer, Goal, Roadmap, People, Visible to, Followers, the public text; and the Meetings section. Each value edits
+   Assignee, Goal, Roadmap, People, Visible to, the public text; and the Meetings section. Each value edits
    in place or through a small pick, and saves at once. */
 
 const act = async (id: string, input: object) => {
@@ -195,24 +195,27 @@ export function SizeFact({ t }: { t: TaskData }) {
   );
 }
 
-/** Human, Developer, Goal, Roadmap, People, Visible to, Followers: after Tags. */
+/** Human, Assignee, Goal, Roadmap, People, Visible to: after Tags. */
 export function MoreFacts({ t }: { t: TaskFacts }) {
   return (
     <>
       <HumanFact t={t} />
-      {t.assignee_id && t.assignee_id !== t.owner_id && (
-        <Kv k="Developer">
-          <Face id={t.assignee_id} />
-          <span>
-            <NameOf id={t.assignee_id} />
-          </span>
-        </Kv>
-      )}
+      <Kv k="Assignee">
+        {t.assignee_id ? (
+          <>
+            <Face id={t.assignee_id} />
+            <span>
+              <NameOf id={t.assignee_id} />
+            </span>
+          </>
+        ) : (
+          none
+        )}
+      </Kv>
       {t.goal_id && <GoalFact goal={t.goal_id} />}
       <RoadmapFact t={t} />
       <PeopleFact t={t} />
       <VisibleFact t={t} />
-      {Array.isArray(t.followers) && <FollowersFact t={t} followers={t.followers} />}
     </>
   );
 }
@@ -342,15 +345,17 @@ function PeopleFact({ t }: { t: TaskData }) {
 
 const VISIBLE: Record<Visible, string> = { team: 'Team', public: 'Public roadmap', private: 'Private' };
 
-/** Team, Public roadmap (a roadmap task) or Private; a private task's people: who asked and who has it, then readers. */
+/** Team, Public roadmap (a roadmap task) or Private; a private task's people: who asked, who has it and a person
+    assignee (each reads it by being that, hubdb.task_private_readable), then readers. */
 function VisibleFact({ t }: { t: TaskData }) {
   const nameOf = useNames();
   const pipelines = useQuery(pipelinesQuery);
   const onRoad = roadmapPipeline(pipelines.data ?? [])?.id === t.pipeline_id;
   const now = visibleOf(t);
   const choices: Visible[] = onRoad || now === 'public' ? ['team', 'public', 'private'] : ['team', 'private'];
-  const readers = (t.readers ?? []).filter((r) => r !== t.requester_id && r !== t.owner_id);
-  const fixed = [...new Set([t.requester_id, t.owner_id].filter((x): x is string => !!x))];
+  const assignee = t.assignee_id?.startsWith('human:') ? t.assignee_id : null;
+  const fixed = [...new Set([t.requester_id, t.owner_id, assignee].filter((x): x is string => !!x))];
+  const readers = (t.readers ?? []).filter((r) => !fixed.includes(r));
   return (
     <PickKv
       k="Visible to"
@@ -381,37 +386,6 @@ function VisibleFact({ t }: { t: TaskData }) {
         <MenuItem key={v} label={VISIBLE[v]} on={v === now} onSelect={() => v !== now && void act('task.setVisible', { task: t.id, to: v })} />
       ))}
     </PickKv>
-  );
-}
-
-function FollowersFact({ t, followers }: { t: TaskData; followers: { actor: string }[] }) {
-  const nameOf = useNames();
-  const me = useQuery(meQuery).data?.id;
-  const mine = followers.find((f) => f.actor === me);
-  const follow = (input: object) => act('task.follow', { task: t.id, ...input });
-  return (
-    <div className="dt-kv" data-target={`task-followers:${t.id}`}>
-      <span className="dt-k">Followers</span>
-      <span className="dt-v">
-        <span className="faces">
-          {followers.map((f) =>
-            f.actor === me ? (
-              <Face key={f.actor} id={f.actor} />
-            ) : (
-              <FaceMenu key={f.actor} id={f.actor} label={nameOf(f.actor)}>
-                <MenuItem label="Take off" icon="close" onSelect={() => follow({ actor: f.actor, following: false })} />
-              </FaceMenu>
-            ),
-          )}
-        </span>
-        <button type="button" className="dt-act" onClick={() => follow({ following: !mine })}>
-          {mine ? 'Unfollow' : 'Follow'}
-        </button>
-        <Menu align="start" trigger={<IconButton icon="plus" label="Add a follower" size="sm" quiet />}>
-          <ActorItems current={null} onPick={(id) => follow({ actor: id, following: true })} />
-        </Menu>
-      </span>
-    </div>
   );
 }
 

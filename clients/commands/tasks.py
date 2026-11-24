@@ -40,6 +40,16 @@ def task_context(api, args):
 
 
 # ----------------------------------------------------------------------------- tasks
+
+
+def same_people(readers, shared):
+    """Whether `readers` and `shared_with` (either may be left out) name the same people, in any order and with spaces
+    trimmed, as the server compares them (backend/models.py one_reader_list)."""
+    if readers is None or shared is None:
+        return True
+    return sorted(str(x).strip() for x in readers) == sorted(str(x).strip() for x in shared)
+
+
 @tool(
     "tico_task_create",
     "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
@@ -72,11 +82,12 @@ def task_context(api, args):
             "run on a private task or under a private parent. Left out: a private task's run files it private; "
             "bot defaults also apply",
         },
-        "readers": {
+        "shared_with": {
             "type": "array",
             "items": {"type": "string"},
             "description": "Private: who else sees it: human:<id>, bot:<slug> or group:<id>",
         },
+        "readers": {"type": "array", "items": {"type": "string"}, "description": "shared_with's older name"},
         "follow": {"type": "boolean"},  # the filer follows it too (docs/tasks.md, Followers)
         "for_actor": _s(
             "A bot filing a person's own ask: the person (human:<id>) it is for, who becomes its requester. "
@@ -182,12 +193,17 @@ def task_create(api, args):
         "model",
         "effort",
         "harness",
-        "readers",
         "follow",
         "route",
     ):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
+    readers, shared = args.get("readers"), args.get("shared_with")
+    if not same_people(readers, shared):
+        raise ValueError("shared_with and readers are one list, and these differ: give one")
+    if chosen := (readers if readers is not None else shared):
+        # Sent as `readers`, the name every server takes (backend/models.py one_reader_list).
+        body["readers"] = list(chosen)
     if args.get("private") is not None:
         body["private"] = args["private"]
     after = _after(args)

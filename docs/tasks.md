@@ -495,9 +495,11 @@ assignee or owner, a reader taken off) has their open ❓ on it cleared, and the
 - The task's **Who can see** row shows them; × takes a reader off and + adds one.
 - Anyone who may change the task changes its readers. A bot adds only people and bots within its reach. Only a person
   adds a group.
-- `tico task create --private --reader X`; `tico task readers list|add|remove <id> [X ...]`.
+- `tico task create --private --share-with X` (or `--reader X`); `tico task readers list|add|remove <id> [X ...]`.
 - API: `GET /api/v2/tasks/{id}/readers`; `POST` with `{"add": [...], "remove": [...]}`; `PUT` with
-  `{"readers": [...]}`. A task lists at most 50 readers.
+  `{"readers": [...]}`. A task lists at most 50 readers. `shared_with` is the same list by its newer name: the task's
+  read and the `/readers` answers carry both, and create and `PUT` take either (both, naming different people, is
+  refused).
 - A reader reads that task only: not the task above it or its other sub-tasks.
 - A private task stuck because the next stage's owner or someone it asks can't see it says so on its person's Needs
   you card, naming everyone shut out ("Stuck in Build: Reviewer 1 can't see this task"), with **Let Reviewer 1 see

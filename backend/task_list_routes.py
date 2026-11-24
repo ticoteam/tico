@@ -776,6 +776,8 @@ def readers(auth):
                 readable_earlier(c, auth, reader, entry)
             value = readable_page_refs(c, auth, reader, value)
             value = teammate_access.Known(c, who, auth).task(value)  # people the reader may not see
+        # `readers` by its newer name (docs/tasks.md); a list row carries only `readers`.
+        value["shared_with"] = value["readers"]
         return value
 
     def list_tags(c, who, rows):

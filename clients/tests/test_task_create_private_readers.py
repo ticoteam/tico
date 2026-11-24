@@ -88,3 +88,19 @@ def test_the_command_itself_prints_the_line_on_a_private_dry_run(monkeypatch, ca
     out = capsys.readouterr()
     assert out.err.splitlines()[0] == "tico: " + LINE
     assert out.out.startswith("ok: would create")
+
+
+def test_the_dry_run_refuses_reader_lists_that_differ_with_or_without_a_pipeline(monkeypatch, capsys):
+    """--reader and --share-with are one list (backend/models.py one_reader_list): a dry run with no pipeline, which
+    asks the server nothing, still refuses two that name different people, and takes two that agree once trimmed."""
+    from clients import tico
+
+    monkeypatch.setenv("HUB_API_URL", "https://acme.example")
+    monkeypatch.setenv("HUB_BOT", "builder")
+    monkeypatch.setattr(tico.Client, "post", lambda self, path, body=None, key=None: {"ok": True})
+    argv = ["task", "create", "--private", "--owner", "bot:builder", "--title", "Fix it", "--body", "Rounds pay."]
+    assert hubcli.main([*argv, "--reader", "ben", "--share-with", "cara", "--dry-run"]) != 0
+    out = capsys.readouterr().out
+    assert "one list" in json.loads(out)["error"] and "ok:" not in out
+    assert hubcli.main([*argv, "--reader", " ben ", "--share-with", "ben", "--dry-run"]) == 0
+    assert capsys.readouterr().out.startswith("ok:")
