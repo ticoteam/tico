@@ -3,7 +3,7 @@
 //! Inside a turn (`in_turn`), a fetch of a repository and upstream the same turn already fetched, or pushed to, within
 //! FRESH_FOR is skipped; the merge or rebase onto it still runs.
 //!
-//! A chat turn (a person waits for it in the bot's own checkout, `in_turn` with `chat`) also starts on this runner's
+//! A chat turn (a person waits for it on the bot's checkout, `in_turn` with `chat`) also starts on this runner's
 //! last fetch or push of the repository from any turn, when it began less than CHAT_FRESH_FOR ago. The turn moves the
 //! remote-tracking ref to what the last background fetch brought (`Upstream::take_behind`), fast-forwards onto it, and
 //! then fetches again in the background beside the model's start (`Upstream::refresh_behind`), so the next chat turn
