@@ -56,8 +56,8 @@ code{font-family:var(--mono);overflow-wrap:anywhere}
   <h2>Why now</h2>
   <figure class="chart" aria-label="{{what the bars measure}}">
     <div class="bars">
-      <span>{{label}}</span><i style="width:60%">{{value}}</i>
-      <span>{{label}}</span><i style="width:25%">{{value}}</i>
+      <span>{{label}}</span><i style="width:{{value as % of the largest}}%">{{value}}</i>
+      <span>{{label}}</span><i style="width:{{value as % of the largest}}%">{{value}}</i>
     </div>
     <figcaption>{{the measure, its source and date}}</figcaption>
   </figure>

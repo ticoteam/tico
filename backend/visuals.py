@@ -229,8 +229,11 @@ class _Cleaner(HTMLParser):
             return
         if lowered == "a":
             # A link to a place in the page (its contents) stays in the page, over the page's <base target="_blank">.
-            href = re.search(r"""\shref\s*=\s*["']?\s*#""", body, re.I)
-            attrs.append(' target="_self"' if href else ' target="_blank" rel="noopener noreferrer"')
+            hrefs = [
+                html.unescape(value.strip("\"'")) for _, key, _, value in ATTR.findall(body) if key.lower() == "href"
+            ]
+            inside = any(href.strip().startswith("#") for href in hrefs)
+            attrs.append(' target="_self"' if inside else ' target="_blank" rel="noopener noreferrer"')
         self.case[lowered] = name
         self.out.append("<" + name + "".join(attrs) + end)
         if lowered == "head" and self.base_target and not self.based:

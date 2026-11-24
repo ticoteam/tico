@@ -39,7 +39,7 @@ commit:
   the summary; what was not checked goes in its own section.
 - Contents linking every section, then each section as an H2, in the template's order.
 - Verdict: four tiles (criteria passed of those due before release, checks at the head, open review findings, risk
-  in five words or fewer) and "Approve = ship to production."
+  in five words or fewer).
 - Checks and results: the table, one row per check in the spec's order, each with how it was checked (its proof's
   letter or arrow) and pass, fail or after launch.
 - Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; the

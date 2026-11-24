@@ -33,7 +33,7 @@ th{color:var(--muted);font-weight:600}
 .tile b{display:block;font-size:var(--t-lg);line-height:1.2}
 .tile span{color:var(--muted);font-size:var(--t-sm)}
 .tile.ok b{color:var(--ok,#2f7a4f)}.tile.warn b{color:var(--wait,#b7791f)}.tile.bad b{color:var(--fail,#c53030)}
-.approve{font-weight:600}
+
 .pass{color:var(--ok,#2f7a4f);font-weight:600}.fail{color:var(--fail,#c53030);font-weight:600}.nc{color:var(--wait,#b7791f);font-weight:600}
 /* How it works: plain boxes, the changed ones outlined; they stack on a phone. */
 .arch{display:grid;grid-template-columns:1fr 32px 1fr 32px 1fr;align-items:center;margin:8px 0 4px}
@@ -68,7 +68,6 @@ details{margin:8px 0}summary{cursor:pointer;color:var(--muted)}
     <div class="tile ok"><b>{{0 open}}</b><span>review findings</span></div>
     <div class="tile ok"><b>{{Low}}</b><span>risk: {{five words or fewer}}</span></div>
   </div>
-  <p class="approve">Approve = ship to production.</p>
 </section>
 
 <section id="plan">

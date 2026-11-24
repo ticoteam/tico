@@ -394,9 +394,9 @@ def test_a_page_of_its_own_light_colours_needs_dark_values_too(tmp_path):
 
 
 def test_each_page_is_a_title_one_line_contents_and_short_sections(tmp_path):
-    # Chris, Nov 24: a boxed opening is "really bad". Every page is a title, one line saying what it is (its summary),
-    # clickable contents linking every H2, headings in order and one-line bullets, never a form to fill in. A release
-    # report names at most three risks and its changelog is written for customers (Chris, Nov 13).
+    # A boxed opening buries the point. Every page is a title, one line saying what it is (its summary), clickable
+    # contents linking every H2, headings in order and one-line bullets, never a form to fill in. A release report names
+    # at most three risks and its changelog is written for customers.
     tool = page_tool()
     (tmp_path / "shots").mkdir()
     pages = {}
@@ -505,8 +505,6 @@ def test_the_qa_page_check_names_each_part_a_person_reads_first(tmp_path):
         assert f'no section id="{name}"' in tool.problems_in(cut(name), "qa"), name
     three = good.replace('<div class="tile ok">', '<div class="x">', 1)
     assert any("3 tiles; it has 4" in p for p in tool.problems_in(three, "qa"))
-    unsaid = good.replace("Approve = ship to production.", "Approve.")
-    assert any("Approve = ship to production" in p for p in tool.problems_in(unsaid, "qa"))
     no_diagram = good.replace('class="box changed"', 'class="box"')
     assert any("has no diagram" in p for p in tool.problems_in(no_diagram, "qa"))
     # A one-file change may name its file instead of a diagram: one row and the total (the total row is not a file).

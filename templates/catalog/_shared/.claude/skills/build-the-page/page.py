@@ -292,6 +292,8 @@ def shape_problems(text):
             if name not in linked:
                 out.append(f'the contents link "#{name}", which is not an H2 section on the page')
     levels = [int(n) for n in re.findall(r"<h([1-6])\b", text, re.I)]
+    if levels and levels[0] != 1:
+        out.append(f"the page opens with an H{levels[0]}: the title (H1) comes first")
     for i in range(1, len(levels)):
         before, after = levels[i - 1], levels[i]
         if after > before + 1:
@@ -336,8 +338,6 @@ def qa_problems(text):
                 f"the verdict strip has {tiles} tiles; it has {TILES}: criteria passed, checks at the head, open "
                 "review findings, risk"
             )
-        if not re.search(r"approve\s*=\s*ship to production", html.unescape(re.sub(r"<[^>]+>", " ", strip)), re.I):
-            out.append('the verdict strip does not say "Approve = ship to production"')
     how = section(text, "how")
     if how is not None:
         rows = re.findall(

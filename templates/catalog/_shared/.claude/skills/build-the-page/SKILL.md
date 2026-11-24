@@ -61,7 +61,8 @@ running with the change. Name each `shots/<screen>-<before|after>-<390|1280|1440
 - **Production today** (every validation picture; a spec's before only where no demo runs), signed in as yourself:
   `tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-before-390.png` (and `--width 1280`; `--full` for
   the whole page). Refused: the bot's **Can view the app (read only)** setting is off; an owner or admin turns it on
-  (`tico bot app-view <bot> on`). Say so in the task note and use the demo.
+  (`tico bot app-view <bot> on`). Say so in the task note; a spec uses the demo, a validation marks those checks
+  "Not checked" (a demo never proves production).
 - **The app with the change** (a spec's after, a review's before and after): the repository's demo, run from a branch
   with the change. In Tico: build web/ (`npm ci && npm run build`), run `python3 -m backend.demo --port <port>` on each
   side, and take each page in Playwright at 1440 and 390 px. A pair comes from one source: for a spec, both from the
