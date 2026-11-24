@@ -686,8 +686,10 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
                 .ok_or("Missing provider home")?
                 .join(&d.runtime);
             let sessions = plan.join("sessions");
-            Folder::open(&d.root, &sessions, true).map_err(|_| "Cannot create provider sessions")?;
-            let dir = Folder::open(&d.root, &home, false).map_err(|_| "Cannot link provider sessions")?;
+            Folder::open(&d.root, &sessions, true)
+                .map_err(|_| "Cannot create provider sessions")?;
+            let dir =
+                Folder::open(&d.root, &home, false).map_err(|_| "Cannot link provider sessions")?;
             if dir.kind(c"sessions") != Some(libc::S_IFLNK) {
                 dir.symlink(c"sessions", &sessions)
                     .map_err(|_| "Cannot link provider sessions")?;
@@ -874,14 +876,11 @@ fn place(
             text
         }
     };
-    let entry = homes
-        .live
-        .entry(home.to_path_buf())
-        .or_insert(Live {
-            turns: 0,
-            revision,
-            watch: None,
-        });
+    let entry = homes.live.entry(home.to_path_buf()).or_insert(Live {
+        turns: 0,
+        revision,
+        watch: None,
+    });
     entry.turns += 1;
     entry.revision = entry.revision.max(revision);
     Ok(text)
@@ -929,7 +928,8 @@ impl Folder {
 
     /// The folder `name` in this one, never through a link; made when missing (`make`).
     fn child(&self, name: &CStr, make: bool) -> Result<Folder, String> {
-        let open = || crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_DIRECTORY);
+        let open =
+            || crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_DIRECTORY);
         if let Some(fd) = open() {
             return Ok(Folder(fd));
         }
@@ -996,7 +996,9 @@ impl Folder {
             .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()))
             .and_then(|_| {
                 // SAFETY: renameat within one held descriptor, NUL-terminated names.
-                if unsafe { libc::renameat(self.raw(), staged.as_ptr(), self.raw(), name.as_ptr()) } == 0 {
+                if unsafe { libc::renameat(self.raw(), staged.as_ptr(), self.raw(), name.as_ptr()) }
+                    == 0
+                {
                     Ok(())
                 } else {
                     Err(std::io::Error::last_os_error().to_string())

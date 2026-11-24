@@ -3167,7 +3167,7 @@ def connect(c, settings, auth, who, body):
                 # The person's own agy, older than Tico runs: Tico does not replace it.
                 from clients import harness_manifests as manifests
 
-                least = manifests.get(spec["runtime"])["minimum"]
+                least = (manifests.get(spec["runtime"]) or {}).get("minimum") or ""
                 return waiting(False, f"Update Antigravity on {runner['label']} to {least} or later.")
             if tool.get("state") == "failed":
                 return waiting(False, f"Antigravity couldn't install on {runner['label']}; Tico will retry.")

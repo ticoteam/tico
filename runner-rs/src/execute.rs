@@ -7496,19 +7496,28 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         std::fs::write(folder.join("agy-refresh-0"), "").unwrap();
         fake_agy_in(&folder);
         let token = format!("run-agy-{}", uuid::Uuid::new_v4().simple());
-        grants().lock().unwrap().insert(token.clone(), json!({"subscriptions": [{
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
             "id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
             "file": crate::model_subscriptions::AGY_TOKEN, "revision": 1, "billing": "subscription",
-            "value": r#"{"token":{"access_token":"ya29.synthetic-handed-token-0123456789"}}"#}]}));
+            "value": r#"{"token":{"access_token":"ya29.synthetic-handed-token-0123456789"}}"#}]}),
+        );
         let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon",
                          "attempt": {"token": token, "credential_vault": true}});
         let ran = session_turns(false, true, &[("m4", json!({}), agy)]).await;
         let _ = std::fs::remove_dir_all(&folder);
-        assert_eq!(ran.completions[0]["outcome"], "completed", "{}", ran.completions[0]);
+        assert_eq!(
+            ran.completions[0]["outcome"], "completed",
+            "{}",
+            ran.completions[0]
+        );
         let said = serde_json::to_string(&ran.events).unwrap();
         assert!(said.contains("Done."), "{said}");
         assert!(!said.contains("synthetic-refreshed-mid-turn"), "{said}");
-        assert!(!ran.completions[0].to_string().contains("synthetic-refreshed-mid-turn"));
+        assert!(!ran.completions[0]
+            .to_string()
+            .contains("synthetic-refreshed-mid-turn"));
     }
 
     #[tokio::test]
