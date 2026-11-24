@@ -9,6 +9,7 @@ from backend import access_requests as AR
 from backend import reconnects
 from backend.tests.helpers.api import get, headers, post, put
 from backend.tests.helpers.api_tools import key, level, tool
+from backend.store import H
 from backend.tests.helpers.cards import task
 from backend.tests.helpers.credentials import setup
 
@@ -142,6 +143,50 @@ def test_a_request_goes_to_the_bots_own_owner_alone_when_they_can_see_it_through
         finally:
             c.set_trace_callback(None)
     assert [p.actor for p in people] == ["human:ben"] and len(seen) < 40, len(seen)
+
+
+def test_a_card_is_read_by_its_recipient_alone_in_their_agent_bar_chat_even_when_the_tools_owner_is_shared(api):
+    world(api)
+    owned_by_ben(api)
+    with api.app.state.store.transaction() as c:  # one shared room for Ben, Cara (and Ana, the company's owner)
+        c.execute(
+            "INSERT INTO bot_config(bot,owner_id,owner_ids,thread_mode) VALUES('support','ana','[\"ben\",\"cara\"]',"
+            "'shared')"
+        )
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    asked = ask(api, crm, "read_write", why="merge the duplicate deals for the acquirer")
+    assert set(cards(api, asked["id"])) == {"human:ben"}
+    mid = json.loads(row(api, asked["id"])["cards"])["human:ben"]
+    with api.app.state.store.read() as c:
+        from backend import threads
+
+        card = H.message(c, mid)
+        where = card["conversation_id"]
+        cara = threads.viewer(api.app.state.vault.auth, api.app.state.vault.auth.identity_for_actor(c, "human:cara"))
+        # Cara, in the Tools Owner's shared room with Ben, reads neither the card's chat nor the card.
+        assert not threads.readable(c, cara, where) and not threads.readable(c, cara, card)
+    get(api, f"threads/{where}", "cara-test", expected=404)
+    # Ben finds it in the chat his Agent bar opens with the Tools Owner, and in his Needs you.
+    assert get(api, "threads/dm?with=bot:support&private=true&create=false", "ben-test")["id"] == where
+    needs = [i["id"] for i in get(api, "needs-you", "ben-test")["items"] if i["kind"] == "access"]
+    assert needs == ["access:" + asked["id"]]
+
+
+def test_cards_in_a_dm_the_tools_owner_opened_never_count_against_its_unsolicited_cap(api):
+    world(api)
+    owned_by_ben(api)
+    with api.app.state.store.transaction() as c:  # the Tools Owner wrote to Ben first: the DM is its own
+        from backend import threads
+
+        threads.dm(c, "bot:support", ["human:ben"], private=True)
+    for n in range(H.UNSOLICITED_PER_DAY + 1):
+        tid = tool(api, f"Acme Tool {n}", base_url=f"https://t{n}.acme.example")["id"]
+        key(api, tid, f"{SECRET}-{n}")
+        asked = ask(api, tid, "read_write")
+        assert asked["state"] == "open" and set(cards(api, asked["id"])) == {"human:ben"}
+    with api.app.state.store.read() as c:
+        assert threads.unsolicited_today(c, "bot:support", "human:ben") == 0
 
 
 def test_an_owner_who_cannot_read_the_asking_task_is_not_asked_alone(api):

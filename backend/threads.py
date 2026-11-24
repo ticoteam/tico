@@ -2012,12 +2012,14 @@ def _reachable(c, actor):
 
 
 def solicited(c, thread, bot, person, refs=None, in_reply_to=None, *, addressed=True, before=None):
-    """Whether `bot`'s post reaches `person` solicited (contract §4.7), for one delivery: a task or approval ref, a
-    reply to them, a DM they opened, or a post that answers them. `addressed`: the post is addressed to them, so a
-    thread they opened that is not a Home counts too, as it always did. `before`: the post's own seq, once it is
-    written. Having opened a Home never counts: it is the owner's lasting place, so opening it asks for nothing."""
+    """Whether `bot`'s post reaches `person` solicited (contract §4.7), for one delivery: a task or approval ref, an access
+    request card the server built for them to decide (hubdb.check_message_refs refuses that ref from anyone else; a key
+    grant is proposed with the bot's own note, so it stays under the cap), a reply to them, a DM they opened, or a post that answers them. `addressed`: the post is
+    addressed to them, so a thread they opened that is not a Home counts too, as it always did. `before`: the post's own
+    seq, once it is written. Having opened a Home never counts: it is the owner's lasting place, so opening it asks for
+    nothing."""
     refs = refs or {}
-    if refs.get("task") or refs.get("approval"):
+    if refs.get("task") or refs.get("approval") or refs.get("card") == "access_request":
         return True
     row = thread_row(c, thread)
     if row is None:
