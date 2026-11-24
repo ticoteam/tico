@@ -34,6 +34,7 @@ from .readiness import absolute, can_run
 from .statuses import PARKED_SQL
 from . import fast_json
 from . import gateway_tiers
+from . import harness_actions
 from . import names as actor_names
 from . import read_cache
 from . import report_managers
@@ -1535,6 +1536,7 @@ class SettingsAdmin:
                 from .model_login import hold_removals
 
                 hold_removals(c, self.settings)
+                harness_actions.install_where_needed(c, who, self.settings, target["runtime"])
                 # The limit was the old model's: the new one starts on the queued work now, unless it waits on the
                 # same spent login or Gateway key.
                 lift_after_model_change(c, self.settings, who.actor, bot, was)
@@ -2143,6 +2145,7 @@ class SettingsAdmin:
                 (who.actor, H.now(), undo_change_id),
             )
         H.event(c, who.actor, "bot.task_model_changed", bot, {"before": before, "after": after})
+        harness_actions.install_where_needed(c, who, self.settings, (target or {}).get("runtime"))
         model = task_models.of(declared)
         readiness = task_models.readiness(c, bot, model) if model else None
         warning = task_models.warning(c, self.settings, bot, declared, model) if model else ""
@@ -2195,6 +2198,10 @@ class SettingsAdmin:
         ):
             raise Problem("unchanged", "That task model is already selected", 409)
         saved = task_run_models.set_choice(c, who.actor, task_id, target)
+        placed = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        harness_actions.install_where_needed(
+            c, who, self.settings, (target or {}).get("runtime"), [placed["runner_id"]] if placed else []
+        )
         declared = shared_bots.follow(c, bot, _json(self._config(c, bot)["config"], {}) or {})
         on_model = target if target and target["model"] else None
         readiness = task_models.readiness(c, bot, on_model) if on_model else None

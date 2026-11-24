@@ -138,6 +138,23 @@ def choose(c, who, rid, harness, enabled, settings=None):
     return {"runner_id": rid, "harness": harness, "enabled": bool(enabled)}
 
 
+def install_where_needed(c, who, settings, runtime, runners=()):
+    """After an owner saves a model on `runtime`: turn Antigravity on for each online computer that runs it (a bot
+    there, its task model or the company default, or one of `runners`), reports the harness and lacks agy, as Connect
+    does. A choice someone made, on or off, stays; anyone else's save leaves it to the bot's readiness."""
+    if runtime != "antigravity" or who.role != "owner":
+        return
+    wanted = {rid for rid, got in providers.runtimes_run_on(c, settings).items() if runtime in got} | set(runners)
+    chosen = choices_by_runner(c)
+    for rid in sorted(wanted):
+        runner = c.execute("SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
+        if not runner or not runner_online.is_online(runner["last_seen_at"]) or runtime in chosen.get(rid, {}):
+            continue
+        tool = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(runtime)
+        if isinstance(tool, dict) and not tool.get("installed") and tool.get("state") not in ("queued", "installing"):
+            choose(c, who, rid, runtime, True, settings)
+
+
 def choices(c, rid):
     """{harness: True | False} the owner set for this computer; a harness not listed was never chosen."""
     return {

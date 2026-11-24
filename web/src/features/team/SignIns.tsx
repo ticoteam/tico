@@ -160,6 +160,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
   const send = useAction('computers.signInCode');
   const stop = useAction('computers.cancelSignIn');
   const [code, setCode] = useState('');
+  const [opened, setOpened] = useState(false);
   const l = q.data;
   const live = !l || LIVE_LOGIN.includes(l.state);
   useEffect(() => {
@@ -187,7 +188,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
       {l?.state === 'waiting' && (
         <>
           {l.url && (
-            <a className="once" href={l.url} target="_blank" rel="noopener noreferrer">
+            <a className="once" href={l.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpened(true)} onAuxClick={() => setOpened(true)}>
               {l.url.replace(/^https:\/\//, '')}
             </a>
           )}
@@ -196,7 +197,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
               {l.code}
             </code>
           )}
-          {l.accepts_code && !l.code_sent && (
+          {l.accepts_code && !l.code_sent && (opened || !l.url) && (
             <form
               onSubmit={(e) => {
                 e.preventDefault();
