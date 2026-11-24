@@ -665,6 +665,18 @@ impl Runner {
             }
             let path = crate::sessions::local_path(&self.config, &bot, &entry["config"]);
             if crate::instructions::present(&path) {
+                if let Some(expected) = entry["burst_revision"].as_str() {
+                    let repository = text_of(&entry["repository"]);
+                    if crate::readiness::burst_checkout_revision(&path, &repository)
+                        .await
+                        .is_some_and(|current| current != expected)
+                    {
+                        if let Ok(env) = self.github_access(&bot, entry).await {
+                            crate::placement::catch_up(&bot, &entry["burst_revision"], &path, &env)
+                                .await;
+                        }
+                    }
+                }
                 continue;
             }
             self.fetch_repository(&bot, entry, &path).await;

@@ -142,6 +142,17 @@ impl Drain {
             .insert(aid.into(), Turn::Running);
     }
 
+    /// The hub can fence a claim before its draining lease reaches this computer.
+    pub fn refused_burst_start(&self, aid: &str) {
+        let mut s = self.inner.lock().unwrap();
+        if let Some(lease) = &mut s.burst {
+            lease.draining = true;
+        }
+        if s.turns.insert(aid.into(), Turn::Returning(WAITING)) != Some(Turn::Returning(WAITING)) {
+            s.handed_back += 1;
+        }
+    }
+
     pub fn end(&self) {
         let mut s = self.inner.lock().unwrap();
         s.since = None;

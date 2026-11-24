@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use futures_util::{stream, StreamExt};
 use serde_json::{json, Map, Value};
 use tokio::task::JoinHandle;
 
@@ -68,6 +69,7 @@ pub struct Runner {
     pub sign_in: crate::signin::SignIn,
     /// The last history-publish failure per bot, so it is logged when it changes.
     pub publish_notes: Mutex<HashMap<String, String>>,
+    burst_revisions: Mutex<HashMap<(String, String), (Instant, bool)>>,
     pub attempt_bots: Mutex<HashMap<String, String>>,
     pub runtime_rows: Mutex<Map<String, Value>>,
     /// The last readiness probe (readiness::probe_all): what the heartbeat's rows are composed from.
@@ -207,6 +209,7 @@ impl Runner {
             push_lock: tokio::sync::Mutex::new(()),
             sign_in: crate::signin::SignIn::new(&projects_dir),
             publish_notes: Mutex::new(HashMap::new()),
+            burst_revisions: Mutex::new(HashMap::new()),
             attempt_bots: Mutex::new(HashMap::new()),
             runtime_rows: Mutex::new(Map::new()),
             probed: Mutex::new(readiness::Probed::default()),
@@ -616,6 +619,55 @@ impl Runner {
         candidates
     }
 
+    async fn verify_burst_revisions(
+        &self,
+        assignments: &[Value],
+        checks: &mut [Map<String, Value>],
+    ) {
+        const PROOF_AGE: Duration = Duration::from_secs(60);
+        self.burst_revisions
+            .lock()
+            .unwrap()
+            .retain(|_, (at, _)| at.elapsed() < PROOF_AGE);
+        stream::iter(checks.iter_mut())
+            .for_each_concurrent(4, |row| async move {
+                let Some(revision) = row.get("burst_revision").and_then(Value::as_str) else {
+                    return;
+                };
+                let bot = text_of(&row["bot"]);
+                let path = std::path::Path::new(row["repository"].as_str().unwrap_or_default());
+                let Some(entry) = assignments
+                    .iter()
+                    .find(|e| e["bot"].as_str() == Some(bot.as_str()))
+                else {
+                    row.remove("burst_revision");
+                    return;
+                };
+                let key = (text_of(&entry["repository"]), revision.to_owned());
+                let cached = self.burst_revisions.lock().unwrap().get(&key).copied();
+                let reachable = match cached {
+                    Some((_, reachable)) => reachable,
+                    None => {
+                        let reachable = match self.github_access(&bot, entry).await {
+                            Ok(env) => {
+                                readiness::burst_revision_reachable(path, &env, revision).await
+                            }
+                            Err(_) => false,
+                        };
+                        self.burst_revisions
+                            .lock()
+                            .unwrap()
+                            .insert(key, (Instant::now(), reachable));
+                        reachable
+                    }
+                };
+                if !reachable {
+                    row.remove("burst_revision");
+                }
+            })
+            .await;
+    }
+
     async fn probe_now(&self) -> bool {
         let _gate = self.probe_gate.lock().await;
         let config = self.config_now();
@@ -764,6 +816,10 @@ impl Runner {
             computer_logins,
         )
         .await;
+        if crate::follow::feature("burst_revision") && !crate::follow::feature("burst_preparation")
+        {
+            self.verify_burst_revisions(&candidates, &mut checks).await;
+        }
         self.perbot.decorate(&self.config, &mut checks, &candidates);
         self.publish_unpublished(&candidates, &mut checks).await;
         let notes = self.publish_notes.lock().unwrap().clone();
@@ -845,9 +901,10 @@ impl Runner {
                 .clone()
                 .filter(|r| !full && r.is_string())
                 .map(|r| text_of(&r));
-            let burst = crate::follow::feature("burst_preparation");
+            let burst_features = ["burst_preparation", "burst_revision"];
+            let before = burst_features.map(crate::follow::feature);
             follower.poll(&self.client, said).await;
-            if burst != crate::follow::feature("burst_preparation") {
+            if before != burst_features.map(crate::follow::feature) {
                 self.events.ask(&["sync", "claim"]);
             }
             let restarting = self.restart.lock().unwrap().is_some();
@@ -1029,6 +1086,8 @@ impl Runner {
                 // A server rolled back since it said it takes the commit: it waits for `runners/desired` to say so again.
                 body.as_object_mut().unwrap().remove("commit");
                 crate::follow::shared().inspect(|f| f.drop_commit());
+            } else if e.detail.contains(".burst_revision") && strip_burst_revision(body) {
+                // A previous hub may still have advertised the field before a rollback.
             } else if capacity_refused(&e.detail) && body["capacity"].as_u64().unwrap_or(0) > 32 {
                 // A server from before larger capacities accepts at most 32 and never hands out more turns
                 // than the runner reports, so after a rollback the runner keeps working at 32.
@@ -1164,6 +1223,17 @@ impl Runner {
     fn state_bot(&self, aid: &str) -> Option<String> {
         self.attempt_bots.lock().unwrap().get(aid).cloned()
     }
+}
+
+fn strip_burst_revision(body: &mut Value) -> bool {
+    let Some(bots) = body["readiness"]["bots"].as_object_mut() else {
+        return false;
+    };
+    let mut removed = false;
+    for row in bots.values_mut().filter_map(Value::as_object_mut) {
+        removed |= row.remove("burst_revision").is_some();
+    }
+    removed
 }
 
 fn ask_after_preparation(events: &Events, bots: &Value) {

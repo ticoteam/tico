@@ -48,7 +48,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
             try:
                 # Inside the read transaction, so the two share one read of the computer's row (read_cache).
                 validate_identity(snapshot, request.state.identity)
-                execution.runner(snapshot, request.state.identity)
+                runner = execution.runner(snapshot, request.state.identity)
                 selected = live_turn_cache(snapshot, request.state.identity.runner_id)
             finally:
                 snapshot.rollback()
@@ -65,20 +65,22 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 return execution.heartbeat(c, request.state.identity, body, live_tasks=selected if unchanged else None)
 
             result = mutate(request, body, work)
+            # Idempotent heartbeat replays also need the remaining time at this read.
+            if compute_pool.burst_key(runner["cloud_key"]):
+                if lease := cloud_machines.burst_lease(snapshot, runner["id"]):
+                    result["burst_lease"] = lease
         # No bot list: every runner the server accepts (0.6.0-rc.1 on) reads its bots from GET runners/assignments when a
         # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
         # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
         result["assignments"] = []
-        # Compute the remaining time after the mutation, including on an idempotent heartbeat replay.
-        with store.read() as c:
-            if lease := cloud_machines.burst_lease(c, request.state.identity.runner_id):
-                result["burst_lease"] = lease
         return result
 
     @app.get("/api/v2/runners/desired")
     def desired_runner_release(request: Request):
         with store.read() as c:
-            burst = compute_pool.target(c, execution.runner(c, request.state.identity))
+            runner = execution.runner(c, request.state.identity)
+            burst = compute_pool.target(c, runner)
+            burst_revision = burst or compute_pool.enabled(c) and runner["cloud_key"] == cloud_machines.SHARED
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
@@ -123,6 +125,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "run_timings": True,
                 "run_timings_turn": True,
                 **({"burst_preparation": True} if burst else {}),
+                **({"burst_revision": True} if burst_revision else {}),
             },
         }
 

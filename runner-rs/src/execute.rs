@@ -1427,6 +1427,7 @@ impl Runner {
                 Ok(false)
             }
             Err(e) if e.code == "burst_draining" => {
+                self.drain.refused_burst_start(aid);
                 Err(self.drain_failure(aid, crate::drain::WAITING))
             }
             Err(e) => Err(e.into()),
@@ -2590,7 +2591,10 @@ impl Runner {
                 self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)
             })).await?;
             if let Some(repository) = &burst_repository {
-                if !crate::readiness::burst_checkout_ready(&lanes.main_path, repository).await {
+                let revision = crate::readiness::burst_checkout_revision(&lanes.main_path, repository).await;
+                if !revision.is_some_and(|actual| {
+                    attempt["burst_revision"].as_str().is_none_or(|expected| actual == expected)
+                }) {
                     burst_checkout = Some("mismatch");
                     self.events.ask(&["heartbeat"]);
                     return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
@@ -2779,7 +2783,7 @@ impl Runner {
                     // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
                     // run no turn on a copy that shares no history with GitHub's.
                     // A personal claim publishes nothing, the shared checkout's history included.
-                    let (published, detail) = if personal_claim {
+                    let (published, detail) = if personal_claim || burst_repository.is_some() {
                         ("skipped", String::new())
                     } else {
                         self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, place_env).await?
@@ -2813,6 +2817,24 @@ impl Runner {
                     self.place_turn(p, &mut attempt, place_env, &flags.lost).await.map_err(Fail::runtime)
                 }).await
             }).await?;
+            if let Some(repository) = &burst_repository {
+                // Pulling during placement can advance the checkout after the first check.
+                let valid = match crate::readiness::burst_checkout_revision(&p.main_path, repository).await {
+                    Some(actual) => match attempt["burst_revision"].as_str() {
+                        Some(expected) if actual == expected => {
+                            crate::readiness::burst_revision_reachable(&p.main_path, place_env, expected).await
+                        }
+                        Some(_) => false,
+                        None => true,
+                    },
+                    None => false,
+                };
+                if !valid {
+                    burst_checkout = Some("mismatch");
+                    self.events.ask(&["heartbeat"]);
+                    return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
+                }
+            }
             conv.push_str(placed);
             if let Some(old) = legacy_conv.as_mut() {
                 old.push_str(placed);
@@ -2838,11 +2860,13 @@ impl Runner {
             }
             // The instruction file the harness loads by itself, AGENTS.md with Tico's standing section, before the
             // turn starts (crate::instructions): an older AGENT.md and state.md are moved over in one commit.
-            let app = self.names().await.app;
-            match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
-                Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
-                Ok(false) => {}
-                Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
+            if burst_repository.is_none() {
+                let app = self.names().await.app;
+                match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
+                    Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
+                    Ok(false) => {}
+                    Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
+                }
             }
             // git off the async threads: it can take a moment on a large checkout.
             memory_before = {
@@ -3500,6 +3524,7 @@ impl Runner {
         // A turn whose tools ran is never taken again by a fallback, named or the company's: it may already have
         // changed things.
         let fallback_allowed = !paid_by
+            && burst_checkout.is_none()
             && !voice_reply
             && !native_control
             && continuing.is_empty()
@@ -6284,6 +6309,7 @@ mod tests {
         started: bool,
         renewed_at: Option<u64>,
         publish_repository: bool,
+        burst_draining: bool,
     }
 
     impl StartWindow {
@@ -6322,6 +6348,9 @@ mod tests {
                 return Some((false, json!({"reserved": !waiting})));
             }
             if path.ends_with("/started") {
+                if self.burst_draining {
+                    return Some((true, json!({"error": {"code": "burst_draining"}})));
+                }
                 assert!(
                     self.until.is_some(),
                     "the runner must reserve before starting"
@@ -6636,6 +6665,54 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn burst_start_fence_yields_before_the_runner_hears_the_drain() {
+        let _home = PrivateHome::claude(true);
+        let _controls = RunControls;
+        let window = Arc::new(Mutex::new(StartWindow {
+            now: 0,
+            until: Some(180),
+            expired: false,
+            started: false,
+            renewed_at: None,
+            publish_repository: false,
+            burst_draining: true,
+        }));
+        let (url, seen, server) =
+            recording_server_start_window(None, None, Some(window), None, false).await;
+        let (runner, dir) = runner_at(&url, "burst-fence");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        runner.runtime_rows.lock().unwrap().insert(
+            "claude".into(),
+            json!({"installed": true, "authenticated": "ready"}),
+        );
+        runner.drain.confirm_burst(
+            Instant::now(),
+            crate::wire::BurstLease {
+                confirmed_at_ms: 1,
+                run_seconds: 180,
+                draining: false,
+            },
+        );
+        let attempt = json!({"id": "fenced", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
+            "start_reservation_seconds": 180, "lease_seconds": 120, "start_reserved": true,
+            "conversation": {"id": "c1", "kind": "chat"}, "history": [],
+            "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+            "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary"}});
+        runner.clone().execute(attempt).await.unwrap();
+        server.abort();
+        assert_eq!(posted(&seen, "/attempts/fenced/started"), 1);
+        assert!(runner.drain.claims_closed());
+        let requests = seen.lock().unwrap();
+        let (_, _, completion) = requests
+            .iter()
+            .find(|(_, path, _)| path.ends_with("/attempts/fenced/complete"))
+            .unwrap();
+        assert_eq!(completion["outcome"], "interrupted");
+        assert_eq!(completion["yielded"], true);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     async fn lazy_claude_fallback(start_reserved: bool) {
         let _home = PrivateHome::claude(true);
         let _controls = RunControls;
@@ -6647,6 +6724,7 @@ mod tests {
             started: false,
             renewed_at: None,
             publish_repository: false,
+            burst_draining: false,
         }));
         let (url, seen, server) =
             recording_server_start_window(None, None, Some(window), None, false).await;

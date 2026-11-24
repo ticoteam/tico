@@ -20,6 +20,7 @@ class FakeHQ:
         self.calls, self.fail, self.machines, self.n = [], {}, {}, 0
         self.clock = None  # a test's fake clock (an ISO time): start and stop then stamp as HQ does
         self.sizes = None  # None offers the module's SIZES (a test may patch them); a test sets its own list
+        self.launch_options = []
         self.switch = False  # HQ's helper switch for Tico support
 
     def _check(self, action):
@@ -39,7 +40,9 @@ class FakeHQ:
         sizes = SIZES if self.sizes is None else self.sizes
         return {"machines": [dict(m) for m in self.machines.values()], "sizes": sizes, "caps": {"machines": 10}}
 
-    def create(self, key, size, enroll_token, hub_url):
+    def create(self, key, size, enroll_token, hub_url, **options):
+        if options:
+            self.launch_options.append(options)
         self.calls.append(("create", key, size, enroll_token, hub_url))
         self._check("create")
         for machine in self.machines.values():
@@ -64,7 +67,9 @@ class FakeHQ:
         }
         return dict(self.machines[mid])
 
-    def start(self, machine_id, size=None):
+    def start(self, machine_id, size=None, **options):
+        if options:
+            self.launch_options.append(options)
         self.calls.append(("start", machine_id, size))
         self._check("start")
         machine = self.machines[machine_id]

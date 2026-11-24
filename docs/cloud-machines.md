@@ -420,7 +420,8 @@ create a local worktree or use a routed plan stay on Base.
 The assignment stays on Burst through the lease restore window so the runner can restore the turn or hand in its
 result. If the window expires without a report, the assignment returns to Base. Work that never started keeps its
 normal retry rules. Work that may have changed the checkout stays held for recovery.
-The runner publishes checkout changes before completing a turn. A checkout mismatch, unpublished changes, or work
+The runner publishes checkout changes before completing a turn. A checkout mismatch before the turn starts returns
+it to Base and blocks borrowing the bot until Base reports a new published revision. Unpublished changes or work
 that needs a saved Burst session goes to recovery on Base. When the saved session is unavailable, the bot's operator
 can review the stopped run, recover any checkout changes, and run
 `tico run restart JOB --acknowledge-uncertain-effects`. The API equivalent is `POST /api/v2/jobs/{jid}/retry` with
@@ -429,8 +430,10 @@ If Base is unavailable, the return stays pending until Base comes back.
 New claims need a confirmed HQ lease with at least three minutes to start and one minute to drain.
 `tico settings burst-autoscale on` lets the company owner or an admin enable automatic scaling after enabling
 Burst re-home and configuring a daily budget in HQ. The hub prefers a parked Large (8 vCPU) worker. It requests one
-worker after an eligible, company-paid Base turn waits 30 seconds without a free slot. A worker parks after 30 idle
-minutes, once its turn settles and its bot returns to Base. The runner reserves the final minute of confirmed HQ
+worker after an eligible, company-paid Base turn with a clean, published checkout waits 30 seconds without a free
+slot. A sleeping or booting Base counts as a slot on its way. Each worker parks after 30 minutes without work for
+that worker, once its turn settles and its bot returns to Base. If a managed worker fails to enroll or confirm a
+lease, the hub alerts the company owner and pauses new Burst launches for one hour. The runner reserves the final minute of confirmed HQ
 lease time for publishing and settlement. `tico settings burst-autoscale off` drains and parks the managed workers.
 
 Stop new borrows with `tico settings burst-rehome off`. To pin a bot, include `"pinned": true` when setting its assignment through

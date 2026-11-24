@@ -81,7 +81,7 @@ pub const CAPABILITIES: &[&str] = &[
     crate::model_subscriptions::AGY_ACP_CAPABILITY,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
-// A 0.6.0 hub that reports only a list refusal can need eighteen capability drops before it accepts the heartbeat.
+// A 0.6.0 hub that reports only a list refusal can need several posts while the runner drops capabilities.
 pub const MAX_HEARTBEAT_POSTS: u32 = 20;
 
 #[derive(Clone, Debug)]
