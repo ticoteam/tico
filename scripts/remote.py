@@ -4,11 +4,14 @@
     python3 scripts/remote.py [--setup python|browser|rust|all] [--cpus 4|8] [--minutes N] [--ref SHA] -- CMD...
 
 It runs the pushed commit (HEAD by default), never this checkout's uncommitted files, waits for the result, prints the
-command's last lines and keeps the whole log under .remote-runs/. The exit code is the command's own. `gh` must be
-signed in with permission to dispatch workflows on the repository. scripts/heavy.sh calls it when TICO_HEAVY_REMOTE=1.
-At most TICO_REMOTE_MAX (4 by default; 0 means no cap) of the repository's remote runs go at once: a run past that waits
-up to 20 minutes for a slot, then exits without dispatching. A failed exit is never 0: see EXIT_CODES (75 when the run
-was never dispatched, 76 when it was dispatched but ended without the command's result).
+command's last lines and keeps the whole log under .remote-runs/. Every setup installs the root npm packages, and a
+command that names web/ (`cd web`, `web/...`, `--prefix web`) gets web/'s packages first (web_ready). The exit code is
+the command's own. `gh` must be signed in with permission to dispatch workflows on the repository. scripts/heavy.sh
+calls it when TICO_HEAVY_REMOTE=1. At most TICO_REMOTE_MAX (8 by default; 0 means no cap) of the repository's remote
+runs go at once: a run past that waits up to 20 minutes for a slot, then exits without dispatching. RunsOn bills by the
+machine-minute, so runs side by side cost what the same runs cost one after another; Tico's CI permit (below) is what
+limits the spend. A failed exit is never 0: see EXIT_CODES (75 when the run was never dispatched, 76 when it was
+dispatched but ended without the command's result).
 
 A builder's run (one started by a Tico bot, which has HUB_TOKEN and HUB_TASK_ID) first asks Tico for a permit
 (backend/ci_runs.py): when its ticket has used its build-time minutes, or today's CI share is used up, the run is not
@@ -20,6 +23,7 @@ import json
 import os
 from pathlib import Path
 import random
+import re
 import shlex
 import subprocess
 import sys
@@ -48,7 +52,7 @@ def _now():
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = 'remote-run.yml'
 TAIL = 200
-CAP = 4  # remote runs of this repository at once; TICO_REMOTE_MAX overrides it
+CAP = 8  # remote runs of this repository at once; TICO_REMOTE_MAX overrides it
 WAIT_LIMIT = 20 * 60  # seconds a dispatch waits for a free slot
 CHECK_LIMIT = 2 * 60  # seconds the count may keep failing before a dispatch goes ahead without it
 BUSY = ('queued', 'in_progress', 'waiting', 'pending')
@@ -142,6 +146,22 @@ def setup_for(command):
     browser = any(word in text for word in ('playwright', 'npm ', 'npx '))
     rust = 'cargo' in text or ('release_checks.py' in text and '--release' in text)
     return 'all' if browser and rust else 'browser' if browser else 'rust' if rust else 'python'
+
+
+# `web` as a word or a path's first folder: `cd web`, `web/src`, `--prefix web`, `-C web`; not test_web.py or webhooks.
+WEB = re.compile(r'(?<![\w.-])web(?![\w.-])')
+WEB_INSTALL = (
+    'if [ -f web/package-lock.json ]; then (cd web && npm ci --no-audit --no-fund --prefer-offline) || exit $?; fi; '
+)
+
+
+def web_ready(line):
+    """The shell line the VM runs for `line`: web/'s packages first when it names web/ and does not install them itself.
+    The VM's install (scripts/ci_install.sh) covers the root packages only, so `npx tsr` or `npm run typecheck` in web/
+    failed with `tsr: not found`. An install that fails ends the run with npm's exit code."""
+    if not WEB.search(line) or 'npm ci' in line or 'npm install' in line:
+        return line
+    return WEB_INSTALL + line
 
 
 def find_run(run_id, deadline):
@@ -337,7 +357,7 @@ def run(command, *, setup=None, cpus='4', minutes=50, ref=None, echo=True):
         '-f',
         f'ref={ref}',
         '-f',
-        f'command={shlex.join(command)}',
+        f'command={web_ready(shlex.join(command))}',
         '-f',
         f'setup={setup}',
         '-f',

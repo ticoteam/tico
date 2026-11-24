@@ -123,4 +123,4 @@ Push the branch, then run from the worktree:
 
     python3 scripts/remote.py --setup python --minutes 20 -- python3 -m e2e.run
 
-At most 4 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.
+At most 8 remote runs of the repository go at once (`TICO_REMOTE_MAX` changes that, 0 for none); a run past the cap waits up to 20 minutes for a slot.

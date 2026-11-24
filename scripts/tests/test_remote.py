@@ -66,6 +66,27 @@ def test_setup_covers_what_the_command_runs(command, setup):
     assert remote.setup_for(command) == setup
 
 
+@pytest.mark.parametrize(
+    'line, installs',
+    [
+        # Nov 24: three builders' `cd web && npx tsr generate` failed with `tsr: not found`: the VM installs only the
+        # root packages, so a command that names web/ gets web/'s first.
+        ("bash -c 'cd web && npx tsr generate'", True),
+        ('npm --prefix web run typecheck', True),
+        ('node web/scripts/parity.ts chat', True),
+        ('npx vitest run --root=web', True),
+        # One that installs them itself, or does not name web/, runs as it is.
+        ("bash -c 'cd web && npm ci && npx vitest run'", False),
+        ('python -m pytest -q backend/tests/test_webhooks.py backend/tests/test_web.py', False),
+        ('python -m pytest -q backend/web_push.py', False),
+        ('cargo test', False),
+    ],
+)
+def test_a_command_that_names_web_installs_webs_packages_first(line, installs):
+    assert remote.web_ready(line) == (remote.WEB_INSTALL + line if installs else line)
+    assert remote.WEB_INSTALL.startswith('if [ -f web/package-lock.json ]; then (cd web && npm ci ')
+
+
 def fake_gh(monkeypatch, replies):
     """subprocess.run for `gh`: each call takes the next (returncode, stdout, stderr) from `replies`."""
     calls = []
@@ -252,7 +273,7 @@ def stub_remote(
 ):
     """Stands in for git, gh and the log download for one remote.main(). The run list and the run view answer for the
     run that was dispatched. `artifact` is the exit-code file the VM left in the log, or None when the log never came
-    back. `busy` is how many remote runs the count reports as busy."""
+    back. `busy` is how many remote runs the count reports as busy. Returns the dispatch's inputs once it is sent."""
     monkeypatch.delenv('TICO_REMOTE_MAX', raising=False)
     # A run with no hub credential is a person's, which needs no permit. Inside a bot's task turn these three are set,
     # and permit() would ask the live Tico with the bot's token (403, exit 3) instead of the stubbed path.
@@ -273,7 +294,7 @@ def stub_remote(
 
     def run(argv, **kwargs):
         if argv[:3] == ['gh', 'workflow', 'run']:
-            dispatched['id'] = next(arg for arg in argv if arg.startswith('id=')).removeprefix('id=')
+            dispatched.update(arg.split('=', 1) for arg in argv if '=' in arg)
             return SimpleNamespace(returncode=dispatch, stdout='', stderr='refused' if dispatch else '')
         if argv[:3] == ['gh', 'run', 'list']:
             found = [{'databaseId': 99, 'displayTitle': f'Remote run {dispatched["id"]}', 'url': 'https://x/99'}]
@@ -293,12 +314,13 @@ def stub_remote(
 
     monkeypatch.setattr(remote, 'git', git)
     monkeypatch.setattr(remote.subprocess, 'run', run)
+    return dispatched
 
 
 @pytest.mark.parametrize(
     'options, message',
     [
-        ({'busy': 4}, 'not dispatching'),  # the cap held it for 20 minutes
+        ({'busy': remote.CAP}, 'not dispatching'),  # the cap held it for 20 minutes
         ({'dispatch': 1}, 'gh workflow run failed: refused'),  # GitHub refused the dispatch
         ({'pushed': False}, 'is not pushed'),
         ({'commit': False}, 'cannot resolve'),
@@ -310,6 +332,21 @@ def test_a_run_that_is_never_dispatched_exits_75(monkeypatch, tmp_path, capsys, 
         remote.main(COMMAND)
     assert exit.value.code == remote.EX_NOT_DISPATCHED
     assert message in capsys.readouterr().err
+
+
+def test_eight_remote_runs_go_at_once_by_default(monkeypatch, tmp_path):
+    # Nov 24: a cap of 4 held runs for 20 minutes, then gave up. RunsOn bills by the machine-minute, so side by side
+    # costs what one after another does, and Tico's CI permit limits the spend.
+    assert remote.CAP == 8
+    stub_remote(monkeypatch, tmp_path, busy=7, artifact='0')
+    assert remote.main(COMMAND) == 0
+
+
+def test_a_web_command_is_dispatched_with_webs_install_first(monkeypatch, tmp_path):
+    dispatched = stub_remote(monkeypatch, tmp_path, artifact='0')
+    assert remote.main(['--', 'bash', '-c', 'cd web && npx tsr generate']) == 0
+    assert dispatched['command'] == remote.WEB_INSTALL + "bash -c 'cd web && npx tsr generate'"
+    assert dispatched['setup'] == 'browser'  # npx: Node and Playwright, as before
 
 
 @pytest.mark.parametrize('artifact, code', [('0', 0), ('124', 124)])

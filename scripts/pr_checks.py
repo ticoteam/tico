@@ -68,6 +68,18 @@ UPGRADE_TESTS = (
 CLI_SPEC = "clients/tests/test_cli_spec.py"
 CLI_FIXTURES = "clients/tests/test_cli_fixtures.py"
 CLI_COMMANDS = "clients/commands/"
+# - WIRE_CONTRACT drives the runner's endpoints and compares each answer's shape with contracts/runner/fixtures/*.json.
+#   Almost any backend module can change an answer, and the map has no edge from most of them to it: #5148 took a field
+#   out of served messages (backend/hubdb.py message_view, task_privacy.py, events.py), its pull request plan never ran
+#   the test, and the queue group's run ejected it. It takes about 10 one-worker seconds (release timings), so any
+#   backend Python change runs it. The API goldens (e2e/tests/test_contract.py, e2e/goldens) need no rule here: any
+#   backend/ change turns on the contracts job (CONTRACT_INPUTS), which runs them.
+WIRE_CONTRACT = "backend/tests/test_runner_wire_contract.py"
+
+
+def serves(name):
+    """True for a backend Python module outside the tests: what the server sends is made in these."""
+    return name.startswith("backend/") and name.endswith(".py") and "/tests/" not in name
 
 
 # These release contracts are marked slow and absent from default collection. Run them together on a separate VM:
@@ -1124,6 +1136,7 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
     7. A path a CONTENT_SWEEPS test reads turns that slow test on in the contracts job (`sweeps`), with its environment.
     8. A file under MIGRATIONS runs UPGRADE_TESTS, which a light plan keeps (narrow).
     9. Guard tests (`guards`, which a light plan keeps): a file under CLI_COMMANDS runs CLI_SPEC and CLI_FIXTURES.
+       A backend module (serves) runs WIRE_CONTRACT.
     10. Inputs in CHECK_ALSO run the tests that exercise them through HTTP or catalog discovery.
     11. A changed or gone workflow (WORKFLOW) runs the SCRIPT_TESTS files that name it as guards, and turns on their
         slow tests in the contracts job (`sweeps`).
@@ -1269,6 +1282,9 @@ def selection(changed, event="pull_request", root=ROOT, graph=None, base=None, a
         if cli_guards:
             guards |= cli_guards
             notes.append("rule 9: a CLI command change runs the CLI spec and frozen command-line tests")
+    if any(serves(n) for n in names) and (root / WIRE_CONTRACT).is_file():
+        guards.add(WIRE_CONTRACT)
+        notes.append("rule 9: a backend module runs the runner wire contract")
     script_sweeps = set()
     workflows = [n for n in names if WORKFLOW.fullmatch(n)]
     for name in workflows:  # rule 11

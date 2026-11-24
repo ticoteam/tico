@@ -2819,6 +2819,28 @@ def test_a_cli_command_change_runs_the_frozen_command_lines_even_in_a_light_plan
     assert checks.CLI_FIXTURES not in light_plan(["backend/performance.py"], event, repo_map, added=[])["guards"]
 
 
+@pytest.mark.parametrize("event", ["pull_request", "merge_group"])
+def test_a_backend_module_change_runs_the_runner_wire_contract_and_the_api_goldens(event, repo_map):
+    # Nov 24: #5148 took a field out of served messages (backend/hubdb.py message_view, task_privacy.py, events.py); its
+    # pull request plan never ran test_runner_wire_contract.py, and the queue group's run ejected it on the shape check
+    # of contracts/runner/fixtures/*.json.
+    served = (
+        ["backend/hubdb.py"],
+        ["backend/task_privacy.py", "backend/events.py"],
+        ["backend/api_answers/contacts.py"],
+    )
+    for changed in served:
+        light = light_plan(changed, event, repo_map, added=[])
+        assert checks.WIRE_CONTRACT in light["guards"] and (ROOT / checks.WIRE_CONTRACT).is_file(), changed
+        # Tier 0: the time cap never leaves it out.
+        assert checks.WIRE_CONTRACT in light["python"] and light["narrow"]["tier"][checks.WIRE_CONTRACT] == 0, changed
+        # The API goldens run in the contracts job, which any backend change turns on.
+        assert light["contracts"] and "e2e/tests/test_contract.py" in checks.contract_files(light["sweeps"]), changed
+    # A test, or a file outside backend/, is not a module that serves anything.
+    for changed in (["backend/tests/test_auth.py"], ["clients/commands/strategy.py"], ["docs/releasing.md"]):
+        assert checks.WIRE_CONTRACT not in light_plan(changed, event, repo_map, added=[]).get("guards", []), changed
+
+
 RELEASE_WORKFLOW_TEST = "scripts/tests/test_release_workflow.py"
 
 
