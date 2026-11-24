@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import type { GitHubApp } from '@/api/schema';
-import { run, useAction } from '@/actions';
+import { useAction } from '@/actions';
 import { meQuery } from '@/data';
 import { Button } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
@@ -12,14 +12,13 @@ import { SkeletonRows } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { PartFault } from './Cards';
+import { GithubDialog } from './GithubDialog';
 import { forgetSetup, isGithubPage, pendingSetup, reasonOf } from './handoff';
 import { githubQuery } from './queries';
 
 /* The company's GitHub App, for Tools › GitHub (the old ui/github-connect.ts): connected or not, which account, what it
-   may do, and the fixes. Connect opens the short Connect GitHub dialog over the app (`?setup=github`). The owner only;
+   may do, and the fixes. Connect opens the short Connect GitHub dialog (GithubDialog). The owner only;
    anyone else sees nothing here. */
-
-const click = { via: 'click' } as const;
 
 export function GithubConnection() {
   const { data: me } = useQuery(meQuery);
@@ -70,6 +69,7 @@ function Refusal({ text }: { text: string | null }) {
 function NotConnected() {
   // A setup this tab sent to GitHub that came back with no session: finish it here.
   const [pending] = useState(pendingSetup);
+  const [connecting, setConnecting] = useState(false);
   const finish = usePress('github.finish');
   return (
     <>
@@ -83,7 +83,7 @@ function NotConnected() {
                   Finish
                 </Button>
               )}
-              <Button variant="primary" onClick={() => run('setup.open', { step: 'github' }, click)}>
+              <Button variant="primary" onClick={() => setConnecting(true)}>
                 Connect
               </Button>
             </>
@@ -93,6 +93,7 @@ function NotConnected() {
         </LabelValue>
       </Facts>
       <Refusal text={finish.error} />
+      {connecting && <GithubDialog onClose={() => setConnecting(false)} />}
     </>
   );
 }

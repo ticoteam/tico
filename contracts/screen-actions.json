@@ -8547,122 +8547,12 @@
       }
     },
     {
-      "id": "setup.back",
-      "title": "Previous setup step",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "from": {
-            "enum": [
-              "path",
-              "name",
-              "model",
-              "paste",
-              "team",
-              "github"
-            ]
-          }
-        },
-        "required": [
-          "from"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "setup.choosePath",
-      "title": "Choose who sets up the company",
+      "id": "setup.open",
+      "title": "Set up your company",
       "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "enum": [
-              "agents",
-              "self"
-            ]
-          }
-        },
-        "required": [
-          "path"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "setup.close",
-      "title": "Close setup",
-      "kind": "view",
       "input": {
         "type": "object",
         "properties": {},
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "setup.finish",
-      "title": "Create the team",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "job": {
-            "type": "string",
-            "maxLength": 40,
-            "pattern": "^[a-z]*$",
-            "description": "a first job key, or empty for the whole chart"
-          }
-        },
-        "required": [
-          "job"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "setup.next",
-      "title": "Next setup step",
-      "kind": "change",
-      "input": {
-        "type": "object",
-        "properties": {
-          "from": {
-            "enum": [
-              "name",
-              "model"
-            ]
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100
-          }
-        },
-        "required": [
-          "from"
-        ],
-        "additionalProperties": false
-      }
-    },
-    {
-      "id": "setup.open",
-      "title": "Set up your company",
-      "kind": "view",
-      "input": {
-        "type": "object",
-        "properties": {
-          "step": {
-            "enum": [
-              "path",
-              "name",
-              "model",
-              "paste",
-              "team",
-              "github"
-            ]
-          }
-        },
         "additionalProperties": false
       }
     },

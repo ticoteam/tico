@@ -32,7 +32,7 @@ export function CompanyPage({ search }: { search: CompanySearch }) {
   const navigate = useNavigate();
   const open = parseStage(search.panel);
   const close = () => void navigate({ to: '.', search: (prev: Record<string, unknown>) => ({ ...prev, panel: undefined }) as never });
-  // Set up: the owner's first-run steps (setup.open), for a new company and again from the ⋯.
+  // Set up (setup.open): Tico's sheet on the first run while it is owed, else Tico takes the setup over in its chat.
   const setup = useAction('setup.open', {});
   const halls = floor.factories as Factory[];
   const pipeline = open && halls.flatMap((h) => h.pipelines).find((p) => p.id === open.pipeline);

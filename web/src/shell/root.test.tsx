@@ -86,10 +86,12 @@ vi.mock('@/data', async (orig) => ({
 }));
 // A feature's routing.ts is what the first load carries (the gate, counts, reads); its exports.ts the parts the root
 // loads when they first have something to show.
-vi.mock('@/features/start/exports', () => ({ FirstRun: () => null }));
+vi.mock('@/features/start/exports', () => ({ SetupChat: () => null }));
 vi.mock('@/features/start/routing', () => ({
   StartScreen: ({ screen }: { screen: string }) => <p>start: {screen}</p>,
-  useStartGate: () => ({ screen: gate.screen, error: null, retry: () => {}, busy: false, firstRun: false }),
+  useStartGate: () => ({ screen: gate.screen, error: null, retry: () => {}, busy: false }),
+  useSetupOwed: () => gate.setup,
+  useSetupTranscript: () => [],
   landing: async () => (gate.screen ? null : { setup: gate.setup }),
 }));
 const call = vi.hoisted(() => ({ phase: 'idle' }));
@@ -842,16 +844,12 @@ describe('the landing address', () => {
     expect(router.state.location.search).toEqual({});
   });
 
-  it('keeps the first run open over Tasks while setup is owed, and for the old welcome address @s1154', async () => {
+  it('while setup is owed, lands on Tasks with the first run in Tico’s sheet, not the address @s1154', async () => {
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [] }]);
     gate.setup = true;
-    const router = land('/');
+    const router = land('/?setup=path');
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
-    expect(router.state.location.search).toEqual({ setup: 'path' });
-    gate.setup = false;
-    const again = land('/?setup=path');
-    await waitFor(() => expect(again.state.location.pathname).toBe('/tasks'));
-    expect(again.state.location.search).toEqual({ setup: 'path' });
+    expect(router.state.location.search).toEqual({});
   });
 });
 

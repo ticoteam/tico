@@ -91,7 +91,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/overview/floor/f_1', '/company'],
   ['#/overview/company-page', '/company'],
   ['#/team/engineering', '/team/engineering'],
-  ['#/welcome', '/?setup=path'],
+  ['#/welcome', '/'],
   ['#/roadmap', '/roadmap'],
   ['#/tags', '/tags'],
   ['#/tag/bug', '/tags/bug'],

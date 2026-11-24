@@ -8,7 +8,7 @@ import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirect
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
-import { StartScreen, useStartGate } from '@/features/start/routing';
+import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
 import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
@@ -114,7 +114,6 @@ const CallBar = lazy(() => import('@/features/calls/exports').then((m) => ({ def
 const CallSide = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.CallSide })));
 const RingCard = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.RingCard })));
 const FileViewerHost = lazy(() => import('@/features/library/exports').then((m) => ({ default: m.FileViewerHost })));
-const FirstRun = lazy(() => import('@/features/start/exports').then((m) => ({ default: m.FirstRun })));
 const SupportChat = lazy(() => import('@/features/support/exports').then((m) => ({ default: m.SupportChat })));
 const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeammateChat })));
 const AddTeammate = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.AddTeammate })));
@@ -217,6 +216,18 @@ function App() {
     foldSheet('list', false);
   };
 
+  // The first run is Tico's (SetupChat, in its sheet): while it is owed, Tico's sheet opens on it (on a phone its card
+  // comes up: TicoSheet). The sheets are drawn by now: this runs after the frame's own effects.
+  const setupOwed = useSetupOwed();
+  useEffect(() => {
+    if (!setupOwed) return;
+    try {
+      foldSheet('tico', false);
+    } catch {
+      // the phone's cards: no sheets to fold
+    }
+  }, [setupOwed]);
+
   // One stream, once the person is known and Tico's room is drawn (its follow then rides the first connection).
   const room = useQuery(ticoRoomQuery);
   const ready = signedIn && !room.isPending;
@@ -317,7 +328,6 @@ function App() {
   const hideCallChat = () => void run('calls.hideChat', {}, { via: 'click' });
   const callOut = useCallWindow().open;
   const ringing = (useQuery(ringingQuery).data?.calls ?? []).some((c) => c.ring && c.state === 'live');
-  const setupOpen = useLocation({ select: (l) => !!(l.search as { setup?: unknown }).setup });
   const adding = useLocation({ select: (l) => validateTeamSearch(l.search as Record<string, unknown>).add });
   const addTo = useLocation({ select: (l) => word((l.search as Record<string, unknown>).team) });
   const fileOpen = useFileOpen();
@@ -354,12 +364,7 @@ function App() {
           bar={barShown ? bar : undefined}
         />
       </div>
-      {signedIn ? (
-        <Later on={setupOpen}>
-          <FirstRun />
-        </Later>
-      ) : null}
-      {/* each page's first-visit intro, in Tico's chat (it waits while the first run is open) */}
+      {/* each page's first-visit intro, in Tico's chat (it waits while the first run is owed) */}
       {signedIn ? <PageIntro /> : null}
       {/* Add teammate over any page (`?add=`), onto the team the address names */}
       <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>

@@ -6,7 +6,7 @@ import { limitsQuery, usageQuery, type UsageRange } from './queries';
 export { SECTION_IDS, isSection, type SectionId } from './sections';
 export { loadSection } from './main';
 export { providerReady } from './providerStatus';
-export { addSubscription, subscriptionsQuery, supportAccessQuery, type SignInKind, type SupportAccessView } from './queries';
+export { addSubscription, billingQuery, subscriptionsQuery, supportAccessQuery, type BillingView, type SignInKind, type SupportAccessView } from './queries';
 
 export interface UsageSearch {
   view?: 'limits';
