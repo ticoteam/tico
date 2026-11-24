@@ -785,7 +785,8 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   useFollow({ allTasks: true });
   const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
   const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
-  const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
+  const list = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
+  const page = list.data;
   const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
   // each stage's rows as the pipeline's read has them, and its count: the server's, under the filters and past what was
   // read (none from a read without counts)
@@ -803,15 +804,17 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   if (own && head?.open !== open) setHead({ open, at: own, stage: own });
   const at = head?.open === open ? head.at : undefined;
   const want = head?.open === open ? head.stage : undefined;
-  // none until it is known: the open task's stage, or the pipeline's read to fall back on, never a first guess read by
-  // priority and dropped
-  const showing = want || page ? (read.find((g) => g.id === want) ?? read.find((g) => g.items.length) ?? read[0])?.id : undefined;
+  // none until it is known: the open task's stage (one of this pipeline's), or the pipeline's read to fall back on, never
+  // a first guess read by priority and dropped
+  const showing = read.find((g) => g.id === want)?.id ?? (page ? (read.find((g) => g.items.length) ?? read[0])?.id : undefined);
   // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More), and Tico sorts it
   // when due; drawn once that read is in, never in the queue's order first
   const ranks = !filters.sort && !!showing;
   const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
   const ranked = byPriority.data;
-  const failed = ranks && byPriority.isError && !ranked;
+  // a failed read says so with Try again: the stage's by priority, or the pipeline's while no stage is known from it
+  const listFailed = list.isError && !page && !showing;
+  const failed = listFailed || (ranks && byPriority.isError && !ranked);
   useStageSort((ranks && showing) || null, ranked);
   const stages = useMemo(
     () => (ranks ? read.map((g) => (g.id === showing ? { ...g, items: (ranked?.tasks ?? []).filter((t) => t.stage_id === g.id) } : g)) : read),
@@ -885,7 +888,7 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
       <div className="nav-scroll li-body">
         {failed ? (
           <Empty icon="alert" title="These tasks did not load">
-            <Button onClick={() => void byPriority.refetch()}>Try again</Button>
+            <Button onClick={() => void (listFailed ? list.refetch() : byPriority.refetch())}>Try again</Button>
           </Empty>
         ) : page && (!ranks || ranked) && !more && !shown?.items.length ? (
           <Empty title="No open tasks" />
