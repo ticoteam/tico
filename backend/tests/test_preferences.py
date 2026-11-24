@@ -1,6 +1,7 @@
 """Per-person preferences (POST/GET /api/v2/preferences/{key}) whose values the server checks."""
 
 from backend.tests.helpers.api import get, headers, post  # noqa: F401
+from backend.tests.helpers.tasks_board import bot_token
 
 
 def test_send_way_keeps_only_a_way_the_web_menu_offers(api):
@@ -26,3 +27,24 @@ def test_tracker_seen_at_keeps_only_a_time_with_a_timezone(api):
         r = api.post("/api/v2/preferences/ui.tracker_seen_at", json={"value": wrong}, headers=headers())
         assert r.status_code == 422 and "ui.tracker_seen_at" in r.json()["error"]["detail"], (wrong, r.text)
     assert get(api, "preferences/ui.tracker_seen_at")["value"] == at
+
+
+def test_intros_seen_keeps_pages_with_times_for_people_only(api):
+    # The web plays a page's first-visit intro once per person: what it keeps must read back as pages and times, and
+    # an agent has no intros to keep.
+    seen = {"tasks": "2026-11-23T10:00:00.000Z", "growth": "2026-11-23T10:05:00+00:00"}
+    assert post(api, "preferences/intros.seen", {"value": seen})["value"] == seen
+    for wrong in (
+        ["tasks"],
+        "tasks",
+        {"tasks": "yesterday"},
+        {"tasks": "2026-11-23T10:00:00"},
+        {"Tasks!": "2026-11-23T10:00:00Z"},
+        {f"p{n}": "2026-11-23T10:00:00Z" for n in range(65)},
+    ):
+        r = api.post("/api/v2/preferences/intros.seen", json={"value": wrong}, headers=headers())
+        assert r.status_code == 422 and "intros.seen" in r.json()["error"]["detail"], (wrong, r.text)
+    assert get(api, "preferences/intros.seen")["value"] == seen
+    assert get(api, "preferences/intros.seen", token="ben-test")["value"] is None
+    r = api.post("/api/v2/preferences/intros.seen", json={"value": {}}, headers=headers(bot_token(api)))
+    assert r.status_code == 403, r.text
