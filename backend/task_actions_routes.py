@@ -942,7 +942,9 @@ def register_core(
         # The old `human` field is the `human` role: checked against `roles` first, then written once the task entered its
         # first stage, so the person is judged on the privacy it has there. Filing it is the right to name them, as it
         # was for the Human; `roles` keeps its own check.
-        folded = H.human_roles(c, who.actor, body.human or None, body.roles)
+        # Sent as null or "", `human` names nobody, which `roles.human` must then agree with; left out, it says nothing.
+        named = (body.human or "") if "human" in body.model_fields_set else None
+        folded = H.human_roles(c, who.actor, named, body.roles)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)

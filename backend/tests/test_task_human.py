@@ -109,6 +109,22 @@ def test_a_stage_a_person_holds_asks_them_not_the_assignee(dev):
     assert task["id"] not in {task_id for task_id, _ in _asks(api, "ben-test")}
 
 
+def test_the_manager_the_ladder_handed_the_task_to_comes_before_the_assignee(dev):
+    """The holder comes first, as `holder` reads it: once the ladder hands Spec to the pipeline's manager, a person,
+    its unnamed OK is the manager's, not the assignee's; back with the agent that owns it, the OK is the assignee's."""
+    api = dev
+    task = _file(api, "Bulk export", "dev", owner="ben")
+    assert (task["owner_id"], task["assignee_id"]) == ("bot:builder", BEN)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE pipelines SET manager_id=? WHERE id='dev'", (CARA,))
+    assert (task["id"], "OK the spec") in _asks(api, "ben-test")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE visits SET level='manager' WHERE task_id=? AND left_at IS NULL", (task["id"],))
+        assert W.holder(c, E.task(c, task["id"])) == CARA
+    assert (task["id"], "OK the spec") in _asks(api, "cara-test")
+    assert task["id"] not in {task_id for task_id, _ in _asks(api, "ben-test")}
+
+
 def test_a_person_assignee_gets_the_ok_the_agents_wake_names_them_and_a_new_assignee_moves_needs_you(dev):
     """Ben shapes his feature and hands it on: the Build agent holds it, Ben stays its assignee, so Build's unnamed OK
     is in his Needs you and the agent's wake tells it to ask him. A new assignee moves both people's Needs you."""
@@ -171,6 +187,11 @@ def test_human_and_roles_human_must_agree_on_create_and_update(api):
     assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara", "roles": {"human": ["ben"]}}, expected=422)
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "", "roles": {"human": ["ben"]}}, expected=422)
+    # Sent as null or "" on create, `human` names nobody, so a `roles.human` naming someone disagrees with it.
+    for nobody in (None, ""):
+        post(api, "tasks", {**body, "human": nobody, "roles": {"human": ["ben"]}}, expected=422)
+    alone = post(api, "tasks", {**body, "title": "Add PDF export", "roles": {"human": ["ben"]}})
+    assert _roles(api, alone["id"]) == {"human": [BEN]}  # `human` left out says nothing
     # A role name is stored lower-case, so `Human` is the same role and cannot slip another person in.
     post(api, "tasks", {**body, "human": "ben", "roles": {"Human": ["cara"]}}, expected=422)
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "ben", "roles": {"Human": ["cara"]}}, expected=422)

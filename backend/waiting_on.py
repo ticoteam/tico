@@ -192,12 +192,17 @@ def _readers(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
 
 
 def _people_for(conn: "sqlite3.Connection", row: Row) -> Iterator[str]:
-    """`person_for`'s people in order, each one that can act; read lazily, so the first one costs only its own read."""
+    """`person_for`'s people in order, each one that can act; read lazily, so the first one costs only its own read. The
+    holder is who has the work now, as `holder` reads it without its fallback to this ladder: a person owner, else the
+    pipeline's manager once the ladder handed it the task (or while it has no owner), else the owner. It comes before
+    the assignee, who the task is for."""
     visit: Row = row.get("visit") or {}
     pipe: Row = row.get("pipeline") or {}
+    owner = row.get("owner_id")
+    manager_has_it = not is_human(owner) and ((visit.get("level") or "owner") == "manager" or not owner)
     people = (
         visit.get("person_id"),
-        row.get("owner_id"),
+        pipe.get("manager_id") if manager_has_it else owner,
         row.get("assignee_id"),
         pipe.get("owner_id"),
         pipe.get("manager_id"),
