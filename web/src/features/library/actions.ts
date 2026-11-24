@@ -1,6 +1,7 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction } from '@/actions';
+import { fileKind } from '@/lib';
 import {
   addAccount,
   addApiTool,
@@ -351,7 +352,7 @@ export const filesView = defineAction({
   run: async ({ router, queryClient }, i) => {
     if (!i.file) return viewing.set(null);
     const f = await queryClient.ensureQueryData(fileQuery(i.file)).catch(() => null);
-    if (f && (f.mime?.startsWith('image/') || f.library_kind === 'image')) return viewing.set({ file: i.file, version: i.version, name: f.title });
+    if (f && fileKind(f.mime, f.name, f.library_kind) === 'image') return viewing.set({ file: i.file, version: i.version, name: f.title });
     await go(router, '/library/files', { file: i.file, v: i.version });
   },
   target: () => null,

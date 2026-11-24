@@ -3150,8 +3150,14 @@ def _post(
     if named and not question_marks.cleared_by(c, named, (message or {}).get("id")):
         raise Problem("answered", question_marks.ANSWERED, 409)  # it did not answer that ❓: write nothing
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
+    # A picture, video or PDF the preview worker can read gets its row here too (never in blobs.register, which every
+    # stored byte goes through): the timeline then shows its thumbnail.
+    from .file_metadata import derives
+
     for item in attachments or ():
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+        if derives(item.get("content_type")):
+            c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (item["id"],))
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
     return message
 
@@ -5248,7 +5254,7 @@ def get(c, v, thread_id):
 
 
 def _message_out(m):
-    refs = H._json(m.get("refs"), {}) or m.get("refs") or {}
+    refs = H._json(m.get("refs"), {}) or {}  # a stored "{}" is an empty dict, never the string
     out = {
         k: m.get(k)
         for k in (
@@ -5654,7 +5660,9 @@ def session_sql(places, session=None, comments=False, m="messages"):
     return "", ()
 
 
-def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=False, session=None, comments=False):
+def timeline(
+    c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=False, session=None, comments=False, enrich=None
+):
     """A thread in tree order, newest page first: `cursor` and `limit` page its own messages, and each is followed by its
     sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest messages under a
     `collapsed` row ("N more", with the cursor that reads the rest). Every row passes the per-message check: hidden
@@ -5666,7 +5674,8 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status).
 
     On a task's thread, `session` (an agent) pages only that agent's session and `comments` only the comments
-    (`session_sql`)."""
+    (`session_sql`). `enrich(rows)` changes the rows the viewer may read in place (the route's visuals.for_reader:
+    each file as this reader sees it), before the byte cap measures them."""
     from . import task_privacy
 
     v = viewer(None, v) if not isinstance(v, Viewer) else v
@@ -5700,6 +5709,8 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
         tops = _timeline_rows(c, v, rows[:limit], row["id"], _depth(row))
         branches = {} if old_only else _branches(c, v, tops, (session, comments))
     every = tops + [r for b in branches.values() for r in b["rows"]]
+    if enrich:
+        enrich([r for r in every if not r.get("hidden") and isinstance(r.get("refs"), dict)])  # before the byte cap
     shown = [r["id"] for r in every if not r.get("hidden")]
     marks = reactions(c, shown)
     quotes = reply_quotes(c, v, every)

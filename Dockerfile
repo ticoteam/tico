@@ -220,7 +220,9 @@ COPY --chmod=0755 dist/native/${TARGETARCH}/tico-screen-relay /out/tico-screen-r
 FROM screen-bin-${NATIVE} AS screen-bin
 
 FROM python AS server
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
+# ffmpeg and poppler-utils make chat and task files' previews (a video's poster, a PDF's first page), each run under
+# backend/limited.py's limits.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl ffmpeg poppler-utils \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 tico \
     && useradd --uid 10001 --gid tico --home-dir /data --no-create-home --shell /usr/sbin/nologin tico

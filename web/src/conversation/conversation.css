@@ -162,6 +162,7 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .pic img{display:block;width:100%;height:100%;object-fit:cover}
 .pics.is-1 .pic{justify-self:start;max-width:100%;background:none}
 .pics.is-1 .pic img{width:auto;max-width:100%;max-height:280px;object-fit:contain;border-radius:var(--r-block);box-shadow:var(--lift-paper)}
+.pics.is-1 .pic.is-sized img{width:100%;height:100%;max-height:none}
 .pics:not(.is-1) .pic{aspect-ratio:4/3}
 .pics.is-3 .pic:first-child{grid-row:span 2;aspect-ratio:auto}
 .pic-more{position:absolute;inset:0;display:grid;place-items:center;background:var(--scrim);color:var(--on-scrim);font-size:var(--t-md);font-weight:var(--w-strong)}

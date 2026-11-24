@@ -886,10 +886,11 @@ def install(app, store, auth, mutate, rule_check):
         task's thread, `session=<agent>` reads only that agent's session and `comments=true` only the comments.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
+        who = request.state.identity
         with store.read() as c:
             return threads.timeline(
                 c,
-                threads.viewer(auth, request.state.identity),
+                threads.viewer(auth, who),
                 thread_id,
                 cursor=cursor,
                 limit=limit or 50,
@@ -897,6 +898,7 @@ def install(app, store, auth, mutate, rule_check):
                 flat=bool(flat),
                 session=session,
                 comments=comments,
+                enrich=lambda rows: visuals.for_reader(app, store.settings, c, who, rows),
             )
 
     @app.get(
@@ -1150,10 +1152,15 @@ def install(app, store, auth, mutate, rule_check):
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
             out = _thread_message(message)
+            if shared:
+                out = visuals.for_reader(app, store.settings, c, who, [out])[0]
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
 
-        return mutate(request, body, work)
+        sent = mutate(request, body, work)
+        if body.attachments:
+            app.state.file_metadata.wake.set()  # a shared picture, video or PDF is queued for its preview
+        return sent
 
     @app.patch(
         "/api/v2/messages/{message_id}",
@@ -1527,6 +1534,7 @@ def install(app, store, auth, mutate, rule_check):
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
             assert message is not None  # the message just posted
+            message = visuals.for_reader(app, store.settings, c, who, [message])[0]
             if posted.get("warnings"):
                 message["warnings"] = posted["warnings"]  # the reload keeps what the post told its writer
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
@@ -1534,7 +1542,9 @@ def install(app, store, auth, mutate, rule_check):
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, message["conversation_id"]), "message": message}
 
-        return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
+        sent = await asyncio.to_thread(write_upload, store, request, body, uploads, work)
+        app.state.file_metadata.wake.set()  # its pictures, videos and PDFs are queued for their previews
+        return sent
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
     # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).

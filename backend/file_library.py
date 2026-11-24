@@ -693,13 +693,16 @@ def release_blobs(c, blob_ids, now):
     needs any more are queued, and `drain` removes them from storage after the write commits."""
     from . import visuals
 
-    blob_ids = set(blob_ids)
-    for bid in list(blob_ids):
+    parents = set(blob_ids)
+    derived = set()
+    for bid in parents:
         media = c.execute("SELECT poster_blob_id,thumb_blob_id FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
         if media:
-            blob_ids |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
+            derived |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
     digests = {}
-    for bid in sorted(blob_ids):
+    # Parents first: a preview stays while its parent's blob_media row still names it, so a preview released before its
+    # parent would be kept for good.
+    for bid in [*sorted(parents), *sorted(derived - parents)]:
         shared = c.execute(
             "SELECT 1 FROM bot_file_versions WHERE blob_id=? OR poster_blob_id=? OR thumb_blob_id=? "
             "UNION ALL SELECT 1 FROM media_assets WHERE blob_id=? "

@@ -768,9 +768,115 @@ def for_reader(app, settings, c, who, messages):
     def hosted(v):
         return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
 
-    return decorate(
-        c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
+    files = app.state.files
+    decorated = decorate(
+        c, who, files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
     )
+    return previews(c, files.auth, who, decorated)
+
+
+def previews(c, auth, who, messages):
+    """Each attached picture, video or PDF whose preview is made, as `who` may see it: `width` and `height`, and
+    `thumb_url` / `poster_url` on the app's own file routes (/api/v2/files/{id}/thumb and /poster, which check the
+    reader again on each load). A plain upload (a blob, no file id) is read from blob_media, a file's version from its
+    own row, each in one batched read; only an attachment whose bytes the reader may open gains anything (media.blob_for,
+    files.version_refusal: the routes' own checks). The Rules Owner sees each file as its plain ref, so nothing here.
+    A message that gains a field gets new refs: the rows handed in may be read by others."""
+    from .counsel import is_counsel
+
+    if is_counsel(who):
+        return messages
+    blobs, versions = [], []
+    for message in messages:
+        for i, a in enumerate(((message or {}).get("refs") or {}).get("attachments") or []):
+            if not isinstance(a, dict) or a.get("removed"):
+                continue
+            if a.get("file_id"):
+                versions.append((message, i, (a["file_id"], int(a.get("version") or 0))))
+            elif isinstance(a.get("id"), str) and a["id"]:
+                blobs.append((message, i, a["id"]))
+    shown = {}  # (id of the message, index): the fields it gains
+    if blobs:
+        ids = list({bid for _, _, bid in blobs})
+        made = {
+            r["blob_id"]: r
+            for r in c.execute(
+                "SELECT blob_id,width,height,thumb_blob_id,poster_blob_id FROM blob_media "
+                f"WHERE blob_id IN ({','.join('?' * len(ids))}) AND media_state='ready'",
+                ids,
+            )
+        }
+        readable = {}
+        for message, i, bid in blobs:
+            media = made.get(bid)
+            if media is None:
+                continue
+            if bid not in readable:
+                readable[bid] = _blob_readable(c, auth, who, bid)
+            if readable[bid]:
+                shown[(id(message), i)] = _fields(media, "/api/v2/files/" + bid, "")
+    if versions:
+        keys = list({key for _, _, key in versions})
+        made = {
+            (r["file_id"], r["version"]): r
+            for r in c.execute(
+                "SELECT * FROM bot_file_versions WHERE (file_id,version) IN "
+                f"(VALUES {','.join(['(?,?)'] * len(keys))}) AND media_state='ready'",
+                [x for key in keys for x in key],
+            )
+        }
+        rows, readable = {}, {}
+        for message, i, key in versions:
+            v = made.get(key)
+            if v is None or not (v["thumb_blob_id"] or v["poster_blob_id"]):
+                continue
+            if key not in readable:
+                if key[0] not in rows:
+                    rows[key[0]] = c.execute("SELECT * FROM bot_files WHERE id=?", (key[0],)).fetchone()
+                row = rows[key[0]]
+                readable[key] = bool(row) and not row["archived"] and _version_readable(c, auth, who, row, key[1], v)
+            if readable[key]:
+                shown[(id(message), i)] = _fields(v, "/api/v2/files/" + key[0], f"?v={key[1]}")
+    if not shown:
+        return messages
+    for message in messages:
+        items = ((message or {}).get("refs") or {}).get("attachments") or []
+        if any((id(message), i) in shown for i in range(len(items))):
+            fresh = [_with(a, shown[(id(message), i)]) if (id(message), i) in shown else a for i, a in enumerate(items)]
+            message["refs"] = {**message["refs"], "attachments": fresh}
+    return messages
+
+
+def _fields(media, base, query):
+    out = {field: media[field] for field in ("width", "height") if media[field] is not None}
+    if media["thumb_blob_id"]:
+        out["thumb_url"] = base + "/thumb" + query
+    if media["poster_blob_id"]:
+        out["poster_url"] = base + "/poster" + query
+    return out
+
+
+def _with(a, fields):
+    """A copy of the attachment with its preview fields; what decorate already gave it (a visual route's poster, its
+    size) stays."""
+    return {**fields, **a, **({"thumb_url": fields["thumb_url"]} if "thumb_url" in fields else {})}
+
+
+def _blob_readable(c, auth, who, bid):
+    from .media import blob_for
+    from .store import Problem
+
+    try:
+        blob_for(c, auth, who, bid)
+    except Problem:
+        return False
+    return True
+
+
+def _version_readable(c, auth, who, row, number, v):
+    from .files import version_refusal
+
+    return version_refusal(c, auth, who, row, number, v) is None
 
 
 # ---------------------------------------------------------------------------------------------- serve

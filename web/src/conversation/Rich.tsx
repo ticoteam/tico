@@ -1,12 +1,12 @@
 import { useQuery } from '@tanstack/react-query';
-import { createContext, use, useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, use, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
-import { besideThread } from '@/lib';
+import { besideThread, fileKind } from '@/lib';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
 import { fileFactsQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
@@ -64,8 +64,7 @@ function AppChip({ p, words }: { p: Extract<Pointer, { kind: 'app' }>; words: Re
 }
 
 const fileHrefOf = (file: string, version?: number): `/api/${string}` => `/api/v2/files/${encodeURIComponent(file)}${version ? `/versions/${version}` : ''}`;
-const isPage = (mime: string | null | undefined, kind?: string) => /^text\/html/.test(mime ?? '') || kind === 'page';
-const fileIcon = (mime: string | null | undefined, kind?: string): IconName => (isPage(mime, kind) ? 'tobar' : 'file');
+const fileIcon = (mime: string | null | undefined, kind?: string): IconName => (fileKind(mime, undefined, kind) === 'html' ? 'tobar' : 'file');
 
 /** Opens one of the app's files full screen, by its id (the library's) or as a message's own file. */
 const preview = (file: string, version?: number, held?: { url: string; mime: string; name: string; size?: number }) =>
@@ -156,33 +155,62 @@ function RefCard({ p }: { p: Extract<Pointer, { kind: 'file' }> }) {
   if (!facts) return null;
   const title = facts.title || facts.name || 'Page';
   const src = fileHrefOf(p.file, p.version);
-  if (isPage(facts.mime, facts.library_kind)) return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
-  if (/^image\//.test(facts.mime ?? '')) return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
+  const kind = fileKind(facts.mime, facts.name, facts.library_kind);
+  if (kind === 'html') return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
+  if (kind === 'image') return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
   return null;
 }
 
 interface Shown {
+  /** The picture itself: what the viewer opens. */
   src: string;
   name: string;
+  /** Its small copy (the server's thumbnail), drawn in its place when there is one. */
+  thumb?: string;
+  width?: number;
+  height?: number;
+}
+
+/** The most a single picture takes in the chat (conversation.css `.pics`, `.pics.is-1 .pic img`). */
+const ONE_WIDE = 360;
+const ONE_TALL = 280;
+
+/** A lone picture of known size keeps its own shape and room before it loads, so the chat does not jump. */
+function reserved(p: Shown, alone: boolean): CSSProperties | undefined {
+  if (!alone || !p.width || !p.height) return undefined;
+  const wide = Math.min(p.width, ONE_WIDE, (ONE_TALL * p.width) / p.height);
+  return { width: `min(100%, ${Math.round(wide)}px)`, aspectRatio: `${p.width} / ${p.height}` };
 }
 
 /** One to four pictures as pictures: one at its own shape, more as tiles, past four a count on the last. */
 function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void }) {
-  // a picture that does not load (gone, or its bytes not kept) is its name as a chip, never a broken image
+  // a thumbnail that does not load gives way to the picture itself; a picture that does not load (gone, or its bytes
+  // not kept) is its name as a chip, never a broken image
   const [lost, setLost] = useState<ReadonlySet<string>>(new Set());
   if (!list.length) return null;
   const shown = list.filter((p) => !lost.has(p.src));
   const more = shown.length - 4;
+  const alone = shown.length === 1;
   return (
     <>
       {shown.length > 0 && (
         <div className={`pics is-${Math.min(shown.length, 4)}`}>
-          {shown.slice(0, 4).map((p, i) => (
-            <button key={p.src} type="button" className="pic" onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
-              <img src={p.src} alt={p.name} loading="lazy" onError={() => setLost((was) => new Set(was).add(p.src))} />
-              {i === 3 && more > 0 && <span className="pic-more">+{more}</span>}
-            </button>
-          ))}
+          {shown.slice(0, 4).map((p, i) => {
+            const face = p.thumb && !lost.has(p.thumb) ? p.thumb : p.src;
+            const room = reserved(p, alone);
+            return (
+              <button key={p.src} type="button" className={room ? 'pic is-sized' : 'pic'} style={room} onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
+                <img
+                  src={face}
+                  alt={p.name}
+                  loading="lazy"
+                  {...(p.width && p.height && { width: p.width, height: p.height })}
+                  onError={() => setLost((was) => new Set(was).add(face))}
+                />
+                {i === 3 && more > 0 && <span className="pic-more">+{more}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
       {list
@@ -204,14 +232,16 @@ const attachmentType = (f: Attachment) => {
   const end = /\.([a-z0-9]{1,5})$/i.exec(f.name ?? '')?.[1];
   return (end ?? f.content_type?.split('/')[1] ?? '').toUpperCase();
 };
-export const isPicture = (f: Attachment) => /^image\//.test(f.content_type ?? '');
+export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) === 'image';
+/** Only the server's own file routes: a preview address is never somewhere else. */
+const previewHref = (u: unknown) => (typeof u === 'string' && /^\/api\/v2\/files\/[^/?#]+\/(thumb|poster)(\?v=\d+)?$/.test(u) ? u : undefined);
 
 /** A message's own file that is not a picture: a page small and live, anything else its chip. */
 function AttachedFile({ f }: { f: Attachment }) {
   const url = attachmentHref(f);
   const name = attachmentLabel(f);
   const held = { url, mime: f.content_type ?? '', name, ...(typeof f.size === 'number' && { size: f.size }) };
-  if (isPage(f.content_type)) return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
+  if (fileKind(f.content_type, f.name) === 'html') return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
   const open = (e: MouseEvent) => {
     if (!plainClick(e)) return;
     e.preventDefault();
@@ -240,7 +270,14 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
         {attachmentType(f) && <em>{attachmentType(f)}</em>}
       </span>
     ));
-  const pictures = files.filter(isPicture).map((f) => ({ src: attachmentHref(f), name: attachmentLabel(f) }));
+  const pictures = files.filter(isPicture).map(
+    (f): Shown => ({
+      src: attachmentHref(f),
+      name: attachmentLabel(f),
+      ...(previewHref(f.thumb_url) && { thumb: previewHref(f.thumb_url) }),
+      ...(f.width && f.height && { width: f.width, height: f.height }),
+    }),
+  );
   const others = files.filter((f) => !isPicture(f));
   const refs = m.deleted ? [] : filesIn(m.body ?? '').slice(0, PAGE_REFS);
   if (!pictures.length && !others.length && !refs.length) return null;
