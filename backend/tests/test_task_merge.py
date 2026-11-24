@@ -1,7 +1,7 @@
 """Drop a task on another on the board (backend/task_merge.py, docs/tasks.md "Merge and make a subtask").
 
 Merge keeps the task dropped on: its merge note carries the other's request under "From #A", its files and pages (linked), labels,
-related links, followers and requesters; the other's open subtasks move under it; the other is Closed with the
+related links and requesters; the other's open subtasks move under it; the other is Closed with the
 duplicate note and linked as a duplicate. Comments stay on the duplicate, its asks end, and the kept task's note counts
 the comments and lists each ask. A bot owner is woken once; a person is not. A refusal anywhere changes nothing.
 Make it a subtask puts the task under the other after filing: both keep their owners and stages, the parent waits on
@@ -49,15 +49,13 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         post(api, f"tasks/{dup['id']}/comments", {"text": f"Note {n}"})
     for line in ("OK the refund fix for the Pro plan?", "OK refunding every annual customer?"):
         post(api, f"tasks/{dup['id']}/asks", {"to": "cara", "line": line, "kind": "ok"})
-    r = api.put(f"/api/v2/tasks/{dup['id']}/followers", json={"actor": "cara"}, headers=headers())
-    assert r.status_code == 200, r.text
     other = task(api, "Refund email copy")
     post(api, f"tasks/{dup['id']}/relations", {"task": other["id"], "kind": "related"})
     post(api, f"tasks/{dup['id']}/links", {"url": "https://status.stripe.com/incidents/1"})
     seen = get(api, f"tasks/{dup['id']}/merge?into={kept['id']}")
     assert (seen["merge"], seen["subtask"], seen["same_owner"]) == (None, None, True)
     assert seen["moves"]["comments"] == 7 and seen["moves"]["subtasks"] == 1
-    assert seen["moves"]["followers"] == 2, "cara, who follows it, and ana, who asked for it"
+    assert seen["moves"]["requesters"] == 1, "ana, who asked for it"
     assert seen["moves"]["asks"] == ["OK the refund fix for the Pro plan?", "OK refunding every annual customer?"]
 
     done = post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]})
@@ -82,14 +80,6 @@ def test_merge_moves_the_details_and_subtasks_and_closes_the_duplicate(api):
         assert c.execute(
             "SELECT 1 FROM task_links WHERE task_id=? AND url='https://status.stripe.com/incidents/1'", (kept["id"],)
         ).fetchone()
-        from backend import task_followers as F
-
-        following = {f["actor"] for f in F.listed(c, b)}
-        assert "human:cara" in following
-        assert "human:ana" not in {f["actor"] for f in F.listed(c, H.task(c, dup["id"]))}
-        assert "human:ana" in following, (
-            "whoever asked for the duplicate follows the kept task, so hears when it is done"
-        )
         assert c.execute(
             "SELECT 1 FROM task_requesters WHERE task_id=? AND actor='human:ana'", (kept["id"],)
         ).fetchone(), "whoever asked for the duplicate hears when the kept task is done"
@@ -230,7 +220,7 @@ def test_a_bot_and_a_person_who_cannot_change_both_are_refused(api):
     get(api, f"tasks/{mine['id']}/merge?into={hers['id']}", token=bot, expected=403)
 
 
-def test_whoever_cannot_read_the_kept_task_neither_follows_it_nor_is_listed(api):
+def test_whoever_cannot_read_the_kept_task_is_not_listed(api):
     kept = task(api, "Payroll fix", owner="cara", token="cara-test", private=True)
     dup = task(api, "Payroll bug", owner="cara", private=True)  # ana asked for it and may read it, not the kept one
     r = api.get(f"/api/v2/tasks/{kept['id']}", headers=headers())
@@ -238,14 +228,6 @@ def test_whoever_cannot_read_the_kept_task_neither_follows_it_nor_is_listed(api)
     post(api, f"tasks/{dup['id']}/merge", {"into": kept["id"]}, token="cara-test")
 
     def check(c):
-        from backend import task_followers as F
-
-        tid = F.thread_id(c, H.task(c, kept["id"]))
-        assert tid, "the kept task has its own thread, so a follow could be written"
-        # The stored rows, not F.listed: a listing hides non-readers, so a follow written for them would not show.
-        assert not c.execute(
-            "SELECT 1 FROM thread_followers WHERE thread_id=? AND actor='human:ana' AND following=1", (tid,)
-        ).fetchone()
         assert not c.execute(
             "SELECT 1 FROM task_requesters WHERE task_id=? AND actor='human:ana'", (kept["id"],)
         ).fetchone()

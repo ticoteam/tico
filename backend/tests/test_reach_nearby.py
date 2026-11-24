@@ -757,28 +757,24 @@ def test_a_mention_in_a_thread_the_bot_cannot_read_is_not_named_in_its_refusal(a
 
 def test_a_bot_brings_a_teammate_out_of_its_reach_into_a_task_it_owns(api):
     """Live on v0.6.65: Legal could not hand a customer's case to Concierge, on another team. Its refusal names the
-    rule, and on a task it owns it adds anyone, as a follower or a reader, and then reaches them there."""
+    rule, and on a task it owns it adds anyone as a reader, and then reaches them there."""
     chart(api)
     cold = message(api, "pd-test", "scout", "Can you take this customer's case?", expected=409)["error"]
     assert cold["code"] == "reach_closed"
     assert "reach rule, Nearby (the company default) on Rules › Internal" in cold["detail"]
-    assert "add them to its task as a reader or follower" in cold["detail"]
+    assert "add them to its task as a reader: on that task an @mention reaches them" in cold["detail"]
     case = task(api, "pd-test", "bot:product-design", title="Reply to the customer")
     ask = {"text": "@scout can you take this customer's case?"}
     early = api.post(f"/api/v2/tasks/{case['id']}/comments", json=ask, headers=headers("pd-test"))
-    assert early.status_code == 409, early.text  # not on the task yet
-    added = api.put(
-        f"/api/v2/tasks/{case['id']}/followers", json={"following": True, "actor": "scout"}, headers=headers("pd-test")
-    )
-    assert added.status_code == 200, added.text
-    said = api.post(f"/api/v2/tasks/{case['id']}/comments", json=ask, headers=headers("pd-test"))
-    assert said.status_code == 200, said.text
+    assert early.status_code == 409, early.text  # not on the task
     sealed = task(api, "pd-test", "bot:product-design", title="Sealed case", private=True, readers=["bot:scout"])
     with api.app.state.store.read() as c:
         assert "bot:scout" in H.task_readers(H.task(c, sealed["id"]))
+    said = api.post(f"/api/v2/tasks/{sealed['id']}/comments", json=ask, headers=headers("pd-test"))
+    assert said.status_code == 200, said.text
     handed = api.post(
-        f"/api/v2/tasks/{case['id']}/owner",
-        json={"owner": "bot:scout", "version": version(api, case["id"])},
+        f"/api/v2/tasks/{sealed['id']}/owner",
+        json={"owner": "bot:scout", "version": version(api, sealed["id"])},
         headers=headers("pd-test"),
     )
     assert handed.status_code == 200, handed.text

@@ -3568,15 +3568,23 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
-def turn_wrote(c, aid, conversation_id, actor):
-    """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too."""
+def turn_wrote(c, aid, conversation_id, actor, reached=False):
+    """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too.
+    `reached`: only a post that reached someone counts (it was delivered: written `to` an agent, a Reply, a mention,
+    a ❓); a plain comment on a task reaches nobody, so it answers nobody either."""
     started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
     if not started or not started[0]:
         return False
+    delivered = (
+        " AND (EXISTS (SELECT 1 FROM message_deliveries d WHERE d.message_id=m.id AND d.recipient<>m.sender_id)"
+        " OR EXISTS (SELECT 1 FROM question_marks q WHERE q.message_id=m.id))"
+        if reached
+        else ""
+    )
     return (
         c.execute(
-            "SELECT 1 FROM messages WHERE conversation_id=? AND sender_id=? AND created_at>=? AND deleted_at IS NULL "
-            "LIMIT 1",
+            "SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.sender_id=? AND m.created_at>=? "
+            "AND m.deleted_at IS NULL" + delivered + " LIMIT 1",
             (conversation_id, actor, started[0]),
         ).fetchone()
         is not None
@@ -5934,6 +5942,7 @@ class Execution:
                 conv["id"],
                 limit=HISTORY_PAGE * 2,
                 since=epoch["updated_at"] if epoch else None,
+                session=bot_who.actor,
             )["messages"]
             history = lane_history(c, row["bot_id"], followed, history, conv, lane)[-HISTORY_PAGE:]
         if card_slot.of(row):
@@ -6343,7 +6352,10 @@ class Execution:
             epoch = c.execute("SELECT updated_at FROM session_epochs WHERE conversation_id=?", (cid,)).fetchone()
             if epoch:
                 since = max(since or "", epoch["updated_at"])
-            page = privacy.page(c, who, cid, since=since, limit=HISTORY_PAGE, max_bytes=64_000)["messages"]
+            # The same agent filter as a claim's replay: another agent's session on a task's thread stays out.
+            page = privacy.page(c, who, cid, since=since, limit=HISTORY_PAGE, max_bytes=64_000, session="bot:" + bot)[
+                "messages"
+            ]
             page = lane_history(c, bot, config, page, room, lane)
             if card_slot.of(job):
                 pending = card_slot.pending(c, bot, [m["id"] for m in page])
@@ -7504,15 +7516,16 @@ class Execution:
         woke = bool(origin) and (task is None or live(task))
         if woke:
             refs = {"task": task["id"]} if task else {}
-            H.say(
-                c,
-                H.TICO_ACTOR,
-                "bot:" + row["bot_id"],
-                defang(text, c),
-                kind="notice",
-                conversation_id=task["conversation_id"] if task else origin["conversation_id"],
-                refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid),
-            )
+            with H.session_of("bot:" + row["bot_id"], H.TICO_ACTOR):  # its session's run notice on a task's thread
+                H.say(
+                    c,
+                    H.TICO_ACTOR,
+                    "bot:" + row["bot_id"],
+                    defang(text, c),
+                    kind="notice",
+                    conversation_id=task["conversation_id"] if task else (origin or {})["conversation_id"],
+                    refs=run_triggers.stamp({**refs, "wake": "background-done"}, "background_done", aid),
+                )
         H.event(
             c,
             H.TICO_ACTOR,
@@ -7596,7 +7609,14 @@ class Execution:
         to = target if not carried or H.is_human(target) or msg["kind"] == "ask" else None
         v = threads.viewer(None, Identity(actor, "bot", attempt_id=aid))
         thread, under = conv, None
-        if parent_id and text and str(text).strip() and str(target).startswith(("human:", "bot:")):
+        # On a task's thread a reply stays in the thread, under what it answers (in_reply_to), never a sub-thread.
+        if (
+            parent_id
+            and text
+            and str(text).strip()
+            and str(target).startswith(("human:", "bot:"))
+            and threads.audience_of(threads.root_of(c, conv)) != "task"
+        ):
             root = threads.root_of(c, conv)
             parent = H.message(c, parent_id)
             if (
@@ -7868,12 +7888,12 @@ class Execution:
                     # its own room (H.task_from_chat). Any other dedicated task thread hears its owner's turn: on
                     # the open task; once the owner marked the work done; or, for a finished turn that came in after
                     # its lease lapsed, once the task was closed under it: no later turn will answer that room. On
-                    # its own open task, a turn that already wrote in that room (its own comment or ❓ says it) posts
-                    # nothing more, wherever the room is.
+                    # its own open task, a turn that already reached someone from that room (a ❓, a mention, a Reply)
+                    # posts nothing more, wherever the room is; a plain comment reached nobody, so it answers nobody.
                     wrote = (
                         actor == task["owner_id"]
                         and task["status"] == "open"
-                        and turn_wrote(c, aid, (conv or {}).get("id"), actor)
+                        and turn_wrote(c, aid, (conv or {}).get("id"), actor, reached=True)
                     )
                     if conv.get("kind") == "chat" or (
                         conv.get("task_id") == task["id"] and H.task_from_chat(c, task["id"])
@@ -7906,6 +7926,17 @@ class Execution:
                             aid,
                             {"bot": row["bot_id"], "task": task["id"], "to": target, "reason": "notice_only"},
                         )
+                elif (
+                    replyable
+                    and task
+                    and task["status"] == "open"
+                    and (conv or {}).get("task_id") == task["id"]
+                    and turn_wrote(c, aid, conv["id"], actor, reached=True)
+                ):
+                    # Any turn on an open task that already reached someone from its room (a ❓, a mention, a Reply)
+                    # posts nothing more: an agent woken on a task never posts twice. A post that reached nobody (a
+                    # plain comment with files) is no answer: the person who started the turn still gets one.
+                    replyable = False
                 # A turn a Stop reached after its task was closed (end_task_work) files its answer on the run
                 # instead: the closed room takes no more posts from work that was stopped.
                 if task and task["status"] == "closed" and row["stop_requested_at"]:
@@ -7986,9 +8017,11 @@ class Execution:
                     if replyable and not refused:
 
                         def post_reply():
-                            sent = self._say_reply(
-                                c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
-                            )
+                            # On a task's own thread the reply is the agent's session message (hubdb.session_stamp).
+                            with H.session_of(actor, actor):
+                                sent = self._say_reply(
+                                    c, actor, target, text, conv, source, refs, body.parent_message_id, aid, carried
+                                )
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, source)
                             return sent

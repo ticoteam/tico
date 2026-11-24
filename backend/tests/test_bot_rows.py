@@ -20,7 +20,7 @@ def _interrupted(api):
             (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]),
         )
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
-    post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True, "to": "bot:ops"})
     post(api, "chat/ops", {"text": "Separate question"})  # a person's own chat is never held by it
     return r
 

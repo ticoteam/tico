@@ -320,7 +320,9 @@ def test_a_one_to_one_call_wakes_the_runner_and_claims_while_its_bot_is_steering
     task_run = post(meet, "jobs/claim", claim, token)["attempt"]
     assert task_run["lane"] == "task:" + task["id"]
     post(meet, f"attempts/{task_run['id']}/started", {"thread_id": "task-session"}, token)
-    followup = post(meet, f"tasks/{task['id']}/comments", {"text": "Check the numbers too."})["comment"]
+    followup = post(meet, f"tasks/{task['id']}/comments", {"text": "Check the numbers too.", "to": "bot:ops"})[
+        "comment"
+    ]
     inputs = post(meet, f"attempts/{task_run['id']}/inputs", {}, token)["messages"]
     assert followup["id"] in [m["id"] for m in inputs]
 
@@ -632,7 +634,11 @@ def test_voice_uses_the_bots_model_with_medium_effort_and_concise_output(meet, r
         {"owner": "ops", "title": "Check the review schedule", "body": "Follow up from the call."},
         token=attempt["token"],
     )
-    post(meet, f"tasks/{followup['id']}/comments", {"text": "Please check the schedule.", "needs_action": True})
+    post(
+        meet,
+        f"tasks/{followup['id']}/comments",
+        {"text": "Please check the schedule.", "needs_action": True, "to": "bot:ops"},
+    )
     task = _claim(meet, worker, "ops")
     assert task["task"]["id"] == followup["id"]
     assert [task["config"][key] for key in keys] == [model, "high", "Explanatory"]

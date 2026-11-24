@@ -59,9 +59,11 @@ refuses it once the rule is enforced; `tico task create --dry-run` shows what it
   `tico task snooze <task-id> --until <date> -m "<what you wait for and what to check>" --version N`
   and end the turn. Give a date wherever there is one: "vendor replies by Nov 14". A snooze with no
   date shows as On ice and your manager is told.
-- Progress, a finding, a question for the people on the task: `tico task comment <task-id> "<text>"`.
-  A comment is on the record with your name; it is not a chat. An @ in it only marks the task unread
-  for that person. If you need them, ask them on the task.
+- Progress or a finding for the people on the task: `tico task comment <task-id> "<text>"`. A comment is on
+  the record with your name; it wakes and notifies nobody. @ the agent or person you need: an @agent is woken
+  on the task in its own session, an @person is notified. `--reply-to <comment>` answers a comment and reaches
+  its author. Handing the work on is still the stage's job (say done, or file a task), not a comment; a
+  question to a person is an ask (`tico task ask`).
 - Never message a person about a task outside the task: no chats, emails or pushes about it.
 
 ## Pages and pull requests on a stage

@@ -647,6 +647,10 @@ CLOSE_PROBE = contextvars.ContextVar("hub_close_probe", default=False)
 # The run (attempt id) whose token made this request (backend/app.py request_guard): each write it logs is counted on
 # that run's `attempts.writes`, which says whether the run acted (backend/run_triggers.py).
 RUN = contextvars.ContextVar("hub_run", default="")
+# The agent session a write belongs to (session views: messages.session_agent_id, backend/threads.py), named by the
+# writer that makes it for an agent (`session_of`): a stage wake, a run's reply, a person's message to that agent. ""
+# stamps nothing (an ask, a done note). Unset, a run's own tool call is its agent's session (`session_stamp`).
+SESSION: contextvars.ContextVar[tuple[str, str | None] | None] = contextvars.ContextVar("hub_session", default=None)
 # A task write made without a run token still attributes its refusal to the task being changed.
 REFUSAL_TASK = contextvars.ContextVar("hub_refusal_task", default=None)
 # The bulk change (backend/app.py task_bulk) a refusal came from: each task it skipped keeps its own refusal on record,
@@ -2156,6 +2160,39 @@ def unless_queue_full(conn, write):
     return out, None
 
 
+@contextmanager
+def session_of(agent, sender=None):
+    """The writes inside, by `sender` (None: anyone) in a task's own thread, are `agent`'s session messages; None or ""
+    for `agent` makes them comments, whoever writes them. A carrier is never stamped (`session_stamp`)."""
+    token = SESSION.set((agent, sender) if agent else ("", None))
+    try:
+        yield
+    finally:
+        SESSION.reset(token)
+
+
+def session_stamp(conn, actor, conv, refs):
+    """The agent whose session a message `actor` writes in `conv` belongs to, or None for a comment. Only in a task's
+    own thread: what a writer named (`session_of`), else, for a run's own tool call (RUN), its agent when it writes
+    on the task that run works. A carrier (refs.carries), Tico's word that starts a run, is stamped where it is written
+    (threads._carrier): it is the session message of the agent it wakes."""
+    if not conv or conv.get("kind") != "task" or not conv.get("task_id") or conv.get("parent_id"):
+        return None
+    if isinstance(refs, dict) and refs.get("carries"):
+        return None
+    named = SESSION.get()
+    if named is not None:
+        agent, sender = named
+        return agent if agent and is_bot(agent) and sender in (None, actor) else None
+    run = RUN.get()
+    if not run or not is_bot(actor):
+        return None
+    found = conn.execute("SELECT bot_id, task_id, thread_id FROM attempts WHERE id=?", (run,)).fetchone()
+    if not found or "bot:" + str(found[0]) != actor:
+        return None
+    return actor if conv["task_id"] == found[1] or conv["id"] == found[2] else None
+
+
 def _write_message(
     conn,
     actor,
@@ -2234,6 +2271,7 @@ def _write_message(
         "direction": outside_direction if outside else None,
         "connection_id": outside[1] if outside else "",
         "source_message_id": outside[2] if outside else None,
+        "session_agent_id": None if outside else session_stamp(conn, actor, conv, refs),
     }
     if delivered_at is None and not outside:
         _held_queue_admit(conn, actor, target, row["body"], row["refs"])
@@ -2260,10 +2298,10 @@ def _write_message(
     conn.execute(
         "INSERT INTO messages (id, conversation_id, sender_id, recipient_id, kind, body, refs, "
         "in_reply_to, created_at, delivered_at, read_at, expires_at, wait_s, origin_id, revision, restricted, "
-        "legacy_audience, channel, direction, connection_id, source_message_id) "
+        "legacy_audience, channel, direction, connection_id, source_message_id, session_agent_id) "
         "VALUES (:id, :conversation_id, :sender_id, :recipient_id, :kind, :body, :refs, "
         ":in_reply_to, :created_at, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
-        ":restricted, :legacy_audience, :channel, :direction, :connection_id, :source_message_id)",
+        ":restricted, :legacy_audience, :channel, :direction, :connection_id, :source_message_id, :session_agent_id)",
         row,
     )
     if outside:
@@ -3804,8 +3842,9 @@ def session_root(conn, bot, task_id, config=None):
     walk goes up through parents the same bot owns and stops at the topmost, so it continues that task's session.
     A subtask the bot filed for itself is new work it planned out, so it is its own root and runs in its own
     session beside its parent; a dozen filed from one turn would otherwise run one after another in that turn's lane.
-    A parent with another owner, or one whose readers differ, ends the walk: a bot-owned subtask under a
-    person's task is its own root, and a session never carries one task's words to people who cannot read it.
+    A parent with another owner, or a private parent or subtask, ends the walk: a bot-owned subtask under a
+    person's task is its own root, and a private ticket has its own provider session (`task:<id>`), so a session never
+    carries one task's words to people who cannot read it.
     `subtask_session: own` in the bot's config keeps every subtask its own session (clients/sessions.py), and a
     subtask on a check model (backend/check_models.py) is always its own: it reads the subtask, not the parent's thread.
     A stateless bot (`stateless`) has no shared session at all: every task is its own."""
@@ -3823,7 +3862,12 @@ def session_root(conn, bot, task_id, config=None):
         if not parent_id or parent_id in seen:
             break
         parent = _one(conn, "SELECT id,owner_id,requester_id,private FROM tasks WHERE id=?", (parent_id,))
-        if not parent or parent["owner_id"] != "bot:" + bot or not _same_readers(conn, current, parent):
+        if (
+            not parent
+            or parent["owner_id"] != "bot:" + bot
+            or task_private(conn, current)
+            or task_private(conn, parent)
+        ):
             break
         seen.add(parent_id)
         root, current = parent_id, parent
@@ -3850,19 +3894,6 @@ def prime_session_roots(conn, task_ids):
         ):
             rows[row["id"]] = row
     prime(conn, SESSION_ROOT_ROW_SQL, {(tid,): rows.get(tid) for tid in met})
-
-
-def _same_readers(conn, one, other):
-    """Whether two tasks may share a session: both public, or both private with every party of each able to
-    read the other, so nothing one session turn says reaches a reader of either task who could not read both."""
-    if task_private(conn, one) != task_private(conn, other):
-        return False
-    return not task_private(conn, one) or all(
-        task_private_readable(conn, who, b)
-        for a, b in ((one, other), (other, one))
-        for who in (a["owner_id"], a["requester_id"])
-        if who
-    )
 
 
 def task_session_started(conn, bot, lane, message_id, thread_id, runtime):
@@ -4214,10 +4245,14 @@ def task_comment(
     people_notified=False,
     to=None,
     checked=True,
+    in_reply_to=None,
+    session=None,
 ):
     """A comment on a task: one message in the task's thread, tagged with the task, from whoever wrote it. It goes as
-    any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to) and to the
-    task's followers, each by its way and their level (threads.plan). `way` (steer, queue, or defer until `defer_for`)
+    any post there does (threads.post): to whom it addresses (its @mentions, the author it replies to), each by its way
+    (threads.plan); a plain comment reaches nobody. `in_reply_to`: the message on the task it answers (a Reply).
+    `session`: the agent it is written to as a message in that agent's session (stamped, `session_of`), checked by the
+    caller: it may read the task. `way` (steer, queue, or defer until `defer_for`)
     defaults to Steer when `wake` (D13), else to Defer never: each following bot takes it on its next turn here, and
     nobody following is notified. A bot's comment flagged needs-action steers whatever `wake` says (bot_to_bot).
     `people_notified`: a Defer never that binds the bots only (a reader who may not wake them: people are notified as
@@ -4270,11 +4305,13 @@ def task_comment(
     )
     if to == actor or (to and not task_private_readable(conn, to, row)):
         to = None
+    to = session or to
     if reach is not None:
         from . import reach as R
 
-        R.check_thread(conn, reach, conv["id"], text)
-    msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to)
+        R.check_thread(conn, reach, conv["id"], text, to=session)
+    with session_of(session, actor):
+        msg = threads.post(conn, actor, conv["id"], text, refs=refs, to_actor=to, in_reply_to=in_reply_to)
     from . import wake_rules
 
     wake_rules.own_comment(conn, msg, row)  # token saving 2/9: a bot's own comment never wakes it; log the skip
@@ -4422,9 +4459,11 @@ def comment_delivery(conn, msg, *, since=0):
     return {"woke": queued, "delivered": delivered}
 
 
-def task_comments(conn, task_id, *, actor=None):
+def task_comments(conn, task_id, *, actor=None, session=None, comments=False):
     """Every comment and ask on this task, oldest first, with who wrote it. A deleted comment is not
-    listed; an edited one carries `edited_at`."""
+    listed; an edited one carries `edited_at`. `session` (an agent) keeps only that agent's session and `comments`
+    only the comments (threads.session_sql); neither, everything, which is what a writer reads its own write back
+    from."""
     from . import task_privacy as privacy
 
     row = task(conn, task_id)
@@ -4449,6 +4488,11 @@ def task_comments(conn, task_id, *, actor=None):
             clauses.append("(+conversation_id=? AND id IN (SELECT value FROM json_each(?)))")
             args += [cid, _dump(sorted(ids))]
     sql = "(" + " OR ".join(clauses) + ")"
+    if session or comments:
+        from .threads import session_sql
+
+        view_sql, view_args = session_sql(cids, session, comments)
+        sql, args = sql + view_sql, [*args, *view_args]
     if actor is not None:
         # The rows below are read in the snapshot their checks use, so each check takes the row as stored.
         privacy.snapshot(conn)
@@ -4565,6 +4609,7 @@ def is_comment(msg):
                 "send_people",
                 "can_wait",
                 "held_by",
+                "no_mentions",  # an agent's done note (task_calls.done_note)
             }
         )
     )
@@ -4867,7 +4912,7 @@ def task_create(
     (`_reuse_occurrence`), never a second one.
     `wake_refs`, `trigger` and `trigger_source` go on the owner bot's wake: what the run it starts is for.
     `reconcile_related` lets a task whose result is shared with another audience keep unrelated work out of that wake.
-    `follow` makes the filer a follower of the task (backend/task_followers.py); the owner follows anyway.
+    `follow` is accepted and ignored: nobody follows a task (backend/task_followers.py).
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
     `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
@@ -5284,14 +5329,9 @@ def task_create(
                 conn, "SELECT id FROM messages WHERE wake_key=?", (task_wakes.key(row["id"], entered["visit"]["id"]),)
             )
             threads.task_opened(conn, conv, actor, requester, notice)
-        from . import task_followers
-
         made = task(conn, row["id"])
         if made is None:
             raise LookupError(f"task {row['id']} is not there after its insert")
-        task_followers.seed_owner(conn, made)
-        if follow:
-            task_followers.follow_on_create(conn, made, actor)
         recount(conn, [target, actor, made.get("owner_id")])
     made = task(conn, row["id"])
     extra = {**({"warnings": plain} if plain else {}), **({"private_readers": told_readers} if told_readers else {})}
@@ -6088,9 +6128,6 @@ def _task_room(conn, row, parties):
         (room, "task", row["title"], _dump(parties), now(), "task", row["id"]),
     )
     conn.execute("UPDATE tasks SET conversation_id=? WHERE id=?", (room, row["id"]))
-    from . import task_followers
-
-    task_followers.seed_owner(conn, task(conn, row["id"]))  # its owner follows the new room (docs/tasks.md)
     return conversation(conn, room)
 
 

@@ -6,57 +6,33 @@ from .store import Problem
 from fastapi import Request
 from . import org_rule_check
 from . import task_privacy as privacy
-from . import task_followers
 from .api_contract import api_v2
 from .api_answers.tasks import CommentResult
 
 
-def register(
-    app, auth, mover, mutate, rule_check, rule_task_audience, store, task_followers_seen, task_place, visual_view
-):
-    def followers_answer(c, who, task_id):
-        rows = task_followers_seen(c, who, H.task(c, task_id))
-        mine = next((r for r in rows or [] if r["actor"] == who.actor), None)
-        return {
-            "task_id": task_id,
-            "following": bool(mine),
-            "notify": mine["notify"] if mine else None,
-            "followers": rows,
-        }
+def register(app, auth, mover, mutate, rule_check, rule_task_audience, store, task_place, visual_view):
+    def followers_answer(task_id):
+        # Nobody follows a task (backend/task_followers.py): the old answer's shape, listing nobody.
+        return {"task_id": task_id, "following": False, "notify": None, "followers": []}
 
     @app.get("/api/v2/tasks/{tid}/followers")
     def get_task_followers(request: Request, tid: str):
-        """Who follows the task, each at their level (docs/tasks.md, Followers)."""
+        """Nobody follows a task any more (backend/task_followers.py): kept for older clients, it lists nobody."""
         with store.read() as c:
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            return followers_answer(c, who, task_id)
+            return followers_answer(task_id)
 
     @app.put("/api/v2/tasks/{tid}/followers")
     def put_task_followers(request: Request, tid: str, body: M.TaskFollower):
-        """Follow or unfollow the task, or set a level: yourself (no actor), or anyone who sees it when you may change
-        the task."""
+        """Kept for older clients: following a task does nothing (backend/task_followers.py)."""
 
         def work(c):
             who = request.state.identity
             task_id = auth.resolve_task(c, who, tid)
             auth.task(c, who, task_id)
-            from . import reach
-
-            task_followers.change(
-                c,
-                who.actor,
-                task_id,
-                body.actor,
-                following=body.following,
-                notify=body.notify,
-                mover=mover(c, who) or None,
-                check=lambda target: reach.check(
-                    c, who, target, "task", task_id=task_id, owner=(H.task(c, task_id) or {}).get("owner_id")
-                ),
-            )
-            return followers_answer(c, who, task_id)
+            return followers_answer(task_id)
 
         return mutate(request, body, work)
 

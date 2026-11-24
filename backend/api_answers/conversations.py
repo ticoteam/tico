@@ -75,6 +75,8 @@ class Message(TypedDict):
     created_at: str
     in_reply_to: str | None
     refs: dict[str, Any]
+    session_agent_id: NotRequired[str | None]
+    """On a task's thread: the agent whose session this message is in; null for a comment"""
     sender_name: NotRequired[str]
     """Display name of sender_id, when it is a person or a bot"""
     recipient_name: NotRequired[str]

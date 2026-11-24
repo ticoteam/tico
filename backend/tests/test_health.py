@@ -1275,10 +1275,10 @@ def test_an_interrupted_run_fence_explains_a_busy_bot_queue(environment, monkeyp
         claimable(c, runner, "helper")
         owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
         task = H.task_create(c, owner, "Interrupted task", "", "bot:helper", private=False)
-        interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+        interrupted = H.task_comment(c, owner, task["id"], "interrupted work", session=task["owner_id"])
         interrupted_job = c.execute("SELECT id FROM jobs WHERE message_id=?", (interrupted["id"],)).fetchone()["id"]
         c.execute("UPDATE jobs SET state='uncertain',created_at=? WHERE id=?", (old, interrupted_job))
-        H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+        H.task_comment(c, owner, task["id"], "queued behind interrupted work", session=task["owner_id"])
         c.execute("UPDATE jobs SET created_at=? WHERE bot_id='helper' AND state='queued'", (old,))
 
         running_chat = H.open_conversation(c, owner, [owner, "bot:helper"], kind="chat")
@@ -1319,9 +1319,9 @@ def fenced_task_jobs(c, bot, created):
     before = {r["id"] for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,))}
     owner = "human:" + c.execute("SELECT id FROM humans ORDER BY id LIMIT 1").fetchone()[0]
     task = H.task_create(c, owner, "Interrupted task", "", "bot:" + bot, private=False)
-    interrupted = H.task_comment(c, owner, task["id"], "interrupted work")
+    interrupted = H.task_comment(c, owner, task["id"], "interrupted work", session=task["owner_id"])
     c.execute("UPDATE jobs SET state='uncertain',created_at=? WHERE message_id=?", (created, interrupted["id"]))
-    H.task_comment(c, owner, task["id"], "queued behind interrupted work")
+    H.task_comment(c, owner, task["id"], "queued behind interrupted work", session=task["owner_id"])
     jobs = [
         r["id"]
         for r in c.execute("SELECT id FROM jobs WHERE bot_id=? AND state='queued'", (bot,))

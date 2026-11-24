@@ -335,9 +335,9 @@ threads.update(c, principal, thread_id, *, title=None, archived=None)
 threads.set_retention(c, principal, thread_id, days)           # a root's manager; days=None keeps messages for good
 ```
 - Posting follows nobody, in chats and tasks alike (D4). Being @mentioned, or replied to, sets `following=1` (reason
-  `mentioned`, `replied`), over a row a read, a join or an unfollow left, keeping its read mark and notify level. A bot follows a chat at `mentions`, anyone else at `live`. A task's thread is
-  followed by its owner (reason `owner`), whoever chose to (reason `manual`) and whoever was @mentioned
-  (backend/task_followers.py, docs/tasks.md Followers). A chat's starter follows it; a DM delivery or a join only makes
+  `mentioned`, `replied`), over a row a read, a join or an unfollow left, keeping its read mark and notify level. A bot follows a chat at `mentions`, anyone else at `live`. Nobody follows a
+  task's thread: its comments are a log, and a message there reaches only whom it addresses (backend/task_followers.py,
+  docs/tasks.md Conversation). A chat's starter follows it; a DM delivery or a join only makes
   the row (a person's joined row is a read mark, not a follow: §4.1), so it never undoes an unfollow.
 - On a private task's thread an in-audience @mention is anyone who reads the task; a mention of someone who does not
   adds them to the task's Who can see (`threads.widen`, a task event anyone on the task can undo), a bot's only within
@@ -379,8 +379,10 @@ One message's deliveries are the **addressed** ∪ the **followers**, minus the 
 post's transaction, plus outside destinations linked to the thread (`slack:<channel>`, written by those tracks through
 `threads.add_outside_delivery`).
 - Addressed, reached at any level and on any way: the `to_actor`; every in-audience mention, ask or assign; the author
-  of the message it replies to (`in_reply_to`, people too); the other members of a `personal`/`participants` thread
-  (DMs); a Home's bot; a sub-thread's posters.
+  of the message it replies to (`in_reply_to`, people too; on a task's thread a person's reply is an @mention of that
+  author); the other members of a `personal`/`participants` thread (DMs); a Home's bot; a sub-thread's posters (not on
+  a task's thread). On a task's thread that is everyone: no follower is reached there, and whatever clears an agent's
+  ❓ reaches that agent.
 - Followers (reason `follower`): the thread's `following=1` rows at `live` (a bot at `digest` gets its digest, §4.3).
   `mentions` and `muted` get only what addresses them. On a chat a person's `joined`/`read` row is not a follow, and
   joining a task's thread follows nobody. An ask or an answer on a task reaches only whom it is for, no follower.

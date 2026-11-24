@@ -122,7 +122,7 @@ def test_runs_held_after_a_limit_resume_together_oldest_first_once_it_resets(api
     first = claim(api, machine)
     held_the_old_way(api, machine, first)
     # A second request on the same task, held in the same turn (the runner folded it in).
-    post(api, f"tasks/{task['id']}/comments", {"text": "Also check the tests."})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Also check the tests.", "to": "bot:ops"})
     with api.app.state.store.transaction() as c:
         second = c.execute(
             "SELECT id FROM jobs WHERE bot_id='ops' AND state='queued' ORDER BY created_at DESC"

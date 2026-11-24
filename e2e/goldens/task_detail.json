@@ -5,6 +5,7 @@
       "human:ana": "Ana"
     },
     "can_comment": true,
+    "can_direct": true,
     "can_set_run_model": true,
     "check_model": null,
     "children": [],
@@ -17,9 +18,9 @@
       "steers": false
     },
     "comment_to": {
-      "bot": "ops",
+      "bot": null,
       "mention": [],
-      "wakes": true
+      "wakes": false
     },
     "comments": [
       {
@@ -64,6 +65,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 6,
+        "session_agent_id": null,
         "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
@@ -245,6 +247,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 6,
+        "session_agent_id": null,
         "source_message_id": null,
         "superseded_at": null,
         "wait_s": null,
@@ -256,6 +259,12 @@
     "parent": null,
     "run_model": null,
     "runs": [],
+    "sessions": [
+      {
+        "agent": "bot:ops",
+        "last_seq": null
+      }
+    ],
     "stopped_agent": null,
     "task": {
       "acceptance_criteria": [],
@@ -287,14 +296,7 @@
       "external_requesters": 0,
       "filed": [],
       "filed_by": null,
-      "followers": [
-        {
-          "actor": "bot:ops",
-          "actor_name": "ops",
-          "notify": "live",
-          "reason": "owner"
-        }
-      ],
+      "followers": [],
       "from_person": "human:ana",
       "goal_id": null,
       "human_id": null,

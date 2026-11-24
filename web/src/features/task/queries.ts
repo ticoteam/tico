@@ -23,6 +23,8 @@ export type TaskData = TaskDetail['task'] & {
   parent: TaskDetail['parent'];
   children: TaskChild[];
   can_comment: boolean;
+  /** Whether the person may message an agent's session on it (POST .../comments `to`). */
+  can_direct: boolean;
   mover: boolean;
   /** The agent Tico stopped that this task is the notice for, when the person may release it; else null. */
   stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
@@ -40,6 +42,7 @@ function flat(d: TaskDetail): TaskData {
     parent: d.parent ?? null,
     children: d.children ?? [],
     can_comment: d.can_comment ?? false,
+    can_direct: d.can_direct ?? false,
     mover: d.mover ?? false,
     stopped_agent: d.stopped_agent ?? null,
   };

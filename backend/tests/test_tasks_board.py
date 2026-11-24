@@ -72,9 +72,11 @@ def _a_comment_on_a_task_a_bot_filed_wakes_it_only_when_addressed_to_it(api, tok
         assert update["woke"] is False and jobs_for(api, "ops") == queued
     assert any(m["body"] == "Testing it on staging for a day." for m in get(api, "tasks/" + task["id"])["comments"])
     assert post(api, path, {"text": "@ops which app is still open?"})["woke"] is True
-    # The @mention made ops a follower: the owner's plain reply now reaches it like any post, Steer by default.
-    reply = post(api, path, {"text": "I don't know why this task is assigned to me."}, token="ben-test")
-    assert reply["woke"] is True and reply["comment"]["recipient_id"] == "bot:ops"
+    # The owner's plain comment reaches nobody; one that names ops wakes it.
+    plain = post(api, path, {"text": "Still looking into it."}, token="ben-test")
+    assert plain["woke"] is False
+    reply = post(api, path, {"text": "@ops I don't know why this task is assigned to me."}, token="ben-test")
+    assert reply["woke"] is True
     queued = jobs_for(api, "ops")
     mine = f"{path}/{reply['comment']['id']}"
     assert post(api, mine, {"text": "Why is this mine?"}, token="ben-test")["woke"] is False
@@ -116,24 +118,25 @@ def _a_mention_on_a_task_with_no_bot_on_it_is_one_comment(api):
     assert [m["body"] for m in get(api, "tasks/" + task["id"])["comments"]] == ["x", "@ben can you book it by Friday?"]
 
 
-def _mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot(api):
+def _mentioning_a_person_on_a_task_a_bot_owns_reaches_only_them(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Send the weekly numbers", "body": "x"})
     queued = jobs_for(api, "ops")
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ben can you send ops the numbers?"})
-    assert said["woke"] is True and said["comment"]["kind"] != "ask"
-    assert jobs_for(api, "ops") == queued + 1
+    assert said["woke"] is False and said["comment"]["kind"] != "ask"
+    assert jobs_for(api, "ops") == queued, "the bot holding it is not named, so it is not woken"
     assert mention_reason(api, said["comment"]["id"], "human:ben") == "mention"
 
 
-def _a_comment_on_a_task_with_no_bot_on_it_is_not_quiet(api):
+def _a_plain_comment_on_a_persons_task_reaches_nobody(api):
     task = post(api, "tasks", {"owner": "ben", "title": "Book the caterer", "body": "x"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "Any update?"})
-    assert said["woke"] is False and said["delivered"] is True and not said["comment"].get("refs", {}).get("quiet")
+    assert said["woke"] is False and said["delivered"] is False
+    assert mention_reason(api, said["comment"]["id"], "human:ben") is None, "a comment is the task's log"
 
 
 def _the_author_edits_a_comment_and_nobody_wakes(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the newsletter", "body": "x"})
-    said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the Agust numbers."})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "Use the Agust numbers.", "to": "bot:ops"})
     assert said["woke"] and said["comment"]["edited_at"] is None
     before, queued = get(api, "tasks/" + task["id"]), jobs_for(api, "ops")
     edited = post(api, f"tasks/{task['id']}/comments/{said['comment']['id']}", {"text": "Use the August numbers."})
@@ -168,7 +171,9 @@ def _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves(api):
 
 def _a_deleted_comment_leaves_the_task_and_never_reaches_the_bot(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Draft the launch email", "body": "x"})
-    said = post(api, f"tasks/{task['id']}/comments", {"text": "September, and call me first."})["comment"]
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "September, and call me first.", "to": "bot:ops"})[
+        "comment"
+    ]
     before = get(api, "tasks/" + task["id"])
     gone = post(api, f"tasks/{task['id']}/comments/{said['id']}/delete", {})
     assert gone["comment"]["deleted_at"] and gone["woke"] is False
@@ -190,8 +195,8 @@ def test_comments_reach_whom_they_name_and_edits_or_deletes_wake_nobody(api, sub
     first, as they did on a fresh hub; then ops is leased once and the two checks on a task ops filed share that token."""
     for check in (
         _a_mention_on_a_task_with_no_bot_on_it_is_one_comment,
-        _mentioning_a_person_on_a_task_a_bot_owns_still_wakes_the_bot,
-        _a_comment_on_a_task_with_no_bot_on_it_is_not_quiet,
+        _mentioning_a_person_on_a_task_a_bot_owns_reaches_only_them,
+        _a_plain_comment_on_a_persons_task_reaches_nobody,
         _the_author_edits_a_comment_and_nobody_wakes,
         _only_its_author_edits_or_deletes_a_comment_signed_in_as_themselves,
         _a_deleted_comment_leaves_the_task_and_never_reaches_the_bot,

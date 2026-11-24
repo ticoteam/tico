@@ -780,9 +780,9 @@ def _rule(ctx, sender, receiver, mode):
         else "set for it"
     )
     share = (
-        "add them to its task as a reader or follower: on that task it reaches them"
+        "add them to its task as a reader: on that task an @mention reaches them"
         if H.is_bot(receiver)
-        else "it may add them to its task as a reader or follower, so they see it"
+        else "it may add them to its task as a reader, so they see it"
     )
     return (
         f"This is its reach rule, {mode.capitalize()} ({where}) on Rules › Internal; a person who manages "
@@ -919,15 +919,6 @@ def task_parties(c, task_id, before=None):
                 r[0]
                 for r in c.execute(
                     "SELECT actor FROM thread_members WHERE thread_id=? LIMIT 500", (row["conversation_id"],)
-                )
-            }
-        if not before and H._has_table(c, "thread_followers"):
-            # Its followers (task_followers): an owner who added a teammate to its task reaches them on it.
-            out |= {
-                r[0]
-                for r in c.execute(
-                    "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 LIMIT 500",
-                    (row["conversation_id"],),
                 )
             }
     return {a for a in out if a}
@@ -1230,7 +1221,7 @@ def check(
     exemptions that need the database are read only when the write would be refused without them: for a bot teammate,
     a task they share or a teammate who came to the bot first; for a person, only person_asked (a reply to them, a
     conversation they wrote in, a task they handed the bot). `owner`: the owner of the task the receiver is being added
-    to as a reader or follower. A bot shares a task it owns with any teammate in the company: that is never refused.
+    to as a reader. A bot shares a task it owns with any teammate in the company: that is never refused.
     `ask`: the write is an ask of the person on the task itself (a ❓ there or a stage ask), which also opens the
     task's Human to its owner (human_of); a refused one names only why its Human is not open."""
     sender = _sender(who)

@@ -22,7 +22,7 @@ import functools
 import json
 import re
 from collections.abc import Callable, Iterable
-from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar
+from typing import TYPE_CHECKING, Any, Concatenate, NoReturn, ParamSpec, TypeVar, cast
 
 from . import ask_shape, hubdb_core, task_effects
 
@@ -187,6 +187,36 @@ def may_handle_ask(
     return can_work(conn, actor, row)
 
 
+def cast_row(value: object) -> Row:
+    """A row read from an untyped module, or {} for none."""
+    return cast(Row, value) if isinstance(value, dict) else {}
+
+
+def done_note(conn: "sqlite3.Connection", actor: str, task_id: str, note: str | None, visit_id: str | None) -> None:
+    """An agent's done note is one comment on the task by that agent, written once its done was taken: unstamped (so
+    it is in the comments, not its session), its @mentions delivered to nobody. Keyed on the visit the done left
+    (`visit_id`, read before the done: `<task>:<visit>:done:<agent>`), so a retry posts nothing more and a done again on
+    that visit updates the comment in place, or posts nothing once its author deleted it. Only on a task with a thread of its own."""
+    H = _h()
+    text = str(note or "").strip()
+    if not text or not visit_id or not H.is_bot(actor):
+        return
+    from . import task_followers
+
+    followers: Any = task_followers
+    if not followers.thread_id(conn, H.task(conn, task_id)):
+        return
+    key = f"{task_id}:{visit_id}:done:{actor}"
+    found = conn.execute("SELECT id, deleted_at FROM messages WHERE wake_key=?", (key,)).fetchone()
+    if found and found[1]:
+        return  # its author took this visit's note back: the deletion stands, and no other note takes its key
+    if found:
+        H.task_comment_edit(conn, actor, task_id, found[0], text)
+        return
+    made = H.task_comment(conn, actor, task_id, text, wake=False, extra_refs={"no_mentions": True}, checked=False)
+    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, made["id"]))
+
+
 # ----------------------------------------------------------------------------- moves
 @_task_write()
 def task_done(
@@ -226,14 +256,17 @@ def task_done(
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)  # a bot's own open ❓ here waits for its reply
+    leaving: str | None = str(cast_row(row.get("visit")).get("id") or "") or None if row["status"] == "open" else None
     own = next((s for s in R.standings(conn, row) if s.requirement["kind"] == "owner_done" and not s.met), None)
     pipe: Row = row.get("pipeline") or {}
     says = is_human(actor) or actor in (row.get("owner_id"), pipe.get("manager_id"), SYSTEM)
     if own and row["status"] == "open" and says:
         with task_effects.because(actor):
-            return A.answer(
+            answered = A.answer(
                 conn, task_id, own.requirement["id"], actor, "done", note or None, seen_version=seen_version
             )
+        done_note(conn, actor, task_id, note, leaving)
+        return answered
     if row["status"] == "open" and says:
         # Done again after a send back: each stage OK sent back asks its approver again (answers.reopen_sent_back),
         # and the task waits on them.
@@ -241,9 +274,12 @@ def task_done(
         if A.reopen_sent_back(conn, row, actor, note or None):
             with task_effects.because(actor):
                 E.changed(conn, task_id, actor)
+            done_note(conn, actor, task_id, note, leaving)
             return E.task(conn, task_id) or row
     with task_effects.because(actor), task_effects.noting(task_id, note):
-        return E.move(conn, task_id, NEXT, actor, None, seen_version)
+        moved = E.move(conn, task_id, NEXT, actor, None, seen_version)
+    done_note(conn, actor, task_id, note, leaving)
+    return moved
 
 
 @_task_write()
@@ -549,8 +585,13 @@ def task_answer(
         from . import question_marks
 
         question_marks.refuse_ending(conn, actor, task_id)
+    from . import task_engine as E
+
+    leaving: str | None = (
+        str(cast_row(cast_row(E.task(conn, task_id)).get("visit")).get("id") or "") or None if value == "done" else None
+    )
     with task_effects.because(actor):
-        return A.answer(
+        answered = A.answer(
             conn,
             task_id,
             requirement_id,
@@ -564,6 +605,8 @@ def task_answer(
             keyed=keyed,
             page_reader=page_reader,
         )
+    done_note(conn, actor, task_id, note, leaving)
+    return answered
 
 
 @_task_write()

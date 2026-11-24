@@ -49,8 +49,8 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
             (task["id"],),
         ).fetchone()
         assert RT.of_message(H.message(c, wake[0])) == ("task_turn", None)
-        # comment: a bot writes on the task.
-        H.task_comment(c, "bot:finance", task["id"], "The bank file is in.")
+        # comment: a bot writes to the task's agent (its session: a plain comment reaches nobody).
+        H.task_comment(c, "bot:finance", task["id"], "The bank file is in.", session="bot:ops")
         said = newest(c, "ops", "The bank file is in.")
         assert RT.of_message(said) == ("comment", said["id"])
         # pr_checks: a pull request's burst of check results.

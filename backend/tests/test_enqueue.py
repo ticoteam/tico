@@ -93,7 +93,7 @@ def test_a_task_for_a_bot_and_a_comment_on_it(api):
     task = post(api, "tasks", {"owner": "ops", "title": "File the invoices", "body": "All of October."})
     assert (ops, True) in {(w[1], w[3]) for w in _written(api, at)}
     at = _since(api)
-    post(api, f"tasks/{task['id']}/comments", {"text": "Include the late ones too."})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Include the late ones too.", "to": ops})
     assert ("human:ana", ops, "say", True) in _written(api, at)
 
 

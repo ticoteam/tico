@@ -7,7 +7,7 @@ it.
 
 `merge(A, into=B)` keeps B and ends A as its duplicate, in one write (the route's transaction: if any part is refused,
 nothing changes). B gets A's description under "From #A", A's files and pages (linked, not copied), labels, related
-links, followers and requesters; A's open subtasks move under B before A closes, so the close cascade finds none. A's
+links and requesters; A's open subtasks move under B before A closes, so the close cascade finds none. A's
 comments stay on A and its open asks end with it: B's note counts the comments and lists each question. A is Closed
 with "Archiving this one as a duplicate of #B; its details were added there." and linked as a duplicate of B. With
 `owner`, B is first given to that owner with the usual hand-over checks (the caller passes them in: `reassign`). A bot
@@ -36,12 +36,6 @@ def _h() -> Any:
     from . import hubdb
 
     return hubdb
-
-
-def _followers_mod() -> Any:
-    from . import task_followers
-
-    return task_followers
 
 
 def _calls() -> Any:
@@ -232,28 +226,9 @@ def _teammate(actor: Any) -> bool:
     return isinstance(actor, str) and actor.startswith(("human:", "bot:"))
 
 
-def _followers(conn: Any, a: Row, b: Row) -> list[str]:
-    """Who follows B after the merge: A's followers, and the teammates who asked for A (its requester and the
-    task_requesters rows), so they hear when B is done. Nobody can follow a task with no thread of its own (one filed
-    into a shared chat), so that gives none."""
-    F = _followers_mod()
-    if not F.thread_id(conn, b):
-        return []
-    asked = [a.get("requester_id")] + [
-        row[0] for row in conn.execute("SELECT actor FROM task_requesters WHERE task_id=?", (a["id"],))
-    ]
-    have: set[str] = {f["actor"] for f in F.listed(conn, b)}
-    out: list[str] = []
-    for actor in [f["actor"] for f in F.listed(conn, a)] + [x for x in asked if _teammate(x)]:
-        if actor not in have and _h().task_private_readable(conn, actor, b):
-            have.add(actor)
-            out.append(actor)
-    return out
-
-
 def _requesters(conn: Any, a: Row, b: Row) -> list[Row]:
     """A's requesters that B does not have yet: its own requester first, then the rows of task_requesters. A teammate
-    who may not read B is left out, as for followers."""
+    who may not read B is left out."""
     H = _h()
     have = {b.get("requester_id")} | {
         row[0]
@@ -335,7 +310,6 @@ def moves(conn: Any, a: Row, b: Row) -> Row:
         "asks": [ask["line"] for ask in _asks(conn, a["id"])],
         "subtasks": len(_open_children(conn, a["id"])),
         "files": len(_files(conn, a["id"])),
-        "followers": len(_followers(conn, a, b)),
         "requesters": len(_requesters(conn, a, b)),
         "labels": len(_labels(a, b)) - len(H.task_labels(b)),
         "links": len(_relations(conn, a, b)) + len(_links(conn, a, b)),
@@ -426,7 +400,7 @@ def merge(
         H.hydrate_task_tags(conn, [row])
     ts = H.now()
     files, asks, comments = _files(conn, a["id"]), _asks(conn, a["id"]), _comments(conn, a["id"])
-    followers, requesters = _followers(conn, a, b), _requesters(conn, a, b)
+    requesters = _requesters(conn, a, b)
     relations, links, labels = _relations(conn, a, b), _links(conn, a, b), _labels(a, b)
     added_labels = labels[len(H.task_labels(b)) :]
     # B: A's labels; A's request and files go in the merge note on B's chat (a task has no description).
@@ -436,11 +410,6 @@ def merge(
     from . import roadmaps as _roadmaps
 
     roadmaps: Any = _roadmaps
-    F = _followers_mod()
-
-    tid = F.thread_id(conn, b)
-    for who in followers:  # none when B has no thread: _followers checked
-        F._upsert(conn, tid, who, F.CHOSEN)
     for req in requesters:
         values = {k: req.get(k) or "" for k in ("name", "email", "phone", "other", "organization", "note")}
         roadmaps.add_requester(
@@ -501,7 +470,6 @@ def merge(
     came = [f'its request under "From {_num(a)}"'] if asked else []
     came += [f"{len(files)} of its files and pages, linked"] if files else []
     came += [_plural(len(added_labels), "label")] if added_labels else []
-    came += [_plural(len(followers), "follower")] if followers else []
     came += [_plural(len(requesters), "requester")] if requesters else []
     came += [_plural(len(relations) + len(links), "related link")] if relations or links else []
     came += [_plural(len(moved), "open subtask") + " moved here"] if moved else []

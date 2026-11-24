@@ -1,6 +1,6 @@
-"""A person's comment on a bot's task wakes the bot at once, whatever the task waits on (docs/tasks.md, Comments): a
-person's message is on the always-wake floor (backend/wake_rules.py), so neither a sub-task, a ❓ to a person nor a
-snooze holds it back (execution.job_refusal)."""
+"""A person's message to the session of the agent holding a task wakes it at once, whatever the task waits on
+(docs/tasks.md, Comments): a person's message is on the always-wake floor (backend/wake_rules.py), so neither a
+sub-task, a ❓ to a person nor a snooze holds it back (execution.job_refusal)."""
 
 import pytest
 
@@ -52,7 +52,7 @@ def waiting_task(api, machine, wait, requester="human:ana"):
 def test_a_persons_comment_on_a_waiting_task_starts_the_bots_turn(api, wait, requester):
     machine = task_bot(api, lanes=True, others=("cpo",))
     tid = waiting_task(api, machine, wait, requester)
-    sent = post(api, f"tasks/{tid}/comments", {"text": "Please cut the release now."})
+    sent = post(api, f"tasks/{tid}/comments", {"text": "Please cut the release now.", "to": "bot:ops"})
     assert sent["woke"] is True and sent["sent_as"] == {"delivery": "steer", "until": None}
     turn = claim(api, machine)
     assert turn and turn["message"]["id"] == sent["comment"]["id"], "the comment is the bot's next turn"

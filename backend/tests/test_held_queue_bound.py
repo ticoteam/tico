@@ -82,7 +82,10 @@ def test_total_items_across_senders_rooms_and_comments_rolls_back(queue, monkeyp
     send(queue)
     send(queue, 'cpo', conversation_id=tasks[1]['conversation_id'])
     post(
-        api, f"tasks/{tasks[0]['id']}/comments", {'text': 'Fixture finding', 'needs_action': True}, token=tokens['ops']
+        api,
+        f"tasks/{tasks[0]['id']}/comments",
+        {'text': 'Fixture finding', 'needs_action': True, 'to': 'bot:finance'},
+        token=tokens['ops'],
     )
     send(queue, 'doc-updater', kind='notice')
     assert len(pending(api)) == 4
@@ -90,7 +93,7 @@ def test_total_items_across_senders_rooms_and_comments_rolls_back(queue, monkeyp
     result = post(
         api,
         f"tasks/{tasks[1]['id']}/comments",
-        {'text': 'No room', 'needs_action': True},
+        {'text': 'No room', 'needs_action': True, 'to': 'bot:finance'},
         token=tokens['cpo'],
         expected=422,
     )
@@ -274,7 +277,7 @@ def test_author_cannot_grow_a_pending_comment_past_byte_bound(queue, monkeypatch
 
     monkeypatch.setattr(rules, '_rule_for_event', lambda event: (rules.WAKE, event))  # as a wake rule would
     with api.app.state.store.transaction() as c:
-        comment = H.task_comment(c, 'bot:ops', tasks[0]['id'], 'Small')
+        comment = H.task_comment(c, 'bot:ops', tasks[0]['id'], 'Small', session='bot:finance')
     monkeypatch.setattr(H, 'HELD_QUEUE_BYTES', retained(pending(api)))
     before = domain(api)
     result = post(
@@ -294,7 +297,12 @@ def test_total_bytes_combine_senders_task_rooms_comments_and_notices(queue, monk
     send(queue, text='界🙂')
     first_size = retained(pending(api))
     send(queue, 'cpo', text='界🙂', conversation_id=tasks[1]['conversation_id'])
-    post(api, f"tasks/{tasks[0]['id']}/comments", {'text': '界🙂', 'needs_action': True}, token=tokens['ops'])
+    post(
+        api,
+        f"tasks/{tasks[0]['id']}/comments",
+        {'text': '界🙂', 'needs_action': True, 'to': 'bot:finance'},
+        token=tokens['ops'],
+    )
     monkeypatch.setattr(H, 'HELD_QUEUE_BYTES', retained(pending(api)) + first_size)
     send(queue, 'doc-updater', text='界🙂', kind='notice')
     assert retained(pending(api)) == H.HELD_QUEUE_BYTES

@@ -1604,15 +1604,21 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                 label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
-            parts = turns.reply_parts(
-                [
-                    (e["kind"], json.loads(e["payload"]), e["created_at"])
-                    for e in c.execute(
-                        "SELECT kind,payload,created_at FROM attempt_events WHERE attempt_id=? ORDER BY seq",
-                        (job["attempt_id"],),
-                    )
-                ]
-            )
+            steps = [
+                dict(e)
+                for e in c.execute("SELECT * FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))
+            ]
+            reader = privacy.actor(who) if who else None
+            decoded = [e | {"payload": json.loads(e["payload"])} for e in steps]
+            if reader is not None:
+                privacy.prime_references(c, decoded)  # the tasks and pages the steps name, looked up together
+            shown = []
+            for e, d in zip(steps, decoded, strict=True):
+                # Each step under the check the stream applies before it sends one (events._step_shown): a step that
+                # names what this reader may not read (a restricted page, a private task) is left out here too.
+                if reader is None or privacy.content_readable(c, reader, e, d):
+                    shown.append((e["kind"], d["payload"], e["created_at"]))
+            parts = turns.reply_parts(shown)
         if parts:
             # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
             # is checked and delivered (backend/org_rule_check.py).

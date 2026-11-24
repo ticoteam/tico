@@ -12,7 +12,6 @@ import pytest
 from backend import question_marks as Q
 from backend import task_delete
 from backend import task_engine as E
-from backend import task_followers
 from backend import task_reads
 from backend.store import H
 from backend.tests.helpers import engine as X
@@ -796,7 +795,7 @@ def test_a_bot_that_sends_no_version_is_refused_the_old_way_of_saying_done_too(c
     assert H.task_update(c, ANA, row["id"], status="done", note="Sent.")["status"] == "done"  # a person may
 
 
-def test_qa_stage_moves_keep_the_developer_following_and_preserve_rank(c):
+def test_qa_stage_moves_keep_the_developer_assigned_and_preserve_rank(c):
     stages = (
         {"name": "In progress", "owner": "assignee", "requirements": [{"kind": "owner_done"}]},
         {"name": "Bot QA", "owner": HELPER, "requirements": [{"kind": "owner_done"}]},
@@ -816,7 +815,6 @@ def test_qa_stage_moves_keep_the_developer_following_and_preserve_rank(c):
             BUILDER,
             rank,
         )
-        assert {f["actor"] for f in task_followers.listed(c, task)} == {BUILDER, owner}
 
     check("In progress", BUILDER)
     wake = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (task_id + ":%",)).fetchone()[0]

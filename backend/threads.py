@@ -1390,6 +1390,8 @@ def _record(c, message, conv):
     # A generated notice (refs.no_mentions, a task roundup) names people in its text as data: it makes no mention.
     named = "@" in str(message.get("body") or "") and not refs.get("no_mentions")
     found = mentions(c, thread, message.get("body") or "", author=author) if named else []
+    if not refs.get("no_mentions"):
+        found = with_reply_mention(c, thread, author, message.get("in_reply_to"), found)
     warnings, in_audience = [], []
     now = _now()
     root = root_of(c, thread) if found else None
@@ -1457,6 +1459,27 @@ def _widens(c, root, author, actor):
     return row
 
 
+def reply_mention(c, thread, author, in_reply_to):
+    """The author a person's Reply on a task's thread @mentions (decision 3): on a task's thread a person's reply is
+    an explicit @mention of whom it answers, so it reaches them as a mention does (notified, or woken in their session),
+    with nothing added to its text. None anywhere else, for a bot's reply, or when its author is no person or bot."""
+    if not in_reply_to or not str(author or "").startswith("human:"):
+        return None
+    root = root_of(c, thread)
+    if root is None or audience_of(root) != "task":
+        return None
+    replied = _replied_author(c, root, in_reply_to)
+    return replied if replied and replied != author else None
+
+
+def with_reply_mention(c, thread, author, in_reply_to, found):
+    """`found` (mentions) with the author a person's Reply answers (`reply_mention`) as one more @mention."""
+    replied = reply_mention(c, thread, author, in_reply_to)
+    if replied and replied not in [a for a, _ in found]:
+        return [*found, (replied, "mention")]
+    return found
+
+
 def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=None):
     """The "Who it reaches" preview: whom the viewer's message `text` in this thread would reach, each with its mode
     (`plan`), and the @mentions it would not reach (`outside`) or would add to a private task's Who can see
@@ -1464,6 +1487,7 @@ def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=N
     thread = require(c, v, thread_id)
     root = root_of(c, thread)
     found, outside, adds = mentions(c, thread, text, author=v.actor), [], []
+    found = with_reply_mention(c, thread, v.actor, in_reply_to, found)
     inside = []
     for actor, kind in found:
         if audience_has(c, thread, actor):
@@ -1474,7 +1498,12 @@ def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=N
         else:
             outside.append(actor)
     rows = plan(c, thread, v.actor, found=inside, in_reply_to=in_reply_to, way=way, defer_for=defer_for, root=root)
-    rows = [{**r, "adds_reader": r["actor"] in adds} for r in rows]
+    # A bot that cannot take a turn (archived, removed) is reached by nothing, so it is not listed (`_deliver_bot`).
+    rows = [
+        {**r, "adds_reader": r["actor"] in adds}
+        for r in rows
+        if not r["actor"].startswith("bot:") or _reachable(c, r["actor"])
+    ]
     known = v.known(c)
     if not known.member(thread["id"]):
         unseen = known.unseen_of([r["actor"] for r in rows] + outside)
@@ -1651,7 +1680,8 @@ def plan(
     author. The same list makes the deliveries (`deliver`) and the "Who it reaches" preview (`reaches`).
 
     Addressed (reached at any level, on any way): the @mentions in `found`, the author of the message it replies to,
-    a DM's members, a Home's owner (a bot or a person), a sub-thread's posters. Followers (reason `follower`): `live` rows of the thread; on
+    a DM's members, a Home's owner (a bot or a person), a sub-thread's posters. A task's thread reaches only the
+    addressed (its comments are a log): no follower and no sub-thread poster. Followers (reason `follower`): `live` rows of the thread; on
     a chat a person follows by a follow, a mention, a reply or starting it, not by joining (that row is a read mark and a
     sidebar place). `mentions` and `muted` get only what addresses them; a bot on `digest` gets its digest. A system
     line (D10) reaches only the addressed.
@@ -1678,13 +1708,14 @@ def plan(
         owner = home_owner(root)
         if owner and owner.startswith(("bot:", "human:")):
             wanted.setdefault(owner, "home")
-    if thread.get("parent_id"):
+    if thread.get("parent_id") and not on_task:
         for actor in _sub_thread_posters(c, thread["id"], exclude or ""):
             wanted.setdefault(actor, "sub_thread")
     replied = _replied_author(c, root, in_reply_to)
     if replied:
         wanted.setdefault(replied, "reply")
-    if not system:
+    # A task's comments are a log (decision 1): its followers are reached by nothing, only whom a comment addresses.
+    if not system and not on_task:
         for actor, notify, reason in _follower_rows(c, thread["id"]):
             if not on_task and actor.startswith("human:") and reason in ("joined", "read"):
                 continue
@@ -1763,6 +1794,20 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         exclude=message["id"],
         people_notified=bool(refs.get("send_people")),
     )
+    if _cause(author) == "human" and audience_of(root) == "task" and not system:
+        # Whatever clears an agent's ❓ reaches it (question_marks.replied), plain comment or not: no asker is left
+        # waiting on an answer it never got.
+        from . import question_marks
+
+        named = {r["actor"] for r in reached} | {primary}
+        # Each by the message's way, as `plan` builds an addressed bot's entry: a Defer keeps its deadline.
+        due = plan_defer_for(root, defer_for) if way == "defer" else None
+        mode = "queue" if due == "never" else way or "steer"
+        for bot in question_marks.cleared_askers(c, (root or {}).get("task_id") or "", message["id"]):
+            if bot not in named and bot.startswith("bot:"):
+                reached.append(
+                    {"actor": bot, "reason": "reply", "mode": mode, "defer_for": due if mode == "defer" else None}
+                )
     seq = (message.get("seq") or 1) - 1
     out = []
     entry = next((r for r in reached if r["actor"] == primary), None) if primary else None
@@ -1836,8 +1881,12 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
             out.append(sent)
     for actor in _outside(c, thread["id"]):
         _insert_delivery(c, message, actor, thread, root, "none", "outside")
-    if _cause(author) == "human":
-        resume_capped(c, root["id"])
+    if _cause(author) == "human" and (
+        audience_of(root) != "task"
+        or str(primary or "").startswith("bot:")
+        or any(r["actor"].startswith("bot:") for r in reached)
+    ):
+        resume_capped(c, root["id"])  # a person's post lifts the loop guard; on a task, only one that reaches a bot
     return out
 
 
@@ -1882,6 +1931,17 @@ def _replied_author(c, root, target):
     if not row or row[2] != root["id"] or not str(row[0] or "").startswith(("bot:", "human:")):
         return None
     return row[0]
+
+
+def deliver_to_people(c, thread_id, message, people):
+    """One message delivered to each of these people (a Tico line several people are told by, task_effects), each
+    checked on its own as any delivery to a person is."""
+    thread = thread_row(c, thread_id)
+    if thread is None:
+        return
+    root = root_of(c, thread)
+    for person in people:
+        _deliver_person(c, thread, root, message, person, "addressed", True, None)
 
 
 def _deliver_person(c, thread, root, message, person, reason, replay, warnings):
@@ -1957,8 +2017,10 @@ def _deliver_bot(c, thread, root, message, bot, reason, replay=False, entry=None
         return None
     judged = _judged(message)
     author = message.get("sender_id") or ""
-    if reason == "follower" and _cause(author) == "bot":
+    if _cause(author) == "bot" and (reason == "follower" or reason == "reply" and audience_of(root) == "task"):
         # A bot's plain post reaches a following bot at its next turn (bot_to_bot): an @mention or needs_action wakes.
+        # On a task's thread a bot's reply to a bot waits the same way unless what it answers asked for an answer
+        # (needs-action, wait_s), so two agents' answers never ping-pong; the loop guard stays the backstop.
         from . import rules
 
         if rules.bot_to_bot_decision(
@@ -2451,7 +2513,7 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     """A Tico notice to `bot` in the same thread whose job starts its run for `message`, or None when the bot may not
     read that message. No seq: no timeline, counter or SSE thread view shows it. It carries the source's provenance
     by reference: the per-message check reads a carrier as the message it carries (task_privacy.message_readable),
-    and its legacy audience is copied. `way` (named_way): a queued carrier stays out of a running turn
+    and its legacy audience is copied. In a task's own thread it is stamped as `bot`'s session message. `way` (named_way): a queued carrier stays out of a running turn
     (execution.inputs); a deferred one is quiet, and starts no run until its deadline."""
     if not _source_readable(c, thread, message, bot):
         return None
@@ -2477,10 +2539,24 @@ def _carrier(c, thread, message, bot, reason, rule, wake="thread", body=None, wa
     )
     legacy = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message["id"],)).fetchone()
     dumped, created = H._dump(refs), _now()
+    # In a task's own thread a carrier is a message in the session of the agent it was written for: it copies words
+    # from another session (or a comment), and no other agent's replay shows it (task_privacy.page `session`).
+    own = thread.get("kind") == "task" and thread.get("task_id") and not thread.get("parent_id")
     c.execute(
         "INSERT INTO messages(id,conversation_id,sender_id,recipient_id,kind,body,refs,in_reply_to,created_at,"
-        "origin_id,revision,restricted,legacy_audience) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?)",
-        (cid, thread["id"], H.TICO_ACTOR, bot, body, dumped, created, mint_origin(c), legacy[0] if legacy else None),
+        "origin_id,revision,restricted,legacy_audience,session_agent_id) VALUES(?,?,?,?,'notice',?,?,NULL,?,?,0,1,?,?)",
+        (
+            cid,
+            thread["id"],
+            H.TICO_ACTOR,
+            bot,
+            body,
+            dumped,
+            created,
+            mint_origin(c),
+            legacy[0] if legacy else None,
+            bot if own else None,
+        ),
     )
     from .enqueue import enqueue
 
@@ -2877,7 +2953,7 @@ def _post(
         refs["origin"] = {k: origin.get(k) for k in ("origin_id", "revision", "install", "actor") if origin.get(k)}
     if attachments:
         refs["attachments"] = list(attachments)
-    found = mentions(c, thread, text, author=actor)
+    found = with_reply_mention(c, thread, actor, in_reply_to, mentions(c, thread, text, author=actor))
     target = None
     if to_actor:
         if str(to_actor).startswith("ext:"):
@@ -2953,8 +3029,8 @@ def _post(
 
 
 def _task_primary(c, thread, author, found, in_reply_to, refs):
-    """The bot a post on a task's own thread (not a sub-thread) goes to: the first bot `plan` gives a turn, addressed
-    first, then followers. None when it gives none, or the thread is not a task's. A way that defers but reaches its
+    """The bot a post on a task's own thread (not a sub-thread) goes to: the first bot `plan` gives a turn (an
+    @mention, or the author a person's Reply answers). None when it gives none, or the thread is not a task's. A way that defers but reaches its
     bot queued (Defer never and an @mention) loses its quiet in `refs`, so the bot's job is queued."""
     root = root_of(c, thread)
     if thread.get("parent_id") or audience_of(root) != "task":
@@ -2972,6 +3048,8 @@ def _task_primary(c, thread, author, found, in_reply_to, refs):
         system=system,
         root=root,
     ):
+        if r["reason"] == "reply" and _cause(author) == "bot":
+            continue  # a bot's reply to a bot waits under bot_to_bot in `deliver`, never promoted to a turn here
         if r["actor"].startswith("bot:") and r["mode"] in ("steer", "queue", "defer") and _reachable(c, r["actor"]):
             if r["mode"] == "queue" and way == "defer":
                 refs.pop("quiet", None)
@@ -5057,6 +5135,7 @@ def _message_out(m):
             "seq",
             "revision",
             "origin_id",
+            "session_agent_id",
         )
     }
     out.update(thread_id=m.get("conversation_id"), refs=refs, deleted=bool(m.get("deleted_at")))
@@ -5419,7 +5498,27 @@ def _open_subtree(c, v, row):
     return [i for i in ids if i == row["id"] or i in allowed]
 
 
-def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=False):
+def session_sql(places, session=None, comments=False, m="messages"):
+    """(SQL, args) that keep one view of a task's thread among messages `m` in `places`: `session`, one agent's
+    session (its stamped messages and those that @mention it, by the mention's delivery); `comments`, the comments
+    (unstamped, with each stamped answer to one). ("", ()) for neither."""
+    if session:
+        marks = ",".join("?" * len(places))
+        return (
+            f" AND ({m}.session_agent_id=? OR {m}.id IN (SELECT message_id FROM message_deliveries WHERE "
+            f"thread_id IN ({marks}) AND recipient=? AND reason='mention'))",
+            (session, *places, session),
+        )
+    if comments:
+        return (
+            f" AND ({m}.session_agent_id IS NULL OR EXISTS (SELECT 1 FROM messages p WHERE p.id={m}.in_reply_to "
+            "AND p.session_agent_id IS NULL))",
+            (),
+        )
+    return "", ()
+
+
+def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=False, session=None, comments=False):
     """A thread in tree order, newest page first: `cursor` and `limit` page its own messages, and each is followed by its
     sub-thread's messages, recursively, each with its `depth`. A long branch shows its latest messages under a
     `collapsed` row ("N more", with the cursor that reads the rest). Every row passes the per-message check: hidden
@@ -5428,7 +5527,10 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
 
     `flat`: the thread and its whole readable open subtree in time order, every message at depth 0, paged by the same
     cursor (a seq) and caps, with `read_marks` for the root and each thread a message on the page is in. Each shown
-    message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status)."""
+    message has `reply_to` (reply_quotes) in both modes; the first page also has `bot_status` (thread_bot_status).
+
+    On a task's thread, `session` (an agent) pages only that agent's session and `comments` only the comments
+    (`session_sql`)."""
     from . import task_privacy
 
     v = viewer(None, v) if not isinstance(v, Viewer) else v
@@ -5441,12 +5543,17 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None, flat=Fal
     old_only = legacy_reader_only(c, v, row)
     only_old = " AND legacy_audience IS NOT NULL" if old_only else ""
     places = _open_subtree(c, v, row) if flat and not old_only else [row["id"]]
+    if session:
+        session = H.resolve_actor(c, session)
+        if not str(session or "").startswith("bot:") or v.known(c).unseen_of([session]):
+            raise Problem("validation", "No agent by that name", 422)  # the same answer whether or not it exists
+    view_sql, view_args = session_sql(places, session, comments)
     rows = [
         dict(r)
         for r in c.execute(
             f"SELECT * FROM messages WHERE conversation_id IN ({','.join('?' * len(places))}) "
-            f"AND seq IS NOT NULL AND seq<?{only_old} ORDER BY seq DESC LIMIT ?",
-            (*places, below, limit + 1),
+            f"AND seq IS NOT NULL AND seq<?{only_old}{view_sql} ORDER BY seq DESC LIMIT ?",
+            (*places, below, *view_args, limit + 1),
         )
     ]
     more = len(rows) > limit

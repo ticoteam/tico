@@ -256,6 +256,7 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
             "@ana the old reports page or the new one?",
             "I sent this one myself.",
             "Back on it, Ana: fixing the label first.",
+            "Done: Shipped",  # Ana filed it: she is told once that it is done
             "Done: the button is live.",
         ]
         newest = c.execute("SELECT seq FROM messages WHERE id=?", (done,)).fetchone()[0]
@@ -266,7 +267,8 @@ def test_the_migration_takes_notices_and_bare_answers_out_of_peoples_timelines(c
         for notice in (poke, asked, last, quiet):  # still stored: each is what its run started from
             assert c.execute("SELECT seq FROM messages WHERE id=?", (notice,)).fetchone()[0] is None
         asked_first = H.task_request(c, task["id"])["id"]  # Ana's request, the room's first message
-        assert {asked_first, real, named, sent, hers, done} == {
+        told = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (task["id"] + ":%:told",)).fetchone()[0]
+        assert {asked_first, real, named, sent, hers, told, done} == {
             r[0] for r in c.execute("SELECT id FROM messages WHERE conversation_id=? AND seq IS NOT NULL", (room,))
         }
         fresh = task_wakes.add(c, task, "bot:cpo", task["visit"], "One more.", try_n=5)

@@ -200,21 +200,6 @@ def test_undo_never_makes_a_task_private_giving_it_back_to_a_bot_that_now_keeps_
     assert "keeps its tasks private" in text, text
 
 
-def test_undo_of_a_reassign_gives_back_each_followers_level(c):
-    """The owner had muted the task for Ops, its owner; given back, Ops follows it muted again, and Finance no longer
-    follows it."""
-    from backend import task_followers as TF
-
-    work = _filed(c, "ops", "Reconcile the vendor invoices")
-    TF.change(c, OWNER, work, "bot:ops", notify="muted", mover=True)
-    made = _decide(c, [{"do": "reassign", "task_id": work, "owner": "finance"}])
-    SA.undo(c, OWNER, made["id"])
-    back = H.task(c, work)
-    assert back["owner_id"] == "bot:ops"
-    following = {f["actor"]: f["notify"] for f in TF.listed(c, back)}
-    assert following.get("bot:ops") == "muted" and "bot:finance" not in following, following
-
-
 # ----------------------------------------------------------------------------- through the routes
 
 

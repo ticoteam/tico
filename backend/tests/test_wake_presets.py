@@ -386,7 +386,9 @@ def test_a_persons_message_is_not_delayed_by_a_held_batch(api):
     tick(api, H.now())
     [held] = jobs(api, since=since)
     assert held["held"] == 1 and held["hold_until"] > H.now()
-    post(api, f"tasks/{task['id']}/comments", {"text": "Please also tidy the README."})  # the person who filed it
+    post(
+        api, f"tasks/{task['id']}/comments", {"text": "Please also tidy the README.", "to": "bot:ops"}
+    )  # the person who filed it
     post(api, "chat/ops", {"text": "And send me the link when it is up."})
     tick(api, H.now())
     assert [(j["state"], j["held"], j["hold_until"]) for j in jobs(api, since=since)[1:]] == [("queued", 0, None)] * 2

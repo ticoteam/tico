@@ -650,3 +650,90 @@ def test_a_native_post_to_a_moved_room_is_checked_in_its_home(ruled):
     hold = hold_row(api, got.json()["held"]["id"])
     assert json.loads(hold["payload"])["provenance"]["place"]["thread"] == home
     assert not bodies(api, "favorite color is gold")
+
+
+def test_a_task_comments_rule_audience_is_every_one_it_reaches_after_its_to_and_reply_are_checked(ruled, monkeypatch):
+    """The audience the org rules read for a task comment is the one list the write delivers to: the agent it is sent
+    `to`, the author a Reply answers and whom it @mentions, agents too. A `to` or a Reply the writer may not use is
+    refused before any rule reads who it names."""
+    api, _ = ruled
+    block_everyone(api)
+    seen = []
+    real = K.preflight
+
+    def spy(store, judge, who, operation, output, recipients, *rest, **more):
+        seen.append(sorted(recipients))
+        return real(store, judge, who, operation, output, recipients, *rest, **more)
+
+    monkeypatch.setattr(K, "preflight", spy)
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    path = f"/api/v2/tasks/{task['id']}/comments"
+    seen.clear()
+    for body in ({"text": "Hello.", "to": "bot:nosuch"}, {"text": "Hello.", "in_reply_to": "no-such-message"}):
+        r = api.post(path, json=body, headers=headers("ana-test"))
+        assert r.status_code == 422, r.text
+    assert seen == [], "refused before any rule read its audience"
+    bens = post(api, f"tasks/{task['id']}/comments", {"text": "Ben here."}, token="ben-test")["comment"]
+    seen.clear()
+    post(api, f"tasks/{task['id']}/comments", {"text": "@finance please check this.", "to": "ops"})
+    post(api, f"tasks/{task['id']}/comments", {"text": "Agreed.", "in_reply_to": bens["id"]})
+    assert "bot:finance" in seen[0] and "bot:ops" in seen[0]
+    assert "human:ben" in seen[1]
+    # A plain comment that settles two agents' ❓ to Ana reaches both: the rules read both.
+    from backend import question_marks
+
+    with api.app.state.store.transaction() as c:
+        for bot in ("bot:cpo", "bot:finance"):
+            question_marks.ask(c, bot, task["id"], "human:ana", "Which bank feed should I use?", checked=False)
+    seen.clear()
+    post(api, f"tasks/{task['id']}/comments", {"text": "The Chase feed, both of you."})
+    assert {"bot:cpo", "bot:finance"} <= set(seen[0])
+
+
+def test_send_anyway_of_a_held_task_comment_is_refused_once_who_it_reaches_changed(ruled):
+    """Send anyway reads a held comment's audience again (its replay's audience, the same list the check read): unchanged
+    it is written once; once it would reach someone else, it stays held with a 409."""
+    api, _ = ruled
+    block_everyone(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    path = f"tasks/{task['id']}/comments"
+    kept = post(api, path, {"text": "@finance our favorite color is gold."}, token="cara-test")["held"]["id"]
+    moved = post(api, path, {"text": "@finance our favorite color is red."}, token="cara-test")["held"]["id"]
+    view = get(api, f"rule-holds/{kept}", token="ana-test")
+    assert post(api, f"rule-holds/{kept}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    with api.app.state.store.transaction() as c:
+        H.task_reassign(c, "human:ana", task["id"], "bot:cpo", "Cpo takes it", mover=True)
+    view = get(api, f"rule-holds/{moved}", token="ana-test")
+    refused = post(api, f"rule-holds/{moved}/send", {"nonce": view["nonce"]}, token="ana-test", expected=409)
+    assert "changed" in str(refused)
+    assert len(bodies(api, "favorite color is red")) == 0
+
+
+def test_a_question_that_mentions_another_agent_is_checked_for_whom_it_reaches_and_goes(ruled):
+    """A ❓ is checked for the person it asks and whom its text @mentions, agents too, the same list its write counts:
+    so it is not refused as moved between the check and the write."""
+    api, _ = ruled
+    block_everyone(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    asked = post(
+        api,
+        f"tasks/{task['id']}/questions",
+        {"to": "ana", "text": "Should @finance check the numbers first?", "not_known": True},
+        token="ops-test",
+    )
+    assert asked["question"]["person_id"] == "human:ana", asked
+
+
+def test_a_message_to_an_agent_in_a_tasks_thread_is_its_session_message(ruled):
+    """/messages to an agent in a task's own thread writes what the task's route would: that agent's session message,
+    stamped, and only from someone who may direct the task (403 otherwise), Send anyway's replay included."""
+    api, _ = ruled
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    body = {"to": "ops", "text": "Ship it now.", "conversation_id": task["conversation_id"]}
+    r = api.post("/api/v2/messages", json=body, headers=headers("cara-test"))
+    assert r.status_code == 403, r.text
+    assert bodies(api, "Ship it now.") == []
+    sent = post(api, "messages", body)
+    assert sql(api, "SELECT session_agent_id FROM messages WHERE id=?", (sent["id"],)) == [
+        {"session_agent_id": "bot:ops"}
+    ]

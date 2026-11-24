@@ -279,6 +279,7 @@ def register_core(
                     parent_row = None
                 if parent_row:
                     parent = {"id": parent_id, "title": parent_row["title"], **H.ticket_refs(c, [parent_id])[parent_id]}
+            from .chat_goals import may_direct
             from .task_reads import comment_rights
             from .views import task_wait
 
@@ -301,11 +302,11 @@ def register_core(
             for event in history:
                 if isinstance(event, dict):
                     event.pop("body_sources", None)
-            # Who follows it (backend/task_followers.py): null for a task with no thread of its own.
             return {
                 "task": {
                     **task_view(row, c, visible_sql=related_sql, who=who),
-                    "followers": task_followers_seen(c, who, row),
+                    # Nobody follows a task (backend/task_followers.py): kept empty for older clients.
+                    "followers": [],
                     # Its documents, newest change first, with approval marks from this snapshot.
                     "documents": task_documents.listing(c, app.state.files, who, tid),
                     # Its label, as hubdb.ticket_refs says it ("O561"), from the row already read.
@@ -315,6 +316,8 @@ def register_core(
                 },
                 "events": history,
                 "can_comment": can_comment,
+                # Whether this reader may message an agent's session on it (`to` on POST .../comments; may_direct).
+                "can_direct": can_comment and (who.role == "bot" or may_direct(c, who, row)),
                 "children": children,
                 "parent": parent,
                 # The task page reads as its session's chat: each bot reply carries the run behind it (`run`,
@@ -325,6 +328,8 @@ def register_core(
                     c, who, turn_work.annotate(c, auth, who, H.task_comments(c, tid, actor=privacy.actor(who)))
                 ),
                 "execution": task_execution(c, who, row),
+                # Each agent on the task with its own session view (one row per agent, `session=` on the timeline).
+                "sessions": task_sessions(c, who, row),
                 "comment_to": comment_to(c, who, row) if can_comment else None,
                 "comment_delivery": delivery_choices(c, who, row) if can_comment else None,
                 "mover": mover(c, request.state.identity),
@@ -345,15 +350,52 @@ def register_core(
             }
 
     @app.get("/api/v2/tasks/{tid}/execution")
-    def task_execution_read(request: Request, tid: str):
+    def task_execution_read(request: Request, tid: str, agent: str | None = None):
         """The run the task's page follows (`execution` of GET /api/v2/tasks/{tid}, the same value), alone: the page
-        reads it as the run's steps come in, without reading the whole task each time."""
+        reads it as the run's steps come in, without reading the whole task each time. `agent`: that agent's run on
+        the task instead, which its session view follows."""
         who = request.state.identity
         with store.read_transaction() as c:
             row = auth.task(c, who, auth.resolve_task(c, who, tid))
-            return {"execution": task_execution(c, who, row)}
+            if not agent:
+                return {"execution": task_execution(c, who, row)}
+            bot = H.resolve_actor(c, agent)
+            if not H.is_bot(bot) or teammate_access.Known(c, who, auth).unseen_of([bot]):
+                return {"execution": None}
+            return {"execution": task_execution(c, who, row, bot)}
 
-    def task_execution(c, who, row):
+    # One row per agent on a task: the holder when an agent, every agent with a stamped message on its thread, every
+    # agent woken there by an @mention or a reply (its deliveries, on messages not deleted), every agent with a run on
+    # the task or a job waiting on its thread. `last_seq` is the newest message its session view shows
+    # (threads.session_sql: stamped for it, or an @mention of it), NULL when it shows none yet. Each part reads by index
+    # (messages_session_agent covers the first; message_deliveries_thread, attempts_task, and jobs_queued first:
+    # the waiting jobs are few, the thread's messages many, so CROSS JOIN keeps that order).
+    SESSIONS_SQL = (
+        "SELECT agent, MAX(seq), MIN(n) FROM ("
+        "SELECT session_agent_id AS agent, MAX(seq) AS seq, 1 AS n FROM messages WHERE conversation_id=? "
+        "AND session_agent_id IS NOT NULL AND deleted_at IS NULL GROUP BY session_agent_id "
+        "UNION ALL SELECT d.recipient, MAX(CASE WHEN d.reason='mention' THEN m.seq END), 1 FROM message_deliveries d "
+        "JOIN messages m ON m.id=d.message_id WHERE d.thread_id=? AND d.recipient LIKE 'bot:%' "
+        "AND d.reason IN ('mention','reply') AND m.deleted_at IS NULL GROUP BY d.recipient "
+        "UNION ALL SELECT DISTINCT 'bot:'||bot_id, NULL, 1 FROM attempts WHERE task_id=? "
+        "UNION ALL SELECT DISTINCT 'bot:'||j.bot_id, NULL, 1 FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued' AND m.conversation_id=? "
+        "UNION ALL SELECT ?, NULL, 0 WHERE ? LIKE 'bot:%'"
+        ") GROUP BY agent ORDER BY MIN(n), MAX(seq) DESC, agent"
+    )
+
+    def task_sessions(c, who, row):
+        """[{agent, last_seq}] the agents on the task with a session view (`SESSIONS_SQL`), the holder first, only those
+        the reader may be told of (teammate_access). Empty for a task with no thread of its own."""
+        cid = task_followers.thread_id(c, row)
+        if not cid:
+            return []
+        owner = row["owner_id"] or ""
+        found = [(r[0], r[1]) for r in c.execute(SESSIONS_SQL, (cid, cid, row["id"], cid, owner, owner))]
+        unseen = teammate_access.Known(c, who, auth).unseen_of([a for a, _ in found])
+        return [{"agent": a, "last_seq": seq} for a, seq in found if a not in unseen]
+
+    def task_execution(c, who, row, agent=None):
         """The run the task's page follows in its own room, as a conversation snapshot shows it, or None: the owning
         bot's newest run, or a newer one for a message a person sent there, whichever bot it was routed to (the bot
         that asked a person's task, say). Another bot's run for a bot's comment is not it. A task still in a chat
@@ -365,29 +407,18 @@ def register_core(
             return None
         from .views import conversation_execution
 
+        bot = agent or (owner if H.is_bot(owner) else None)
+        # One agent's session follows that agent's runs only; the task's own view also follows a person's message.
         return conversation_execution(
-            c, cid, who, settings, bot=owner.removeprefix("bot:") if H.is_bot(owner) else None, auth=auth, people=True
+            c, cid, who, settings, bot=bot.removeprefix("bot:") if bot else None, auth=auth, people=not agent
         )
 
     def comment_bot(c, row):
-        """The bot a plain comment on the task gives a turn first (threads._task_primary, with no @mention): its first
-        live bot follower who still reads it, or, for a task in a shared chat (no followers), its owner bot. One
-        read. None when there is none."""
-        from . import task_followers as TF
-
-        tid = TF.thread_id(c, row)
-        if not tid:
-            return row["owner_id"] if H.is_bot(row["owner_id"]) else None
-        bots = [
-            r[0]
-            for r in c.execute(
-                "SELECT actor FROM thread_followers WHERE thread_id=? AND following=1 AND "
-                "notify='live' AND actor LIKE 'bot:%' ORDER BY created_at, actor",
-                (tid,),
-            )
-        ]
-        private = bots and H.task_private(c, row)
-        return next((b for b in bots if not private or H.task_private_readable(c, b, row)), None)
+        """The bot holding the task, which a goal (`delivery="goal"`) is set for and whose harness the composer's
+        choices describe. A plain comment wakes nobody (threads.plan), so this is never who a comment reaches. None
+        when a person or nobody holds it, or its bot may not read it."""
+        owner = row["owner_id"]
+        return owner if H.is_bot(owner) and H.task_private_readable(c, owner, row) else None
 
     def comment_way_for(c, who, row):
         """The way a reader's comment with none named goes: Steer (D13) for whoever may direct the task's bots
@@ -398,15 +429,11 @@ def register_core(
         return ("steer", None) if who.role == "bot" or may_direct(c, who, row) else ("defer", delivery.NEVER)
 
     def comment_to(c, who, row):
-        """Who a plain comment from this reader wakes first (comment_bot): `bot`, or None when no bot follows the
-        task; `wakes`, whether its default way wakes that bot (steer) rather than waiting for its next turn on the task
-        (defer); `mention`, kept empty: an @mention always reaches whoever it names. None for a bot reader."""
+        """Who a plain comment from this reader wakes: nobody, as a task's comments are a log (threads.plan); an
+        @mention or a Reply reaches whom it names. Kept in its old shape for older clients. None for a bot reader."""
         if who.role == "bot":
             return None
-        bot = comment_bot(c, row)
-        if not bot:
-            return {"bot": None, "wakes": False, "mention": []}
-        return {"bot": H.actor_id(bot), "wakes": comment_way_for(c, who, row)[0] != "defer", "mention": []}
+        return {"bot": None, "wakes": False, "mention": []}
 
     def delivery_choices(c, who, row):
         """How this reader's comment can reach the task's bots (docs/tasks.md, backend/delivery.py): `default`, the way
@@ -1368,20 +1395,8 @@ def register_core(
         visual_view,
     )
 
-    def task_followers_seen(c, who, row):
-        """The task's followers this reader may be told of, or None for a task with no thread of its own."""
-        tid = task_followers.thread_id(c, row)
-        if not tid:
-            return None
-        rows = task_followers.listed(c, row)
-        known = teammate_access.Known(c, who, auth)
-        if rows and not known.member(tid):
-            unseen = known.unseen_of(r["actor"] for r in rows)
-            rows = [r for r in rows if r["actor"] not in unseen]
-        return rows
-
     task_followers_routes.register(
-        app, auth, mover, mutate, rule_check, rule_task_audience, store, task_followers_seen, task_place, visual_view
+        app, auth, mover, mutate, rule_check, rule_task_audience, store, task_place, visual_view
     )
 
     @app.post(

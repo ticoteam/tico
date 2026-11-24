@@ -74,6 +74,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 3,
+        "session_agent_id": null,
         "source": {
           "kind": "person",
           "link": null,
@@ -111,6 +112,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 4,
+        "session_agent_id": null,
         "source": {
           "kind": "person",
           "link": null,
@@ -148,6 +150,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 5,
+        "session_agent_id": null,
         "source": {
           "kind": "person",
           "link": null,
@@ -194,6 +197,7 @@
         "revision": 0,
         "sender_id": "keeper",
         "seq": 8,
+        "session_agent_id": null,
         "source": {
           "kind": "task_update",
           "link": null,
@@ -231,6 +235,7 @@
         "sender_id": "human:ana",
         "sender_name": "Ana",
         "seq": 9,
+        "session_agent_id": null,
         "source": {
           "kind": "person",
           "link": null,
@@ -286,6 +291,7 @@
         "sender_id": "bot:ops",
         "sender_name": "ops",
         "seq": 10,
+        "session_agent_id": null,
         "source": {
           "kind": "bot",
           "link": null,

@@ -826,11 +826,25 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
     return {**found, "person_id": target, "given_by_id": by, "given_at": at}
 
 
+def cleared_askers(conn: sqlite3.Connection, task_id: str, message_id: str) -> list[str]:
+    """The agents whose ❓ on this task this message cleared (`replied`), each once."""
+    return [
+        str(r[0])
+        for r in conn.execute(
+            "SELECT DISTINCT bot_id FROM question_marks WHERE task_id=? AND cleared_message_id=? ORDER BY bot_id",
+            (task_id, message_id),
+        )
+    ]
+
+
 def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[str, Any], refs: object) -> list[str]:
     """A person's message just written: it clears each open ❓ for them in that chat. Their own hand, their token or
-    their Assistant on their word (`REPLY_VIA`); Agent Ops or an automation writing as them do not. A reply counts as
-    progress on the task (task_engine.progress_mark). Returns the tasks of the marks it cleared, each once ('' for a
-    direct chat's): a shared chat can hold marks for several tasks, and the reply itself need not name any."""
+    their Assistant on their word (`REPLY_VIA`); Agent Ops or an automation writing as them do not. A message in one
+    agent's session (`session_agent_id`) clears only that agent's, and the pinned answer to one ❓ (`ANSWERS` in its
+    refs, POST .../comments with `ask`) only that one. Whatever it clears reaches each asking agent (threads.deliver).
+    A reply counts as progress on the task (task_engine.progress_mark). Returns the tasks of the marks it cleared, each
+    once ('' for a direct chat's): a shared chat can hold marks for several tasks, and the reply itself need not name
+    any."""
     sender = str(message.get("sender_id") or "")
     if not H.is_human(sender) or message.get("kind") == "notice":
         return []
@@ -839,7 +853,8 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
     if via not in REPLY_VIA:
         return []
     # A reply to a ❓ by name (`answering`, its card) answers that ❓ alone, even posted in another room than the one it
-    # was asked in (a task moved to its own room); any other reply, each one for them in this chat.
+    # was asked in (a task moved to its own room); a message in one agent's session, each of that agent's for them in
+    # this chat; any other reply, each one for them in this chat.
     only = _ANSWERING.get()
     if only:
         found = conn.execute(
@@ -847,9 +862,13 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
             (only, sender),
         ).fetchall()
     else:
+        mine, args = "", []
+        if message.get("session_agent_id"):
+            mine, args = " AND bot_id=?", [str(message["session_agent_id"])]
         found = conn.execute(
-            "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",
-            (room_of(conv), sender),
+            "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL"
+            + mine,
+            (room_of(conv), sender, *args),
         ).fetchall()
     if not found:
         return []

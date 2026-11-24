@@ -357,7 +357,7 @@ def test_a_comment_in_the_room_a_task_moved_to_steers_the_turn_still_running_fro
     with api.app.state.store.transaction() as c:
         moved = H.task(c, task["id"])
         assert moved["conversation_id"] != room
-        comment = H.task_comment(c, "human:ana", task["id"], "Use the new numbers.")
+        comment = H.task_comment(c, "human:ana", task["id"], "Use the new numbers.", session="bot:ops")
     assert [m["id"] for m in post(api, f"attempts/{active['id']}/inputs", {}, r["token"])["messages"]] == [
         comment["id"]
     ]
@@ -525,8 +525,8 @@ def test_a_comment_taken_back_while_the_turn_read_it_does_not_break_the_turns_fi
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
-    kept = post(api, path, {"text": "Also check the totals"})["comment"]
-    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    kept = post(api, path, {"text": "Also check the totals", "to": "bot:ops"})["comment"]
+    gone = post(api, path, {"text": "And the appendix", "to": "bot:ops"})["comment"]
     assert {m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]} == {
         kept["id"],
         gone["id"],
@@ -565,8 +565,8 @@ def test_a_comment_taken_back_before_the_runtime_got_it_is_canceled_not_requeued
     first = claim(api, r, "ops")
     post(api, f"attempts/{first['id']}/started", {"thread_id": "thread"}, r["token"])
     path = f"tasks/{task['id']}/comments"
-    kept = post(api, path, {"text": "Also check the totals"})["comment"]
-    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    kept = post(api, path, {"text": "Also check the totals", "to": "bot:ops"})["comment"]
+    gone = post(api, path, {"text": "And the appendix", "to": "bot:ops"})["comment"]
     assert {m["id"] for m in post(api, f"attempts/{first['id']}/inputs", {}, r["token"])["messages"]} == {
         kept["id"],
         gone["id"],
@@ -598,7 +598,7 @@ def _a_turn_started_by_a_comment(api, bot="ops", r=None):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='canceled' WHERE state='queued'")
     path = f"tasks/{task['id']}/comments"
-    said = post(api, path, {"text": "Please look at the totals"})["comment"]
+    said = post(api, path, {"text": "Please look at the totals", "to": "bot:" + bot})["comment"]
     attempt = claim(api, r, bot)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT message_id FROM jobs WHERE id=?", (attempt["job_id"],)).fetchone()[0] == said["id"]
@@ -614,7 +614,7 @@ def test_a_turn_whose_own_comment_was_taken_back_keeps_polling_and_posts_no_repl
     machine = request.getfixturevalue("agent_ops") if bot == "botops" else None
     r, path, said, attempt = _a_turn_started_by_a_comment(api, bot, machine)
     post(api, f"{path}/{said['id']}/delete", {})
-    later = post(api, path, {"text": "Also the appendix"})["comment"]
+    later = post(api, path, {"text": "Also the appendix", "to": "bot:" + bot})["comment"]
     polled = post(api, f"attempts/{attempt['id']}/inputs", {}, r["token"])["messages"]
     assert said["id"] not in [m["id"] for m in polled]
     for m in polled:
@@ -638,8 +638,8 @@ def test_a_turn_whose_own_comment_was_taken_back_keeps_polling_and_posts_no_repl
 
 def test_a_reply_does_not_list_a_comment_taken_back_mid_turn_among_those_it_answered(api):
     r, path, said, attempt = _a_turn_started_by_a_comment(api)
-    kept = post(api, path, {"text": "Also check the totals"})["comment"]
-    gone = post(api, path, {"text": "And the appendix"})["comment"]
+    kept = post(api, path, {"text": "Also check the totals", "to": "bot:ops"})["comment"]
+    gone = post(api, path, {"text": "And the appendix", "to": "bot:ops"})["comment"]
     assert {m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, r["token"])["messages"]} == {
         kept["id"],
         gone["id"],

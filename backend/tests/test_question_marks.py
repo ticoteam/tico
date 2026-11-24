@@ -8,7 +8,6 @@ import pytest
 from backend import never_stuck as NS
 from backend import org_rules as OR
 from backend import question_marks as Q
-from backend import task_followers as TF
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.store import H
@@ -685,8 +684,8 @@ def test_open_marks_are_checked_in_as_many_reads_for_eight_as_for_two(c, general
 
 
 def _asked_cara(api):
-    """Ana's task on a by-hand stage, worked by ops, with finance following live; Cara (neither on the task nor a
-    mover, and without Write on finance) is asked a ❓ by ops. Every job so far is done."""
+    """Ana's task on a by-hand stage, worked by ops; Cara (neither on the task nor a mover, and without Write on
+    finance) is asked a ❓ by ops. Every job so far is done."""
     with api.app.state.store.transaction() as c:
         X.pipeline(
             c,
@@ -695,7 +694,6 @@ def _asked_cara(api):
             stages=[{"name": "Review", "owner": "assignee", "by_hand": True, "requirements": [{"kind": "owner_done"}]}],
         )
         task = X.new_task(c, ANA, "Write a launch message", pipeline_id="manual", assignee="bot:ops")
-        TF.change(c, ANA, task["id"], "bot:finance", notify="live")
         restrict(
             c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
         )
@@ -715,7 +713,7 @@ def test_the_persons_plain_reply_wakes_the_bot_that_asked_now_even_on_a_by_hand_
     )
     assert r.status_code == 200, r.text
     assert r.json()["woke"] and r.json()["sent_as"]["delivery"] == "steer"
-    assert _queued(api) == ["ops"]  # finance, following, takes it on its next turn here
+    assert _queued(api) == ["ops"]  # the asker only
     with api.app.state.store.read() as c:
         assert Q.get(c, mark["id"])["cleared_reason"] == "replied"
         assert H.task_delegated(c, task["id"], "bot:ops") and not H.task_delegated(c, task["id"], "bot:finance")
@@ -724,16 +722,17 @@ def test_the_persons_plain_reply_wakes_the_bot_that_asked_now_even_on_a_by_hand_
 def test_the_persons_reply_wakes_no_other_bot_and_a_defer_they_chose_stays(api):
     task, _mark = _asked_cara(api)
     api.post(f"/api/v2/tasks/{task['id']}/comments", json={"text": "Friday."}, headers=headers("cara-test"))
-    steer = {"text": "Use a shorter message.", "delivery": "steer"}  # no ❓ waits on Cara: she may not wake a bot
-    assert api.post(f"/api/v2/tasks/{task['id']}/comments", json=steer, headers=headers("cara-test")).status_code == 403
+    steer = {"text": "Use a shorter message.", "delivery": "steer"}  # no ❓ waits on Cara: a plain comment wakes nobody
+    plain = api.post(f"/api/v2/tasks/{task['id']}/comments", json=steer, headers=headers("cara-test"))
+    assert plain.status_code == 200 and plain.json()["woke"] is False, plain.text
     with api.app.state.store.transaction() as c:
         Q.ask(c, "bot:ops", task["id"], "human:cara", "Should we send a shorter message?")
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
     r = api.post(f"/api/v2/tasks/{task['id']}/comments", json=steer, headers=headers("cara-test"))
     assert r.status_code == 200, r.text
     assert _queued(api) == ["ops"]
-    modes = sql(api, "SELECT recipient, mode FROM message_deliveries WHERE message_id=?", (r.json()["comment"]["id"],))
-    assert {m["recipient"]: m["mode"] for m in modes}.get("bot:finance") == "defer"
+    modes = sql(api, "SELECT recipient FROM message_deliveries WHERE message_id=?", (r.json()["comment"]["id"],))
+    assert "bot:finance" not in {m["recipient"] for m in modes}
     with api.app.state.store.transaction() as c:
         Q.ask(c, "bot:ops", task["id"], "human:cara", "Should it name the venue?")
         c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")

@@ -43,7 +43,7 @@ def register(
     task_place,
     visual_view,
 ):
-    def replying_to(c, who, task_id, body):
+    def replying_to(c, who, task_id, body, session=None):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
         A person's plain comment on a task where a bot's ❓ waits on them is their reply to it (writing it clears the ❓,
         hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's open ❓ on this task.
@@ -54,10 +54,12 @@ def register(
         if not body.ask:
             if who.role == "bot" or body.public or body.delivery == "goal":
                 return None, False
+            # A message in one agent's session answers only that agent's ❓ (question_marks.replied).
+            only = " AND bot_id=?" if session else ""
             mine = c.execute(
-                "SELECT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL "
-                "ORDER BY created_at LIMIT 1",
-                (task_id, who.actor),
+                "SELECT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL"
+                f"{only} ORDER BY created_at LIMIT 1",
+                (task_id, who.actor, *((session,) if session else ())),
             ).fetchone()
             return (mine[0], True) if mine else (None, False)
         if body.public or body.delivery == "goal":
@@ -74,6 +76,95 @@ def register(
             return marked["bot_id"], marked["person_id"] == who.actor
         raise Problem("validation", "That is not a bot's question on this task", 422)
 
+    def askers(c, who, task_id, body, session=None):
+        """Every agent whose ❓ this comment settles, as the write clears them (question_marks.replied) and delivers to
+        each (threads.deliver): the one `ask` names; else, for a person's plain comment, each agent's open ❓ to them on
+        the task (only `session`'s in a session message). The org rules read the same list."""
+        asker, _ = replying_to(c, who, task_id, body, session)
+        if body.ask or not asker:
+            return [asker] if asker else []
+        only = " AND bot_id=?" if session else ""
+        return [
+            str(r[0])
+            for r in c.execute(
+                "SELECT DISTINCT bot_id FROM question_marks WHERE task_id=? AND person_id=? AND cleared_at IS NULL"
+                f"{only} ORDER BY bot_id",
+                (task_id, who.actor, *((session,) if session else ())),
+            )
+        ]
+
+    def reply_target(c, who, row, body):
+        """The message a Reply answers (`in_reply_to`): one on this task the writer reads, else 422."""
+        if not body.in_reply_to:
+            return None
+        msg = H.comment_on(c, row, body.in_reply_to)
+        try:
+            if msg and not msg.get("deleted_at"):
+                privacy.require_message(c, who, msg)
+                return msg
+        except Problem:
+            pass
+        raise Problem("validation", "That is not a message on this task", 422)
+
+    def session_target(c, who, row, body):
+        """The agent a session message (`to`) is written to: an active agent the writer may see that reads the task,
+        else 422 (the same answer whether or not it exists). A person who may not direct the task's agents gets 403
+        first, so they learn nothing about which agents exist or read it."""
+        if not body.to:
+            return None
+        from .chat_goals import may_direct
+
+        if who.role != "bot" and not may_direct(c, who, row):
+            raise Problem("delivery", "Only someone on this task can message its agents", 403)
+        if body.public or body.ask or body.delivery == "goal" or body.in_reply_to:
+            raise Problem(
+                "validation",
+                "A message to an agent's session is plain: send it without public, ask, goal or in_reply_to",
+                422,
+            )
+        agent = H.resolve_actor(c, body.to)
+        found = H.bot(c, H.actor_id(agent)) if agent and H.is_bot(agent) else None
+        if (
+            not found
+            or found.get("state") not in ("active", "paused", "quarantined")  # a held agent gets it on release
+            or teammate_access.Known(c, who, auth).unseen_of([agent])
+            or not H.task_private_readable(c, agent, row)
+        ):
+            raise Problem("validation", "No agent by that name can read this task", 422)
+        return agent
+
+    def recipients(c, who, row, body, session, replied, asked):
+        """Everyone a comment is written to, once its `to` (`session`), Reply (`replied`) and ❓ answers (`asked`, the
+        askers it settles) are checked: that agent, the author it answers, each asker, and whom its text @mentions,
+        agents and people. The org rule check's audience reads this one list (`comment_audience`) in the preflight, the
+        write and Send anyway's replay."""
+        from . import threads
+
+        out = [session, *asked]
+        if replied and str(replied.get("sender_id") or "").startswith(("human:", "bot:")):
+            out.append(replied["sender_id"])
+        conv = H.conversation(c, row["conversation_id"]) if row.get("conversation_id") else None
+        if conv and body.text:
+            out += [a for a, _ in threads.mentions(c, conv, body.text, author=who.actor)]
+        return [a for a in dict.fromkeys(out) if a and a != who.actor]
+
+    def addressed_bot(c, who, row, text, replied):
+        """The first bot a comment addresses (threads.plan): one it @mentions that reads the task, or the bot a
+        person's Reply answers. A plain comment addresses nobody. On a task with no thread of its own (filed into a
+        shared chat) every comment goes to its holder bot (hubdb.task_comment)."""
+        from . import task_followers, threads
+
+        conv = H.conversation(c, row["conversation_id"]) if row.get("conversation_id") else None
+        if not conv:
+            return None
+        if not task_followers.thread_id(c, row):
+            owner = row["owner_id"]
+            return owner if H.is_bot(owner) and owner != who.actor else None
+        found = threads.with_reply_mention(
+            c, conv, who.actor, replied, threads.mentions(c, conv, text, author=who.actor)
+        )
+        return next((a for a, _ in found if H.is_bot(a) and H.task_private_readable(c, a, row)), None)
+
     def comment_write(c, who, tid, body, ingest=None, rc=None, reader=None, ask_to=None):
         """One task comment, as `POST /api/v2/tasks/{tid}/comments` writes it and Send anyway replays it. `ask_to`: the
         person a ❓ on it will ask (`question_write`), who is in its audience too."""
@@ -85,12 +176,16 @@ def register(
         from .task_reads import comment_rights
 
         comment_rights(c, auth, who, task_id)
-        asker, asked_me = replying_to(c, who, task_id, body)
+        session = session_target(c, who, row, body)
+        replied = reply_target(c, who, row, body)
+        asker, asked_me = replying_to(c, who, task_id, body, session)
         if ask_to:  # who a ❓ asks is checked before its rule verdict: may they be asked at all
             question_marks.check_asking(c, who.actor, task_id, ask_to, body.text)
         # The org rule check (backend/org_rule_check.py), applied before anything is written: held, nothing is.
-        extra = (ask_to,) if ask_to else ()
-        audience = rule_comment_audience(c, who, row, body.text, *extra) if rc is not None else None
+        also = ((ask_to,) if ask_to else ()) + tuple(
+            recipients(c, who, row, body, session, replied, askers(c, who, task_id, body, session))
+        )
+        audience = rule_comment_audience(c, who, row, body.text, *also) if rc is not None else None
         rule = org_rule_check.apply(
             c,
             rc,
@@ -108,10 +203,14 @@ def register(
             return org_rule_check.held_answer(c, who, rule, auth=auth)
         text = org_rule_check.warned_text(rule, body.text)
         attached, report = visuals.attach(c, who, app.state.files, app.state.blobs, body.attachments, task_id=task_id)
-        # A comment reaches its @mentions, the author it replies to and the task's followers (threads.plan). Steer and
-        # queue wake the bots among them, so they take the right to direct the task (a bot's is its needs_action);
-        # anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below).
-        bot = asker or comment_bot(c, row)
+        # A comment reaches its @mentions and the author it replies to (threads.plan); a plain one reaches nobody.
+        # Steer and queue wake the bots among them, so they take the right to direct the task (a bot's is its
+        # needs_action); anyone may defer. Defer and goal wake none: a goal's own control does (set_goal below), on
+        # the bot holding the task.
+        if body.delivery == "goal":
+            bot = comment_bot(c, row)
+        else:
+            bot = asker or session or addressed_bot(c, who, row, body.text, replied and replied["id"])
         directs = who.role == "bot" or may_direct(c, who, row)
         # The person a bot's ❓ waits on wakes that bot with their reply, as they may answer it, and that bot only: the
         # comment reaches everyone else as a Defer never would, and only the asker takes the delegation. Unless they
@@ -130,6 +229,8 @@ def register(
             way = body.delivery
         elif body.delivery == "goal":
             way, defer_for = "defer", delivery.NEVER
+        elif session:
+            way, defer_for = "steer", None  # a message in an agent's session wakes it (session_target checked who may)
         else:
             way, defer_for = comment_way_for(c, who, row)
         if answers:
@@ -179,6 +280,8 @@ def register(
                 delegate=directs and way != "defer",
                 reach=who if who.role == "bot" else None,
                 to=asker,
+                in_reply_to=replied and replied["id"],
+                session=session,
             )
         if named and not question_marks.cleared_by(c, named, msg["id"]):
             raise Problem("answered", question_marks.ANSWERED, 409)  # not cleared by it: write nothing
@@ -239,14 +342,29 @@ def register(
         }
 
     def own_turn(c, who, tid):
-        """Refuse a bot's comment on its own open task from a turn on that task: what it says goes in its reply."""
+        """Refuse a bot's comment on an open task from its turn on that task, whoever holds it: what it says goes in
+        its reply, posted once at the end of the turn."""
         task_id = auth.resolve_task(c, who, tid)
         row = H.task(c, task_id)
         found = c.execute("SELECT task_id FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
-        if row and found and found[0] == task_id and row["owner_id"] == who.actor and row["status"] == "open":
+        if row and found and found[0] == task_id and row["status"] == "open":
             raise Problem("own_turn", OWN_TURN, 409)
 
-    @org_rule_check.replayer("comment")
+    def comment_audience(c, who, tid, body, ask_to=None):
+        """A comment's audience as the org rules read it, in the preflight and in Send anyway's replay; `comment_write`
+        counts the same at the write. Its `to`, Reply and ❓ answer are checked first, so a refused one is refused before
+        any rule reads who it names. `ask_to`: the person a ❓ on it asks (`question_write`)."""
+        row = auth.task(c, who, auth.resolve_task(c, who, tid))
+        session = session_target(c, who, row, body)
+        replied = reply_target(c, who, row, body)
+        asked = askers(c, who, row["id"], body, session)
+        found = recipients(c, who, row, body, session, replied, asked)
+        return rule_comment_audience(c, who, row, body.text, *((ask_to,) if ask_to else ()), *found)
+
+    def rule_comment_replay_audience(c, bot, replay):
+        return comment_audience(c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]))
+
+    @org_rule_check.replayer("comment", audience=rule_comment_replay_audience)
     def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
         return comment_write(
             c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest, org_rule_check.decided(gate)
@@ -257,13 +375,19 @@ def register(
         "/api/v2/tasks/{tid}/comments",
         **api_v2("Tasks", "listTaskComments", "Comments and questions with their answers", TaskComments),
     )
-    def task_comments(request: Request, tid: str):
+    def task_comments(request: Request, tid: str, session: str | None = None, comments: bool = False):
+        """Everything on the task's thread; `session=<agent>` only that agent's session, `comments=true` only the
+        comments (threads.session_sql)."""
         with store.read() as c:
-            task_id = auth.resolve_task(c, request.state.identity, tid)
-            auth.task(c, request.state.identity, task_id)
+            who = request.state.identity
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            agent = H.resolve_actor(c, session) if session else None
+            if session and (not H.is_bot(agent) or teammate_access.Known(c, who, auth).unseen_of([agent])):
+                raise Problem("validation", "No agent by that name", 422)  # the same answer whether or not it exists
             return {
                 "comments": visual_view(
-                    c, request.state.identity, H.task_comments(c, task_id, actor=privacy.actor(request.state.identity))
+                    c, who, H.task_comments(c, task_id, actor=privacy.actor(who), session=agent, comments=comments)
                 )
             }
 
@@ -275,8 +399,8 @@ def register(
         """A comment on a task. `delivery` says how it reaches the task's bot (backend/delivery.py): steer into its
         running turn, queue right after it, defer to its next turn on the task (at the latest `defer_for`, 24h), or
         goal: the task session's goal becomes the text (chat_goals.set_goal). Omitted, it steers (D13), or defers with no
-        deadline for a reader who may not direct the task's bots. It reaches the task's followers and whom it addresses
-        (threads.plan). A question to a person is a ❓ (`POST /api/v2/tasks/{tid}/questions`). A bot does not comment
+        deadline for a reader who may not direct the task's bots. It reaches only whom it addresses (threads.plan): a
+        plain comment reaches nobody. A question to a person is a ❓ (`POST /api/v2/tasks/{tid}/questions`). A bot does not comment
         on its own open task during its turn there: its reply at the end of the turn is posted on the task (`OWN_TURN`);
         a comment that carries files still goes."""
         who = request.state.identity
@@ -294,7 +418,7 @@ def register(
             who,
             "comment",
             body.text,
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), body.text),
+            lambda c: comment_audience(c, who, tid, body),
             place=task_place(who, tid),
             late=True,
         )
@@ -365,7 +489,7 @@ def register(
             who,
             "question",
             question_marks.with_choices(text, body.choices),  # its suggested answers are shown, and sent, as words
-            lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
+            lambda c: comment_audience(c, who, tid, M.TaskComment(text=text), ask_to=to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
@@ -419,8 +543,8 @@ def register(
         return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
 
     def rule_question_audience(c, bot, replay):
-        row = auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
-        return rule_comment_audience(c, bot, row, replay["body"].get("text") or "", replay["to"])
+        text = replay["body"].get("text") or ""
+        return comment_audience(c, bot, replay["task"], M.TaskComment(text=text), ask_to=replay["to"])
 
     @org_rule_check.replayer("question", audience=rule_question_audience)
     def rule_replay_question(c, bot, hold, replay, ingest, gate=None):

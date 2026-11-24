@@ -144,6 +144,48 @@ def _tell_requester(conn: "sqlite3.Connection", after: Row, actor: str, why: str
         conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (wake_key, message["id"]))
 
 
+def _tell_people(conn: "sqlite3.Connection", after: Row, actor: str, why: str | None) -> None:
+    """The people who asked for a task hear once how it ended: one unstamped Tico line in its own thread, delivered to
+    each human requester (`requester_id` and task_requesters) who still reads it, never the one who ended it nor the
+    holder unless they asked for it too. It says the done note of this cycle (or the close's why), else just Done or Closed. Keyed on the visit the
+    end opened (`<task>:<visit>:told`), so a retry tells nobody again and a reopen starts a new completion. It widens
+    nothing: who may not read the task is left out."""
+    H = _h()
+    visit: Row = after.get("visit") or {}
+    room = H.conversation(conn, after.get("conversation_id")) if after.get("conversation_id") else None
+    if not visit.get("id") or not room or room.get("task_id") != after["id"]:
+        return
+    key = f"{after['id']}:{visit['id']}:told"
+    if conn.execute("SELECT 1 FROM messages WHERE wake_key=?", (key,)).fetchone():
+        return
+    asked = [after.get("requester_id")] + [
+        r[0]
+        for r in conn.execute("SELECT actor FROM task_requesters WHERE task_id=? ORDER BY created_at", (after["id"],))
+    ]
+    people = [
+        p for p in dict.fromkeys(asked) if H.is_human(p) and p != actor and H.task_private_readable(conn, p, after)
+    ]
+    if not people:
+        return
+    done = after["status"] == "done"
+    note = (why or "").strip()
+    if done and not note:
+        found = conn.execute(_CYCLE_NOTE_SQL, (after["id"],)).fetchone()
+        note = str(found[0] or "").strip() if found else ""
+    label = "Done" if done else "Closed"
+    text = f"{label}: {note[:NOTE_CHARS]}" if note else f"{label}."
+    # Not task news (refs.task), which reaches no person: this line is for the people it names, and only them. The
+    # done note it quotes may @mention someone; that makes no mention here (no_mentions).
+    message = H._write_message(
+        conn, H.TICO_ACTOR, people[0], text, room, "notice", {"told": label.lower(), "no_mentions": True}, None, None
+    )
+    conn.execute("UPDATE messages SET wake_key=? WHERE id=?", (key, message["id"]))
+    from . import threads
+
+    threads_: Any = threads
+    threads_.deliver_to_people(conn, room["id"], message, people)  # one message, delivered to each
+
+
 # The latest completion note of this cycle (since the last reopen): the owner's done, a done again after a send back
 # (answers.reopen_sent_back), or a done's note kept on its move (`noting`). What a report back says when the move that
 # ended the task carried no note of its own.
@@ -339,6 +381,7 @@ def moved(
         deliveries: Any = delivery
         deliveries.task_closed(conn, before)
         _tell_requester(conn, after, actor, why)
+        _tell_people(conn, after, actor, why)
         _report_back(conn, after, by, why, revision)
     H.event(conn, actor, "task.close" if new == "closed" else "task.update", after["id"], {"status": new, "note": why})
     H.recount(conn, [after.get("owner_id"), after.get("requester_id"), before.get("owner_id")])
@@ -364,13 +407,13 @@ def owner_moved(conn: "sqlite3.Connection", before: Row, after: Row, by: str) ->
 
 def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, *, rerank: bool) -> None:
     """What follows a task's owner, whichever way it changed (a reassignment, or a move into a stage someone else
-    owns): the new owner's private default, the sessions and worktree, the per-task model, the followers, the old
-    owner's goal on the task, with `rerank` its place at the end of the new owner's queue, and the ❓ of anyone who
-    can no longer read it. Before anything about the change is published or woken."""
+    owns): the new owner's private default, the sessions and worktree, the per-task model, the old owner's goal on the
+    task, with `rerank` its place at the end of the new owner's queue, and the ❓ of anyone who can no longer read it.
+    Before anything about the change is published or woken."""
     H = _h()
     task_id = after["id"]
     old, new = before.get("owner_id"), after.get("owner_id")
-    from . import question_marks, reconnects, task_followers, task_run_models
+    from . import question_marks, reconnects, task_run_models
 
     made_private = bool(new and H.private_tasks_default(conn, new) and not H.task_private(conn, before))
     closed_to: list[str] = []  # the tasks under it this change makes private
@@ -399,8 +442,6 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
             goals.clear_task_goal(conn, room)
     models: Any = task_run_models
     models.moved(conn, actor, task_id)
-    followers: Any = task_followers
-    followers.owner_moved(conn, after, old, new)
     if rerank:
         conn.execute("UPDATE tasks SET rank=? WHERE id=?", (H._queue_end(conn, new) if new else None, task_id))
     reconnects_: Any = reconnects

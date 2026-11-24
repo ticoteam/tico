@@ -84,7 +84,7 @@ def test_finishing_the_last_subtask_wakes_its_parent_once_whatever_session_it_ra
         assert filed_wakes(c, since) == [first, second]
 
 
-def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_the_same_readers(api):
+def test_a_private_subtask_or_parent_never_shares_a_session(api):
     with api.app.state.store.transaction() as c:
         parent = H.task_create(c, "human:ana", "Plan the private launch", "x", "bot:ops", private=True, lint=False)[
             "id"
@@ -101,9 +101,33 @@ def test_a_private_subtask_shares_a_private_parents_session_only_when_both_have_
             "id"
         ]
         c.execute("UPDATE tasks SET private=0 WHERE id=?", (public,))  # made public later
-        assert H.session_root(c, "ops", shared) == parent
+        assert H.session_root(c, "ops", shared) == shared, "a private sub-ticket has its own session"
         assert H.session_root(c, "ops", apart) == apart
         assert H.session_root(c, "ops", public) == public
+
+
+def test_the_migration_starts_anew_an_open_private_parents_session_that_carried_a_private_subtask(api):
+    import importlib.resources
+
+    with api.app.state.store.transaction() as c:
+        parent = H.task_create(c, "human:ana", "Plan the private launch", "x", "bot:ops", private=True, lint=False)
+        H.task_create(c, "human:ana", "Draft the private copy", "x", "bot:ops", parent_id=parent["id"], private=True)
+        plain = H.task_create(c, "human:ana", "Plan the public launch", "x", "bot:ops", lint=False)
+        H.task_create(c, "human:ana", "Draft the public copy", "x", "bot:ops", parent_id=plain["id"], lint=False)
+        sql = next(
+            f.read_text()
+            for f in importlib.resources.files("backend.migrations").iterdir()
+            if f.name.endswith("_private_subtask_sessions.sql")
+        )
+        c.execute(sql)
+
+        def epoch(row):
+            found = c.execute(
+                "SELECT epoch FROM session_epochs WHERE conversation_id=?", (row["conversation_id"],)
+            ).fetchone()
+            return found[0] if found else 0
+
+        assert epoch(parent) == 1 and epoch(plain) == 0
 
 
 def roots_runner(api, mode="task"):
@@ -388,6 +412,34 @@ def test_a_moved_subtask_replays_messages_posted_while_the_parent_was_running(ap
     replayed = {m["id"] for m in turn["moved_history"]}
     assert in_flight["id"] in replayed and deferred["id"] not in replayed
     assert f"[{deferred['id']}]" in turn["deferred"]
+
+
+def test_a_moved_run_replays_no_other_agents_session(api):
+    """A run that lands on another computer replays what it missed with the same agent filter as any claim: another
+    agent's session on the task's thread stays out, the comments and its own session come in."""
+    home = roots_runner(api)
+    (parent,) = tasks(api, ("bot:ops", None))
+    first = claim(api, home)
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "parent-thread"}, home["token"])
+    store = api.app.state.store
+    with store.transaction() as c:
+        comment = H.task_comment(c, "human:ana", parent, "Include the revised figures.", wake=False)
+        theirs = H.task_comment(c, "human:ana", parent, "Finance only: the bank feed is late.", wake=False)
+        c.execute("UPDATE messages SET session_agent_id='bot:finance' WHERE id=?", (theirs["id"],))
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {"outcome": "completed", "last_seq": 0, "text": "The draft is ready."},
+        home["token"],
+    )
+    with store.transaction() as c:
+        H.task_create(c, "human:ana", "Finish the draft", "Finish it.", "bot:ops", parent_id=parent)
+    new = runner(api, label="Second computer")
+    assign(api, new, "ops", generation=first["generation"])
+    ready(api, new, ["ops"], RUNNER_CAPABILITIES)
+    turn = claim(api, new)
+    replayed = {m["id"] for m in turn["moved_history"]}
+    assert comment["id"] in replayed and theirs["id"] not in replayed
 
 
 def test_subtasks_a_bot_files_for_itself_from_one_turn_start_in_their_own_lanes_side_by_side(api):

@@ -75,6 +75,8 @@ export interface ConversationProps {
   mentionFirst?: readonly string[];
   /** The only actor ids the box's @ list may name (a direct chat's members). */
   mentionOnly?: readonly string[];
+  /** A task's chat: each message is a task comment, to `to`'s session when one is named (queries.ts Send.task). */
+  task?: { id: string; to?: string };
 }
 
 type Item =
@@ -184,7 +186,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly, task }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -338,6 +340,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       from: retry ? (retry.refs?.from_page ?? null) : at,
       me: myId,
       ...(toDm && { toDm, onMoved, onFailed }),
+      ...(task && { task }),
       ...(retry && { retry: retry.id }),
       ...(answers && { replyTo: answers, quote }),
     }).then((sent) => {

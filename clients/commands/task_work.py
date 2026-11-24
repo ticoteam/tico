@@ -327,8 +327,9 @@ def task_run(api, args):
 
 @tool(
     "tico_task_comment",
-    "Leave a comment on a task: a link to what you found, a note for the people on it. Name people and tasks, never "
-    "ids. Not on your own task during your turn there: your reply is posted on it. A question to a person is "
+    "Leave a comment on a task: a link to what you found, a note for the people on it. A plain comment wakes and "
+    "notifies nobody: @ the agent or person you need, or reply_to a comment to reach its author. Name people and "
+    "tasks, never ids. Not on a task during your turn on it: your reply is posted there. A question to a person is "
     "tico_task_ask.",
     {
         "id": TASK_ID,
@@ -361,12 +362,16 @@ def task_run(api, args):
             "applies.",
         },
         "defer_for": DEFER_FOR,
+        "reply_to": _s("Reply: the id of the comment on this task it answers; it reaches that comment's author"),
+        "to": _s("An agent on the task: a message in that agent's session, which wakes it"),
     },
     required=("id", "text"),
     writes=True,
 )
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "attachments", "public", "needs_action") if k in args}
+    body = {k: args[k] for k in ("text", "attachments", "public", "needs_action", "to") if k in args}
+    if args.get("reply_to"):
+        body["in_reply_to"] = args["reply_to"]
     if args.get("ok"):
         body["approval_id"] = args["ok"]
     body.update({"delivery": "goal"} if args.get("delivery") == "goal" else _delivery(args))

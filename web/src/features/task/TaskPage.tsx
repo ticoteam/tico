@@ -131,8 +131,17 @@ const decoded = (part: string): string => {
     where the email is on screen). */
 const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?.wait ? null : { email: x?.email ?? null });
 
-/** On the person's own task the box is theirs to write on: never "Message <their own name>". */
-const ownTask = (t: Pick<TaskData, 'owner_id'>, me: string | undefined): string | undefined => (me && t.owner_id === me ? 'Add a note' : undefined);
+/** On the person's own task the box is theirs to write on: never "Message <their own name>". Someone who may not direct
+    the agent holding it comments: a comment reaches nobody it does not name. */
+const ownTask = (t: Pick<TaskData, 'owner_id' | 'can_direct'>, me: string | undefined): string | undefined =>
+  me && t.owner_id === me ? 'Add a note' : t.owner_id?.startsWith('bot:') && !t.can_direct ? 'Add a comment' : undefined;
+
+/** The person's words on a task's chat are its comments; to the agent holding it, a message in its session, when they
+    may direct it (a plain comment wakes nobody). */
+const taskSend = (t: Pick<TaskData, 'id' | 'owner_id' | 'can_direct'>): { id: string; to?: string } => ({
+  id: t.id,
+  ...(t.owner_id?.startsWith('bot:') && t.can_direct && { to: t.owner_id }),
+});
 
 /** Whom a task's @ list names first: who asked, who it is for, who has it, then its roles' people. */
 const onTask = (t: Pick<TaskData, 'requester_id' | 'assignee_id' | 'owner_id' | 'roles'>): string[] => [
@@ -315,6 +324,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         actor={t.owner_id ?? undefined}
         compose={ownTask(t, me)}
         mentionFirst={onTask(t)}
+        task={taskSend(t)}
         foot={
           <>
             {/* a pinned ❓ already says it needs them: the status line would say it again */}
@@ -435,6 +445,7 @@ export function TaskChat({ task }: TaskChatProps) {
           actor={t.owner_id ?? undefined}
           compose={ownTask(t, me)}
           mentionFirst={onTask(t)}
+          task={taskSend(t)}
           foot={
             <>
               {/* a pinned ❓ already says it needs them: the status line would say it again */}

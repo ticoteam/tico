@@ -213,6 +213,33 @@ def _delivery_words(body):
         raise Problem("delivery", "delivery goes with a message in a bot's Home or DM, not in a sub-thread", 422)
 
 
+def _no_task_to(c, thread_id, body):
+    """A thread post's `to` on a task's thread is refused: there `to` writes to an agent's session, which only the task's
+    own route does, with its checks (`may_direct`, the agent may read the task) and its delivery. 422, after the
+    caller's write right is checked."""
+    if not getattr(body, "to", None) or not thread_id:
+        return
+    if threads.audience_of(threads.root_of(c, thread_id) or {}) == "task":
+        raise Problem("task_to", "On a task, write to an agent with POST /api/v2/tasks/{task}/comments and its to", 422)
+
+
+def _task_session(c, who, conversation_id, to):
+    """The agent whose session a message `to` it is, when written in a task's own thread (not a sub-thread); None
+    anywhere else. A person who may not direct the task's agents gets the task route's 403."""
+    if not conversation_id or not str(to or "").startswith("bot:"):
+        return None
+    room = threads.thread_row(c, conversation_id)
+    if not room or room.get("parent_id") or threads.audience_of(room) != "task" or not room.get("task_id"):
+        return None
+    task = H.task(c, room["task_id"])
+    if task and who.role != "bot":
+        from .chat_goals import may_direct
+
+        if not may_direct(c, who, task):
+            raise Problem("delivery", "Only someone on this task can message its agents", 403)
+    return to
+
+
 def _reply_check(c, auth, who, thread_id, body):
     """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
     reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
@@ -829,7 +856,7 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "getThreadTimeline",
-            "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`",
+            "The thread in tree order, a page of its own messages at a time (`cursor` is the seq from next_cursor), each followed by its sub-thread's messages; a long branch has a `collapsed` row with the cursor that reads the rest. With `flat=1`: the thread and every open sub-thread under it the viewer reads, in time order, all at depth 0, paged the same way, with `read_marks`. Each message has `reply_to` and `routed`; the first page has `bot_status`. On a task's thread, `session=<agent>` pages only that agent's session (its stamped messages and those that @mention it) and `comments=true` only the comments (unstamped messages and the stamped answers to them)",
             "ThreadTimeline",
         ),
     )
@@ -840,9 +867,12 @@ def install(app, store, auth, mutate, rule_check):
         limit: int | None = None,
         max_bytes: int | None = None,
         flat: int = 0,
+        session: str | None = None,
+        comments: bool = False,
     ):
         """The thread in tree order: a page of its own messages, each followed by its sub-thread's messages, and the
-        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0.
+        breadcrumb; with `flat=1`, the thread and its open sub-threads in time order, every message at depth 0. On a
+        task's thread, `session=<agent>` reads only that agent's session and `comments=true` only the comments.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         with store.read() as c:
@@ -854,6 +884,8 @@ def install(app, store, auth, mutate, rule_check):
                 limit=limit or 50,
                 max_bytes=max_bytes,
                 flat=bool(flat),
+                session=session,
+                comments=comments,
             )
 
     @app.get(
@@ -1066,6 +1098,10 @@ def install(app, store, auth, mutate, rule_check):
         if target:
             target = bot_home_merge.named_home(store, target)
         _delivery_words(body)
+        if target and body.to:
+            with store.read() as c:
+                threads.require(c, threads.viewer(auth, who), target, write=True)
+                _no_task_to(c, target, body)
         if target:
             rc = check(who, target, body)
         else:  # the poster's first message to that agent: the DM is made with it, only if it goes
@@ -1437,6 +1473,7 @@ def install(app, store, auth, mutate, rule_check):
             else:
                 with store.read() as c:
                     threads.require(c, threads.viewer(auth, who), target, write=True)
+                    _no_task_to(c, target, body)
             checked["rc"] = check(who, target, body)
 
         body, uploads = await app.state.uploads.form(request, ThreadUpload, admit)
@@ -1545,6 +1582,10 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
         check_refs(c, who, body.refs)
         body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
+        # A message to an agent in a task's own thread is that agent's session message, as the task's route writes one
+        # (task_comments_routes.session_target): a person must be one who may direct the task, and it is stamped.
+        # Send anyway's replay writes through here too.
+        session = _task_session(c, who, conversation_id, to)
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if (
             way == "defer"
@@ -1558,17 +1599,18 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
             refs["delivery"] = "queue"  # after the bot's running turn, not into it (execution.inputs)
         if to.startswith("bot:") and way == "defer":
             refs["quiet"] = True  # no job: the session's next turn, or its deadline, takes it
-        message = H.say(
-            c,
-            who.actor,
-            to,
-            body.text,
-            conversation_id=conversation_id,
-            kind=body.kind,
-            refs=refs,
-            in_reply_to=body.in_reply_to,
-            wait_s=body.wait_s,
-        )
+        with H.session_of(session, who.actor):
+            message = H.say(
+                c,
+                who.actor,
+                to,
+                body.text,
+                conversation_id=conversation_id,
+                kind=body.kind,
+                refs=refs,
+                in_reply_to=body.in_reply_to,
+                wait_s=body.wait_s,
+            )
         recipient_gate.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":

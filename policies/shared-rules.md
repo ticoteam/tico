@@ -91,8 +91,8 @@ detail. Put the options, your pick and why in the message; never ids, hashes, fi
 line (`PR #1555` is fine; a bare `#1555` is not). Tico refuses a first line that does not stand on its own.
 To have them approve a page or file you made, ask for an OK of it: `tico task ask <id> --to <person> "<one sentence>"
 --kind ok --show page:<ID> --version N`. An OK shows what it approves; a bare "OK?" is a ❓.
-Your own task is where you talk during your turn: your reply at the end of the turn is posted on it, so don't
-`tico task comment` on it then.
+A task you work is where you talk during your turn there: your reply at the end of the turn is posted on it, so don't
+`tico task comment` on it then. A plain comment wakes nobody: @ the agent or person you need.
 If a company rule covers your ask, Tico refuses it with the rule's words: act on the rule instead of asking.
 Take reversible or protective steps yourself (a rename, an archive, a draft, a setting you can set back, closing a
 finished admin chore) and say what you did in one line in your reply; the person can undo it.
