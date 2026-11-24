@@ -112,6 +112,32 @@ def test_a_preview_made_for_a_picture_deleted_meanwhile_leaves_no_bytes_behind(a
         blobs.get(made[0])
 
 
+def test_a_preview_stored_before_a_later_write_fails_is_queued_for_removal(api, monkeypatch):
+    """A PDF's poster is stored, then its thumbnail's write fails: the poster's bytes are queued, never left behind."""
+    drive = worker(api)
+    blobs = api.app.state.blobs
+    thread = new_thread(api, members=("human:ben",))
+    upload(api, thread["id"], [("plan.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")])
+
+    def first_page(args, root):
+        Image.new("RGB", (40, 30), "teal").save(args[-1] + ".jpg", format="JPEG")
+        return ""
+
+    put, stored = blobs.put_stream, []
+
+    def second_fails(data, content_type="application/octet-stream", **kw):
+        if stored:
+            raise OSError("storage unreachable")
+        stored.append(put(data, content_type, **kw))
+        return stored[-1]
+
+    monkeypatch.setattr(file_metadata, "run", first_page)
+    monkeypatch.setattr(blobs, "put_stream", second_fails)
+    drive.batch()
+    with api.app.state.store.read() as c:
+        assert stored and c.execute("SELECT 1 FROM blob_purges WHERE digest=?", (stored[0],)).fetchone()
+
+
 def test_a_purge_queued_again_while_draining_is_kept_for_the_next_pass(api, monkeypatch):
     """Bytes written and queued again while a pass removes them stay queued, so the next pass removes them too."""
     from backend import file_library
