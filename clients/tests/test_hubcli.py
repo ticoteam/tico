@@ -2184,6 +2184,14 @@ def test_task_comment_sends_a_reply_a_session_message_or_an_answer_in_one_commen
     assert (write.path, write.body) == ("/api/v2/tasks/T1/comments", {"text": "Use the August numbers.", **sent})
 
 
+@pytest.mark.parametrize("flag", ["--reply-to", "--to", "--ask"])
+def test_task_comment_refuses_an_empty_reply_to_to_or_ask_and_posts_nothing(monkeypatch, flag):
+    """An empty `--reply-to`, `--to` or `--ask` is a usage error (64), never a plain comment that reaches nobody."""
+    wire = cli_wire(monkeypatch, {"GET me": {"actor": "human:ana"}, "POST tasks/T1/comments": {"woke": True}})
+    assert hubcli.main(["task", "comment", "T1", "Use the August numbers.", flag, " "]) == 64
+    assert wire.writes() == []
+
+
 def test_thread_post_attach_sends_checkout_files_with_the_message_in_one_request(monkeypatch, tmp_path):
     """`tico thread post --attach PATH` (repeatable): the text and every file go in one multipart request to the
     thread's upload route, each file a `files` part in order, so the message and its files land together. Files

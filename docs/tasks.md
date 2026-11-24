@@ -401,7 +401,7 @@ task once when the PR's checks finish, a review approves or asks for changes, or
 ## Conversation
 
 Every task has its own thread, and its comments are a log: a plain comment wakes and notifies nobody, not even the
-agent holding the task. It reaches only whom it addresses:
+agent holding the task (it does answer your open ❓s there, below). It reaches only whom it addresses:
 
 - **@someone**: a person is notified; an agent is woken in its own session, and its answer shows as a reply under the
   comment.

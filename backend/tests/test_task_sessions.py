@@ -331,12 +331,15 @@ def test_the_mcp_tool_replies_writes_to_a_session_and_answers_an_ask_as_the_api_
     is_error, sent = call(api, "tico_task_comment", {"id": row["id"], "text": "Use August.", "to": "ops"})
     assert not is_error and sent["comment"]["session_agent_id"] == "bot:ops" and jobs(api, "ops"), sent
     settle(api)
-    (mark,) = asks(api, row["id"], "bot:ops")
+    mark, _ = asks(api, row["id"], "bot:ops", "bot:finance")
     answer = {"id": row["id"], "text": "Use the main bank feed.", "ask": "qmark:" + mark}
     is_error, sent = call(api, "tico_task_comment", answer)
-    assert not is_error and open_asks(api, row["id"]) == set() and jobs(api, "ops") == [sent["comment"]["id"]], sent
+    assert not is_error and open_asks(api, row["id"]) == {"bot:finance"}, "the other ❓ stays open"
+    assert jobs(api, "ops") == [sent["comment"]["id"]] and jobs(api, "finance") == [], sent
     is_error, again = call(api, "tico_task_comment", {**answer, "text": "And again."})
     assert is_error and "answered" in json.dumps(again), again
+    is_error, blank = call(api, "tico_task_comment", {"id": row["id"], "text": "Use August.", "to": ""})
+    assert is_error and "needs a value" in json.dumps(blank), "an empty `to` is refused, not a plain comment"
 
 
 def test_a_plain_comment_that_clears_two_agents_asks_reaches_both(api):

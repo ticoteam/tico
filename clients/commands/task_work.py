@@ -373,6 +373,9 @@ def task_run(api, args):
     writes=True,
 )
 def task_comment(api, args):
+    blank = [k for k in ("reply_to", "to", "ask") if k in args and not str(args[k] or "").strip()]
+    if blank:  # an empty one would post a plain comment that reaches nobody
+        raise ValueError(f"{' and '.join(blank)} needs a value, or leave it out for a plain comment")
     body = {k: args[k] for k in ("text", "attachments", "public", "needs_action", "to", "ask") if k in args}
     if args.get("reply_to"):
         body["in_reply_to"] = args["reply_to"]
