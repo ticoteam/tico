@@ -194,8 +194,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<id1>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 1,
         "revision": 0,
@@ -346,8 +345,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<id5>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 2,
         "revision": 0,
@@ -493,8 +491,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 3,
         "revision": 0,
@@ -564,8 +561,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 4,
         "revision": 0,
@@ -635,8 +631,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 5,
         "revision": 0,
@@ -760,8 +755,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<id12>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 6,
         "revision": 0,
@@ -1035,8 +1029,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<id16>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 7,
         "revision": 0,
@@ -1093,8 +1086,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 8,
         "revision": 0,
@@ -1179,8 +1171,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 9,
         "revision": 0,
@@ -1552,8 +1543,7 @@
           "source_message_id": null,
           "superseded_at": null,
           "thread_id": "<conversation>",
-          "wait_s": null,
-          "wake_key": null
+          "wait_s": null
         },
         "message_seq": 10,
         "revision": 0,

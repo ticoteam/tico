@@ -82,8 +82,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       },
       {
         "answered_by_id": null,
@@ -120,8 +119,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       },
       {
         "answered_by_id": null,
@@ -158,8 +156,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       },
       {
         "answered_by_id": null,
@@ -205,8 +202,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       },
       {
         "answered_by_id": null,
@@ -243,8 +239,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       },
       {
         "answered_by_id": null,
@@ -299,8 +294,7 @@
         },
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       }
     ],
     "next_before": "<volatile>"

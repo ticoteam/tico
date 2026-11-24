@@ -68,8 +68,7 @@
         "session_agent_id": null,
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       }
     ],
     "events": [
@@ -250,8 +249,7 @@
         "session_agent_id": null,
         "source_message_id": null,
         "superseded_at": null,
-        "wait_s": null,
-        "wake_key": null
+        "wait_s": null
       }
     ],
     "mover": true,
