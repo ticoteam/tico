@@ -88,7 +88,7 @@ def test_a_bots_payer_is_sought_by_agent_and_provider_indexes(tmp_path, stats):
     [payers] = [p for sql, p in found.items() if "WITH chosen AS MATERIALIZED" in sql]
     assert any(p.startswith("SEARCH p USING INDEX sqlite_autoindex_agent_subscriptions_1") for p in payers), payers
     assert any(p.startswith("SEARCH s USING INDEX sqlite_autoindex_model_subscriptions_1") for p in payers), payers
-    assert any(p.startswith("SEARCH s USING COVERING INDEX model_subscriptions_pool") for p in payers), payers
+    assert any(p.startswith("SEARCH s USING COVERING INDEX model_subscriptions_plan_pool") for p in payers), payers
     assert not [p for p in payers if p.startswith(("SCAN p", "SCAN s"))], payers
     by_key = c.execute("EXPLAIN QUERY PLAN SELECT id FROM model_subscriptions WHERE credential_id=?", ("x",))
     assert [r[3] for r in by_key] == [

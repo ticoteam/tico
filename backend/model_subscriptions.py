@@ -128,7 +128,7 @@ RUNTIME_LABELS = {
     "cursor": "Cursor",
     "musecode": "Muse Code",
 }
-# The plans a person's pool takes turns from (agent_subscriptions.read, the model_subscriptions_pool index).
+# The plans a person's pool takes turns from (agent_subscriptions.read, the model_subscriptions_plan_pool index).
 POOL_KINDS = tuple(kind for kind, spec in KINDS.items() if spec["billing"] == "subscription")
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 DEFAULT_MAX_LIVE_TURNS = 20

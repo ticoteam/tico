@@ -25,7 +25,7 @@ Row = dict[str, Any]
 Window = tuple[str, str, float, datetime, datetime]
 HOLD: Any = login_holds
 CAPABILITY = "attempt_credentials_v1"
-# Written as the model_subscriptions_pool index's own condition is, so the pool read can use it (INDEXED BY).
+# Written as the model_subscriptions_plan_pool index's own condition is, so the pool read can use it (INDEXED BY).
 POOL_KINDS_SQL = ",".join(f"'{kind}'" for kind in MS.POOL_KINDS)
 
 
@@ -271,7 +271,7 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             "SELECT p.bot,p.runtime,p.parent_grant,p.subscription_id AS provider_id FROM agent_subscriptions p "
             f"WHERE p.bot IN ({marks}) AND p.kind<>'pool' UNION ALL "
             "SELECT p.bot,p.runtime,p.parent_grant,s.id FROM agent_subscriptions p "
-            "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_pool ON s.owner_id=p.person "
+            "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_plan_pool ON s.owner_id=p.person "
             f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ({POOL_KINDS_SQL})), "
             # Drive the count from live attempts across the team, including legacy delivery and excluding shell sign-ins.
             "live AS MATERIALIZED (SELECT s.subscription_id,count(*) AS turns "
