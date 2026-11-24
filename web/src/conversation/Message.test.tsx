@@ -56,6 +56,9 @@ function serve(reply: (url: string, method: string) => Reply | Promise<Reply> | 
     const method = init?.method ?? 'GET';
     calls.push({ url: String(url), method, body: typeof init?.body === 'string' ? JSON.parse(init.body) : undefined });
     const r = (await reply(String(url), method)) ?? { status: 200, body: { items: [], counts: [] } };
+    // a file's bytes, read by range as a card reads them (data/range.ts)
+    if (typeof r.body === 'string' && new Headers(init?.headers).has('range'))
+      return new Response(r.body, { status: 206, headers: { 'Content-Range': `bytes 0-${r.body.length - 1}/${r.body.length}` } });
     return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
   });
 }

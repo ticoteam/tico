@@ -9,3 +9,4 @@ export { heldCount, useHeldCount, type HeldCount } from './held';
 export { directoryQuery, useActor, useActors, useDirectory, withStatus, type Actor, type Directory, type StatusLine, type Team } from './directory';
 export { asksGone, needsYouItems, needsYouRead } from './needs';
 export { pageOwnersQuery, type PageOwnerRow, type PageOwners } from './pageOwners';
+export { rangeBytes, rangeText, rangeTextQuery, textOf, zipList, zipListQuery, ZIP_NAMES, type Bytes, type Text, type ZipList } from './range';

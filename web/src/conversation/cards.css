@@ -1,0 +1,45 @@
+/* A chat's file cards (FileCard.tsx): the page card's frame and foot (conversation.css .pcard), with what the file
+   holds drawn small in place of the page, and its full view in the layer. */
+.pcard.fcard{width:min(100%,420px);min-width:min(320px,75vw)} /* a short card keeps a card's width */
+.fcard-face{position:relative;display:block;max-height:220px;overflow:hidden;background:var(--sheet);border-bottom:1px solid var(--line);font-size:var(--t-xs);color:var(--ink-2)}
+.fcard-face::after{content:"";position:absolute;inset:auto 0 0;height:var(--s-6);background:linear-gradient(transparent,var(--sheet));pointer-events:none}
+.fcard-type{flex:none;font-style:normal;font-size:var(--t-xs);color:var(--muted)}
+.fcard-wait{display:block;height:96px;background:var(--well)}
+.fcard-wait.is-none{background:var(--sheet)}
+.fcard-lines{margin:0;padding:var(--s-2) var(--s-3);font-family:var(--font-code);font-size:var(--t-micro);line-height:var(--lh-code);white-space:pre;overflow:hidden}
+.fcard-table{font-size:var(--t-xs)}
+.fcard-table th,.fcard-table td{height:auto;padding:var(--s-1) var(--s-2);max-width:160px;overflow:hidden;text-overflow:ellipsis}
+.fcard-facts{display:grid;gap:var(--s-1);margin:0;padding:var(--s-3)}
+.fcard-facts>div{display:flex;gap:var(--s-2);min-width:0}
+.fcard-facts dt{flex:none;width:44px;color:var(--muted)}
+.fcard-facts dd{margin:0;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fcard-facts .is-title dd{font-size:var(--t-sm);font-weight:var(--w-strong);color:var(--ink)}
+.fcard-zip{display:grid;gap:var(--s-0);padding:var(--s-2) var(--s-3);font-family:var(--font-code);font-size:var(--t-micro)}
+.fcard-zip b{margin-bottom:var(--s-1);font-family:var(--font-text);font-size:var(--t-xs);font-weight:var(--w-strong);color:var(--ink)}
+.fcard-zip span{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.fcard-zip .is-folder,.fcard-names .is-folder{color:var(--muted)}
+.fcard-diff pre{margin:0;padding:var(--s-1) var(--s-3);font-family:var(--font-code);font-size:var(--t-micro);line-height:var(--lh-code);overflow:hidden}
+.fcard-diff pre.is-nowrap{white-space:pre}
+.fcard-diff pre.is-wrap{white-space:pre-wrap;overflow-wrap:anywhere}
+.fcard-chip{border:0;color:inherit;font:inherit;cursor:zoom-in}
+
+/* the full view */
+.fcard-full{height:100%;padding:var(--s-4) var(--s-6) var(--s-6)}
+.fcard-full.is-markdown,.fcard-full.is-text,.fcard-full.is-ics,.fcard-full.is-vcf,.fcard-full.is-eml{background:var(--desk)}
+.fcard-paper{width:min(100%,var(--measure));margin:0 auto;padding:var(--s-8) var(--s-10);border-radius:var(--r-paper);background:var(--raised);box-shadow:var(--lift-paper)}
+.fcard-text{font-family:var(--font-code);font-size:var(--t-xs);line-height:var(--lh-code);white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2)}
+.fcard-full .fcard-diff pre{padding:0;font-size:var(--t-sm);overflow:visible}
+.fcard-full .fcard-diff .dl{margin:0 calc(-1 * var(--s-6));padding:0 var(--s-6)}
+.fcard-full .fcard-diff pre.is-nowrap code{display:inline-block;min-width:100%}
+.fcard-full-table th{position:sticky;top:calc(var(--s-4) * -1);z-index:var(--z-stick);background:var(--surface);box-shadow:inset 0 -1px 0 var(--line-strong);border-bottom:0}
+.fcard-names{display:grid;margin:0;padding:0;list-style:none;font-size:var(--t-sm)}
+.fcard-names li{display:flex;gap:var(--s-3);padding:var(--s-1) 0;border-bottom:1px solid var(--line)}
+.fcard-names li span{flex:1;min-width:0;overflow-wrap:anywhere}
+.fcard-names em{flex:none;font-style:normal;color:var(--muted)}
+.fcard-cut{margin:var(--s-3) 0 0;font-size:var(--t-xs);color:var(--muted);text-align:center}
+:where(html[data-layout="cards"]) .fcard-full{padding:var(--s-3)}
+:where(html[data-layout="cards"]) .fcard-paper{padding:var(--s-5) var(--s-4)}
+
+:where(html[data-layout="cards"]) .fcard-full-table th{top:calc(var(--s-3) * -1)}
+.fcard-layer{display:contents}
+.fcard-cut a{color:var(--ink);text-decoration:underline}

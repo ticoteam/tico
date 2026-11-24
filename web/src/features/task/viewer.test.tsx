@@ -257,7 +257,8 @@ describe('a task’s tabs: pages and plain files', () => {
             : null;
     show(<TaskPage task="12" pipeline="p1" tab="review" />, '/tasks/p1/12/review');
     const frame = await screen.findByTitle('Review');
-    await waitFor(() => expect(frame.getAttribute('srcdoc')).toBe('<h1>Looks right</h1>'));
+    await waitFor(() => expect(frame.getAttribute('srcdoc')).toContain('<h1>Looks right</h1>'));
+    expect(frame.getAttribute('srcdoc')).toContain("img-src data:"); // under lib/safeFrame's policy: it loads nothing
     expect(frame.getAttribute('sandbox')).not.toContain('allow-scripts');
     expect(calls).toContain('GET /api/v2/pages/h1');
     reply = () => null;

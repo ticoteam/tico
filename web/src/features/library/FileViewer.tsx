@@ -6,7 +6,7 @@ import { Link } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
-import { fileKind, type FileKind } from '@/lib';
+import { csvRows, fileKind, safeFrame, type FileKind } from '@/lib';
 import { size } from './parts';
 import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';
@@ -54,7 +54,8 @@ const STREAMS = new Set<View>(['image', 'video', 'audio', 'pdf']);
 /** The type a file is held as when its address says nothing (an attachment): its own, else what its name says. */
 const HELD_TYPE: Partial<Record<View, string>> = { pdf: 'application/pdf', html: 'text/plain', markdown: 'text/plain', csv: 'text/plain', text: 'text/plain' };
 
-/** An HTML file is shown, never run: no scripts, its own origin, links open a new tab (viewer.ts htmlPreviewFrame). */
+/** An HTML file is shown, never run: no scripts, its own origin, links open a new tab (viewer.ts htmlPreviewFrame), and
+    it loads nothing from anywhere (lib/safeFrame). */
 const HTML_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
 
 export interface PreviewProps {
@@ -143,7 +144,7 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
   const src = reads ? kept.data?.src : url;
   if (asText) {
     const text = held ? kept.data?.text : words.data;
-    return text === undefined ? null : <TextPreview text={text} view={view} title={title} />;
+    return text === undefined ? null : <TextPreview text={text} view={view} title={title} url={url} />;
   }
   if (!src) return null;
   if (view === 'image')
@@ -191,39 +192,11 @@ function Unshown({ name, bytes, url, office = false }: { name: string; bytes?: n
   );
 }
 
-/** A quoted field can hold commas, line breaks, and a literal quote written twice. */
-function csvRows(text: string): string[][] {
-  const rows: string[][] = [];
-  let row: string[] = [];
-  let cell = '';
-  let quoted = false;
-  let start = text.charCodeAt(0) === 0xfeff ? 1 : 0;
-  for (let i = start; i < text.length && rows.length < 500; i++) {
-    const c = text.charAt(i);
-    if (quoted) {
-      if (c !== '"') cell += c;
-      else if (text[i + 1] === '"') {
-        cell += '"';
-        i++;
-      } else quoted = false;
-    } else if (c === '"' && !cell) quoted = true;
-    else if (c === ',') {
-      row.push(cell);
-      cell = '';
-    } else if (c === '\n' || c === '\r') {
-      if (i > start) rows.push([...row, cell]);
-      if (c === '\r' && text[i + 1] === '\n') i++;
-      row = [];
-      cell = '';
-      start = i + 1;
-    } else cell += c;
+function TextPreview({ text, view, title, url }: { text: string; view: View; title: string; url: string }) {
+  if (view === 'html') {
+    const page = safeFrame(text);
+    return page === null ? <Unshown name={title} url={url} /> : <iframe className="fv-frame" srcDoc={page} title={title} sandbox={HTML_SANDBOX} referrerPolicy="no-referrer" />;
   }
-  if (start < text.length && rows.length < 500) rows.push([...row, cell]);
-  return rows;
-}
-
-function TextPreview({ text, view, title }: { text: string; view: View; title: string }) {
-  if (view === 'html') return <iframe className="fv-frame" srcDoc={text} title={title} sandbox={HTML_SANDBOX} referrerPolicy="no-referrer" />;
   // Text reads as a sheet of paper on the desk, as an image does (files.js textView).
   if (view === 'markdown')
     return (

@@ -586,6 +586,13 @@ file does, and is 404 until made), falling back to the file itself; messages car
 shows its `/poster` with a play mark (a plain card when there is none) and plays in place on a tap, read from its
 address as it plays; a sound is the browser's player bar; a PDF shows its `/thumb` (page one) and opens full screen.
 The picture viewer zooms (pinch, double tap, wheel, − and +, a click for fit or actual size) and swipes only at fit.
+Other chat files show as cards that read only part of the file, by byte range: a CSV, TSV or diff's first 16 KB, a
+text, Markdown, JSON or log file's first 8 KB, a calendar invite, contact or email's first 16 KB, and a zip's last
+64 KB and its directory (at most 256 KB). Opened, a card shows at most 2 MB, 2,000 rows of 200 cells, 5,000 lines or
+1,000 names, with Download where that cuts it; JSON shows as written. Office files (Word, Excel, PowerPoint and the
+old formats) download. An uploaded HTML page (its card reads up to 256 KB) draws in a
+sandboxed frame whose own policy lets it load nothing from outside (pictures and fonts only as `data:`), with its
+meta, link, base and script tags removed.
 Transient storage failures retry with bounded backoff, and a source that fails five passes becomes `none`; permanent
 decode failures become `none`.
 Missing tools or unsupported media never fail an upload, and a version nothing can be derived from (an SVG, or a
