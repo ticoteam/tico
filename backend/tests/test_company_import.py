@@ -2315,10 +2315,11 @@ def test_a_setup_drafts_work_never_runs_on_gateway_credit(environment):
     approved = rows(api, "SELECT id FROM tasks WHERE title='Spring blends'")[0]["id"]
     other = rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %' LIMIT 1")
     with api.app.state.store.read() as c:
-        assert setup_drafts.refusal(c, approved, lambda: True) == setup_drafts.DRAFT_NEEDS_PLAN
-        assert setup_drafts.refusal(c, approved, lambda: False) is None
+        found = setup_drafts.status(c, approved)
+        assert setup_drafts.refusal(found, lambda: True) == setup_drafts.DRAFT_NEEDS_PLAN
+        assert setup_drafts.refusal(found, lambda: False) is None
         if other:
-            assert setup_drafts.refusal(c, other[0]["id"], lambda: True) is None
+            assert setup_drafts.refusal(setup_drafts.status(c, other[0]["id"]), lambda: True) is None
     config = {"model": "claude", "gateway_fallback": {"model": "tico-a"}, "fallback": {"model": "tico-b"}}
     assert setup_drafts.no_gateway(config) == {"model": "claude"}
     assert setup_drafts.no_gateway({"model": "claude", "fallback": {"model": "gpt"}})["fallback"] == {"model": "gpt"}

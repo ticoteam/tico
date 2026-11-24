@@ -94,13 +94,23 @@ def _wake(c, task_id, bot):
     task_wakes.add(c, task, bot, task["visit"], SENT, wake_key="%s:setup-send" % task_id)
 
 
-def refusal(c, task_id, gateway):
-    """Why the claim passes over a run on this task, or None: a setup draft still waiting on its Send, or one that
-    would run on Gateway credit (`gateway`: a callable saying whether this turn would)."""
-    found = get(c, task_id)
+def status(c, task_id, loads=None):
+    """A task's setup draft status (WAITING or APPROVED), or None for a task not made from one; through the claim's reads
+    (claim_loads.Loads.setup_draft) when it has them, so Health asks once for every queued job."""
+    if not task_id:
+        return None
+    if loads is not None:
+        return loads.setup_draft(c, str(task_id))
+    row = c.execute("SELECT status FROM setup_drafts WHERE task_id=?", (str(task_id),)).fetchone()
+    return row[0] if row else None
+
+
+def refusal(found, gateway):
+    """Why the claim passes over a run on a task whose setup draft status is `found`, or None: a setup draft still
+    waiting on its Send, or one that would run on Gateway credit (`gateway`: a callable saying whether this turn would)."""
     if not found:
         return None
-    if found["status"] == WAITING:
+    if found == WAITING:
         return DRAFT_WAIT
     return DRAFT_NEEDS_PLAN if gateway() else None
 

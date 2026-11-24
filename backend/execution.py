@@ -3159,8 +3159,8 @@ def job_refusal(
         # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
         # Tico's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
-    draft = setup_drafts.get(c, task_id) if task_id else None
-    if draft and draft["status"] == setup_drafts.WAITING:
+    draft = setup_drafts.status(c, task_id, loads)
+    if draft == setup_drafts.WAITING:
         return setup_drafts.DRAFT_WAIT  # a setup draft runs only after its person's Send, whoever wrote since
     refs = message.get("refs") or {}
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
@@ -3235,8 +3235,7 @@ def job_refusal(
     if draft and runner is not None and settings is not None:
         record = loads.record if loads is not None else providers.load(c, settings)
         why = setup_drafts.refusal(
-            c,
-            task_id,
+            draft,
             lambda: gateway_connection.is_tico(config.get("model")) or models_preset.waiting(record, ready, config),
         )
         if why:
@@ -5908,7 +5907,7 @@ class Execution:
                 tier,
                 falls_back=models_preset.computer_falls_back(c, runner["id"]),
             )
-            if task_id and setup_drafts.get(c, task_id):
+            if setup_drafts.status(c, task_id):
                 config = setup_drafts.no_gateway(config)
         if config.get("waiting_for_sign_in") or check and gateway_connection.is_tico(check.get("model")):
             # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the

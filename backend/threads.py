@@ -2970,8 +2970,8 @@ def _post(
     if attachments:
         refs["attachments"] = list(attachments)
     # Text Tico carries in for a bot (a draft imported from setup, refs.no_mentions) names nobody: its @words reach no one.
-    named = [] if refs.get("no_mentions") else mentions(c, thread, text, author=actor)
-    found = with_reply_mention(c, thread, actor, in_reply_to, named)
+    mentioned = [] if refs.get("no_mentions") else mentions(c, thread, text, author=actor)
+    found = with_reply_mention(c, thread, actor, in_reply_to, mentioned)
     target = None
     if to_actor:
         if str(to_actor).startswith("ext:"):
