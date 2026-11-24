@@ -386,11 +386,16 @@ def test_an_old_runners_requests_still_drive_this_server(api):
         aid = ""
         for name, case in TURN:
             recorded = json.loads((path / W.FIXTURES / ("%s.%s.json" % (name, case))).read_text())
+            request = recorded["request"]
+            if name == "heartbeat":
+                # The copy's heartbeat was recorded on that line's release candidate (0.6.0's on 0.6.0-rc.1, below the
+                # floor); the runner the copy stands for reports the release itself.
+                request = {**request, "release": path.name}
             if name == "claim":
                 post(api, "chat/ops", {"text": "Please summarize the current work."})
             response = api.post(
                 WIRE["endpoints"][name]["path"].replace("{aid}", aid),
-                json=recorded["request"],
+                json=request,
                 headers=headers(computer["token"], "%s:%s:%s" % (name, aid, uuid.uuid4())),
             )
             assert response.status_code == 200, (path.name, name, response.text[:400])
