@@ -76,23 +76,53 @@ def test_a_finish_again_on_a_live_file_made_company_changes_nothing(environment)
     assert len(rows(api, "SELECT 1 FROM events WHERE action='onboarding.live'")) == 1
 
 
-def test_the_apps_first_run_hands_the_setup_to_tico_once_it_runs_with_no_seat_live(environment):
-    """No seat starts on a guess (first_job none). The owner's "Set up my company." is owed by the finish itself and
-    said once the Assistant runs (here: when the first computer enrolls), once: a reload, a retried finish or a restart
-    cannot lose it or say it twice."""
-    api = environment()
+def connect_a_plan(api):
+    body = {"kind": "anthropic_key", "secret": "sk-ant-api03-" + "a" * 24, "name": "Company key"}
+    added = api.post("/api/v2/model-subscriptions", json=body, headers=signed_in())
+    assert added.status_code == 200, added.text
+
+
+def owes(api):
+    return api.get("/api/v2/setup", headers=signed_in()).json()["hand_off_owed"]
+
+
+def first_run_finished(api):
     saved = api.put("/api/v2/setup", json={"answers": {"first_job": "none"}}, headers=signed_in())
     assert saved.status_code == 200, saved.text
-    done = finish(api, {"hand_off": True})
+    return finish(api, {"hand_off": True})
+
+
+def test_the_apps_first_run_starts_no_seat_and_waits_for_a_plan_before_it_asks_tico(environment):
+    """No seat starts on a guess (first_job none). The finish owes the owner's "Set up my company.": with the Assistant
+    running but no plan connected nothing is said (no turn could run, and never on Gateway); connecting one says it once,
+    and a retried finish or a second computer does not say it again."""
+    api = environment()
+    machine(api)  # a computer first, so the Assistant runs from the finish
+    done = first_run_finished(api)
     assert not {r["slug"] for r in rows(api, "SELECT slug FROM bots")} & JOB_SEATS
     assert not rows(api, "SELECT 1 FROM tasks WHERE title LIKE 'Set up %' AND title NOT LIKE 'Set up the market%'")
-    # No computer yet: the Assistant is not running, so it is kept, not refused or lost.
+    assert rows(api, "SELECT state FROM bots WHERE slug='assistant'") == [{"state": "active"}]
     assert done["hand_off_owed"] is True and not hand_offs(api)
-    finish(api, {"hand_off": True})
-    machine(api)
+    connect_a_plan(api)
     said = hand_offs(api)
     assert len(said) == 1 and said[0]["sender_id"].startswith("human:") and said[0]["recipient_id"].startswith("bot:")
-    assert api.get("/api/v2/setup", headers=signed_in()).json()["hand_off_owed"] is False
+    assert owes(api) is False
     finish(api, {"hand_off": True})
     machine(api)
-    assert len(hand_offs(api)) == 1
+    connect_a_plan(api)
+    assert len(hand_offs(api)) == 1 and owes(api) is False
+
+
+def test_an_enrollment_with_the_assistant_running_and_the_hand_off_owed_says_it_once_and_it_stays_said(environment):
+    """Finished with no computer, a plan connected while the Assistant could not run, the Assistant then turned on by
+    hand: the computer's enrollment says it once, and the record it saves afterwards does not owe it again."""
+    api = environment()
+    first_run_finished(api)
+    connect_a_plan(api)
+    assert not hand_offs(api) and owes(api) is True  # the Assistant is not running yet
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE slug='assistant'")
+    machine(api)
+    assert len(hand_offs(api)) == 1 and owes(api) is False
+    machine(api)
+    assert len(hand_offs(api)) == 1 and owes(api) is False

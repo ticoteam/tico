@@ -2046,7 +2046,29 @@ def default_name(c, kind, owner=""):
     return name
 
 
+def plan_ready(c):
+    """Whether the company has a plan or API key that can sign a turn in now, as the app's first run counts one
+    (web/src/features/settings/providerStatus.ts providerReady): no problem to fix and `available`. Tico Gateway is not
+    a plan here. The first run's hand-off to Tico waits for it (onboarding.hand_off)."""
+    if not _present(c):
+        return False
+    return any(
+        available(c, sub, KINDS[sub["kind"]]["runtime"]) and not problem(c, sub)
+        for sub in (dict(r) for r in c.execute(f"SELECT * FROM {SUBS}"))
+        if sub["kind"] in KINDS
+    )
+
+
 def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=None):
+    """A plan saved, then the first run's hand-off to Tico, which waits for one (onboarding.hand_off)."""
+    from . import onboarding
+
+    saved = _save(c, vault, settings, auth, who, body, sid, completing_login_id=completing_login_id)
+    onboarding.hand_off(c, settings, auth)
+    return saved
+
+
+def _save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=None):
     """Add a subscription, or change a saved one: a new secret reconnects it (status `new`, so it counts again) and ends
     its usage-limit hold as Try now does, and a name renames it. Returns its view.
 

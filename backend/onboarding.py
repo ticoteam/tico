@@ -327,6 +327,29 @@ def _mtime(path):
 SETUP_HAND_OFF = "Set up my company."
 
 
+def hand_off(c, settings, auth):
+    """The owner's "Set up my company." in their Assistant chat, as the owner: its turn runs Tico's setup playbook
+    (templates/catalog/assistant/skills/set-up-the-company). One self-contained step any caller just calls (the end of a
+    completion, every start, an enrollment, a move onto cloud machines, a plan or key saved): it reads the setup record
+    in this write and says it only while the app's first run owes it (`hand_off_owed`), the Assistant is active, and the
+    company has a plan or key that can run it (model_subscriptions.plan_ready, never Gateway); otherwise it stays owed.
+    The record stops owing it in the same write, so it is said once. The app's own words: no rule check reads them."""
+    from . import assistant, model_subscriptions
+
+    record = load(c)
+    bot = settings.assistant_bot
+    owner = auth.owner_id(c)
+    if not record["hand_off_owed"] or not owner or (H.bot(c, bot) or {}).get("state") != "active":
+        return None
+    if not model_subscriptions.plan_ready(c):
+        return None
+    actor = "human:" + owner
+    room = assistant.ensure_room(c, actor, bot)
+    H.say(c, actor, "bot:" + bot, SETUP_HAND_OFF, conversation_id=room["id"], kind="say", refs={"assistant": True})
+    Onboarding._store(c, {**record, "hand_off_owed": False}, actor)
+    return True
+
+
 def load(c):
     """The stored record, with every field a client reads present even before a first save."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
@@ -1244,22 +1267,8 @@ class Onboarding:
         return True
 
     def hand_off(self, c):
-        """The owner's "Set up my company." in their Assistant chat, as the owner, once the app's first run owes it
-        (`complete` with hand_off) and the Assistant runs: its turn runs Tico's setup playbook
-        (templates/catalog/assistant/skills/set-up-the-company). The app's own words, so no rule check reads them. Said
-        once: the record stops owing it in the same write."""
-        from . import assistant
-
-        record = load(c)
-        bot = self.settings.assistant_bot
-        owner = self.auth.owner_id(c)
-        if not record["hand_off_owed"] or not owner or (H.bot(c, bot) or {}).get("state") != "active":
-            return None
-        actor = "human:" + owner
-        room = assistant.ensure_room(c, actor, bot)
-        H.say(c, actor, "bot:" + bot, SETUP_HAND_OFF, conversation_id=room["id"], kind="say", refs={"assistant": True})
-        self._store(c, {**record, "hand_off_owed": False}, actor)
-        return True
+        """The first run's hand-off to Tico (module `hand_off`)."""
+        return hand_off(c, self.settings, self.auth)
 
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
@@ -1689,10 +1698,10 @@ class Onboarding:
         branches = place_pending(c, operator, runner_id, self.admin, self.execution, self.settings.github_owner)
         if operator != self.auth.owner_id(c):
             return branches
-        record = load(c)
-        if not record["completed"]:
+        if not load(c)["completed"]:
             return branches
         self.complete_company(c)  # the built-ins it can run now, and what they complete
+        record = load(c)  # as complete_company left it (its hand-off step writes the record)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         self.hand_off(c)  # the Assistant may run only now (_wire activated it)

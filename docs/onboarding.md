@@ -18,8 +18,10 @@ in the chat:
 5. **Live.** A company a setup file made lands on Tasks, Needs you on top, and its bots are pinged for what they still
    need ([Setup in Flow](#setup-in-flow)). A company started in the app gets its starting chart with no seat live
    (`answers.first_job` `none`: every role Recruiting, below), and the finish itself (`POST /api/v2/setup/complete` with
-   `hand_off`) owes the owner's "Set up my company." to Tico, said in their chat once the Assistant runs (at once, or when
-   the first computer enrolls; `hand_off_owed` until then), so a reload or a lost answer never loses it. Tico takes the
+   `hand_off`) owes the owner's "Set up my company." to Tico (`hand_off_owed`). It is said in their chat, once, as soon as
+   the Assistant is active and the company has a plan or key that can run it (never Tico Gateway): checked at the end of
+   the finish, at every start, when a computer enrolls, on a move onto cloud machines and when a plan or key is saved. A
+   reload or a lost answer never loses it. Tico takes the
    setup over in its chat, winning first: what winning looks like, the company
    and its website, the strategy, the chart, each owner's goal under the company's, then their first drafts in Flow, and
    the owner's feedback becomes rules (`templates/catalog/assistant/skills/set-up-the-company/`).
