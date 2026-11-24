@@ -216,7 +216,7 @@ describe('a task’s tabs: pages and plain files', () => {
           ? { body: docx, type: mime }
           : null;
     try {
-      show(<TaskPage task="12" pipeline="p1" tab="details" file="word1" />, '/tasks/p1/12/details?file=word1&v=1');
+      show(<TaskPage task="12" pipeline="p1" tab="details" file="word1" />, '/tasks/p1?task=12&list=p1&task.tab=details&task.file=word1&task.v=1');
       const sheet = await screen.findByRole('article', { name: 'draft.docx, v1' });
       expect(within(sheet).getByText('Original draft')).toBeTruthy();
       expect(calls).not.toContain('GET /api/v2/files/word1?v=2');
@@ -345,7 +345,7 @@ describe('an email the task asks about', () => {
     expect(tabs.querySelector('.doc-tab .dot')).toBeTruthy();
     expect(await screen.findByText('sales@example.test')).toBeTruthy();
     expect(screen.getByText('Pat Lee <pat@example.test>')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /quote\.docx/ }).getAttribute('href')).toBe('/tasks/p1/12/email?part=2');
+    expect(screen.getByRole('link', { name: /quote\.docx/ }).getAttribute('href')).toBe('/tasks/p1?task=12&list=p1&task.tab=email&task.part=2');
   });
 
   it('draws a Word attachment as its words, with Download from its frozen address @approvals', async () => {
@@ -358,7 +358,7 @@ describe('an email the task asks about', () => {
     );
     const before = reply;
     reply = (url) => (url.includes('/attachments/2') ? { body: docx, type: 'application/octet-stream' } : before(url));
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=2');
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1?task=12&list=p1&task.tab=email&task.part=2');
     const sheet = await screen.findByRole('article', { name: 'quote.docx' });
     expect(within(sheet).getByRole('heading', { name: 'Quote' })).toBeTruthy();
     expect(within(sheet).getByText('Total:').tagName).toBe('B');
@@ -367,7 +367,7 @@ describe('an email the task asks about', () => {
   });
 
   it('shows a PDF attachment inline, read and held as a PDF', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?part=3');
+    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1?task=12&list=p1&task.tab=email&task.part=3');
     expect(await screen.findByRole('region', { name: 'terms.pdf' })).toBeTruthy();
     expect(openPdf).toHaveBeenLastCalledWith('blob:held');
     expect(calls).toContain('GET /api/v2/email/sends/s1/attachments/3');

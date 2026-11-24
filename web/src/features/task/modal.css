@@ -8,7 +8,7 @@
 .tmd>.tmd-task{grid-column:3}
 .tmd .tmd-fold,.tmd>.tmd-tab,.tmd>.tmd-more,.tmd>.tmd-panes,.tmd>.tmd-dim{display:none}
 /* the task's own way back is the layer's Close */
-.tmd .pk-back{display:none}
+.tmd .pk-back,html[data-layout="cards"] .tmd .pk .pk-back{display:none}
 /* a file opened from Details, one layer up */
 .vw-body>.tv-layer{min-height:0;display:flex;flex-direction:column;overflow:hidden}
 
@@ -20,7 +20,7 @@
   .tmd.is-list-up>.tmd-list{transform:none;visibility:visible;transition:transform var(--dur-enter) var(--ease-arrive)}
   .tmd.is-list-up>.tmd-dim{display:block;position:absolute;inset:0;z-index:var(--z-stick);border:0;padding:0;background:var(--scrim);opacity:.25}
   .tmd .tmd-fold{display:inline-flex}
-  .tmd>.tmd-tab{display:flex;align-items:center;justify-content:center;position:absolute;left:0;top:var(--s-3);z-index:var(--z-stick);width:28px;height:var(--s-10);padding:0;border:1px solid var(--line);border-left:0;border-radius:0 var(--r-ctl) var(--r-ctl) 0;background:var(--raised);color:var(--muted);cursor:pointer}
+  .tmd>.tmd-tab{display:flex;align-items:center;justify-content:center;position:absolute;left:0;top:var(--s-3);z-index:var(--z-stick);width:28px;height:var(--s-10);padding:0;border:1px solid var(--line);border-left:0;border-radius:0;border-top-right-radius:var(--r-ctl);border-bottom-right-radius:var(--r-ctl);background:var(--raised);color:var(--muted);cursor:pointer}
   .tmd>.tmd-tab:hover{color:var(--ink)}
   .tmd>.tmd-chat .side-head{padding-left:var(--s-8)}
 }
@@ -36,7 +36,7 @@
   .tmd>.tmd-dock{flex:none}
   .tmd>.tmd-dock>.dock{display:flex;padding-bottom:var(--s-2)}
   .tmd>.tmd-more{display:flex;align-items:center;justify-content:center;gap:var(--s-1);flex:none;height:44px;padding:0 0 calc(env(safe-area-inset-bottom));border:0;border-top:1px solid var(--line);background:var(--raised);color:var(--muted);font-size:var(--t-sm);cursor:pointer}
-  .tmd>.tmd-list{position:absolute;inset:auto 0 0;width:auto;height:70%;z-index:var(--z-pop);border:0;border-radius:var(--r-pane) var(--r-pane) 0 0;box-shadow:var(--lift-3);transform:translateY(100%);visibility:hidden}
+  .tmd>.tmd-list{position:absolute;inset:auto 0 0;width:auto;height:70%;z-index:var(--z-pop);border:0;border-radius:0;border-top-left-radius:var(--r-pane);border-top-right-radius:var(--r-pane);box-shadow:var(--lift-3);transform:translateY(100%);visibility:hidden}
   .tmd.is-list-up>.tmd-list{transform:none;visibility:visible}
   .tmd .page,.tmd .tv{height:auto}
 }

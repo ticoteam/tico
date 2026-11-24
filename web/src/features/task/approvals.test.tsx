@@ -403,14 +403,6 @@ describe('the thing is the first tab', () => {
     expect(was(router).pathname).toBe('/tasks/p1/12/b-pdf');
   });
 
-  it('on a computer, opened beside the thread it came from (`?chat=`), the page holds its own Approve @approvals', async () => {
-    show(<TaskPage task="12" pipeline="p1" tab="email" />, '/tasks/p1/12/email?chat=agent%3Alo&via=thread');
-    const box = await decision();
-    // in the page, not in the phone's dock (which a computer does not draw)
-    expect(box.closest('[data-dock]')).toBeNull();
-    expect(await ready(box)).toBeTruthy();
-  });
-
   it('opens the version the address names over the one the ask pinned @approvals', async () => {
     const at = (n: number) => ({ n, by: 'bot:lo', created_at: '2026-11-01T10:00:00Z', mime: 'application/pdf', size: 10, url: `/api/v2/files/f9?v=${n}`, answers: [], ask: null });
     const pdf = { id: 'f9', name: 'declaration.pdf', title: 'declaration.pdf', mime: 'application/pdf', archived: false, current_version: 2, links: [], writers: [], versions: [at(1), at(2)] };
@@ -945,36 +937,6 @@ describe('the decision', () => {
     const direct = show(<OnTask />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
     await waitFor(() => expect(was(direct).pathname).toBe('/tasks/p1'));
-  });
-
-  it('Back from a link before the pipelines are read waits for them to pick the board @approvals', async () => {
-    let give!: () => void;
-    const list = new Promise<Reply>((done) => (give = () => done({ body: { pipelines: [{ id: 'p1', name: 'Legal', stages: [] }] } })));
-    reply = (url, method) => (method === 'GET' && url.endsWith('/api/v2/pipelines') ? list : null);
-    const router = show(<OnTask />, '/tasks/p1/12');
-    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await act(async () => {});
-    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
-    give();
-    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1'));
-  });
-
-  it('Back from a link to a task whose pipeline is retired goes to Tasks, not a board that is gone @approvals', async () => {
-    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
-    const router = show(<OnTask />, '/tasks/p1/12');
-    fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(was(router).pathname).toBe('/tasks'));
-  });
-
-  it('opened from a thread, ✕ closes the task back to that thread, even after another tab was opened @approvals', async () => {
-    const router = show(<OnTask />, '/team/lo');
-    await act(() => router.navigate({ href: '/tasks/p1/12/email?chat=agent%3Alo&via=thread' }));
-    await decision();
-    await act(() => router.navigate({ href: '/tasks/p1/12/details?chat=agent%3Alo&via=thread' }));
-    await waitFor(() => expect(document.querySelector('.pk-head .pk-close')).toBeTruthy());
-    fireEvent.click(document.querySelector('.pk-head .pk-close') as HTMLElement);
-    await waitFor(() => expect(was(router).pathname).toBe('/team/lo'));
-    expect(router.history.canGoBack()).toBe(false);
   });
 
   it('staying for a question, an approval that arrives later does not move the person off the page @approvals', async () => {

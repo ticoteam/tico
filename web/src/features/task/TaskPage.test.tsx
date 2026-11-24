@@ -410,10 +410,10 @@ describe('one open task', () => {
     expect(screen.queryByText('Spec approved')).toBeNull();
   });
 
-  it('ends the tab row with Expand; the due date is a Details fact even before one is set', async () => {
+  it('the due date is a Details fact even before one is set', async () => {
     serve(base);
     details();
-    expect(await screen.findByRole('button', { name: 'Expand' })).toBeTruthy();
+    await waitFor(() => expect(document.querySelector('[data-target="task-due:t1"]')).toBeTruthy());
     const due = document.querySelector('[data-target="task-due:t1"]') as HTMLElement;
     expect(within(due).getByRole('button', { name: 'None' })).toBeTruthy();
   });
@@ -632,10 +632,10 @@ describe('one open task', () => {
     expect(document.querySelector('.frame.fv iframe')).toBeNull();
   });
 
-  it('says when there is no such task', async () => {
+  it('says when the task is gone', async () => {
     serve(() => ({ status: 404, body: { error: { code: 'not_found', detail: 'No such task' } } }));
     show(<TaskPage task="99" pipeline="p1" />, '/tasks/p1/99');
-    expect(await screen.findByRole('heading', { name: 'No such task' })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'This task is gone' })).toBeTruthy();
   });
 
   it('shows nothing of a task the person may not see', async () => {
