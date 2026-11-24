@@ -71,7 +71,7 @@ const fileIcon = (mime: string | null | undefined, kind?: string, name?: string 
 const isPage = (mime: string | null | undefined, kind?: string) => fileKind(mime, undefined, kind) === 'html';
 
 /** Opens one of the app's files full screen, by its id (the library's) or as a message's own file. */
-const preview = (file: string, version?: number, held?: { url: string; mime: string; name: string; size?: number }) =>
+const preview = (file: string, version?: number, held?: { url: string; mime: string; name: string; filename?: string; size?: number }) =>
   void run('files.preview', held ? { file, held } : version ? { file, version } : { file }, { via: 'click' });
 
 function FileChip({ p, words }: { p: Extract<Pointer, { kind: 'file' }>; words: ReactNode | null }) {
@@ -207,8 +207,10 @@ function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void
   );
 }
 
-const attachmentHref = (f: Attachment): `/api/${string}` =>
-  typeof f.url === 'string' && /^\/api\/v2\/files\//.test(f.url) ? (f.url as `/api/${string}`) : `/api/v2/files/${encodeURIComponent(f.id)}`;
+/** A message's own file by the address it came with, only when that is plainly one of the app's files (no `..`, no
+    other route); else by its id. */
+export const attachmentHref = (f: Attachment): `/api/${string}` =>
+  typeof f.url === 'string' && /^\/api\/v2\/files\/[A-Za-z0-9_-]+(\?v=\d+)?$/.test(f.url) ? (f.url as `/api/${string}`) : `/api/v2/files/${encodeURIComponent(f.id)}`;
 const attachmentLabel = (f: Attachment) => f.title?.trim() || f.name || 'File';
 const attachmentType = (f: Attachment) => {
   const end = /\.([a-z0-9]{1,5})$/i.exec(f.name ?? '')?.[1];
@@ -222,7 +224,14 @@ const previewOf = (href: string, kind: 'thumb' | 'poster') => {
   const m = /^(\/api\/v2\/files\/[^/?#]+)(\?v=\d+)?$/.exec(href);
   return m ? `${m[1]}/${kind}${m[2] ?? ''}` : undefined;
 };
-const heldOf = (f: Attachment) => ({ url: attachmentHref(f), mime: f.content_type ?? '', name: attachmentLabel(f), ...(typeof f.size === 'number' && { size: f.size }) });
+// the file's own name goes too: a caption says nothing of what it is, and `lease.pdf` sent as octet-stream is a PDF by its name
+const heldOf = (f: Attachment) => ({
+  url: attachmentHref(f),
+  mime: f.content_type ?? '',
+  name: attachmentLabel(f),
+  ...(f.name && { filename: f.name }),
+  ...(typeof f.size === 'number' && { size: f.size }),
+});
 
 /** How a message's own file shows under its words, from its type alone: nothing about it is read to choose. */
 type Face = 'picture' | 'video' | 'audio' | 'pdf' | 'page' | 'file';
@@ -318,7 +327,19 @@ function PdfCard({ f }: { f: Attachment }) {
         <span>{name}</span>
         <em>PDF</em>
       </span>
-      <button type="button" className="pcard-hit" aria-label={name} onClick={() => preview(f.id, undefined, heldOf(f))} />
+      {/* a link, so a new-tab click still opens the file itself; a plain click opens it full screen */}
+      <a
+        className="pcard-hit"
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={name}
+        onClick={(e) => {
+          if (!plainClick(e)) return;
+          e.preventDefault();
+          preview(f.id, undefined, heldOf(f));
+        }}
+      />
     </div>
   );
 }

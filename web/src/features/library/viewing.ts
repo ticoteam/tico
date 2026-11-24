@@ -9,6 +9,8 @@ export interface Viewing {
   full?: {
     mime: string;
     kind?: string;
+    /** The file's own name, when the title is a caption: what it is reads from it (`lease.pdf`) and Download keeps it. */
+    name?: string;
     size?: number | null;
     /** A message's own file (an attachment), read from this address: it is not one of the library's files. */
     url?: string;

@@ -19,9 +19,9 @@ import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
 import { agentWords, Quote } from './Quote';
-import { isPicture, linkRender, richText, Shelf } from './Rich';
+import { attachmentHref, isPicture, linkRender, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
-import type { Attachment, ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
+import type { ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
 export interface Who {
   name: string;
@@ -60,13 +60,12 @@ export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant
 /* ---------------------------------------------------------------- parts inside a message */
 
 const MD_PICTURE = /!\[([^\]]*)\]\((\/api\/[^()\s]+)\)/g;
-const pictureHref = (f: Attachment) => (typeof f.url === 'string' && /^\/api\/v2\/files\//.test(f.url) ? f.url : `/api/v2/files/${encodeURIComponent(f.id)}`);
 
 /** Every picture a message holds, in the order it reads: those in its text, then its attached ones. */
 export function picturesOf(m: Pick<ChatMessage, 'body' | 'refs' | 'pending' | 'deleted'>): Picture[] {
   if (m.pending || m.deleted) return [];
   const inText = [...(m.body ?? '').matchAll(MD_PICTURE)].map((x) => ({ src: x[2]!, name: x[1] || 'Picture' }));
-  const attached = (m.refs?.attachments ?? []).filter(isPicture).map((f) => ({ src: pictureHref(f), name: f.title?.trim() || f.name || 'Picture' }));
+  const attached = (m.refs?.attachments ?? []).filter(isPicture).map((f) => ({ src: attachmentHref(f), name: f.title?.trim() || f.name || 'Picture' }));
   return [...inText, ...attached];
 }
 

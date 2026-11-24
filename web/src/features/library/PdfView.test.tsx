@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Viewer } from '@/kit/Viewer';
 import { fakePdf } from '@/test/fakePdf';
 import { openPdf } from './pdf';
 import { PdfView } from './PdfView';
@@ -33,6 +34,18 @@ describe('PdfView', () => {
     expect(new Set(pdf.drawn)).toEqual(new Set([1, 2, 3]));
     unmount();
     expect(pdf.destroy).toHaveBeenCalled();
+  });
+
+  it('has no Expand of its own inside the full-screen layer', async () => {
+    vi.mocked(openPdf).mockResolvedValue(fakePdf(1).open);
+    render(
+      <Viewer open onClose={() => {}} title="Lease">
+        <PdfView src="blob:x/1" title="Lease" url="/api/v2/files/p1" />
+      </Viewer>,
+    );
+    await screen.findByRole('region', { name: 'Lease' });
+    expect(screen.getByRole('button', { name: 'Zoom in' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Expand' })).toBeNull();
   });
 
   it('zooms in a step at a time, never past its last step', async () => {

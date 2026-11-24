@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } fr
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Viewer } from '@/kit/Viewer';
-import { actualScale, DRAG_PX, FIT, isFit, MAX_SCALE, pan, STEP, swipeStep, toggle, zoomTo, type Box, type Zoom } from './zoom';
+import { actualScale, DRAG_PX, FIT, isFit, MAX_SCALE, pan, STEP, swipeStep, toggle, wheelPx, zoomTo, type Box, type Zoom } from './zoom';
 import './PictureViewer.css';
 
 export interface Picture {
@@ -61,16 +61,23 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
   const p = i >= 0 ? list[i] : undefined;
   const many = list.length > 1;
   const shown = p ? `${i}\n${p.src}` : '';
-  // the zoom belongs to the picture it was set on: any other one opens at fit
-  const [held, setHeld] = useState<{ of: string; z: Zoom }>({ of: '', z: FIT });
+  // the zoom belongs to the picture it was set on: another one, or the same one opened again, starts at fit
+  const [held, setHeld] = useState<{ of: string; z: Zoom; moving: boolean }>({ of: shown, z: FIT, moving: false });
+  if (held.of !== shown) setHeld({ of: shown, z: FIT, moving: false });
   const z = held.of === shown ? held.z : FIT;
-  const setZ = (next: (was: Zoom) => Zoom) => setHeld((h) => ({ of: shown, z: next(h.of === shown ? h.z : FIT) }));
+  const moving = held.of === shown && held.moving;
+  const setZ = (next: (was: Zoom) => Zoom) => setHeld((h) => (h.of === shown ? { ...h, z: next(h.z) } : h));
+  const setMoving = (on: boolean) => setHeld((h) => (h.of === shown ? { ...h, moving: on } : h));
   const [area, setArea] = useState<HTMLDivElement | null>(null);
   const img = useRef<HTMLImageElement>(null);
   const points = useRef(new Map<number, Pt>());
   const gesture = useRef<Gesture | null>(null);
   const lastTap = useRef<{ t: number; at: Pt } | null>(null);
-  const [moving, setMoving] = useState(false);
+  useEffect(() => {
+    points.current.clear();
+    gesture.current = null;
+    lastTap.current = null;
+  }, [shown]);
 
   const box = (): Box | undefined => boxOf(area, img.current);
   const rel = (clientX: number, clientY: number) => relTo(area, clientX, clientY);
@@ -78,23 +85,25 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
 
   useEffect(() => {
     if (!area) return;
-    const set = (next: (was: Zoom) => Zoom) => setHeld((h) => ({ of: shown, z: next(h.of === shown ? h.z : FIT) }));
+    const set = (next: (was: Zoom) => Zoom) => setHeld((h) => (h.of === shown ? { ...h, z: next(h.z) } : h));
     // non-passive, so the page itself neither scrolls nor zooms under the picture
     const wheel = (e: WheelEvent) => {
       e.preventDefault();
       const pt = relTo(area, e.clientX, e.clientY);
-      const k = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002));
+      const k = Math.exp(-wheelPx(e.deltaY, e.deltaMode) * (e.ctrlKey ? 0.01 : 0.002));
       set((was) => zoomTo(was, was.scale * k, pt.x, pt.y, boxOf(area, img.current)));
     };
-    // Safari's own pinch (a trackpad's, or a page zoom on iOS): the pointers carry a touch pinch, this the rest
+    // Safari's own pinch (a trackpad's): only one that began with no pointer down, as a touch pinch is the pointers'
     let base = -1;
+    let own = false;
     const gStart = (e: Event) => {
       e.preventDefault();
       base = -1;
+      own = points.current.size === 0;
     };
     const gChange = (e: Event) => {
       e.preventDefault();
-      if (points.current.size >= 2) return;
+      if (!own || points.current.size > 0) return;
       const g = e as Event & { scale: number; clientX: number; clientY: number };
       const pt = relTo(area, g.clientX, g.clientY);
       set((was) => {
@@ -102,13 +111,16 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
         return zoomTo(was, base * g.scale, pt.x, pt.y, boxOf(area, img.current));
       });
     };
+    const stop = (e: Event) => e.preventDefault();
     area.addEventListener('wheel', wheel, { passive: false });
     area.addEventListener('gesturestart', gStart, { passive: false });
     area.addEventListener('gesturechange', gChange, { passive: false });
+    area.addEventListener('gestureend', stop, { passive: false });
     return () => {
       area.removeEventListener('wheel', wheel);
       area.removeEventListener('gesturestart', gStart);
       area.removeEventListener('gesturechange', gChange);
+      area.removeEventListener('gestureend', stop);
     };
   }, [area, shown]);
 
@@ -124,7 +136,8 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
   };
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    // a right click, or a Control-click (the Mac's right click), is the browser's
+    if (e.pointerType === 'mouse' && (e.button !== 0 || e.ctrlKey)) return;
     e.currentTarget.setPointerCapture?.(e.pointerId);
     const pt = rel(e.clientX, e.clientY);
     points.current.set(e.pointerId, pt);
@@ -142,7 +155,7 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
       const [a, b] = [...points.current.values()];
       if (!a || !b) return;
       const m = mid(a, b);
-      setZ(() => pan(zoomTo(g.z0, (g.z0.scale * dist(a, b)) / g.d0, g.mid0.x, g.mid0.y, box()), m.x - g.mid0.x, m.y - g.mid0.y, box()));
+      setZ(() => pan(zoomTo(g.z0, (g.z0.scale * dist(a, b)) / g.d0, g.mid0.x, g.mid0.y), m.x - g.mid0.x, m.y - g.mid0.y, box()));
       return;
     }
     if (g.kind === 'press' && dist(pt, g.start) > DRAG_PX) g.kind = 'drag';
@@ -165,7 +178,7 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
     }
     gesture.current = null;
     setMoving(false);
-    if (e.type === 'pointercancel') return;
+    if (e.type === 'pointercancel' || e.type === 'lostpointercapture') return;
     const pt = rel(e.clientX, e.clientY);
     if (g.kind === 'drag') {
       const d = g.swipes ? swipeStep(z, pt.x - g.start.x, pt.y - g.start.y) : 0;
@@ -194,8 +207,9 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
       onKeyDown={onKeyDown}
       actions={
         <>
-          <IconButton icon="minus" label="Zoom out" disabled={isFit(z)} onClick={() => by(1 / STEP)} />
-          <IconButton icon="plus" label="Zoom in" disabled={z.scale >= MAX_SCALE} onClick={() => by(STEP)} />
+          {/* a phone pinches and double taps instead: the bar keeps room for Close */}
+          <IconButton icon="minus" className="pv-zoom" label="Zoom out" disabled={isFit(z)} onClick={() => by(1 / STEP)} />
+          <IconButton icon="plus" className="pv-zoom" label="Zoom in" disabled={z.scale >= MAX_SCALE} onClick={() => by(STEP)} />
           {many && <IconButton icon="chevron" className="flip" label="Previous" onClick={() => step(-1)} />}
           {many && <IconButton icon="chevron" label="Next" onClick={() => step(1)} />}
           {/* A diagram the app drew is an SVG of its own: opened as a page it would run on the app's origin. */}
@@ -217,6 +231,7 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
           onPointerMove={move}
           onPointerUp={up}
           onPointerCancel={up}
+          onLostPointerCapture={up}
         >
           <img
             ref={img}

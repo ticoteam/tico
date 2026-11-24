@@ -27,7 +27,7 @@ describe('a message’s own media under its words', () => {
     const pause = vi.spyOn(video, 'pause').mockImplementation(() => {});
     fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
     expect(pause).toHaveBeenCalled();
-    expect(run).toHaveBeenCalledWith('files.preview', { file: 'v1', held: { url: '/api/v2/files/v1', mime: 'video/mp4', name: 'demo.mp4' } }, { via: 'click' });
+    expect(run).toHaveBeenCalledWith('files.preview', { file: 'v1', held: { url: '/api/v2/files/v1', mime: 'video/mp4', name: 'demo.mp4', filename: 'demo.mp4' } }, { via: 'click' });
     // a video the browser cannot play is offered as a download
     fireEvent.error(video);
     expect(container.querySelector('video')).toBeNull();
@@ -44,17 +44,23 @@ describe('a message’s own media under its words', () => {
   });
 
   it('shows a PDF’s first page with its name, a plain card when there is none, and opens it full screen', () => {
-    const { container } = shelf({ id: 'p1', name: 'lease.pdf', content_type: 'application/pdf', size: 2048 });
+    // a PDF by its name alone, captioned: the viewer is told the name, so it opens as a PDF too
+    const { container } = shelf({ id: 'p1', name: 'lease.pdf', title: 'The lease', content_type: 'application/octet-stream', size: 2048 });
     const thumb = container.querySelector('.pcard img')!;
     expect(thumb.getAttribute('src')).toBe('/api/v2/files/p1/thumb');
     expect(screen.getByText('PDF')).toBeTruthy();
     fireEvent.error(thumb);
     expect(container.querySelector('.pcard img')).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'lease.pdf' }));
+    fireEvent.click(screen.getByRole('link', { name: 'The lease' }));
     expect(run).toHaveBeenCalledWith(
       'files.preview',
-      { file: 'p1', held: { url: '/api/v2/files/p1', mime: 'application/pdf', name: 'lease.pdf', size: 2048 } },
+      { file: 'p1', held: { url: '/api/v2/files/p1', mime: 'application/octet-stream', name: 'The lease', filename: 'lease.pdf', size: 2048 } },
       { via: 'click' },
     );
+  });
+
+  it('reads a file only from the app’s own file address, never one that walks out of it', () => {
+    const { container } = shelf({ id: 's2', name: 'memo.mp3', content_type: 'audio/mpeg', url: '/api/v2/files/../admin/x' });
+    expect(container.querySelector('audio')?.getAttribute('src')).toBe('/api/v2/files/s2');
   });
 });

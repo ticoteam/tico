@@ -317,12 +317,13 @@ function FullFile({ v }: { v: Viewing & { full: NonNullable<Viewing['full']> } }
   const { full } = v;
   const close = () => viewing.set(null);
   const url = full.url ?? fileUrl(v.file, v.version);
+  const named = full.name || v.name;
   return (
     <Viewer
       open
       onClose={close}
       title={v.name}
-      meta={kindWord(full.mime, full.kind, v.name) || undefined}
+      meta={kindWord(full.mime, full.kind, named) || undefined}
       actions={
         <>
           {!full.url && (
@@ -330,14 +331,14 @@ function FullFile({ v }: { v: Viewing & { full: NonNullable<Viewing['full']> } }
               <Icon name="popout" />
             </Link>
           )}
-          <a className="ib" href={url} download={v.name} aria-label="Download" title="Download">
+          <a className="ib" href={url} download={named} aria-label="Download" title="Download">
             <Icon name="download" />
           </a>
         </>
       }
     >
       {full.url ? (
-        <FileFrame id={v.file} mime={full.mime} title={v.name} url={full.url} name={v.name} size={full.size} held streams />
+        <FileFrame id={v.file} mime={full.mime} title={v.name} url={full.url} name={named} size={full.size} held streams />
       ) : (
         <FilePreview file={v.file} version={v.version} />
       )}
@@ -345,7 +346,7 @@ function FullFile({ v }: { v: Viewing & { full: NonNullable<Viewing['full']> } }
   );
 }
 
-const pictureOf = (v: Viewing) => !v.full || viewOf(v.full.mime, v.full.kind, v.name) === 'image';
+const pictureOf = (v: Viewing) => !v.full || viewOf(v.full.mime, v.full.kind, v.full.name || v.name) === 'image';
 
 /** Mounted once at the app's root: the picture `files.view` opened, full size over the page (any other file opens as
     its page in Files), or any file `files.preview` opened, in the full-screen layer. */

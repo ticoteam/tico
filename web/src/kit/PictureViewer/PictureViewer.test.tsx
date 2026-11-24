@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { PictureViewer, type Picture } from './PictureViewer';
@@ -14,6 +14,9 @@ function Harness({ start = 0 }: { start?: number | null }) {
   return (
     <>
       <span data-testid="at">{String(at)}</span>
+      <button type="button" onClick={() => setAt(0)}>
+        Reopen
+      </button>
       <PictureViewer pictures={PICS} at={at} onAtChange={setAt} />
     </>
   );
@@ -68,6 +71,22 @@ describe('PictureViewer', () => {
     swipe(back.parentElement!, -120);
     expect(screen.getByTestId('at').textContent).toBe('0');
     expect(await screen.findByRole('img', { name: 'Front.png' })).toBeTruthy();
+  });
+
+  it('opens a picture at fit again after another one, and after closing', async () => {
+    render(<Harness />);
+    const zoomIn = () => fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    zoomIn();
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toContain('scale(1.5)');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowRight' });
+    await screen.findByRole('img', { name: 'Back.png' });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowLeft' });
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toBe('');
+    zoomIn();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toBe('');
   });
 
   it('draws nothing while closed', () => {
