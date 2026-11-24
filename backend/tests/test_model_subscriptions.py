@@ -75,6 +75,7 @@ def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_val
     assert [k["kind"] for k in body["kinds"]] == [
         "claude_token",
         "codex_login",
+        "antigravity_login",
         "anthropic_key",
         "openai_key",
         "cursor_key",

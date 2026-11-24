@@ -135,7 +135,8 @@ impl TurnHome {
     pub fn sign_in(&self, home: &str) -> Result<String, String> {
         let text = read_codex_auth(&Path::new(home).join(self.file))
             .ok_or("the plan's sign-in is not in place")?;
-        let v: Value = serde_json::from_str(&text).map_err(|_| "the plan's sign-in is unreadable")?;
+        let v: Value =
+            serde_json::from_str(&text).map_err(|_| "the plan's sign-in is unreadable")?;
         if ["access_token", "refresh_token"]
             .iter()
             .any(|k| v["token"][k].as_str().is_some_and(|t| !t.is_empty()))
@@ -792,7 +793,13 @@ fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
 /// revision, else `value`. A turn joining one already running keeps the file in place (Codex may have refreshed it)
 /// unless it brings a newer revision (someone reconnected it). Returns what the file holds now.
-fn place(root: &Path, home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
+fn place(
+    root: &Path,
+    home: &Path,
+    name: &str,
+    value: &str,
+    revision: i64,
+) -> Result<String, String> {
     let mut homes = homes();
     let path = home.join(name);
     plain_dirs(root, path.parent().unwrap_or(home), true)?;
@@ -1516,7 +1523,10 @@ mod tests {
             // process goes without them, and over SSH (hosts/antigravity.rs).
             assert!(env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
             let home = PathBuf::from(&env["GEMINI_HOME"]);
-            assert_eq!(plan_home(&got, "antigravity"), Some(env["GEMINI_HOME"].clone()));
+            assert_eq!(
+                plan_home(&got, "antigravity"),
+                Some(env["GEMINI_HOME"].clone())
+            );
             let t = turn_home("antigravity").unwrap();
             assert_eq!(t.sign_in(&env["GEMINI_HOME"]).unwrap(), value);
             let token = home.join(AGY_TOKEN);
@@ -1613,7 +1623,15 @@ mod tests {
             &mut vec![],
             &mut BTreeSet::new(),
         );
-        let turns_dir = got[0].home.clone().unwrap().parent().unwrap().parent().unwrap().to_path_buf();
+        let turns_dir = got[0]
+            .home
+            .clone()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
         let _ = std::fs::remove_dir_all(&turns_dir);
         std::os::unix::fs::symlink(&elsewhere, &turns_dir).unwrap();
         assert!(start(&mut got, "antigravity", &mut env).is_err());

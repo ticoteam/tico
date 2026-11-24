@@ -33,6 +33,7 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 -o "$work/manifest.json" "$MANIFESTS/${os}_${target}${musl}.json"
 # One "name": "value" per line, however the manifest is laid out (none of its values holds a brace or comma).
+# shellcheck disable=SC2020  # each of the three characters becomes a newline
 field() { tr '{},' '\n\n\n' <"$work/manifest.json" | sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" | head -n 1; }
 version=$(field version)
 url=$(field url)

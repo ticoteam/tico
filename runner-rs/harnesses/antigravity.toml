@@ -11,7 +11,7 @@ providers = ["google"]
 [install]
 method = "script"
 url = "https://raw.githubusercontent.com/ticoteam/tico/main/runner-rs/harnesses/antigravity-install-v1.sh"
-sha256 = "7d63f719fb27def9931d505477462f4d35ffdd7536a7598e3fd607fa9664b48f"
+sha256 = "142709241325e666df80c9d342e83aa2500896242f674347ca93c1fd95dfa036"
 requires = ["curl", "tar", "mktemp"]
 prefix_env = "AGY_PREFIX"
 bin = "bin/agy"
