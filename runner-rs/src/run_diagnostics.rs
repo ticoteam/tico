@@ -191,6 +191,11 @@ impl Stderr {
         }
     }
 
+    /// Forget what a process kept between turns said in an earlier turn, so a failure carries only its own turn's.
+    pub fn clear(&self) {
+        self.0.lock().unwrap().clear();
+    }
+
     pub fn tail(&self) -> String {
         self.0
             .lock()

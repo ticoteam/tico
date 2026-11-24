@@ -962,28 +962,9 @@ impl Pool {
         }
     }
 
-    /// A new folder for one process's token file: the bot may traverse it, never write it (crate::warm).
+    /// A new folder for one process's token file (crate::warm).
     fn home(&self) -> Result<PathBuf, String> {
-        use std::os::unix::fs::PermissionsExt;
-        let home = self.dir.join(uuid::Uuid::new_v4().simple().to_string());
-        std::fs::create_dir_all(&home)
-            .map_err(|e| format!("could not make pi's token folder: {e}"))?;
-        let mode = if crate::isolation::enabled() {
-            0o711
-        } else {
-            0o700
-        };
-        for path in [&self.dir, &home] {
-            if !std::fs::symlink_metadata(path)
-                .map_err(|e| e.to_string())?
-                .is_dir()
-            {
-                return Err("pi's token folders must not be symbolic links".into());
-            }
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-                .map_err(|e| format!("could not prepare pi's token folder: {e}"))?;
-        }
-        Ok(home)
+        crate::warm::folder(&self.dir)
     }
 }
 

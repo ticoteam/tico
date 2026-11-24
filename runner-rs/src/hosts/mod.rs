@@ -1159,11 +1159,12 @@ pub enum Host {
 }
 
 impl Host {
-    /// Whether the newest turn ran on a harness process already running: a pooled pi process. Every other harness
-    /// starts a process for each turn.
+    /// Whether the newest turn ran on a harness process already running: a pooled pi or Antigravity process. Every
+    /// other harness starts a process for each turn.
     pub fn warm(&self) -> bool {
         match self {
             Host::Pi(h) => h.warm(),
+            Host::Antigravity(h) => h.warm(),
             _ => false,
         }
     }
@@ -1338,7 +1339,7 @@ impl Host {
             Host::Claude(h) => h.start_turn(thread_id, text, effort),
             Host::Codex(h) => h.start_turn(thread_id, text, effort).await,
             Host::Gemini(h) => h.start_turn(thread_id, text, effort),
-            Host::Antigravity(h) => h.start_turn(thread_id, text, effort),
+            Host::Antigravity(h) => h.start_turn(thread_id, text, effort).await,
             Host::MuseCode(h) => h.start_turn(thread_id, text, effort),
             Host::Pi(h) => h.start_turn(thread_id, text, effort).await,
             Host::Cursor(h) => h.start_turn(thread_id, text, effort),

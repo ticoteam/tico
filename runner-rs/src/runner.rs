@@ -122,6 +122,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
     pub pi: Arc<crate::hosts::pi::Pool>,
+    /// agy processes kept between a thread's turns (hosts/antigravity.rs Pool).
+    pub agy: Arc<crate::hosts::antigravity::Pool>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -236,6 +238,10 @@ impl Runner {
             shutdown: Mutex::new(None),
             pi: Arc::new(crate::hosts::pi::Pool::new(
                 state.directory.join("pi"),
+                capacity.max(8),
+            )),
+            agy: Arc::new(crate::hosts::antigravity::Pool::new(
+                state.directory.join("agy-warm"),
                 capacity.max(8),
             )),
             state,
@@ -1460,6 +1466,7 @@ impl Runner {
             m.abort();
         }
         self.pi.prune(true).await;
+        self.agy.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
@@ -1516,6 +1523,7 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.pi.prune(false).await;
+        self.agy.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!(

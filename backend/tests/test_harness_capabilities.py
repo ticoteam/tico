@@ -12,7 +12,7 @@ def test_manifests_load_and_reject_unknown_capabilities():
         and rows["antigravity"]["manifest"] == "antigravity"
         and rows["antigravity"]["capabilities"]["sign_in_status"] == "command"
         and rows["antigravity"]["capabilities"]["resume_command"] == "agy --conversation"
-        and not rows["antigravity"]["capabilities"]["persistent_session"]
+        and rows["antigravity"]["capabilities"]["persistent_session"]
     )
     with pytest.raises(manifests.ManifestError, match="unknown capability"):
         manifests.parse({"id": "x", "runtime": "x", "capabilities": {"telepathy": True}})

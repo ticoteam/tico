@@ -6,8 +6,9 @@
 config options (a session starts on Hydrogen at low), and `session/prompt`, which streams two message chunks and
 answers with its stopReason and that prompt's usage. Every turn is appended to $FAKE_LOG as one JSON line (argv, pid,
 the conversation and the one it resumed, the model and level, the prompt, the granted variables and the token
-HUB_TOKEN held). A prompt containing HANG streams one chunk and answers nothing more, once per $FAKE_LOG; the process
-exits when stdin closes."""
+HUB_TOKEN held). A prompt containing HANG streams one chunk and answers nothing more, once per $FAKE_LOG; a
+notification (`session/cancel`) is not answered. The runner keeps the process between a thread's turns; it exits
+when stdin closes."""
 
 import json
 import os
@@ -79,7 +80,7 @@ def main():
             continue
         msg = json.loads(line)
         method, rid, p = msg.get("method"), msg.get("id"), msg.get("params") or {}
-        if method is None:
+        if method is None or rid is None:
             continue
         if method == "initialize":
             result = {

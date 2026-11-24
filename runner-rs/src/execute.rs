@@ -2273,7 +2273,12 @@ impl Runner {
             }
             if runtime == "antigravity" {
                 let home = self.state.directory.join("agy").join(bot);
-                return Ok(Host::Antigravity(AntigravityHost::new(&home, command, tx)));
+                return Ok(Host::Antigravity(AntigravityHost::new(
+                    &home,
+                    command,
+                    tx,
+                    self.agy.clone(),
+                )));
             }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
@@ -2306,11 +2311,12 @@ impl Runner {
                 vec!["gemini".into()],
                 tx,
             )),
-            // Its conversation records only: each turn starts its own `agy` (hosts/antigravity.rs).
+            // Its conversation records, and the `agy` kept between the bot's turns (hosts/antigravity.rs Pool).
             "antigravity" => Host::Antigravity(AntigravityHost::new(
                 &self.state.directory.join("agy").join(bot),
                 vec![crate::harness_tools::executable_for("antigravity")],
                 tx,
+                self.agy.clone(),
             )),
             "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
                 bot,
@@ -2957,6 +2963,7 @@ impl Runner {
                     &execution_path.join(".antigravity"),
                     vec![crate::harness_tools::executable_for("antigravity")],
                     tx,
+                    self.agy.clone(),
                 ))
             } else {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
@@ -4042,11 +4049,17 @@ impl Runner {
                     let _ = h.interrupt(th, t).await;
                 }
             }
-            // A host that keeps its process between turns gives it back below, after a turn that completed; a fresh
-            // stateless chat turn keeps none (crate::continuity::stateless).
-            let keeps = !fresh_chat && !personal && matches!(h, Host::Pi(_));
-            if !keeps || drove.outcome != "completed" {
+            // A host that keeps its process between turns gives it back below, after a turn that completed (Antigravity's
+            // after one it cancelled too, which leaves its process running); a fresh stateless chat turn keeps none
+            // (crate::continuity::stateless).
+            let keeps = !fresh_chat && !personal && matches!(h, Host::Pi(_) | Host::Antigravity(_));
+            let ended = drove.outcome == "completed"
+                || (drove.outcome == "interrupted" && matches!(h, Host::Antigravity(_)));
+            if !keeps || !ended {
                 self.stop_host(h, &aid).await;
+            }
+            if let Host::Antigravity(agy) = h {
+                agy.release(keeps && ended).await;
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
@@ -7667,15 +7680,18 @@ mod tests {
         );
     }
 
-    /// An `agy acp` for execute's tests (argv: this script, its folder). It resumes the conversation it is asked to,
-    /// unless `agy-lose-<n>` is there (then it refuses, and the turn begins a new one). It keeps each prompt as
-    /// `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone once the turn
-    /// ends (as on a computer that lost them).
+    /// An `agy acp` for execute's tests (argv: this script, its folder), counting turns `<n>` by the prompts it was
+    /// sent. It resumes the conversation it is asked to, unless `agy-lose-<n>` is there (then it refuses, and the turn
+    /// begins a new one). It keeps each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of
+    /// its conversations are gone once it answered, and it exits (as on a computer that lost them), as it does with
+    /// `agy-exit-<n>`, so the next turn starts a new one.
     const FAKE_AGY: &str = r#"#!/usr/bin/env python3
 import json, os, sys, uuid
 folder = sys.argv[1]
-n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
+n = 0
 def flag(name):
+    global n
+    n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
     return os.path.exists(os.path.join(folder, "%s-%d" % (name, n)))
 def send(m):
     print(json.dumps(m), flush=True)
@@ -7693,28 +7709,33 @@ for line in sys.stdin:
         sid = p.get("sessionId") or str(uuid.uuid4())
         send({"jsonrpc": "2.0", "id": i, "result": {"sessionId": sid}})
     elif method == "session/prompt":
-        open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(p["prompt"][0]["text"])
+        forget, leave = flag("agy-forget"), flag("agy-exit")
+        refresh, crash = flag("agy-refresh"), flag("agy-crash")
+        k = n
+        open(os.path.join(folder, "agy-prompt-%d" % k), "w").write(p["prompt"][0]["text"])
         said = "Done."
-        if flag("agy-refresh"):
+        if refresh:
             # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on
             # its stderr as it fails).
-            fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
+            fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % k
             token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
             open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
             said = "Done. " + fresh
-            if flag("agy-crash"):
+            if crash:
                 sys.stderr.write("refresh went wrong with " + fresh + "\n")
                 sys.stderr.flush()
                 sys.exit(3)
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}}}})
         send({"jsonrpc": "2.0", "id": i, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}})
+        if forget:
+            records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
+            for root, _, files in os.walk(records):
+                for name in files:
+                    os.remove(os.path.join(root, name))
+        if forget or leave:
+            sys.exit(0)
     else:
         send({"jsonrpc": "2.0", "id": i, "result": {}})
-if flag("agy-forget"):
-    records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
-    for root, _, files in os.walk(records):
-        for name in files:
-            os.remove(os.path.join(root, name))
 "#;
 
     fn fake_agy_in(folder: &Path) {
@@ -7836,7 +7857,10 @@ if flag("agy-forget"):
         let folder =
             std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("agy-lose-1"), "").unwrap();
+        // Turn 0's agy exits after it answered, so turn 1's starts again and must resume.
+        for name in ["agy-exit-0", "agy-lose-1"] {
+            std::fs::write(folder.join(name), "").unwrap();
+        }
         fake_agy_in(&folder);
         let agy =
             json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
