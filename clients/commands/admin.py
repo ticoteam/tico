@@ -283,8 +283,8 @@ def people_list(api, args):
 
 @tool(
     "tico_setup_show",
-    "Where Finish setup stands, for the owner or an admin: whether the welcome wizard is finished (`completed`, "
-    "`needed`), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
+    "Where Finish setup stands, for the owner or an admin: whether setup is finished (`completed`, `needed`; "
+    "`live_owed`: a setup file made the company and its owner has not gone live in the app yet), its saved answers and picks, the people the company file from setup names (`company_import.people`: "
     "`id` is the key `tico_setup_invite` takes, `person` is set once they are on the roster, `invited_at` once Tico "
     "mailed them), a company file that could not be imported (`company_import_failed`), and the getting-started "
     "checklist (`getting_started.items`: `done`, `optional`, `skipped`).",
@@ -298,10 +298,11 @@ def setup_show(api, args):
 
 @tool(
     "tico_setup_complete",
-    "Finish the welcome wizard with the answers and picks it has saved (`tico_setup_show`), as the owner: the built-in "
-    "bots are created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. The "
-    "same as the wizard's Create my team. Answers with the setup record. The wizard's choices are saved with "
-    "`tico_api` PUT /api/v2/setup, or come from the company file the install was given.",
+    "Finish setup with the answers and picks it has saved (`tico_setup_show`), as the owner: the built-in bots are "
+    "created and every other role becomes a Recruiting seat. Finishing twice keeps the first time. A company a setup "
+    "file made already has its team: finishing only marks it live (`live_owed` false). The same as the owner's finish "
+    "in Tico's first run. Answers with the setup record. The choices are saved with `tico_api` PUT /api/v2/setup, or "
+    "come from the company file the install was given.",
     {},
     writes=True,
 )

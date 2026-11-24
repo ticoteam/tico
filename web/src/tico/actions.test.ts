@@ -6,7 +6,7 @@ import { run } from '@/actions';
 // the test lends its router to dispatch, as the shell's ActionsRoot does
 import { bind } from '@/actions/bind';
 import { ticoRoomQuery } from '@/conversation';
-import { queryClient } from '@/data';
+import { configQuery, queryClient } from '@/data';
 import './actions';
 import { ticoPowerQuery, type TicoPower } from './queries';
 
@@ -22,6 +22,7 @@ beforeEach(() => {
   queryClient.setQueryData(ticoPowerQuery.queryKey, on);
   queryClient.setQueryData(ticoRoomQuery.queryKey, 'room1');
   queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
+  queryClient.setQueryData(configQuery.queryKey, { onboarding_needed: false } as never);
 });
 afterEach(() => {
   queryClient.clear();
@@ -37,5 +38,17 @@ describe('Ask Tico', () => {
     await run('tico.ask', { text: 'Who made this?' }, { via: 'click' });
     const ask = sent.find((s) => s.url === '/api/v2/assistant/messages');
     expect(ask?.body).toEqual({ text: 'Who made this?', from_page: { page: 'docs', label: 'Files', item: { kind: 'file', id: 'f1' } } });
+  });
+
+  it('sends nothing while the owner still owes the first run: no plan, so no turn is queued', async () => {
+    const root = createRootRoute();
+    const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/tasks'] }) });
+    await router.load();
+    bind({ router });
+    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'owner', slug: null });
+    queryClient.setQueryData(configQuery.queryKey, { onboarding_needed: true } as never);
+    const r = await run('tico.ask', { text: 'What is our churn?' }, { via: 'search' });
+    expect(r.ok).toBe(false);
+    expect(sent.filter((s) => s.url.includes('/messages'))).toEqual([]);
   });
 });

@@ -2840,7 +2840,8 @@ class OnboardingAnswers(Contract):
     teams_off: list[Annotated[str, Field(min_length=1, max_length=60)]] = Field(default_factory=list, max_length=20)
     # The first job picked on the Your team step's "Start with" line (company_import.FIRST_JOBS): its one seat is the
     # default chart's only live seat that is not a built-in. "" is none picked: every live seat of the chart is live.
-    first_job: Literal["plan", "grow", "customers", "legal", ""] = ""
+    # "none": no seat is live; Tico hires once the owner has said what winning looks like (the app's first run).
+    first_job: Literal["plan", "grow", "customers", "legal", "none", ""] = ""
 
 
 class OnboardingSelection(Contract):
@@ -2859,6 +2860,13 @@ class OnboardingDraft(Contract):
     selected: dict[Slug, OnboardingSelection] = Field(
         default_factory=dict, max_length=300
     )  # the chart's 300-seat guard
+
+
+class SetupComplete(Contract):
+    """The owner's finish. `hand_off`: the first run in the app ends with the owner's "Set up my company." to their
+    Assistant, written with the finish, so Tico takes the setup over in its chat (Onboarding.complete)."""
+
+    hand_off: bool = False
 
 
 class OnboardingCompanyFile(Contract):

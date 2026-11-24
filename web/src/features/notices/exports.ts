@@ -2,4 +2,6 @@
 export { PlanLock } from './PlanLock';
 export { AssetRecovery } from './AssetRecovery';
 // The menu's note: the new desktop app, inside the older one.
-export { DesktopMove } from './DesktopMove';
+export { DesktopMove, systemOf } from './DesktopMove';
+// Where the desktop app downloads from, for this computer (the first run's Stay in touch).
+export { desktopDownloadQuery, downloadHref } from './queries';

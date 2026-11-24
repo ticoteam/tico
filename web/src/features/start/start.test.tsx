@@ -1,18 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ActionsRoot } from '@/actions';
 import { ApiError } from '@/api/client';
-import { directoryQuery, queryClient } from '@/data';
-// Keep the lazy Settings import's transform outside the sign-in test.
-import '@/features/settings/exports';
-import { subscriptionsQuery } from '@/features/settings/routing';
-import { FirstRun } from './FirstRun';
-import { useStartGate } from './gate';
+import { queryClient } from '@/data';
 import { GithubConnection } from './GithubConnection';
-import { landing, type SetupRecord } from './queries';
+import { landing } from './queries';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 
@@ -38,27 +32,6 @@ function show(node: ReactNode, at: string) {
   );
   return router;
 }
-
-const RECORD: SetupRecord = {
-  names: { company_name: '', app_name: '', assistant_name: '', owner_name: '', team_domain: '', website: '' },
-  answers: {},
-  selected: {},
-  completed: null,
-  needed: true,
-  default_chart: [
-    { team: 'Engineering', on: true },
-    { team: 'Support', on: false },
-    { team: 'Sales', on: false },
-    { team: 'Founders', on: false, locked: true },
-  ],
-  first_jobs: {
-    choices: [
-      { key: 'build', label: 'Build the app', seat: 'eng', team: 'Engineering' },
-      { key: 'support', label: 'Answer customers', seat: 'sup', team: 'Support' },
-    ],
-    picked: 'build',
-  },
-};
 
 const SETUP = {
   action: 'https://github.com/organizations/acme-co/settings/apps/new?state=made-up-state',
@@ -101,7 +74,6 @@ afterEach(() => {
 
 const posted = () => submit.mock.calls.map(([f]) => f);
 const sent = (method: string, path: string) => calls.filter((c) => c.method === method && c.url.split('?')[0] === path);
-const putBody = () => JSON.parse(sent('PUT', '/api/v2/setup')[0]!.body!) as unknown;
 
 describe('Connect GitHub @s1158', () => {
   it('a return with forged or unknown address values does nothing: the server decides', async () => {
@@ -117,7 +89,8 @@ describe('Connect GitHub @s1158', () => {
 
   it('hands off to GitHub with the setup, and the setup never enters the cache', async () => {
     answers['GET /api/v2/github/app/manifest'] = { body: SETUP };
-    show(<FirstRun />, '/tasks?setup=github');
+    show(<GithubConnection />, '/library/tools?tool=github');
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Connect GitHub' })).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('radio', { name: /An organization/ }));
@@ -137,7 +110,8 @@ describe('Connect GitHub @s1158', () => {
 
   it('a setup page that is not GitHub is never posted to', async () => {
     answers['GET /api/v2/github/app/manifest'] = { body: { ...SETUP, action: 'https://elsewhere.example/apps/new' } };
-    show(<FirstRun />, '/tasks?setup=github');
+    show(<GithubConnection />, '/library/tools?tool=github');
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
     expect(await within(dialog).findByRole('alert')).toBeTruthy();
@@ -148,7 +122,8 @@ describe('Connect GitHub @s1158', () => {
   it('a lost key is replaced only after the owner says so', async () => {
     answers['GET /api/v2/github/app/manifest'] = [refusal(409, 'github_key_missing', 'made-up server words'), { body: SETUP }];
     answers['POST /api/v2/github/app/replace-lost-key'] = { body: { replaced: true } };
-    show(<FirstRun />, '/tasks?setup=github');
+    show(<GithubConnection />, '/library/tools?tool=github');
+    fireEvent.click(await screen.findByRole('button', { name: 'Connect' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Connect' }));
     expect(await within(dialog).findByText(/Replacing it removes the GitHub app and directory sync keys/)).toBeTruthy();
@@ -217,11 +192,6 @@ describe('Connect GitHub @s1158', () => {
   });
 });
 
-function Probe() {
-  const gate = useStartGate();
-  return <span>{gate.firstRun ? 'First run' : 'The app'}</span>;
-}
-
 describe('Setup, first run @s1154', () => {
   it('an owner the server says still owes the first run lands with it open; others land plain', async () => {
     serve(() => ({}));
@@ -236,167 +206,5 @@ describe('Setup, first run @s1154', () => {
     otherwise = () => refusal(401, 'signin', 'Sign in');
     expect(await landing(queryClient)).toBeNull();
     expect(queryClient.getQueryState(['me'])?.error).toBeInstanceOf(ApiError);
-  });
-
-  it('the address opens it over the app for the owner', async () => {
-    serve(() => ({}));
-    queryClient.setQueryData(directoryQuery.queryKey, { actors: [], byId: {} });
-    const router = show(<Probe />, '/?setup=path');
-    expect(await screen.findByText('First run')).toBeTruthy();
-    expect(router.state.location.search).toEqual({ setup: 'path' });
-  });
-
-  it('sends anyone else to Tasks, with no first run', async () => {
-    serve(() => ({}));
-    queryClient.setQueryData(directoryQuery.queryKey, { actors: [], byId: {} });
-    queryClient.setQueryData(['me'], { id: 'human:me', email: '', role: 'person', slug: null });
-    const router = show(<Probe />, '/?setup=path');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
-    expect(screen.getByText('The app')).toBeTruthy();
-    expect(router.state.location.search).toEqual({});
-  });
-});
-
-describe('First run @s1154 @s1171', () => {
-  it('opens from the address over the app, with "Have my agent set it up" chosen first', async () => {
-    serve(() => ({}));
-    show(<FirstRun />, '/tasks?setup=path');
-    const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByRole('heading', { name: 'Set up your company' })).toBeTruthy();
-    expect(within(dialog).getByRole('radio', { name: /Have my agent set it up/ }).getAttribute('aria-checked')).toBe('true');
-    expect(within(dialog).getByRole('radio', { name: /Set it up myself/ }).getAttribute('aria-checked')).toBe('false');
-    expect(within(dialog).getByRole('button', { name: 'Continue' })).toBeTruthy();
-  });
-});
-
-describe('Setup dialog, three steps @s1171', () => {
-  it('step 1 saves the company name and moves to step 2', async () => {
-    serve((method, url) => {
-      if (url.startsWith('/api/v2/model-subscriptions')) return { subscriptions: [] };
-      if (method === 'PUT') return { ...RECORD, names: { ...RECORD.names, company_name: 'Fernhill' } };
-      return RECORD;
-    });
-    queryClient.setQueryData(['setup'], RECORD);
-    const router = show(<FirstRun />, '/tasks?setup=name');
-    const dialog = await screen.findByRole('dialog', { name: 'Name your company' });
-    expect(within(dialog).getByRole('img', { name: 'Step 1 of 3' })).toBeTruthy();
-    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Company name' }), { target: { value: ' Fernhill ' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect((router.state.location.search as { setup?: string }).setup).toBe('model'));
-    expect(putBody()).toMatchObject({ names: { company_name: 'Fernhill' } });
-    const next = await screen.findByRole('dialog', { name: 'Connect your AI plan' });
-    expect(within(next).getByRole('img', { name: 'Step 2 of 3' })).toBeTruthy();
-  });
-
-  it('continues when the first held provider becomes available and refreshes the later hold too', async () => {
-    vi.useFakeTimers();
-    try {
-      const now = Date.now();
-      const quota = new Date(now + 4000).toISOString();
-      const capacity = new Date(now + 2000).toISOString();
-      const path = '/api/v2/model-subscriptions';
-      const catalog = () => {
-        const limited = Date.now() < now + 4000;
-        const busy = Date.now() < now + 2000;
-        return { kinds: [], subscriptions: [
-          { id: 'limited', name: 'Limited plan', runtime: 'codex', available: !limited, usage: limited ? { quota_hold_until: quota } : null },
-          { id: 'busy', name: 'Busy plan', runtime: 'claude', available: !busy, usage: busy ? { capacity_until: capacity } : null },
-        ] };
-      };
-      queryClient.setQueryData(subscriptionsQuery.queryKey, catalog() as never);
-      serve((_method, url) => url === path ? catalog() : RECORD);
-      show(<FirstRun />, '/tasks?setup=model');
-      await act(() => vi.advanceTimersByTimeAsync(0));
-      const dialog = within(screen.getByRole('dialog', { name: 'Connect your AI plan' }));
-      expect(dialog.queryByRole('button', { name: 'Continue' })).toBeNull();
-
-      await act(() => vi.advanceTimersByTimeAsync(1999));
-      expect(sent('GET', path)).toHaveLength(0);
-      await act(() => vi.advanceTimersByTimeAsync(6));
-      expect(sent('GET', path)).toHaveLength(1);
-      expect(dialog.getByRole('button', { name: 'Continue' })).toBeTruthy();
-      expect(dialog.getByText('Busy plan')).toBeTruthy();
-
-      await act(() => vi.advanceTimersByTimeAsync(1994));
-      expect(sent('GET', path)).toHaveLength(1);
-      await act(() => vi.advanceTimersByTimeAsync(6));
-      expect(sent('GET', path)).toHaveLength(2);
-      expect(dialog.getByText('Limited plan')).toBeTruthy();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('connects inline, retries, and continues only after a provider is ready', async () => {
-    let allowed = false;
-    let saved = false;
-    const usage = { used_pct: 100, resets_at: '2099-07-01T00:00:00Z' };
-    const existing = { id: 'old', name: 'Held plan', runtime: 'claude', status: 'working', available: false, usage: { ...usage, quota_hold_until: usage.resets_at } };
-    // A Claude plan's kind, which offers Paste instead when no computer can sign in.
-    const claude = { kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Setup token', help: '', owned: true, connect: true, paste: true };
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [existing] } as never);
-    const codePage = 'https://auth.example/claude';
-    otherwise = (method, url) => {
-      if (url.endsWith('/connect')) {
-        return allowed
-          ? { body: { id: 'login1', runner_id: 'r1', state: 'waiting', url: codePage, code: 'TEMP-CODE' } }
-          : refusal(409, 'offline', 'No computer can sign in');
-      }
-      if (url.endsWith('/logins/login1/cancel')) return { body: { state: 'canceled' } };
-      if (url.endsWith('/logins/login1')) return { body: { id: 'login1', runner_id: 'r1', state: 'waiting', url: codePage, code: 'TEMP-CODE', not_yours: true } };
-      if (url === '/api/v2/model-subscriptions') {
-        if (method === 'POST') {
-          saved = true;
-          return { body: { id: 'new', name: 'New plan' } };
-        }
-        return { body: { kinds: [claude], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working', available: true, usage }] : [existing] } };
-      }
-      return { body: RECORD };
-    };
-    const router = show(<><ActionsRoot dot={() => null} fold={() => {}} /><FirstRun /></>, '/tasks?setup=model');
-    const dialog = await screen.findByRole('dialog', { name: 'Connect your AI plan' });
-    expect(within(dialog).getByRole('button', { name: 'Use an API key' })).toBeTruthy();
-    expect(within(dialog).queryByRole('button', { name: 'Continue' })).toBeNull();
-    fireEvent.click(within(dialog).getAllByRole('button', { name: 'Connect' })[0]!);
-    await within(dialog).findByRole('region', { name: 'Connect Claude plan' });
-    const connect = () => within(within(dialog).getByRole('region', { name: 'Connect Claude plan' }));
-    expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    expect(await connect().findByRole('button', { name: 'Paste instead' })).toBeTruthy();
-    allowed = true;
-    fireEvent.click(connect().getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(connect().getByRole('link', { name: 'Open Claude' })).toBeTruthy());
-    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => [q.queryKey, q.state.data]))).not.toContain('TEMP-CODE');
-    fireEvent.click(await connect().findByRole('button', { name: 'Paste instead' }));
-    fireEvent.change(await connect().findByLabelText('Setup token'), { target: { value: 'made-up-plan-token' } });
-    fireEvent.click(connect().getByRole('button', { name: 'Connect' }));
-    expect(sent('POST', '/api/v2/model-subscriptions/connect')).toHaveLength(2);
-    fireEvent.click(await within(dialog).findByRole('button', { name: 'Continue' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({ setup: 'team' }));
-  });
-
-  it('step 3 makes the team with the first job picked, then lands on Tasks with the dialog shut', async () => {
-    serve((method) => (method === 'PUT' ? RECORD : {}));
-    queryClient.setQueryData(['setup'], RECORD);
-    const router = show(<FirstRun />, '/tasks?setup=team');
-    const dialog = await screen.findByRole('dialog', { name: 'Pick a team' });
-    expect(within(dialog).getByRole('img', { name: 'Step 3 of 3' })).toBeTruthy();
-    expect(within(dialog).getByRole('radio', { name: /Build the app/ }).getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(within(dialog).getByRole('radio', { name: /Answer customers/ }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Start' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
-    await waitFor(() => expect((router.state.location.search as { setup?: string }).setup).toBeUndefined());
-    // the chart as the server laid it out, less the teams off; the picked job's team and a locked one are never off
-    expect(putBody()).toMatchObject({ answers: { first_job: 'support', teams_off: ['Sales'] }, selected: {} });
-    expect(sent('POST', '/api/v2/setup/complete')).toHaveLength(1);
-  });
-
-  it('a pasted key is a password field held in the step only, never in the cache', async () => {
-    serve((_method, url) => (url.startsWith('/api/v2/model-subscriptions') ? { subscriptions: [] } : {}));
-    show(<FirstRun />, '/tasks?setup=paste');
-    const dialog = await screen.findByRole('dialog', { name: 'Paste a key' });
-    const key = within(dialog).getByLabelText('Key') as HTMLInputElement;
-    expect(key.type).toBe('password');
-    fireEvent.change(key, { target: { value: 'made-up-secret-123' } });
-    expect(JSON.stringify(queryClient.getQueryCache().getAll().map((q) => q.state.data))).not.toContain('made-up-secret-123');
   });
 });

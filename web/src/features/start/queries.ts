@@ -10,6 +10,7 @@ import type {
   GitHubLostKeyReplaced,
 } from '@/api/schema';
 import { configQuery, keys, meQuery, queryClient, quietRoot, write } from '@/data';
+import { ticoRoomQuery } from '@/conversation';
 import { addSubscription, subscriptionsQuery } from '@/features/settings/routing';
 
 /* ---------------------------------------------------------------- where a person lands */
@@ -57,16 +58,27 @@ export interface SetupNames {
   team_domain: string;
   website: string;
 }
-export interface SetupJob {
-  key: string;
-  label: string;
-  seat: string;
-  team: string;
-}
 export interface SetupTeam {
   team: string;
   on: boolean;
   locked?: boolean;
+}
+/** One person the setup file names (backend/company_import.py `apply`): `email` only when the visitor typed it on the
+    setup page (format 0.4), `invited_at` once Invite sent theirs. */
+export interface FilePerson {
+  id: string;
+  name: string;
+  title?: string;
+  email?: string;
+  person?: string;
+  invited_at?: string | null;
+}
+/** What a setup file left (backend/company_import.py `apply`). `drafts` (format 0.4): how many of the file's drafts
+    wait on the owner in Needs you, were approved, skipped, or had no agent. */
+export interface FileImport {
+  fingerprint: string;
+  people?: FilePerson[];
+  drafts?: { waiting?: number; approved?: number; skipped?: number; unowned?: number };
 }
 export interface SetupRecord {
   names: SetupNames;
@@ -74,13 +86,15 @@ export interface SetupRecord {
   selected: Record<string, unknown>;
   completed: string | null;
   needed: boolean;
+  /** A setup file made the company; its owner still goes live here (backend/onboarding.py `needed`). */
+  live_owed?: boolean;
+  company_import?: FileImport | null;
   default_chart?: SetupTeam[];
-  first_jobs?: { choices: SetupJob[]; picked: string };
 }
 
 const SETUP = ['setup'] as const;
 
-/** The setup record, kept as it was left: closing and reopening the first run resumes it. Refetched on the `setup` signal. */
+/** The setup record. Refetched on the `setup` signal. */
 export const setupQuery = queryOptions({
   queryKey: SETUP,
   queryFn: ({ signal }) => api.get<SetupRecord>('/api/v2/setup', { signal }),
@@ -89,47 +103,53 @@ export const setupQuery = queryOptions({
 /** A PUT replaces names, answers and choices whole, so each save sends the record as held with its change. */
 const draftOf = (r: SetupRecord) => ({ names: r.names, answers: r.answers, selected: r.selected });
 
-async function held(): Promise<SetupRecord> {
-  return queryClient.getQueryData<SetupRecord>(SETUP) ?? queryClient.fetchQuery(setupQuery);
-}
+/** The people from the setup file who have an email and no invite yet: Tico offers to invite them. */
+export const invitees = (record: SetupRecord | undefined): FilePerson[] =>
+  (record?.company_import?.people ?? []).filter((p) => !!p.email?.trim() && !p.invited_at);
 
-export async function saveCompanyName(name: string): Promise<SetupRecord> {
-  const record = await held();
-  const next: SetupRecord = { ...record, names: { ...record.names, company_name: name } };
-  return write<SetupRecord>({
-    key: SETUP,
-    optimistic: () => next,
-    send: (idem) => api.put<SetupRecord>('/api/v2/setup', draftOf(next), { idempotencyKey: idem }),
-    settle: (current, answer) => (answer && typeof answer === 'object' && 'names' in answer ? answer : current),
-  });
+/** Invite one person the setup file names, with the email they gave (backend/invites.py sends Tico's sign-in mail). */
+export async function inviteFromFile(person: FilePerson): Promise<void> {
+  const record = await api.post<SetupRecord>(
+    `/api/v2/setup/company/people/${encodeURIComponent(person.id)}/invite`,
+    { email: person.email ?? '' },
+  );
+  queryClient.setQueryData(SETUP, record);
 }
 
 /**
- * The default chart with only the first job's seat live (welcome.ts onbCollect), then Create. `job` '' keeps every
- * live seat of the chart. Names and setup state change for the whole app, so config and the directory are read again.
+ * The owner's finish. A company a setup file made already has its team: the server only marks it live, and its bots
+ * are pinged for the setup questions they still have. A company set up here gets the chart setup offers first (every
+ * seat Recruiting) and the owner's "Set up my company." to Tico in the same write; Tico then sets the rest up with
+ * the owner in its chat, so no bot is pinged. Names, setup state and Tico change for the whole app, so they are read again.
  */
-export async function finishSetup(job: string): Promise<void> {
-  const record = await held();
-  const team = record.first_jobs?.choices.find((c) => c.key === job)?.team;
-  const teams_off = (record.default_chart ?? []).filter((t) => !t.on && !t.locked && t.team !== team).map((t) => t.team);
-  const next: SetupRecord = {
-    ...record,
-    answers: { ...record.answers, departments: [], briefings: {}, first_job: job, teams_off },
-    selected: {},
-  };
-  await write<SetupRecord>({
-    key: SETUP,
-    optimistic: () => next,
-    send: (idem) => api.put<SetupRecord>('/api/v2/setup', draftOf(next), { idempotencyKey: idem }),
-  });
-  await api.post('/api/v2/setup/complete', {});
-  // The new team's agents start on their first work; a ping that fails leaves them to start on their own.
-  await api.post('/api/v2/flow/ping', { scope: 'setup' }).catch(() => undefined);
+export async function finishSetup(): Promise<{ fromFile: boolean }> {
+  const record = await queryClient.fetchQuery(setupQuery);
+  const fromFile = !!record.company_import;
+  // A finish whose answer was lost already completed it: the starting team is saved once.
+  if (!record.completed) {
+    // No seat starts on a guess: Tico asks what winning looks like first, then hires for it (its set-up-the-company skill).
+    const teams_off = (record.default_chart ?? []).filter((t) => !t.on && !t.locked).map((t) => t.team);
+    const next: SetupRecord = { ...record, answers: { ...record.answers, departments: [], briefings: {}, first_job: 'none', teams_off }, selected: {} };
+    await write<SetupRecord>({
+      key: SETUP,
+      optimistic: () => next,
+      send: (idem) => api.put<SetupRecord>('/api/v2/setup', draftOf(next), { idempotencyKey: idem }),
+    });
+  }
+  // One set up here hands the rest to Tico in the same write (backend/onboarding.py `complete`, hand_off): a reload or a
+  // lost answer cannot leave it live with no one asked.
+  await api.post('/api/v2/setup/complete', fromFile ? {} : { hand_off: true });
+  // A ping that fails leaves the bots to ask on their own.
+  if (fromFile) await api.post('/api/v2/flow/ping', { scope: 'setup' }).catch(() => undefined);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: SETUP }),
     queryClient.invalidateQueries({ queryKey: configQuery.queryKey }),
     queryClient.invalidateQueries({ queryKey: keys.directory() }),
+    // Finishing turns Tico on (backend/onboarding.py `_activate_bootstrap`): its power and room are read again.
+    queryClient.invalidateQueries({ queryKey: ['tico'] }),
+    queryClient.invalidateQueries({ queryKey: ticoRoomQuery.queryKey }),
   ]);
+  return { fromFile };
 }
 
 export type KeyKind = 'anthropic_key' | 'openai_key';

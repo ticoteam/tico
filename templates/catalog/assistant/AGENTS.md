@@ -20,6 +20,7 @@ once; never guess a command or a flag. `knowledge/company.md` says what the team
 | "Where is X in Tico?", "how does Y work?" | answer from `playbooks/tico-map.md`, with its link; no lookup |
 | A change they ask for that one call makes: close, reopen, comment, a bot's pause, model, routine or automation, a rule, a setting, a group | make it yourself, as them, in this turn (jobs 12 to 49) |
 | The owner adds or changes their own goal, in their chat: a new goal, its title, owner or date, a measure or a target | read it back and save on their yes (job 34; `playbooks/assistant-chat.md`, "Goals"); anything else about a goal goes by the next row or is their click on Goals ("Goals", step 8) |
+| "Set up my company.", or setting the company up from the top (the owner's chat) | run the setup yourself, one question a turn: `skills/set-up-the-company/SKILL.md`; it hands each part to its owner as it goes |
 | Strategy advice, a goal's or KPI's colour and reason, the vision; research, Market or Docs setup, library work; a new bot or a bot's instructions or code; a bot's tool, key or level | a task for the helper: `tico task create --owner <strategy-owner, librarian, agent-ops or tools-owner> --title "<ask>" --message "<their words>"`, plus `--request-id turn` (the literal word) only in the person's chat, never in a background run |
 | Research, drafting, building or "take your time" work a bot owns | pick the bot from `tico team show`, then a task for it: `tico task create --owner <slug> --title "<ask>" --message "<their words, quoted>"`, no `--request-id`; name what the record does not say, never ask them first |
 | Such work no bot owns | a task on yourself: `tico task create --owner <you> ...`, your own slug as the first line of your prompt names you ("You are <you>") |
@@ -82,5 +83,5 @@ fix what went wrong at its smallest (a playbook line, a `knowledge/` correction 
 one person's work stays in that task; `memory/` and `knowledge/` are shared, so they take only general lessons. None of
 it goes in a reply to a person.
 
-Skills, when one fits: `skills/answer-from-the-record/`, `skills/build-one-bulk-card/`, `skills/where-we-stand/`,
-`skills/write-a-task-the-owner-can-start/`. Publishing a report: `playbooks/publish-a-file.md`.
+Skills, when one fits: `skills/answer-from-the-record/`, `skills/build-one-bulk-card/`, `skills/set-up-the-company/`,
+`skills/where-we-stand/`, `skills/write-a-task-the-owner-can-start/`. Publishing a report: `playbooks/publish-a-file.md`.

@@ -1,9 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useLocation, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { directoryQuery, meQuery } from '@/data';
-import { retryStart, screenFor, type StartScreenKind } from './queries';
-import { setupStep } from './steps';
+import { configQuery, directoryQuery, meQuery } from '@/data';
+import { needsSetup, retryStart, screenFor, type StartScreenKind } from './queries';
 
 /** The longest the app waits for the person and the directory before it says it could not load (old app: boot.ts). */
 export const BOOT_WAIT_MS = 10_000;
@@ -16,26 +14,15 @@ export interface StartGate {
   /** Read again; the card stays while it reads. */
   retry: () => void;
   busy: boolean;
-  /** The first run is open over the app (`FirstRun`). */
-  firstRun: boolean;
 }
 
-/** For the root: whether the app can open, and whether the first run is open over it. */
+/** For the root: whether the app can open. */
 export function useStartGate(): StartGate {
   const me = useQuery(meQuery);
   const dir = useQuery(directoryQuery);
-  const step = useLocation({ select: (l) => setupStep((l.search as { setup?: unknown }).setup) });
   const [late, setLate] = useState(false);
   const [round, setRound] = useState(0);
   const settled = me.isError || (me.isSuccess && !dir.isPending);
-  const navigate = useNavigate();
-  // Only the owner sets a company up: anyone else sent to `?setup=` lands on Tasks (old app: welcome.ts pageWelcome).
-  const owner = me.data?.role === 'owner';
-  const turnAway = step !== null && me.isSuccess && !owner;
-  useEffect(() => {
-    if (turnAway) void navigate({ to: '/tasks', replace: true });
-  }, [turnAway, navigate]);
-
   useEffect(() => {
     if (settled) return;
     const t = setTimeout(() => setLate(true), BOOT_WAIT_MS);
@@ -52,6 +39,13 @@ export function useStartGate(): StartGate {
     error: me.error,
     retry,
     busy: me.isFetching,
-    firstRun: step !== null && me.isSuccess && owner,
   };
+}
+
+/** Whether the first run is owed: the owner of a company not yet live (the server's `onboarding_needed`, which is
+    false for anyone else). Tico's sheet holds it in place of its chat (SetupChat) until the owner finishes. */
+export function useSetupOwed(): boolean {
+  const owner = useQuery({ ...meQuery, select: (m) => m.role === 'owner' }).data === true;
+  const { data: config } = useQuery({ ...configQuery, enabled: owner });
+  return owner && needsSetup(config);
 }

@@ -1,9 +1,7 @@
-import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction, run } from '@/actions';
-import { meQuery, queryClient } from '@/data';
+import { configQuery, meQuery, queryClient } from '@/data';
 import { tellDesktopSigningOut } from '@/desktop';
-import { providerReady, subscriptionsQuery } from '@/features/settings/routing';
 import { forgetSetup, goToGithub, handOff, pendingSetup, refused } from './handoff';
 import {
   checkGithub,
@@ -12,25 +10,24 @@ import {
   finishSetup,
   githubAuthorizeLink,
   githubSetup,
+  inviteFromFile,
+  invitees,
+  needsSetup,
   replaceGithubKey,
-  saveCompanyName,
   saveKey,
   setupQuery,
 } from './queries';
-import { STEPS, resumeStep, stepBefore, type SetupStep } from './steps';
-
-/** Open the first run at a step, or close it (null). Steps push, so Back walks them. */
-const toStep = (router: AnyRouter, step: SetupStep | null) =>
-  router.navigate({
-    to: '.',
-    search: ({ setup: _, ...rest }: Record<string, unknown>) => (step ? { ...rest, setup: step } : rest),
-  } as never);
 
 const isOwner = () => queryClient.getQueryData(meQuery.queryKey)?.role === 'owner';
-const SETUP_TARGET = { kind: 'dialog', id: 'setup' } as const;
+const TICO_SHEET = { kind: 'sheet', id: 'tico' } as const;
 
-// What Tico hears when the person hands it the setup: it asks the rest in its own chat.
-const HAND_OFF = 'Set up my company.';
+// What Tico hears when it takes the setup over: it runs its setup playbook in its own chat
+// (templates/catalog/assistant/skills/set-up-the-company).
+export const HAND_OFF = 'Set up my company.';
+
+async function askTico(): Promise<boolean> {
+  return (await run('tico.ask', { text: HAND_OFF }, { via: 'click' })).ok;
+}
 
 /* Signing in and out is the person's own: the server's pages do it, never Tico. */
 export const signOut = defineAction({
@@ -46,79 +43,25 @@ export const signOut = defineAction({
   },
 });
 
+/* The first run lives in Tico's sheet (SetupChat): while it is owed this opens the sheet on it. Once the company is
+   live, "Set up" hands the rest to Tico, which asks in its own chat. */
 export const openSetup = defineAction({
   id: 'setup.open',
   title: 'Set up your company',
-  kind: 'view',
-  input: z.strictObject({ step: z.optional(z.enum(STEPS)) }),
-  can: () => isOwner(),
-  run: ({ router }, { step }) => toStep(router, step ?? 'path'),
-  show: ({ router }, { step }) => toStep(router, step ?? 'path'),
-  did: () => 'Opened setup',
-  target: () => SETUP_TARGET,
-});
-
-export const closeSetup = defineAction({
-  id: 'setup.close',
-  title: 'Close setup',
-  kind: 'view',
+  kind: 'change',
   input: z.strictObject({}),
-  run: ({ router }) => toStep(router, null),
-  did: () => 'Closed setup',
-});
-
-export const choosePath = defineAction({
-  id: 'setup.choosePath',
-  title: 'Choose who sets up the company',
-  kind: 'change',
-  input: z.strictObject({ path: z.enum(['agents', 'self'] as const) }),
   can: () => isOwner(),
-  run: async ({ router, via }, { path }) => {
-    if (path === 'agents') {
-      // Tico choosing this is already doing the setup; it does not ask itself.
-      if (via !== 'tico') {
-        const asked = await run('tico.ask', { text: HAND_OFF }, { via: 'click' });
-        if (!asked.ok) throw Object.assign(new Error(asked.error ?? 'not sent'), { code: 'not_sent' });
-      }
-      return toStep(router, null);
+  run: async ({ via }) => {
+    const config = await queryClient.ensureQueryData(configQuery);
+    if (needsSetup(config)) {
+      await run('shell.fold', { sheet: 'tico', folded: false }, { via });
+      return;
     }
-    const [record, subs] = await Promise.all([
-      queryClient.ensureQueryData(setupQuery),
-      queryClient.ensureQueryData(subscriptionsQuery).catch(() => undefined),
-    ]);
-    return toStep(router, resumeStep(record, subs));
+    // Tico choosing this is already doing the setup; it does not ask itself.
+    if (via !== 'tico' && !(await askTico())) throw Object.assign(new Error('not sent'), { code: 'not_sent' });
   },
-  did: ({ path }) => (path === 'agents' ? 'Handed setup to Tico' : 'Setting up by hand'),
-  target: ({ path }) => (path === 'agents' ? { kind: 'sheet', id: 'tico' } : SETUP_TARGET),
-});
-
-export const nextStep = defineAction({
-  id: 'setup.next',
-  title: 'Next setup step',
-  kind: 'change',
-  input: z.strictObject({ from: z.enum(['name', 'model'] as const), name: z.optional(z.string().check(z.minLength(1), z.maxLength(100))) }),
-  can: () => isOwner(),
-  run: async ({ router, queryClient }, { from, name }) => {
-    if (from === 'name') {
-      if (!name?.trim()) throw Object.assign(new Error('a name is needed'), { code: 'name_missing' });
-      await saveCompanyName(name.trim());
-      return toStep(router, 'model');
-    }
-    const providers = await queryClient.fetchQuery(subscriptionsQuery);
-    if (!providers.subscriptions.some(providerReady)) throw Object.assign(new Error('Connect a provider first'), { code: 'provider_missing' });
-    return toStep(router, 'team');
-  },
-  did: ({ from }) => (from === 'name' ? 'Named the company' : 'Next step'),
-  target: () => SETUP_TARGET,
-});
-
-export const backStep = defineAction({
-  id: 'setup.back',
-  title: 'Previous setup step',
-  kind: 'view',
-  input: z.strictObject({ from: z.enum(STEPS) }),
-  run: ({ router }, { from }) => toStep(router, stepBefore(from)),
-  target: () => SETUP_TARGET,
+  did: () => 'Opened setup',
+  target: () => TICO_SHEET,
 });
 
 export const pasteKey = defineAction({
@@ -127,24 +70,44 @@ export const pasteKey = defineAction({
   kind: 'change',
   tico: false,
   input: z.strictObject({ kind: z.enum(['anthropic_key', 'openai_key'] as const), secret: z.string().check(z.minLength(1), z.maxLength(20000)) }),
-  run: async ({ router }, { kind, secret }) => {
-    await saveKey(kind, secret.trim());
-    return toStep(router, 'model');
-  },
-  target: () => SETUP_TARGET,
+  run: (_ctx, { kind, secret }) => saveKey(kind, secret.trim()),
+  target: () => TICO_SHEET,
 });
 
+/* Inviting someone sends mail outside the company: the owner's own press on Tico's card, never Tico's. */
+export const invite = defineAction({
+  id: 'setup.invite',
+  title: 'Invite the people from the setup file',
+  kind: 'change',
+  tico: false,
+  input: z.strictObject({}),
+  can: () => isOwner(),
+  run: async () => {
+    for (const person of invitees(await queryClient.fetchQuery(setupQuery))) await inviteFromFile(person);
+  },
+  did: () => 'Invited them',
+  target: () => TICO_SHEET,
+});
+
+/* The owner's finish, from their press in the first run. A company a setup file made goes live and lands on Tasks;
+   one set up here gets its starting team, and Tico takes the setup over in its chat (the server asks it in the same
+   write). Answers which: 'live' or 'handed'. */
 export const finish = defineAction({
   id: 'setup.finish',
-  title: 'Create the team',
+  title: 'Go live',
   kind: 'change',
-  input: z.strictObject({ job: z.string().check(z.maxLength(40), z.regex(/^[a-z]*$/), z.describe('a first job key, or empty for the whole chart')) }),
+  tico: false,
+  input: z.strictObject({}),
   can: () => isOwner(),
-  run: async ({ router }, { job }) => {
-    await finishSetup(job);
-    return router.navigate({ to: '/tasks' });
+  run: async ({ router }) => {
+    const { fromFile } = await finishSetup();
+    if (fromFile) {
+      await router.navigate({ to: '/tasks' });
+      return 'live';
+    }
+    return 'handed';
   },
-  did: () => 'Created the team',
+  did: () => 'Went live',
   target: () => ({ kind: 'page', id: '/tasks' }),
 });
 

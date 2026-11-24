@@ -8,7 +8,7 @@ import { Dock } from '@/kit/Dock';
 import { useCards } from '@/kit/Popover';
 import { forgetPlaces, leaveTask, notePlace } from '@/lib';
 import { arrangementFor } from '@/shell/arrangement';
-import { Frame } from '@/shell/Frame';
+import { Frame, foldSheet } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
 import { PhoneCards, type PhoneCardsProps } from './PhoneCards';
 
@@ -367,6 +367,21 @@ describe('phone: the frame', () => {
     };
     render(<Frame tico={<p>Tico</p>} menu={<p>Menu</p>} page={<Page />} arrangement="page" />);
     expect(seen[0]).toBe(true);
+  });
+
+  it('a fold of Tico (the first run, `shell.fold`) brings its card up and puts it down', () => {
+    width(390);
+    render(<Frame tico={<p>Tico</p>} menu={<p>Menu</p>} page={<h1>Tasks</h1>} arrangement="page" />);
+    expect(up()).not.toBe('tico');
+    act(() => foldSheet('tico', false));
+    expect(up()).toBe('tico');
+    act(() => foldSheet('tico', true));
+    expect(up()).not.toBe('tico');
+    // grown past 760 but inside the hysteresis: still the cards, so the fold is still the card's
+    width(780);
+    expect(document.querySelector('.phone')).toBeTruthy();
+    act(() => foldSheet('tico', false));
+    expect(up()).toBe('tico');
   });
 
   it('a task opened by its own address shows its head, its chat behind the Agent icon; no trail over it', async () => {

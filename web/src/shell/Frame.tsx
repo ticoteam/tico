@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { motionLevel } from '@/motion';
-import { PhoneCards, type PhoneCard } from '@/shell/phone';
+import { PhoneCards, foldPhoneCard, type PhoneCard } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { useArrangement } from './arrangement';
 import { Icon } from '@/kit/Icon';
@@ -308,6 +308,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     }
   });
   const onFold = useEffectEvent((id: SheetId, folded?: boolean) => {
+    // the phone's cards, as drawn (the sheets may be laid out behind them): Tico's card comes up or goes down instead
+    if (cards) return foldPhoneCard(id, folded);
     const cur = find(id);
     if (!cur) return;
     const shut = cur.state !== 'open';

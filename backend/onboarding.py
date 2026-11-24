@@ -322,6 +322,34 @@ def _mtime(path):
         return None
 
 
+# What the owner says to Tico when the app's first run hands the setup over (web/src/features/start/actions.ts HAND_OFF,
+# the Assistant's AGENTS.md routing row).
+SETUP_HAND_OFF = "Set up my company."
+
+
+def hand_off(c, settings, auth):
+    """The owner's "Set up my company." in their Assistant chat, as the owner: its turn runs Tico's setup playbook
+    (templates/catalog/assistant/skills/set-up-the-company). One self-contained step any caller just calls (the end of a
+    completion, every start, an enrollment, a move onto cloud machines, a plan or key saved): it reads the setup record
+    in this write and says it only while the app's first run owes it (`hand_off_owed`), the Assistant is active, and the
+    company has a plan or key that can run it (model_subscriptions.plan_ready, never Gateway); otherwise it stays owed.
+    The record stops owing it in the same write, so it is said once. The app's own words: no rule check reads them."""
+    from . import assistant, model_subscriptions
+
+    record = load(c)
+    bot = settings.assistant_bot
+    owner = auth.owner_id(c)
+    if not record["hand_off_owed"] or not owner or (H.bot(c, bot) or {}).get("state") != "active":
+        return None
+    if not model_subscriptions.plan_ready(c):
+        return None
+    actor = "human:" + owner
+    room = assistant.ensure_room(c, actor, bot)
+    H.say(c, actor, "bot:" + bot, SETUP_HAND_OFF, conversation_id=room["id"], kind="say", refs={"assistant": True})
+    Onboarding._store(c, {**record, "hand_off_owed": False}, actor)
+    return True
+
+
 def load(c):
     """The stored record, with every field a client reads present even before a first save."""
     row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
@@ -338,6 +366,12 @@ def load(c):
         "company_import": stored.get("company_import") or None,
         # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
         "seats": dict(stored.get("seats") or {}),
+        # A company a setup file made before its owner signed in: the owner still goes live in the app (connect a plan,
+        # stay in touch), once. Cleared by their finish (`Onboarding.complete`).
+        "live_owed": bool(stored.get("live_owed")),
+        # The app's first run handed the setup to Tico: the owner's "Set up my company." waits for the Assistant to run
+        # (`Onboarding.hand_off`).
+        "hand_off_owed": bool(stored.get("hand_off_owed")),
         "updated_at": stored.get("updated") or "",
         "updated_by": stored.get("updated_by") or "",
     }
@@ -363,13 +397,17 @@ def display_names(settings, record):
 
 
 def needed(c, who, record):
-    """Whether the owner still owes us the first-run wizard.
+    """Whether the owner still owes us the first run: Tico's setup in its chat (web/src/features/start).
 
-    A company that already runs active bots is past its first run even if nobody ever finished
+    A company a setup file made (`live_owed`) owes it until the owner finishes it, though the file completed setup. A company that already runs active bots is past its first run even if nobody ever finished
     the wizard: deployments older than onboarding, or one set up by hand, must not be sent back
     to screen one.
     """
-    if who is None or who.role != "owner" or record["completed"]:
+    if who is None or who.role != "owner":
+        return False
+    if record.get("live_owed"):
+        return True
+    if record["completed"]:
         return False
     active = c.execute("SELECT 1 FROM bots WHERE state='active' LIMIT 1").fetchone()
     return active is None
@@ -799,7 +837,7 @@ class Onboarding:
         elif reports_to == slug:
             raise Problem("hierarchy", "A bot cannot report to itself", 422)
 
-    def complete(self, c, who, seats=True, finish=True):
+    def complete(self, c, who, seats=True, finish=True, hand_off=False):
         """Deploy the chart setup picked (docs/onboarding.md, "Setup picks the chart"): the built-ins (Agent Ops, the
         Librarian, the Strategy Owner and the Assistant) are created as bots, Active from day one, and every other role is
         laid out as a Recruiting seat with its reporting line: no bot, repository, computer slot or Agent Ops task until
@@ -809,11 +847,24 @@ class Onboarding:
         the live seats' bots). With no role picked at all, its chart is the default one
         (company_import.default_chart), the chart the site's file gives a company that picked nothing. Every completion
         ends with what a start does to complete a company (complete_company), so nothing waits for a restart. `finish`
-        False leaves all three to the caller: a company file's import lays out its own chart after this, then finishes."""
+        False leaves all three to the caller: a company file's import lays out its own chart after this, then finishes.
+
+        A company a setup file made is laid out once: its owner's finish only says they are live, and a finish again (a
+        lost answer retried) changes nothing. `hand_off` (the app's first run): a new company's first completion also
+        owes the owner's "Set up my company." to their Assistant, kept in this write and said once the Assistant runs
+        (`hand_off`), so a reload, a lost answer or a company with no computer yet never leaves it live with Tico not
+        asked; Tico's set-up-the-company skill takes it from there."""
         from . import company_import
 
         self._owner(who)
         record = load(c)
+        if record["completed"] and record["company_import"]:
+            # A setup file already made the team: the owner's finish only says they are live; nothing is laid out again.
+            if record["live_owed"]:
+                record["live_owed"] = False
+                self._store(c, record, who.actor)
+                H.event(c, who.actor, "onboarding.live", "", {})
+            return self.view(c, who)
         first = not record["completed"]
         names = display_names(self.settings, record)
         cards = {card["template"]: card for card in read_cards(self.settings)}
@@ -881,6 +932,8 @@ class Onboarding:
             )
         # Completing twice keeps the moment the company actually finished; the chart's picks stay in `selected`.
         record.update(selected={**plan, **roles}, completed=record["completed"] or H.now(), seats=laid)
+        if hand_off and first:
+            record["hand_off_owed"] = True  # said to Tico once it runs (`hand_off`, a step of complete_company)
         self._wire(c, record, who.actor)
         self._store(c, record, who.actor)
         if finishing:
@@ -1213,13 +1266,18 @@ class Onboarding:
                 pass
         return True
 
+    def hand_off(self, c):
+        """The first run's hand-off to Tico (module `hand_off`)."""
+        return hand_off(c, self.settings, self.auth)
+
     def complete_company(self, c, failed=None):
         """What makes a set-up company whole once its bots can run: the built-ins it is missing (`_ensure_builtin`: the
         Librarian, the Strategy Owner, the General Manager, the Rules Owner, the Design Owner, the Tools Owner, and the Finance Owner
         once Finance is set up), the constitution at the root of Rules (org_rules.ensure_constitution), the Assistant's
         routines it never had, General's manager once the General Manager exists
         (pipeline_settings.ensure_presets), Agent Ops' daily "Sweep stuck tasks" once Agent Ops is active, and the models of
-        the bots that follow the company's plans (plan_models.follow). Every start
+        the bots that follow the company's plans (plan_models.follow), and the hand-off to Tico the app's first run owes
+        (`hand_off`). Every start
         runs it (start_jobs), and so do the end of every first run (complete(), a company file's import) and a
         computer's enrollment, so none of it waits for the next start. Each step is idempotent and leaves
         what a person changed alone.
@@ -1245,6 +1303,7 @@ class Onboarding:
             ("pipelines", pipeline_settings.ensure_presets),
             ("task_sweep", routines.ensure_task_sweep),
             ("plan_models", lambda c: plan_models.follow(c, self.settings, H.TICO_ACTOR)),
+            ("hand_off", self.hand_off),
         )
         for name, step in steps:
             c.execute("SAVEPOINT complete_company")
@@ -1639,12 +1698,13 @@ class Onboarding:
         branches = place_pending(c, operator, runner_id, self.admin, self.execution, self.settings.github_owner)
         if operator != self.auth.owner_id(c):
             return branches
-        record = load(c)
-        if not record["completed"]:
+        if not load(c)["completed"]:
             return branches
         self.complete_company(c)  # the built-ins it can run now, and what they complete
+        record = load(c)  # as complete_company left it (its hand-off step writes the record)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
+        self.hand_off(c)  # the Assistant may run only now (_wire activated it)
         return branches + placed
 
     def _wire(self, c, record, actor, runner_id=None):
@@ -1703,6 +1763,7 @@ class Onboarding:
         as had the sizes been known when it finished."""
         if load(c)["completed"]:
             self._adopt_cloud(c, H.TICO_ACTOR)
+            self.hand_off(c)
 
     def _activate_bootstrap(self, c, actor):
         """Activate the bootstrap bots (the assistant, Agent Ops) and the starters once a machine hosts
