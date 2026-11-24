@@ -941,7 +941,12 @@ def parser():
     # `tico tool` (clients/commands/tools.py): every leaf but `call`, which runs the vendor call on this computer.
     cli_spec.add(sub, tools_commands.TOOL)
     tools = _group_subparsers(sub, "tool")
-    s = tools.add_parser("call", help="call a proxied API tool from a turn; Tico adds the real key")
+    s = tools.add_parser(
+        "call",
+        help="call a proxied API tool from a turn; Tico adds the real key",
+        description="Only for tools Tico proxies (their $TICO_TOOL_<ID>_URL is set). A tool whose key is in your "
+        "environment, you call directly.",
+    )
     s.add_argument("tool", help="the API tool id, e.g. close-crm (its TICO_TOOL_<ID>_URL)")
     s.add_argument("method", type=str.upper, choices=("GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"))
     s.add_argument("path", help="the vendor API path, e.g. /api/v1/me/")

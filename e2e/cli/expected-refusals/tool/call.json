@@ -1,1 +1,1 @@
-"acme-smoke is not a proxied tool in this run (this run has none)"
+"acme-smoke is not proxied in this run and no ACME_SMOKE_ variable is set: check "

@@ -109,6 +109,11 @@ function Connected({ app }: { app: GitHubApp }) {
       <Facts>
         <LabelValue label="Account">{app.org}</LabelValue>
         {app.slug && <LabelValue label="App">{app.slug}</LabelValue>}
+        {app.bot && (
+          <LabelValue label="Bot">
+            {`${app.bot.login} · App ID ${app.bot.app_id}` + (app.bot.user_id ? ` · user id ${app.bot.user_id}` : '')}
+          </LabelValue>
+        )}
         <LabelValue
           label="Installed"
           trail={
@@ -156,6 +161,12 @@ function Connected({ app }: { app: GitHubApp }) {
         )}
         {app.checks_withheld && <LabelValue label="Checks">Needs Checks permission</LabelValue>}
       </Facts>
+      {/* A reconnect made a new App: CI and rules that name the old bot skip or block agents' pull requests. */}
+      {app.app_changed?.notice && (
+        <p className="f-err" role="status">
+          {`⚠ ${app.app_changed.notice}`}
+        </p>
+      )}
       <Refusal text={install.error ?? check.error ?? authorize.error} />
     </>
   );
@@ -183,7 +194,10 @@ function More({ app }: { app: GitHubApp }) {
         onOpenChange={setAsking}
         alert
         title="Disconnect GitHub?"
-        description="Agents lose GitHub here. The app stays on GitHub until you delete it there."
+        description={
+          'Agents lose GitHub here. The app stays on GitHub until you delete it there. Connecting again makes a new ' +
+          'app: CI or rules that name this bot will need the new one.'
+        }
         actions={
           <>
             <Button disabled={disconnect.pending} onClick={() => setAsking(false)}>

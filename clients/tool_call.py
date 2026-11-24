@@ -1,4 +1,6 @@
 """`tico tools call <tool> <METHOD> <path>`: one call to a proxied tool from a bot's turn (backend/tool_proxy.py).
+A tool whose key reaches the computer as it is (Jira) is called directly with that key: the error says so and names the
+variables (`not_proxied`).
 
 Runs beside the bot, with no hub API: a run granted a proxied tool has the proxy's address in `TICO_TOOL_<ID>_URL` and
 a proxy token where the key would be (the credential's own variable). The token's claims name its tool, so the
@@ -48,16 +50,66 @@ def _tool_of(token):
         return None
 
 
-def find(tool, environ=None):
+def own_variables(tool, environ):
+    """The run's variables named after `tool`, when its key reached this computer as it is (no proxy): its id in capitals
+    with every other character as `_`, else its first word (close-crm: CLOSE_CRM_*, then CLOSE_*). Never Tico's own."""
+    spelled = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
+    for stem in dict.fromkeys((spelled, spelled.split("_", 1)[0])):
+        if not stem:
+            continue
+        found = sorted(k for k in environ if k.startswith(stem + "_") and not k.startswith("TICO_"))
+        if found:
+            # The key first, so the sentence leads with what authenticates.
+            return sorted(found, key=lambda k: not re.search(r"TOKEN|KEY|SECRET|PASSWORD", k))
+    return []
+
+
+def names_command(stem):
+    """The shell line that lists the variables named after a tool, names only. It reads the names themselves: text
+    tools over `env` would print a line of a multi-line value that starts with the prefix. The first word's prefix covers
+    the full id's too (own_variables' fallback), and Tico's own variables are left out as there."""
+    first = stem.split("_", 1)[0] or stem
+    return (
+        "python3 -c 'import os; print(*sorted(k for k in os.environ if k.startswith(\""
+        + first
+        + "_\") and not k.startswith(\"TICO_\")))'"
+    )
+
+
+def not_proxied(tool, environ, shell=True):
+    """Why `tool` cannot be called here, and what to do instead: a refusal read as "no access" stalls a turn whose key is
+    in its own environment. Variable names only, never their values. `shell` is False for the MCP server: a harness
+    starts it with Tico's own variables only (runner-rs/src/hosts/mod.rs HUB_MCP_ENV), so finding none there says
+    nothing about the agent's shell, and the answer gives both cases."""
+    proxied = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
+    tail = f" Proxied tools in this run: {', '.join(proxied)}." if proxied else ""
+    vendor = tool[:1].upper() + tool[1:]
+    names = own_variables(tool, environ)
+    if names:
+        also = f" (this run also has {', '.join('$' + n for n in names[1:])})" if names[1:] else ""
+        return (
+            f"{tool}'s access is on this computer, not behind Tico's proxy, so tico tool call cannot use it. Call the "
+            f"{vendor} API yourself with ${names[0]}{also}.{tail}"
+        )
+    stem = re.sub(r"[^A-Z0-9]", "_", str(tool).upper()).strip("_")
+    if not shell:
+        return (
+            f"{tool} is not proxied for this MCP server, which cannot see your shell's variables. Run "
+            f"`{names_command(stem)}` (names only): if it lists any, {tool}'s access is on your computer, so call the "
+            f"{vendor} API yourself with them; if none, check that this bot is granted {tool} (tico tool show {tool})."
+        )
+    return (
+        f"{tool} is not proxied in this run and no {stem}_ variable is set: check that this bot is granted {tool} "
+        f"(tico tool show {tool}).{tail}"
+    )
+
+
+def find(tool, environ=None, shell=True):
     """(proxy address, token) for `tool` in this turn's environment."""
     environ = os.environ if environ is None else environ
     address = environ.get(url_env(tool), "")
     if not address:
-        have = sorted(k for k in environ if k.startswith("TICO_TOOL_") and k.endswith("_URL"))
-        raise CallError(
-            f"{tool} is not a proxied tool in this run"
-            + (f" (this run has {', '.join(have)})" if have else " (this run has none)")
-        )
+        raise CallError(not_proxied(tool, environ, shell))
     wanted = address.rstrip("/").rsplit("/", 1)[-1]
     for value in environ.values():
         if value.startswith(TOKEN_PREFIX) and _tool_of(value) == urllib.parse.unquote(wanted):
@@ -65,11 +117,11 @@ def find(tool, environ=None):
     raise CallError(f"No token for {tool} in this run's environment")
 
 
-def call(tool, method, path, data=None, query=(), environ=None, idempotency_key=None):
+def call(tool, method, path, data=None, query=(), environ=None, idempotency_key=None, shell=True):
     """Make the call and return {status, content_type, body}: JSON parsed when the answer is JSON, else text. A write
     carries an Idempotency-Key, one per call (`idempotency_key`, else a new one): the proxy checks a write against the
     org rules only with one."""
-    address, token = find(tool, environ)
+    address, token = find(tool, environ, shell)
     url = address + "/" + path.lstrip("/")
     pairs = []
     for item in query or ():

@@ -128,6 +128,7 @@ def _github_view(app, repos=None):
         "org": org,
         "account_type": kind,
         "app_id": app.get("app_id"),
+        "bot": app.get("bot"),
         "creates_repositories": bool(app.get("administration")),
         "missing": missing,
         "links": {
@@ -174,6 +175,10 @@ def _github_view(app, repos=None):
             else "1 repository ticked: " + ticked[0]
         )
     summary = "; ".join(words) + "."
+    changed = (app.get("app_changed") or {}).get("notice")
+    if changed:
+        view["app_changed"] = app["app_changed"]
+        summary += " " + changed
     if missing:
         summary += " Missing: " + ", ".join(m["key"] for m in missing) + "."
     return {"summary": summary, **view}
@@ -192,7 +197,9 @@ def _status(api):
     "tico_github_status",
     "The team's GitHub App, in plain words (the Owner): connected or not, to which account or organization, installed "
     "or not, which repositories are ticked, and what is missing with its fix (checks_withheld: the App lacks Checks "
-    "write; not_installed; bot repositories the App cannot reach...). Example: tico github status",
+    "write; not_installed; bot repositories the App cannot reach...). `bot` is how GitHub sees Tico's bots (login, App "
+    "ID, user id); `app_changed` says, for 30 days after a reconnect made a new App, which old bot CI and rules still "
+    "name. Example: tico github status",
     {},
 )
 def github_status(api, args):

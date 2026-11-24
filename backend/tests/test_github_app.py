@@ -2033,3 +2033,88 @@ def test_only_the_owner_reaches_the_connect_routes(api, gh):
         assert r.status_code == 403 and r.json()["error"]["code"] == "forbidden", (path, r.text)
     state = api.get("/api/v2/github/app", headers=auth()).json()
     assert state["connected"] and state["slug"] == "acme-tico"  # nothing was disconnected or replaced
+
+
+def test_a_reconnect_that_made_a_new_app_names_both_bots_for_30_days(api, gh):
+    """A team replaced its GitHub app; its CI still trusted the old bot and silently stopped running on agents' PRs.
+    AC-5: status names both bots and App IDs (user ids where GitHub gave them) and says to update CI and rules."""
+    gh.app, gh.bot_ids = {"id": 1234567, "slug": "acme-tico"}, {"acme-tico[bot]": 187654321}
+    connect(api)
+    first = api.get("/api/v2/github/app", headers=auth()).json()
+    assert first["bot"] == {"login": "acme-tico[bot]", "app_id": 1234567, "user_id": 187654321}
+    assert first["app_changed"] is None  # no connect before it with an App ID
+    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
+    gh.app, gh.bot_ids = {"id": 2345678, "slug": "acme-tico-2"}, {"acme-tico-2[bot]": 198765432}
+    connect(api)
+    status = api.get("/api/v2/github/app", headers=auth())
+    document = api.get("/api/v2/openapi.json", headers=auth()).json()
+    schema = document["paths"]["/api/v2/github/app"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert conforms(status.json(), schema, document) is None, status.text
+    now = status.json()
+    assert now["bot"] == {"login": "acme-tico-2[bot]", "app_id": 2345678, "user_id": 198765432}
+    assert now["app_changed"]["notice"] == (
+        "This is a new GitHub app. GitHub now sees Tico's bots as acme-tico-2[bot] (App ID 2345678, user id "
+        "198765432), not acme-tico[bot] (App ID 1234567, user id 187654321). Update CI workflows, rulesets and branch "
+        "rules that name the old bot, or they will skip or block your agents' pull requests."
+    )
+    # AC-7: 30 days after that connect the notice is gone; the bot still shows.
+    with api.app_state.store.transaction() as c:
+        old = (datetime.now(timezone.utc) - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        c.execute("UPDATE events SET created_at=? WHERE action='github.app_connected' AND target='acme-tico-2'", (old,))
+    later = api.get("/api/v2/github/app", headers=auth()).json()
+    assert later["app_changed"] is None and later["bot"]["login"] == "acme-tico-2[bot]"
+
+
+def test_no_change_notice_for_the_same_app_or_an_old_connect_with_no_app_id(api, gh):
+    """AC-6: never a false warning. GitHub's user lookup failing leaves the login and App ID without a user id."""
+    with api.app_state.store.transaction() as c:
+        H.event(c, "human:ana", "github.app_connected", "acme-tico-old", {"org": "Acme"})  # before App IDs were kept
+    connect(api)
+    app = api.get("/api/v2/github/app", headers=auth()).json()
+    assert app["app_changed"] is None
+    assert app["bot"] == {"login": "acme-tico[bot]", "app_id": 4242, "user_id": None}
+    assert api.post("/api/v2/github/app/disconnect", headers=auth()).status_code == 200
+    connect(api)  # the same App ID again
+    assert api.get("/api/v2/github/app", headers=auth()).json()["app_changed"] is None
+
+
+def test_bot_view_without_a_user_id_and_past_the_window():
+    row = {"slug": "new", "app_id": 2}
+    connect_at = "2026-11-01T00:00:00.000000Z"
+    detail = {"app_id": 2, **G.connect_detail({"slug": "old", "detail": {"app_id": 1}}, "new", 2, None)}
+    bot, changed = G.bot_view(
+        row, {"created_at": connect_at, "slug": "new", "detail": detail}, now=datetime(2026, 11, 2, tzinfo=timezone.utc)
+    )
+    assert bot == {"login": "new[bot]", "app_id": 2, "user_id": None}
+    assert "as new[bot] (App ID 2), not old[bot] (App ID 1)." in changed["notice"]
+    _, gone = G.bot_view(
+        row, {"created_at": connect_at, "slug": "new", "detail": detail}, now=datetime(2026, 12, 2, tzinfo=timezone.utc)
+    )
+    assert gone is None
+
+
+def test_the_notice_is_gone_at_exactly_30_days():
+    """AC-7: the notice ends at 30 days to the microsecond, not after."""
+    detail = {"app_id": 2, **G.connect_detail({"slug": "old", "detail": {"app_id": 1}}, "new", 2, None)}
+    connect_at = {"created_at": "2026-11-01T00:00:00.000000Z", "slug": "new", "detail": detail}
+    row = {"slug": "new", "app_id": 2}
+    edge = datetime(2026, 12, 1, tzinfo=timezone.utc)
+    assert G.bot_view(row, connect_at, now=edge - timedelta(microseconds=1))[1] is not None
+    bot, gone = G.bot_view(row, connect_at, now=edge)
+    assert gone is None and bot == {"login": "new[bot]", "app_id": 2, "user_id": None}
+
+
+def test_a_stalled_github_user_lookup_never_holds_the_connect(api, gh, monkeypatch):
+    """httpx times each read, so an answer in slow pieces outlasts its timeout: the lookup has one total deadline, and
+    the connect is saved with the login and App ID while GitHub is still held."""
+    import threading
+
+    monkeypatch.setattr(G, "BOT_LOOKUP_SECONDS", 0.2)
+    gh.bot_ids, gh.bot_hold = {"acme-tico[bot]": 187654321}, threading.Event()
+    try:
+        connect(api)
+        app = api.get("/api/v2/github/app", headers=auth()).json()
+        assert gh.bot_hold.is_set() is False  # answered while GitHub was still held
+        assert app["bot"] == {"login": "acme-tico[bot]", "app_id": 4242, "user_id": None}
+    finally:
+        gh.bot_hold.set()

@@ -2,8 +2,11 @@
 
 import base64
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
+import pytest
 
 from clients import tool_call
 
@@ -78,3 +81,86 @@ def test_a_write_carries_one_idempotency_key_and_a_read_none():
     finally:
         server.shutdown()
     assert seen[0] is None and seen[1].startswith("tico-tool-call-") and seen[2] == "op-7"
+
+
+def test_a_tool_whose_key_is_on_the_computer_is_told_to_use_its_variable_never_its_value():
+    """AC-1: an agent read "jira is not a proxied tool in this run" as a refusal with $JIRA_API_TOKEN set."""
+    environ = {"JIRA_API_TOKEN": "s3cret-token", "JIRA_BASE_URL": "https://acme.example", "TICO_JIRA_X": "no"}
+    with pytest.raises(tool_call.CallError) as got:
+        tool_call.call("jira", "GET", "/rest/api/3/myself", environ=environ)
+    words = str(got.value)
+    assert words == (
+        "jira's access is on this computer, not behind Tico's proxy, so tico tool call cannot use it. Call the Jira "
+        "API yourself with $JIRA_API_TOKEN (this run also has $JIRA_BASE_URL)."
+    )
+    assert "s3cret" not in words and "acme.example" not in words and "TICO_JIRA" not in words
+
+
+def test_the_mcp_tool_names_the_variables_it_sees_and_never_says_none_are_set(monkeypatch):
+    """AC-2. A harness starts the MCP server with Tico's own variables only (Codex among them), so a key in the agent's
+    shell is not there: the answer then says how to look and gives both cases, never "no JIRA_ variable is set"."""
+    from clients.commands import tools
+
+    ask = {"tool": "jira", "method": "GET", "path": "/rest/api/3/myself"}
+    for name in [k for k in os.environ if k.startswith(("JIRA_", "TICO_TOOL_"))]:
+        monkeypatch.delenv(name)
+    unseen = tools.tool_call(None, ask)["error"]
+    assert unseen.startswith("jira is not proxied for this MCP server, which cannot see your shell's variables.")
+    assert (
+        f"`{tool_call.names_command('JIRA')}`" in unseen
+        and "call the Jira API yourself" in unseen
+        and "tico tool show jira" in unseen
+    )
+    assert "no JIRA_ variable is set" not in unseen
+    assert tool_call.names_command("CLOSE_CRM") in tool_call.not_proxied("close-crm", {}, shell=False)
+    monkeypatch.setenv("JIRA_API_TOKEN", "s3cret-token")
+    monkeypatch.setenv("JIRA_BASE_URL", "https://acme.example")
+    seen = tools.tool_call(None, ask)["error"]
+    assert seen == tool_call.not_proxied("jira", os.environ)  # the CLI's words when the server does see them
+    assert seen.startswith("jira's access is on this computer") and "s3cret" not in seen
+
+
+def test_the_shell_check_it_suggests_prints_names_never_a_value_even_one_over_several_lines():
+    """The line the MCP error tells an agent to run, run in a shell: a value whose own line starts like a variable
+    (a pasted config) is never printed, and the first word's prefix finds a key named after it alone."""
+    import subprocess
+    import sys
+
+    environ = {
+        "PATH": os.environ.get("PATH", ""),
+        "CONFIG": "settings\nCLOSE_API_KEY: s3cret-in-config",
+        "CLOSE_API_KEY": "s3cret-key",
+        "CLOSE_CRM_URL": "https://acme.example",
+    }
+    line = tool_call.names_command("CLOSE_CRM").replace("python3", sys.executable, 1)
+    out = subprocess.run(["sh", "-c", line], env=environ, capture_output=True, text=True, check=True).stdout
+    assert out.split() == ["CLOSE_API_KEY", "CLOSE_CRM_URL"] and "s3cret" not in out
+    # A tool named after Tico itself never counts Tico's own variables as its key, as own_variables does not.
+    environ["TICO_TOOL_JIRA_URL"] = "https://acme.example/api/v2/tool-proxy/jira"
+    line = tool_call.names_command("TICO_DOCS").replace("python3", sys.executable, 1)
+    assert (
+        subprocess.run(["sh", "-c", line], env=environ, capture_output=True, text=True, check=True).stdout.split() == []
+    )
+
+
+def test_a_tool_id_with_two_words_falls_back_to_its_first_word():
+    assert tool_call.own_variables("close-crm", {"CLOSE_CRM_KEY": "x", "CLOSE_OTHER": "y"}) == ["CLOSE_CRM_KEY"]
+    assert tool_call.own_variables("close-crm", {"CLOSE_API_KEY": "x"}) == ["CLOSE_API_KEY"]
+    assert "with $CLOSE_API_KEY." in tool_call.not_proxied("close-crm", {"CLOSE_API_KEY": "x"})
+
+
+def test_no_proxy_and_no_variable_says_to_check_the_grant_and_lists_the_proxied_tools():
+    """AC-3."""
+    environ = {"TICO_TOOL_SENTRY_URL": "https://x/api/v2/tool-proxy/sentry", "JIRAFFE": "x"}
+    words = tool_call.not_proxied("jira", environ)
+    assert words == (
+        "jira is not proxied in this run and no JIRA_ variable is set: check that this bot is granted jira "
+        "(tico tool show jira). Proxied tools in this run: TICO_TOOL_SENTRY_URL."
+    )
+
+
+def test_a_proxied_tool_is_found_as_before():
+    """AC-4: a tool with its proxy address goes through the proxy even when a variable is named after it."""
+    token = token_for("jira")
+    environ = {"TICO_TOOL_JIRA_URL": "https://x/api/v2/tool-proxy/jira/", "JIRA_API_TOKEN": token}
+    assert tool_call.find("jira", environ) == ("https://x/api/v2/tool-proxy/jira", token)

@@ -28,6 +28,28 @@ SCHEMAS.update(
                 "org": {"type": "string", "description": "The login of the account or organization the App is under"},
                 "account_type": {"enum": ["Organization", "User"]},
                 "app_id": "i",
+                "bot": obj(
+                    {
+                        "login": {"type": "string", "description": "`<slug>[bot]`: the name CI filters and rules use"},
+                        "app_id": "i",
+                        "user_id": {
+                            "type": ["integer", "null"],
+                            "description": "The bot's GitHub user id, when GitHub gave it at connect; null otherwise",
+                        },
+                    }
+                )
+                | {"description": "How GitHub sees Tico's bots: the App's bot account"},
+                "app_changed": {
+                    "type": ["object", "null"],
+                    "description": "For 30 days after a connect that made a different App than the one before: "
+                    "`notice` (what to update), `since` (that connect) and `previous` {app_id, slug, bot_login, "
+                    "bot_user_id}; null otherwise",
+                    "properties": {
+                        "notice": {"type": "string"},
+                        "since": {"type": "string"},
+                        "previous": {"type": "object"},
+                    },
+                },
                 "administration": {
                     "type": "boolean",
                     "description": "Whether the installation lets Tico create repositories (Administration: write)",

@@ -639,6 +639,20 @@ authorization; bots fall back to their computers' git access. To
 revoke access on GitHub, uninstall the app from the account's or organization's installed apps page, or delete the
 app from its settings page.
 
+### Replacing the app
+
+Connecting is refused while an app is connected, so replacing it is Disconnect, then Connect, and each Connect makes a
+new app from the manifest: a new App ID and a new bot (`<slug>[bot]`, with its own GitHub user id). GitHub then sees
+Tico's bots as that new bot. A CI workflow that filters on the old bot's login, a ruleset or branch rule pinned to the
+old App ID (as above), or a bypass list naming it, keeps naming the old one: workflows skip agents' pull requests and
+rules block them, with nothing failing loudly. The Disconnect question says so before it happens.
+
+Tools > GitHub and `tico github status` show the bot always (login, App ID, and user id when GitHub gave it at connect).
+For 30 days after a connect whose App ID differs from the previous connect's, both also name the old bot and the new
+one and say to update CI workflows, rulesets and branch rules. The previous app is read from the last
+`github.app_connected` event, which now records the bot and, on a change, the previous App ID, slug and bot; a connect
+before that recorded nothing to compare, so it shows no notice.
+
 ## Task PR events
 
 New GitHub Apps include the task events and read permissions automatically. For an existing

@@ -19,7 +19,7 @@ import time
 import uuid
 from collections import namedtuple
 from concurrent.futures import Future
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Literal
 from urllib.parse import quote, urlencode, urlparse
@@ -114,6 +114,86 @@ CHECKS_WITHHELD = (
 )
 # registry_metadata: the installation's permissions as GitHub last reported them (`live_permissions`), for Health.
 PERMISSIONS_SEEN = "github-app-permissions"
+# A connect that made a different App than the one before (Disconnect, then Connect, makes a new one): GitHub sees Tico's
+# bots as another bot, and CI or rules that name the old one skip or block agents' pull requests.
+# Said on the connection for this long after that connect.
+APP_CHANGE_DAYS = 30
+BOT_LOOKUP_SECONDS = 5  # a connect never waits longer on the bot's user id, in total
+
+
+def bot_login(slug):
+    """The login GitHub gives the App's bot: what CI filters and rulesets name."""
+    return f"{slug}[bot]" if slug else ""
+
+
+def last_connect(c):
+    """The newest `github.app_connected` event as {created_at, slug, detail}, or None. It alone keeps an App after
+    `save` replaced its row: the App ID, slug and bot that the next connect compares against."""
+    row = c.execute(
+        "SELECT created_at,target,detail FROM events WHERE action='github.app_connected' "
+        "ORDER BY created_at DESC LIMIT 1"
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        detail = json.loads(row["detail"] or "{}")
+    except ValueError:
+        detail = {}
+    return {
+        "created_at": row["created_at"],
+        "slug": row["target"],
+        "detail": detail if isinstance(detail, dict) else {},
+    }
+
+
+def connect_detail(before, slug, app_id, user_id):
+    """What a connect records about its bot, and about the App before it when that was a different one. An older connect
+    with no App ID compares as nothing: never a false warning."""
+    out = {"bot_login": bot_login(slug), "bot_user_id": user_id}
+    old = (before or {}).get("detail") or {}
+    if old.get("app_id") and str(old["app_id"]) != str(app_id):
+        old_slug = before.get("slug") or ""
+        out["previous"] = {
+            "app_id": old["app_id"],
+            "slug": old_slug,
+            "bot_login": old.get("bot_login") or bot_login(old_slug),
+            "bot_user_id": old.get("bot_user_id"),
+        }
+    return out
+
+
+def _bot_words(login, app_id, user_id):
+    return f"{login} (App ID {app_id}" + (f", user id {user_id})" if user_id else ")")
+
+
+def bot_view(row, connect, now=None):
+    """The connected App's bot (login, App ID, and user id when GitHub gave one at connect), and the notice that it is
+    a new App, for APP_CHANGE_DAYS after a connect that replaced another, else None."""
+    detail = (connect or {}).get("detail") or {}
+    same = str(detail.get("app_id") or "") == str(row["app_id"])
+    bot = {
+        "login": bot_login(row["slug"]),
+        "app_id": row["app_id"],
+        "user_id": (detail.get("bot_user_id") or None) if same else None,
+    }
+    old = detail.get("previous") if same else None
+    if not old:
+        return bot, None
+    try:
+        at = datetime.fromisoformat(str(connect["created_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return bot, None
+    if (now or datetime.now(timezone.utc)) - at >= timedelta(days=APP_CHANGE_DAYS):
+        return bot, None
+    words = (
+        "This is a new GitHub app. GitHub now sees Tico's bots as "
+        + _bot_words(bot["login"], bot["app_id"], bot["user_id"])
+        + ", not "
+        + _bot_words(old.get("bot_login") or "", old.get("app_id"), old.get("bot_user_id"))
+        + ". Update CI workflows, rulesets and branch rules that name the old bot, or they will skip or block your "
+        "agents' pull requests."
+    )
+    return bot, {"since": connect["created_at"], "previous": old, "notice": words}
 
 
 def permission_seen(c, name):
@@ -921,6 +1001,37 @@ class GitHubApp:
                 retryable=True,
                 extra={"timed_out": True} if isinstance(exc, httpx.TimeoutException) else None,
             ) from None
+
+    def bot_user_id(self, slug):
+        """GitHub's user id of the App's bot (`<slug>[bot]`), from its public profile with no token; None when GitHub does
+        not say within BOT_LOOKUP_SECONDS. The login and App ID are shown without it."""
+        if self.settings.rehearsal or not slug:
+            return None
+
+        deadline = time.monotonic() + BOT_LOOKUP_SECONDS
+        found = {}
+
+        def look():
+            # httpx times each connect and read, not the whole answer: the body is read in pieces and dropped at the
+            # deadline, and the thread is a daemon, so a GitHub that stalls holds neither the connect nor the shutdown.
+            try:
+                with _client() as http:
+                    url = "/users/" + quote(bot_login(slug), safe="")
+                    with http.stream("GET", url, timeout=BOT_LOOKUP_SECONDS) as r:
+                        body = b""
+                        for piece in r.iter_bytes():
+                            body += piece
+                            if time.monotonic() > deadline or len(body) > 65536:
+                                return
+                        if r.status_code < 300:
+                            found["id"] = int(json.loads(body).get("id") or 0) or None
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError):
+                pass
+
+        worker = threading.Thread(target=look, name="github-bot-id", daemon=True)
+        worker.start()
+        worker.join(BOT_LOOKUP_SECONDS)
+        return None if worker.is_alive() else found.get("id")
 
     def exchange(self, code):
         r = self._call("POST", f"/app-manifests/{quote(code, safe='')}/conversions")
@@ -2164,6 +2275,7 @@ def install_github_app(app, settings, store):
         with store.read() as c:
             fix = fixes(c, row)
             made = bot_repo_maker.progress(c, service, settings)
+            bot, changed = bot_view(row, last_connect(c))
         page = links(row)
         return {
             "connected": True,
@@ -2172,6 +2284,8 @@ def install_github_app(app, settings, store):
             "org": row["org"],
             "account_type": account_kind(row),
             "app_id": row["app_id"],
+            "bot": bot,
+            "app_changed": changed,
             "administration": administration,
             "installed": bool(row["installation_id"]),
             "authorized": authorized,
@@ -2338,7 +2452,9 @@ def install_github_app(app, settings, store):
     def exchange_and_save(actor, row, code):
         """The App's conversion: GitHub's code becomes the App's secrets, and the connect is recorded. Returns the conversion."""
         conversion = service.exchange(code)
+        user_id = service.bot_user_id(conversion["slug"])  # before the transaction: a slow GitHub holds no write
         with store.transaction() as c:
+            before = last_connect(c)
             service.save(c, actor, row["org"], row["administration"], conversion, row["account_type"])
             saved = service.row(c)
             H.event(
@@ -2346,7 +2462,12 @@ def install_github_app(app, settings, store):
                 actor,
                 "github.app_connected",
                 conversion["slug"],
-                {"org": saved["org"], "account_type": saved["account_type"], "app_id": conversion["id"]},
+                {
+                    "org": saved["org"],
+                    "account_type": saved["account_type"],
+                    "app_id": conversion["id"],
+                    **connect_detail(before, conversion["slug"], conversion["id"], user_id),
+                },
             )
         return conversion
 
