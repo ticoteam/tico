@@ -1,9 +1,10 @@
 # pyright: strict
 """A person's or a bot's own preferences: GET and POST /api/v2/preferences/{key}. Each actor reads and writes only its
 own. The server checks the values of the keys it acts on: the web's Send way, meetings' auto share and hiding the
-Strategy Owner from one's own chart."""
+Strategy Owner from one's own chart, and the pages whose first-visit intro a person has had."""
 
 import json
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, cast
 
@@ -42,10 +43,14 @@ KEYS = frozenset(
         "pipeline.rail_hidden",
         "meetings.auto_share",
         "ui.tracker_seen_at",
+        "intros.seen",
         strategy_bot.HIDE_PREF,
     }
 )
 MAX_BYTES = 4096
+# A page key in web/src/tico/intros.ts INTROS: lower case words joined by dashes.
+INTRO_PAGE = re.compile(r"[a-z][a-z-]{0,39}")
+INTRO_PAGES = 64
 
 
 def known(key: str) -> None:
@@ -74,11 +79,32 @@ def check(who: Any, key: str, value: object) -> None:
         at = H.parse_ts(value) if isinstance(value, str) else None
         if at is None or at.tzinfo is None:
             raise Problem("validation", "ui.tracker_seen_at is an ISO-8601 date/time with a timezone", 422)
+    # The pages whose first-visit intro played for this person (web/src/tico/Intro.tsx), each with when: a person's
+    # own, as agents get no intros. A write adds its pages to those kept (`seen_union`).
+    if key == "intros.seen":
+        views.human_only(who)
+        if not isinstance(value, dict) or len(cast(dict[str, object], value)) > INTRO_PAGES:
+            raise Problem("validation", f"intros.seen is an object of at most {INTRO_PAGES} pages", 422)
+        for page, at in cast(dict[str, object], value).items():
+            when = H.parse_ts(at) if isinstance(at, str) else None
+            if not INTRO_PAGE.fullmatch(page) or when is None or when.tzinfo is None:
+                raise Problem("validation", "intros.seen maps a page to an ISO-8601 date/time with a timezone", 422)
     # Hide from my chart on the Strategy Owner: a person's own view.
     if key == strategy_bot.HIDE_PREF:
         views.human_only(who)
         if not isinstance(value, bool):
             raise Problem("validation", strategy_bot.HIDE_PREF + " is a boolean", 422)
+
+
+def seen_union(c: Any, actor: str, value: dict[str, str]) -> dict[str, str]:
+    """intros.seen as kept after a write: the pages already kept, each at its first time, and the new ones. Two tabs
+    opening two pages each send their own page, and neither loses the other's."""
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key='intros.seen'", (actor,)).fetchone()
+    old = json.loads(row[0]) if row else None
+    kept: dict[str, str] = {**value, **(cast(dict[str, str], old) if isinstance(old, dict) else {})}
+    if len(kept) > INTRO_PAGES:
+        raise Problem("validation", f"intros.seen keeps at most {INTRO_PAGES} pages", 422)
+    return kept
 
 
 def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any) -> None:
@@ -87,7 +113,7 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
         **api_v2(
             "Team",
             "getPreference",
-            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share, ui.tracker_seen_at); null when unset",
+            "One of your own preferences (the keys clients keep: compose.send_way, ui.rails, org.history, org.mine, tasks.view, tasks.pins, pipeline.rail_hidden, chart.hide_strategy_bot, meetings.auto_share, ui.tracker_seen_at, intros.seen); null when unset",
             "PreferenceValue",
         ),
     )
@@ -103,7 +129,10 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
     @app.post(
         "/api/v2/preferences/{key}",
         **api_v2(
-            "Team", "setPreference", "Keep one of your own preferences; a value is at most 4 KB", "PreferenceValue"
+            "Team",
+            "setPreference",
+            "Keep one of your own preferences; a value is at most 4 KB (intros.seen adds its pages to those kept)",
+            "PreferenceValue",
         ),
     )
     def set_preference(request: Request, key: str, body: M.Preference) -> Any:
@@ -127,13 +156,14 @@ def register(app: "FastAPI", auth: Any, mutate: "Callable[..., Any]", store: Any
 
         def work(c: Any) -> dict[str, Any]:
             at = H.now()
+            kept = seen_union(c, who.actor, value) if key == "intros.seen" else value
             c.execute(
                 "INSERT INTO preferences(actor,key,value,updated_at) VALUES(?,?,?,?) "
                 "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
-                (who.actor, key, encode(value), at),
+                (who.actor, key, encode(kept), at),
             )
             if key == strategy_bot.HIDE_PREF:
                 strategy_bot.mirror_hide(c, who.actor, encode(value), at)
-            return {"key": key, "value": value}
+            return {"key": key, "value": kept}
 
         return mutate(request, body, work)

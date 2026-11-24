@@ -1,0 +1,27 @@
+/* A page's first-visit intro (Intro.tsx): Tico's card pinned over its box, or over a phone's page foot, and the
+   spotlight's ring. Neither takes a press away from the page: the ring lets every press through, and the phone's page
+   makes room for the card. */
+.intro{display:flex;flex-direction:column;align-items:flex-start;gap:var(--s-2)}
+.intro-line{margin:0;color:var(--ink)}
+.intro-beats{margin:0;padding:0 0 0 var(--s-4);display:flex;flex-direction:column;gap:var(--s-1);color:var(--ink-2);font-size:var(--t-sm)}
+.intro-beats button{padding:0;border:0;background:none;color:inherit;font:inherit;text-align:left;cursor:pointer;text-decoration:underline dotted;text-underline-offset:3px}
+.intro-beats button:hover,.intro-beats button[aria-pressed="true"]{color:var(--ink)}
+.intro-beats button:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-gap)}
+.intro-acts{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-2)}
+
+/* pinned over Tico's box, outside the chat's scrolling list: in view for as long as it shows */
+.intro-pin{align-self:stretch;margin:0 0 var(--s-2);padding:var(--s-3);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-1)}
+
+/* a phone with its page up: one card over the page's foot, above the bar of icons and the home indicator's room under
+   it (phone.css --tabbar, which lives on .phone); the page makes room for it (FloatCard sets --intro-room) */
+.intro-float{position:fixed;left:var(--s-4);right:var(--s-4);bottom:calc(var(--s-2) + max(env(safe-area-inset-bottom,0px),8px) + 56px);z-index:var(--z-dock);
+  max-width:420px;margin:0 auto;padding:var(--s-4);border-radius:var(--r-card);background:var(--raised);box-shadow:var(--lift-2)}
+:root:has(>body>.intro-float) .phone>.pg{padding-bottom:calc(var(--intro-room, 0px) + var(--s-2))}
+
+.intro-spot{position:fixed;z-index:var(--z-fx);pointer-events:none;border-radius:var(--r-ctl);box-shadow:0 0 0 2px var(--focus);transition:top var(--dur) var(--ease),left var(--dur) var(--ease),width var(--dur) var(--ease),height var(--dur) var(--ease)}
+.intro-spot-label{position:absolute;top:calc(100% + var(--s-2));left:0;padding:var(--s-1) var(--s-2);border-radius:var(--r-chip);background:var(--raised);box-shadow:var(--lift-2);color:var(--ink);font-size:var(--t-sm);white-space:nowrap}
+/* no room under the ring: its words sit inside its foot; near the right edge they end at its right */
+.intro-spot-label[data-in]{top:auto;bottom:var(--s-2);left:var(--s-2)}
+.intro-spot-label[data-end]{left:auto;right:0}
+.intro-spot-label[data-in][data-end]{right:var(--s-2)}
+@media (prefers-reduced-motion:reduce){.intro-spot{transition:none}}

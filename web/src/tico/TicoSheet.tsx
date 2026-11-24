@@ -11,6 +11,7 @@ import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
+import { IntroPin } from './Intro';
 import { okCard } from './OkCard';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
@@ -21,7 +22,8 @@ import { Tracker } from './Tracker';
    Tico's runs in the room (Conversation sets it). Tucked, the frame draws its edge with the Dot. While
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
    Tico about the open page (Chips). Over the chat, the tasks the person handed off (Tracker). Under a message that
-   links one OK waiting on the person, a card that opens it (OkCard). In the head, a call with Tico (AssistantCall). */
+   links one OK waiting on the person, a card that opens it (OkCard). In the head, a call with Tico (AssistantCall). A
+   page's first-visit intro shows over the box (IntroPin). */
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
@@ -40,7 +42,18 @@ export function TicoSheet() {
       ) : room.data ? (
         <>
           <Tracker />
-          <Conversation id={room.data} variant="tico" from={fromPage(pageAt(path ?? '/', search))} foot={<TicoChips room={room.data} />} below={okCard} />
+          <Conversation
+            id={room.data}
+            variant="tico"
+            from={fromPage(pageAt(path ?? '/', search))}
+            foot={
+              <>
+                <IntroPin />
+                <TicoChips room={room.data} />
+              </>
+            }
+            below={okCard}
+          />
         </>
       ) : room.isError ? (
         // The grey fault, then the one way out (the kit's empty-state row).

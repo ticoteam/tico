@@ -58,7 +58,9 @@ const power = vi.hoisted(() => ({ now: undefined as { available: boolean } | und
 vi.mock('@/tico/power', () => ({ useTicoPower: () => power.now }));
 vi.mock('@/tico', async (orig) => ({
   ...(await orig<object>()),
-   TicoSheet: () => <aside aria-label="Tico">Tico</aside> }));
+   TicoSheet: () => <aside aria-label="Tico">Tico</aside>,
+   // tico/Intro.test.tsx tests the intros
+   PageIntro: () => null }));
 vi.mock('@/conversation', async (orig) => ({
   ...(await orig<object>()),
    ticoRoomQuery: { queryKey: ['tico-room'], queryFn: async () => 'room', staleTime: Infinity } }));
