@@ -6939,8 +6939,10 @@ mod tests {
     ) -> Ran {
         let _controls = RunControls;
         RUN_SESSION.with(|on| on.set(Some(serves)));
-        let dir =
-            std::env::temp_dir().join(format!("tico-session-{}", uuid::Uuid::new_v4().simple()));
+        // Attempt ids of this call's own: masking (redact::add_to) finds a running turn by its id, so two tests' turns
+        // of one id would mask into each other's.
+        let run = uuid::Uuid::new_v4().simple().to_string();
+        let dir = std::env::temp_dir().join(format!("tico-session-{run}"));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
         std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
@@ -7007,7 +7009,7 @@ mod tests {
             let moved_history = config.as_object_mut().unwrap().remove("moved_history");
             // Fields of the attempt itself (its run token, `credential_vault`): a turn on a plan (`on_agy_plan`).
             let more = config.as_object_mut().unwrap().remove("attempt");
-            let mut attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
+            let mut attempt = json!({"id": format!("a-session-{run}-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
                                  "lease_seconds": 120, "conversation": room, "task": task,
                                  "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
                                  "history": history, "config": config});
@@ -7064,7 +7066,9 @@ mod tests {
             .map(|n| {
                 let found: Vec<&Value> = seen
                     .iter()
-                    .filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-session-{n}/complete")))
+                    .filter(|(_, p, _)| {
+                        p.ends_with(&format!("/attempts/a-session-{run}-{n}/complete"))
+                    })
                     .map(|(_, _, b)| b)
                     .collect();
                 assert_eq!(found.len(), 1, "turn {n}: {seen:?}");
@@ -7074,7 +7078,9 @@ mod tests {
         let diagnostics = (0..turns.len())
             .map(|n| {
                 seen.iter()
-                    .filter(|(_, p, _)| p.ends_with(&format!("/attempts/a-session-{n}/events")))
+                    .filter(|(_, p, _)| {
+                        p.ends_with(&format!("/attempts/a-session-{run}-{n}/events"))
+                    })
                     .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
                     .filter(|e| e["kind"] == "diagnostic")
                     .map(|e| text_of(&e["payload"]["text"]))
