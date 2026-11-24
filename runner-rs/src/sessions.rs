@@ -1987,7 +1987,9 @@ impl Runner {
         // A chat turn's own checkout may start on the runner's recent fetch; its `reads:` siblings fetch first.
         crate::fetch_fresh::fetching_first(ensure_reads(&self.config.projects_dir(), path)).await?;
         // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
-        if crate::product_files::refresh_due(&place.bot, &attempt["config"]) {
+        if (attempt["burst_repository"].is_null() || !self.drain.burst_managed())
+            && crate::product_files::refresh_due(&place.bot, &attempt["config"])
+        {
             let _git = self.lanes.git_lock(path).lock_owned().await;
             crate::product_files::refresh(&self.config, &place.bot, &attempt["config"], path).await;
         }

@@ -38,6 +38,7 @@ pub struct HeartbeatAnswer {
     pub browser_exit: Option<bool>,
     pub browser_exit_bots: Option<Vec<String>>,
     pub model_exit: Option<bool>,
+    pub burst_lease: Option<BurstLease>,
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,
@@ -49,6 +50,14 @@ pub struct ClaimAnswer {
     pub attempt: Option<Map<String, Value>>,
     /// Why this computer gets no work (backend/runner_versions.py `paused`).
     pub paused: Option<String>,
+    pub burst_lease: Option<BurstLease>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BurstLease {
+    pub confirmed_at_ms: u64,
+    pub run_seconds: u64,
+    pub draining: bool,
 }
 
 /// `POST attempts/{aid}/start-place`.

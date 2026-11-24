@@ -121,6 +121,7 @@ ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 AUDIENCE = {
     "tico_settings_plan_exit_routing": ("owner", "admin"),
     "tico_settings_burst_rehome": ("owner", "admin"),
+    "tico_settings_burst_autoscale": ("owner", "admin"),
     **{
         name: PEOPLE
         for name in (

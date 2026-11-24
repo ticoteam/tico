@@ -147,6 +147,11 @@ DELETION_BATCH = 4  # old ids reconciled per look, even when HQ's list cannot be
 DELETION_WARN = 24 * 60 * 60  # an unsettled disk may still cost money even after its bot has a fresh machine
 HEARTBEAT = 60
 BURST_DRAIN_SECONDS = 60  # Leave time to stop and report before HQ takes the worker away.
+BURST_WAIT = 30
+BURST_SIZE = "large"
+BURST_NEXT = "burst-next-launch"
+BURST_FAILURES = "burst-launch-failures"
+BURST_FAILURE_WAIT = 60 * 60
 # An own machine HQ still runs whose runner has been silent this long while claimable work waits is stopped, and the
 # work's wake starts it again (HQ's start leaves a live machine as it is). At most one per OFFLINE_RESTART_GAP, and none
 # again until its runner has checked in since the last. A restart its runner has not checked in from this long after the
@@ -243,8 +248,11 @@ def parse_machine(value):
     if type(starts) is not int or starts < 0:
         raise ValueError("starts")
     pending = {"pending": value["pending"]} if "pending" in value else {}
-    if pending and value["pending"] is not None and not isinstance(value["pending"], str):
-        raise ValueError("pending")
+    if pending:
+        if value["pending"] is not None and not isinstance(value["pending"], str):
+            raise ValueError("pending")
+        if value["pending"] == "create":
+            pending["pending"] = "start"
     return {
         "id": value["id"],
         "key": value["key"][:100],
@@ -255,6 +263,7 @@ def parse_machine(value):
         "cost_month_usd": float(_number(value.get("cost_month_usd") or 0)),
         "starts_month": starts,
         "last_error": _text(value.get("last_error"), 200) or "",
+        "managed": value.get("managed") is True,
         **pending,
     }
 
@@ -390,20 +399,31 @@ class HQ:
                 sizes.append(parse_size(row))
             except ValueError:
                 continue
-        caps = answer.get("caps") if isinstance(answer.get("caps"), dict) else {}
+        raw_caps = answer.get("caps")
+        caps: dict[Any, Any] = raw_caps if isinstance(raw_caps, dict) else {}
+        budget = caps.get("daily_budget_usd")
         return {
             "machines": machines,
             "sizes": sizes,
-            "caps": {k: v for k, v in caps.items() if isinstance(k, str) and type(v) is int},
+            "caps": {
+                **{k: v for k, v in caps.items() if isinstance(k, str) and type(v) is int},
+                **(
+                    {"daily_budget_usd": budget}
+                    if isinstance(budget, (int, float)) and not isinstance(budget, bool) and 0 <= budget <= 100_000
+                    else {}
+                ),
+            },
         }
 
-    def create(self, key, size, enroll_token, hub_url):
+    def create(self, key, size, enroll_token, hub_url, **options):
         return self.machine(
-            self.call("POST", "", {"key": key, "size": size, "enroll_token": enroll_token, "hub_url": hub_url})
+            self.call(
+                "POST", "", {"key": key, "size": size, "enroll_token": enroll_token, "hub_url": hub_url, **options}
+            )
         )
 
-    def start(self, machine_id, size=None):
-        return self.machine(self.call("POST", f"/{machine_id}/start", {"size": size} if size else {}))
+    def start(self, machine_id, size=None, **options):
+        return self.machine(self.call("POST", f"/{machine_id}/start", {**({"size": size} if size else {}), **options}))
 
     def stop(self, machine_id):
         return self.machine(self.call("POST", f"/{machine_id}/stop"))
@@ -455,7 +475,10 @@ def offered(c, settings=None):
     return cloud_company(c, settings) and bool(sizes(c))
 
 
-ROW_SQL = "SELECT * FROM cloud_machines WHERE bot=?"
+MACHINE_COLUMNS = "m.*,coalesce(l.managed,0) AS burst_managed,l.launch_at AS burst_launch_at"
+MACHINE_FROM = "FROM cloud_machines m LEFT JOIN burst_launches l ON l.bot=m.bot"
+MACHINE_SQL = f"SELECT {MACHINE_COLUMNS} {MACHINE_FROM}"
+ROW_SQL = MACHINE_SQL + " WHERE m.bot=?"
 DELETING_SQL = "SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?"
 
 
@@ -477,9 +500,7 @@ def prime_rows(c, bots):
     keys = sorted({str(b) for b in bots if b} | {SHARED})
     found = {
         r["bot"]: r
-        for r in c.execute(
-            "SELECT * FROM cloud_machines WHERE bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),)
-        )
+        for r in c.execute(MACHINE_SQL + " WHERE m.bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),))
     }
     read_cache.prime(c, ROW_SQL, {(k,): found.get(k) for k in keys})
     machines = sorted({r["machine_id"] for r in found.values() if r["machine_id"] is not None})
@@ -498,7 +519,7 @@ def prime_rows(c, bots):
 
 
 ROWS_SQL = (
-    "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
+    f"SELECT {MACHINE_COLUMNS},d.machine_id IS NOT NULL AS deleting {MACHINE_FROM} "
     "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id"
 )
 
@@ -650,7 +671,23 @@ def checked_in(c, runner_id):
 SHOWN = ("state", "problem", "start_asked_at", "runner_id", "mode", "placement")
 
 
+def _save_burst_launch(c, key, **fields):
+    columns = ",".join(fields)
+    marks = ",".join("?" for _ in fields)
+    updates = ",".join(f"{column}=excluded.{column}" for column in fields)
+    c.execute(
+        f"INSERT INTO burst_launches(bot,{columns}) SELECT bot,{marks} FROM cloud_machines WHERE bot=? "
+        f"ON CONFLICT(bot) DO UPDATE SET {updates}",
+        (*fields.values(), key),
+    )
+
+
 def save(c, key, **fields):
+    burst = {
+        column: fields.pop(field)
+        for field, column in (("burst_managed", "managed"), ("burst_launch_at", "launch_at"))
+        if field in fields
+    }
     fields["updated_at"] = H.now()
     if "start_asked_at" in fields and fields["start_asked_at"] is None:
         fields["start_asked_size"] = None
@@ -661,6 +698,8 @@ def save(c, key, **fields):
     c.execute(
         "UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?", (*fields.values(), key)
     )
+    if burst:
+        _save_burst_launch(c, key, **burst)
     if before is not None and any(fields[k] != before[i] for i, k in enumerate(shown)):
         _status_moved(c, key)
 
@@ -934,6 +973,11 @@ def listed_caps(c):
     except (ValueError, TypeError, AttributeError):
         caps = {}
     return caps if isinstance(caps, dict) else {}
+
+
+def burst_budget(c):
+    budget = listed_caps(c).get("daily_budget_usd")
+    return isinstance(budget, (int, float)) and not isinstance(budget, bool) and 0 <= budget <= 100_000
 
 
 def resizing(current):
@@ -1804,6 +1848,107 @@ def held(c, runner_id):
     return claim_status(c, runner_id)[0]
 
 
+def burst_managed(c, runner_id):
+    current = c.execute(
+        f"SELECT m.bot,coalesce(l.managed,0) AS burst_managed {MACHINE_FROM} WHERE m.runner_id=? LIMIT 1",
+        (runner_id,),
+    ).fetchone()
+    return bool(current and burst_key(current["bot"]) and current["burst_managed"])
+
+
+def burst_work(c, runner_id, *, include_settled=False):
+    return (
+        runner_id
+        and c.execute(
+            "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
+            "UNION ALL SELECT 1 FROM burst_guests WHERE runner_id=? AND (? OR return_pending<>'settled') LIMIT 1",
+            (runner_id, runner_id, include_settled),
+        ).fetchone()
+    )
+
+
+def burst_idle_since(c, machine, at):
+    finished = c.execute(
+        "SELECT max(finished_at) FROM attempts WHERE runner_id=?",
+        (machine["runner_id"],),
+    ).fetchone()[0]
+    return max(machine["active_at"] or at, epoch(finished) or 0)
+
+
+def confirmed_until(machine):
+    return (machine["heartbeat_at"] or 0) + (machine["ttl_s"] or 0)
+
+
+def lease_low(machine, at):
+    return confirmed_until(machine) < at + start_places.START_SECONDS + BURST_DRAIN_SECONDS
+
+
+def burst_lease_supported(c, runner_id):
+    return (
+        runner_id
+        and c.execute(
+            "SELECT 1 FROM runner_states r,json_each(r.capabilities) k WHERE r.runner_id=? AND k.value=?",
+            (runner_id, compute_pool.LEASE),
+        ).fetchone()
+    )
+
+
+def burst_lease(c, runner_id):
+    current = c.execute(MACHINE_SQL + " WHERE m.runner_id=? AND l.managed=1 LIMIT 1", (runner_id,)).fetchone()
+    if not current or not burst_key(current["bot"]):
+        return None
+    return {
+        "confirmed_at_ms": int((current["heartbeat_at"] or 0) * 1000) if current["ttl_s"] is not None else 0,
+        "run_seconds": max(0, int(confirmed_until(current) - now() - BURST_DRAIN_SECONDS)),
+        "draining": current["drain_started_at"] is not None or current["state"] != "running",
+    }
+
+
+def burst_start_fence(c, attempt):
+    if not compute_pool.borrowed(attempt):
+        return None
+    lease = burst_lease(c, attempt["runner_id"])
+    if lease is None:
+        return None
+    if lease["draining"] or not lease["run_seconds"]:
+        return "burst_draining"
+    if c.execute(
+        "SELECT 1 FROM cloud_machines WHERE runner_id=? AND next_try_at IS NOT NULL", (attempt["runner_id"],)
+    ).fetchone():
+        return "start_wait"
+    return None
+
+
+def drain_burst(c, machine, at):
+    from . import events
+
+    save(c, machine["bot"], drain_started_at=at, next_try_at=None)
+    events.tell_runners(c, "assignments", "SELECT ? AS rid", (machine["runner_id"],))
+
+
+def drain_managed_burst(c):
+    at = now()
+    for machine in c.execute(MACHINE_SQL + " WHERE l.managed=1").fetchall():
+        if machine["state"] in (*ON, "stopping") or any(
+            machine[field] is not None for field in ("create_asked_at", "start_asked_at")
+        ):
+            if machine["drain_started_at"] is None:
+                drain_burst(c, machine, at)
+
+
+def burst_backoff(c, at):
+    c.execute(
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+        "value=max(CAST(registry_metadata.value AS REAL),CAST(excluded.value AS REAL))",
+        (BURST_NEXT, str(at)),
+    )
+
+
+def burst_failures(c):
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (BURST_FAILURES,)).fetchone()
+    return int(found[0]) if found else 0
+
+
 def claim_status(c, runner_id):
     """Why the claim gives computer `runner_id` no new turn, or "": it is a cloud machine reserved for a stop
     (`reserve`, until its reservation lapses), awaiting reconciliation of an unanswered manual deletion, one HQ
@@ -1815,20 +1960,21 @@ def claim_status(c, runner_id):
         (runner_id, runner_id),
     ).fetchone()
     found = c.execute(
-        "SELECT state,stop_until,machine_id,size,machine_size,bot,heartbeat_at,ttl_s,next_try_at "
-        "FROM cloud_machines WHERE runner_id=? LIMIT 1",
+        "SELECT m.state,m.stop_until,m.machine_id,m.size,m.machine_size,m.bot,m.heartbeat_at,m.ttl_s,m.next_try_at,"
+        f"coalesce(l.managed,0) AS burst_managed,m.drain_started_at {MACHINE_FROM} WHERE m.runner_id=? LIMIT 1",
         (runner_id,),
     ).fetchone()
     key = found["bot"] if found else ""
     if (
         burst_key(key)
+        and found["burst_managed"]
+        and (found["drain_started_at"] is not None or not burst_lease_supported(c, runner_id))
+    ):
+        return "This Burst machine is draining or has yet to confirm lease support.", key
+    if (
+        burst_key(key)
         and compute_pool.enabled(c)
-        and (
-            found["state"] != "running"
-            or found["next_try_at"] is not None
-            or (found["heartbeat_at"] or 0) + (found["ttl_s"] or 0)
-            < now() + start_places.START_SECONDS + BURST_DRAIN_SECONDS
-        )
+        and (found["state"] != "running" or found["next_try_at"] is not None or lease_low(found, now()))
     ):
         return "This Burst machine has no confirmed renewal for new turns.", key
     if not intent and (not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now())):
@@ -1862,6 +2008,9 @@ class Manager:
         self.synced = None
         self.relist_until = 0  # an ambiguous create briefly holds other creates while HQ's list is unreadable
         self.list_refused = None  # the code of HQ's last refused list, None once one is read: a waiting create says it
+        self.burst_waiting = None
+        self.burst_hint = None
+        self.inventory = {}
 
     @property
     def off(self):
@@ -1916,6 +2065,271 @@ class Manager:
             except Exception as exc:  # one machine's failure never holds the others
                 log.exception("Cloud machine step failed for %s", key)
                 self.failed(key, exc)
+        self.scale_burst(hq, now())
+
+    def burst_base(self, c):
+        return c.execute(
+            "SELECT r.* FROM cloud_machines m JOIN runners_with_state r ON r.id=m.runner_id "
+            "WHERE m.bot=? AND r.revoked_at IS NULL",
+            (SHARED,),
+        ).fetchone()
+
+    def burst_base_slot(self, c, base, job, at):
+        from .models import Claim
+
+        current = row(c, SHARED)
+        if current is None:
+            return False
+        if current["deleting"] or cloud_access.frozen(c) or current["problem"] == "out_of_credit":
+            return False
+        if (
+            start_pending(current, at)
+            or current["create_asked_at"] is not None
+            and at < current["create_asked_at"] + CREATE_HOLD
+        ):
+            return True
+        if current["state"] in ON and (
+            current["state"] == "starting" or not runner_online.is_online(base["last_seen_at"])
+        ):
+            return at < max(epoch(current["started_at"]) or 0, current["woke_at"] or 0) + CREATE_HOLD
+        if current["state"] in GOING:
+            # The Base wake runs independently once the machine finishes parking.
+            return current["problem"] not in ("stuck", "no_enroll")
+        people_only = compute_pool.slot_admission(c, self.execution, base)
+        return (
+            current["state"] == "running"
+            and people_only is not None
+            and self.execution._candidate(c, Claim(), base, job["id"], people_only, None, (), base["id"]) is not None
+        )
+
+    def burst_demand(self, c, workers):
+        from . import org_turns
+
+        if (
+            cloud_access.locked(c)
+            or not c.execute("SELECT 1 FROM jobs WHERE state='queued' AND held=0 LIMIT 1").fetchone()
+            or org_turns.admission(c)["at_stop"]
+        ):
+            return None, None
+        base = self.burst_base(c)
+        if not base:
+            return None, None
+        slot, offer = compute_pool.preparation_slot(c, self.execution, base["owner_id"])
+        if slot:
+            return offer, slot
+        # Base and Burst boot from the same image. Use Burst readiness once a worker has confirmed its lease.
+        images = []
+        for worker in workers:
+            if worker["runner_id"] and worker["machine_size"] == BURST_SIZE:
+                runner = c.execute(
+                    "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (worker["runner_id"],)
+                ).fetchone()
+                if runner and {compute_pool.PREPARATION, compute_pool.LEASE} <= set(json.loads(runner["capabilities"])):
+                    images.append(runner)
+        for runner in images or [base]:
+            if job := compute_pool.candidate(c, self.execution, runner, demand=True, company_paid=True):
+                return job, None if self.burst_base_slot(c, base, job, now()) else ""
+        return None, None
+
+    def burst_workers(self, c):
+        return [
+            dict(worker)
+            for worker in c.execute(
+                f"SELECT {MACHINE_COLUMNS},"
+                "EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=m.machine_id) AS deleting "
+                f"{MACHINE_FROM} WHERE m.bot GLOB '_burst:[0-9]*' "
+                "ORDER BY CAST(substr(m.bot,8) AS INTEGER),m.bot"
+            )
+            if burst_key(worker["bot"])
+        ]
+
+    def scale_burst(self, hq, at):
+        from . import events
+
+        with self.store.read_transaction() as c:
+            if not compute_pool.autoscale(c):
+                self.burst_waiting = self.burst_hint = None
+                return
+            workers = self.burst_workers(c)
+            job, slot = self.burst_demand(c, workers)
+            running = [
+                worker
+                for worker in workers
+                if worker["state"] == "running" and worker["drain_started_at"] is None and worker["burst_managed"]
+            ]
+            idle = {
+                worker["bot"]: None if burst_work(c, worker["runner_id"]) else burst_idle_since(c, worker, at)
+                for worker in running
+            }
+        hint = (slot, job["id"]) if slot and job else None
+        updates = [
+            w["bot"]
+            for w in running
+            if idle[w["bot"]] != w["active_at"] or (idle[w["bot"]] or at) + pause_after(w) <= at
+        ]
+        if updates or hint and hint != self.burst_hint:
+            with self.store.transaction(notify=True) as c:
+                if hint:
+                    base = self.burst_base(c)
+                    current_slot, _ = (
+                        compute_pool.preparation_slot(c, self.execution, base["owner_id"], job)
+                        if base and compute_pool.autoscale(c)
+                        else (None, None)
+                    )
+                    if current_slot != slot:
+                        hint = None
+                if hint and hint != self.burst_hint:
+                    events.tell_runners(c, "assignments", "SELECT ? AS rid", (hint[0],))
+                for key in updates:
+                    worker = row(c, key)
+                    if not worker or worker["state"] != "running" or worker["drain_started_at"] is not None:
+                        continue
+                    since = None if burst_work(c, worker["runner_id"]) else burst_idle_since(c, worker, at)
+                    if since is not None and since + pause_after(worker) <= at:
+                        drain_burst(c, worker, at)
+                    elif since != worker["active_at"]:
+                        save(c, key, active_at=since)
+        self.burst_hint = hint
+        waiting = (job["id"], job["attempt_id"], job["burst"]["generation"]) if job and slot == "" else None
+        if waiting is None:
+            self.burst_waiting = None
+            return
+        if self.burst_waiting is None or self.burst_waiting[0] != waiting:
+            self.burst_waiting = (waiting, at)
+        ready_at = self.burst_waiting[1] + BURST_WAIT
+        if at < ready_at:
+            return
+        if self.list_refused is not None or self.synced is None or at - self.synced >= SYNC:
+            return
+        with self.store.transaction(durable=True) as c:
+            from . import org_turns
+
+            at = now()
+            if not compute_pool.autoscale(c) or cloud_access.locked(c) or org_turns.admission(c)["at_stop"]:
+                return
+            workers = self.burst_workers(c)
+            if not self.burst_launchable(c, workers, job, at):
+                return
+            base = self.burst_base(c)
+            burst_entry: Any = job["burst"] if job else None
+            if not burst_entry:
+                return
+            image = c.execute(
+                "SELECT * FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (burst_entry["runner_id"],)
+            ).fetchone()
+            live = (
+                compute_pool.candidate(c, self.execution, image, job=job, demand=True, company_paid=True)
+                if image and base
+                else None
+            )
+            if (
+                not live
+                or (live["id"], live["attempt_id"], live["burst"]["generation"]) != waiting
+                or self.burst_base_slot(c, base, live, at)
+                or compute_pool.preparation_slot(c, self.execution, base["owner_id"], live)[0]
+            ):
+                return
+            reserved = self.reserve_burst(c, workers, live, at, self.inventory)
+        if reserved:
+            current, action, code = reserved
+            self.act(hq, current, action, {}, at, reserved=True, code=code)
+
+    def burst_launchable(self, c, workers, job, at):
+        next_at = c.execute("SELECT value FROM registry_metadata WHERE key=?", (BURST_NEXT,)).fetchone()
+        if burst_failures(c) >= ENROLL_TRIES or next_at and at < float(next_at[0]):
+            return False
+        if not burst_budget(c) or not any(
+            s["name"] == BURST_SIZE and s["cpu"] == 8 and s.get("available") is not False for s in sizes(c)
+        ):
+            return False
+        for worker in workers:
+            if not worker["burst_managed"]:
+                continue
+            if (
+                worker["burst_launch_at"] is not None
+                or worker["create_asked_at"] is not None
+                or worker["start_asked_at"] is not None
+                or worker["state"] == "starting"
+                or worker["state"] == "running"
+                and worker["drain_started_at"] is None
+                and (
+                    not worker["ttl_s"]
+                    or not burst_lease_supported(c, worker["runner_id"])
+                    or (
+                        worker["wake_key"] == "burst-job:" + job["id"]
+                        and at < (worker["woke_at"] or 0) + CREATE_HOLD
+                        and not burst_work(c, worker["runner_id"], include_settled=True)
+                    )
+                )
+            ):
+                return False
+        return True
+
+    def reserve_burst(self, c, workers, job, at, inventory):
+        # A parked disk can come back with its runner and checkout. A failed reservation can reuse its key.
+        current = next(
+            (
+                w
+                for w in workers
+                if w["burst_managed"]
+                and w["state"] == "stopped"
+                and w["machine_size"] == BURST_SIZE
+                and w["runner_id"]
+                and burst_lease_supported(c, w["runner_id"])
+                and not burst_work(c, w["runner_id"], include_settled=True)
+                and not w["deleting"]
+                and (w["next_try_at"] or 0) <= at
+                and (listed := inventory.get(w["bot"])) is not None
+                and listed["id"] == w["machine_id"]
+                and listed["state"] == "stopped"
+                and not listed.get("pending")
+            ),
+            None,
+        )
+        if current is None:
+            current = next(
+                (
+                    w
+                    for w in workers
+                    if w["burst_managed"]
+                    and not w["deleting"]
+                    and (not w["machine_id"] or w["state"] in DEAD)
+                    and w["bot"] not in inventory
+                    and (w["next_try_at"] or 0) <= at
+                    and w["enroll_fails"] < ENROLL_TRIES
+                ),
+                None,
+            )
+        code = None
+        if current and current["state"] == "stopped":
+            key, action = current["bot"], "start"
+            save(c, key, start_asked_at=at, start_asked_size=BURST_SIZE, drain_started_at=None)
+        else:
+            key = (
+                current["bot"]
+                if current
+                else compute_pool.KEY
+                + str(
+                    max(
+                        (
+                            int(k.removeprefix(compute_pool.KEY))
+                            for k in set(inventory) | {w["bot"] for w in workers}
+                            if burst_key(k)
+                        ),
+                        default=0,
+                    )
+                    + 1
+                )
+            )
+            action = "create"
+            if c.execute("INSERT OR IGNORE INTO cloud_machines(bot,size) VALUES(?,?)", (key, BURST_SIZE)).rowcount:
+                _save_burst_launch(c, key, managed=1)
+            code = self.reserve_create(c, row(c, key), at)
+            if code is None:
+                return None
+        save(c, key, burst_launch_at=at, wake_key="burst-job:" + job["id"], ttl_s=None)
+        burst_backoff(c, at + BURST_WAIT)
+        return row(c, key), action, code
 
     def failed(self, key, exc):
         """Name a look's failure on machine `key`'s row, so its bots' work says why (the log has the trace)."""
@@ -2013,8 +2427,15 @@ class Manager:
                     or ((current["state"] in DEAD or current["deleting"]) and machine["id"] != current["machine_id"])
                 ):
                     if current["machine_id"] != machine["id"]:
+                        if current["burst_managed"] and (
+                            current["create_asked_at"] is None or machine.get("managed") is not True
+                        ):
+                            continue
                         self.adopt(c, current, machine, at)
                         continue
+                    managed = current["burst_managed"]
+                    if managed and machine["state"] in DEAD:
+                        self.finish_burst_launch(c, current, at, failed=True)
                     if burst_key(key) and machine["state"] in DEAD and current["runner_id"]:
                         deleted(c, current, H.TICO_ACTOR, execution=self.execution)
                         save(c, key, last_error=machine["last_error"])
@@ -2022,21 +2443,28 @@ class Manager:
                     gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
                         counted = count_enrollment_failure(c, key, machine["id"], machine["last_error"])
-                        if machine["state"] == "failed" and current["state"] != "failed":
+                        if not managed and machine["state"] == "failed" and current["state"] != "failed":
                             self.plan_failed(c, current, machine, at)
                         gone.update(temporary_create_retry(counted, machine, at))
                         gone.update(enroll_by=None, wake_key=None, start_asked_at=None)
-                    elif machine["state"] == "starting" and current["start_asked_at"] is not None:
-                        # HQ can list its reservation before it starts the machine. Keep the prior state so an
-                        # unanswered request stays retryable even if the list goes away.
+                    elif current["start_asked_at"] is not None and (
+                        machine["state"] == "starting" if not managed else machine.get("pending") == "start"
+                    ):
+                        # HQ can list its reservation before dispatch. Retain the unanswered start.
                         continue
-                    elif machine["state"] == "running" and current["start_asked_at"] is not None:
+                    elif current["start_asked_at"] is not None and (
+                        machine["state"] == "running" or managed and machine["state"] == "starting"
+                    ):
                         # Only an unanswered start can be a recovered resume: a stop may still list as running.
                         # Give the start its idle window and spend a new wake, keeping the old guard if none remains.
-                        woke_for = wake_for(current, facts(c, self.settings, current, at))[0]
+                        woke_for = (
+                            current["wake_key"]
+                            if managed
+                            else wake_for(current, facts(c, self.settings, current, at))[0]
+                        )
                         gone.update(
                             active_at=at,
-                            heartbeat_at=at,
+                            heartbeat_at=current["heartbeat_at"] if managed else at,
                             start_asked_at=None,
                             failures=0,
                             next_try_at=None,
@@ -2045,9 +2473,26 @@ class Manager:
                         )
                         if woke_for is not None:
                             gone.update(wake_key=woke_for, woke_at=at)
-                    save(c, key, **self.described(machine), **gone)
-            # A readable list resolves unanswered creates before another POST is allowed, including after restart.
-            c.execute("UPDATE cloud_machines SET create_asked_at=NULL WHERE create_asked_at IS NOT NULL")
+                    elif managed and machine["state"] == "stopped":
+                        if machine.get("pending") == "start" or start_pending(current, at):
+                            continue
+                        self.finish_burst_launch(c, current, at, failed=True)
+                        gone["start_asked_at"] = None
+                    fields = self.described(machine)
+                    if managed:
+                        fields.update(self.burst_state(c, current, machine, at, gone))
+                    save(c, key, **(fields | gone))
+            # A readable list resolves unanswered creates before another POST is allowed.
+            for worker in c.execute(
+                MACHINE_SQL + " WHERE l.managed=1 AND m.create_asked_at<=?",
+                (at - CREATE_HOLD,),
+            ).fetchall():
+                self.finish_burst_launch(c, worker, at, failed=True)
+                save(c, worker["bot"], create_asked_at=None)
+            c.execute(
+                "UPDATE cloud_machines SET create_asked_at=NULL WHERE create_asked_at IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM burst_launches l WHERE l.bot=cloud_machines.bot AND l.managed=1)"
+            )
             if learned and self.on_offered is not None and offered(c, self.settings):
                 c.execute("SAVEPOINT cloud_offered")
                 try:
@@ -2057,6 +2502,7 @@ class Manager:
                     log.exception("Placing bots on cloud machines failed")
                 c.execute("RELEASE cloud_offered")
         self.cleanup_deletions(hq, at)
+        self.inventory = latest
         return listed
 
     def settle_delete(self, c, intent, machine):
@@ -2148,10 +2594,30 @@ class Manager:
             "last_error": machine["last_error"],
         }
 
+    @staticmethod
+    def burst_state(c, current, machine, at, settled):
+        pending = machine.get("pending")
+        if pending in ("stop", "delete") and machine["state"] in ON:
+            return {"state": "stopping"}
+        if (
+            machine["state"] in ("stopped", *DEAD)
+            and not pending
+            and settled.get("start_asked_at", current["start_asked_at"]) is None
+            and settled.get("create_asked_at", current["create_asked_at"]) is None
+        ):
+            return {
+                "ttl_s": None,
+                "drain_started_at": None,
+            }
+        if not compute_pool.autoscale(c):
+            return {"drain_started_at": current["drain_started_at"] or at}
+        return {}
+
     def adopt(self, c, current, machine, at):
         """A new id gets only its own attempt's codes, runner, deadline and wake state, from create or from a list."""
         key, old_id = current["bot"], current["machine_id"]
         burst = burst_key(key)
+        managed = current["burst_managed"]
         if old_id and (
             current["state"] == "failed"
             or not current["runner_id"]
@@ -2174,23 +2640,30 @@ class Manager:
         c.execute("DELETE FROM cloud_machine_codes WHERE bot=? AND replacement_for IS NOT ?", (key, old_id))
         dead = machine["state"] in DEAD
         fresh = {**current, **self.described(machine), "runner_id": fresh_runner, "deleting": False}
-        woke_for = wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
+        woke_for = (
+            current["wake_key"]
+            if managed
+            else wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
+        )
         retry = temporary_create_retry(current, machine, at) or {
             "failures": 0,
             "next_try_at": None,
             "problem": "",
             "problem_at": None,
         }
+        fields = self.described(machine)
+        if managed:
+            fields.update(self.burst_state(c, current, machine, at, {"create_asked_at": None, "start_asked_at": None}))
+        fields["ttl_s"] = None
         save(
             c,
             key,
-            **self.described(machine),
+            **fields,
             runner_id=fresh_runner,
             enroll_by=None if dead else (0 if fresh_runner else enrollment_deadline(c, key, at)),
             enroll_fails=0 if fresh_runner else current["enroll_fails"],
             active_at=None if dead else at,
             heartbeat_at=None if dead else at,
-            ttl_s=None,
             wake_key=None if dead else woke_for,
             woke_at=None if dead else at,
             **retry,
@@ -2200,30 +2673,146 @@ class Manager:
         )
         adopted = row(c, key)
         if machine["state"] == "failed" or not fresh_runner and (dead or at >= adopted["enroll_by"]):
+            if managed:
+                self.finish_burst_launch(c, current, at, failed=True)
             count_enrollment_failure(c, key, machine["id"], machine["last_error"])
-            if machine["state"] == "failed":
+            if not managed and machine["state"] == "failed":
                 self.plan_failed(c, adopted, machine, at)
         elif adopted["enroll_fails"] >= ENROLL_TRIES:
             save(c, key, problem="no_enroll", problem_at=H.now())
+
+    @staticmethod
+    def burst_ready(c, worker, at):
+        if (
+            worker["state"] != "running"
+            or worker["start_asked_at"] is not None
+            or lease_low(worker, at)
+            or not burst_lease_supported(c, worker["runner_id"])
+        ):
+            return False
+        runner = c.execute(
+            "SELECT last_seen_at FROM runners_with_state WHERE id=? AND revoked_at IS NULL", (worker["runner_id"],)
+        ).fetchone()
+        return bool(runner and runner_online.is_online(runner[0]))
+
+    def drain_expiring_burst(self, c, worker, at):
+        self.finish_burst_launch(c, worker, at, failed=True)
+        drain_burst(c, worker, at)
+
+    def finish_burst_launch(self, c, machine, at, *, failed=False):
+        if machine["burst_launch_at"] is None:
+            return
+        save(c, machine["bot"], burst_launch_at=None)
+        if machine["drain_started_at"] is not None or not compute_pool.autoscale(c):
+            return
+        failures = burst_failures(c)
+        if failures >= ENROLL_TRIES:
+            return
+        if not failed:
+            c.execute("DELETE FROM registry_metadata WHERE key=?", (BURST_FAILURES,))
+            return
+        failures += 1
+        c.execute("INSERT OR REPLACE INTO registry_metadata VALUES(?,?)", (BURST_FAILURES, str(failures)))
+        burst_backoff(c, at + BURST_FAILURE_WAIT)
+        H.event(c, H.TICO_ACTOR, "cloud_machine.burst_launch_failed", machine["bot"], {"consecutive": failures})
+        if failures == ENROLL_TRIES and (owner := self.execution.auth.owner_id(c)):
+            H.attempt(
+                c,
+                H.notice,
+                H.TICO_ACTOR,
+                H.human_actor(owner),
+                "Three consecutive Burst launches failed to enroll or confirm a lease. "
+                "Turn Burst autoscaling off and back on to allow new launches.",
+                refs={"cloud_machine": machine["bot"]},
+            )
 
     def step(self, hq, key, at):
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
         if burst_key(key):
             with self.store.read() as c:
                 current = row(c, key)
+                if not current or current["burst_managed"] and current["deleting"]:
+                    return None
+                managed = current["burst_managed"]
+                overdue = (
+                    managed
+                    and current["state"] in ON
+                    and not current["runner_id"]
+                    and current["enroll_by"]
+                    and at >= current["enroll_by"]
+                )
+                launching = managed and current["burst_launch_at"] is not None and current["state"] in ON
+                timed_out = launching and at >= (current["burst_launch_at"] or 0) + CREATE_HOLD
+                ready = launching and self.burst_ready(c, current, at)
+            if not current["machine_id"]:
+                return None
+            if overdue or ready or timed_out:
+                with self.store.transaction(durable=True, notify=True) as c:
+                    live = row(c, key)
+                    if (
+                        not live
+                        or live["machine_id"] != current["machine_id"]
+                        or live["state"] not in ON
+                        or live["deleting"]
+                    ):
+                        return None
+                    if overdue and not live["runner_id"]:
+                        self.finish_burst_launch(c, live, at, failed=True)
+                        intend_delete(c, live, "never_enrolled")
+                    elif live["burst_launch_at"] is not None and self.burst_ready(c, live, at):
+                        self.finish_burst_launch(c, live, at)
+                        overdue = False
+                    elif timed_out and live["drain_started_at"] is not None:
+                        self.finish_burst_launch(c, live, at, failed=True)
+                        overdue = False
+                    else:
+                        if timed_out:
+                            self.drain_expiring_burst(c, live, at)
+                        return None
+                if overdue:
+                    self.act(hq, live, "delete", {}, at, reserved=True)
+                    return "delete"
+            if managed and current["state"] in ON and current["drain_started_at"] is not None:
+                if at < max(current["stop_until"] or 0, current["next_try_at"] or 0):
+                    return None
+                with self.store.read() as c:
+                    if burst_work(c, current["runner_id"]):
+                        return None
+                with self.store.transaction(durable=True) as c:
+                    live = row(c, key)
+                    if (
+                        not live
+                        or live["machine_id"] != current["machine_id"]
+                        or live["state"] not in ON
+                        or live["drain_started_at"] is None
+                        or burst_work(c, live["runner_id"])
+                    ):
+                        return None
+                    save(c, key, stop_until=at + STOP_HOLD)
+                self.act(hq, live, "stop", {}, at, reserved=True)
+                return "stop"
             if (
-                current
-                and current["machine_id"]
-                and current["state"] == "running"
+                current["state"] == "running"
+                and (not managed or current["drain_started_at"] is None)
                 and at >= (current["next_try_at"] or 0)
                 and (not current["ttl_s"] or at - (current["heartbeat_at"] or 0) >= HEARTBEAT)
             ):
                 with self.store.transaction() as c:
-                    if (row(c, key) or {}).get("machine_id") != current["machine_id"]:
+                    live = row(c, key)
+                    if (
+                        not live
+                        or live["machine_id"] != current["machine_id"]
+                        or (managed and live["drain_started_at"] is not None)
+                    ):
                         return None
                     save(c, key, next_try_at=at + WAIT)  # An unanswered renewal keeps its claim fence.
                 self.act(hq, current, "heartbeat", {}, at)
                 return "heartbeat"
+            if managed and current["state"] == "running" and current["ttl_s"] is not None and lease_low(current, at):
+                with self.store.transaction(notify=True) as c:
+                    live = row(c, key)
+                    if live and live["machine_id"] == current["machine_id"] and live["drain_started_at"] is None:
+                        self.drain_expiring_burst(c, live, at)
             return None
         if key != SHARED:
             with self.store.read() as c:
@@ -2365,17 +2954,18 @@ class Manager:
                     )
             return row(c, key)
 
-    def act(self, hq, current, action, found, at):
+    def act(self, hq, current, action, found, at, *, reserved=False, code=None):
         key = current["bot"]
+        burst = burst_key(key)
+        managed = bool(burst and current["burst_managed"])
         # The stop half of an offline restart (`offline_restart_ready`), or the start that follows it.
-        offline_restart = action == "stop" and offline_restart_ready(current, found, at)
-        code = None
-        if action in ("stop", "delete"):
+        offline_restart = action == "stop" and not managed and offline_restart_ready(current, found, at)
+        if not reserved and action in ("stop", "delete"):
             with self.store.transaction() as c:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return  # a claim came first, or the facts changed: not now
-        if action in ("create", "start"):
+        if not reserved and action in ("create", "start"):
             with self.store.transaction() as c:
                 live = row(c, key)
                 if not live or live["machine_id"] != current["machine_id"]:
@@ -2393,11 +2983,22 @@ class Manager:
         restarting = action == "start" and current["problem"] == OFFLINE_RESTARTING
         restarting_since = current["problem_at"] if restarting else None
         resize = current["size"] if action == "start" and current["size"] != current["machine_size"] else None
+        options = {}
+        intent_field = {"start": "start_asked_at", "create": "create_asked_at"}.get(action)
+        if managed and intent_field:
+            with self.store.transaction() as c:
+                live = row(c, key)
+                if not live or live[intent_field] != current[intent_field] or not live["burst_managed"]:
+                    return
+                if not compute_pool.autoscale(c) or live["drain_started_at"] is not None:
+                    save(c, key, burst_launch_at=None, **{intent_field: None})
+                    return
+            options = {"managed": True, "request_id": digest(encode([key, action, current[intent_field]]))}
         try:
             if action == "create":
-                machine = hq.create(key, current["size"], code, self.settings.runner_url)
+                machine = hq.create(key, current["size"], code, self.settings.runner_url, **options)
             elif action == "start":
-                machine = hq.start(current["machine_id"], resize)
+                machine = hq.start(current["machine_id"], resize, **options)
             elif action == "stop":
                 machine = hq.stop(current["machine_id"])
             elif action == "delete":
@@ -2424,17 +3025,35 @@ class Manager:
                 self.never_enrolled(current)
                 return
             else:
+                sent = max(at, now())
                 ttl = hq.heartbeat(current["machine_id"])
-                if burst_key(key) and (not ttl or ttl < 0):
+                if burst and (ttl is None or ttl < 0 or not managed and not ttl):
                     raise Refused("bad_answer")
-                with self.store.transaction() as c:
-                    if not burst_key(key) or (row(c, key) or {}).get("machine_id") == current["machine_id"]:
-                        save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try_at=None)
+                with self.store.transaction(notify=managed) as c:
+                    live = row(c, key) if burst else current
+                    if live and live["machine_id"] == current["machine_id"]:
+                        lease = {}
+                        if not managed or ttl > 0 and sent + ttl > confirmed_until(live):
+                            lease = {"heartbeat_at": sent if managed else at, "ttl_s": ttl}
+                        save(c, key, **lease, failures=0, next_try_at=None)
+                        renewed = {**live, **lease}
+                        if managed and live["drain_started_at"] is None and renewed["ttl_s"] is not None:
+                            at = now()
+                            if lease_low(renewed, at):
+                                self.drain_expiring_burst(c, renewed, at)
+                            elif renewed["burst_launch_at"] is not None and self.burst_ready(c, renewed, at):
+                                self.finish_burst_launch(c, renewed, at)
                 return
         except Refused as refused:
             self.refused(current, action, refused, at, restarting=restarting)
             return
-        if action == "start" and machine["state"] == "starting" and machine.get("pending") == "start":
+        if action == "start" and (
+            machine.get("pending") == "start"
+            and (managed or machine["state"] == "starting")
+            or managed
+            and "pending" not in machine
+            and machine["state"] == "starting"
+        ):
             self.synced = None
             return  # HQ acknowledged its reservation; the start is still unanswered
         with self.store.read() as c:
@@ -2443,12 +3062,16 @@ class Manager:
             # HQ still has the machine deleted (until boat confirms) or failed here: the new one is made once it is
             # gone, and HQ answering with that same machine is not a new one.
             with self.store.transaction() as c:
+                if managed:
+                    self.finish_burst_launch(c, row(c, key), at, failed=True)
                 save(c, key, next_try_at=at + BACKOFF, enroll_by=None, create_asked_at=None)
             return
         fields = self.described(machine)
         if action == "start":
-            woke_for = wake_for(current, found)[0]
-            fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
+            woke_for = current["wake_key"] if managed else wake_for(current, found)[0]
+            fields.update(active_at=at, wake_key=woke_for, woke_at=at)
+            if not managed:
+                fields["heartbeat_at"] = at
             if resize and machine["size"] != resize:
                 # HQ started it at another size: keep that, or every look would drain it to ask again.
                 fields.update(
@@ -2457,7 +3080,7 @@ class Manager:
                     grow_blocked_until=at + GROW_RETRY,
                     grow_note=f"Couldn't change to {cloud_size_name(resize)}",
                 )
-        if action == "stop" and resizing(current):
+        if action == "stop" and not managed and resizing(current):
             # Stopped to resize: its next want is fresh, even one it was woken for before the drain held it.
             fields.update(wake_key=None, drain_started_at=None, grow_note="")
         if offline_restart:
@@ -2466,8 +3089,16 @@ class Manager:
             if action == "create":
                 # Enrollment may have arrived while HQ answered. Both recovery paths read it under the write lock.
                 live = row(c, key)
-                self.adopt(c, live, machine, at)
+                if not managed or (
+                    live and live["create_asked_at"] == current["create_asked_at"] and machine["key"] == key
+                ):
+                    self.adopt(c, live, machine, at)
             else:
+                if managed:
+                    live = row(c, key)
+                    if not live or live["machine_id"] != machine["id"]:
+                        return
+                    fields.update(self.burst_state(c, live, machine, at, {"start_asked_at": None}))
                 save(
                     c,
                     key,
@@ -2530,7 +3161,7 @@ class Manager:
                 "DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN (SELECT code_hash FROM enrollments)",
                 (key,),
             )
-        code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED else None)
+        code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED or current["burst_managed"] else None)
         save(c, key, start_asked_at=None, create_asked_at=at)
         return code
 
@@ -2551,6 +3182,8 @@ class Manager:
 
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
+        burst = burst_key(key)
+        managed = current["burst_managed"]
         fields = {}
         if refused.status == 402:
             fields = {"problem": "out_of_credit", "problem_at": H.now(), "next_try_at": at + FROZEN_RETRY}
@@ -2561,6 +3194,8 @@ class Manager:
             with self.store.transaction() as c:
                 live = row(c, key)
                 if not burst_key(key) or (live and live["machine_id"] == current["machine_id"]):
+                    if burst and live and live["burst_managed"]:
+                        self.finish_burst_launch(c, live, at, failed=True)
                     deleted(c, live, H.TICO_ACTOR, replacing=not burst_key(key), execution=self.execution)
             return
         else:
@@ -2606,7 +3241,7 @@ class Manager:
                 grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
                 grow_note=f"Couldn't change to {cloud_size_name(current['size'])}",
             )
-        plan = plan_refusal(refused.code) if action in ("create", "start") else None
+        plan = plan_refusal(refused.code) if not managed and action in ("create", "start") else None
         if action == "stop" and resizing(current) and "failures" in fields:
             if fields["failures"] >= STOP_TRIES:
                 # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
@@ -2623,6 +3258,17 @@ class Manager:
             else:
                 fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
+            if managed and action == "heartbeat":
+                live = row(c, key)
+                if not live or live["machine_id"] != current["machine_id"]:
+                    return
+            if managed and action in ("create", "start"):
+                if fields.get(action + "_asked_at", at) is None:
+                    fields["burst_launch_at"] = None  # HQ refused before a worker needed to become ready.
+                wait = FROZEN_RETRY if refused.code in ("daily_budget", "burst_budget_required") else BURST_WAIT
+                if refused.code == "burst_rate_full":
+                    wait = 60
+                burst_backoff(c, max(at + wait, fields.get("next_try_at") or 0))
             if plan and "grow_refused_size" in fields:
                 # A resize the plan cannot run: it starts at the size it has (above), and whoever chose is told.
                 fields["grow_note"] = fallback_note(sizes(c), current["size"], plan)
@@ -3242,6 +3888,7 @@ def deleted(c, current, actor, changed_by=None, details=None, replacing=False, *
         enroll_by=None,
         stop_until=None,
         start_asked_at=None,
+        burst_launch_at=None,
         grow_note="",
         grow_refused_size=None,
         drain_started_at=None,

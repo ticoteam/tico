@@ -777,7 +777,10 @@ impl Runner {
             readiness::changed_agent_instructions(&self.config, &assignments, &published);
         let mut readiness_doc = readiness::document(&runtimes, &checks, &self.state.directory);
         // Every advertised capability, less what an older server refused in the last ten minutes (lanes.rs).
-        let capabilities = crate::lanes::capabilities(computer_logins);
+        let mut capabilities = crate::lanes::capabilities(computer_logins);
+        if self.drain.burst_managed() {
+            capabilities.push(crate::lanes::BURST_LEASE);
+        }
         if computer_logins {
             readiness_doc["computer_profile"] =
                 json!(crate::profiles::computer_login(&config.data)
@@ -917,6 +920,16 @@ impl Runner {
                 beat.as_ref().err(),
             );
             let beat = beat?;
+            if let Some(lease) = beat.burst_lease {
+                let first = !self.drain.burst_managed();
+                let closed = self.drain.claims_closed();
+                self.drain.confirm_burst(began, lease);
+                if first {
+                    self.events.ask(&["heartbeat"]);
+                } else if closed && !self.drain.claims_closed() {
+                    self.events.ask(&["sync"]);
+                }
+            }
             *self.beat.lock().unwrap() = Some((printed, Instant::now()));
             self.published.lock().unwrap().extend(versions);
             let actions = beat.worktree_actions.unwrap_or_default();
@@ -1118,13 +1131,18 @@ impl Runner {
             return Ok(ClaimAnswer {
                 attempt: None,
                 paused: None,
+                burst_lease: None,
             });
         };
+        let sent = Instant::now();
         let result = self.client.post("jobs/claim", &body, Some(&key)).await;
         if matches!(&result, Err(e) if e.retryable) {
             *self.unanswered_claim.lock().unwrap() = Some((key, body, at));
         }
         let mut answer: ClaimAnswer = result.and_then(decode)?;
+        if let Some(lease) = answer.burst_lease.take() {
+            self.drain.confirm_burst(sent, lease);
+        }
         // A replayed answer's start place was granted when the first claim was: too long ago to keep (execute.rs
         // keep_start_place), so the turn asks for it again.
         if replayed {

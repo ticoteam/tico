@@ -1,6 +1,7 @@
 """Computer, placement, runner, agent sync and attempt routes."""
 
 from . import built_on
+from . import cloud_machines
 from .call_sessions import CLOSED_COMPLETION, VoicePhase, closed_attempt
 from . import runner_online
 from . import run_header
@@ -635,6 +636,10 @@ def register(
                     credential = {**(credential or {}), "shell": shell_value}
                 if credential:
                     answer = {**answer, "attempt": {**answer["attempt"], "attempt_credential": credential}}
+            if attempt.get("burst_repository"):
+                with store.read() as c:
+                    if lease := cloud_machines.burst_lease(c, runner_id):
+                        answer["burst_lease"] = lease
         return answer
 
     @app.post("/api/v2/attempts/{aid}/renew")

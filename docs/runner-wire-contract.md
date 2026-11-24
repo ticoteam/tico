@@ -28,10 +28,16 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
-Heartbeats can carry 39 capabilities. If an older hub refuses the count, the runner drops `antigravity_acp_v1`
+Heartbeats can carry 40 capabilities. If an older hub refuses the count, the runner drops `burst_lease_v1` when sent, then `antigravity_acp_v1`
 first, then `burst_preparation_v1`, then `model_exit_codex_v1`, then `model_exit_claude_v1`, then `antigravity_plan_v1`, then `model_exit_v1`, then
 `attempt_credentials_v1` if needed. Only a runner with `antigravity_acp_v1` gets an Antigravity plan's Connect, install
 or turns: 0.6.250 to 0.6.253 report `antigravity_plan_v1` but run agy headless.
+
+Managed Burst workers receive `burst_lease` on heartbeat and claim replies. The runner anchors `run_seconds`
+to the request's monotonic send time. It keeps the later deadline after renewal and retains it if a reply is lost. The hub reserves the
+final 60 seconds of confirmed HQ lease time for publishing and settlement. The `draining` flag closes new
+starts. When the hub's drain fence wins the race with `/started`, it answers `burst_draining` and the runner
+reports a planned hand-back. The hub requires `burst_lease_v1` before it assigns a managed Burst worker a turn.
 
 When the company enables plan exit routing, a routed Claude or Codex claim carries `delivery: "model_exit"`
 and `exit_generation` in its payer metadata. Both computers report `model_exit_v1` and the turn

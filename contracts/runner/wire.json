@@ -32,9 +32,10 @@
     "heartbeat.request.capabilities[]=\"model_exit_claude_v1\"": "runner-rs/src/lanes.rs refused_field drops this on an older server's 422; a routed Claude claim requires it",
     "heartbeat.request.capabilities[]=\"model_exit_codex_v1\"": "runner-rs/src/lanes.rs refused_field drops this on an older server's 422, after antigravity_acp_v1 and burst_preparation_v1; a routed Codex claim requires it",
     "heartbeat.request.capabilities[]=\"burst_preparation_v1\"": "runner-rs/src/lanes.rs drops this capability when an older hub refuses it.",
+    "heartbeat.request.capabilities[]=\"burst_lease_v1\"": "Sent only after the hub reports a Burst lease, and dropped if refused after a hub rollback.",
     "complete.request.burst_checkout": "Sent only when the claim includes burst_repository, which advertises support for this completion field.",
     "heartbeat.request.capabilities[]=\"antigravity_acp_v1\"": "runner-rs/src/lanes.rs refused_field drops this first on an older server's 422; without it no Antigravity plan Connect, install or turn goes to that computer",
-    "heartbeat.request.capabilities: the reader's maxItems": "runner-rs/src/lanes.rs refused_field: when an older server refuses the capability count, the runner drops antigravity_acp_v1, then burst_preparation_v1, then model_exit_codex_v1, then model_exit_claude_v1, then antigravity_plan_v1, then model_exit_v1, then attempt_credentials_v1 if needed",
+    "heartbeat.request.capabilities: the reader's maxItems": "runner-rs/src/lanes.rs refused_field: when an older server refuses the capability count, the runner drops burst_lease_v1 if sent, then antigravity_acp_v1, then burst_preparation_v1, then model_exit_codex_v1, then model_exit_claude_v1, then antigravity_plan_v1, then model_exit_v1, then attempt_credentials_v1 if needed",
     "heartbeat.request.capabilities[]=\"browser_exit_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"model_subscription_activation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; only a claim with activate metadata triggers hop-time fetch, and that fetch requires subscription_activated acknowledgement after rollback",
     "heartbeat.request.capabilities[]=\"model_connect_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
@@ -97,7 +98,7 @@
       "properties": {
         "code": {"type": "string", "x-open-enum": true, "enum": [
           "validation", "idempotency_key", "busy", "storage_unavailable", "identity", "forbidden", "stale_lease",
-          "already_started", "start_wait", "wrong_thread", "event_conflict", "event_gap", "terminal", "escape",
+          "already_started", "start_wait", "burst_draining", "wrong_thread", "event_conflict", "event_gap", "terminal", "escape",
           "privacy", "not_found"]},
         "detail": {"type": "string"},
         "retryable": {"type": "boolean"}
@@ -115,6 +116,7 @@
         "subscription_usage_sources": {"type": "boolean", "x-note": "The server reads a usage window's origin and subscription_id (backend/model_subscriptions.py provenance); absent from older servers, so the runner sends neither (runner-rs profiles.rs for_server)."},
         "subscription_usage_attempts": {"type": "boolean", "x-note": "The server reads the attempt_id of a subscription usage window."},
         "model_exit": {"type": "boolean", "x-note": "The runner holds the model link open while this is true. With plan exit routing enabled, the hub sends it only to a runner advertising model_exit_v1 and supervising a selected plan. Claude setup tokens qualify on any platform; full Claude logins qualify where they can be refreshed from a file (outside the Mac keychain). Codex exits advertise model_exit_codex_v1 and need Codex 0.170.0 or newer to carry turns."},
+        "burst_lease": {"$ref": "#/$defs/BurstLease"},
         "worktree_record_stamp": {"type": "boolean"},
         "worktree_actions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "worktree_actions_skipped": {"type": "integer", "minimum": 1},
@@ -130,8 +132,17 @@
       "type": "object", "additionalProperties": false, "required": ["attempt"],
       "properties": {
         "attempt": {"oneOf": [{"$ref": "#/$defs/Attempt"}, {"type": "null"}]},
+        "burst_lease": {"$ref": "#/$defs/BurstLease"},
         "paused": {"type": "string", "x-note": "Why this computer gets no work (runner_versions.paused)."},
         "waiting": {"type": "string", "x-note": "Why no turn starts here now (computer busy, company turn limit)."}
+      }
+    },
+    "BurstLease": {
+      "type": "object", "additionalProperties": false, "required": ["confirmed_at_ms", "run_seconds", "draining"],
+      "properties": {
+        "confirmed_at_ms": {"type": "integer", "minimum": 0, "x-note": "The hub request time of the confirmed HQ renewal. An older renewal is ignored and rereading the same confirmation cannot extend a cutoff."},
+        "run_seconds": {"type": "integer", "minimum": 0, "x-note": "Confirmed HQ time remaining when the hub answered, minus the final 60 seconds reserved for settlement. The runner measures from its monotonic request send time."},
+        "draining": {"type": "boolean", "x-note": "Close new starts. A turn already accepted by the hub can settle until its run cutoff."}
       }
     },
     "Attempt": {

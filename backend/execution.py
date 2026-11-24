@@ -5082,7 +5082,7 @@ class Execution:
         if row:
             self.hand_back(c, row, SimpleNamespace(undelivered=[], outcome="interrupted"), payer=True)
 
-    def hand_back(self, c, row, body, *, planned=False, payer=False):
+    def hand_back(self, c, row, body, *, planned=False, payer=False, burst_return=False):
         """A run its computer gave up on before starting it (it could not set the run up or reach Tico, or a person
         stopped it first) comes back now, not 90 seconds later when its lease lapses: on Oct 22 Agent Ops's runner lost
         Tico for half a minute before a start, its report was refused as not started, and the lapse showed Agent Ops as
@@ -5091,9 +5091,9 @@ class Execution:
         now = H.now()
         c.execute(
             "UPDATE attempts SET state='expired',finished_at=?,lease_until=?,final_text=?,"
-            "result=CASE WHEN ? THEN json_set(coalesce(result,'{}'),'$.planned_hand_back',0) ELSE result END "
+            "result=CASE WHEN ? THEN json_set(coalesce(result,'{}'),'$.planned_hand_back',?) ELSE result END "
             "WHERE id=?",
-            (now, now, HANDED_BACK + ".", planned, row["id"]),
+            (now, now, HANDED_BACK + ".", planned or burst_return, int(burst_return), row["id"]),
         )
         task_reads.run_moved(c, row["id"])
         gateway_connection.forget(c, row["id"])
@@ -5104,7 +5104,7 @@ class Execution:
             row,
             model_subscriptions.PAYER_UNAVAILABLE if payer else HANDED_BACK,
             event="attempt.payer_unavailable" if payer else "attempt.returned",
-            excused=payer,
+            excused=payer or burst_return,
         )
         return {
             "attempt_id": row["id"],
@@ -5414,6 +5414,11 @@ class Execution:
             return {"attempt": None, "waiting": hold[1]}
         return {"attempt": None}
 
+    @staticmethod
+    def claim_runner_status(c, runner_id):
+        paused = runner_versions.paused(c, runner_id)
+        return (paused, "") if paused else cloud_machines.claim_status(c, runner_id)
+
     def held_starts(self, c, runner_id):
         """(people_only, answer) for a computer that holds new starts: overloaded, not reporting, memory high, or with turns already waiting
         to start there. A person's own message passes CPU overload and stale reports; only Linux memory holds it;
@@ -5530,8 +5535,7 @@ class Execution:
             return {"attempt": None, "paused": cloud_access.LOCKED}
         if c.execute('SELECT 1 FROM org_turn_waits LIMIT 1').fetchone():
             return None
-        paused = runner_versions.paused(c, who.runner_id)
-        why, machine = (paused, "") if paused else cloud_machines.claim_status(c, who.runner_id)
+        why, machine = self.claim_runner_status(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)
@@ -5648,8 +5652,7 @@ class Execution:
             return {"attempt": None, "paused": cloud_access.LOCKED}
         # A cloud machine reserved for a stop takes no new turn: checked under this write lock, which the stop's
         # reservation also takes, so a claim either finds it or has its turn out before it (cloud_machines.reserve).
-        paused = runner_versions.paused(c, who.runner_id)
-        why, machine = (paused, "") if paused else cloud_machines.claim_status(c, who.runner_id)
+        why, machine = self.claim_runner_status(c, who.runner_id)
         if why:
             return {"attempt": None, "paused": why}
         people_only, held = self.held_starts(c, who.runner_id)
@@ -5987,7 +5990,11 @@ class Execution:
         )
         wake = wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))
         if burst:
+            from . import cloud_machines
+
             wake["burst"] = True
+            if cloud_machines.burst_managed(c, who.runner_id):
+                wake["burst_readiness"] = compute_pool.checkout_readiness(runner["readiness"], row["bot_id"])
         c.execute(
             "UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?", (json.dumps(wake), *handed, aid)
         )
@@ -7121,6 +7128,10 @@ class Execution:
             return {"reserved": False, "stop": True}
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        from .cloud_machines import burst_start_fence
+
+        if burst_start_fence(c, row):
+            return {"reserved": False}
         if body.waiting:
             start_places.waiting(c, aid, body.waiting)
         # Check before reserve clears the wait, including when the last renewal preceded task completion.
@@ -7134,6 +7145,10 @@ class Execution:
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        from .cloud_machines import burst_start_fence
+
+        if code := burst_start_fence(c, row):
+            return {"started": False, "refused": {"code": code, "detail": "Burst admission is closed"}}
         payer = c.execute(
             "SELECT delivery FROM attempt_subscriptions WHERE attempt_id=? AND runtime=?",
             (aid, row["handed_runtime"]),
@@ -7860,6 +7875,7 @@ class Execution:
         row = self.attempt(c, who, aid, final=True, voice_control=True)
         burst = compute_pool.borrowed(row)
         checkout = body.burst_checkout if burst else None
+        burst_readiness = (H._json(row["wake"], {}) or {}).get("burst_readiness") if burst else None
         stored_source = (
             (H._json(row["result"], {}) or {}).get("source_continuation")
             if burst and (checkout or body.outcome != "completed")
@@ -7918,6 +7934,28 @@ class Execution:
         # requests came back as a phantom interruption.
         late = row["state"] == "expired"
         planned = not row["started_at"] and body.yielded and bool(reported_planned_drain(c, aid))
+        if (
+            burst
+            and row["state"] in ("leased", "expired")
+            and not row["started_at"]
+            and not row["writes"]
+            and not row["stop_requested_at"]
+            and (checkout == "mismatch" or planned)
+            and burst_readiness
+        ):
+            if row["last_seq"] != body.last_seq:
+                raise Problem("event_gap", "Upload all events before completing the attempt", 409)
+            if checkout == "mismatch" and self.current_owner(c, who, row):
+                compute_pool.record_mismatch(c, row, burst_readiness)
+            if late:
+                # Expiry already requeued the job. A late report must not overwrite a newer attempt's state.
+                c.execute(
+                    "UPDATE attempts SET result=json_set(coalesce(result,'{}'),'$.planned_hand_back',1) WHERE id=?",
+                    (aid,),
+                )
+                compute_pool.settle(c, row)
+                return {"attempt_id": aid, "outcome": "interrupted", "message": None, "burst_complete": True}
+            return self.hand_back(c, row, body, burst_return=True)
         if planned and (row["stop_requested_at"] or not planned_yield_available(c, row)):
             body = body.model_copy(update={"yielded": False})
         # The one turn that ends before it starts: a Tico model on a runner that can't run one (clients/gateway.py

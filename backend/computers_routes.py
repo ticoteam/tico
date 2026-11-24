@@ -4,6 +4,7 @@ import json
 from fastapi import Request
 from . import (
     bot_settings as BS,
+    cloud_machines,
     compute_pool,
     harness_actions,
     inbox_isolation,
@@ -64,6 +65,9 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 return execution.heartbeat(c, request.state.identity, body, live_tasks=selected if unchanged else None)
 
             result = mutate(request, body, work)
+            # Idempotent heartbeat replays also need the remaining time at this read.
+            if lease := cloud_machines.burst_lease(snapshot, request.state.identity.runner_id):
+                result["burst_lease"] = lease
         # No bot list: every runner the server accepts (0.6.0-rc.1 on) reads its bots from GET runners/assignments when a
         # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
         # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
@@ -73,7 +77,8 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
     @app.get("/api/v2/runners/desired")
     def desired_runner_release(request: Request):
         with store.read() as c:
-            burst = compute_pool.target(c, execution.runner(c, request.state.identity))
+            runner = execution.runner(c, request.state.identity)
+            burst = compute_pool.target(c, runner)
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).

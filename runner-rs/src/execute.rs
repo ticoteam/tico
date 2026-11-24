@@ -1426,6 +1426,10 @@ impl Runner {
                 self.places.lock().unwrap().remove(aid);
                 Ok(false)
             }
+            Err(e) if e.code == "burst_draining" => {
+                self.drain.refused_burst_start(aid);
+                Err(self.drain_failure(aid, crate::drain::WAITING))
+            }
             Err(e) => Err(e.into()),
         }
     }
@@ -3497,6 +3501,7 @@ impl Runner {
         // A turn whose tools ran is never taken again by a fallback, named or the company's: it may already have
         // changed things.
         let fallback_allowed = !paid_by
+            && (burst_checkout.is_none() || !self.drain.burst_managed())
             && !voice_reply
             && !native_control
             && continuing.is_empty()
@@ -6281,6 +6286,7 @@ mod tests {
         started: bool,
         renewed_at: Option<u64>,
         publish_repository: bool,
+        burst_draining: bool,
     }
 
     impl StartWindow {
@@ -6319,6 +6325,9 @@ mod tests {
                 return Some((false, json!({"reserved": !waiting})));
             }
             if path.ends_with("/started") {
+                if self.burst_draining {
+                    return Some((true, json!({"error": {"code": "burst_draining"}})));
+                }
                 assert!(
                     self.until.is_some(),
                     "the runner must reserve before starting"
@@ -6633,6 +6642,54 @@ mod tests {
         std::fs::remove_dir_all(dir).unwrap();
     }
 
+    #[tokio::test]
+    async fn burst_start_fence_yields_before_the_runner_hears_the_drain() {
+        let _home = PrivateHome::claude(true);
+        let _controls = RunControls;
+        let window = Arc::new(Mutex::new(StartWindow {
+            now: 0,
+            until: Some(180),
+            expired: false,
+            started: false,
+            renewed_at: None,
+            publish_repository: false,
+            burst_draining: true,
+        }));
+        let (url, seen, server) =
+            recording_server_start_window(None, None, Some(window), None, false).await;
+        let (runner, dir) = runner_at(&url, "burst-fence");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        runner.runtime_rows.lock().unwrap().insert(
+            "claude".into(),
+            json!({"installed": true, "authenticated": "ready"}),
+        );
+        runner.drain.confirm_burst(
+            Instant::now(),
+            crate::wire::BurstLease {
+                confirmed_at_ms: 1,
+                run_seconds: 180,
+                draining: false,
+            },
+        );
+        let attempt = json!({"id": "fenced", "job_id": "j1", "bot": "ops", "token": "synthetic-turn",
+            "start_reservation_seconds": 180, "lease_seconds": 120, "start_reserved": true,
+            "conversation": {"id": "c1", "kind": "chat"}, "history": [],
+            "message": {"id": "m1", "from_actor": "human:ana@acme.example", "body": "Next", "refs": {}},
+            "config": {"runtime": "claude", "harness": "claude", "model": "synthetic-primary"}});
+        runner.clone().execute(attempt).await.unwrap();
+        server.abort();
+        assert_eq!(posted(&seen, "/attempts/fenced/started"), 1);
+        assert!(runner.drain.claims_closed());
+        let requests = seen.lock().unwrap();
+        let (_, _, completion) = requests
+            .iter()
+            .find(|(_, path, _)| path.ends_with("/attempts/fenced/complete"))
+            .unwrap();
+        assert_eq!(completion["outcome"], "interrupted");
+        assert_eq!(completion["yielded"], true);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     async fn lazy_claude_fallback(start_reserved: bool) {
         let _home = PrivateHome::claude(true);
         let _controls = RunControls;
@@ -6644,6 +6701,7 @@ mod tests {
             started: false,
             renewed_at: None,
             publish_repository: false,
+            burst_draining: false,
         }));
         let (url, seen, server) =
             recording_server_start_window(None, None, Some(window), None, false).await;
@@ -10548,6 +10606,7 @@ for line in sys.stdin:
             started: false,
             renewed_at: None,
             publish_repository: kind == "publish",
+            burst_draining: false,
         }));
         let (url, seen, server) =
             recording_server_start_window(None, None, Some(window.clone()), None, false).await;
