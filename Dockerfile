@@ -15,6 +15,9 @@
 # binaries it built and tests (NATIVE=prebuilt, with dist/native/amd64/ and dist/native/arm64/ in the context), so a
 # release ships exactly the binaries its gate ran.
 ARG NATIVE=compiled
+# The previous release's server image (ghcr.io/ticoteam/tico:vX.Y.Z), whose page files this build carries forward
+# (scripts/carry_web_assets.py). Any other build carries nothing.
+ARG PREVIOUS_RELEASE=no-previous-release
 ARG PYTHON_IMAGE=python:3.15.2-slim-trixie@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 
 FROM ${PYTHON_IMAGE} AS download
@@ -46,6 +49,10 @@ RUN fetch-tool litestream /out
 FROM download AS node
 RUN fetch-tool node /opt/node
 
+FROM download AS no-previous-release
+RUN mkdir -p /opt/tico/build/web
+FROM ${PREVIOUS_RELEASE} AS previous-release
+
 # The web app at / (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web. The server image
 # has no Node, so only build/web goes on from here.
 FROM node AS web-build
@@ -55,6 +62,11 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY web ./
 RUN npm run build
+# A tab opened on the previous release still finds that release's page files: they are carried into this build for 7
+# days after the last release that built them.
+COPY scripts/carry_web_assets.py /src/carry_web_assets.py
+RUN --mount=type=bind,from=previous-release,source=/opt/tico/build/web,target=/previous \
+    python3 /src/carry_web_assets.py /previous /src/build/web
 
 # Export matching maps only for the release uploader. The image copies the original build.
 FROM web-build AS web-with-sourcemaps

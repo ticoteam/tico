@@ -276,6 +276,7 @@ jobs:
             TICO_VERSION=${{ needs.candidate.outputs.version }}
             TICO_COMMIT=${{ needs.candidate.outputs.sha }}
             TICO_REPOSITORY=${{ github.repository }}
+            PREVIOUS_RELEASE=ghcr.io/ticoteam/tico:${{ needs.candidate.outputs.previous }}
           outputs: type=image,name=ghcr.io/ticoteam/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }}
           cache-to: type=gha,scope=${{ matrix.image }}-${{ matrix.platform }},mode=max

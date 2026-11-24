@@ -174,3 +174,20 @@ def test_each_live_stream_names_the_build_served_so_an_older_tab_loads_its_next_
     manifest.parent.mkdir()
     manifest.write_text(json.dumps({"index.html": {"file": "assets/index-1a2b3c.js"}}))
     assert live().until(topic("ready"))["data"]["build"] == "/next/assets/index-1a2b3c.js"
+
+
+def test_a_file_carried_from_an_earlier_release_is_served_like_the_build_s_own(web, tmp_path):
+    from scripts import carry_web_assets
+
+    root = web.app.state.store.settings.web_dir
+    earlier = tmp_path / "earlier"
+    (earlier / "assets").mkdir(parents=True)
+    (earlier / "assets" / "page-aaaa.js").write_text("an earlier release's page")
+    carry_web_assets.carry(earlier, root, 0.0)  # what the image build does
+    old = web.get("/next/assets/page-aaaa.js", headers=AUTH)
+    current = web.get("/next/assets/index-1a2b3c.js", headers=AUTH)
+    assert old.status_code == 200 and old.text == "an earlier release's page"
+    assert old.headers["content-type"].startswith("text/javascript")
+    for header in ("cache-control", "x-content-type-options", "content-security-policy"):
+        assert old.headers[header] == current.headers[header], header
+    assert old.headers["cache-control"] == web_routes.IMMUTABLE
