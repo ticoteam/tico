@@ -87,8 +87,6 @@ export interface ConversationProps {
   canSend?: boolean;
   /** Over the messages of a chat drawn as the page: which chat this is, and the way out of it (an agent's session). */
   head?: ReactNode;
-  /** Words the chat answers itself, with nothing sent: true when it did (Tico's "Show me how this works"). */
-  onLocal?: (text: string) => boolean;
 }
 
 type Item =
@@ -250,7 +248,7 @@ function withExtra(rows: ChatMessage[], extra: ChatMessage[] | undefined, more: 
   return [...out, ...left];
 }
 
-export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly, task, view, canSend = true, head, onLocal }: ConversationProps) {
+export function Conversation({ id, variant, title, actor, session, from, starters, toDm, onMoved, foot, card, below, canPost = true, compose, extra, chat, mentionFirst, mentionOnly, task, view, canSend = true, head }: ConversationProps) {
   useFollow(variant === 'tico' ? { conversation: id } : { thread: id });
 
   const { data: me } = useQuery(meQuery);
@@ -384,7 +382,6 @@ export function Conversation({ id, variant, title, actor, session, from, starter
 
   const send = (text: string, files: File[], retry?: ChatMessage, answering?: ChatMessage) => {
     if (!myId) return;
-    if (!retry && !answering && !files.length && onLocal?.(text)) return;
     // a reply written in place stays where it is: the list does not jump to its end
     jump.current = !answering;
     const to = answering ?? replyTo;

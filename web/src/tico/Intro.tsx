@@ -1,9 +1,9 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { useLocation, useRouterState } from '@tanstack/react-router';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { run } from '@/actions';
-import { rowsOf, sendToDm, ticoRoomQuery, timelineQuery, type ChatMessage } from '@/conversation';
+import { sendToDm, ticoRoomQuery, timelineQuery, type ChatMessage } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, pageOwnersQuery, useActor, type Actor } from '@/data';
 import { providerReady, subscriptionsQuery } from '@/features/settings/routing';
 import { needsSetup } from '@/features/start/routing';
@@ -11,15 +11,16 @@ import { Button } from '@/kit/Button';
 import { Pill } from '@/kit/Pill';
 import { fromPage, pageAt } from '@/shell/pageOwner';
 import { useAnswering } from './Chips';
-import { INTROS, introKey, isPhone, nextBeat, nowBeat, nowShown, play, replayCount, setFloat, setHere, spot, stop, subscribe, teamWho, ticoOpen } from './intros';
+import { INTROS, introKey, isPhone, nextBeat, nowBeat, nowShown, play, replayCount, setHere, setWhere, sheetsNow, spot, stop, subscribe, teamWho, whereFor } from './intros';
 import { introsSeenQuery, markIntroSeen, ticoPowerQuery } from './queries';
 import './intro.css';
 
 /* A page's first-visit intro (intros.ts), mounted once beside the frame. It waits for a quiet moment (the address
    settled, setup not owed or open, Tico not answering), plays the page's line in Tico's chat (`useIntroMessage`, drawn
-   by `IntroCard`) with its spotlights over the page, and marks the page seen for this person. While Tico's sheet is not
-   open (folded, tucked, a phone's, Tico off) the line is a card over the page's foot instead; a phone has no
-   spotlights. Never a dialog, and it never sends anything by itself: "Got it" puts it away. Agents never get one. */
+   by `IntroCard`) with its spotlights over the page. The page is marked seen for this person once the card has drawn.
+   While Tico's sheet is not open (folded, Tico off, a phone's page up) the line is a card over the page's foot, which
+   the phone's page makes room for; while a phone's agent chat or menu is up it waits. A phone has no spotlights.
+   Never a dialog, and it never sends anything by itself: "Got it" puts it away. Agents never get one. */
 
 /** How long a spotlight stays on its element. */
 export const SPOT_MS = 1800;
@@ -30,19 +31,20 @@ const useShown = () => useSyncExternalStore(subscribe, nowShown, nowShown);
 const useBeat = () => useSyncExternalStore(subscribe, nowBeat, nowBeat);
 const useReplays = () => useSyncExternalStore(subscribe, replayCount, replayCount);
 
-/* The frame marks a tucked sheet's place `data-shut` and the window's layout on the root: Tico's sheet open, kept current. */
+/* The frame marks a tucked sheet's place `data-shut`, a phone the card that is up (`data-card`), and the window's
+   layout on the root: what covers the page, kept current. */
 function watchSheets(fn: () => void) {
   const mo = new MutationObserver(fn);
   mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-layout'] });
-  mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-shut'] });
+  mo.observe(document.body, { subtree: true, attributes: true, attributeFilter: ['data-shut', 'data-card'] });
   return () => mo.disconnect();
 }
-const useTicoOpen = () => useSyncExternalStore(watchSheets, ticoOpen, () => false);
+const useSheets = () => useSyncExternalStore(watchSheets, sheetsNow, () => 'shut');
 
 /** An agent that is set up and on the team: never a planned, paused or archived one. */
 const live = (a: Actor | undefined): a is Actor => a?.kind === 'agent' && a.lifecycle !== 'planned' && a.lifecycle !== 'paused' && a.lifecycle !== 'archived';
 
-/** Pages played this session: a seen mark the server refused never plays one again and again. */
+/** Pages whose card drew this session: a seen mark the server refused never plays one again and again. */
 const played = new Set<string>();
 
 /** For tests: a fresh session. */
@@ -70,15 +72,16 @@ export function PageIntro() {
   const setup = useLocation({ select: (l) => !!(l.search as { setup?: unknown }).setup });
   // `/` passes on to Tasks (and to the first run) only once its read is done: nothing plays on the way
   const settled = useRouterState({ select: (s) => s.status === 'idle' && s.resolvedLocation !== undefined });
-  const config = useQuery({ ...configQuery, enabled: person }).data;
-  const owed = me?.role === 'owner' && needsSetup(config);
+  const config = useQuery({ ...configQuery, enabled: person });
+  // the owner's setup is done only when the company's config says so: not before it is read
+  const owed = me?.role === 'owner' && (!config.isSuccess || needsSetup(config.data));
   const seen = useQuery({ ...introsSeenQuery, enabled: person });
   const room = useQuery({ ...ticoRoomQuery, enabled: person }).data;
   const on = useQuery({ ...ticoPowerQuery, enabled: person }).data?.available !== false;
   const busy = useAnswering(on ? room : null);
   const shown = useShown();
   const replays = useReplays();
-  const float = !useTicoOpen() || !on || !room;
+  const where = whereFor(useSheets(), on && !!room);
   const quiet = person && settled && !busy && !setup && !owed;
 
   useEffect(() => setHere(person ? key : null), [person, key]);
@@ -89,36 +92,28 @@ export function PageIntro() {
     if (now && now.key !== key) stop();
   }, [shown, key]);
 
-  useEffect(() => setFloat(float), [float, shown]);
+  useEffect(() => setWhere(where), [where, shown]);
 
   // first visit: once the page and Tico are quiet
   const fresh = !!key && quiet && !!seen.data && !seen.data[key] && !played.has(key) && shown?.key !== key;
   useEffect(() => {
     if (!fresh || !key) return;
-    played.add(key);
-    play(key, false, float);
-    void markIntroSeen(key).catch(() => undefined);
-  }, [fresh, key, float]);
+    play(key, false, where);
+  }, [fresh, key, where]);
 
   // "Show me how this works": the open page's again, now
   const asked = useRef(replays);
   useEffect(() => {
     if (replays === asked.current) return;
     asked.current = replays;
-    if (key && person) play(key, true, float);
-  }, [replays, key, person, float]);
+    if (key && person) play(key, true, where);
+  }, [replays, key, person, where]);
 
   if (!shown || shown.key !== key) return null;
   return (
     <>
       {!isPhone() && <Spotlight key={shown.at} page={shown.key} />}
-      {shown.float &&
-        createPortal(
-          <div className="intro-float">
-            <IntroCard />
-          </div>,
-          document.body,
-        )}
+      {shown.where === 'float' && createPortal(<FloatCard />, document.body)}
     </>
   );
 }
@@ -199,6 +194,28 @@ function Spotlight({ page }: { page: string }) {
   );
 }
 
+/** Over the page's foot: the phone's page makes room for it (`--intro-room`), so nothing under it is out of reach. */
+function FloatCard() {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    const root = document.documentElement.style;
+    const room = () => root.setProperty('--intro-room', `${el?.offsetHeight ?? 0}px`);
+    room();
+    const ro = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(room);
+    if (el) ro?.observe(el);
+    return () => {
+      ro?.disconnect();
+      root.removeProperty('--intro-room');
+    };
+  }, []);
+  return (
+    <div className="intro-float" ref={ref}>
+      <IntroCard />
+    </div>
+  );
+}
+
 /** The page's owner agent, when it can run: a connected plan, and its own owner (not the General Manager standing in)
     set up and on the team. */
 function useOwner(page: string, on: boolean): Actor | undefined {
@@ -216,9 +233,18 @@ function useOwner(page: string, on: boolean): Actor | undefined {
 export function IntroCard() {
   const shown = useShown();
   const at = useBeat();
-  const path = useLocation({ select: (l) => l.pathname });
+  // the page as its owner and its messages name it (Goals is not Strategy's, though its intro is)
+  const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
+  const here = pageAt(path ?? '/', search);
   const intro = shown ? INTROS[shown.key] : undefined;
-  const owner = useOwner(shown?.key ?? '', !!intro?.owner);
+  const owner = useOwner(here.page, !!intro?.owner);
+  // drawn: this person has had it, and it does not play here again on its own
+  const first = shown && !shown.replay ? shown.key : null;
+  useEffect(() => {
+    if (!first) return;
+    played.add(first);
+    void markIntroSeen(first).catch(() => undefined);
+  }, [first]);
   if (!shown || !intro) return null;
   const phone = isPhone();
   const gotIt = () => {
@@ -266,7 +292,7 @@ export function IntroCard() {
             onClick={() => {
               gotIt();
               const text = 'Propose one real addition to this page: one ask, with up to 3 choices.';
-              void sendToDm(owner.id, text, fromPage(pageAt(path))).catch(() => undefined);
+              void sendToDm(owner.id, text, fromPage(here)).catch(() => undefined);
             }}
           >
             {`Ask ${owner.name} for one idea`}
@@ -284,9 +310,10 @@ const INTRO_KIND = 'intro';
     the newest message whatever this computer's clock says. */
 export function useIntroMessage(bot: string | undefined, room: string | null | undefined): ChatMessage[] | undefined {
   const shown = useShown();
-  const newest = useInfiniteQuery({ ...timelineQuery(room ?? ''), enabled: false, select: (d) => rowsOf(d).at(-1)?.created_at }).data;
+  // the newest loaded message: the last of the newest page (rowsOf draws the pages newest first)
+  const newest = useInfiniteQuery({ ...timelineQuery(room ?? ''), enabled: false, select: (d) => d.pages[0]?.messages?.at(-1)?.created_at }).data;
   return useMemo(() => {
-    if (!shown || shown.float) return undefined;
+    if (!shown || shown.where !== 'chat') return undefined;
     const at = newest && Date.parse(newest) > Date.parse(shown.at) ? newest : shown.at;
     return [{ id: `intro:${shown.key}:${shown.at}`, kind: INTRO_KIND, sender_id: `bot:${bot ?? 'assistant'}`, sender_name: 'Tico', created_at: at, body: INTROS[shown.key]?.line ?? '' }];
   }, [shown, newest, bot]);

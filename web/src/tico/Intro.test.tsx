@@ -8,7 +8,7 @@ import { liveQuery, sendToDm, ticoRoomQuery, timelineQuery } from '@/conversatio
 import { configQuery, directoryQuery, meQuery, pageOwnersQuery, queryClient } from '@/data';
 import { subscriptionsQuery } from '@/features/settings/routing';
 import { introCard, PageIntro, resetIntros, useIntroMessage } from './Intro';
-import { askReplay, introKey, INTROS, isShowMe } from './intros';
+import { askReplay, introKey, INTROS } from './intros';
 import { introsSeenQuery, ticoPowerQuery } from './queries';
 
 vi.mock('@/conversation', async (orig) => ({ ...(await orig<object>()), sendToDm: vi.fn(async () => null) }));
@@ -39,29 +39,36 @@ interface Seed {
   plan?: boolean;
   lifecycle?: string;
   owed?: boolean;
+  /** The company's config not read yet. */
+  noConfig?: boolean;
 }
 
-function seed({ role = 'owner', seen = {}, plan = true, lifecycle = 'active', owed = false }: Seed = {}) {
+function seed({ role = 'owner', seen = {}, plan = true, lifecycle = 'active', owed = false, noConfig = false }: Seed = {}) {
   queryClient.setQueryData(meQuery.queryKey, { id: role === 'agent' ? 'bot:ops' : 'human:maya', email: '', role, slug: null } as never);
-  queryClient.setQueryData(configQuery.queryKey, { onboarding_needed: owed } as never);
+  if (!noConfig) queryClient.setQueryData(configQuery.queryKey, { onboarding_needed: owed } as never);
   queryClient.setQueryData(ticoRoomQuery.queryKey, ROOM);
   queryClient.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
   queryClient.setQueryData(introsSeenQuery.queryKey, seen);
   queryClient.setQueryData(timelineQuery(ROOM).queryKey, { pages: [{ messages: [], next_cursor: null }], pageParams: [null] } as never);
   queryClient.setQueryData(subscriptionsQuery.queryKey, { subscriptions: plan ? [{ id: 's1', status: 'ok', in_use_on: [] }] : [] } as never);
-  queryClient.setQueryData(pageOwnersQuery.queryKey, { pages: { growth: { bot: GM, own: true } }, canChange: false });
+  // Strategy's own owner is the Growth Manager here; Goals, its tab, has its own row and no owner of its own
+  const pages = { growth: { bot: GM, own: true }, strategy: { bot: GM, own: true }, goals: { bot: 'bot:general-manager', own: false } };
+  queryClient.setQueryData(pageOwnersQuery.queryKey, { pages, canChange: false });
   const gm = { id: GM, kind: 'agent', name: 'Growth Manager', slug: 'growth-manager', lifecycle };
   queryClient.setQueryData(directoryQuery.queryKey, { actors: [gm], byId: { [GM]: gm, 'growth-manager': gm } } as never);
 }
 
-/** The app at `path`, with `page` in its page sheet and Tico's sheet open or tucked (`shut`). A fresh one each time. */
-function mount(path: string, page: ReactNode = null, shut = false) {
+/** The app at `path`, with `page` in its page sheet and Tico's sheet open or tucked (`shut`); on a phone, the phone's
+    cards with `card` up. A fresh one each time. */
+function mount(path: string, page: ReactNode = null, shut = false, card?: string) {
   cleanup();
   const root = createRootRoute({
     component: () => (
       <>
-        {page && <main className="pane page">{page}</main>}
-        <Chat shut={shut} />
+        <div className={card ? 'phone' : undefined} data-card={card}>
+          {page && <main className="pane page">{page}</main>}
+          <Chat shut={shut} />
+        </div>
         <PageIntro />
       </>
     ),
@@ -157,6 +164,15 @@ describe('page intros', () => {
     expect(posts()).toEqual([{ usage: expect.any(String) }]);
   });
 
+  it('wait for an owner until the company’s config says setup is done', async () => {
+    seed({ noConfig: true });
+    mount('/company/usage');
+    await wait();
+    expect(chat().textContent).toBe('');
+    act(() => queryClient.setQueryData(configQuery.queryKey, { onboarding_needed: false } as never));
+    expect(await screen.findByText('First visit · Usage')).toBeTruthy();
+  });
+
   it('go with Got it, and come back on "Show me how this works" where the page has one', async () => {
     seed();
     const router = mount('/company/finance');
@@ -164,8 +180,6 @@ describe('page intros', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Got it' }));
     expect(chat().textContent).toBe('');
 
-    expect(isShowMe('Show me how this works?')).toBe(true);
-    expect(isShowMe('show me how this works for Leo')).toBe(false);
     act(() => void askReplay());
     // a replay is the page's name alone, and its chip runs the app's own action
     expect(await screen.findByText('Finance')).toBeTruthy();
@@ -191,12 +205,27 @@ describe('page intros', () => {
 
     document.documentElement.dataset.layout = 'cards';
     seed();
-    mount('/library/tools', tool);
+    mount('/library/tools', tool, false, 'none');
     const phone = await waitFor(() => document.querySelector<HTMLElement>('.intro-float') ?? Promise.reject(new Error('no card')));
     expect(phone.querySelector('.intro-beats')?.textContent).toBe('Tico holds the keys');
     expect(phone.querySelector('.intro-beats button')).toBeNull();
     expect(document.querySelector('.intro-spot')).toBeNull();
     expect(chat().textContent).toBe('');
+  });
+
+  it('on a phone wait while the agent’s chat is up, and show in Tico’s chat when it is up; seen only once drawn', async () => {
+    document.documentElement.dataset.layout = 'cards';
+    seed();
+    mount('/company/routines', null, false, 'chat');
+    await wait();
+    expect(document.querySelector('.intro-float')).toBeNull();
+    expect(chat().textContent).toBe('');
+    expect(posts()).toEqual([]);
+
+    act(() => document.querySelector<HTMLElement>('.phone')!.setAttribute('data-card', 'tico'));
+    expect(await screen.findByText('First visit · Routines')).toBeTruthy();
+    expect(document.querySelector('.intro-float')).toBeNull();
+    expect(posts()).toEqual([{ routines: expect.any(String) }]);
   });
 
   it('point only at what shows: never into a tucked sheet, and at an element that draws a moment later', async () => {
@@ -250,14 +279,26 @@ describe('page intros', () => {
       expect(screen.queryByRole('button', { name: /for one idea/ }), JSON.stringify(missing)).toBeNull();
     }
   });
+
+  it('ask the owner of the page as it is named: Goals has its own, though it plays Strategy’s intro', async () => {
+    seed();
+    const router = mount('/company/strategy');
+    await screen.findByText('First visit · Strategy');
+    expect(await screen.findByRole('button', { name: 'Ask Growth Manager for one idea' })).toBeTruthy();
+    await act(() => router.navigate({ to: '/company/strategy/goals' as never }));
+    await wait(50);
+    expect(screen.getByText('First visit · Strategy')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /for one idea/ })).toBeNull();
+  });
 });
 
-/* Every route file has its intro, or none on purpose (a task, a thread, a doc, a call, `/` on its way to Tasks). A new
-   route file fails here until it is decided. */
+/* Every route file has its intro, or none on purpose, each with why. A new route file fails here until it is decided. */
 const ROUTES: Record<string, [path: string, intro: string | null]> = {
+  // developers' pictures, not the product
   '[_]dev.dot.tsx': ['/_dev/dot', null],
   '[_]dev.kinds.tsx': ['/_dev/kinds', null],
   'calendar.tsx': ['/calendar', 'calendar'],
+  // a call is a conversation under way: never interrupted
   'call.$room.tsx': ['/call/r1', null],
   'company.finance.tsx': ['/company/finance', 'finance'],
   'company.growth.tsx': ['/company/growth', 'growth'],
@@ -272,10 +313,12 @@ const ROUTES: Record<string, [path: string, intro: string | null]> = {
   'company.strategy.tsx': ['/company/strategy', 'strategy'],
   'company.strategy_.$tab.tsx': ['/company/strategy/goals', 'strategy'],
   'company.usage.tsx': ['/company/usage', 'usage'],
+  // old Flow links and the landing address only pass on to a page that has its own
   'flow.$task.tsx': ['/flow/t1', null],
   'flow.index.tsx': ['/flow', null],
   'index.tsx': ['/', null],
   'learned.tsx': ['/learned', 'learned'],
+  // one doc, read or written: its words are the page
   'library.$doc.tsx': ['/library/d1', null],
   'library.contacts.tsx': ['/library/contacts', 'contacts'],
   'library.docs.tsx': ['/library/docs', 'docs'],
@@ -287,16 +330,19 @@ const ROUTES: Record<string, [path: string, intro: string | null]> = {
   'roadmap.tsx': ['/roadmap', 'roadmap'],
   'settings.$section.tsx': ['/settings/agents', 'settings'],
   'settings.index.tsx': ['/settings', 'settings'],
+  // the design system's reference, not a product page
   'settings.style-guide.tsx': ['/settings/style-guide', null],
   'tags.$tag.tsx': ['/tags/vip', 'tags'],
   'tags.index.tsx': ['/tags', 'tags'],
+  // a task is its own chat with its agents: the work, never a tour
   'task.$task.tsx': ['/task/t1', null],
   'tasks.$pipeline.$task.$tab.tsx': ['/tasks/eng/7/files', null],
   'tasks.$pipeline.$task.index.tsx': ['/tasks/eng/7', null],
-  'tasks.$pipeline.edit.tsx': ['/tasks/eng/edit', null],
+  'tasks.$pipeline.edit.tsx': ['/tasks/eng/edit', 'pipeline'],
   'tasks.$pipeline.index.tsx': ['/tasks/eng', 'tasks'],
   'tasks.index.tsx': ['/tasks', 'tasks'],
   'team.$who.tsx': ['/team/scout', 'who'],
+  // one thread is a conversation: never interrupted
   'threads.$thread.tsx': ['/threads/th1', null],
   'threads.catch-up.tsx': ['/threads/catch-up', 'threads'],
   'threads.index.tsx': ['/threads', 'threads'],

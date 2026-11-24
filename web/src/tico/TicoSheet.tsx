@@ -12,7 +12,6 @@ import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
 import { introCard, useIntroMessage } from './Intro';
-import { askReplay, isShowMe } from './intros';
 import { okCard } from './OkCard';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
@@ -24,7 +23,7 @@ import { Tracker } from './Tracker';
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
    Tico about the open page (Chips). Over the chat, the tasks the person handed off (Tracker). Under a message that
    links one OK waiting on the person, a card that opens it (OkCard). In the head, a call with Tico (AssistantCall). A
-   page's first-visit intro plays here as Tico's message (Intro.tsx); "Show me how this works" plays it again, unsent. */
+   page's first-visit intro plays here as Tico's message (Intro.tsx). */
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
@@ -52,7 +51,6 @@ export function TicoSheet() {
             below={okCard}
             extra={intro}
             card={introCard}
-            onLocal={(text) => isShowMe(text) && askReplay()}
           />
         </>
       ) : room.isError ? (

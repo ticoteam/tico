@@ -1,6 +1,6 @@
 /* Each page's first-visit intro (plan: setup walkthrough v4, Part 3): one line in Tico's chat, up to three spotlights on
    the page's own elements, and a chip only where it is an action the app already has. It plays once per person per
-   page (preference intros.seen) and again on "Show me how this works" (Tico's chip, or those words typed to Tico).
+   page (preference intros.seen) and again on Tico's "Show me how this works" chip.
    Plain data and a small store that Intro.tsx, Tico's sheet and its chips read. */
 
 export interface Beat {
@@ -84,13 +84,14 @@ export const INTROS: Readonly<Record<string, Intro>> = {
     chips: [{ label: 'Add teammate', action: 'shell.addTeammate', input: {} }],
   },
   company: { name: 'Company', line: 'Your company at a glance. Each section has its own agent.' },
+  pipeline: { name: 'the pipeline editor', line: 'Shape how work moves: its stages, and who does each.' },
   'needs-you': { name: 'Needs you', line: 'Everything that waits on you, in one place.' },
   roadmap: { name: 'Roadmap', line: 'What comes now, next and later, and what shipped.' },
   updates: { name: 'Updates', line: 'What changed across the company.' },
   tags: { name: 'Tags', line: 'Tags gather tasks from every pipeline.' },
   learned: { name: 'Learned', line: 'What Tico has learned about how you work.' },
   calendar: { name: 'Calendar', line: 'Meetings, launches and deadlines land here. Agents add them as they plan.' },
-  files: { name: 'Files', line: 'Drop anything here. Every agent can read it.' },
+  files: { name: 'Files', line: 'Files attach to a task, and whoever can see the task can see them.' },
   docs: { name: 'Docs', line: 'Agents write plans and reports here. You can too.' },
   threads: { name: 'Threads', line: 'Every conversation with people and agents, in one place.' },
   settings: { name: 'Settings', line: 'Company settings: people, agents, plans, billing. Your own settings are under your name.' },
@@ -109,8 +110,8 @@ export function introKey(path: string): string | null {
   if (SINGLE.has(top)) return a ? null : top;
   switch (top) {
     case 'tasks':
-      // the board, any pipeline's; a task or a pipeline's editor is not
-      return b ? null : 'tasks';
+      // the board, any pipeline's, and a pipeline's editor; a task is a chat
+      return b === 'edit' ? 'pipeline' : b ? null : 'tasks';
     case 'company':
       if (!a) return 'company';
       if (a === 'strategy' && b) return b === 'org' ? 'team' : 'strategy';
@@ -142,9 +143,6 @@ export function teamWho(path: string): string | undefined {
   }
 }
 
-/** What a person types to Tico to see the open page's intro again: answered here, with nothing sent. */
-export const isShowMe = (text: string) => /^\s*(please\s+)?show me how (this|it) works\s*[.!?]*\s*$/i.test(text);
-
 /* ---------------------------------------------------------------- what is playing */
 
 /** The intro showing now. Replaced only when it starts, moves between Tico's chat and a card, or goes: the
@@ -154,9 +152,12 @@ export interface Shown {
   /** When it started: the chat message's time and id. */
   at: string;
   replay: boolean;
-  /** A card over the page's foot, not Tico's chat: Tico's sheet is not open (folded, tucked, a phone, Tico off). */
-  float: boolean;
+  where: Where;
 }
+
+/** Where the card shows: in Tico's chat while it is open; over the page's foot while nothing covers the page (Tico
+    folded or off, a phone's page up); nowhere for now while a phone's other card (the agent's chat, the menu) is up. */
+export type Where = 'chat' | 'float' | 'none';
 
 /** The spotlight on now (-1: none). `solo`: one beat pressed again in the card, then none. */
 export interface BeatNow {
@@ -183,8 +184,8 @@ export const nowBeat = () => beat;
 export const hereKey = () => here;
 export const replayCount = () => replays;
 
-export function play(key: string, replay: boolean, float: boolean): void {
-  shown = { key, at: new Date().toISOString(), replay, float };
+export function play(key: string, replay: boolean, where: Where): void {
+  shown = { key, at: new Date().toISOString(), replay, where };
   beat = INTROS[key]?.beats?.length && !isPhone() ? { n: 0, solo: false } : NO_BEAT;
   tell();
 }
@@ -196,10 +197,10 @@ export function stop(): void {
   tell();
 }
 
-/** The card moves between Tico's chat and the page's foot as Tico's sheet opens and folds. */
-export function setFloat(float: boolean): void {
-  if (!shown || shown.float === float) return;
-  shown = { ...shown, float };
+/** The card moves between Tico's chat and the page's foot as Tico's sheet (or a phone's card) opens and folds. */
+export function setWhere(where: Where): void {
+  if (!shown || shown.where === where) return;
+  shown = { ...shown, where };
   tell();
 }
 
@@ -236,5 +237,16 @@ export function askReplay(): boolean {
 /** The phone's cards (shell Frame sets the layout on the root before the first paint): the card, no spotlights. */
 export const isPhone = () => typeof document !== 'undefined' && document.documentElement.dataset.layout === 'cards';
 
-/** Tico's sheet shows on this window: drawn, not tucked to its edge, and not a phone's (whose Tico is a card). */
-export const ticoOpen = () => !isPhone() && !!document.querySelector('[data-sheet="tico"]:not([data-shut])');
+/** What covers the page now: a phone's card up ('phone:none|tico|menu|chat', PhoneCards `data-card`), or on a
+    computer whether Tico's sheet is drawn and not tucked to its edge ('open' or 'shut'). */
+export function sheetsNow(): string {
+  if (isPhone()) return `phone:${document.querySelector<HTMLElement>('.phone')?.dataset.card ?? 'none'}`;
+  return document.querySelector('[data-sheet="tico"]:not([data-shut])') ? 'open' : 'shut';
+}
+
+/** Where the card goes, from what covers the page and whether Tico's chat can show it (on, with a room). */
+export function whereFor(sheets: string, chat: boolean): Where {
+  if (sheets === 'phone:none') return 'float';
+  if (sheets === 'phone:tico' || sheets === 'open') return chat ? 'chat' : sheets === 'open' ? 'float' : 'none';
+  return sheets === 'shut' ? 'float' : 'none';
+}
