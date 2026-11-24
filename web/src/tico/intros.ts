@@ -91,7 +91,7 @@ export const INTROS: Readonly<Record<string, Intro>> = {
   tags: { name: 'Tags', line: 'Tags gather tasks from every pipeline.' },
   learned: { name: 'Learned', line: 'What Tico has learned about how you work.' },
   calendar: { name: 'Calendar', line: 'Meetings, launches and deadlines land here. Agents add them as they plan.' },
-  files: { name: 'Files', line: 'Files attach to a task, and whoever can see the task can see them.' },
+  files: { name: 'Files', line: 'Uploads attach to the task you choose.' },
   docs: { name: 'Docs', line: 'Agents write plans and reports here. You can too.' },
   threads: { name: 'Threads', line: 'Every conversation with people and agents, in one place.' },
   settings: { name: 'Settings', line: 'Company settings: people, agents, plans, billing. Your own settings are under your name.' },
@@ -155,8 +155,8 @@ export interface Shown {
   where: Where;
 }
 
-/** Where the card shows: in Tico's chat while it is open; over the page's foot while nothing covers the page (Tico
-    folded or off, a phone's page up); nowhere for now while a phone's other card (the agent's chat, the menu) is up. */
+/** Where the card shows: pinned over Tico's box while Tico's sheet (or a phone's Tico card) is open; on a phone with
+    its page up, over the page's foot, which makes room for it; else nowhere for now (it waits). */
 export type Where = 'chat' | 'float' | 'none';
 
 /** The spotlight on now (-1: none). `solo`: one beat pressed again in the card, then none. */
@@ -247,6 +247,5 @@ export function sheetsNow(): string {
 /** Where the card goes, from what covers the page and whether Tico's chat can show it (on, with a room). */
 export function whereFor(sheets: string, chat: boolean): Where {
   if (sheets === 'phone:none') return 'float';
-  if (sheets === 'phone:tico' || sheets === 'open') return chat ? 'chat' : sheets === 'open' ? 'float' : 'none';
-  return sheets === 'shut' ? 'float' : 'none';
+  return (sheets === 'open' || sheets === 'phone:tico') && chat ? 'chat' : 'none';
 }

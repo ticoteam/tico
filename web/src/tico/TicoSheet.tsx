@@ -11,7 +11,7 @@ import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
 import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
-import { introCard, useIntroMessage } from './Intro';
+import { IntroPin } from './Intro';
 import { okCard } from './OkCard';
 import { useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
@@ -23,7 +23,7 @@ import { Tracker } from './Tracker';
    Tico is off, the sheet shows that in place of the chat, and the Dot is grey and hollow. Over its box, what to ask
    Tico about the open page (Chips). Over the chat, the tasks the person handed off (Tracker). Under a message that
    links one OK waiting on the person, a card that opens it (OkCard). In the head, a call with Tico (AssistantCall). A
-   page's first-visit intro plays here as Tico's message (Intro.tsx). */
+   page's first-visit intro shows over the box (IntroPin). */
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
@@ -31,7 +31,6 @@ export function TicoSheet() {
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   // On a phone the bar draws Tico's one Dot: the head has none of its own.
   const phone = usePhoneCards();
-  const intro = useIntroMessage(power?.bot, room.data);
   return (
     <Sheet kind="tico" label="Tico">
       <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
@@ -47,10 +46,13 @@ export function TicoSheet() {
             id={room.data}
             variant="tico"
             from={fromPage(pageAt(path ?? '/', search))}
-            foot={<TicoChips room={room.data} />}
+            foot={
+              <>
+                <IntroPin />
+                <TicoChips room={room.data} />
+              </>
+            }
             below={okCard}
-            extra={intro}
-            card={introCard}
           />
         </>
       ) : room.isError ? (

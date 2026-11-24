@@ -7,7 +7,7 @@ import { api } from '@/api/client';
 import { liveQuery, sendToDm, ticoRoomQuery, timelineQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, pageOwnersQuery, queryClient } from '@/data';
 import { subscriptionsQuery } from '@/features/settings/routing';
-import { introCard, PageIntro, resetIntros, useIntroMessage } from './Intro';
+import { IntroPin, PageIntro, resetIntros } from './Intro';
 import { askReplay, introKey, INTROS } from './intros';
 import { introsSeenQuery, ticoPowerQuery } from './queries';
 
@@ -17,17 +17,12 @@ const ROOM = 'room-1';
 const GM = 'bot:growth-manager';
 const wait = (ms = 20) => act(() => new Promise((r) => setTimeout(r, ms)));
 
-/** Tico's chat as TicoSheet draws an intro (its message, drawn by `introCard`), in the frame's place for Tico's sheet. */
+/** Tico's sheet as TicoSheet draws an intro (pinned over its box), in the frame's place for Tico's sheet. */
 function Chat({ shut }: { shut: boolean }) {
-  const messages = useIntroMessage('assistant', ROOM);
   return (
     <div data-sheet="tico" data-shut={shut || undefined}>
       <aside aria-label="Tico">
-        {messages?.map((m) => (
-          <div key={m.id} className="msg">
-            {introCard(m)}
-          </div>
-        ))}
+        <IntroPin />
       </aside>
     </div>
   );
@@ -190,18 +185,27 @@ describe('page intros', () => {
     expect(askReplay()).toBe(false);
   });
 
-  it('move to a card over the page while Tico’s sheet is tucked, and on a phone show the beats as words with no spotlight', async () => {
+  it('pin the card over Tico’s box and point at the page; with Tico folded on a computer wait, marking nothing', async () => {
     seed();
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(BOX);
     const tool = <div data-target="tool:shopify">Shopify</div>;
     mount('/library/tools', tool, true);
-    const card = await waitFor(() => document.querySelector<HTMLElement>('.intro-float') ?? Promise.reject(new Error('no card')));
-    expect(card.textContent).toContain('First visit · Tools');
+    await wait(50);
     expect(chat().textContent).toBe('');
-    // a computer still points at the page
+    expect(document.querySelector('.intro-float, .intro-spot')).toBeNull();
+    expect(posts()).toEqual([]);
+
+    act(() => document.querySelector('[data-sheet="tico"]')!.removeAttribute('data-shut'));
+    const pin = await waitFor(() => document.querySelector<HTMLElement>('.intro-pin') ?? Promise.reject(new Error('no pin')));
+    expect(pin.textContent).toContain('First visit · Tools');
     expect(document.querySelector('.intro-spot')?.textContent).toBe('Tico holds the keys');
-    act(() => resetIntros());
-    queryClient.clear();
+    expect(document.querySelector('.intro-float')).toBeNull();
+    expect(posts()).toEqual([{ tools: expect.any(String) }]);
+  });
+
+  it('on a phone with its page up, float one card over the page with the beats as words and no spotlight', async () => {
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(BOX);
+    const tool = <div data-target="tool:shopify">Shopify</div>;
 
     document.documentElement.dataset.layout = 'cards';
     seed();

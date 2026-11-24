@@ -1,9 +1,9 @@
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useLocation, useRouterState } from '@tanstack/react-router';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { run } from '@/actions';
-import { sendToDm, ticoRoomQuery, timelineQuery, type ChatMessage } from '@/conversation';
+import { sendToDm, ticoRoomQuery } from '@/conversation';
 import { configQuery, directoryQuery, meQuery, pageOwnersQuery, useActor, type Actor } from '@/data';
 import { providerReady, subscriptionsQuery } from '@/features/settings/routing';
 import { needsSetup } from '@/features/start/routing';
@@ -16,11 +16,12 @@ import { introsSeenQuery, markIntroSeen, ticoPowerQuery } from './queries';
 import './intro.css';
 
 /* A page's first-visit intro (intros.ts), mounted once beside the frame. It waits for a quiet moment (the address
-   settled, setup not owed or open, Tico not answering), plays the page's line in Tico's chat (`useIntroMessage`, drawn
-   by `IntroCard`) with its spotlights over the page. The page is marked seen for this person once the card has drawn.
-   While Tico's sheet is not open (folded, Tico off, a phone's page up) the line is a card over the page's foot, which
-   the phone's page makes room for; while a phone's agent chat or menu is up it waits. A phone has no spotlights.
-   Never a dialog, and it never sends anything by itself: "Got it" puts it away. Agents never get one. */
+   settled, setup not owed or open, Tico not answering, and somewhere to show it), then plays the page's line as a card
+   pinned over Tico's box (`IntroPin`, outside the scrolling chat, so it is in view while it shows) with its spotlights
+   over the page. On a phone with its page up the card sits over the page's foot instead, and the page makes room for
+   it; a phone has no spotlights. With Tico folded or off on a computer, or a phone's agent chat or menu up, it waits.
+   The page is marked seen once the card has drawn. Never a dialog, and it never sends anything by itself: "Got it"
+   puts it away. Agents never get one. */
 
 /** How long a spotlight stays on its element. */
 export const SPOT_MS = 1800;
@@ -95,7 +96,7 @@ export function PageIntro() {
   useEffect(() => setWhere(where), [where, shown]);
 
   // first visit: once the page and Tico are quiet
-  const fresh = !!key && quiet && !!seen.data && !seen.data[key] && !played.has(key) && shown?.key !== key;
+  const fresh = !!key && quiet && where !== 'none' && !!seen.data && !seen.data[key] && !played.has(key) && shown?.key !== key;
   useEffect(() => {
     if (!fresh || !key) return;
     play(key, false, where);
@@ -194,7 +195,7 @@ function Spotlight({ page }: { page: string }) {
   );
 }
 
-/** Over the page's foot: the phone's page makes room for it (`--intro-room`), so nothing under it is out of reach. */
+/** Over a phone's page foot: the page makes room for it (`--intro-room`), so nothing under it is out of reach. */
 function FloatCard() {
   const ref = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
@@ -304,19 +305,13 @@ export function IntroCard() {
   );
 }
 
-const INTRO_KIND = 'intro';
-
-/** For Tico's chat: the intro playing there as a message of Tico's, drawn by `IntroCard` (`introCard`). It reads as
-    the newest message whatever this computer's clock says. */
-export function useIntroMessage(bot: string | undefined, room: string | null | undefined): ChatMessage[] | undefined {
+/** In Tico's sheet, over its box: the intro while it shows there (outside the chat's scrolling list). */
+export function IntroPin() {
   const shown = useShown();
-  // the newest loaded message: the last of the newest page (rowsOf draws the pages newest first)
-  const newest = useInfiniteQuery({ ...timelineQuery(room ?? ''), enabled: false, select: (d) => d.pages[0]?.messages?.at(-1)?.created_at }).data;
-  return useMemo(() => {
-    if (!shown || shown.where !== 'chat') return undefined;
-    const at = newest && Date.parse(newest) > Date.parse(shown.at) ? newest : shown.at;
-    return [{ id: `intro:${shown.key}:${shown.at}`, kind: INTRO_KIND, sender_id: `bot:${bot ?? 'assistant'}`, sender_name: 'Tico', created_at: at, body: INTROS[shown.key]?.line ?? '' }];
-  }, [shown, newest, bot]);
+  if (shown?.where !== 'chat') return null;
+  return (
+    <div className="intro-pin">
+      <IntroCard />
+    </div>
+  );
 }
-
-export const introCard = (m: ChatMessage) => (m.kind === INTRO_KIND ? <IntroCard /> : null);
