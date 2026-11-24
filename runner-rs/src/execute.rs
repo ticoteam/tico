@@ -10629,6 +10629,7 @@ for line in sys.stdin:
             started: false,
             renewed_at: None,
             publish_repository: kind == "publish",
+            burst_draining: false,
         }));
         let (url, seen, server) =
             recording_server_start_window(None, None, Some(window.clone()), None, false).await;
