@@ -320,6 +320,17 @@ def test_an_agy_older_than_tico_runs_neither_signs_a_plan_in_nor_runs_its_turns(
     assert payment.reason == "Update Antigravity on Ana Mac"
 
 
+def test_connect_signs_in_on_the_agy_tico_installed_before_a_hand_installed_one(api):
+    setup(api)
+    company(api)
+    own = computer(api, "Ana Mac", installed=True, managed=False)
+    tico = computer(api, "Ana Linux", installed=True)
+    beat(api, own, installed=True, managed=False)  # seen last, enrolled first
+    assert connect(api, "ben-test")["runner_id"] == tico["runner_id"]
+    # Connect tries only the first: one signing in already gives way to an idle one, hand-installed or not.
+    assert connect(api)["runner_id"] == own["runner_id"]
+
+
 def test_the_api_schema_names_every_plan_kind_and_runtime():
     from backend.api_schemas import model_subscriptions as schema
     from backend.model_subscriptions import KINDS, RUNTIMES

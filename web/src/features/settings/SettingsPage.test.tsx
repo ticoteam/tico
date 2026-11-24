@@ -299,6 +299,25 @@ describe('A model sign-in @s746', () => {
     await waitFor(() => expect(screen.queryByLabelText('Code from the page')).toBeNull());
   });
 
+  it('asks for the code only after the person opens the sign-in page', async () => {
+    const waiting = { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, accepts_code: true, computer: 'Ana Mac' };
+    serve((url) => {
+      if (url.endsWith('/connect')) return ok(waiting);
+      if (url.endsWith('/logins/l1')) return ok(waiting);
+    });
+    const kind = { connect: true, paste: false, help: '', kind: 'antigravity_login' as const, label: 'Antigravity plan', owned: true, runtime: 'antigravity' as const, secret_label: 'Sign-in' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
+    show(<Providers />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Antigravity plan/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Antigravity plan' });
+    const open = await within(dialog).findByRole('link', { name: 'Open Google' });
+    expect(within(dialog).getByText('Signing in on Ana Mac')).toBeTruthy();
+    expect(within(dialog).queryByLabelText('Code from the page')).toBeNull();
+    fireEvent.click(open);
+    expect(await within(dialog).findByLabelText('Code from the page')).toBeTruthy();
+  });
+
   it.each([
     [ok({ id: '', kind: 'connect', runner_id: '', state: 'requested', waking: true, message: 'Installing Antigravity on Ana Mac.' }), 'Installing Antigravity on Ana Mac.'],
     [{ status: 409, body: { error: { code: 'offline', detail: 'Connect needs a computer online, on the latest Tico, with Antigravity installed' } } }, 'Connect needs a computer online, on the latest Tico, with Antigravity installed'],

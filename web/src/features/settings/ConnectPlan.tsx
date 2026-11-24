@@ -39,6 +39,8 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
   const [pasting, setPasting] = useState(false);
   const [secret, setSecret] = useState('');
   const [code, setCode] = useState('');
+  // The code box waits until the person has been to the provider's page.
+  const [opened, setOpened] = useState(false);
   const [sending, setSending] = useState(false);
   const [codeError, setCodeError] = useState<string | null>(null);
   const submitting = useRef(false);
@@ -132,7 +134,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
           ? 'Sign-in canceled'
           : null);
   const hostWarning = now.not_yours ? `Credential passes through someone else's computer${now.computer ? ` (${now.computer})` : ''}` : null;
-  const signingIn = state === 'waiting' ? undefined : `Signing in${now.computer ? ` on ${now.computer}` : ''}`;
+  const signingIn = `Signing in${now.computer ? ` on ${now.computer}` : ''}`;
   const offerPaste = canPaste && (error
     ? error.code === 'offline' || error.code === 'runner_version'
     : state !== 'done' && (!!hostWarning || !!ended));
@@ -215,7 +217,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
           {ended && <Button disabled={ending} onClick={async () => { if (await endAttempt()) onRetry(); }}>Try again</Button>}
           {offerPaste && <Button disabled={ending} onClick={switchToPaste}>Paste instead</Button>}
           {!ended && !cancelError && now.url && (
-            <a className="btn btn-fill" href={now.url} target="_blank" rel="noreferrer">
+            <a className="btn btn-fill" href={now.url} target="_blank" rel="noreferrer" onClick={() => setOpened(true)} onAuxClick={() => setOpened(true)}>
               Open {codex ? 'ChatGPT' : kind === 'antigravity_login' ? 'Google' : 'Claude'}
             </a>
           )}
@@ -229,7 +231,7 @@ function Connection({ kind, subscription, owner, onClose, onRetry, inline }: Con
         <Field label={codex ? 'auth.json' : 'Setup token'} type="password" value={secret} onValueChange={setSecret} autoComplete="off" autoFocus />
       )}
       {!pasting && !restart && !ended && now.code && <LabelValue label="Code">{now.code}</LabelValue>}
-      {!pasting && !restart && !ended && now.accepts_code && !now.code_sent && (
+      {!pasting && !restart && !ended && now.accepts_code && !now.code_sent && (opened || !now.url) && (
         <form className="connect-plan-fields" onSubmit={(event) => void send(event)}>
           <Field label="Code from the page" value={code} onValueChange={setCode} disabled={sending} autoComplete="one-time-code" />
           {codeError && <div role="alert">{codeError}</div>}
