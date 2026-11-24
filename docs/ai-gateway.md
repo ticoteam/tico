@@ -302,8 +302,8 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 `tico gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
 - **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
-  Good for frames and quick pictures.
-- **high**: `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
+  Good for quick pictures and drafts.
+- **high** (the best the Gateway has; use it for finals, storyboards, characters and anything customers see): `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
   character from the `--ref` files).
 - **svg**: a vector image, scalable without loss, saved as `.svg`. `--quality standard` (the default) or `pro`. It takes no
   `--ref` and no `--size`. HQ strips scripts and event handlers from the SVG before it

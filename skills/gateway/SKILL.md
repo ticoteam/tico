@@ -64,9 +64,10 @@ tico gateway image "what to draw" --model low|high|svg --out shots/frame-01.png 
 Pick the model for the job:
 
 - **low** (the default): fast. Keeps people and places from `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
-  Frames and quick pictures.
-- **high**: `--category photo` (the default), `graphic` for text and layout, or `character` to keep a person from the
-  references.
+  Quick pictures and drafts.
+- **high** (the best the Gateway has): `--category photo` (the default), `graphic` for text and
+  layout, or `character` to keep a person from the references. Use it for finals, storyboards, characters and
+  anything customers see.
 - **svg**: a vector image for icons, logos and diagrams that must stay sharp at any size. `--quality standard` (the
   default) or `pro`. No `--ref`, no `--size`. Saved as `.svg`.
 

@@ -350,9 +350,10 @@ def image_choice(args):
 @tool(
     "tico_gateway_image",
     "Make an image through the Tico AI Gateway and save it here: the answer is the paths, model "
-    "and cost, never the bytes. `model`: low (fast, keeps references; default), high (`category` "
-    "photo, graphic or character; character keeps a person from the refs, graphic is text and "
-    "layout) or svg (.svg vector; `quality` standard or pro; no refs or size). `refs`: up to 4 "
+    "and cost, never the bytes. `model`: low (fast drafts, keeps references; default), high (the "
+    "best; for finals, storyboards, characters and anything customers see; `category` photo, "
+    "graphic or character; character keeps a person from the refs, graphic is text and layout) "
+    "or svg (.svg vector; `quality` standard or pro; no refs or size). `refs`: up to 4 "
     "reference files (PNG, JPEG or WebP, 2 MiB each). `out` names the first image; more go beside "
     "it as name-2.png. Each gets a `<file>.json` sidecar. It spends from the company's Gateway "
     "cap. Never overwrites: pick a new name.",
