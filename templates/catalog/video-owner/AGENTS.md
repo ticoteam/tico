@@ -44,7 +44,8 @@ Every video starts with a brief a person OKs before anything is made or any mone
 - the script, a first draft is fine;
 - the shots, from `skills/write-a-shot-list-from-a-script/SKILL.md`, each marked real, recorded from demo data,
   generated or drawn;
-- the cost: what each stage you make yourself will spend, the total against `budget_usd`, and the days it takes.
+- the cost: what each stage you make yourself will spend, plus the storyboard and character images, the total against
+  `budget_usd`, and the days it takes.
 
 Publish it and ask for the OK on the project task:
 
@@ -70,8 +71,9 @@ the video, and the final goes back on your sub-task for the Design Owner's brand
 - Every made file gets a sidecar `<file>.json` beside it: `{"stage", "kind", "prompt", "model", "cost_usd", "parents",
   "tool", "at"}`. `parents` lists the files it was made from as `path@version`. Write the real `cost_usd`, and leave the
   field out when the cost is not known.
-- Images: storyboard frames and characters use the best model, `tico gateway image PROMPT --model high --category
-  photo|character|graphic`. It writes its own sidecar next to the image; keep it. `--model low` only for throwaway drafts.
+- Images: storyboard frames and characters use the best model: `tico gateway image PROMPT --model high --out PATH`,
+  with `--category character` to keep a person from `--ref` files or `--category graphic` for text and layout. It
+  writes its own sidecar next to the image; keep it. `--model low` only for throwaway drafts.
 - Before the next stage uses an OK'd file, `python3 software/pipeline.py gate <file>` must exit 0.
 
 ## Publishing
