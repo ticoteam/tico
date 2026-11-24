@@ -45,6 +45,9 @@
 .rr .scope-row{grid-template-columns:var(--av-sm) minmax(0,1fr) auto;column-gap:var(--s-2);padding:0 var(--s-2h) 0 var(--s-1h)}
 .rr .scope-row.is-kid{padding-left:var(--s-6)}
 .rr .scope-row.is-selected .row-title{font-weight:var(--w-strong)}
+/* the constitution in the right column: what it is for, then its text at the reading measure */
+.rr .rr-law{max-width:calc(var(--measure) + var(--s-8) + var(--s-6));padding:var(--s-2h) var(--s-6) var(--s-8) var(--s-8)}
+.rr .rr-law-note{margin:0 0 var(--s-5);color:var(--muted);font-size:var(--t-sm)}
 .rr .scope-ico{display:grid;place-items:center;color:var(--muted)}
 .rr .scope-ico .ico{width:var(--ico);height:var(--ico)}
 .rr .scope-ico.is-chev{color:var(--faint)}

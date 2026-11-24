@@ -79,6 +79,9 @@ export type Builtin = (typeof BUILTINS)[number];
 
 const id = z.string().check(z.minLength(1), z.maxLength(200));
 const agent = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^bot:\S+$/), z.describe('bot:<id>'));
+/** Rules › Company's `who` for the constitution, read in the parties' place. */
+export const LAW = 'constitution';
+
 const party = z.string().check(z.minLength(1), z.maxLength(200), z.regex(/^(\*|(group|bot|human):\S+)$/), z.describe('*, group:<id>, bot:<id> or human:<id>'));
 const cron = z.string().check(z.minLength(9), z.maxLength(100), z.regex(/^\S+( \S+){4}$/), z.describe('a five-part cron, like 0 9 * * 1-5'));
 const name = z.string().check(z.minLength(1), z.maxLength(200));
@@ -683,7 +686,7 @@ export const pickScope = defineAction({
   id: 'rules.pickScope',
   title: 'Show the rules for a team, an agent or a person',
   kind: 'view',
-  input: z.strictObject({ who: party }),
+  input: z.strictObject({ who: z.union([party, z.literal(LAW)]) }),
   run: ({ router }, i) => go(router, RULES, i.who === '*' ? {} : { who: i.who }),
   did: () => 'Opened their rules',
   target: (i) => ({ kind: 'scope', id: i.who }),

@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query';
-import { ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
+import { LAW, ROUTINE_STATES, RULE_TABS, RUNS_RANGE } from './actions';
 import type { ListeningSearch } from './ListeningPage';
 import { allRunsQuery, dueQuery, holdsQuery, hooksQuery, matchesQuery, orgRulesQuery, reachQuery, routinesQuery, ruleGroupsQuery, RUN_RANGES, RUN_STATUSES, sourcesQuery, stageRulesQuery, teamsQuery, watchesQuery, watchQuery } from './queries';
 import type { RoutinesSearch } from './RoutinesPage';
@@ -44,7 +44,7 @@ export function validateRulesSearch(raw: Record<string, unknown>): RulesSearch {
   const panel = text(raw.panel);
   if (panel && PANEL.test(panel)) out.panel = panel;
   const who = text(raw.who);
-  if (who && PARTY.test(who)) out.who = who;
+  if (who && (PARTY.test(who) || who === LAW)) out.who = who;
   const q = text(raw.q);
   if (q) out.q = q;
   return out;
