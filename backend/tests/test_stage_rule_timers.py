@@ -616,6 +616,22 @@ def test_a_private_blocker_the_owner_may_not_open_is_not_named(c, time_machine):
     assert task_depends.ref(E.task(c, blocker)) not in body and "Salary" not in " ".join(_history(c, blocked))
 
 
+def test_a_private_blocker_is_not_named_on_a_task_every_member_reads(c, time_machine):
+    _late(c, minutes=6 * 60)
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the salaries")
+    blocker = _task(c, "ops", "Build", "bot:fixer", "Salary numbers")
+    _block(c, blocked, blocker)
+    # The owner bot may open the blocker; the members who read the company task may not.
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps(["bot:builder"]), blocker))
+    c.execute("UPDATE tasks SET private=0 WHERE id=?", (blocked,))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    ((_, body),) = _owner_told(c, blocked, "Late")
+    assert "Blocked by a task you can't open" in body
+    assert task_depends.ref(E.task(c, blocker)) not in " ".join([body, *_history(c, blocked)])
+
+
 def test_a_timer_never_messages_a_person(c, time_machine):
     _rule(c, id="tell-anyone", name="Tell anyone", timer={"kind": "quiet", "hours": 1}, then="tell_owner")
     _rule(c, id="tell-boss", name="Tell the boss", timer={"kind": "quiet", "hours": 1}, then="tell_manager")

@@ -475,8 +475,9 @@ def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str)
 
 
 def named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
-    """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when it is private,
-    so may every party and reader of `row`, who read the thread later (as task_wakes.told does for a filed task)."""
+    """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when the blocker is
+    private, `row` is private too and every party and reader of it may open the blocker, since they read the thread
+    later (as task_wakes.told does for a filed task). A company task is read by every member: never a private name."""
     from . import hubdb, task_calls
 
     H: Any = hubdb
@@ -488,6 +489,8 @@ def named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
     if not H.task_private(conn, blocker):
         return True
     full: Row = H.task(conn, str(row["id"])) or {}
+    if not H.task_private(conn, full):
+        return False  # a company task is read by every member, and a private blocker is not opened by all of them
     parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
     return all(H.task_private_readable(conn, p, blocker) for p in parties)
 
