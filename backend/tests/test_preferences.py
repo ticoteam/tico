@@ -34,12 +34,17 @@ def test_intros_seen_keeps_pages_with_times_for_people_only(api):
     # an agent has no intros to keep.
     seen = {"tasks": "2026-11-23T10:00:00.000Z", "growth": "2026-11-23T10:05:00+00:00"}
     assert post(api, "preferences/intros.seen", {"value": seen})["value"] == seen
+    # Each write adds its page: two tabs never lose each other's, and a page keeps its first time.
+    later = {"rules": "2026-11-23T11:00:00Z", "tasks": "2026-11-23T11:00:00Z"}
+    seen = {**seen, "rules": "2026-11-23T11:00:00Z"}
+    assert post(api, "preferences/intros.seen", {"value": later})["value"] == seen
     for wrong in (
         ["tasks"],
         "tasks",
         {"tasks": "yesterday"},
         {"tasks": "2026-11-23T10:00:00"},
         {"Tasks!": "2026-11-23T10:00:00Z"},
+        {"tasks\n": "2026-11-23T10:00:00Z"},
         {f"p{n}": "2026-11-23T10:00:00Z" for n in range(65)},
     ):
         r = api.post("/api/v2/preferences/intros.seen", json={"value": wrong}, headers=headers())
