@@ -252,19 +252,14 @@ export function SupportChat() {
         )}
         <Composer
           id={SUPPORT_CHAT}
+          // support takes words only; its send refuses files
+          attach={false}
           me={me?.id ?? YOU}
           to={NAME}
           fill={fill}
           // Tico support reads it, not the teammates an @ would name
           mentions={false}
-          onSend={(text, files) => {
-            if (files.length) {
-              setError('Files cannot go to Tico support. Attach diagnostics instead.');
-              setFill({ text });
-              return;
-            }
-            void send(text);
-          }}
+          onSend={(text) => void send(text)}
         />
       </footer>
       <Diagnostics open={reviewing} onOpenChange={setReviewing} attached={attached} onAttach={setAttached} />

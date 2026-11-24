@@ -149,7 +149,8 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     setActive(0);
   };
   const add = (adding: readonly File[]) => {
-    if (attach && adding.length) setFiles(withFiles(files, adding));
+    // nothing joins a send already on its way: it would be cleared when that send lands
+    if (attach && !sending && adding.length) setFiles(withFiles(files, adding));
   };
   // Another conversation in the same box: its own draft.
   if (shownFor !== `${me}:${id}`) {
