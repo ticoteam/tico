@@ -268,7 +268,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             {"outcome": "completed", "text": "Ready to review", "last_seq": 0},
             token=machine["token"],
         )
-    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "delivery": "steer"})
+    post(api, f"tasks/{tid}/comments", {"text": "Start the review", "delivery": "steer", "to": "bot:finance"})
     failures = []
     claimed_ids = []
     if disabled_guard == "audience":
@@ -448,6 +448,7 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
                 "text": "Check remaining attachments",
                 "attachments": [(ordinary if deleted else fid) + "@1"],
                 "delivery": "steer",
+                "to": "bot:finance",
             },
         )["comment"]["id"]
         inputs = api.post(f"/api/v2/attempts/{aid}/inputs", json={}, headers=headers(machine["token"]))
@@ -460,7 +461,11 @@ def test_restricted_page_leak_matrix_across_stored_shapes_transports_and_deletio
             token=machine["token"],
         )
         if not deleted:
-            post(api, f"tasks/{tid}/comments", {"text": "Continue review after deletion", "delivery": "steer"})
+            post(
+                api,
+                f"tasks/{tid}/comments",
+                {"text": "Continue review after deletion", "delivery": "steer", "to": "bot:finance"},
+            )
     if disabled_guard:
         assert any(isinstance(found, list) and set(found) & set(secrets) for _, found, *rest in failures), (
             "The matrix did not detect removal of " + disabled_guard
