@@ -364,12 +364,19 @@ def task_run(api, args):
         "defer_for": DEFER_FOR,
         "reply_to": _s("Reply: the id of the comment on this task it answers; it reaches that comment's author"),
         "to": _s("An agent on the task: a message in that agent's session, which wakes it"),
+        "ask": _s(
+            "Your answer to an agent's ❓ to you on this task, by its id (qmark:<id>, the Needs you item's id): it "
+            "settles that ❓ alone and wakes the agent that asked"
+        ),
     },
     required=("id", "text"),
     writes=True,
 )
 def task_comment(api, args):
-    body = {k: args[k] for k in ("text", "attachments", "public", "needs_action", "to") if k in args}
+    blank = [k for k in ("reply_to", "to", "ask") if k in args and not str(args[k] or "").strip()]
+    if blank:  # an empty one would post a plain comment that reaches nobody
+        raise ValueError(f"{' and '.join(blank)} needs a value, or leave it out for a plain comment")
+    body = {k: args[k] for k in ("text", "attachments", "public", "needs_action", "to", "ask") if k in args}
     if args.get("reply_to"):
         body["in_reply_to"] = args["reply_to"]
     if args.get("ok"):

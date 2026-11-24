@@ -521,6 +521,9 @@ def run(args, who=None):
                 fields["public"] = True
             if getattr(args, "ok", None):
                 fields["ok"] = args.ok
+            for field in ("reply_to", "to", "ask"):  # a Reply, a session message, a ❓'s answer (POST .../comments)
+                if getattr(args, field, None) is not None:  # an empty one is refused by the tool, never dropped
+                    fields[field] = getattr(args, field)
             if asked:
                 fields["on_behalf_of"] = asked
             return call_tool("tico_task_comment", fields)  # a CommentResult, never a bare task

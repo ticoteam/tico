@@ -401,7 +401,7 @@ task once when the PR's checks finish, a review approves or asks for changes, or
 ## Conversation
 
 Every task has its own thread, and its comments are a log: a plain comment wakes and notifies nobody, not even the
-agent holding the task. It reaches only whom it addresses:
+agent holding the task (it does answer your open ❓s there, below). It reaches only whom it addresses:
 
 - **@someone**: a person is notified; an agent is woken in its own session, and its answer shows as a reply under the
   comment.
@@ -428,10 +428,13 @@ tico task comment <id> "@build use the August numbers." --steer
 tico task comment <id> "For later." --to build --defer 4h
 ```
 
+[Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions) shows each way in the API, MCP and CLI.
+
 When an agent finishes its stage, its done note is one comment on the task. When the task is done or closed, each
 person who asked for it and can still read it gets one line saying so, once per completion.
 
-A comment that names a bot's open ❓ on the task (`ask`, in `POST /api/v2/tasks/{id}/comments`: the pinned answer)
+A comment that names a bot's open ❓ on the task (`ask` in `POST /api/v2/tasks/{id}/comments`, `--ask` in the CLI:
+the pinned answer)
 settles exactly that ❓ and wakes the bot that asked. Any other comment of yours on the task clears your open ❓s there
 (a message in one agent's session, only that agent's), and every agent whose ❓ it clears gets it.
 

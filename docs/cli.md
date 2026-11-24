@@ -112,6 +112,13 @@ sentence with what to do next, in place of the JSON error: for example "Builder 
 minute.", "Mac mini is offline; try again later, or ask a person to see to it.", "That element is gone; read the page
 again (tico browser read app.example.com)." Exit codes are the ones below.
 
+## Comments and @mentions
+
+`tico task comment <task> "..."` reaches only whom its text @mentions: a plain comment wakes and notifies nobody,
+except that it answers your open ❓s on the task, which reaches each agent that asked. `--reply-to <comment id>`
+makes it a Reply, `--to <agent>` a message in that agent's session, and `--ask qmark:<id>` your answer to one agent's
+❓, as [Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions) shows.
+
 ## Exit codes
 
 | Code | Meaning | Retry? |
