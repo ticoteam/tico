@@ -45,17 +45,21 @@ installs. A plan is never pasted, and the API takes its sign-in from Connect onl
 conversations, so a move between plans resumes the same conversation; its conversation summaries (a SQLite file, which
 a link cannot share) do not carry across plans. That turn's `agy` alone is told it runs over SSH, and no Gemini or
 Google key, nor the computer's Application Default Credentials (`AGY_ADC_AUTH`), reaches it; a token it refreshes
-during the turn is masked before anything it says is kept; without the file in place it is not started. The home is
-removed once `agy` has exited, and any left by a stopped runner when it starts again. The file holds the plan's
-refresh token, so, as for a ChatGPT plan, a bot paid by the plan can read it while its turn runs (SECURITY.md).
+during the turn, or while it is kept after it, is masked before anything it says is kept; without the file in place
+it is not started. The home is removed once `agy` has exited (a kept one, below, when it is stopped), and any left by a
+stopped runner when it starts again. The file holds the plan's refresh token, so, as for a ChatGPT plan, a bot paid by
+the plan can read it while its turn runs, and while its `agy` is kept after it: at most 15 minutes unused, which is
+also how long a removed or revoked plan's sign-in can stay on the computer (SECURITY.md).
 
-On the computer's own sign-in, the `agy` process stays up after a turn that completed, as T3 Code keeps it: one per
+The `agy` process stays up after a turn that completed, as T3 Code keeps it: one per
 thread, holding its conversation open (`Pool` in `hosts/antigravity.rs`, as many as the runner's capacity, at least 8).
 The thread's next turn goes straight to `session/prompt` there, setting the model and thinking level on the live session
 first when they changed. The runner stops a kept process after 15 minutes unused, when it stops, and when a turn would
-start `agy` differently (another home, environment, folder or MCP servers): that turn starts a new one. While kept, its
+start `agy` differently (another home, environment, folder or MCP servers, or another plan or a sign-in the plan was
+handed again: a turn no longer handed the plan never goes on in its process): that turn starts a new one. While kept, its
 `HUB_TOKEN` file is blank (a `tico-file:` reference, rewritten with each turn's token), what it asks is refused and what
-it says is dropped. A plan turn's `agy` ends with its turn, as its home and sign-in do. Stopping a turn sends
+it says is dropped. A plan turn's `agy` keeps its own home and sign-in while it is kept; the next turn on the plan,
+though handed a home of its own, goes on there. Stopping a turn sends
 `session/cancel`: when `agy` ends the prompt as cancelled within 15 seconds, its process stays; otherwise it is stopped.
 The runner keeps each thread's conversation ID locally (`state/agy/<bot>/`, readable by
 the runner only) and a new process resumes it with `session/resume`, so a kept process that exited is replaced by one

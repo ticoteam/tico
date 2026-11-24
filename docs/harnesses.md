@@ -534,7 +534,7 @@ another bot's home; all turns use the original login in its own home.
 | `voice_session` | The harness can answer live call questions in one resident session | `false` |
 | `voice_session_runner` | Additional heartbeat capability required to place a resident call session on the runner | `voice_sessions_v1` suffices |
 | `steer` | A message sent while a turn runs is written into that turn (Claude Code, Codex and pi; Claude Code also needs a CLI that echoes its input) | The message waits for the next turn; DM says so and offers Stop and redirect |
-| `persistent_session` | One process per conversation is kept between turns (pi, and Antigravity on the computer's own sign-in) | One process per turn |
+| `persistent_session` | One process per conversation is kept between turns (pi, Antigravity) | One process per turn |
 | `goal_runs_across_turns` | A native goal keeps the thread going after a turn completes, and a clear is reconciled | A goal ends with its turn |
 | `serial_cold_start` | An expired stored token is refreshed by the first turn; the others wait for it | Turns start together |
 | `isolated_user` | The CLI keeps no owner-only sign-in state in the bot's home, so on a Docker runner with a turn-user pool each turn runs as its own leased OS user that cannot enter another bot's checkout. Only pi sets it: Claude Code, Codex, Gemini CLI, Cursor, Grok, Muse Code and Antigravity keep 0600 sign-in files shared across turns | The turn runs as `bot`; readiness reports it as not isolated |

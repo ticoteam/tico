@@ -10,8 +10,9 @@
 //! the thread's conversation open: the thread's next turn sets only the model and thinking level it asks for and sends
 //! its prompt there. A turn that would start agy differently (another home, environment, folder or MCP servers), a
 //! conversation the process does not hold, or a process that has exited gets a new one, which resumes the saved
-//! conversation; a kept process that is gone before the prompt went is replaced so, never after. A plan turn's process
-//! ends with its turn, as its home and sign-in do. A stop of the turn is `session/cancel`, which keeps the process when
+//! conversation; a kept process that is gone before the prompt went is replaced so, never after. A plan turn's is kept
+//! too, for the thread's next turn on the same plan and sign-in, its home held until it goes
+//! (model_subscriptions::keep_home). A stop of the turn is `session/cancel`, which keeps the process when
 //! agy ends the prompt as cancelled in time. `agy` runs in a process group of its own, owned by the shared process
 //! owner: a stop reaches the group, and whatever of it is left when `agy` exits goes too.
 //!
@@ -533,8 +534,11 @@ struct Agent {
     io: Io,
     stderr: crate::run_diagnostics::Stderr,
     sink: Sink,
-    /// What it was started with (`fingerprint`); None on a plan, whose process ends with its turn.
+    /// What it was started with (`fingerprint`); None when it is not to be kept (a plan whose home it cannot hold).
     key: Option<String>,
+    /// Its `--gemini-dir`, and a plan's home held while it runs.
+    home: String,
+    _plan: Option<crate::model_subscriptions::KeptHome>,
     /// The folder of the token file it reads HUB_TOKEN from (crate::warm).
     tokens: PathBuf,
     /// The conversation it holds open, and that session's config options as they now stand.
@@ -700,11 +704,14 @@ async fn between(mut agent: Agent, mut stop: oneshot::Receiver<()>) -> Agent {
 }
 
 /// What a process for this turn would be started with, the turn's own token and memory scope aside: its command line
-/// (its home among it), environment, folder, records and MCP servers. The model and effort are set in the session.
+/// (its home among it, a plan's named by the plan), environment, folder, records and MCP servers. The model and effort
+/// are set in the session.
 fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) -> String {
     let rest: Env = env
         .iter()
-        .filter(|(k, _)| *k != "HUB_TOKEN" && *k != crate::turn_limits::SCOPE_ENV)
+        .filter(|(k, _)| {
+            *k != "HUB_TOKEN" && *k != "GEMINI_HOME" && *k != crate::turn_limits::SCOPE_ENV
+        })
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let records = records.display().to_string();
@@ -1050,6 +1057,12 @@ impl AntigravityHost {
         home: &str,
         key: Option<String>,
     ) -> Result<Agent, HostError> {
+        // A plan's home stays while the process runs, or it is not kept.
+        let plan = match &settings.plan_home {
+            Some(home) => crate::model_subscriptions::keep_home(Path::new(home)),
+            None => None,
+        };
+        let key = key.filter(|_| settings.plan_home.is_none() || plan.is_some());
         let tokens = crate::warm::folder(&self.0.pool.dir).map_err(failed)?;
         let file = tokens.join("lease-token");
         crate::warm::write_token_for(
@@ -1124,6 +1137,8 @@ impl AntigravityHost {
             stderr,
             sink,
             key,
+            home: home.to_string(),
+            _plan: plan,
             tokens,
             session: None,
             options: Value::Null,
@@ -1133,12 +1148,19 @@ impl AntigravityHost {
 
     /// The process for this turn on `thread`, and whether it was already running: the one this attempt or the pool
     /// holds when it was started as this turn would start it and holds the thread's saved conversation open, else a
-    /// new one. A plan turn's is always new.
+    /// new one. A plan's is named by the plan and the sign-in this turn was handed, so a turn no longer handed it
+    /// never goes on in its process.
     async fn agent(&self, thread: &str, settings: &Settings) -> Result<(Agent, bool), HostError> {
         let home = home_for(settings)?;
-        let key = settings.plan_home.is_none().then(|| {
+        let named = match &settings.plan_home {
+            Some(plan) => {
+                crate::model_subscriptions::plan_of(Path::new(plan)).map(|p| format!("plan:{p}"))
+            }
+            None => Some(home.clone()),
+        };
+        let key = named.map(|named| {
             fingerprint(
-                &acp_argv(&self.0.cmd, &home),
+                &acp_argv(&self.0.cmd, &named),
                 &env_of(settings),
                 settings,
                 &self.0.home,
@@ -1368,7 +1390,7 @@ impl AntigravityHost {
             }
         }
         c.agent.options = options;
-        self.prompt(c, &settings, &session, text).await
+        self.prompt(c, &session, text).await
     }
 
     /// `initialize`, `authenticate` and the thread's conversation resumed or begun: its id and config options.
@@ -1469,13 +1491,7 @@ impl AntigravityHost {
     }
 
     /// The turn's prompt in `session`, and how agy answered it.
-    async fn prompt(
-        &self,
-        c: &mut Conv<'_>,
-        settings: &Settings,
-        session: &str,
-        text: &str,
-    ) -> End {
+    async fn prompt(&self, c: &mut Conv<'_>, session: &str, text: &str) -> End {
         let full = if c.stream.restored {
             self.inner().full_prompt.take()
         } else {
@@ -1495,9 +1511,7 @@ impl AntigravityHost {
             None => text.to_string(),
         };
         // Where the session log stands before the prompt, so only the steps it adds are read after.
-        let native = home_for(settings)
-            .map(|home| session_log(&home, session))
-            .ok();
+        let native = Some(session_log(&c.agent.home, session));
         let before = match native.clone() {
             Some(log) => tokio::task::spawn_blocking(move || last_step(&log))
                 .await
@@ -3108,7 +3122,7 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn a_kept_process_goes_when_idle_and_another_home_or_a_plan_gets_its_own() {
+    async fn a_kept_process_goes_when_idle_and_another_home_gets_its_own() {
         let rig = Rig::new();
         let s = rig.settings(&[]);
         // Idle past its time: stopped.
@@ -3122,7 +3136,7 @@ for line in sys.stdin:
         turn_events(&mut rx).await;
         host.release(true).await;
         assert!(gone(rig.pid()).await, "evicted once idle");
-        // Another home (here the bot's HOME; a plan's is its own): a process of its own, the kept one stopped.
+        // Another home: a process of its own, the kept one stopped.
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
@@ -3140,27 +3154,6 @@ for line in sys.stdin:
         assert!(!next.warm() && gone(kept).await);
         assert!(rig.runs()[2].contains(&rig.dir.join("other/.gemini").display().to_string()));
         next.stop().await;
-        // A plan turn's process ends with its turn, its home and sign-in with it.
-        let plan = rig.dir.join("plan");
-        std::fs::create_dir_all(plan.join(APP_DATA_DIR)).unwrap();
-        std::fs::write(
-            plan.join(crate::model_subscriptions::AGY_TOKEN),
-            r#"{"token":{"access_token":"ya29.synthetic-plan-token"}}"#,
-        )
-        .unwrap();
-        let paid = Settings {
-            plan_home: Some(plan.display().to_string()),
-            ..s.clone()
-        };
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&paid);
-        host.start_turn(&thread, "one", None).await.unwrap();
-        assert!(turn_events(&mut rx)
-            .await
-            .iter()
-            .any(|e| e["kind"] == "turn_completed"));
-        host.release(true).await;
-        assert!(gone(rig.pid()).await, "a plan's process is never kept");
     }
 
     #[tokio::test]
@@ -3255,5 +3248,76 @@ for line in sys.stdin:
             .await
             .contains(&json!({"kind": "message", "text": "early late", "final": true})));
         host.stop().await;
+    }
+
+    /// A turn on the plan `items` hand: its home made and held as a turn's, the settings that run on it, and the home.
+    fn plan_turn(
+        rig: &Rig,
+        items: &Value,
+    ) -> (
+        Settings,
+        Vec<crate::model_subscriptions::Delivered>,
+        PathBuf,
+    ) {
+        use crate::model_subscriptions as subs;
+        let mut env = rig.settings(&[]).env;
+        let mut got = subs::apply(
+            &rig.dir,
+            items,
+            &mut env,
+            &mut vec![],
+            &mut Default::default(),
+        );
+        subs::start(&mut got, "antigravity", &mut env).unwrap();
+        let home = subs::plan_home(&got, "antigravity").unwrap();
+        let settings = Settings {
+            env,
+            plan_home: Some(home.clone()),
+            ..rig.settings(&[])
+        };
+        (settings, got, PathBuf::from(home))
+    }
+
+    #[tokio::test]
+    async fn a_plan_turns_agy_goes_on_for_the_same_plan_and_its_home_goes_with_it() {
+        use crate::model_subscriptions as subs;
+        let rig = Rig::new();
+        let items = json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
+                            "file": subs::AGY_TOKEN, "revision": 1, "billing": "subscription",
+                            "value": r#"{"token":{"access_token":"ya29.synthetic-plan-token-0123456789"}}"#}]);
+        let (s, mut got, first) = plan_turn(&rig, &items);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true).await;
+        subs::finish(&mut got);
+        // The turn is over, its process kept: the home and its sign-in stay while it runs.
+        assert!(first.join(subs::AGY_TOKEN).exists());
+        let pid = rig.pid();
+        // The next turn on the same plan, handed a home of its own, goes on in that process.
+        let (s, mut got, second) = plan_turn(&rig, &items);
+        assert_ne!(first, second);
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &s).unwrap();
+        next.start_turn(&thread, "two", None).await.unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "two", "final": true})));
+        assert!(next.warm());
+        assert_eq!(rig.runs().len(), 1, "one process");
+        next.release(true).await;
+        subs::finish(&mut got);
+        assert!(!second.exists() && first.join(subs::AGY_TOKEN).exists());
+        // A turn no longer handed the plan gets a process of its own; the plan's goes, its home and sign-in with it.
+        let own = rig.settings(&[]);
+        let (last, mut rx) = rig.host();
+        last.resume_thread(&thread, &own).unwrap();
+        last.start_turn(&thread, "three", None).await.unwrap();
+        turn_events(&mut rx).await;
+        assert!(!last.warm() && gone(pid).await);
+        assert!(!first.exists(), "no copy left behind");
+        assert_eq!(rig.runs().len(), 2);
+        last.stop().await;
     }
 }

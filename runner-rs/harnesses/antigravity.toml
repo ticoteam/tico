@@ -54,8 +54,7 @@ AGY_CLI_DISABLE_AUTO_UPDATE = "1"
 # No subscription profiles: a profile's own home would hold no sign-in, and a profile's bots would lose the computer's.
 # A plan's sign-in is put in a home of each turn's own instead (model_subscriptions.rs TURN_HOMES).
 tool_events = true
-# `agy acp`: one process per conversation between turns on the computer's own sign-in (hosts/antigravity.rs Pool); a
-# plan turn's ends with its turn.
+# `agy acp`: one process per conversation between turns (hosts/antigravity.rs Pool), a plan's with its home.
 persistent_session = true
 mcp_unsupported = "agy takes no http or sse MCP servers over ACP (its initialize offers none), and Tico does not touch the config file in the operator's home (the operator's own servers would reach every bot)"
 resume_command = "agy --conversation"

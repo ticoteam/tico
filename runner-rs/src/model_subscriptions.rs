@@ -13,7 +13,8 @@
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
 //! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
 //! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
-//! that subscription runs: written 0600 when that runtime starts (`start`), removed when the last turn holding that
+//! that subscription runs, or an Antigravity plan's process is kept after it (`KeptHome`, at most crate::warm::IDLE
+//! unused): written 0600 when that runtime starts (`start`), removed when the last turn or kept process holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
 //! leaves no copy behind. When Codex refreshed the login during the turn the new file goes back
@@ -36,7 +37,9 @@
 //! --gemini-dir <home>` reads its sign-in from `<home>/antigravity-cli/antigravity-oauth-token` only when it believes it
 //! runs over SSH (else from the system keyring), so a plan turn's home is one of its own holding that file, and its
 //! `agy` alone runs there, told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from
-//! `plan_home`, so even an `agy` started again later never falls back to the keyring). Only `agy acp` takes its home
+//! `plan_home`, so even an `agy` started again later never falls back to the keyring). That `agy` may be kept running
+//! after the turn for the thread's next turn on the same plan (hosts/antigravity.rs Pool): its home, sign-in file
+//! included, stays as long as it runs (`keep_home`), at most crate::warm::IDLE unused, and goes as a turn's does. Only `agy acp` takes its home
 //! from that flag: headless `agy -p` and `agy models` read `$HOME/.gemini` whatever GEMINI_HOME says, so they never run
 //! on a plan. GEMINI_HOME is the home too, for the turn's tools. The bot's own `~/.gemini` rules, skills and
 //! conversations are linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so
@@ -293,8 +296,11 @@ struct Homes {
 }
 
 struct Live {
+    /// The running turns holding it, and the kept CLI processes still running on it (`Kept`).
     turns: usize,
     revision: i64,
+    /// Where it was made from (`Delivered::root`).
+    root: PathBuf,
     /// A plan's sign-in file its CLI refreshes in place (TURN_HOMES), with how it looked when last read
     /// (`notice_refreshes`).
     watch: Option<(PathBuf, Option<Stamp>)>,
@@ -946,6 +952,7 @@ fn place(
     let entry = homes.live.entry(home.to_path_buf()).or_insert(Live {
         turns: 0,
         revision,
+        root: root.to_path_buf(),
         watch: None,
     });
     entry.turns += 1;
@@ -1250,24 +1257,80 @@ fn release(d: &mut Delivered) -> Vec<String> {
         }
         d.refreshed = Some(now);
     }
-    match homes.live.get_mut(&home) {
+    let_go(&mut homes, &d.root, &home);
+    secrets
+}
+
+/// One holder lets go of `home`: the last one removes its sign-in file, and a turn's own home with it.
+fn let_go(homes: &mut Homes, root: &Path, home: &Path) {
+    match homes.live.get_mut(home) {
         Some(live) if live.turns > 1 => live.turns -= 1,
         _ => {
-            homes.live.remove(&home);
+            homes.live.remove(home);
             // Through descriptors from the runner's state (`Folder`): a link put in place of any folder on the way
             // is removed, never followed.
-            clear(&d.root, &home);
-            if let Some(turn) = turn_dir(&home) {
+            clear(root, home);
+            if let Some(turn) = turn_dir(home) {
                 // A turn's own config directory: its links go with it (never what they point at).
                 if let (Some(up), Some(name)) = (turn.parent(), turn.file_name()) {
-                    if let (Ok(dir), Ok(name)) = (Folder::open(&d.root, up, false), c_name(name)) {
+                    if let (Ok(dir), Ok(name)) = (Folder::open(root, up, false), c_name(name)) {
                         dir.remove(&name);
                     }
                 }
             }
         }
     }
-    secrets
+}
+
+/// A plan turn's home (TURN_HOMES) held past its turn by the CLI process kept running on it (hosts/antigravity.rs
+/// Pool), as one more turn holds it: the turn's own `release` leaves it in place, and its refreshes stay masked
+/// (`notice_refreshes`). Dropped once that process has gone, it is let go as a turn lets go of it, a token the CLI
+/// refreshed masked everywhere first.
+pub struct KeptHome(PathBuf);
+
+/// Hold `home` while a kept process runs on it: None unless a turn holds it now, its sign-in in place.
+pub fn keep_home(home: &Path) -> Option<KeptHome> {
+    let mut homes = homes();
+    let live = homes.live.get_mut(home).filter(|l| l.watch.is_some())?;
+    live.turns += 1;
+    Some(KeptHome(home.to_path_buf()))
+}
+
+impl Drop for KeptHome {
+    fn drop(&mut self) {
+        let mut homes = homes();
+        let Some(live) = homes.live.get(&self.0) else {
+            return;
+        };
+        if let Some(now) = live
+            .watch
+            .as_ref()
+            .and_then(|(file, _)| read_codex_auth(file))
+        {
+            for secret in secrets_in(&now) {
+                crate::redact::hide_everywhere(&secret, false);
+            }
+        }
+        let root = live.root.clone();
+        let_go(&mut homes, &root, &self.0);
+    }
+}
+
+/// What names the plan a turn's home (TURN_HOMES) signs in with: its subscription and the sign-in it was handed, so a
+/// reconnected plan, or another, is another; None for any other home.
+pub fn plan_of(home: &Path) -> Option<String> {
+    let id = home
+        .parent()?
+        .parent()
+        .filter(|t| t.file_name() == Some(OsStr::new(TURNS)))?;
+    let id = id.parent()?.file_name()?.to_string_lossy().to_string();
+    let t = TURN_HOMES
+        .iter()
+        .find(|t| home.file_name() == Some(OsStr::new(t.runtime)))?;
+    let signed = t.sign_in(&home.display().to_string()).ok()?;
+    let digest = ring::digest::digest(&ring::digest::SHA256, signed.as_bytes());
+    let digest: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    Some(format!("{id}:{digest}"))
 }
 
 /// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.
