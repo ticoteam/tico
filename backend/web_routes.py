@@ -10,6 +10,12 @@ there (web/src/router.tsx). The server's own prefixes (SERVER) never fall throug
 is still the plain 404. The folder is read on each request, so a build written while the server runs is served at once; with
 no build the page is a 404.
 
+The diagram frame (web/mermaid-sandbox.html, drawn by web/src/kit/Markdown/diagram.ts) is sandboxed with no origin of
+its own, so it sends no cookies: its page and the build files it loads (listed by the build's manifest) are sent
+without sign-in, as the build's own static files, the page under a policy that runs only those scripts and reaches no
+network, and the scripts with `Access-Control-Allow-Origin: *`, since a module script from an opaque origin is a CORS
+request.
+
 The service worker browsers installed for this origin (scope /) asks /sw.js for its updates: it is the build's
 sw.js (web/public/sw.js), which shows Web Push.
 
@@ -17,7 +23,9 @@ sw.js (web/public/sw.js), which shows Web Push.
 """
 
 import hashlib
+import json
 import mimetypes
+from typing import cast
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -32,6 +40,12 @@ ASSETS_PREFIX = "/next/assets/"
 PAGE_TYPE = "text/html; charset=utf-8"
 IMMUTABLE = "public, max-age=31536000, immutable"
 BUILD = "npm ci && npm run build, in web/"
+SANDBOX_PAGE = "mermaid-sandbox.html"
+# Mermaid's own <style> runs; nothing is fetched, framed, posted or based anywhere.
+SANDBOX_POLICY = (
+    "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+)
 # First path segments the server answers itself: an address under one of them is never the app's page.
 SERVER = frozenset(
     {
@@ -82,6 +96,59 @@ def file_reply(request: Request, path: Path, media_type: str, cache_control: str
     return Response(raw, media_type=media_type, headers=headers)
 
 
+# The diagram frame's files, by manifest, while its size and modified time stay the same.
+_SANDBOX: dict[Path, tuple[tuple[int, int], frozenset[str]]] = {}
+
+
+def _strings(value: object) -> list[str]:
+    return [v for v in cast(list[object], value) if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _object(value: object) -> dict[str, object]:
+    return cast(dict[str, object], value) if isinstance(value, dict) else {}
+
+
+def sandbox_files(root: Path) -> frozenset[str]:
+    """The diagram frame's page and every file it loads (its chunks, Mermaid's lazy ones, their styles and assets), as
+    paths under the build, read from the build's manifest; none without one or without the page in it."""
+    manifest = root / ".vite" / "manifest.json"
+    try:
+        stat = manifest.stat()
+    except OSError:
+        return frozenset()
+    key = (stat.st_mtime_ns, stat.st_size)
+    entry = _SANDBOX.get(manifest)
+    if entry and entry[0] == key:
+        return entry[1]
+    try:
+        chunks = _object(json.loads(manifest.read_bytes()))
+    except (OSError, ValueError):
+        chunks = {}
+    files: set[str] = set()
+    seen: set[str] = set()
+    todo = [SANDBOX_PAGE]
+    while todo:
+        name = todo.pop()
+        chunk = _object(chunks.get(name))
+        if name in seen or not chunk:
+            continue
+        seen.add(name)
+        file = chunk.get("file")
+        if isinstance(file, str):
+            files.add(file)
+        files.update(_strings(chunk.get("css")) + _strings(chunk.get("assets")))
+        todo += _strings(chunk.get("imports")) + _strings(chunk.get("dynamicImports"))
+    found: frozenset[str] = frozenset(files | {SANDBOX_PAGE}) if SANDBOX_PAGE in seen else frozenset()
+    _SANDBOX[manifest] = (key, found)
+    return found
+
+
+def sandboxed(settings: Settings, path: str) -> bool:
+    """Whether `path` (as requested) is one of the diagram frame's files, which pass without sign-in."""
+    prefix = OLD_PREFIX + "/"
+    return path.startswith(prefix) and path[len(prefix) :] in sandbox_files(Path(settings.web_dir).resolve())
+
+
 def page_file(settings: Settings) -> Path:
     """The build's page, or the 404 for a server with no build, naming the command that makes one."""
     page = Path(settings.web_dir).resolve() / "index.html"
@@ -108,7 +175,17 @@ def register(app: FastAPI, settings: Settings) -> None:
         if rest and root in path.parents and path.is_file():
             hashed = request.url.path.startswith(ASSETS_PREFIX)
             media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-            return file_reply(request, path, media_type, IMMUTABLE if hashed else None)
+            if rest not in sandbox_files(root):
+                return file_reply(request, path, media_type, IMMUTABLE if hashed else None)
+            # Sent past the app's own middleware headers (backend/app.py request_guard), so it sets its own.
+            reply = file_reply(request, path, media_type, IMMUTABLE if hashed else "no-cache")
+            reply.headers["X-Content-Type-Options"] = "nosniff"
+            reply.headers["Referrer-Policy"] = "no-referrer"
+            if rest == SANDBOX_PAGE:
+                reply.headers["Content-Security-Policy"] = SANDBOX_POLICY
+            else:
+                reply.headers["Access-Control-Allow-Origin"] = "*"
+            return reply
         if request.url.path.startswith(ASSETS_PREFIX):
             # An older build's file is gone: never the page under a script's name.
             raise Problem("not_found", "Not found", 404)

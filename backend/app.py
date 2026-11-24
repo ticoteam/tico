@@ -1027,6 +1027,10 @@ def _install_request_guard(
             # never read there. Its own headers stand: nothing below adds the app's framing or caching rules.
             if request.url.path.startswith("/visuals/") and request.method in ("GET", "HEAD"):
                 return await call_next(request)
+            # The diagram frame's page and scripts (backend/web_routes.py): the frame has no origin and sends no cookies,
+            # and they are the build's own static files. Their route sets their headers.
+            if request.method in ("GET", "HEAD") and web_routes.sandboxed(settings, request.url.path):
+                return await call_next(request)
             if request.url.path == "/_tico/screen/v1/authorize":
                 from .screen_relay import private_request
 

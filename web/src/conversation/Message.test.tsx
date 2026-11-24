@@ -362,7 +362,7 @@ describe('What a message holds besides words (thread-content.html)', () => {
     show([msg(1, 'bot:qa', '| Bed | Sold |\n| --- | --- |\n| Cedar | 40 |\n\n```\nmake ship\n```')]);
     fireEvent.click(await screen.findByRole('button', { name: 'Copy' }));
     expect(writeText).toHaveBeenCalledWith('make ship');
-    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Expand' })[0]!); // the table's; the code block has its own
     const dialog = await screen.findByRole('dialog', { name: 'Table' });
     expect(within(dialog).getByText('Cedar')).toBeTruthy();
   });
