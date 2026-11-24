@@ -3604,11 +3604,9 @@ def check_unanswered(c, aid, actor, task_id, check, body, reply):
         return None
     started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
     ended = max(task.get("done_at") or "", task.get("closed_at") or "")
-    if (
-        not started
-        or ended < str(started[0] or "")
-        or turn_wrote(c, aid, task["conversation_id"], actor, done_note=False)
-    ):
+    if not started or ended < str(started[0] or ""):
+        return None
+    if turn_wrote(c, aid, task["conversation_id"], actor, done_note=False):
         return None
     model = f"{check['runtime']}:{check['model']}"
     said = (
