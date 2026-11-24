@@ -42,9 +42,11 @@ _manifests: Any = harness_manifests
 _presets: Any = models_preset
 _provider_settings: Any = providers
 _runner_readiness: Any = readiness
-resolve_harness: Callable[[Row], str] = harnesses.resolve_harness  # pyright: ignore[reportUnknownMemberType] - accepts a configuration row
-bot_readiness: Callable[[Any, str], Row] = store.bot_readiness  # pyright: ignore[reportUnknownMemberType] - returns a bot readiness row
-readiness_document: Callable[[Any], Row] = store.readiness_document  # pyright: ignore[reportUnknownMemberType] - normalizes stored readiness
+_harnesses: Any = harnesses
+_store: Any = store
+resolve_harness: Callable[[Row], str] = _harnesses.resolve_harness
+bot_readiness: Callable[[Any, str], Row] = _store.bot_readiness
+readiness_document: Callable[[Any], Row] = _store.readiness_document
 
 SETTING = "burst_rehome"
 KEY = "_burst:"
@@ -169,7 +171,10 @@ def offer(
             return entry if prepare else {**job, "burst": entry}
         return None
 
-    candidate: Callable[..., Row | None] = executor._candidate  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage] - the shared selector accepts the Burst eligibility filter
+    selector: Any = executor
+    candidate: Callable[..., Row | None] = (
+        selector._candidate
+    )  # the shared selector accepts the Burst eligibility filter
     return candidate(
         c,
         Claim(bot=only),
@@ -487,7 +492,8 @@ def install(app: FastAPI, store: Any, auth: Any, mutate: Any) -> None:
                 "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (SETTING, "true" if body.enabled else "false"),
             )
-            after_commit: list[Callable[[], None]] = c.after_commit  # pyright: ignore[reportAttributeAccessIssue] - the store adds hooks to its pooled connections
+            pooled: Any = c  # the store adds after-commit hooks to its pooled connections
+            after_commit: list[Callable[[], None]] = pooled.after_commit
             after_commit.append(lambda: store.set_burst_rehome(body.enabled))
             events.tell_runners(  # pyright: ignore[reportUnknownMemberType] - the runner event dispatcher is untyped
                 c, "assignments", "SELECT runner_id AS rid FROM cloud_machines WHERE bot GLOB '_burst:[0-9]*'"
