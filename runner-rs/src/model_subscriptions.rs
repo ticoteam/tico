@@ -1163,8 +1163,13 @@ fn release(d: &mut Delivered) -> Vec<String> {
     let mut homes = homes();
     if d.turn_home().is_some() {
         // A plan turn's CLI refreshes its access token in the file: masked for the turn, never kept or sent back.
+        // Masked everywhere now, as `notice_refreshes` does, so what the turn's diagnostics still bring after its home
+        // is gone is masked too.
         if let Some(now) = d.file.as_deref().and_then(read_codex_auth) {
             if now != d.written {
+                for secret in secrets_in(&now) {
+                    crate::redact::hide_everywhere(&secret, false);
+                }
                 secrets.extend(secrets_in(&now));
             }
         }

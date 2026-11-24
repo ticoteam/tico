@@ -7542,9 +7542,28 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         let said = serde_json::to_string(&ran.events).unwrap();
         assert!(said.contains("Done."), "{said}");
         assert!(said.contains("refresh went wrong with"), "{said}");
-        assert!(ran.stderr.iter().any(|t| t.contains("refresh went wrong with")), "{:?}", ran.stderr);
-        for kept in [said, ran.stderr.join("\n"), serde_json::to_string(&ran.completions).unwrap()] {
-            assert!(!kept.contains("synthetic-refreshed-mid-turn"), "{kept}");
+        assert!(
+            ran.stderr
+                .iter()
+                .any(|t| t.contains("refresh went wrong with")),
+            "{:?}",
+            ran.stderr
+        );
+        for (what, kept) in [
+            ("events", said),
+            ("stderr", ran.stderr.join("\n")),
+            ("completions", serde_json::to_string(&ran.completions).unwrap()),
+        ] {
+            let at = kept.find("synthetic-refreshed-mid-turn");
+            assert!(
+                at.is_none(),
+                "{what}: ...{}",
+                kept.get(at.unwrap_or(0).saturating_sub(300)..)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(500)
+                    .collect::<String>()
+            );
         }
     }
 
