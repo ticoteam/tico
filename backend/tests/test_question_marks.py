@@ -793,7 +793,7 @@ def test_a_bot_does_not_finish_move_on_or_close_its_task_while_its_question_mark
         with pytest.raises(H.Refused) as refused:
             end()
         assert refused.value.rule == "task_question_open"
-        assert f"tico thread delete {mark['message_id']}" in refused.value.detail  # the way to take it back
+        assert f"tico task ask {task_id} --take-back" in refused.value.detail  # the way to take it back
     assert E.task(c, task_id)["status"] == "open" and len(_open(c, task_id)) == 1
     # Another bot's open ❓ does not hold this one, and taking its own back lets it finish.
     threads.delete_message(c, BUILDER, mark["message_id"])

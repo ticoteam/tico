@@ -77,3 +77,18 @@ def _target(api, value):
 def _key(args, suffix=""):
     op = args.get("operation_id")
     return (op + suffix) if op else None
+
+
+# A ❓'s suggested answers: tap buttons on the person's card.
+CHOICES = {
+    "type": "array",
+    "items": _s("A short reply the person can tap, up to 60 characters", maxLength=60),
+    "maxItems": 3,
+    "description": "Up to 3 suggested answers, your pick first: each is a button, and a tap sends it as their reply",
+}
+CONTEXT = _s("What they need to answer, under the question: a sentence or two", maxLength=3000)
+
+
+def question_text(args):
+    """A ❓'s message: the one-line question, then its context."""
+    return "\n\n".join(part for part in (args.get("line") or args.get("message"), args.get("context")) if part)

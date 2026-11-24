@@ -8,7 +8,8 @@ from clients import s3links
 from clients.cli_spec import NULL, Arg, Command, Group
 
 from clients.commands._registry import tool
-from clients.commands._schemas import STATUSES, TASK_ID, _key, _s, _target
+from clients.commands._schemas import CHOICES, CONTEXT, STATUSES, TASK_ID, _key, _s, _target
+from clients.commands._schemas import question_text
 from clients.commands._shared import ASKED, VERSION, _model_id, _seen
 
 # A task title as every create and file tool asks for it (backend/hubdb_text.py lint_title, lint_human_title).
@@ -605,24 +606,26 @@ def _own_ask(api, task_id, requirement=None):
 
 
 # What makes tico_task_ask a stage ask rather than a ❓: any of these.
-# A question is a message marked ❓ (backend/question_marks.py); its options and why are words in it.
+# A question is a message marked ❓ (backend/question_marks.py); its options are its suggested answers.
 QUESTION_INSTEAD = (
-    'A question is a message: tico task ask <id> --to <person> "<question>", with no --kind or --show. Say the '
-    "options, your pick and why in the message."
+    'A question is a message: tico task ask <id> --to <person> "<question>" --choice "<answer>", with no --kind or '
+    "--show. Offer up to 3 short answers, your pick first."
 )
 _STAGE_ASK = ("kind", "show", "subject", "why")
 
 
 @tool(
     "tico_task_ask",
-    "Ask a person on this task. `to` and `line`: a ❓ message on its chat, in their Needs you until they reply. Prefer "
-    "one question, its first line the question itself. A new ❓ replaces yours, so number several in one; options and "
-    "why go in it. While it is open you can't mark the task done or close it. An OK: `kind` ok with `show`. "
-    "`withdraw` takes an OK back.",
+    "Ask a person on this task. `to` and `line`: a ❓ on its chat, a card in their Needs you until they answer. `line` is "
+    "one question; `choices` up to 3 short answers they can tap; `context` what they need to decide. A new ❓ replaces "
+    "yours. While it is open you can't mark the task done or close it; `take_back` withdraws it as soon as you no longer "
+    "need the answer. An OK: `kind` ok with `show`. `withdraw` takes an OK back.",
     {
         "id": TASK_ID,
         "to": _s("The person's id"),
-        "line": _s("The message: a short first line that reads on its own, then any detail", maxLength=4000),
+        "line": _s("The question, one line that reads on its own", maxLength=4000),
+        "choices": CHOICES,
+        "context": CONTEXT,
         "kind": {
             "type": "string",
             "enum": ["ok"],
@@ -640,6 +643,7 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
         ),
         "content": {"description": "With subject: exactly what the OK covers (any JSON)"},
         "withdraw": {"type": "boolean", "description": "Take back your open OK instead"},
+        "take_back": {"type": "boolean", "description": "Take back your open ❓ here instead"},
         "not_known": {"type": "boolean", "description": "Ask even if Tico answered"},
         "requirement": _s("With withdraw: the OK's requirement id, if several"),
         "why": _s("With withdraw: why"),
@@ -649,6 +653,9 @@ _STAGE_ASK = ("kind", "show", "subject", "why")
     writes=True,
 )
 def task_ask(api, args):
+    if args.get("take_back"):
+        # Your open ❓ here (backend/question_marks.py take_back): `question` null when none is open, never an OK.
+        return api.call("DELETE", f"tasks/{args['id']}/questions", None, key=_key(args))
     if args.get("withdraw"):
         requirement = _own_ask(api, args["id"], args.get("requirement"))
         path = f"tasks/{args['id']}/asks/{quote(requirement, safe='')}"
@@ -658,12 +665,16 @@ def task_ask(api, args):
         raise ValueError(f"An ask names who it is for and the one line they are asked: give {' and '.join(missing)}")
     if not any(args.get(field) for field in _STAGE_ASK):
         # A ❓: the message on the task's chat, needing their reply (backend/question_marks.py).
-        question = {"to": args["to"], "text": args["line"]}
+        question = {"to": args["to"], "text": question_text(args)}
+        if args.get("choices"):
+            question["choices"] = args["choices"]
         if args.get("not_known"):
             question["not_known"] = True  # past Tico's own answer (backend/ask_known.py)
         return api.post(f"tasks/{args['id']}/questions", question, key=_key(args))
     if args.get("kind") != "ok" and not args.get("subject"):
         raise ValueError(QUESTION_INSTEAD)
+    if args.get("choices") or args.get("context"):
+        raise ValueError("An OK is approved or sent back: choices and context go with a question, not with --kind ok")
     body = {"to": args["to"], "line": args["line"], "version": _seen(args)}
     if args.get("subject"):
         if "content" not in args:

@@ -270,6 +270,8 @@ class TaskWait(TypedDict):
     """A private task waits on these actors being let in (the next stage's owner and those it asks, or someone asked here, can't see it): move with to next and let_see set to exactly this list"""
     shots: NotRequired[list[ReconciledShot]]
     """Paid shots of unknown outcome it waits on its person to reconcile, each its key and full name: the keys go to POST /api/v2/tasks/{tid}/shots/reconcile"""
+    choices: NotRequired[list[str]]
+    """A ❓'s suggested answers (at most 3): a tap posts one as the person's reply"""
 
 
 @answer

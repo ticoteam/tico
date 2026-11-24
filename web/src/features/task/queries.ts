@@ -2,6 +2,7 @@ import { keepPreviousData, queryOptions, type QueryKey } from '@tanstack/react-q
 import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
+import { newId } from '@/lib/ids';
 import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
@@ -321,6 +322,17 @@ export async function undoAnswer(id: string, answer: string): Promise<TaskResult
 /* What the answer cannot patch in place (a relation named by number, a new subtask, a parent): sent, then the task is
    read again. */
 const reread = (id: string) => queryClient.invalidateQueries({ queryKey: keys.tasks.detail(id) });
+
+/** A person's answer to a ❓ from its card (POST /api/v2/tasks/{tid}/comments with `ask`): their reply on the task's
+    chat to the agent that asked, which wakes it. The server sends it only while that ❓ is open (409 `answered` once
+    it is not: one reply, however many taps), and it clears that ❓ alone. Resolves with the hold (its id and reason)
+    when a company rule held the reply (nothing sent yet), else null; the task and Needs you are read again. */
+export async function answerQuestion(task: string, question: string, text: string): Promise<{ id: string; reason: string } | null> {
+  const r = await api.post<{ comment?: { id?: string }; held?: { id?: string; reason?: string } }>(`${taskPath(task)}/comments`, { text, ask: question }, { idempotencyKey: newId() });
+  void reread(task);
+  void queryClient.invalidateQueries({ queryKey: ['flow'] });
+  return r.comment?.id ? null : { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+}
 
 /** A task as a person names it: its number (412, #412) or its id. */
 const named = (other: string) => refOf(other.trim().replace(/^#/, ''));

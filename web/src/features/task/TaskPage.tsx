@@ -21,7 +21,6 @@ import { whoHref } from '@/features/team/routing';
 import { leaveTask, nextInList, pressListRow } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
-import { AskCard } from './AskCard';
 import { AddMenu, Details, type Adding } from './Details';
 import type { TaskSearch } from './exports';
 import { EmailSource, Email as EmailView } from './Email';
@@ -37,9 +36,10 @@ import { boardOf, ownAddress } from './routing';
 import { useTabs, type Tab } from './tabs';
 import { TaskStatus } from './StatusLine';
 import { approvalCard, useApprovalCards } from './ThreadCards';
+import { QuestionCard } from './QuestionCard';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
-import { questionLine, questionsFor, waitsNow } from './waits';
+import { questionsFor, waitsNow } from './waits';
 import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
@@ -315,8 +315,10 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         mentionFirst={onTask(t)}
         foot={
           <>
-            <TaskStatus t={t} />
+            {/* a pinned ❓ already says it needs them: the status line would say it again */}
+            {!questionsFor(t, me).length && <TaskStatus t={t} />}
             <Decision t={t} onAsking={setAsking} email={null} />
+            <Questions t={t} ids={questionsFor(t, me)} />
           </>
         }
         canPost={!asking}
@@ -453,10 +455,11 @@ export function TaskChat({ task }: TaskChatProps) {
   );
 }
 
-/** Each ❓ on the task waiting on the person, pinned over the message box they answer it in: the question, and who
-    asked, as their Needs you has it (the agent the server holds for the ❓; a snoozed one's from the snoozed list),
-    else the task's owner. Their reply clears it on the server, whose `question` change reads the task again
-    (live/patch.ts), and the pin goes. Several scroll in a bounded stack, so the message box stays in reach. */
+/** Each ❓ on the task waiting on the person, pinned over the message box: a Question card (the question, the answers
+    the agent offers, a reply box) and who asked, as their Needs you has it (the agent the server holds for the ❓; a
+    snoozed one's from the snoozed list), else the task's owner. Their reply clears it on the server, whose `question`
+    change reads the task again (live/patch.ts), and the pin goes. Several scroll in a bounded stack, so the message box
+    stays in reach. */
 function Questions({ t, ids }: { t: TaskData; ids: string[] }) {
   // Needs you, which the chat's approval cards read already (ThreadCards useApprovalCards): one read for both. A ❓ the
   // person snoozed still waits on the task but leaves that list: only then its own short list is read.
@@ -469,9 +472,7 @@ function Questions({ t, ids }: { t: TaskData; ids: string[] }) {
   return (
     <div className="chat-pins">
       {asked.map((w) => (
-        <AskCard key={w.requirement_id} name="Needs you" label="Needs you" who={by(w.requirement_id ?? '')}>
-          <p className="askcard-what">{questionLine(w.line)}</p>
-        </AskCard>
+        <QuestionCard key={w.requirement_id} id={w.requirement_id ?? ''} task={t.id} line={w.line} choices={w.choices} who={by(w.requirement_id ?? '')} />
       ))}
     </div>
   );

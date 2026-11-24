@@ -1818,12 +1818,18 @@ def register_messages(
         asking = question_marks.Asking(
             lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
         )
-        rc, ingest = message_checks(who, sent, retry=saved_retry(request, who), place=asking, operation="chat_question")
+        # The rules read its suggested answers with its words: a choice is what the person is shown, and sends.
+        judged = sent.model_copy(update={"text": question_marks.with_choices(body.text, body.choices)})
+        rc, ingest = message_checks(
+            who, judged, retry=saved_retry(request, who), place=asking, operation="chat_question"
+        )
         return ask_ingest.judged(
-            store, ingest, lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest))
+            store,
+            ingest,
+            lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest, body.choices)),
         )
 
-    def chat_question_write(c, who, sent, rc, ingest):
+    def chat_question_write(c, who, sent, rc, ingest, choices=()):
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one
         transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
         (task_rule_gate.refuse_question); a hold from before still replays here. Who it asks, and where, is checked
@@ -1831,10 +1837,11 @@ def register_messages(
         guarded = routed_message(c, who, sent)
         guarded.conversation_id = named_destination(c, who, guarded)
         recipient_gate.require_recipient(c, who, guarded.to, body=guarded, auth=auth)
+        question_marks.clean_choices(c, who.actor, choices)  # refused before anything is written
         message = message_write(c, who, sent, rc, ingest)
         if not message.get("id"):
             return message
-        mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to)
+        mark = question_marks.mark(c, who.actor, str(message["id"]), sent.to, choices=choices)
         return question_marks.with_warning({**message, "question": question_marks.public(mark)}, mark)
 
     @app.post(
@@ -1857,6 +1864,27 @@ def register_messages(
 
         return mutate(request, body, write)
 
+    @app.delete(
+        "/api/v2/questions/{mid}",
+        **api_v2(
+            "Needs you",
+            "takeBackQuestion",
+            "Take back: the bot that asked withdraws its open ❓. It leaves the person's Needs you; the message stays. "
+            "`question` is null when it was answered or taken back already",
+        ),
+    )
+    def question_take_back(request: Request, mid: str):
+        """Take back an open ❓ (question_marks.take_back): only the bot that marked it."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only the bot that asked takes a ❓ back", 403)
+
+        def write(c):
+            taken = question_marks.take_back(c, question_marks.mark_id(mid) or mid, who.actor)
+            return {"question": question_marks.public(taken) if taken else None}
+
+        return mutate(request, Nothing(), write)
+
     def rule_prepare_message(store_, bot, replay):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
 
@@ -1869,7 +1897,8 @@ def register_messages(
 
     @org_rule_check.replayer("chat_question", prepare=rule_prepare_message)
     def rule_replay_chat_question(c, bot, hold, replay, ingest, gate=None):
-        """Send anyway of a held ❓ in a direct chat: the message and its mark, as the route writes them."""
+        """Send anyway of a held ❓ in a direct chat, from before a ❓ was refused instead (so with no choices): the message
+        and its mark, as the route writes them."""
         sent = M.MessageCreate.model_validate(replay["body"])
         return chat_question_write(c, bot, sent, org_rule_check.decided(gate), ingest)
 

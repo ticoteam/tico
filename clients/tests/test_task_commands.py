@@ -402,7 +402,7 @@ def test_withdraw_finds_the_one_ask_the_bot_may_take_back_and_names_them_when_th
     }
     api = Recorder(task=one)
     hubtools.task_ask(api, {"id": "T1", "withdraw": True})
-    assert api.writes() == [("DELETE", "tasks/T1/asks/r9", {})]
+    assert api.writes() == [("DELETE", "tasks/T1/asks/r9", {})]  # an OK only: a ❓ is taken back with --take-back
     two = {"id": "T1", "to_leave": [{"requirement_id": r, "may": ["withdraw"]} for r in ("r8", "r9")]}
     with pytest.raises(ValueError, match="--requirement r8, r9"):
         hubtools.task_ask(Recorder(task=two), {"id": "T1", "withdraw": True})
@@ -427,9 +427,7 @@ def test_a_question_with_why_is_refused_before_anything_is_sent():
     assert api.calls == []
 
 
-@pytest.mark.parametrize(
-    "flag", [["--choices", "a,b"], ["--choice", "a|b"], ["--recommend", "a"], ["--title", "t"], ["--details", "d"]]
-)
+@pytest.mark.parametrize("flag", [["--choices", "a,b"], ["--recommend", "a"], ["--title", "t"], ["--details", "d"]])
 def test_the_removed_ask_flags_and_kind_answer_are_errors(flag, capsys):
     argv = ["task", "ask", "T1", "Which tone?", "--to", "chris", *flag]
     with pytest.raises(SystemExit):
@@ -710,3 +708,50 @@ def test_not_known_is_sent_only_when_given():
         hubtools.task_ask(api, args)
         [(_, path, body)] = api.writes()
         assert path == "tasks/T1/questions" and body.get("not_known") is sent
+
+
+def test_a_question_sends_its_choices_and_context_and_take_back_takes_the_open_question_back():
+    """`tico task ask ... --choice --context`: one question, up to 3 answers to tap, and what the person needs to decide;
+    `--take-back` takes the bot's open ❓ back and nothing else (backend/question_marks.py take_back)."""
+    argv = ["task", "ask", "T1", "Ship Friday?", "--to", "chris", "--choice", "Yes", "--choice", "Next week"]
+    args = {k: v for k, v in vars(hubcli.parser().parse_args([*argv, "--context", "QA is done."])).items()}
+    api = Recorder()
+    hubtools.task_ask(api, {k: v for k, v in args.items() if k != "fn" and v is not None})
+    assert api.writes() == [
+        (
+            "POST",
+            "tasks/T1/questions",
+            {"to": "chris", "text": "Ship Friday?\n\nQA is done.", "choices": ["Yes", "Next week"]},
+        )
+    ]
+
+    class Asked(Recorder):
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            self.calls.append((method, path, body))
+            return {"question": {"id": "m1"}}
+
+    args = vars(hubcli.parser().parse_args(["task", "ask", "T1", "--take-back"]))
+    api = Asked(task={"id": "T1", "to_leave": [{"requirement_id": "r9", "may": ["withdraw"]}]})
+    assert hubtools.task_ask(api, {k: v for k, v in args.items() if k != "fn" and v is not None}) == {
+        "question": {"id": "m1"}
+    }
+    assert api.writes() == [("DELETE", "tasks/T1/questions", None)]  # never the OK beside it
+
+
+def test_chat_ask_sends_choices_and_takes_a_question_back_by_its_id():
+    args = vars(hubcli.parser().parse_args(["chat", "ask", "Ship Friday?", "--to", "chris", "--choice", "Yes"]))
+    api = Recorder()
+    hubtools.BY_NAME["tico_chat_ask"]["fn"](api, {k: v for k, v in args.items() if k != "fn" and v is not None})
+    assert api.writes() == [("POST", "questions", {"to": "chris", "text": "Ship Friday?", "choices": ["Yes"]})]
+    args = vars(hubcli.parser().parse_args(["chat", "take-back", "m1"]))
+    api = Recorder()
+    hubtools.BY_NAME["tico_chat_take_back"]["fn"](api, {k: v for k, v in args.items() if k != "fn" and v is not None})
+    assert api.writes() == [("DELETE", "questions/m1", None)]
+
+
+def test_choices_or_context_on_an_ok_are_refused_not_dropped():
+    for extra in ({"choices": ["Yes"]}, {"context": "QA is done."}):
+        api = Recorder()
+        with pytest.raises(ValueError, match="go with a question"):
+            hubtools.task_ask(api, {"id": "T1", "to": "chris", "line": "OK the plan?", "kind": "ok", **extra})
+        assert api.writes() == []

@@ -3,6 +3,9 @@
 from .store import H
 from . import models as M
 from .store import Problem
+from contextlib import nullcontext
+from typing import Any
+
 from fastapi import Request
 from . import ask_known
 from . import ask_shape
@@ -43,7 +46,11 @@ def register(
     def replying_to(c, who, task_id, body):
         """A reply to a bot's question (`ask`): the bot that asked it, and whether the question waits on the writer.
         A person's plain comment on a task where a bot's ❓ waits on them is their reply to it (writing it clears the ❓,
-        hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's open ❓ on this task."""
+        hubdb). (None, False) for any other plain comment. 422 when `ask` is not a bot's open ❓ on this task.
+        The person a ❓ waits on answering it by name (its card) answers it in this same write, so only while it is
+        open (409 `answered` after: a second tap sends nothing, and Send anyway of a held answer checks again), only in
+        their own hand (`question_marks.by_hand`: never Agent Ops or an automation writing as them), and it clears
+        that ❓ alone (`answer_of`)."""
         if not body.ask:
             if who.role == "bot" or body.public or body.delivery == "goal":
                 return None, False
@@ -56,6 +63,12 @@ def register(
         if body.public or body.delivery == "goal":
             raise Problem("validation", "A reply to an ask is a plain comment: send it without public or goal", 422)
         marked = question_marks.get(c, question_marks.mark_id(body.ask) or body.ask)
+        if marked and marked["task_id"] == task_id and marked["person_id"] == who.actor:
+            if marked.get("cleared_at"):
+                raise Problem("answered", question_marks.ANSWERED, 409)
+            if not question_marks.by_hand():
+                raise Problem("validation", "Only the person asked answers a ❓, in their own hand", 422)
+            return marked["bot_id"], True
         if marked and marked["task_id"] == task_id and not marked.get("cleared_at"):
             # A reply to a bot's ❓ on this task: to the bot that marked it. Writing it clears the ❓ (hubdb).
             return marked["bot_id"], marked["person_id"] == who.actor
@@ -144,25 +157,31 @@ def register(
             and delivery.running_in_session(c, H.actor_id(bot), [row["conversation_id"]], task_id)
         ):
             way = "queue"
-        extra = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
+        more: dict[str, Any] = {"attachments": attached, "files": [a["ref"] for a in attached]} if attached else {}
+        # Their answer to this ❓ by name clears it alone (question_marks.replied), not every ❓ to them here, in this
+        # write wherever it is posted; a write that did not clear it fails (`cleared_by`).
+        named = (question_marks.mark_id(body.ask) or body.ask) if body.ask and asked_me else ""
         if body.needs_action or (who.role == "bot" and body.delivery in ("steer", "queue")):
-            extra["needs_action"] = True
-        msg = H.task_comment(
-            c,
-            who.actor,
-            task_id,
-            text,
-            wake=way != "defer",
-            public=body.public,
-            approval_id=body.approval_id,
-            extra_refs=extra or None,
-            way=way,
-            defer_for=defer_for,
-            people_notified=people,
-            delegate=directs and way != "defer",
-            reach=who if who.role == "bot" else None,
-            to=asker,
-        )
+            more["needs_action"] = True
+        with question_marks.answering(named) if named else nullcontext():
+            msg = H.task_comment(
+                c,
+                who.actor,
+                task_id,
+                text,
+                wake=way != "defer",
+                public=body.public,
+                approval_id=body.approval_id,
+                extra_refs=more or None,
+                way=way,
+                defer_for=defer_for,
+                people_notified=people,
+                delegate=directs and way != "defer",
+                reach=who if who.role == "bot" else None,
+                to=asker,
+            )
+        if named and not question_marks.cleared_by(c, named, msg["id"]):
+            raise Problem("answered", question_marks.ANSWERED, 409)  # not cleared by it: write nothing
         org_rule_check.late_on(c, rule, "message", message=msg["id"], task=task_id)
         if answers and asker:
             # The asker's own delivery was deferred with the rest: its run starts now and carries it.
@@ -345,13 +364,13 @@ def register(
         rc = rule_check(
             who,
             "question",
-            text,
+            question_marks.with_choices(text, body.choices),  # its suggested answers are shown, and sent, as words
             lambda c: rule_comment_audience(c, who, auth.task(c, who, auth.resolve_task(c, who, tid)), text, to),
             place=question_marks.Asking(task_place(who, tid)),
         )
 
         def write(c):
-            done = question_write(c, who, tid, text, to, rc)
+            done = question_write(c, who, tid, text, to, rc, choices=body.choices)
             if body.not_known and (done.get("comment") or {}).get("id"):
                 # Counted: Tico's answer did not cover it (Tasks spec criterion 12).
                 H.history_event(c, "task", auth.resolve_task(c, who, tid), who.actor, "ask_not_known", data={"to": to})
@@ -362,15 +381,41 @@ def register(
     # An older client's question on the asks route is asked here (task_moves_routes.task_ask).
     app.state.task_question = task_question
 
-    def question_write(c, who, tid, text, to, rc, ingest=None):
+    @app.delete(
+        "/api/v2/tasks/{tid}/questions",
+        **api_v2(
+            "Tasks",
+            "takeBackTaskQuestion",
+            "A bot takes back its own open ❓ on the task's chat: it leaves the person's Needs you, the message stays. "
+            "`question` is the ❓ taken back, null when none is open. Bots only",
+        ),
+    )
+    def task_question_take_back(request: Request, tid: str):
+        """Take back the caller's own open ❓ on this task (question_marks.take_back), or nothing when none is open."""
+        who = request.state.identity
+        if who.role != "bot":
+            raise Problem("forbidden", "Only the bot that asked takes a ❓ back", 403)
+
+        def write(c):
+            task_id = auth.resolve_task(c, who, tid)
+            auth.task(c, who, task_id)
+            mine = question_marks.open_mine(c, who.actor, task_id)
+            taken = question_marks.take_back(c, mine["id"], who.actor) if mine else None
+            return {"question": question_marks.public(taken) if taken else None}
+
+        return mutate(request, M.Empty(), write)
+
+    def question_write(c, who, tid, text, to, rc, ingest=None, choices=()):
         """A ❓ on a task's chat, as the route writes it and Send anyway replays it: the comment, then its mark, in one
         transaction. A Block or Escalate rule it breaks refuses it back to the bot, nothing written or held
-        (task_rule_gate.refuse_question); a hold from before still replays here."""
+        (task_rule_gate.refuse_question); a hold from before (with no choices) still replays here. `choices`: its
+        suggested answers."""
+        question_marks.clean_choices(c, who.actor, choices)  # refused before anything is written
         done = comment_write(c, who, tid, M.TaskComment(text=text), ingest, rc, who, ask_to=to)
         said = done.get("comment") or {}
         if not said.get("id"):
             return done
-        mark = question_marks.mark(c, who.actor, said["id"], to)
+        mark = question_marks.mark(c, who.actor, said["id"], to, choices=choices)
         return question_marks.with_warning({**done, "question": question_marks.public(mark)}, mark)
 
     def rule_question_audience(c, bot, replay):

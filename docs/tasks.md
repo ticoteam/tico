@@ -127,21 +127,32 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 
 A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
 message shows a small, muted "?" at its top right and is in that person's Needs you, under its task's title (or the
-bot's name in a direct chat). A reply in that chat clears it.
+bot's name in a direct chat). In the task's chat it is a Question card: the question, up to three answers the bot offers
+as buttons, and a reply box. A tap sends that answer as their reply; a reply in that chat clears it too.
 
 ```sh
-tico task ask <id> --to <person> "Should the launch note go out on Friday?"   # on the task's chat
-tico chat ask --to <person> "Should the launch note go out on Friday?"        # in a direct chat
+tico task ask <id> --to <person> "Ship the launch note Friday?" --choice "Yes, Friday" --choice "Next week" \
+  --context "QA signed off today."                                           # on the task's chat
+tico chat ask --to <person> "Ship the launch note Friday?" --choice "Yes"  # in a direct chat
+tico task ask <id> --take-back                                             # take it back
+tico chat take-back <question id>
 ```
+
+- One question, its line short. `--choice` up to 3 times (60 characters each, plain words: no @mention, no leading
+  /), your pick first. `--context` is what they need to decide; it shows in the chat under the question. The rules
+  read the choices with the question.
 
 - Only a bot marks, only its own message, and only for a person who can read that chat. The message follows the "Asks
   to a person" rule like any ask.
 - A bot has one open ❓ per chat: a new one replaces it, and the bot is told so. It puts every question to a person in
   one ❓, numbered when there are several.
 - A bot can't say done, move its task on or close it while its own ❓ there is open: it waits for the reply, or takes
-  the question back first by deleting its message (`tico thread delete <message id>`).
-- It clears when that person replies in the chat (or their Assistant does, on their word), when the task is done,
-  closed, merged or deleted, or when the message is deleted.
+  the question back first (`tico task ask <id> --take-back`).
+- A bot takes a ❓ back as soon as it no longer needs the answer: it leaves Needs you at once, and the message stays.
+  Saying so in words does not clear it.
+- It clears when that person replies in the chat (or their Assistant does, on their word), when the bot takes it back,
+  when the task is done, closed, merged or deleted, or when the message is deleted. A tap on a card that was answered
+  already sends nothing.
 - While it is open the never-stuck ladder does not chase the bot. Once the person replies, the reply is progress and
   the task is back on the ladder; a bot's snooze of the task ends.
 - Give to… hands it to another person; Snooze hides it from you until then, and a new ❓ is a new item.
@@ -577,9 +588,11 @@ tico task snooze --from "Dev/Ideas" [--until date]                 # a person's:
 tico task close <id> -m "why" --version N
 tico task reassign <id> <owner> -m "why" --version N
 tico task ask <id> --to <person> "line" [--kind ok] [--show page:12] --version N
-tico task ask <id> --withdraw
-tico task ask <id> --to <person> "line"          # a ❓ on the task's chat
-tico chat ask --to <person> "line" [--conversation <id>]
+tico task ask <id> --withdraw                   # your open OK
+tico task ask <id> --take-back                  # your open ❓ here
+tico task ask <id> --to <person> "line" [--choice "answer"]... [--context "why"]   # a ❓ on the task's chat
+tico chat ask --to <person> "line" [--choice "answer"]... [--context "why"] [--conversation <id>]
+tico chat take-back <question id>
 tico task answer <id> <requirement> ok|no [-m "note"] --version N
 tico task give <id> <requirement> --to <person> --version N
 tico task file --parent <id> [--pipeline general] [--owner X] "title"
@@ -621,9 +634,12 @@ refusal never counts toward a bot's quarantine.
 | `POST /api/v2/tasks/{id}/asks/{requirement_id}/give` | `to, version` | give it to another person |
 | `POST /api/v2/answers/{id}/undo` | | take an answer back |
 | `POST /api/v2/task-bulk` | `filter, action, ...` | people only |
-| `POST /api/v2/tasks/{id}/questions` | `to, text` | a bot's ❓ on the task's chat |
-| `POST /api/v2/questions` | `to, text, conversation_id?` | a bot's ❓ in a direct chat |
+| `POST /api/v2/tasks/{id}/questions` | `to, text, choices?` | a bot's ❓ on the task's chat |
+| `DELETE /api/v2/tasks/{id}/questions` | | the bot takes back its open ❓ there |
+| `POST /api/v2/questions` | `to, text, choices?, conversation_id?` | a bot's ❓ in a direct chat |
+| `DELETE /api/v2/questions/{id}` | | the bot that asked takes a ❓ back |
 | `POST /api/v2/questions/{id}/give` | `to` | give a ❓ to another person |
+| `POST /api/v2/tasks/{id}/comments` | `text, ask` | the person a ❓ waits on answers it by name (`qmark:<id>`): that ❓ alone, its bot woken; 409 `answered` once it is |
 | `GET /api/v2/needs-you` | | Needs you |
 | `GET /api/v2/pipelines`, `GET/POST /api/v2/pipelines/{id}`, `POST /api/v2/pipelines/{id}/retire` | | settings |
 

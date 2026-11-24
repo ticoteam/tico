@@ -353,8 +353,8 @@ def test_a_decision_filed_for_a_person_is_refused_with_the_ask_it_as_a_question_
     assert A.decide({**answers, "kind": A.CHORE}, 10, 0)[0] == A.THROUGH, "a chore still files as today"
     said = A.message("decision", "Cara", 0, "Ben", "cara")
     assert said == (
-        'This asks Cara to decide, so ask it on your own task: tico task ask <task> --to cara "<question>". Say why, '
-        "the options and your pick in the message."
+        'This asks Cara to decide, so ask it on your own task: tico task ask <task> --to cara "<question>" --choice '
+        '"<your pick>" --choice "<other>" --context "<why>": answers they can tap, your pick first.'
     )
 
 
@@ -414,7 +414,7 @@ def test_a_question_once_replied_to_cannot_be_named_again(ruled):
         json={"text": "One more thing", "ask": mark["id"]},
         headers=headers("ana-test"),
     )
-    assert r.status_code == 422, r.text
+    assert r.status_code == 409 and r.json()["error"]["code"] == "answered", r.text  # its person: answered already
     assert sql(api, "SELECT count(*) AS n FROM messages WHERE body='One more thing'")[0]["n"] == 0
 
 

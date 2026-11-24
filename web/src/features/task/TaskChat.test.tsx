@@ -152,8 +152,8 @@ describe('a question for the person, pinned over the message box', () => {
     needs = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null }];
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
-    await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Needs you' })).toHaveLength(2));
-    const [first, second] = within(chat).getAllByRole('region', { name: 'Needs you' });
+    await waitFor(() => expect(within(chat).getAllByRole('region', { name: 'Question' })).toHaveLength(2));
+    const [first, second] = within(chat).getAllByRole('region', { name: 'Question' });
     expect(within(first!).getByText('Ship the fix on Friday?')).toBeTruthy();
     expect(await within(first!).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
     expect(within(second!).getByText('Keep the old page?')).toBeTruthy();
@@ -167,7 +167,7 @@ describe('a question for the person, pinned over the message box', () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
     snoozed = [{ kind: 'question', id: 'qmark:m1', mark_id: 'm1', message_id: 'msg1', conversation_id: 'c7', task_id: 't1', from_id: 'bot:r2', line: 'Ship the fix on Friday?', since: null, snoozed_until: '2026-12-01T00:00:00Z' }];
     show(<TaskChat task="12" />, '/tasks/p1/12');
-    const pin = await screen.findByRole('region', { name: 'Needs you' });
+    const pin = await screen.findByRole('region', { name: 'Question' });
     expect(await within(pin).findByRole('img', { name: 'Rowan Reviewer' })).toBeTruthy();
   });
 
@@ -175,11 +175,11 @@ describe('a question for the person, pinned over the message box', () => {
     detail = { ...task, waits: [asked('m1', 'human:me', 'Ship the fix on Friday?')] };
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const chat = await screen.findByRole('region', { name: 'Chat with Birch Builder' });
-    await within(chat).findByRole('region', { name: 'Needs you' });
+    await within(chat).findByRole('region', { name: 'Question' });
     // The reply cleared it (backend/question_marks.py replied): the task's change says `question`, and it is read again.
     detail = { ...task, version: 2, waits: [] };
     act(() => dispatch('tasks', [{ seq: 3, id: 't1', kind: 'question', kinds: ['question'] }]));
-    await waitFor(() => expect(within(chat).queryByRole('region', { name: 'Needs you' })).toBeNull());
+    await waitFor(() => expect(within(chat).queryByRole('region', { name: 'Question' })).toBeNull());
     expect(within(chat).getByText('Up next')).toBeTruthy();
   });
 });

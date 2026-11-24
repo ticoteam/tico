@@ -711,6 +711,11 @@ def readers(auth):
 
         turn_for = waiting_on.turn_viewer(who)
         value.update(H.task_view(c, row["id"], viewer, rule, inputs=True, turn_for=turn_for) or {"stage_since": None})
+        if who is not None and value.get("waits"):
+            from . import question_marks, threads
+
+            # A ❓'s suggested answers are its message's words: only when this request may read that message.
+            value["waits"] = question_marks.offered_to(c, threads.viewer(auth, who), value["waits"])
         # The task above it by id only to a reader of that task: anyone else sees "a private task" under relations.
         parent = TR.parent_of(c, row["id"])
         value["parent_id"] = (

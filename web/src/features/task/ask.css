@@ -83,3 +83,8 @@
   .answer.askcard.is-link{padding:var(--s-2h) var(--s-3)}
   .askcard.is-asked{padding:var(--s-1h) 0 var(--s-1) var(--s-1h)}
 }
+/* a ❓'s reply box, in its row of answers (QuestionCard.tsx) */
+.askcard-reply{flex:1 1 8em;min-width:0;height:32px;padding:0 var(--s-2);border:0;border-radius:var(--r-ctl);background:var(--well);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink);font:inherit}
+.askcard .an-row:has(.askcard-reply){flex-wrap:wrap}
+/* a suggested answer (up to 60 characters) wraps inside the card rather than run past its edge in a narrow chat */
+.askcard .an-row .btn.askcard-choice{height:auto;min-height:var(--ctl);max-width:100%;padding-block:var(--s-1);line-height:var(--lh-read);white-space:normal;overflow-wrap:anywhere;text-align:start}

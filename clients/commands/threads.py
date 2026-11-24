@@ -9,6 +9,7 @@ from clients.tico import APIError
 from clients.cli_spec import NULL, Arg, Command, Group
 from clients.commands._registry import tool
 from clients.commands._schemas import DEFER_FOR, DELIVERY, _delivery, _key, _refs, _s, _target
+from clients.commands._schemas import CHOICES, CONTEXT, question_text
 from clients.commands._shared import VISUALS, _CHANNEL, _uploaded, _visuals
 from clients.commands.assistant import assistant_send
 from clients.commands._requester import _as_person
@@ -145,20 +146,36 @@ def chat_goal(api, args):
 
 @tool(
     "tico_chat_ask",
-    "Ask a person in a chat, marked ❓: in their Needs you until they reply there. Files no task.",
+    "Ask a person in a chat, marked ❓: a card in their Needs you until they answer. Files no task. `message` is one "
+    "question; `choices` up to 3 short answers they can tap; `context` what they need to decide.",
     {
         "to": _s("The person's id"),
-        "message": _s("A short first line, then any detail"),
+        "message": _s("The question, one line that reads on its own"),
+        "choices": CHOICES,
+        "context": CONTEXT,
         "conversation_id": _s("A chat you share; default: your chat with them"),
     },
     required=("to", "message"),
     writes=True,
 )
 def chat_ask(api, args):
-    body = {"to": args["to"], "text": args["message"]}
+    body = {"to": args["to"], "text": question_text(args)}
+    if args.get("choices"):
+        body["choices"] = args["choices"]
     if args.get("conversation_id"):
         body["conversation_id"] = args["conversation_id"]
     return api.post("questions", body, key=_key(args))
+
+
+@tool(
+    "tico_chat_take_back",
+    "Take back your open ❓ in a chat as soon as you no longer need the answer: it leaves their Needs you.",
+    {"question_id": _s("The ❓'s id, as tico_chat_ask returned it")},
+    required=("question_id",),
+    writes=True,
+)
+def chat_take_back(api, args):
+    return api.call("DELETE", f"questions/{quote(args['question_id'], safe='')}", None, key=_key(args))
 
 
 @tool(

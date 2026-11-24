@@ -13,14 +13,18 @@ chased while it waits on its own open ❓ (waiting_on.of).
 - One open ❓ per bot per chat (the chat's root conversation, `room_id`): a new one clears the old ("replaced"), and
   the bot is told so (`replaced_warning`), so it puts every question to a person in one ❓.
 - A bot does not finish, move on or close a task while its own ❓ there is open (`refuse_ending`): ending the task would
-  clear it unanswered. It waits for the reply, or takes the question back by deleting its message (`TAKE_BACK`). A bot
-  closing a task it filed itself is withdrawing it, and its question goes with it.
+  clear it unanswered. It waits for the reply, or takes the question back (`take_back`, `TAKE_BACK`). A bot closing a
+  task it filed itself is withdrawing it, and its question goes with it.
+- A ❓ may offer up to three suggested answers (`choices`): the person taps one, which is sent as their reply, or types
+  their own. A free-text ❓ (none offered, or from before) is the same card without them.
 
 It clears when the person replies in that chat, in their own hand or by their Assistant on their word (`replied`, from
 hubdb._write_message: `cleared_via` keeps which); when the person answers the stage's page approval on its task
 (`approval_answered`, from answers.answer); when its task ends (done or closed: the migration's trigger; merged:
-task_merge; deleted: task_engine.on_delete); or when the bot marks a newer message in the chat. Give to moves an open
-one to another person (`give`).
+task_merge; deleted: task_engine.on_delete); when the bot takes it back (`take_back`) or deletes its message; or when
+the bot marks a newer message in the chat. Give to moves an open one to another person (`give`). An answer from its
+card names the ❓ it answers (task_comments_routes `replying_to`): the check and the reply are one write, so a second
+tap is refused, and it clears that ❓ alone.
 
 The open mark is mirrored on its message as refs.question {id, to} (the migration's triggers), so every chat renderer
 draws its glyph from the message alone and a change reaches open pages through the messages trigger.
@@ -75,6 +79,7 @@ def public(mark: Mapping[str, Any]) -> Row:
     """A mark as a route answers with it; `replaced`, the bot's open ❓ in that chat this one cleared, when there was one."""
     keys = ("id", "message_id", "conversation_id", "task_id", "bot_id", "person_id", "line", "created_at")
     out = {k: (mark.get(k) or None) if k == "task_id" else mark.get(k) for k in keys}
+    out["choices"] = choices_of(mark)
     if mark.get("replaced"):
         out["replaced"] = mark["replaced"]
     return out
@@ -106,17 +111,72 @@ def with_warning(answer: Row, mark: Mapping[str, Any]) -> Row:
     return {**answer, "warning": " ".join(w for w in (answer.get("warning"), said) if w)}
 
 
-# How a bot takes back its own ❓: deleting its message clears the mark (the migration's trigger).
-TAKE_BACK = "tico thread delete {message}"
+def choices_of(mark: Mapping[str, Any]) -> list[str]:
+    """The suggested answers a ❓ offers, in order; [] for a free-text one."""
+    found: Any = H._json(mark.get("choices"), []) or []
+    return [str(c) for c in cast(list[Any], found)] if isinstance(found, list) else []
+
+
+CHOICE_PLAIN = (
+    "A suggested answer is plain words: no @mention and no leading /, since a tap sends it as the person's own"
+)
+
+
+def normal_choices(values: Iterable[object] | None) -> list[str]:
+    """The suggested answers as shown and stored: spaces collapsed, blanks and repeats dropped."""
+    out: list[str] = []
+    for value in values or ():
+        one = " ".join(str(value or "").split())
+        if one and one not in out:
+            out.append(one)
+    return out
+
+
+def clean_choices(conn: sqlite3.Connection, bot: str, values: Iterable[object] | None) -> list[str]:
+    """The suggested answers as stored (normal_choices; how many and how long, models.Question). Refused with an
+    @mention or a leading / (CHOICE_PLAIN): a tap sends it as the person's reply, which would reach whoever it names, or
+    run a skill, on their word."""
+    out = normal_choices(values)
+    if any("@" in one or one.startswith("/") for one in out):
+        H.refuse(conn, bot, "lint", CHOICE_PLAIN)
+    return out
+
+
+def with_choices(text: str, choices: Iterable[str] | None) -> str:
+    """A ❓'s words as the org rules read them: its message, then each suggested answer as stored on a line of its own."""
+    return "\n".join([text, *(f"- {one}" for one in normal_choices(choices))])
+
+
+@contextmanager
+def answering(mid: str) -> Generator[None]:
+    """Around the write of a person's reply to the ❓ `mid` by name: `replied` clears that ❓ alone."""
+    token = _ANSWERING.set(mid)
+    try:
+        yield
+    finally:
+        _ANSWERING.reset(token)
+
+
+def by_hand() -> bool:
+    """Whether the write now is the person's own (`REPLY_VIA`, as hubdb stamps refs.via): only that answers a ❓."""
+    return (H.VIA.get() or ("token" if H.BY_TOKEN.get() else "")) in REPLY_VIA
+
+
+# How a bot takes back its own ❓ (`take_back`): the question leaves the person's Needs you, its message stays.
+TAKE_BACK = "tico task ask {task} --take-back"
 STILL_OPEN = (
     'Your ❓ to {name} is still open here: "{line}". Finishing, moving on or closing the task would clear it unanswered. '
     "Wait for their reply, or take the question back first: " + TAKE_BACK + "."
 )
+ANSWERED = "Already answered"
 
 
 # Tico's own feature ending a task whose ❓ it worded for its bot, because the answer no longer matters (a measure read
 # since, a vision set elsewhere): the ❓ ends with the task, as it does on any move Tico makes itself.
 _SETTLED: ContextVar[bool] = ContextVar("question_marks_settled", default=False)
+# The ❓ a person's reply answers by name (its card), set by the server around that one write (`answering`), never
+# from what the client sends: the reply clears that ❓ alone, wherever it is posted (`replied`).
+_ANSWERING: ContextVar[str] = ContextVar("question_marks_answering", default="")
 
 
 @contextmanager
@@ -149,9 +209,7 @@ def refuse_ending(conn: sqlite3.Connection, by: str, task_id: object, *, closing
     found = open_of(conn, by, task_id)
     if not found:
         return
-    detail = STILL_OPEN.format(
-        name=H.actor_name(conn, found["person_id"]), line=found["line"], message=found["message_id"]
-    )
+    detail = STILL_OPEN.format(name=H.actor_name(conn, found["person_id"]), line=found["line"], task=task_id)
     H.refuse(conn, by, "task_question_open", detail, task=str(task_id))
 
 
@@ -574,9 +632,17 @@ def check_asking(conn: sqlite3.Connection, bot: str, task_id: str, person: str, 
     return _check(conn, bot, task_id, person, body, None, checked=True)
 
 
-def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, checked: bool = True) -> Row:
+def mark(
+    conn: sqlite3.Connection,
+    bot: str,
+    message_id: str,
+    person: str,
+    *,
+    checked: bool = True,
+    choices: Iterable[object] | None = None,
+) -> Row:
     """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark, with
-    `replaced` the open ❓ it cleared ({id, line, created_at}) or None.
+    `replaced` the open ❓ it cleared ({id, line, created_at}) or None. `choices`: up to three suggested answers.
     `checked` False: a question Tico's own feature words and addresses for the bot (`ask`), so neither the bot's reach
     nor the words' shape is the bot's to answer for; the person must still be able to read the chat."""
     if not H.is_bot(bot) or bot == H.TICO_ACTOR:
@@ -595,6 +661,7 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
 
     body = str(cast(Any, _org_rule_check).unwarned(str(message.get("body") or "")))
     target = _check(conn, bot, task_id, person, body, message, checked=checked)
+    offered = clean_choices(conn, bot, choices)
     line = first_line(body)
     room = room_of(conv)
     at = H.now()
@@ -618,11 +685,12 @@ def mark(conn: sqlite3.Connection, bot: str, message_id: str, person: str, *, ch
         "person_id": target,
         "line": line,
         "created_at": at,
+        "choices": H._dump(offered) if offered else None,
     }
     conn.execute(
         "INSERT INTO question_marks (id, message_id, conversation_id, room_id, task_id, bot_id, person_id, line, "
-        "created_at) VALUES (:id, :message_id, :conversation_id, :room_id, :task_id, :bot_id, :person_id, :line, "
-        ":created_at)",
+        "created_at, choices) VALUES (:id, :message_id, :conversation_id, :room_id, :task_id, :bot_id, :person_id, "
+        ":line, :created_at, :choices)",
         row,
     )
     H.event(conn, bot, "question.marked", row["id"], {"message": message["id"], "to": target, "task": task_id})
@@ -663,6 +731,58 @@ def ask_in_chat(conn: sqlite3.Connection, bot: str, person: str, text: str, *, c
     return mark(conn, bot, str(said["id"]), person, checked=checked)
 
 
+def take_back(conn: sqlite3.Connection, mid: str, by: str) -> Row | None:
+    """The bot that asked takes its open ❓ back: it leaves the person's Needs you at once (`cleared_reason`
+    'taken_back'), and its message stays in the chat. Returns the mark as it was, or None when its own ❓ was answered
+    or taken back already (a reply that just beat it: nothing to do, and no refusal on the bot's record)."""
+    found = get(conn, mid)
+    if not found or by != found["bot_id"]:
+        H.refuse(conn, by, "identity", "Only the bot that asked takes a ❓ back")
+    assert found is not None
+    if found.get("cleared_at"):
+        return None
+    conn.execute(
+        "UPDATE question_marks SET cleared_at=?, cleared_reason='taken_back', cleared_by_id=? "
+        "WHERE id=? AND cleared_at IS NULL",
+        (H.now(), by, found["id"]),
+    )
+    H._recount(conn, by)
+    H.event(conn, by, "question.cleared", found["id"], {"reason": "taken_back", "to": found["person_id"]})
+    return found
+
+
+def open_mine(conn: sqlite3.Connection, bot: str, task_id: str) -> Row | None:
+    """The bot's own open ❓ on this task's chat, answerable or not: the one it takes back."""
+    found = conn.execute(
+        "SELECT * FROM question_marks WHERE task_id=? AND bot_id=? AND cleared_at IS NULL", (task_id, bot)
+    ).fetchone()
+    return dict(found) if found else None
+
+
+def cleared_by(conn: sqlite3.Connection, mid: str, message_id: object) -> bool:
+    """Whether the ❓ `mid` was cleared by the reply `message_id` (a reply to it by name must have cleared it)."""
+    found = conn.execute("SELECT cleared_message_id FROM question_marks WHERE id=?", (mid,)).fetchone()
+    return bool(found) and found[0] == message_id
+
+
+def offered_to(conn: sqlite3.Connection, reader: Any, waits: list[Row]) -> list[Row]:
+    """A task's waits as the request reads them, each ❓'s with the answers it offers (`choices`) only when `reader`
+    may read its marked message: the answers are its words. `reader` is the request's own threads viewer (its identity
+    and Auth, credential scope and all), as a read of that message would use; never one rebuilt from the actor id. A
+    handful of reads per task, and none for a ❓ offering none."""
+    from . import threads as _threads
+
+    threads = cast(Any, _threads)
+    for wait in waits:
+        mid = mark_id(wait.get("requirement_id"))
+        found = get(conn, mid) if mid else None
+        offered = choices_of(found) if found else []
+        message = H.message(conn, found["message_id"]) if found and offered else None
+        if message and threads.message_readable(conn, reader, message):
+            wait["choices"] = offered
+    return waits
+
+
 def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
     """Give to: move an open ❓ to another person. Its addressee or the bot that marked it may."""
     found = get(conn, mid)
@@ -695,11 +815,19 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
     via: Any = cast(Row, meta).get("via") if refs and isinstance(meta, dict) else None
     if via not in REPLY_VIA:
         return []
-    room = room_of(conv)
-    found = conn.execute(
-        "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",
-        (room, sender),
-    ).fetchall()
+    # A reply to a ❓ by name (`answering`, its card) answers that ❓ alone, even posted in another room than the one it
+    # was asked in (a task moved to its own room); any other reply, each one for them in this chat.
+    only = _ANSWERING.get()
+    if only:
+        found = conn.execute(
+            "SELECT id, bot_id, task_id FROM question_marks WHERE id=? AND person_id=? AND cleared_at IS NULL",
+            (only, sender),
+        ).fetchall()
+    else:
+        found = conn.execute(
+            "SELECT id, bot_id, task_id FROM question_marks WHERE room_id=? AND person_id=? AND cleared_at IS NULL",
+            (room_of(conv), sender),
+        ).fetchall()
     if not found:
         return []
     ids = [str(r[0]) for r in found]
@@ -797,6 +925,7 @@ def item(mark: Mapping[str, Any], until: str | None = None) -> Row:
         "bot_id": mark["bot_id"],
         "requirement_id": None,
         "line": mark["line"],
+        "choices": choices_of(mark),
         "missing": [mark["line"]],
         "since": mark["created_at"],
         **({"snoozed_until": until} if until else {}),
