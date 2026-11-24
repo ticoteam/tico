@@ -1,14 +1,12 @@
-import { useQuery, type QueryClient } from '@tanstack/react-query';
+import type { QueryClient } from '@tanstack/react-query';
 import { redirect, useRouterState } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import { timelineQuery } from '@/conversation';
 import { threadQuery } from '@/features/threads/routing';
-import { meQuery } from '@/data';
 import { coldOf, coldPage, openOf, type TaskWords } from '@/lib';
-import { pipelinesQuery } from '@/features/tasks/routing';
 import { CHAT, decisionOf, defaultTab, isPage, tabsOf, targetOf } from './model';
 import { pageShownQuery, taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
-import { questionsFor, waitSlugs, waitsOnYou } from './waits';
+import { waitSlugs, waitsOnYou } from './waits';
 
 // What the routes use before a task's code loads: its first read, its address and the address check. No components
 // here: the first load imports this file, and the task page comes through exports.ts with its route.

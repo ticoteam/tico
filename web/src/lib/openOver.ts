@@ -62,7 +62,7 @@ export function openTasksOver(r: AnyRouter): void {
       hash: here.hash || undefined,
       replace: !!open || !!opts.replace,
       // the step that opened it over the page: closing steps back to it (lib closeTask); kept as tasks replace it
-      state: { [OVER_PAGE]: open ? !!(here.state as Record<string, unknown> | undefined)?.[OVER_PAGE] : !opts.replace },
+      state: { [OVER_PAGE]: open ? !!(here.state as unknown as Record<string, unknown> | undefined)?.[OVER_PAGE] : !opts.replace },
       resetScroll: false,
     } as never);
   }) as Navigate;

@@ -59,6 +59,21 @@ async function call<T = unknown>(hub: Seeded, path: string, method = 'GET'): Pro
   return (await r.json()) as T;
 }
 const api = <T = unknown>(hub: Seeded, path: string) => call<T>(hub, `/api/v2/${path}`);
+/** A POST to the API as Dana: a JSON body, or a form (a file). */
+async function post<T = unknown>(hub: Seeded, path: string, body: unknown): Promise<T> {
+  const form = body instanceof FormData;
+  const r = await fetch(`${hub.url}/api/v2/${path}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${hub.tokens.dana}`, 'Idempotency-Key': `e2e-${path}-${Date.now()}`, ...(!form && { 'Content-Type': 'application/json' }) },
+    body: form ? body : JSON.stringify(body),
+  });
+  expect(r.ok, `POST ${path}: ${r.status}`).toBe(true);
+  return (await r.json()) as T;
+}
+/** The task open over the page (plan: the task modal), by its title. */
+const modal = (page: Page, title?: string) => (title ? page.getByRole('dialog', { name: title, exact: true }) : page.getByRole('dialog'));
+/** The address's search, as the app wrote it. */
+const searchOf = (page: Page) => Object.fromEntries(new URL(page.url()).searchParams);
 const sql = <T = Record<string, unknown>>(hub: Seeded, query: string) => call<T[]>(hub, `/_e2e/sql?q=${encodeURIComponent(query)}`);
 
 /** Whether the page head's title shows every letter (its words fit its box). */
@@ -76,10 +91,10 @@ test('sign in; an old link and a /next link land on their page; a head title nev
   await expect(page).toHaveURL(new RegExp(`^${hub.url}/tasks`));
   await expect(page.locator('[data-sheet="menu"]')).toContainText('Dana');
 
-  // An old app address, as mail and agents' messages still carry it, opens its page in the new app.
+  // An old app address, as mail and agents' messages still carry it, opens the task over Tasks in the new app.
   await page.goto(`${hub.url}/#/task/${draft!.number}`);
-  await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}(/|\\?|$)`));
-  await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
+  await expect(page).toHaveURL(new RegExp(`/tasks\\?task=${draft!.number}$`));
+  await expect(modal(page, draft!.title)).toBeVisible();
   await page.goto(`${hub.url}/#/decide`);
   await expect(page).toHaveURL(new RegExp('/tasks(/|\\?|$)'));
   // A link from when the app lived at /next drops the prefix and keeps its query.
@@ -104,7 +119,7 @@ test('sign in; an old link and a /next link land on their page; a head title nev
   clean(page);
 });
 
-test('Needs you: open the first case and approve its email; the send goes out and the next case opens', async ({ browser, hub }) => {
+test('Needs you: open the first case over Tasks and approve it; the next case opens, and after the last the task closes', async ({ browser, hub }) => {
   const { mail } = hub.facts;
   const cases = [mail, mail.next];
   const page = await open(browser, hub, '/tasks');
@@ -115,25 +130,89 @@ test('Needs you: open the first case and approve its email; the send goes out an
   const top = (await rows.first().getAttribute('title')) ?? '';
   const [first, second] = top.includes(mail.next.subject) ? [mail.next, mail] : cases;
   await rows.first().click();
-  await expect(page.locator('.ap-subj')).toHaveText(first!.subject);
-  const decision = page.locator('section[aria-label="The decision"]');
+  // the task opens over Tasks: its list (Needs you), its agent's chat and the task, Tasks still under it
+  const over = modal(page);
+  await expect(over.locator('.ap-subj')).toHaveText(first!.subject);
+  expect(new URL(page.url()).pathname).toBe('/tasks');
+  const list = over.locator('nav[aria-label="List"]');
+  await expect(list.locator('.li-head')).toContainText('Needs you');
+  await expect(list.locator('a.li')).toHaveCount(2);
+  await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath('modal-1440.png') });
+  const decision = over.locator('section[aria-label="The decision"]');
   const approve = decision.getByRole('button', { name: 'Approve', exact: true });
   await expect(approve).toBeEnabled();
   const opened = page.url();
   await approve.click();
-  // nothing else on it waits on Dana: the next row of Needs you opens, Needs you still beside it
-  await expect(page.locator('.ap-subj')).toHaveText(second!.subject);
+  // nothing else on it waits on Dana: the next case of Needs you opens in place, its row left the list
+  await expect(over.locator('.ap-subj')).toHaveText(second!.subject);
   expect(page.url()).not.toBe(opened);
-  await expect(page.locator('nav[aria-label="Needs you"] a.li')).toHaveCount(1);
-  await expect(decision.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
+  await expect(list.locator('a.li')).toHaveCount(1);
   // The OK is Dana's own, bound to the copy she was shown; the other still waits
   const okAt = async (approval: string) => (await sql(hub, `SELECT ok_at FROM ok_grants WHERE requirement_id='${approval}'`))[0]?.ok_at ?? null;
   await expect.poll(() => okAt(first!.approval)).not.toBeNull();
   expect(await okAt(second!.approval)).toBeNull();
-  // and the server's sender takes it from the queue: it reaches the (fake) mail provider once
-  expect(await call(hub, '/_e2e/drain', 'POST')).toEqual({ sent: 1 });
+  // the last case: approved, the list is done and the task closes, back on Tasks as it was
+  await expect(decision.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
+  await decision.getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(over).toHaveCount(0);
+  await expect(page).toHaveURL(`${hub.url}/tasks`);
+  await expect.poll(() => okAt(second!.approval)).not.toBeNull();
+  await expect(rows).toHaveCount(0);
+  // and the server's sender takes them from the queue: each reaches the (fake) mail provider once
+  expect(await call(hub, '/_e2e/drain', 'POST')).toEqual({ sent: 2 });
   const sent = await call<{ mime: string }[]>(hub, '/_e2e/sent');
-  expect(sent[0]?.mime).toContain(`Subject: ${first!.subject}`);
+  expect(sent.map((m) => m.mime.includes(`Subject: ${first!.subject}`))).toContain(true);
+  clean(page);
+});
+
+test("a task on an agent's page opens over it; Close leaves the page as it was", async ({ browser, hub }) => {
+  const title = 'Check the launch checklist';
+  await post(hub, 'tasks', { title, owner: 'engineering-manager', pipeline: 'launch' });
+  const page = await open(browser, hub, '/team/engineering-manager');
+  const row = page.locator(`a.row.task[title="${title}"]`);
+  await expect(row).toBeVisible();
+  const before = page.url();
+  await row.click();
+  const over = modal(page, title);
+  await expect(over).toBeVisible();
+  // over the agent's page, with the agent's tasks as its list
+  expect(new URL(page.url()).pathname).toBe('/team/engineering-manager');
+  expect(searchOf(page).list).toMatch(/engineering-manager/);
+  await expect(over.locator('nav[aria-label="List"] a.li', { hasText: title })).toHaveAttribute('aria-current', 'true');
+  await over.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(over).toHaveCount(0);
+  await expect(page).toHaveURL(before);
+  await expect(row).toBeVisible();
+  clean(page);
+});
+
+test("a task's link from outside opens it over Tasks with Needs you as its list; a file opens one layer up and Esc closes it first", async ({ browser, hub }) => {
+  const [draft] = hub.facts.board.tasks;
+  const page = await open(browser, hub, `/task/${draft!.number}`);
+  await expect(page).toHaveURL(new RegExp(`/tasks\\?task=${draft!.number}$`));
+  const over = modal(page, draft!.title);
+  await expect(over.locator('nav[aria-label="List"] .li-head')).toContainText('Needs you');
+  // Back from a link opened cold goes nowhere in the app: Close takes the task away and leaves Tasks
+  await over.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(over).toHaveCount(0);
+  await expect(page).toHaveURL(`${hub.url}/tasks`);
+
+  // a file on the task, opened from its link: the task, and the file a layer over it
+  const form = new FormData();
+  form.append('file', new Blob(['Launch on Friday.\n'], { type: 'text/plain' }), 'launch-notes.txt');
+  const added = await post<{ file_id: string }>(hub, `tasks/${draft!.id}/files`, form);
+  await page.goto(`${hub.url}/tasks/launch/${draft!.number}/details?file=${added.file_id}`);
+  await expect(page.getByRole('dialog')).toHaveCount(2);
+  await expect(modal(page, draft!.title)).toBeAttached();
+  expect(searchOf(page)).toMatchObject({ task: String(draft!.number), list: 'launch', 'task.file': added.file_id });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(modal(page, draft!.title)).toBeVisible();
+  expect(searchOf(page)['task.file']).toBeUndefined();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).toHaveURL(`${hub.url}/tasks/launch`);
   clean(page);
 });
 
@@ -170,18 +249,20 @@ test('Needs you: answer a ❓ by tapping an answer on its card, on Tasks, withou
   }
 });
 
-test("an approval card in an agent's chat opens the case beside it; Close goes back", async ({ browser, hub }) => {
+test("an approval card in an agent's chat opens the case over the agent's page; Close goes back", async ({ browser, hub }) => {
   const { subject } = hub.facts.mail;
   const page = await open(browser, hub, '/team/engineering-manager');
   const card = page.locator('a[data-target^="approval:"]');
   await expect(card).toBeVisible();
   const before = page.url();
   await card.click();
-  await expect(page).toHaveURL(/via=thread/);
-  await expect(page.locator('.ap-subj')).toHaveText(subject);
-  // the chat stays beside the case
-  await expect(page.getByRole('textbox', { name: 'Message engineering-manager' })).toBeVisible();
-  await page.locator('.pk-close').click();
+  const over = modal(page);
+  await expect(over.locator('.ap-subj')).toHaveText(subject);
+  expect(new URL(page.url()).pathname).toBe('/team/engineering-manager');
+  // the case's own chat is beside it
+  await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
+  await over.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(over).toHaveCount(0);
   await expect(page).toHaveURL(before);
   await expect(card).toBeVisible();
   clean(page);
@@ -250,21 +331,38 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   clean(page);
 });
 
-test('phone: open a task, and Back or the bar’s Company returns to the list', async ({ browser, hub }) => {
-  const [draft] = hub.facts.board.tasks;
+test('phone: a task opens full screen over its board; its list pulls up from the bottom; Back or Close returns to the board', async ({ browser, hub }) => {
+  const [draft, date] = hub.facts.board.tasks;
   const page = await open(browser, hub, '/tasks/launch?view=list', PHONE);
-  const bar = page.getByRole('navigation', { name: 'Bar' });
+  const board = `${hub.url}/tasks/launch?view=list`;
   await page.locator('a.row.task', { hasText: draft!.title }).tap();
-  await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}`));
-  await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
-  await expect(bar.getByRole('button', { name: 'Task', exact: true })).toHaveAttribute('aria-current', 'true');
-  await page.locator('main .pk-head').getByRole('button', { name: 'Back' }).tap();
-  await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
+  const over = modal(page, draft!.title);
+  await expect(over).toBeVisible();
+  expect(searchOf(page)).toMatchObject({ view: 'list', task: String(draft!.number), list: 'launch' });
+  // the task, or its chat: two tabs
+  const panes = over.locator('.tmd-panes');
+  await expect(over.locator('section[aria-label="Task"]')).toBeVisible();
+  await panes.getByRole('button', { name: 'Chat', exact: true }).tap();
+  await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
+  await expect(over.locator('section[aria-label="Task"]')).toBeHidden();
+  await panes.getByRole('button', { name: 'Task', exact: true }).tap();
+  await page.screenshot({ path: test.info().outputPath('modal-390.png') });
+  // the board's list pulls up from the bottom; another task from it opens in place
+  const list = over.locator('nav[aria-label="List"]');
+  await expect(list).toBeHidden();
+  await over.locator('.tmd-more').tap();
+  await expect(list).toBeVisible();
+  await list.locator('a.li', { hasText: date!.title }).tap();
+  await expect(modal(page, date!.title)).toBeVisible();
+  await expect(list).toBeHidden();
+  // one Back closes it, however many tasks were opened in it
+  await page.goBack();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).toHaveURL(board);
   await expect(page.locator('a.row.task', { hasText: draft!.title })).toBeVisible();
-  await page.locator('a.row.task', { hasText: draft!.title }).tap();
-  await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}`));
-  await bar.getByRole('button', { name: 'Company', exact: true }).tap();
-  await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
-  await expect(bar.getByRole('button', { name: 'Task', exact: true })).toHaveCount(0);
+  await page.locator('a.row.task', { hasText: date!.title }).tap();
+  await modal(page, date!.title).getByRole('button', { name: 'Close', exact: true }).tap();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page).toHaveURL(board);
   clean(page);
 });
