@@ -5,13 +5,19 @@
  },
  {
   "kind": "delta",
+  "text": "Planning",
+  "delta_kind": "thought"
+ },
+ {
+  "kind": "delta",
   "text": "Acme ",
   "delta_kind": "text"
  },
  {
   "kind": "tool",
-  "tool": "run_command",
-  "state": "running"
+  "tool": "execute",
+  "status": "started",
+  "item_id": "t1"
  },
  {
   "kind": "delta",

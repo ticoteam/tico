@@ -1,4 +1,0 @@
-{"event": "init", "conversation_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff"}
-{"event": "step_update", "step_update": {"step_index": 6, "state": "DONE", "step_type": "agent_response", "text_delta": "ok", "usage": {"input_tokens": 900, "output_tokens": 50, "cache_read_tokens": 200}}}
-{"event": "step_update", "step_update": {"step_index": 8, "state": "DONE", "step_type": "agent_response", "text_delta": "!", "usage": {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 300}}}
-{"event": "result", "result": {"status": "SUCCESS", "response": "ok!", "usage": {"input_tokens": 20000, "output_tokens": 500, "cache_read_tokens": 8000}}}

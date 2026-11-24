@@ -10,14 +10,29 @@ repository at the checksum `antigravity.toml` pins) reads the updater's manifest
 musl included, and Mac arm64 and x64), checks the download's address and sha512, and installs its one executable as
 `agy`. An `agy` already on PATH is used as it is. Tico does not change its global settings, and runs it with
 `AGY_CLI_DISABLE_AUTO_UPDATE=1`. A Gemini API key alone does not select Antigravity's API-key provider; follow
-Google's CLI settings documentation if switching that authentication mode. Readiness finds `agy` and checks sign-in
-with `agy models` before the runner claims work.
+Google's CLI settings documentation if switching that authentication mode. Readiness finds `agy` and checks the
+computer's own sign-in with `agy models` before the runner claims work.
+
+Tico runs `agy` the way T3 Code does: `agy acp --gemini-dir <home> --app-data-dir antigravity-cli`, speaking ACP
+(JSON-RPC over its input and output). `<home>` is the bot's own `~/.gemini` on the computer's own sign-in, and a plan
+turn's own home on a plan; only `agy acp` takes its home from that flag (headless `agy -p` and `agy models` read
+`$HOME/.gemini` whatever `GEMINI_HOME` says). It runs with `GEMINI_HOME` set to that home, no `BROWSER`, unbuffered
+output, a `TMPDIR` of its own (removed once it has exited) and, on Linux, a CA bundle when none is set. A turn says
+`initialize`, `authenticate` with the Google account's method, resumes the thread's conversation (`session/resume`)
+or begins one (`session/new`, given the bot's MCP servers of a transport `agy` offers, none so far), sets the model
+and thinking level as the session's config options, and sends `session/prompt`; tool permissions are given as asked.
+A sign-in `agy` has not got (`Authentication required`, or "No browser is available here") fails the turn as a
+sign-in, and `QUOTA_EXHAUSTED` as a usage limit.
 
 A turn signs in with the computer's own Google account (on a Mac, from its keychain), or with an Antigravity plan:
 Settings > Providers > Add > Antigravity plan. Connect runs `agy acp --login` on one of your computers, in a home of
 its own and told it runs over SSH, so it prints Google's link, reads the code the page shows (or the page's whole
-address) and writes its sign-in to a file there, never the keychain; it counts once `agy models` says it is signed in
-there. Only a computer on a Tico release that reports `antigravity_plan_v1` signs a plan in, installs `agy` for one,
+address) and writes its sign-in to a file there, never the keychain; it counts once a short `agy acp` there
+(`initialize`, `authenticate`, `session/new`) starts a session that offers a model. A failed Connect says why: Antigravity
+did not start within 90 seconds, or showed no Google link 30 seconds after it did (broken IPv6 is a common cause), the
+link expired, Google's page was not approved, the account has no eligible Antigravity subscription, `agy` exited with
+its code, or it signed in but could not start a session or load models; the scrubbed last lines it printed go to the
+runner's log. Only a computer on a Tico release that reports `antigravity_plan_v1` signs a plan in, installs `agy` for one,
 or runs its turns, and only with an `agy` at least as new as `antigravity.toml`'s minimum (an older one of the
 person's own is named, with the release to update to). With no online computer that has `agy`, the owner's first
 Connect turns Antigravity on for their computer (or the company's shared cloud computer) and the page waits while it
@@ -32,15 +47,13 @@ refresh token, so, as for a ChatGPT plan, a bot paid by the plan can read it whi
 
 Each turn starts its own `agy` process, which ends with the turn; no process is kept between turns. The runner saves
 each thread's conversation ID locally (`state/agy/<bot>/`, readable by the runner only) and resumes it with
-`--conversation`. Failed or interrupted runs are never replayed automatically. Changing the effort keeps the
-conversation; starting a new chat starts a new one. A resumed turn's prompt waits until `agy` names the conversation
-it resumed (it does so before it reads its input). A turn that must continue the saved conversation is never sent into
-another one: it stops instead. On any other turn, when `agy` names a new conversation instead, the runner closes it
-without sending the prompt and starts the turn once more in a new conversation, given the whole prompt and the
-conversation's recent history; the saved conversation stays until the new one has worked. This happens only while
-the prompt is still held: once it has gone, the turn is never started again. If `agy` moves to a new conversation only after the model has worked, the runner keeps
-that one, marks it in the saved record, and tells the next turn the conversation's history again; nothing runs twice.
-When `agy` exits, whatever of its process group is left (a tool it started) is stopped too.
+`session/resume`. Failed or interrupted runs are never replayed automatically. Changing the effort keeps the
+conversation; starting a new chat starts a new one. The prompt goes only once `agy` has resumed the saved
+conversation or begun the turn's own. A turn that must continue the saved conversation is never sent into another
+one: it stops instead. On any other turn, when `agy` cannot resume it, the same process begins a new conversation,
+given the whole prompt and the conversation's recent history when there is one; the saved conversation stays until
+the new one has worked, and the next turn is told the history again unless this one was and succeeded. Nothing runs
+twice. When `agy` exits, whatever of its process group is left (a tool it started) is stopped too.
 
 Only the initial run gets the recent conversation bootstrap (up to 30 messages).
 Later runs send messages after the last successfully delivered human request,

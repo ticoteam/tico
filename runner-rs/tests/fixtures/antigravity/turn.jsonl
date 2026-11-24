@@ -1,6 +1,9 @@
-{"event": "init", "conversation_id": "6F9619FF-8B86-D011-B42D-00C04FC964FF"}
-{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Acme "}}
-{"event": "step_update", "step_update": {"step_type": "tool", "tool_name": "run_command", "state": "running"}}
-{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": ""}}
-{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "reply.", "conversation_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff"}}
-{"event": "result", "result": {"status": "SUCCESS", "response": " Acme reply.\n", "conversation_id": "6f9619ff-8b86-d011-b42d-00c04fc964ff", "usage": {"input_tokens": 120, "output_tokens": 8, "cache_read_tokens": 64}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "available_commands_update", "availableCommands": []}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "Planning"}}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "agent_message_chunk", "messageId": "m1", "content": {"type": "text", "text": "Acme "}}}}
+{"jsonrpc": "2.0", "id": 99, "method": "session/request_permission", "params": {"sessionId": "@SID@", "toolCall": {"toolCallId": "t1", "title": "Run ls"}, "options": [{"optionId": "allow", "kind": "allow_once", "name": "Allow"}, {"optionId": "deny", "kind": "reject_once", "name": "Deny"}]}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "tool_call", "toolCallId": "t1", "title": "Run ls", "kind": "execute", "status": "pending"}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "another-session", "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "not this turn's"}}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": {"type": "text", "text": ""}}}}
+{"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@", "update": {"sessionUpdate": "agent_message_chunk", "messageId": "m2", "content": {"type": "text", "text": "reply."}}}}
+{"jsonrpc": "2.0", "id": @ID@, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 120, "outputTokens": 8, "cachedReadTokens": 64, "totalTokens": 192}}}

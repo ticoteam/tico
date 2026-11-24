@@ -7570,48 +7570,50 @@ mod tests {
         );
     }
 
-    /// An `agy` for execute's tests (argv: this script, its folder). It names its conversation before it reads its
-    /// input, as agy does: the `--conversation` it was given, unless `agy-lose-<n>` is there (then one it began). With
-    /// `agy-late-<n>` there it names the one it was given first and one it began only after its first step. It keeps
-    /// each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone
-    /// once the turn ends (as on a computer that lost them).
+    /// An `agy acp` for execute's tests (argv: this script, its folder). It resumes the conversation it is asked to,
+    /// unless `agy-lose-<n>` is there (then it refuses, and the turn begins a new one). It keeps each prompt as
+    /// `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone once the turn
+    /// ends (as on a computer that lost them).
     const FAKE_AGY: &str = r#"#!/usr/bin/env python3
 import json, os, sys, uuid
-folder, args = sys.argv[1], sys.argv[2:]
+folder = sys.argv[1]
 n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
-conv = args[args.index("--conversation") + 1] if "--conversation" in args else str(uuid.uuid4())
-if os.path.exists(os.path.join(folder, "agy-lose-%d" % n)):
-    conv = str(uuid.uuid4())
-print(json.dumps({"event": "init", "conversation_id": conv}), flush=True)
-line = sys.stdin.readline()
-if not line:
-    sys.exit(0)
-open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
-said = "Done."
-if os.path.exists(os.path.join(folder, "agy-refresh-%d" % n)):
-    # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on its
-    # stderr as it fails).
-    fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
-    token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
-    open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
-    said = "Done. " + fresh
-    if os.path.exists(os.path.join(folder, "agy-crash-%d" % n)):
-        sys.stderr.write("refresh went wrong with " + fresh + "\n")
-        sys.stderr.flush()
-        sys.exit(3)
-late = []
-if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
-    conv = str(uuid.uuid4())
-    late = [{"event": "step_update", "step_update": {"conversation_id": conv}}]
-for event in [
-    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": said}},
-] + late + [
-    {"event": "result", "result": {"status": "SUCCESS", "response": said, "conversation_id": conv,
-                                   "usage": {"input_tokens": 1, "output_tokens": 1}}},
-]:
-    print(json.dumps(event), flush=True)
-sys.stdin.read()
-if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
+def flag(name):
+    return os.path.exists(os.path.join(folder, "%s-%d" % (name, n)))
+def send(m):
+    print(json.dumps(m), flush=True)
+sid = None
+for line in sys.stdin:
+    m = json.loads(line)
+    i, method, p = m.get("id"), m.get("method"), m.get("params") or {}
+    if i is None or method is None:
+        continue
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "sessionCapabilities": {"resume": {}}}}})
+    elif method == "session/resume" and flag("agy-lose"):
+        send({"jsonrpc": "2.0", "id": i, "error": {"code": -32603, "message": "Conversation not found"}})
+    elif method in ("session/resume", "session/new"):
+        sid = p.get("sessionId") or str(uuid.uuid4())
+        send({"jsonrpc": "2.0", "id": i, "result": {"sessionId": sid}})
+    elif method == "session/prompt":
+        open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(p["prompt"][0]["text"])
+        said = "Done."
+        if flag("agy-refresh"):
+            # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on
+            # its stderr as it fails).
+            fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
+            token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
+            open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
+            said = "Done. " + fresh
+            if flag("agy-crash"):
+                sys.stderr.write("refresh went wrong with " + fresh + "\n")
+                sys.stderr.flush()
+                sys.exit(3)
+        send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}}}})
+        send({"jsonrpc": "2.0", "id": i, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}})
+    else:
+        send({"jsonrpc": "2.0", "id": i, "result": {}})
+if flag("agy-forget"):
     records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
     for root, _, files in os.walk(records):
         for name in files:
@@ -7730,17 +7732,14 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
     }
 
     #[tokio::test]
-    async fn after_agy_moves_a_thread_to_a_new_conversation_the_next_turn_is_told_everything_once()
-    {
-        // Turn 1's agy names a conversation it began in place of the saved one before it has the prompt: that process
-        // is closed unprompted and a new one is given everything, the conversation's history included, so turn 2 is
-        // not. Turn 3's agy moves to a new conversation only after it did its work: that one holds turn 3 only, so
-        // turn 4 is given the history; turn 5, after turn 4 completed, is not.
+    async fn after_agy_moves_a_thread_to_a_new_conversation_the_next_turn_is_not_told_everything_again(
+    ) {
+        // Turn 1's agy cannot resume the saved conversation: the new one it begins in its place is given everything,
+        // the conversation's history included, so turn 2 is not.
         let folder =
             std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("agy-lose-1"), "").unwrap();
-        std::fs::write(folder.join("agy-late-3"), "").unwrap();
         fake_agy_in(&folder);
         let agy =
             json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});
@@ -7749,9 +7748,6 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
             true,
             &[
                 ("m1", json!({}), agy.clone()),
-                ("m4", json!({}), agy.clone()),
-                ("m4", json!({}), agy.clone()),
-                ("m4", json!({}), agy.clone()),
                 ("m4", json!({}), agy.clone()),
                 ("m4", json!({}), agy),
             ],
@@ -7769,13 +7765,6 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
             "{told}"
         );
         assert!(!prompt(2).contains(replayed), "told once: {}", prompt(2));
-        assert!(!prompt(3).contains(replayed), "{}", prompt(3));
-        let told = prompt(4);
-        assert!(
-            told.contains(replayed) && told.contains("Watch the Acme release."),
-            "{told}"
-        );
-        assert!(!prompt(5).contains(replayed), "told once: {}", prompt(5));
         let _ = std::fs::remove_dir_all(&folder);
     }
 
