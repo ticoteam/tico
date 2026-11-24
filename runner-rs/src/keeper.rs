@@ -45,6 +45,11 @@ pub type Parked = Pin<Box<dyn Future<Output = Box<dyn Session>> + Send>>;
 pub type Stopping<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
 /// What a kept session's workspace needs while it is kept, dropped once it has gone.
 pub type Held = Box<dyn Any + Send>;
+/// SIGKILL a session's process group now; done once it has exited.
+pub type Kill = Arc<dyn Fn() -> Stopping<'static> + Send + Sync>;
+
+/// How long a killed process group has to exit before what it held goes regardless.
+const KILL_WAIT: Duration = Duration::from_secs(5);
 
 /// A harness's running session, as the keeper holds it between turns. Dropped, it kills its process group.
 pub trait Session: Any + Send {
@@ -62,6 +67,8 @@ pub trait Session: Any + Send {
     fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> Parked;
     /// Stop it: its input closed, it and its process group reaped. What it held goes when it is dropped.
     fn stop(&self) -> Stopping<'_>;
+    /// How to kill it outright once a stop is out of time (taken before it is parked, so it reaches a stuck one).
+    fn kill(&self) -> Kill;
     /// Itself, for `take` to give the host its own type back.
     fn into_any(self: Box<Self>) -> Box<dyn Any + Send>;
 }
@@ -109,31 +116,48 @@ struct Kept {
     background: Option<Probe>,
     wanted: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<Box<dyn Session>>,
-    _held: Option<Held>,
+    kill: Kill,
+    held: Option<Held>,
 }
 
 impl Kept {
-    /// The session, back from `park` by `by`; else its task is aborted, which drops it (its process group killed).
-    async fn back(self, by: tokio::time::Instant) -> Option<Box<dyn Session>> {
+    /// The session, back from `park` by `by`, and what it holds, still held; one not back by then is killed (its
+    /// process group) and its task aborted.
+    async fn back(self, by: tokio::time::Instant) -> (Option<Box<dyn Session>>, Option<Held>) {
         let _ = self.wanted.send(());
         let mut task = self.task;
         match tokio::time::timeout_at(by, &mut task).await {
-            Ok(session) => session.ok(),
+            Ok(session) => (session.ok(), self.held),
             Err(_) => {
+                killed(&self.kill).await;
                 task.abort();
                 let _ = task.await;
-                None
+                (None, self.held)
             }
         }
     }
 
-    /// Stopped within INTERRUPT_WAIT in all, else dropped.
+    /// Stopped within INTERRUPT_WAIT in all, else killed; what it held goes only after.
     async fn end(self) {
         let by = tokio::time::Instant::now() + INTERRUPT_WAIT;
-        if let Some(session) = self.back(by).await {
-            let _ = tokio::time::timeout_at(by, session.stop()).await;
+        let kill = self.kill.clone();
+        let (session, held) = self.back(by).await;
+        if let Some(session) = session {
+            stopped(session.stop(), &kill, by).await;
         }
+        drop(held);
     }
+}
+
+/// A session's `stop` done by `by`, else its process group killed.
+async fn stopped(stop: Stopping<'_>, kill: &Kill, by: tokio::time::Instant) {
+    if tokio::time::timeout_at(by, stop).await.is_err() {
+        killed(kill).await;
+    }
+}
+
+async fn killed(kill: &Kill) {
+    let _ = tokio::time::timeout(KILL_WAIT, kill()).await;
 }
 
 /// Stop `sessions` together.
@@ -153,6 +177,8 @@ pub struct Keeper {
     idle: Duration,
     max_pin: Duration,
     kept: Mutex<HashMap<String, Kept>>,
+    /// Stops `put` set off, joined when the runner stops (`prune` with `close`).
+    stopping: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
 impl Keeper {
@@ -167,6 +193,7 @@ impl Keeper {
             idle,
             max_pin,
             kept: Mutex::new(HashMap::new()),
+            stopping: Mutex::new(Vec::new()),
         }
     }
 
@@ -185,9 +212,11 @@ impl Keeper {
         let mut kept = self.kept().remove(thread)?;
         let changed = kept.key.changed(key);
         let due = self.due(&mut kept, Instant::now());
-        let session = kept
-            .back(tokio::time::Instant::now() + INTERRUPT_WAIT)
-            .await?;
+        let by = tokio::time::Instant::now() + INTERRUPT_WAIT;
+        let kill = kept.kill.clone();
+        // What it held goes once it is stopped, or once the turn taking it holds its own.
+        let (session, _held) = kept.back(by).await;
+        let session = session?;
         if !changed.is_empty() {
             // Names only: the values may be secrets.
             crate::util::log(&format!(
@@ -196,13 +225,13 @@ impl Keeper {
             ));
         }
         if !changed.is_empty() || due || !session.alive() {
-            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
+            stopped(session.stop(), &kill, by).await;
             return None;
         }
         // A thread's key names its harness's own command line, so another harness's session never has it.
         let session = session.into_any().downcast::<S>().ok()?;
         if !session.lend(token) {
-            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
+            stopped(session.stop(), &kill, by).await;
             return None;
         }
         Some(*session)
@@ -211,8 +240,14 @@ impl Keeper {
     /// Keep `session`, started with `key`, for `thread`'s next turn, with `held` until it goes: its token blanked,
     /// parked until then. One already kept for the thread is stopped; one whose token cannot be blanked is not kept.
     pub async fn put<S: Session>(&self, thread: &str, key: Inputs, session: S, held: Option<Held>) {
+        let kill = session.kill();
         if !session.lend("") {
-            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
+            stopped(
+                session.stop(),
+                &kill,
+                tokio::time::Instant::now() + INTERRUPT_WAIT,
+            )
+            .await;
             return;
         }
         let background = session.background();
@@ -227,13 +262,18 @@ impl Keeper {
                 background,
                 wanted,
                 task,
-                _held: held,
+                kill,
+                held,
             },
         );
         // Stopped off the turn's path: the turn that gave this one back does not wait on others' stops.
-        let mut stopping = self.overdue(Instant::now(), false);
-        stopping.extend(old);
-        tokio::spawn(end_all(stopping));
+        let mut ending = self.overdue(Instant::now(), false);
+        ending.extend(old);
+        if !ending.is_empty() {
+            let mut stopping = self.stopping.lock().unwrap_or_else(|p| p.into_inner());
+            stopping.retain(|stop| !stop.is_finished());
+            stopping.push(tokio::spawn(end_all(ending)));
+        }
     }
 
     /// Stop the session kept for `thread`, if any.
@@ -259,8 +299,8 @@ impl Keeper {
         true
     }
 
-    /// Stop the sessions past their time (module doc), gone, or over the limit (oldest first); every one with `close`.
-    /// They are stopped together, and all have gone when it returns.
+    /// Stop the sessions past their time (module doc), gone, or over the limit (oldest first); every one with `close`,
+    /// which also waits for the stops `put` set off. They are stopped together, and all have gone when it returns.
     pub async fn prune(&self, close: bool) {
         self.prune_at(Instant::now(), close).await
     }
@@ -268,6 +308,13 @@ impl Keeper {
     /// `prune` as of `now`.
     pub async fn prune_at(&self, now: Instant, close: bool) {
         end_all(self.overdue(now, close)).await;
+        if close {
+            let stops =
+                std::mem::take(&mut *self.stopping.lock().unwrap_or_else(|p| p.into_inner()));
+            for stop in stops {
+                let _ = stop.await;
+            }
+        }
     }
 
     /// Those `prune` stops, taken out: the gone and past their time first, then the oldest while over the limit.
@@ -317,6 +364,9 @@ mod tests {
         stuck_token: bool,
         /// Parked, it never comes back (a write agy stopped reading).
         stuck: bool,
+        /// Its stop never ends.
+        stuck_stop: bool,
+        killed: Arc<AtomicUsize>,
         dropped: Arc<AtomicBool>,
     }
 
@@ -350,6 +400,16 @@ mod tests {
         fn stop(&self) -> Stopping<'_> {
             Box::pin(async move {
                 self.stops.fetch_add(1, Ordering::SeqCst);
+                if self.stuck_stop {
+                    std::future::pending::<()>().await;
+                }
+            })
+        }
+        fn kill(&self) -> Kill {
+            let killed = self.killed.clone();
+            Arc::new(move || {
+                killed.fetch_add(1, Ordering::SeqCst);
+                Box::pin(async {})
             })
         }
         fn into_any(self: Box<Self>) -> Box<dyn Any + Send> {
@@ -449,8 +509,9 @@ mod tests {
                 pinned: None,
                 background: None,
                 wanted,
+                kill: f.kill(),
                 task: tokio::spawn(Box::new(f).park(parked)),
-                _held: None,
+                held: None,
             },
         );
         assert!(k.take::<Fake>("thread-1", &key("a"), "t").await.is_none());
@@ -477,13 +538,28 @@ mod tests {
         assert!(!held.load(Ordering::SeqCst), "kept with its session");
         k.release("thread-1").await;
         assert!(held.load(Ordering::SeqCst));
-        // A session that never comes back from park is dropped (its process group killed) after INTERRUPT_WAIT.
+        // A session that never comes back from park is killed (its process group) and dropped after INTERRUPT_WAIT.
         let mut f = Fake::default();
         f.stuck = true;
-        let dropped = f.dropped.clone();
+        let (dropped, killed) = (f.dropped.clone(), f.killed.clone());
         k.put("thread-2", key("a"), f, None).await;
         k.release("thread-2").await;
-        assert!(dropped.load(Ordering::SeqCst));
+        assert!(dropped.load(Ordering::SeqCst) && killed.load(Ordering::SeqCst) == 1);
+        // One whose stop does not end in time is killed, and what it held goes only after.
+        struct After(Arc<AtomicUsize>, Arc<AtomicBool>);
+        impl Drop for After {
+            fn drop(&mut self) {
+                self.1
+                    .store(self.0.load(Ordering::SeqCst) == 1, Ordering::SeqCst);
+            }
+        }
+        let mut f = Fake::default();
+        f.stuck_stop = true;
+        let after = Arc::new(AtomicBool::new(false));
+        let held = After(f.killed.clone(), after.clone());
+        k.put("thread-3", key("a"), f, Some(Box::new(held))).await;
+        k.release("thread-3").await;
+        assert!(after.load(Ordering::SeqCst), "held until it was killed");
     }
 
     #[tokio::test]
@@ -545,5 +621,13 @@ mod tests {
         k.put("thread-c", key("a"), c, None).await;
         k.prune(true).await;
         assert_eq!((k.count(), c_stops.load(Ordering::SeqCst)), (0, 1));
+        // The runner stopping waits for a stop `put` set off.
+        let mut slow = Fake::default();
+        slow.stuck_stop = true;
+        let killed = slow.killed.clone();
+        k.put("thread-d", key("a"), slow, None).await;
+        k.put("thread-e", key("a"), Fake::default(), None).await;
+        k.prune(true).await;
+        assert_eq!((k.count(), killed.load(Ordering::SeqCst)), (0, 1));
     }
 }

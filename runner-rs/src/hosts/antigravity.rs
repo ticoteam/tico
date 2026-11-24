@@ -580,6 +580,18 @@ impl Session for Agent {
         })
     }
 
+    /// SIGKILL to its group now (no grace), then until it has gone.
+    fn kill(&self) -> crate::keeper::Kill {
+        let proc = self.proc.clone();
+        Arc::new(move || {
+            proc.stopper.terminate(Duration::ZERO);
+            let mut exited = proc.exited.clone();
+            Box::pin(async move {
+                let _ = exited.wait_for(|e| e.is_some()).await;
+            })
+        })
+    }
+
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
         self
     }

@@ -57,8 +57,8 @@ thread, holding its conversation open, in the runner's session keeper (`keeper.r
 `ProviderSessionManager`; `agy` is its first harness, Claude and Codex come next; as many as the runner's capacity, at
 least 8). The hub still claims, starts and completes each message; only the process is reused, and the turn's timings
 say `warm: true`. The thread's next turn goes straight to `session/prompt` there, setting the model and thinking level
-on the live session first when they changed. The runner releases a kept process after 2 minutes unused (T3's idle
-timeout; a session reporting background work still running is kept up to 4 hours, checked every 2 minutes, though
+on the live session first when they changed. The runner releases a kept process after 2 minutes unused (checked every 15 seconds, so a plan removed meanwhile
+can be held up to about 2 minutes 15 seconds plus the process's stop; T3's idle timeout; a session reporting background work still running is kept up to 4 hours, checked every 2 minutes, though
 `agy` reports none), when the keeper is full (oldest first), when it stops, and when a turn would start `agy`
 differently (another home, environment, folder or MCP servers, or another plan or a sign-in the plan was handed again:
 a turn no longer handed the plan never goes on in its process): that turn starts a new one. The turn's own token and
@@ -68,8 +68,9 @@ a turn sets anew forces a cold start, and the runner logs the names (never the v
 proxied tool's grant (its token is minted for each attempt), a file credential (a new file each turn), the GitHub
 token pair once the runner's cached token is renewed (personal chats have none), and `DISPLAY` when the virtual
 screen came or went. A person's own Assistant chat keeps its `agy` too: its copy of the checkout stays while the
-process is kept, is brought up to the checkout in place for the room's next turn, and is removed when the process is
-let go (or at the runner's next start, if it stopped meanwhile). Relationship turns, fresh stateless chats and
+process is kept, is emptied and cloned afresh in the same folder for the room's next turn (nothing of the last turn's
+kept, its `.git` included), and is removed once the process has gone (or at the runner's next start, from the
+runner's own record of the copies it made, if it stopped meanwhile). Relationship turns, fresh stateless chats and
 one-off threads keep none. While kept, its
 `HUB_TOKEN` file is blank (a `tico-file:` reference, rewritten with each turn's token), what it asks is refused and what
 it says is dropped. A plan turn's `agy` keeps its own home and sign-in while it is kept; the next turn on the plan,

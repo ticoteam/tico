@@ -4069,11 +4069,12 @@ impl Runner {
                     }
                     _ => false,
                 };
-            let ended = drove.outcome == "completed"
-                || (drove.outcome == "interrupted"
-                    && matches!(h, Host::Antigravity(_))
-                    && ran.is_ok()
-                    && !flags.lost.load(Ordering::SeqCst));
+            // Never once the lease was lost: a final answer can still come in while the turn is salvaged (drive.rs).
+            let ended = !flags.lost.load(Ordering::SeqCst)
+                && (drove.outcome == "completed"
+                    || (drove.outcome == "interrupted"
+                        && matches!(h, Host::Antigravity(_))
+                        && ran.is_ok()));
             if !keeps || !ended {
                 self.stop_host(h, &aid).await;
             }
@@ -4091,13 +4092,7 @@ impl Runner {
                 } else {
                     Default::default()
                 };
-                let back = pi
-                    .release(
-                        drove.outcome == "completed" && !fresh_chat && !personal,
-                        &owner,
-                        held,
-                    )
-                    .await;
+                let back = pi.release(keeps && ended, &owner, held).await;
                 vault.turn_user = vault.turn_user.take().or(back.user);
                 vault.relay = vault.relay.take().or(back.relay);
             }
@@ -7745,10 +7740,17 @@ for line in sys.stdin:
         k = n
         open(os.path.join(folder, "agy-prompt-%d" % k), "w").write(p["prompt"][0]["text"])
         if os.path.exists(os.path.join(folder, "agy-litter")):
-            # Where it ran: its pid, its folder and that folder's inode, and whether the last turn's file is still there.
-            at = "%d %s %d %s" % (os.getpid(), os.getcwd(), os.stat(".").st_ino, os.path.exists("litter.txt"))
+            # Where it ran: its pid, its folder and that folder's inode, and whether the last turn's file, local branch
+            # and local git config are still there; then it leaves them.
+            import subprocess
+            def git(*args):
+                return subprocess.run(["git"] + list(args), capture_output=True, text=True).stdout.strip()
+            left = (os.path.exists("litter.txt"), bool(git("branch", "--list", "turn-left")), bool(git("config", "--local", "tico.left")))
+            at = "%d %s %d %s %s %s" % ((os.getpid(), os.getcwd(), os.stat(".").st_ino) + left)
             open(os.path.join(folder, "agy-at-%d" % k), "w").write(at)
             open("litter.txt", "w").write("left by a turn")
+            git("branch", "turn-left")
+            git("config", "--local", "tico.left", "yes")
         said = "Done."
         if refresh:
             # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on
@@ -7817,11 +7819,13 @@ for line in sys.stdin:
                 .collect()
         };
         let (first, second) = (at(0), at(1));
-        // One process (warm) in one folder, the room's copy, still there: refreshed in place, so what the first turn
-        // left is gone as from a new copy.
+        // One process (warm) in one folder, the room's copy, still there: cloned again in it, so what the first turn
+        // left (a file, a local branch, local git config) is gone.
         assert_eq!(first[..3], second[..3], "{first:?} {second:?}");
         assert!(first[1].contains("tico-personal-"), "{first:?}");
-        assert_eq!((first[3].as_str(), second[3].as_str()), ("False", "False"));
+        for at in [&first, &second] {
+            assert_eq!(at[3..], ["False", "False", "False"], "{at:?}");
+        }
         // The keeper let the agy go (the runner stopped): the copy went with it.
         assert!(!Path::new(&first[1]).exists(), "{first:?}");
         let _ = std::fs::remove_dir_all(&folder);

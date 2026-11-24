@@ -1392,7 +1392,7 @@ impl Runner {
             crate::checkout_groups::initialize(&state);
             crate::checkout_groups::gate_workspace(&workspace);
             // No turn runs yet: a chat's copy a kept session held when the runner stopped goes.
-            crate::sessions::PersonalCopy::sweep(&workspace);
+            crate::sessions::PersonalCopy::sweep(&state);
         })
         .await;
         let names = self.names().await;

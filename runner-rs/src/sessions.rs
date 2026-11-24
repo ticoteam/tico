@@ -1753,10 +1753,11 @@ pub const RELATIONSHIP_WORKER: &str = "relationship-worker";
 /// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
 /// reads: it runs in a local clone with no remote, which its environment has no git credentials to push from either
 /// (crate::gitcred::without_credentials), and the clone is removed when the turn ends, or when the session kept for
-/// the room after it is let go (crate::keeper; the next turn then refreshes it in place). Its path is the same for every
+/// the room after it is let go (crate::keeper; the next turn then clones it again in the same folder). Its path is the same for every
 /// turn in the room on this runner's workspace (`projects`), so the harness finds the room's session again, and another
 /// runner on this computer never shares it. The shared checkout is only read.
-pub(crate) struct PersonalCopy(pub PathBuf);
+/// The second field is the runner's record of it (`sweep`).
+pub(crate) struct PersonalCopy(pub PathBuf, PathBuf);
 
 impl PersonalCopy {
     fn key(projects: &Path, attempt: &Value) -> String {
@@ -1782,40 +1783,46 @@ impl PersonalCopy {
     }
 
     /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left. A
-    /// copy the room's kept session still holds (`hold`, crate::keeper) is brought up to `main` in place instead: the
-    /// kept process works in that folder.
+    /// copy the room's kept session still holds (`hold`, crate::keeper) is emptied rather than removed, so the kept
+    /// process's folder stays the same one; the clone is new all the same, nothing of the last turn's kept. Which
+    /// copies this runner made is recorded in its own `state` (`sweep`), never in the copy.
     pub(crate) async fn make(
         main: &Path,
         projects: &Path,
+        state: &Path,
         attempt: &Value,
     ) -> Result<Self, String> {
         let path = Self::path_for(projects, attempt);
         let held = hold_copy(&path) > 0;
-        let copy = Self(path);
-        let env = crate::safegit::clean_environment(&crate::env::process_environment());
-        let (from, to) = (main.display().to_string(), copy.0.display().to_string());
+        let name = path.file_name().unwrap_or_default().to_owned();
+        let copy = Self(path, state.join(COPIES_DIR).join(name));
         let kept = held && std::fs::symlink_metadata(&copy.0).is_ok_and(|m| m.is_dir());
-        let refreshed = kept && copy.refresh(&from, &env).await;
-        if !refreshed {
-            if kept {
-                // Same folder, so the kept process's working directory stays this one.
-                empty_folder(&copy.0);
-            } else {
-                remove_copy(&copy.0);
-                crate::isolation::mkdir(&copy.0, 0o700)
-                    .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
-                crate::checkout_groups::prepare(copy.0.clone()).await;
-            }
-            // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
-            let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
-                .await
-                .map_err(|f| fault_name(&f))?;
-            if !cloned.ok() {
+        if kept {
+            empty_folder(&copy.0);
+        } else {
+            remove_copy(&copy.0);
+            let recorded = std::fs::create_dir_all(state.join(COPIES_DIR))
+                .and_then(|_| std::fs::write(&copy.1, ""));
+            if let Err(e) = recorded {
                 return Err(format!(
-                    "cannot copy {from} for this chat: {}",
-                    git_reason(&cloned)
+                    "cannot record this chat's copy of the checkout: {e}"
                 ));
             }
+            crate::isolation::mkdir(&copy.0, 0o700)
+                .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
+            crate::checkout_groups::prepare(copy.0.clone()).await;
+        }
+        let env = crate::safegit::clean_environment(&crate::env::process_environment());
+        let (from, to) = (main.display().to_string(), copy.0.display().to_string());
+        // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
+        let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
+            .await
+            .map_err(|f| fault_name(&f))?;
+        if !cloned.ok() {
+            return Err(format!(
+                "cannot copy {from} for this chat: {}",
+                git_reason(&cloned)
+            ));
         }
         let remotes = g(&copy.0, &env, &["remote"], 15)
             .await
@@ -1831,62 +1838,39 @@ impl PersonalCopy {
                 ));
             }
         }
-        // Whose copy it is, for `sweep` when a runner stopped while a kept session held it.
-        let _ = std::fs::write(
-            copy.0.join(".git").join(COPY_MARK),
-            projects.display().to_string(),
-        );
         Ok(copy)
-    }
-
-    /// The copy at `main`'s commit again, as a new clone would be: what the last turn wrote is gone.
-    async fn refresh(&self, main: &str, env: &Env) -> bool {
-        for args in [
-            &["fetch", "-q", "--no-tags", main, "HEAD"][..],
-            &["reset", "-q", "--hard", "FETCH_HEAD"],
-            &["clean", "-qffdx"],
-        ] {
-            if !g(&self.0, env, args, 120).await.is_ok_and(|o| o.ok()) {
-                return false;
-            }
-        }
-        true
     }
 
     /// Another holder of this copy: the session the keeper keeps for the room (crate::keeper::Held). The copy goes
     /// when its last holder is dropped.
     pub(crate) fn hold(&self) -> Self {
         hold_copy(&self.0);
-        Self(self.0.clone())
+        Self(self.0.clone(), self.1.clone())
     }
 
-    /// Remove the chats' copies of this runner's workspace (`projects`) a kept session held when the runner stopped.
-    pub(crate) fn sweep(projects: &Path) {
-        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+    /// Remove the chats' copies this runner recorded in its `state` (`make`) that a kept session held when it stopped.
+    pub(crate) fn sweep(state: &Path) {
+        let Ok(records) = std::fs::read_dir(state.join(COPIES_DIR)) else {
             return;
         };
-        let ours = projects.display().to_string();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if entry
-                .file_name()
-                .to_string_lossy()
-                .starts_with("tico-personal-")
-                && entry.file_type().is_ok_and(|t| t.is_dir())
-                && std::fs::read_to_string(path.join(".git").join(COPY_MARK))
-                    .is_ok_and(|m| m == ours)
+        for record in records.flatten() {
+            let name = record.file_name();
+            let path = std::env::temp_dir().join(&name);
+            if name.to_string_lossy().starts_with("tico-personal-")
                 && copies()
                     .as_ref()
                     .is_none_or(|held| !held.contains_key(&path))
             {
+                // Never followed: a link in its place is removed itself.
                 remove_copy(&path);
+                let _ = std::fs::remove_file(record.path());
             }
         }
     }
 }
 
-/// Who wrote a chat's copy (`PersonalCopy::sweep`): the runner workspace it belongs to.
-const COPY_MARK: &str = "tico-projects";
+/// Where a runner's state records the chats' copies it made (`PersonalCopy::sweep`).
+const COPIES_DIR: &str = "personal-copies";
 
 /// How many holders each chat's copy has: its turn, and the session kept for the room after it.
 static COPIES: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
@@ -1906,8 +1890,14 @@ fn hold_copy(path: &Path) -> usize {
     *count - 1
 }
 
+/// Remove a copy; a link in its place is removed, never followed.
 fn remove_copy(path: &Path) {
-    match std::fs::remove_dir_all(path) {
+    let gone = match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
+        Ok(_) => std::fs::remove_file(path),
+        Err(e) => Err(e),
+    };
+    match gone {
         Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
             "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
             path.display()
@@ -1916,7 +1906,7 @@ fn remove_copy(path: &Path) {
     }
 }
 
-/// Everything in `path`, not the folder itself.
+/// Everything in `path`, not the folder itself (links removed, never followed).
 fn empty_folder(path: &Path) {
     for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
         let gone = if entry.file_type().is_ok_and(|t| t.is_dir()) {
@@ -1950,6 +1940,7 @@ impl Drop for PersonalCopy {
         };
         if last {
             remove_copy(&self.0);
+            let _ = std::fs::remove_file(&self.1);
         }
     }
 }
@@ -2139,8 +2130,13 @@ impl Runner {
         }
         if place.personal {
             // Its own copy, made from the checkout refreshed for this turn; the checkout itself is never its workspace.
-            let copy =
-                PersonalCopy::make(&place.main_path, &self.config.projects_dir(), attempt).await?;
+            let copy = PersonalCopy::make(
+                &place.main_path,
+                &self.config.projects_dir(),
+                &self.state.directory,
+                attempt,
+            )
+            .await?;
             place.execution_path = copy.0.clone();
             place._copy = Some(copy);
             // No other folder: the claim's worktrees are not this chat's to reach (granted_paths).
@@ -2543,6 +2539,43 @@ impl Runner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_runners_sweep_removes_only_the_copies_it_recorded_and_never_follows_a_link() {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let temp = std::env::temp_dir();
+        let state = temp.join(format!("tico-sweep-{id}"));
+        let (copy, linked, other) = (
+            temp.join(format!("tico-personal-{}a", &id[..12])),
+            temp.join(format!("tico-personal-{}b", &id[..12])),
+            temp.join(format!("tico-personal-{}c", &id[..12])),
+        );
+        std::fs::create_dir_all(copy.join(".git")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let target = state.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), "").unwrap();
+        std::os::unix::fs::symlink(&target, &linked).unwrap();
+        std::fs::create_dir_all(state.join(COPIES_DIR)).unwrap();
+        for recorded in [&copy, &linked] {
+            std::fs::write(
+                state.join(COPIES_DIR).join(recorded.file_name().unwrap()),
+                "",
+            )
+            .unwrap();
+        }
+        PersonalCopy::sweep(&state);
+        // Its own copy and the link recorded in another's place go; the link's target and an unrecorded copy (another
+        // runner's) stay.
+        assert!(!copy.exists() && std::fs::symlink_metadata(&linked).is_err());
+        assert!(target.join("keep").exists() && other.exists());
+        assert_eq!(
+            std::fs::read_dir(state.join(COPIES_DIR)).unwrap().count(),
+            0
+        );
+        let _ = std::fs::remove_dir_all(&other);
+        let _ = std::fs::remove_dir_all(&state);
+    }
 
     #[test]
     fn only_a_persons_chat_in_the_bots_own_checkout_starts_on_the_runners_recent_fetch() {
