@@ -1243,7 +1243,7 @@ def test_promote_skips_without_keys(installs):
     assert installs["updated"] == [] and any("STABLE_UPDATE_KEY" in line for line in rt.LOG)
 
 
-# ---- 0.6 starts fresh: no 0.6 main ships as a 0.5 patch, and no 0.5 install is moved to 0.6 ----
+# ---- a new line: main's first release of a line is tagged by hand ----
 
 
 def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagged(monkeypatch):
@@ -1256,32 +1256,6 @@ def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagg
     gh.releases["v0.6.0"] = released("v0.6.0")
     resumed = plan(gh)
     assert resumed["version"] == "v0.6.1" and resumed["action"] == "dispatch"
-
-
-@pytest.mark.parametrize(
-    "have, want, crosses",
-    [
-        ("", "0.6.0", False),
-    ],
-)
-def test_crossing_the_fresh_start(have, want, crosses):
-    assert rt.crosses_fresh_start(have, want) is crosses
-
-
-def test_an_install_on_0_5_is_never_updated_to_0_6(installs):
-    installs["stable"]["running"] = "0.5.216"
-    with pytest.raises(rt.Fail, match="0.6 starts fresh"):
-        rt.update_install(rt.install("STABLE", ENV), "v0.6.0")
-    assert installs["updated"] == []
-
-
-def test_promote_leaves_a_0_5_stable_where_it_is_when_the_canary_runs_0_6(installs):
-    gh = FakeGitHub()
-    approval_for(gh, "v0.6.0", approved_by="chris")
-    installs["canary"]["running"] = "0.6.0"
-    installs["stable"]["running"] = "0.5.216"
-    rt.promote(gh, ENV)
-    assert installs["updated"] == [] and any("0.6 starts fresh" in line for line in rt.LOG)
 
 
 # ---- approved automatically: no person needed (RELEASE_NEEDS_PERSON off, no High risk item) ----

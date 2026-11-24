@@ -1132,7 +1132,7 @@ def sync_system_mirrors(c):
     - a system job (system_routines.JOBS) with no mirror gets one, of the cutover's shape, owner and id scheme, marked
       in `redesign_migrated` as the cutover marks it, and so does the Health Monitor once its bot is back (restored
       after it was archived). Only once the cutover is done and has a person to own it (`owner_wait` is `catch_up`'s);
-    - a mirror of a job no longer in JOBS, a task rule's mirror (task rules went with the old engine), a second mirror
+    - a mirror of a job no longer in JOBS, a second mirror
       of one job, and the Health Monitor's once its bot is gone or archived are retired as a delete retires an
       automation (`remove`): off, soft-deleted, their unfinished runs skipped; their runs stay as history. A mark that
       named a retired twin names the one kept, so the cutover report does not call the job deleted;
@@ -1165,8 +1165,6 @@ def sync_system_mirrors(c):
                 retire.append(row)
             else:
                 jobs[key] = (row, flow)
-        elif name == AO.TASK_RULE:
-            retire.append(row)
         elif name == HEALTH:
             if not health or health_mirror:
                 retire.append(row)

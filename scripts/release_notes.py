@@ -2,7 +2,7 @@
 """Release notes for one candidate: the pull requests merged between a stable release and the candidate, grouped for
 the people who approve it. scripts/release_train.py posts them as the body of the release's approval issue.
 
-    text = build(api, "v0.5.202", "v0.5.203")
+    text = build(api, "v0.6.262", "v0.6.263")
 
 `api` needs get(path), which returns a REST GET's decoded JSON (release_train.GitHub.get). Read-only. Standard library
 only; release_train loads this file by path, because the Actions checkout is sparse.

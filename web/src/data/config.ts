@@ -9,7 +9,6 @@ export interface ReleaseOffer {
   latest: string;
   checking?: boolean;
   available: boolean;
-  held: string;
   managed: boolean;
   scheduled?: string;
 }

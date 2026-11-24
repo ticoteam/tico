@@ -10,7 +10,7 @@ on:
   workflow_call:
     inputs:
       base:
-        description: "The release before: a tag or commit, e.g. v0.5.204"
+        description: "The release before: a tag or commit, e.g. v0.6.263"
         required: true
         type: string
       head:
@@ -18,7 +18,7 @@ on:
         required: true
         type: string
       version:
-        description: "The release name, e.g. v0.5.205; it names the release-evidence folder"
+        description: "The release name, e.g. v0.6.264; it names the release-evidence folder"
         required: true
         type: string
     outputs:
@@ -31,7 +31,6 @@ on:
         description: "The release before: a tag or commit"
         required: true
         type: string
-        default: v0.5.204
       head:
         description: "The candidate: a commit SHA or a branch name"
         required: true

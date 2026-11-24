@@ -7,7 +7,7 @@ import { UpdateNotice } from '@/features/notices/exports';
 import { fixHref } from './fixes';
 import { Version } from './Version';
 
-const offer: ReleaseOffer = { current: '1.2.3', latest: '1.2.4', available: true, held: '', managed: false };
+const offer: ReleaseOffer = { current: '1.2.3', latest: '1.2.4', available: true, managed: false };
 const UPDATE = '/api/v2/system/update';
 const CONFIG = '/api/v2/config';
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
@@ -121,25 +121,6 @@ describe('Company updates', () => {
     vi.stubGlobal('fetch', async () => json(config(offer)));
     show({ you: 'member' });
     expect(screen.queryByRole('link', { name: 'View update' })).toBeNull();
-  });
-
-  it('gives the backend’s reason for a held release and lets the owner check again', async () => {
-    const held = { ...offer, available: false, held: 'This company’s tasks would not carry over' };
-    let checked = false;
-    const request = vi.fn(async (path: string) => {
-      if (path === UPDATE) return json({ state: 'idle', configured: true });
-      if (path === CONFIG) return json(config(checked ? offer : held));
-      checked = true;
-      return json({ available: true, checking: false });
-    });
-    vi.stubGlobal('fetch', request);
-    show({ update: held });
-    expect(screen.getByText(held.held)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
-    expect(screen.queryByRole('link', { name: 'View update' })).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Check now' }));
-    expect(await screen.findByRole('button', { name: 'Update now' })).toBeTruthy();
-    expect(request).toHaveBeenCalledWith(`${UPDATE}/check`, expect.objectContaining({ method: 'POST' }));
   });
 
   it('shows a managed release without offering updater actions', () => {

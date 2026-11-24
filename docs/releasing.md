@@ -67,10 +67,6 @@ The train cuts patches of one line, `LINE` in `scripts/release_train.py` (now 0.
 older line, it cuts nothing and says so on the `release-train` issue: the line's first release (v0.6.0, and its rcs
 before it) is tagged by hand. After that tag it cuts v0.6.1 and on as usual.
 
-0.6 starts fresh (see [Updates](updates.md#from-05-to-06-every-company-starts-over)). The train never updates an install
-that runs 0.5 to 0.6 or later: promotion skips it, and a hotfix or ship to it fails. Move such an install by hand, on a
-new database.
-
 Triggers: every push to main, every finished Release validation run, a manual run, and a backstop every 20 minutes (at
 :05, :25 and :45) for a missed event, a release waiting for stable and a release waiting for latest. A small read-only
 job decides first, so a push with nothing to do ends in seconds. Every job that acts (the train job and the hotfix)
@@ -204,7 +200,7 @@ risk is what the notes call it (`scripts/release_notes.py`): a pull request whos
   hold.
 - **Superseded.** A newer release on the canary closes an older issue with a link to the newer one. A candidate whose
   canary update failed is closed too, as not on the canary: there is nothing to approve.
-- **Reading the notes.** `python3 scripts/release_train.py notes v0.5.200 v0.5.201` prints the notes for any range,
+- **Reading the notes.** `python3 scripts/release_train.py notes v0.6.262 v0.6.263` prints the notes for any range,
   read-only. It needs `GITHUB_TOKEN`.
 
 ### A release that did not publish
@@ -670,12 +666,8 @@ at the same time, each with its own Docker names; the journey proceeds once thos
   the candidate server, move the computer to the candidate runner and check the variable, the session, the worktree
   and the rows survived and that a turn still answers once the harness's saved session is gone, roll back an update that migrates the database and never turns healthy (the pre-update
   snapshot is restored, with the server's real entrypoint running Litestream), and update once more to a third build
-  so the replaced updater has to pull its image, refresh the bundle and replace itself again. When the previous
-  release is below 0.6 and the candidate is 0.6 or later (`scripts/journey_plan.py` says `fresh-start`), the seeded
-  install is not upgraded: the candidate's own start on its data volume must exit non-zero with the fresh-start
-  message and leave every database file byte-for-byte the same, the previous release must start on it again with its
-  tasks, and "Update now" to the candidate must be refused or roll back. A new previous install with no tasks is
-  then upgraded in place, and the rest of the journey runs on it.
+  so the replaced updater has to pull its image, refresh the bundle and replace itself again. The previous release
+  must be v0.6.0 or later; an older one is refused before anything runs.
 
 It prints a phase table with each check's start offset, duration and exit code, plus total time and starting/ending
 load. It keeps the logs in a temporary directory and prints the end of any failed log. If any build fails, the

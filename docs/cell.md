@@ -150,7 +150,7 @@ Each command prints exactly one JSON object on stdout and exits 0 or 1. An error
 
 ```json
 {"ok": true, "company": "boatyard", "url": "https://boatyard.tico.team", "port": 20000, "ready_ms": 8400,
- "version": "v0.5.1", "changed": true, "owner_link_file": "/srv/tico-cell/companies/boatyard/owner-link.txt"}
+ "version": "v0.6.264", "changed": true, "owner_link_file": "/srv/tico-cell/companies/boatyard/owner-link.txt"}
 ```
 
 `add` and `update` add `"kms": true` and `"kms_key"` when the company's stored secrets are on KMS. A company made
@@ -559,9 +559,8 @@ Each company's `.env` gets five keys at `add`, or at its next `update`, includin
 | `TICO_MEET_API_KEY`, `TICO_MEET_API_SECRET` | the cell's key pair |
 
 While Tico Meet is off, `add` and `update` remove these keys, and calls answer `meet_unavailable`. They are the cell's
-own: an `--env-file` that carries them gets them back in `ignored`. A company on a release older than v0.5.54 (the
-first with calls) ignores them. A company host can never be the TURN host, and the reverse is also refused
-(`domain_taken`).
+own: an `--env-file` that carries them gets them back in `ignored`. A company host can never be the TURN host, and the
+reverse is also refused (`domain_taken`).
 
 **Certificate renewal.** LiveKit reads its certificate only when it starts. Every 10 minutes the cell updater
 compares the certificate file with LiveKit's start time. When the file is newer, it asks LiveKit's `ListRooms` with a

@@ -81,10 +81,6 @@ def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api,
         flow = json.loads(c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()["flow"])
     assert flow["name"] == SR.BY_KEY["goal_colours"].name
     assert sync(api)["renamed"] == []
-    # a task rule mirror (task rules ended with 0.6) is retired
-    gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
-    assert sync(api)["retired"] == [gone]
-    assert mirrors(api)[gone][2]
     # the health monitor mirror comes back with its bot and follows its switch
     with db(api).transaction() as c:  # restored in Settings > Bots
         if H.bot(c, H.HEALTH_MONITOR):
@@ -121,7 +117,7 @@ def test_the_mirror_sync_makes_retires_renames_and_waits_out_a_broken_write(api,
         assert mark.fetchone()["automation"] == kept
     assert report[("system_job", "job:goal_colours")]["state"] == "on", "the report names the live mirror"
     # a mirror that cannot be written waits an hour and warns once
-    gone = dead_mirror(api, "Old rule", "task_rule", {"kind": "task_rule", "id": "task-rule-gone"})
+    gone = dead_mirror(api, "Old job", "job.no_such_job", {"kind": "system_job", "id": "job:no_such_job"})
     clock, real = [1000.0], automations.remove
 
     def broken(*a, **k):

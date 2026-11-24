@@ -6423,7 +6423,7 @@ class Execution:
                     "onboarding": (parked["onboarding_state"] if parked else "") or "",
                     "mailboxes": list(mail_levels),
                     "mailbox_levels": mail_levels,
-                    "next_run": [],  # next-run tasks are gone; runners from before 0.6 read the list
+                    "next_run": [],  # next-run tasks are gone; the 0.6.0 contract still has the list
                     "notes": notes,
                     "job_id": row["id"],
                     "bot": row["bot_id"],

@@ -3,7 +3,7 @@ snapshot it at a release, and refuse a change that breaks a runner or server ins
 
     python scripts/check_wire_contract.py                    # the check: current contract against each kept release
     python scripts/check_wire_contract.py --write-requests   # regenerate requests.json from backend/models.py
-    python scripts/check_wire_contract.py --snapshot 0.5.0   # keep the current contract as that release's copy
+    python scripts/check_wire_contract.py --snapshot 0.6.0   # keep the current contract as that release's copy
 
 The window is the current and the previous minor release, both ways: a runner of either works with a server of
 either. For every release copy inside the window (contracts/runner/releases/<version>/) the check asks four things:

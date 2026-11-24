@@ -227,8 +227,6 @@ The token's **Last used** in the dialog moves on the first call.
 
 Most MCP tools use `tico_<thing>_<action>`. Four established helpers keep their short names:
 `tico_whoami` (identity), `tico_sql` (read-only query), `tico_classify` (Decision questions) and `tico_brief` (build a brief).
-Before 0.6.0 every tool was named `tico_*`; there is no alias for the old names, so update any saved allow rule
-(`mcp__tico__tico_*` becomes `mcp__tico__tico_*`).
 
 ## Task pipelines
 

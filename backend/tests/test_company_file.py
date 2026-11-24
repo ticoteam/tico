@@ -1215,16 +1215,19 @@ def test_a_plan_with_a_strategy_is_written_as_format_0_3_exactly_as_the_setup_pa
     assert yaml.safe_load(text)["version"] == 0.3 and "# Format 0.3." in text
 
 
-def test_a_plan_without_a_strategy_is_still_format_0_2_byte_for_byte():
+def test_a_plan_without_a_strategy_is_format_0_3_with_no_strategy_block_and_a_0_2_file_still_reads():
     draft = fixture_draft()
     del draft["strategy"]
     for goal in draft["goals"]:
         goal.pop("bet")
     text = C.to_yaml(draft, FIXTURE_CREATED)
-    assert "version: 0.2\n" in text and "# Format 0.2." in text and "strategy" not in text and "bet:" not in text
+    assert "version: 0.3\n" in text and "# Format 0.3." in text and "strategy" not in text and "bet:" not in text
     # A blank strategy (the chat touched it and cleared it) writes no block either.
     assert C.to_yaml({**draft, "strategy": C.blank_strategy()}, FIXTURE_CREATED) == text
     assert "strategy" not in C.from_yaml(text)
+    # 0.2 is never written, and still read: the same plan saved as 0.2 (HQ's saved setup drafts) imports the same.
+    old = text.replace("version: 0.3\n", "version: 0.2\n").replace("# Format 0.3.", "# Format 0.2.")
+    assert C.to_yaml(C.from_yaml(old), FIXTURE_CREATED) == text
 
 
 def test_the_starter_import_keeps_the_strategy_and_a_file_without_one_saves_as_before():
@@ -1594,8 +1597,8 @@ def test_a_plan_with_drafts_said_rules_or_an_email_is_format_0_4_and_reads_back_
 
 
 def test_a_plan_without_drafts_said_rules_or_an_email_is_written_as_before_byte_for_byte():
-    """Empty drafts and said lists and a blank email are no part of the plan: the file is the 0.3 fixture, or 0.2
-    without the strategy, exactly as before."""
+    """Empty drafts and said lists and a blank email are no part of the plan: the file is the 0.3 fixture, or 0.3 with
+    no strategy block, exactly as before."""
     text = (FIXTURES / "company.yaml").read_text()
     draft = fixture_draft()
     draft["people"][0]["email"] = " "
@@ -1606,7 +1609,7 @@ def test_a_plan_without_drafts_said_rules_or_an_email_is_written_as_before_byte_
     plain = dict(draft)
     plain["people"] = [{k: v for k, v in p.items() if k != "email"} for p in draft["people"]]
     assert C.to_yaml(draft, FIXTURE_CREATED) == C.to_yaml(plain, FIXTURE_CREATED)
-    assert "version: 0.2\n" in C.to_yaml(draft, FIXTURE_CREATED)
+    assert "version: 0.3\n" in C.to_yaml(draft, FIXTURE_CREATED)
 
 
 def test_the_swarm_s_drafts_are_capped_cut_to_their_limits_and_scrubbed_and_a_bad_draft_is_refused():

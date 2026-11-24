@@ -5,9 +5,6 @@ A routine is now an automation: a trigger and steps. A bot's routine is an autom
 **Before a due date** trigger (below), and whose step is a **Bot turn**: a task for the bot with the prompt, which the bot runs in its own session. For the jobs Tico
 runs on its own, see [System routines](system-routines.md).
 
-An install that had routines moved them once, on the upgrade to Automations; see
-[Moving to Automations](updates.md#moving-to-automations-one-time).
-
 ## Making one
 
 - **The site.** **Automations** in the sidebar → **New automation**. Pick the trigger, add a Bot turn step, and save.

@@ -3,8 +3,8 @@
 # It is not part of CI. It takes about ten minutes and prints a pass/fail table.
 #
 #   scripts/journey-test.sh                     # build this checkout as the candidate (v9.9.9), start from the newest release
-#   scripts/journey-test.sh --tag v0.3.0        # a published candidate release (its images and bundle must exist)
-#   scripts/journey-test.sh --tag v0.3.0 --previous v0.2.5
+#   scripts/journey-test.sh --tag v0.6.264      # a published candidate release (its images and bundle must exist)
+#   scripts/journey-test.sh --tag v0.6.264 --previous v0.6.263
 #   scripts/journey-test.sh --keep              # leave the stack running afterwards
 #   scripts/journey-test.sh --release           # the release gate's run (python scripts/release_checks.py --release)
 #
@@ -46,17 +46,7 @@
 #                 updater kept the helper's settings and stopped refreshing)
 #  11 backup      docker/backup-test.sh on the candidate: MinIO and a file replica, wipe the volume, restore
 #
-# A pair that crosses 0.6 (scripts/journey_plan.py says fresh-start: 0.6 starts fresh, docs/updates.md "From 0.5 to
-# 0.6") cannot upgrade the seeded install, so after seeding it (1-3) the journey proves the refusal instead, then
-# starts over:
-#   r1 refused    the candidate's own start (`docker compose run server` with TICO_TAG set to it) on the seeded data
-#                 volume exits non-zero with the documented message, and the database files are byte-for-byte the same,
-#                 with no new -wal or -shm
-#   r2 previous   the previous release starts on that volume again: same environment id, its tasks still there
-#   r3 update     "Update now" to the candidate is refused (409 fresh_start) or rolls back to the previous release, its
-#                 tasks still there
-#   r4 new        everything is removed and the previous release installed again; a database with no tasks yet
-#   then          4 upgrades that install in place, and 6-11 run on it (seeded on the candidate; 5 does not apply)
+# The previous release is v0.6.0 or later: no release before 0.6 is supported, so an older --previous is refused.
 #
 # scripts/install.sh is Linux-and-root only (it installs Docker and writes /opt/tico), so this does what it does
 # after the preflight, the same way: download the bundle and SHA256SUMS, check the checksum, unpack, write .env.
@@ -116,7 +106,9 @@ if [ -z "$PREV" ]; then
   PREV="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - | grep -vx "$CAND" | head -n 1)"
   [ -n "$PREV" ] || { echo "journey: no previous release tag found; pass --previous" >&2; exit 2; }
 fi
-JOURNEY="$(python3 scripts/journey_plan.py "$PREV" "$CAND")" || exit 2   # upgrade, or fresh-start across 0.6
+case "$PREV" in
+  v0.[0-5].*) echo "journey: the previous release must be v0.6.0 or later, not $PREV" >&2; exit 2 ;;
+esac
 
 rollback_changed() {  # 0: run the rollback steps. Their code changed since $PREV, or the diff cannot be computed.
   export GIT_TERMINAL_PROMPT=0
@@ -146,7 +138,6 @@ WORK="$(mktemp -d)"
 DIR="$WORK/install"
 mkdir -p "$DIR" "$WORK/releases/download"
 RESULTS=() WHY=() STATE_ID="" FAILED=0 SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION="" CAND_READY=0 AGENT_OPS_NAMED=0 AGENT_OPS_WAS=""
-REFUSED=journey-refused-$RUN   # the candidate's one-off start on the previous release's data (fresh-start)
 
 dc() { docker compose -p "$PROJECT" --project-directory "$DIR" "$@"; }
 say() { printf '  %s\n' "$*"; { printf '%s\n' "$*" >> "$WORK/said"; } 2>/dev/null || true; }   # said: the step's reasons, for its summary
@@ -179,7 +170,7 @@ for row in sqlite3.connect("file:/data/hub.sqlite?mode=ro", uri=True).execute(sy
 cleanup() {
   cat "$WORK/stderr" >&2 2>/dev/null   # a step stopped mid-way (killed, or exited) still shows what it said on stderr
   [ "$KEEP" = 1 ] && { echo "journey: kept the stack (docker compose -p $PROJECT --project-directory $DIR ...), $RUNNER and volume $RUNNER_VOLUME"; return; }
-  docker rm -f "$RUNNER" "$SWAP_HELPER" "$RELEASE_SERVER" "$REGISTRY_NAME" "$REFUSED" >/dev/null 2>&1
+  docker rm -f "$RUNNER" "$SWAP_HELPER" "$RELEASE_SERVER" "$REGISTRY_NAME" >/dev/null 2>&1
   dc down -v >/dev/null 2>&1
   docker volume rm "$RUNNER_VOLUME" >/dev/null 2>&1
   # The updater writes the install's bundle as the image's user; hand it back so the directory can go.
@@ -278,28 +269,9 @@ worktree_state() {  # task: the state of its worktree link and whether its check
   path="$(get "tasks/$1/links" | json '[l for l in (d.get("links", d) if isinstance(d, dict) else d) if l["kind"] == "worktree"][0]["path"]')"
   docker exec "$RUNNER" test -e "/home/runner/workspace/$path/.git" && echo on-disk || echo not-on-disk
 }
-on_old_line() { [ "$JOURNEY" = fresh-start ] && [ "$(server_tag)" = "$PREV" ]; }   # the server runs a release below 0.6
 new_task() {  # title: a task Agent Ops is working on, so a worktree may start for it; prints its id
-  local task version
-  if ! on_old_line; then   # 0.6: a new task is open in General's first stage, and its owner bot may add a worktree
-    post tasks "{\"owner\": \"bot:botops\", \"title\": \"$1\", \"body\": \"A worktree for the journey.\"}" | json 'd.get("task", d)["id"]'
-    return
-  fi
-  task="$(post tasks "{\"owner\": \"bot:botops\", \"title\": \"$1\", \"body\": \"A worktree for the journey.\", \"next_run\": true}")" || return 1
-  version="$(printf '%s' "$task" | json 'd.get("task", d)["version"]')"
-  task="$(printf '%s' "$task" | json 'd.get("task", d)["id"]')"
-  post "tasks/$task" "{\"version\": $version, \"status\": \"doing\", \"quiet\": true}" >/dev/null || return 1
-  echo "$task"
-}
-tasks_kept() {  # the previous release's seeded tasks are all still in its database
-  fixture_intact && [ "$(sql "SELECT count(*) FROM tasks WHERE id='$SEED_TASK'")" = 1 ]
-}
-data_files() {  # name, size and SHA-256 of each database file on the install's data volume (-wal and -shm included)
-  docker run --rm --user 0 --entrypoint python -v "${PROJECT}_tico-data:/data" "$SERVER_IMAGE:$PREV" -c '
-import glob, hashlib, os
-for path in sorted(glob.glob("/data/*.sqlite*")):
-    with open(path, "rb") as f:
-        print(os.path.basename(path), os.path.getsize(path), hashlib.sha256(f.read()).hexdigest())'
+  # A new task is open in General's first stage, and its owner bot may add a worktree.
+  post tasks "{\"owner\": \"bot:botops\", \"title\": \"$1\", \"body\": \"A worktree for the journey.\"}" | json 'd.get("task", d)["id"]'
 }
 
 # The updater's side of an update: images it pulls and bundles it downloads, all local.
@@ -403,7 +375,7 @@ EOF
 step_seed() {
   local operator code rid revision assignment assigned generation credential
   # Rows the way older releases wrote them, added to the running install's database: the previous release's, which
-  # the upgrade must keep. A fresh-start journey seeds its second install on the candidate, where none upgrade.
+  # the upgrade must keep.
   if [ "$(server_tag)" = "$PREV" ]; then
     dc exec -T server python - --into /data/hub.sqlite < scripts/make_upgrade_fixture.py || { say "could not add the fixture rows"; return 1; }
   fi
@@ -469,80 +441,6 @@ step_restart() {
   retry 120 seen_since "$before" || { say "the runner did not reconnect"; return 1; }
 }
 
-# fresh-start (scripts/journey_plan.py): the candidate refuses the previous release's database with tasks, then the
-# journey starts over on a new previous install with none.
-step_refused() {
-  local before after pid code end
-  candidate_images || return 1
-  dc stop server >/dev/null 2>&1 || return 1
-  before="$(data_files)" && [ -n "$before" ] || { say "could not read the database files"; return 1; }
-  # The candidate's own start on this install, as `docker compose up` would start it: its entrypoint, the install's
-  # environment and data volume. In the foreground, so no restart policy hides its exit.
-  TICO_TAG="$CAND" docker compose -p "$PROJECT" --project-directory "$DIR" run --rm -T --no-deps --name "$REFUSED" server \
-    > "$WORK/refused.log" 2>&1 &
-  pid=$! end=$((SECONDS + 180))
-  while kill -0 "$pid" 2>/dev/null; do
-    if [ "$SECONDS" -ge "$end" ]; then
-      docker rm -f "$REFUSED" >/dev/null 2>&1; wait "$pid"
-      say "the $CAND server kept running on a $PREV database with tasks"; tail -n 15 "$WORK/refused.log" | sed 's/^/    /'; return 1
-    fi
-    sleep 1
-  done
-  wait "$pid"; code=$?
-  after="$(data_files)" || { say "could not read the database files after the start"; return 1; }
-  [ "$code" != 0 ] || { say "the $CAND server exited 0 on a $PREV database with tasks"; return 1; }
-  # docs/updates.md, "From 0.5 to 0.6" (backend/migrations BELOW_FLOOR)
-  if ! grep -q "Tico 0.6 does not carry tasks over" "$WORK/refused.log" || ! grep -q "Nothing was changed" "$WORK/refused.log"; then
-    say "the $CAND server exited $code without the fresh-start message:"; tail -n 15 "$WORK/refused.log" | sed 's/^/    /'; return 1
-  fi
-  if [ "$after" != "$before" ]; then
-    say "the database files changed (name, size, SHA-256; a new -wal or -shm counts):"
-    diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") | sed 's/^/    /'
-    return 1
-  fi
-}
-
-step_previous_again() {
-  dc up -d server >/dev/null 2>&1 || { say "docker compose up failed"; return 1; }
-  retry 300 healthy || { say "$PREV did not start again on its database"; return 1; }
-  [ "$(server_tag)" = "$PREV" ] || { say "the server is on $(server_tag), not $PREV"; return 1; }
-  conversation_intact || { say "the conversation or environment id changed"; return 1; }
-  tasks_kept || { say "the $PREV tasks are not all there"; return 1; }
-}
-
-step_update_refused() {
-  local response state
-  # "Update now", as an owner or an update key would: a $PREV with the bridge refuses it (409 fresh_start,
-  # backend/releases.py refuse_held); one without starts it, the candidate refuses the database and the updater rolls
-  # back to $PREV.
-  offer_candidate || return 1
-  if response="$(post system/update "{\"version\": \"${CAND#v}\"}" 2>&1)"; then
-    state="$(await_update)"
-    [ "$state" = rolled_back ] || { say "expected rolled_back, got $state: $(get system/update | json 'd["message"]')"; return 1; }
-  else
-    case "$response" in
-      *'"fresh_start"'*) say "$PREV refused the update: fresh_start" ;;
-      *) say "$response"; return 1 ;;
-    esac
-  fi
-  retry 120 healthy && [ "$(server_tag)" = "$PREV" ] || { say "the server is not back on $PREV"; return 1; }
-  [ "$(bundle_version)" = "$PREV" ] || { say "the install's bundle is $(bundle_version), not $PREV"; return 1; }
-  conversation_intact || { say "the conversation or environment id changed"; return 1; }
-  tasks_kept || { say "the $PREV tasks are not all there after the update"; return 1; }
-}
-
-step_new_previous() {
-  # Everything the seeded install had goes; the downloads and the candidate's bundle stay.
-  docker rm -f "$RUNNER" "$SWAP_HELPER" "$RELEASE_SERVER" >/dev/null 2>&1
-  dc down -v >/dev/null 2>&1 || { say "could not remove the seeded install"; return 1; }
-  docker volume rm "$RUNNER_VOLUME" >/dev/null 2>&1
-  docker run --rm --user 0 --entrypoint chown -v "$WORK:/w" "$SERVER_IMAGE:$PREV" -R "$(id -u):$(id -g)" /w >/dev/null 2>&1
-  rm -rf "$DIR" && mkdir -p "$DIR" || return 1
-  SEED_THREAD="" SEED_TASK="" SEED_CONVERSATION=""
-  step_install || return 1
-  [ "$(sql 'SELECT count(*) FROM tasks')" = 0 ] || { say "a new $PREV install already has $(sql 'SELECT count(*) FROM tasks') tasks"; return 1; }
-}
-
 candidate_images() {  # the candidate's server, runner and updater images in the local cache, once
   [ "$CAND_READY" = 1 ] && return 0
   if [ -n "${TICO_JOURNEY_IMAGES_READY:-}" ]; then
@@ -575,11 +473,7 @@ step_upgrade() {
   state="$(run_update "${CAND#v}")"
   [ "$state" = healthy ] || { say "the update ended in state $state: $(get system/update | json 'd["message"]')"; return 1; }
   retry 60 healthy && [ "$(server_tag)" = "$CAND" ] || { say "the server is not on $CAND"; return 1; }
-  if [ -n "$SEED_CONVERSATION" ]; then
-    conversation_intact || { say "data did not survive the update"; return 1; }
-  else   # fresh-start: the new install has no conversation yet
-    [ "$(environment_id)" = "$STATE_ID" ] || { say "the environment id changed in the update"; return 1; }
-  fi
+  conversation_intact || { say "data did not survive the update"; return 1; }
   grep -q "^TICO_TAG=$CAND\$" "$DIR/.env" || { say ".env does not record $CAND"; return 1; }
   [ "$(bundle_version)" = "$CAND" ] || { say "the install's bundle is $(bundle_version), not $CAND"; return 1; }
   updater_replaced "$CAND"   # the first hop: the previous updater hands over to the candidate's
@@ -627,7 +521,7 @@ step_new_runner() {
   [ "$(fact thread)" = "$SEED_THREAD" ] || { say "the session from before the upgrade did not continue: $(cat "$WORK/reply")"; return 1; }
   state="$(worktree_state "$SEED_TASK" | tr '\n' ' ')"
   [ "$state" = "present on-disk " ] || { say "the worktree from before the upgrade is $state"; return 1; }
-  [ "$JOURNEY" = fresh-start ] || fixture_intact || { say "the older releases' rows did not survive the upgrade"; return 1; }
+  fixture_intact || { say "the older releases' rows did not survive the upgrade"; return 1; }
   # A computer that lost the harness's own sessions (a move, a new HOME, cleaned files) still answers, on a fresh
   # thread, instead of failing every turn on the one it remembers.
   docker exec "$RUNNER" find /home/runner/journey-threads -maxdepth 1 -type f -name 'journey-*' -delete || return 1
@@ -762,22 +656,12 @@ failure_logs() {  # what the containers said last: the release gate's log is all
   docker exec "$RUNNER" cat /tmp/journey-fake-codex.log 2>/dev/null | tail -n 20 | sed 's/^/    fake codex: /'
 }
 
-printf 'journey: %s, previous %s -> candidate %s (%s), Docker names end in -%s\n' "$JOURNEY" "$PREV" "$CAND" "$([ "$LOCAL" = 1 ] && echo "built from this checkout" || echo "published release")" "$RUN"
+printf 'journey: previous %s -> candidate %s (%s), Docker names end in -%s\n' "$PREV" "$CAND" "$([ "$LOCAL" = 1 ] && echo "built from this checkout" || echo "published release")" "$RUN"
 run_step "install $PREV (bundle, auth none)" step_install
 run_step "seed: fixture rows, runner, HUB_ variable, session, worktree" step_seed
 [ "$FAST" = 1 ] || run_step "restart the server" step_restart
-if [ "$JOURNEY" = fresh-start ]; then
-  run_step "$CAND refuses the $PREV database, files unchanged" step_refused
-  run_step "$PREV starts again on it with its tasks" step_previous_again
-  run_step "update now to $CAND: refused or rolled back" step_update_refused
-  run_step "new $PREV install with no tasks" step_new_previous
-  run_step "upgrade $PREV -> $CAND (no tasks; updater replaces itself)" step_upgrade
-  run_step "seed $CAND: runner, HUB_ variable, session, worktree" step_seed
-  skip_step "$PREV runner on the $CAND server: turn and worktree" "0.6 starts fresh: the computer is enrolled anew on $CAND"
-else
-  run_step "upgrade $PREV -> $CAND (updater replaces itself)" step_upgrade
-  run_step "$PREV runner on the $CAND server: turn and worktree" step_old_runner
-fi
+run_step "upgrade $PREV -> $CAND (updater replaces itself)" step_upgrade
+run_step "$PREV runner on the $CAND server: turn and worktree" step_old_runner
 run_step "$CAND runner keeps the seeded data" step_new_runner
 L_ROLLBACK="roll back a bad update (snapshot restored)" L_REPLICA="restore from the replica after that rollback"
 if [ "$ROLLBACK_RUN" = 1 ]; then
