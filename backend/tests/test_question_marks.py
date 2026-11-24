@@ -581,6 +581,35 @@ def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, ge
     assert len(_reviewer_jobs(c, reply["id"])) == 1, "and one job"
 
 
+def test_an_asker_following_a_chat_at_digest_gets_the_answer_carried_once(c, general):
+    """Reviewer follows Ana's team chat at digest: her reply there clears its ❓, so it is addressed, one carrier and
+    one job, not left to its digest."""
+    from backend import threads
+
+    room = threads.create(c, ANA, title="Launch", audience="members", members=[BUILDER, "bot:reviewer"])["id"]
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.", conversation_id=room)
+    task = H.task_create(
+        c, ANA, "Write the launch note", "Draft the note.", BUILDER, conversation_id=room, own_room=False, lint=False
+    )
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    mark = _ask(c, task["id"], bot="bot:reviewer")
+    c.execute(
+        "INSERT OR REPLACE INTO thread_followers(thread_id, actor, following, notify, reason, created_at, updated_at) "
+        "VALUES(?, 'bot:reviewer', 1, 'digest', 'mentioned', ?, ?)",
+        (room, H.now(), H.now()),
+    )
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=said["conversation_id"])
+    assert Q.get(c, mark["id"])["cleared_message_id"] == reply["id"]
+    reached = c.execute(
+        "SELECT mode, state, carrier_id FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'",
+        (reply["id"],),
+    ).fetchall()
+    assert [(r[0] in ("steer", "queue"), r[1], bool(r[2])) for r in reached] == [(True, "pending", True)], [
+        tuple(r) for r in reached
+    ]
+    assert len(_reviewer_jobs(c, reply["id"])) == 1
+
+
 def test_a_reply_its_asker_may_not_read_leaves_the_question_open(c, general):
     """Ana's chat with Builder alone: Reviewer, outside it, may not read her reply, so its ❓ stays open, not cleared
     by an answer it never gets."""

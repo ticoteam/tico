@@ -1801,15 +1801,21 @@ def deliver(c, thread, message, in_audience, posting, warnings=None):
         # answer it never got.
         from . import question_marks
 
-        named = {r["actor"] for r in reached} | {primary}
-        # Each by the message's way, as `plan` builds an addressed bot's entry: a Defer keeps its deadline.
+        # Each by the message's way, as `plan` builds an addressed bot's entry: a Defer keeps its deadline. An asker the
+        # message already addresses (its primary, a mention, a DM's member) keeps that entry; one only following it (a
+        # live follower under a Defer, a digest) is addressed instead, so its answer is carried, not left to a digest.
         due = plan_defer_for(root, defer_for) if way == "defer" else None
         mode = "queue" if due == "never" else way or "steer"
+        at = {r["actor"]: i for i, r in enumerate(reached)}
         for bot in question_marks.cleared_askers(c, message["id"]):
-            if bot not in named and bot.startswith("bot:"):
-                reached.append(
-                    {"actor": bot, "reason": "reply", "mode": mode, "defer_for": due if mode == "defer" else None}
-                )
+            if bot == primary or not bot.startswith("bot:"):
+                continue
+            answer = {"actor": bot, "reason": "reply", "mode": mode, "defer_for": due if mode == "defer" else None}
+            if bot not in at:
+                at[bot] = len(reached)
+                reached.append(answer)
+            elif reached[at[bot]]["reason"] in ("follower", "digest"):
+                reached[at[bot]] = answer
     seq = (message.get("seq") or 1) - 1
     out = []
     entry = next((r for r in reached if r["actor"] == primary), None) if primary else None
