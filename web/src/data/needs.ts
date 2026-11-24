@@ -1,5 +1,6 @@
 import { api } from '@/api/client';
 import type { NeedsYou, NeedsYouItem } from '@/api/schema';
+import { queryClient } from './query-client';
 
 /** The most a page holds (backend/views.py NEEDS_PAGE_MAX), and how many pages are read before the rest is left. */
 const PAGE = 200;
@@ -32,4 +33,11 @@ export async function needsYouRead(signal?: AbortSignal): Promise<{ items: Needs
     if (!cursor) break;
   }
   return { items, sorting, sortingUntil };
+}
+
+/** Needs-you items gone (`ids`): a reply sent in a chat, or the live `needs` event's `removed` (answered in another tab,
+    taken back by its agent). Their asks leave the Agent bar now (Flow's list, under ['flow']), before it is read again. */
+export function asksGone(ids: readonly string[]): void {
+  if (!ids.length) return;
+  queryClient.setQueryData<{ asks?: { id: string }[] }>(['flow'], (f) => (f?.asks?.some((a) => ids.includes(a.id)) ? { ...f, asks: f.asks.filter((a) => !ids.includes(a.id)) } : f));
 }

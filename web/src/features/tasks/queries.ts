@@ -846,7 +846,7 @@ export interface Flow {
   approvals?: ApprovalItem[];
   /** Each ❓ question or ask an agent put to the person that still waits, with the pipeline of its task when it is on
       one: the Agent bar opens for its page's owner on that page (a pipeline's on that pipeline's page). */
-  asks?: { id: string; kind: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[];
+  asks?: { id: string; kind: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null; task: string | null; wait: string }[];
   /** Every row's id (a task row's task, a request's own), in Tico's order (backend/needs_order.py). */
   order?: string[];
   /** Tico is sorting the list: its top rows stay live and the rest wait for the new order. */
@@ -981,7 +981,10 @@ export const flowQuery = queryOptions({
       const by = it.kind === 'question' ? it.from_id : it.kind === 'ask' ? [it.ask?.asked_by, task?.owner_id, task?.requester_id].find((a) => !!a?.startsWith('bot:')) : null;
       // where it waits (its chat, or its task), which the Agent bar links: a ❓ may wait in a Home or a task's chat
       const href = it.href ?? (it.conversation_id ? `/threads/${encodeURIComponent(it.conversation_id)}` : it.task?.id ? `/task/${encodeURIComponent(it.task.id)}` : null);
-      if (by?.startsWith('bot:')) asks.push({ id: it.id, kind: it.kind === 'question' ? 'question' : 'ask', by, pipeline: it.task?.pipeline_id ?? null, href });
+      // its task and what it waits on there (as `waits` names it): an answer takes it out of the bar (needsYouWithout)
+      const on = it.task?.id ?? it.task_id ?? null;
+      const wait = it.ask?.requirement_id ?? it.requirement_id ?? it.id;
+      if (by?.startsWith('bot:')) asks.push({ id: it.id, kind: it.kind === 'question' ? 'question' : 'ask', by, pipeline: it.task?.pipeline_id ?? null, href, task: on, wait });
       if (isRequest(it)) {
         requests.push(it);
         order.push(it.id);
@@ -991,7 +994,7 @@ export const flowQuery = queryOptions({
       for (const id of new Set([it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])])) {
         if (!id) continue;
         named.add(id);
-        (waits[id] ??= []).push(it.ask?.requirement_id ?? it.requirement_id ?? it.id);
+        (waits[id] ??= []).push(wait);
       }
       const t = it.task;
       if (!t) continue;

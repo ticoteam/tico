@@ -92,6 +92,8 @@ export function needsYouWithout(task: string, wait: string | null, read: Flow | 
   const row = read?.items.some((w) => w.id === task) ?? true;
   const apply = (f: Flow): Flow => {
     const approvals = f.approvals?.filter((a) => !(a.id === task && (wait === null || a.ask.requirement === wait)));
+    // the Agent bar's line to it goes with it
+    const asks = f.asks?.filter((a) => !(a.task === task && (wait === null || a.wait === wait)));
     if (!leaves) {
       const next = approvals?.find((a) => a.id === task);
       const items = f.items.map((w) => {
@@ -102,7 +104,7 @@ export function needsYouWithout(task: string, wait: string | null, read: Flow | 
         // an answered ❓ goes from the row, so its card shows the next one, and its line no longer names the row
         return { ...base, questions: w.questions?.filter((q) => q.id !== wait), ...(asked && base.reason === asked.line && { reason: undefined }) };
       });
-      return { ...f, items, ...(approvals && { approvals }), ...(f.waits && { waits: { ...f.waits, [task]: left } }) };
+      return { ...f, items, ...(approvals && { approvals }), ...(asks && { asks }), ...(f.waits && { waits: { ...f.waits, [task]: left } }) };
     }
     const items = f.items.filter((w) => w.id !== task);
     const waits = f.waits && Object.fromEntries(Object.entries(f.waits).filter(([t]) => t !== task));
@@ -115,6 +117,7 @@ export function needsYouWithout(task: string, wait: string | null, read: Flow | 
       ...(f.order && { order: f.order.filter((t) => t !== task) }),
       ...(waits && { waits }),
       ...(approvals && { approvals }),
+      ...(asks && { asks }),
     };
   };
   return (cur) => {

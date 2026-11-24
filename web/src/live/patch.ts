@@ -1,6 +1,7 @@
 import type { QueryKey } from '@tanstack/react-query';
 import { queryClient } from '@/data/query-client';
 import { keys } from '@/data/keys';
+import { asksGone } from '@/data/needs';
 import { withStatus, type Directory, type StatusLine } from '@/data/directory';
 import type { Topic, LiveEvent } from './stream';
 
@@ -729,6 +730,8 @@ export function installPatchers(): void {
   onRefetch('letters', () => [['letters']]);
   // What waits on the person changed: Flow's list and the start page's read again.
   onRefetch('needs', () => [['flow'], ['needs']], true);
+  // An ask that left it (`removed`) leaves the Agent bar now, before that read.
+  onTopic<{ removed?: string[] | null }>('needs', (batch) => asksGone(batch.flatMap((e) => e.removed ?? [])));
   onTopic<BotEvent>('bots', patchDirectory);
   onRefetch<{ bot_id?: string; state?: string }>('runs', (e) => {
     if (!e.bot_id || !e.state) return [];
