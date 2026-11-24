@@ -43,6 +43,7 @@ const ASK = { id: 'v1:r1', kind: 'ask', task_id: 't1', task: { id: 't1', number:
 let needs: unknown[] = [ASK];
 let needsFail = false;
 let needsDown = false;
+let seenDown = false;
 
 beforeEach(() => {
   gets = [];
@@ -51,6 +52,7 @@ beforeEach(() => {
   needs = [ASK];
   needsFail = false;
   needsDown = false;
+  seenDown = false;
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (init?.method === 'POST') {
@@ -60,6 +62,8 @@ beforeEach(() => {
     if (needsFail && u.startsWith('/api/v2/needs-you'))
       return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     if (needsDown && u.startsWith('/api/v2/needs-you'))
+      return new Response(JSON.stringify({ error: { code: 'starting', detail: 'Restarting.' } }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+    if (seenDown && u.startsWith('/api/v2/preferences'))
       return new Response(JSON.stringify({ error: { code: 'starting', detail: 'Restarting.' } }), { status: 503, headers: { 'Content-Type': 'application/json' } });
     const q = new URL(u, 'http://x').searchParams;
     const body = u.startsWith('/api/v2/tasks')
@@ -169,6 +173,32 @@ describe("Tico's tracker", () => {
     const row = await screen.findByRole('button', { name: /Tracking 2/ });
     expect(row.textContent).toContain('1 needs you');
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads again by itself only the reads that may pass: a restart's 503, not a refusal; Try again reads both', async () => {
+    needsFail = true;
+    seenDown = true;
+    vi.stubGlobal('EventSource', FakeEventSource);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    startLive();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Tracker />
+      </QueryClientProvider>,
+    );
+    // Needs you (403) comes before the last opening (503) in the reads: its reason is the line
+    expect(await screen.findByText("Tracking didn't load · no access")).toBeTruthy();
+    await waitFor(() => expect(queryClient.getQueryState(['tico', 'tracker', 'seen'])?.status).toBe('error'));
+    const asked = (path: string) => gets.filter((u) => u.startsWith(path)).length;
+    const [needsAsked, seenAsked] = [asked('/api/v2/needs-you'), asked('/api/v2/preferences')];
+    act(() => FakeEventSource.last.feed(opening(1)));
+    await waitFor(() => expect(asked('/api/v2/preferences')).toBe(seenAsked + 1));
+    expect(asked('/api/v2/needs-you')).toBe(needsAsked);
+    // Try again reads every failed read
+    await waitFor(() => expect(queryClient.getQueryState(['tico', 'tracker', 'seen'])?.fetchStatus).toBe('idle'));
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(asked('/api/v2/needs-you')).toBe(needsAsked + 1));
+    expect(asked('/api/v2/preferences')).toBe(seenAsked + 2);
   });
 
   it('drops a result from the Back count when it ages past 7 days, on one timer', async () => {

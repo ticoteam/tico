@@ -4,14 +4,17 @@ import { ApiError } from '@/api/client';
 import { queryClient } from '@/data/query-client';
 import { FakeEventSource, opening } from './fake-stream';
 import { faultReason, useReadFault } from './fault';
-import { liveStatus, startLive, stopLive } from './stream';
+import { liveStatus, restartLive, startLive, stopLive } from './stream';
 
 const FIVE_MIN = 5 * 60_000;
 const starting = () => new ApiError(503, 'starting', 'Tico is restarting', true);
 
+/** One read: failed with `error`, or read (null). */
 function Read({ error, retry }: { error: unknown; retry: () => unknown }) {
-  return <p>{useReadFault('Thing', error, retry) ?? 'fine'}</p>;
+  return <p>{useReadFault('Thing', error ? [{ error, refetch: retry }] : [], !error) ?? 'fine'}</p>;
 }
+
+let visible: DocumentVisibilityState = 'visible';
 
 let warn: MockInstance<typeof console.warn>;
 beforeEach(() => {
@@ -25,6 +28,8 @@ beforeEach(() => {
 afterEach(() => {
   // a test's own onLine (an own property over jsdom's)
   delete (navigator as { onLine?: boolean }).onLine;
+  delete (document as { visibilityState?: string }).visibilityState;
+  visible = 'visible';
   stopLive();
   queryClient.clear();
   vi.useRealTimers();
@@ -60,6 +65,8 @@ describe('a read that failed', () => {
     vi.advanceTimersByTime(250);
     FakeEventSource.last.feed(opening(905, 900));
     await vi.waitFor(() => expect(retry).toHaveBeenCalledTimes(1));
+    // joining a read already on its way (the stream's own read of quiet areas), never cancelling it for another
+    expect(retry).toHaveBeenCalledWith({ cancelRefetch: false });
   });
 
   it('is read again when the page comes back from the browser’s page cache, though the status stayed live', async () => {
@@ -104,6 +111,47 @@ describe('a read that failed', () => {
     expect(screen.getByText('fine')).toBeTruthy();
     rerender(<Read error={starting()} retry={() => undefined} />);
     expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('is not read again when a live stream only reconnects for new follows', async () => {
+    const retry = vi.fn();
+    startLive();
+    FakeEventSource.last.feed(opening(900));
+    render(<Read error={starting()} retry={retry} />);
+    // a page's follows changed: the same stream opens again with the new scope, and was never down
+    restartLive();
+    vi.advanceTimersByTime(30);
+    FakeEventSource.last.feed(opening(905, 900));
+    // then a real drop and return, which does read again: once, so the reconnect before it did not
+    FakeEventSource.last.fail();
+    vi.advanceTimersByTime(250);
+    FakeEventSource.last.feed(opening(910, 905));
+    await vi.waitFor(() => expect(retry).toHaveBeenCalled());
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
+
+  it('a stopped company is never read again by itself, on reconnect or on the backstop', () => {
+    const retry = vi.fn();
+    startLive();
+    render(<Read error={new ApiError(503, 'stopped', 'This Tico company is stopped')} retry={retry} />);
+    expect(screen.getByText("Thing didn't load · company stopped")).toBeTruthy();
+    FakeEventSource.last.feed(opening(900));
+    vi.advanceTimersByTime(FIVE_MIN * 2);
+    expect(retry).not.toHaveBeenCalled();
+  });
+
+  it('a hidden tab skips the backstop, and it resumes once the tab shows again', () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visible });
+    const retry = vi.fn();
+    startLive();
+    FakeEventSource.last.feed(opening(900));
+    render(<Read error={starting()} retry={retry} />);
+    visible = 'hidden';
+    vi.advanceTimersByTime(FIVE_MIN);
+    expect(retry).not.toHaveBeenCalled();
+    visible = 'visible';
+    vi.advanceTimersByTime(FIVE_MIN);
+    expect(retry).toHaveBeenCalledTimes(1);
   });
 
   it('reads nothing once its view is gone', () => {

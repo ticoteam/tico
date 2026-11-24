@@ -50,7 +50,7 @@ export function TicoSheet() {
     void room.refetch();
     if (powerRead.isError) void powerRead.refetch();
   };
-  const fault = useReadFault('Tico', faulted ? room.error : null, retry);
+  const fault = useReadFault('Tico', faulted ? (powerRead.isError ? [room, powerRead] : [room]) : [], room.isSuccess);
   // On a phone, going live from a setup file puts Tico's card down so Tasks shows (the shell brings it up for setup).
   const tuck = phone?.tuck;
   const wasOwed = useRef(owed);

@@ -66,14 +66,14 @@ describe("Tico's sheet when its read fails", () => {
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   /** GET /api/v2/assistant fails as a restart does until `back` is set, then answers `info`. */
   function assistant(info: object) {
-    const server = { back: false };
-    vi.stubGlobal('fetch', async (url: string) =>
-      String(url) !== '/api/v2/assistant'
-        ? json(404, { error: { code: 'not_found', detail: 'No.' } })
-        : server.back
-          ? json(200, { bot: 'assistant', room_id: null, ...info })
-          : json(503, { error: { code: 'starting', detail: 'Restarting.' } }),
-    );
+    const server = { back: false, asked: 0 };
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url) !== '/api/v2/assistant') return json(404, { error: { code: 'not_found', detail: 'No.' } });
+      server.asked++;
+      return server.back
+        ? json(200, { bot: 'assistant', room_id: null, ...info })
+        : json(503, { error: { code: 'starting', detail: 'Restarting.' } });
+    });
     vi.stubGlobal('EventSource', FakeEventSource);
     return server;
   }
@@ -87,9 +87,18 @@ describe("Tico's sheet when its read fails", () => {
     expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
     expect(warn).toHaveBeenCalledTimes(1);
-    // the server is back: the stream says so, and the read goes out again with no click
-    server.back = true;
+    // the stream is back before the server is: the read goes out again with no click, fails again, and is the same
+    // fault (not logged again)
     act(() => FakeEventSource.last.feed(opening(1)));
+    await waitFor(() => expect(server.asked).toBe(2));
+    expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // the server is back: the stream drops and returns, and the read goes out again
+    server.back = true;
+    const opened = FakeEventSource.all.length;
+    act(() => FakeEventSource.last.fail());
+    await waitFor(() => expect(FakeEventSource.all).toHaveLength(opened + 1));
+    act(() => FakeEventSource.last.feed(opening(5, 1)));
     expect(await screen.findByRole('img', { name: 'Tico has no chat yet' })).toBeTruthy();
     expect(screen.queryByText(/didn't load/)).toBeNull();
     expect(warn).toHaveBeenCalledTimes(1);

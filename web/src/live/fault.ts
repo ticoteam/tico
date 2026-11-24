@@ -28,33 +28,48 @@ export function faultReason(err: unknown): string {
     refusal (4xx) or the app's own error would only fail again; Try again stays for those. */
 const passing = (err: unknown) => err instanceof ApiError && (err.status === 0 || err.status >= 500) && err.code !== 'stopped';
 
+/** A read that failed: its error, and how to read it again (a query's own result fits). */
+export interface FailedRead {
+  error: unknown;
+  refetch: (opts: { cancelRefetch: boolean }) => unknown;
+}
+
 /**
- * The line for a read of `what` that failed (`error`; null when it has not, or its fault is not on screen). A passing
- * failure is read again (`retry`) each time the stream is live again, and every BACKSTOP_MS meanwhile. Each fault is
- * logged once, however many reads fail again before one succeeds.
+ * The line for reads of `what` that failed (`failed`: those whose fault is on screen; the first one's error says
+ * why), or null while none has. Each failed read that may pass is read again each time the stream is live again, and
+ * every BACKSTOP_MS meanwhile, joining a read already on its way rather than sending another. A fault is logged once,
+ * through the attempts that fail again, until a read succeeds (`ok`).
  */
-export function useReadFault(what: string, error: unknown, retry: () => unknown): string | null {
-  const again = useRef(retry);
-  const cause = useRef(error);
+export function useReadFault(what: string, failed: readonly FailedRead[], ok: boolean): string | null {
+  const reads = useRef(failed);
   useEffect(() => {
-    again.current = retry;
-    cause.current = error;
+    reads.current = failed;
   });
-  const auto = error != null && passing(error);
+  const auto = failed.some((r) => passing(r.error));
   useEffect(() => {
     if (!auto) return;
-    const off = onLiveAgain(() => void again.current());
+    const again = () => {
+      for (const r of reads.current) if (passing(r.error)) void r.refetch({ cancelRefetch: false });
+    };
+    const off = onLiveAgain(again);
     const timer = setInterval(() => {
-      if (liveStatus() === 'live' && document.visibilityState !== 'hidden') void again.current();
+      if (liveStatus() === 'live' && document.visibilityState !== 'hidden') again();
     }, BACKSTOP_MS);
     return () => {
       off();
       clearInterval(timer);
     };
   }, [auto]);
-  const reason = error != null ? faultReason(error) : null;
+  const first = failed[0];
+  const reason = first ? faultReason(first.error) : null;
+  // the fault logged last: a read trying again (pending, its error cleared) is not a new one
+  const logged = useRef<string | null>(null);
   useEffect(() => {
-    if (reason) console.warn(`${what} didn't load: ${reason}`, cause.current);
-  }, [what, reason]);
+    if (ok) logged.current = null;
+    else if (reason && reason !== logged.current) {
+      logged.current = reason;
+      console.warn(`${what} didn't load: ${reason}`, reads.current[0]?.error);
+    }
+  }, [what, reason, ok]);
   return reason && `${what} didn't load · ${reason}`;
 }

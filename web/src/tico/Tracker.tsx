@@ -76,7 +76,7 @@ export function Tracker() {
       ? trackerGroups(open.data, back.data, waiting, me, backSince(opened ? opened.seen : seen.data, at))
       : null;
   // Said with why, and read again once the stream is back (a release's restart).
-  const fault = useReadFault('Tracking', !groups && me ? failed[0]?.error : null, () => failed.forEach((r) => void r.refetch()));
+  const fault = useReadFault('Tracking', !groups && me ? failed : [], !!groups);
   const ageOut = groups ? nextAgeOut(groups.back) : null;
   useEffect(() => {
     if (ageOut == null) return;
