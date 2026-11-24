@@ -17,7 +17,7 @@ from typing import IO
 from .blobs import register
 from .store import H, Problem
 
-FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")
+FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "preview_html_blob_id", "media_state")
 # Starts from the few pending rows (partial indexes in hubdb.migrate), never a scan of every blob: it runs every few seconds.
 # INDEXED BY pins the partial pending indexes: with small or freshly analysed tables the planner may otherwise
 # scan the full (blob_id,media_state) index, which visits every version.
@@ -91,6 +91,11 @@ class DecodeError(Exception):
 
 IMAGES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 VIDEOS = ("video/mp4", "video/webm", "video/quicktime")
+# Word and Excel files get an HTML preview from backend/office_preview.py, which needs no tool beyond Python.
+OFFICE = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+}
 TRIES = 5  # failed passes before a source is given up on (`Metadata.retry`)
 MAX_BYTES = 25 * 1024**2  # a larger source gets no preview: it is never copied in to be read (the file still opens)
 WALL_SECONDS = 30
@@ -99,10 +104,12 @@ RSS_KIB = 1024 * 1024  # what a child may hold on macOS, where address-space lim
 
 def derives(mime):
     """Whether the worker makes anything from a file of this type on this server: a picture always (its size, and a
-    thumbnail with Pillow); a video or a PDF only with its tool installed. The chat queues only these."""
+    thumbnail with Pillow), a Word or Excel file always (its HTML preview); a video or a PDF only with its tool
+    installed. The chat queues only these."""
     mime = (mime or "").split(";", 1)[0].strip().lower()
     return (
         mime in IMAGES
+        or mime in OFFICE
         or mime in VIDEOS
         and bool(shutil.which("ffprobe") and shutil.which("ffmpeg"))
         or mime == "application/pdf"
@@ -184,10 +191,11 @@ class Metadata:
             duration_ms=None,
             poster_blob_id=blob.get("poster_blob_id"),
             thumb_blob_id=None,
+            preview_html_blob_id=None,
             media_state="none",
         )
         mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
-        if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
+        if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf" or mime in OFFICE):
             return self.save(blob, result, [])
         if not derives(mime) or (blob.get("size") or 0) > MAX_BYTES:
             # Nothing is derived from it here (an SVG, no tool for it, or too big), so it is never read: a file in Tico's
@@ -285,23 +293,25 @@ class Metadata:
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     result["width"], result["height"], preview = image(poster, thumb)
+                elif mime in OFFICE:
+                    page = root / "preview.html"
+                    script = str(Path(__file__).with_name("office_preview.py"))
+                    run([sys.executable, "-I", script, OFFICE[mime], str(source), str(page)], root)
+                    if not page.is_file():
+                        raise DecodeError("The document gave no preview")
+                    derived.append(("preview_html_blob_id", page))
                 if preview:
                     derived.append(("thumb_blob_id", preview))
                 prepared = []
                 try:
                     for field, path in derived:
+                        kind = "text/html" if field == "preview_html_blob_id" else "image/jpeg"
                         with path.open("rb") as data:
-                            digest = self.blobs.put_stream(data, "image/jpeg")
+                            digest = self.blobs.put_stream(data, kind)
                         prepared.append(
                             (
                                 field,
-                                {
-                                    "digest": digest,
-                                    "size": path.stat().st_size,
-                                    "name": path.name,
-                                    "content_type": "image/jpeg",
-                                },
-                            )
+                                {"digest": digest, "size": path.stat().st_size, "name": path.name, "content_type": kind},
                         )
                 except BaseException:
                     # Previews stored before the failure are queued for removal; a later try that stores them again

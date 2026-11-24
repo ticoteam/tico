@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { createContext, use, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, use, useMemo, useRef, useState, type MouseEvent, type ReactNode, type SyntheticEvent } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
@@ -7,10 +7,11 @@ import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
+import { Viewer } from '@/kit/Viewer';
 import { besideThread, fileKind } from '@/lib';
 import { FileCard, isCardKind } from './FileCard';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
-import { fileFactsQuery, pageTextQuery } from './queries';
+import { fileFactsQuery, officePreviewQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
 
 /* What a message holds besides its words, drawn so it reads at a glance (thread-content.html): a link is a chip with
@@ -241,9 +242,9 @@ export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) ===
 /** A file's small copy on the server's own route (`/api/v2/files/<id>/thumb` for a picture or a PDF's first page,
     `/poster` for a video's frame, `?v=` kept), which checks its reader as the file does and answers 404 until the
     copy is made, or when it never is. */
-const previewOf = (href: string, kind: 'thumb' | 'poster') => {
+const previewOf = (href: string, kind: 'thumb' | 'poster' | 'preview') => {
   const m = /^(\/api\/v2\/files\/[A-Za-z0-9_-]+)(\?v=\d+)?$/.exec(href);
-  return m ? `${m[1]}/${kind}${m[2] ?? ''}` : undefined;
+  return m ? (`${m[1]}/${kind}${m[2] ?? ''}` as `/api/${string}`) : undefined;
 };
 // the file's own name goes too: a caption says nothing of what it is, and `lease.pdf` sent as octet-stream is a PDF by its name
 const heldOf = (f: Attachment, own: OwnFile) => ({
@@ -255,11 +256,11 @@ const heldOf = (f: Attachment, own: OwnFile) => ({
 });
 
 /** How a message's own file shows under its words, from its type alone: nothing about it is read to choose. */
-type Face = 'picture' | 'video' | 'audio' | 'pdf' | 'page' | 'file';
+type Face = 'picture' | 'video' | 'audio' | 'pdf' | 'page' | 'docx' | 'xlsx' | 'file';
 function faceOf(f: Attachment): Face {
   const kind = fileKind(f.content_type, f.name);
   if (kind === 'image') return 'picture';
-  if (kind === 'video' || kind === 'audio' || kind === 'pdf') return kind;
+  if (kind === 'video' || kind === 'audio' || kind === 'pdf' || kind === 'docx' || kind === 'xlsx') return kind;
   return isPage(f.content_type) ? 'page' : 'file';
 }
 
@@ -365,6 +366,91 @@ function PdfCard({ f, own }: { f: Attachment; own: OwnFile }) {
   );
 }
 
+/** Any other file: its name, opened full screen (`files.preview`, which offers Download); a new-tab click opens it. */
+function FileLink({ f, own }: { f: Attachment; own: OwnFile }) {
+  const open = (e: MouseEvent) => {
+    if (!plainClick(e)) return;
+    e.preventDefault();
+    preview(own.id, undefined, heldOf(f, own));
+  };
+  return (
+    <a className="file" href={own.href} target="_blank" rel="noreferrer" onClick={open}>
+      <Icon name="file" />
+      <span>{attachmentLabel(f)}</span>
+      {attachmentType(f) && <em>{attachmentType(f)}</em>}
+    </a>
+  );
+}
+
+/** The full view's frame for a document: shown, never run, its links out to a new tab (as the file viewer's page). */
+const DOC_SANDBOX = 'allow-popups allow-popups-to-escape-sandbox';
+/** The layer is a portal, but React bubbles its presses up through the message: stopped here, a long press inside it
+    never opens that message's Copy and Reply sheet. */
+const stopHere = (e: SyntheticEvent) => e.stopPropagation();
+
+/** An Excel preview's first sheet and how many there are, from its page (backend/office_preview.py `data-sheet`). */
+function sheetOf(page: string): string {
+  const body = new DOMParser().parseFromString(page, 'text/html').body;
+  const count = Number(body.dataset.sheets);
+  return body.dataset.sheet && count > 1 ? `${body.dataset.sheet} of ${count}` : '';
+}
+
+/**
+ * A Word or Excel file: the preview the server made of it (backend/office_preview.py, at its `/preview`), drawn small
+ * and closed as a page card is (lib/safeFrame, no scripts); Expand shows it large with Download. While the first read
+ * is out it is a quiet card; with no preview (not made yet, or never) it is the plain file chip, which gives way to
+ * the card if the preview arrives while the card asks again.
+ */
+function OfficeCard({ f, own, kind }: { f: Attachment; own: OwnFile; kind: 'docx' | 'xlsx' }) {
+  const src = previewOf(own.href, 'preview');
+  const read = useQuery({ ...officePreviewQuery(src ?? '/api/v2/none'), enabled: !!src });
+  const [open, setOpen] = useState(false);
+  const page = read.data;
+  const label = useMemo(() => (kind === 'xlsx' && page ? sheetOf(page) : ''), [kind, page]);
+  const name = attachmentLabel(f);
+  const type = attachmentType(f);
+  if (!src || page === null || (page === undefined && (read.failureCount > 0 || read.isError))) return <FileLink f={f} own={own} />;
+  return (
+    <>
+      <div className={`pcard is-office is-${kind}`}>
+        <span className="pcard-view" aria-hidden="true">
+          {page !== undefined ? (
+            <iframe srcDoc={page} sandbox="" title={name} tabIndex={-1} loading="lazy" referrerPolicy="no-referrer" />
+          ) : (
+            <span className="pcard-none is-loading">
+              <Icon name={kind === 'xlsx' ? 'columns' : 'file'} />
+            </span>
+          )}
+        </span>
+        <span className="pcard-foot">
+          <Icon name={kind === 'xlsx' ? 'columns' : 'file'} />
+          <span>{name}</span>
+          {label ? <em>{label}</em> : type && <em>{type}</em>}
+          <Icon name="expand" className="end" />
+        </span>
+        <button type="button" className="pcard-hit" aria-label={name} onClick={() => setOpen(true)} disabled={page === undefined} />
+      </div>
+      {open && page && (
+        <span className="fcard-layer" onClick={stopHere} onContextMenu={stopHere} onTouchStart={stopHere} onPointerDown={stopHere}>
+          <Viewer
+            open
+            onClose={() => setOpen(false)}
+            title={name}
+            meta={label || type || undefined}
+            actions={
+              <a className="ib" href={own.href} download={f.name || name} aria-label="Download" title="Download">
+                <Icon name="download" />
+              </a>
+            }
+          >
+            <iframe srcDoc={page} sandbox={DOC_SANDBOX} title={name} referrerPolicy="no-referrer" />
+          </Viewer>
+        </span>
+      )}
+    </>
+  );
+}
+
 /** A message's own file that is not a picture: a video, a sound, a PDF or a page by its face, anything else its chip. */
 function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
   const url = own.href;
@@ -375,20 +461,10 @@ function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
   if (face === 'audio') return <AudioBar f={f} own={own} />;
   if (face === 'pdf') return <PdfCard f={f} own={own} />;
   if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />;
+  if (face === 'docx' || face === 'xlsx') return <OfficeCard f={f} own={own} kind={face} />;
   const kind = fileKind(f.content_type, f.name);
   if (isCardKind(kind)) return <FileCard kind={kind} url={url} name={name} mime={f.content_type ?? ''} {...(typeof f.size === 'number' && { size: f.size })} />;
-  const open = (e: MouseEvent) => {
-    if (!plainClick(e)) return;
-    e.preventDefault();
-    preview(own.id, undefined, held);
-  };
-  return (
-    <a className="file" href={url} target="_blank" rel="noreferrer" onClick={open}>
-      <Icon name="file" />
-      <span>{name}</span>
-      {attachmentType(f) && <em>{attachmentType(f)}</em>}
-    </a>
-  );
+  return <FileLink f={f} own={own} />;
 }
 
 /**

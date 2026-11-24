@@ -1243,6 +1243,13 @@ def install_media(
     def thumb(request: Request, bid: str, v: int | None = None):
         return download_blob(request, bid, v, "thumb")
 
+    @app.head("/api/v2/files/{bid}/preview", include_in_schema=False)
+    @app.get("/api/v2/files/{bid}/preview")
+    def preview_html(request: Request, bid: str, v: int | None = None):
+        """A Word or Excel file's HTML preview (backend/office_preview.py), for its reader only. It is served as any
+        file is, a sandboxed download; the chat reads it and draws it in a closed frame."""
+        return download_blob(request, bid, v, "preview_html")
+
     @app.head("/api/v2/files/{bid}", include_in_schema=False)
     @app.get("/api/v2/files/{bid}")
     def download(request: Request, bid: str, v: int | None = None):

@@ -1741,12 +1741,12 @@ def job_counts(c, who, bots, states=("queued",)):
     return out
 
 
-BLOB_PARENTS_SQL = "SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=?"
+BLOB_PARENTS_SQL = "SELECT blob_id FROM blob_media WHERE poster_blob_id=? OR thumb_blob_id=? OR preview_html_blob_id=?"
 BLOB_TASKS_SQL = "SELECT task_id FROM task_assets WHERE blob_id=?"
 BLOB_FILES_SQL = (
     "SELECT f.task_id,f.scope,v.attempt_id FROM bot_files f "
     "JOIN bot_file_versions v ON v.file_id=f.id WHERE v.blob_id=? "
-    "OR v.poster_blob_id=? OR v.thumb_blob_id=?"
+    "OR v.poster_blob_id=? OR v.thumb_blob_id=? OR v.preview_html_blob_id=?"
 )
 BLOB_MESSAGES_SQL = "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?"
 BLOB_TRASHED_SQL = "SELECT 1 FROM task_trash_assets WHERE blob_id=?"
@@ -1860,24 +1860,29 @@ def _prime_blob_links(c, bids):
         wanted = set(part)
         parents, tasks, files, messages = ({bid: [] for bid in part} for _ in range(4))
         for row in c.execute(
-            "SELECT blob_id,poster_blob_id,thumb_blob_id FROM blob_media "
-            f"WHERE poster_blob_id IN ({marks}) OR thumb_blob_id IN ({marks})",
-            part * 2,
+            "SELECT blob_id,poster_blob_id,thumb_blob_id,preview_html_blob_id FROM blob_media "
+            f"WHERE poster_blob_id IN ({marks}) OR thumb_blob_id IN ({marks}) OR preview_html_blob_id IN ({marks})",
+            part * 3,
         ):
-            for bid in {row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
+            for bid in {row["poster_blob_id"], row["thumb_blob_id"], row["preview_html_blob_id"]} & wanted:
                 parents[bid].append(row)
             parent_ids.add(row["blob_id"])
         for row in c.execute(f"SELECT task_id,blob_id FROM task_assets WHERE blob_id IN ({marks})", part):
             tasks[row["blob_id"]].append(row)
             task_ids.add(row["task_id"])
         for row in c.execute(
-            "SELECT f.task_id,f.scope,v.attempt_id,v.blob_id,v.poster_blob_id,v.thumb_blob_id "
+            "SELECT f.task_id,f.scope,v.attempt_id,v.blob_id,v.poster_blob_id,v.thumb_blob_id,v.preview_html_blob_id "
             "FROM bot_files f JOIN bot_file_versions v ON v.file_id=f.id "
             f"WHERE v.blob_id IN ({marks}) OR v.poster_blob_id IN ({marks}) "
-            f"OR v.thumb_blob_id IN ({marks})",
-            part * 3,
+            f"OR v.thumb_blob_id IN ({marks}) OR v.preview_html_blob_id IN ({marks})",
+            part * 4,
         ):
-            for bid in {row["blob_id"], row["poster_blob_id"], row["thumb_blob_id"]} & wanted:
+            for bid in {
+                row["blob_id"],
+                row["poster_blob_id"],
+                row["thumb_blob_id"],
+                row["preview_html_blob_id"],
+            } & wanted:
                 files[bid].append(row)
             if row["task_id"]:
                 task_ids.add(row["task_id"])
@@ -1894,9 +1899,9 @@ def _prime_blob_links(c, bids):
             row[0]
             for row in c.execute(f"SELECT DISTINCT blob_id FROM task_trash_assets WHERE blob_id IN ({marks})", part)
         }
-        read_cache.prime_rows(c, BLOB_PARENTS_SQL, {(bid, bid): parents[bid] for bid in part})
+        read_cache.prime_rows(c, BLOB_PARENTS_SQL, {(bid, bid, bid): parents[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_TASKS_SQL, {(bid,): tasks[bid] for bid in part})
-        read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid): files[bid] for bid in part})
+        read_cache.prime_rows(c, BLOB_FILES_SQL, {(bid, bid, bid, bid): files[bid] for bid in part})
         read_cache.prime_rows(c, BLOB_MESSAGES_SQL, {(bid,): messages[bid] for bid in part})
         read_cache.prime(c, BLOB_TRASHED_SQL, {(bid,): (1,) if bid in trashed else None for bid in part})
         from . import postal_mail
@@ -1959,11 +1964,11 @@ def blob_readable(c, actor, bid, seen=None, memo=None):
         for row in read_cache.rows(c, LETTER_BLOBS_SQL, (bid, bid)):
             if not letter_blob_readable(c, actor, row, seen, memo):
                 return False
-    for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid)):
+    for parent in read_cache.rows(c, BLOB_PARENTS_SQL, (bid, bid, bid)):
         if not blob_readable(c, actor, parent[0], seen, memo):
             return False
     ids = {r[0] for r in read_cache.rows(c, BLOB_TASKS_SQL, (bid,))}
-    for row in read_cache.rows(c, BLOB_FILES_SQL, (bid, bid, bid)):
+    for row in read_cache.rows(c, BLOB_FILES_SQL, (bid, bid, bid, bid)):
         if row["task_id"]:
             ids.add(row["task_id"])
         if row["scope"].startswith("task:"):

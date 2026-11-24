@@ -992,10 +992,10 @@ def export_entries(c, who, auth, files):
         for v in versions:
             seen.add(v["blob_id"])
             entries.append((f"files/{found['id']}/v{v['version']}/{_clean(v['name'])}", v["digest"]))
-    # A video's poster and a page's preview are made from a version, not files of their own.
+    # A video's poster, a page's preview and a document's HTML preview are made from a version, not files of their own.
     for still in c.execute(
-        "SELECT poster_blob_id, thumb_blob_id FROM bot_file_versions UNION ALL "
-        "SELECT poster_blob_id, thumb_blob_id FROM blob_media"
+        "SELECT poster_blob_id, thumb_blob_id, preview_html_blob_id FROM bot_file_versions UNION ALL "
+        "SELECT poster_blob_id, thumb_blob_id, preview_html_blob_id FROM blob_media"
     ):
         seen.update(still)
     for blob in c.execute("SELECT id, digest, name FROM blobs ORDER BY created_at, id"):

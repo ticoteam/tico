@@ -654,7 +654,12 @@ def purge_rows(c, actor, row):
         "INSERT INTO file_deletions(file_id,actor,versions,created_at) VALUES(?,?,?,?)",
         (fid, actor, len(versions), now),
     )
-    blob_ids = {b for v in versions for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"]) if b}
+    blob_ids = {
+        b
+        for v in versions
+        for b in (v["blob_id"], v["poster_blob_id"], v["thumb_blob_id"], v["preview_html_blob_id"])
+        if b
+    }
     if c.execute("SELECT 1 FROM pages WHERE file_id=?", (fid,)).fetchone():
         from .files import retain_page_label_sources
 
@@ -696,18 +701,21 @@ def release_blobs(c, blob_ids, now):
     blob_ids = set(blob_ids)
     derived = set()
     for bid in blob_ids:
-        media = c.execute("SELECT poster_blob_id,thumb_blob_id FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
+        media = c.execute(
+            "SELECT poster_blob_id,thumb_blob_id,preview_html_blob_id FROM blob_media WHERE blob_id=?", (bid,)
+        ).fetchone()
         if media:
-            derived |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
+            derived |= {b for b in media if b}
     digests = {}
     # Sources first, previews after, whichever were asked for: a preview stays while its source's blob_media row still
     # names it, so one released before its source would be kept for good.
     for bid in [*sorted(blob_ids - derived), *sorted(derived)]:
         shared = c.execute(
             "SELECT 1 FROM bot_file_versions WHERE blob_id=? OR poster_blob_id=? OR thumb_blob_id=? "
-            "UNION ALL SELECT 1 FROM media_assets WHERE blob_id=? "
-            "UNION ALL SELECT 1 FROM blob_media WHERE blob_id<>? AND (poster_blob_id=? OR thumb_blob_id=?) LIMIT 1",
-            (bid, bid, bid, bid, bid, bid, bid),
+            "OR preview_html_blob_id=? UNION ALL SELECT 1 FROM media_assets WHERE blob_id=? "
+            "UNION ALL SELECT 1 FROM blob_media WHERE blob_id<>? AND (poster_blob_id=? OR thumb_blob_id=? "
+            "OR preview_html_blob_id=?) LIMIT 1",
+            (bid, bid, bid, bid, bid, bid, bid, bid, bid),
         ).fetchone()
         blob = c.execute("SELECT digest,size,content_type FROM blobs WHERE id=?", (bid,)).fetchone()
         if shared or not blob:
@@ -740,9 +748,9 @@ def _kept_elsewhere(c, bid):
     return (
         c.execute(
             "SELECT 1 FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id WHERE (v.blob_id=? OR v.poster_blob_id=? "
-            "OR v.thumb_blob_id=?) AND (f.identity<>? OR (SELECT COUNT(*) FROM bot_file_versions o WHERE o.file_id=f.id)>1) "
-            "LIMIT 1",
-            (bid, bid, bid, "chat-file:" + bid),
+            "OR v.thumb_blob_id=? OR v.preview_html_blob_id=?) AND (f.identity<>? OR "
+            "(SELECT COUNT(*) FROM bot_file_versions o WHERE o.file_id=f.id)>1) LIMIT 1",
+            (bid, bid, bid, bid, "chat-file:" + bid),
         ).fetchone()
         is not None
     )

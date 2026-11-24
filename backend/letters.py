@@ -249,7 +249,7 @@ def provenance(c, who, body, original):
             raise Problem("source_provenance", "The source has too many linked versions; upload a PDF", 422)
         seen.add(bid)
         tasks.update(row[0] for row in c.execute(privacy.BLOB_TASKS_SQL, (bid,)))
-        for row in c.execute(privacy.BLOB_FILES_SQL, (bid, bid, bid)):
+        for row in c.execute(privacy.BLOB_FILES_SQL, (bid, bid, bid, bid)):
             if row["task_id"]:
                 tasks.add(row["task_id"])
             if row["scope"].startswith("task:"):
@@ -264,8 +264,9 @@ def provenance(c, who, body, original):
             row[0]
             for row in c.execute(
                 "SELECT f.conversation_id FROM bot_files f JOIN bot_file_versions v "
-                "ON f.id=v.file_id WHERE f.conversation_id IS NOT NULL AND (v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=?)",
-                (bid, bid, bid),
+                "ON f.id=v.file_id WHERE f.conversation_id IS NOT NULL AND (v.blob_id=? OR v.poster_blob_id=? OR v.thumb_blob_id=? "
+                "OR v.preview_html_blob_id=?)",
+                (bid, bid, bid, bid),
             )
         )
         for link in c.execute(privacy.LETTER_BLOBS_SQL, (bid, bid)):
@@ -281,7 +282,7 @@ def provenance(c, who, body, original):
                 rooms.add(link["thread_id"])
             if link["original_blob_id"]:
                 pending.append(link["original_blob_id"])
-        pending.extend(row[0] for row in c.execute(privacy.BLOB_PARENTS_SQL, (bid, bid)))
+        pending.extend(row[0] for row in c.execute(privacy.BLOB_PARENTS_SQL, (bid, bid, bid)))
     for attempt in attempts:
         tasks.update(privacy.attempt_tasks(c, attempt))
     return {"tasks": sorted(tasks), "attempts": sorted(attempts), "threads": sorted(rooms)}
