@@ -105,6 +105,15 @@ export function useLiveStatus(): LiveStatus {
   return useSyncExternalStore(onLiveStatus, liveStatus, liveStatus);
 }
 
+const againListeners = new Set<() => void>();
+
+/** `fn` each time a stream is ready after not being live, or after a gap the status never showed (back from sleep or
+    the browser's page cache, where it stays 'live' across the reconnect). Returns the unsubscribe. */
+export function onLiveAgain(fn: () => void): () => void {
+  againListeners.add(fn);
+  return () => void againListeners.delete(fn);
+}
+
 // ---------------------------------------------------------------- connecting
 
 export function setScopeSource(fn: () => StreamScope): void {
@@ -226,11 +235,13 @@ function connect(): void {
 }
 
 function isLive(): void {
+  const again = status !== 'live' || wasDown;
   setStatus('live');
   if (wasDown) {
     wasDown = false;
     refetchQuiet();
   }
+  if (again) for (const fn of [...againListeners]) fn();
 }
 
 const jitter = (ms: number) => Math.round(ms * (0.8 + Math.random() * 0.4));

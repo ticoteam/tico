@@ -1,18 +1,24 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ticoRoomQuery } from '@/conversation';
+import { queryClient } from '@/data';
+import { startLive, stopLive } from '@/live';
+import { FakeEventSource, opening } from '@/live/fake-stream';
 import { PhoneCards } from '@/shell/phone';
 import { closeSearch, searchState } from '@/search/state';
 import { ticoPowerQuery } from './queries';
 import { TicoSheet } from './TicoSheet';
 
-async function show(tree: () => ReactNode) {
+async function show(tree: () => ReactNode, read = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
-  client.setQueryData(ticoRoomQuery.queryKey, null);
+  // `read`: the power and the room come from the server (GET /api/v2/assistant), not the cache
+  if (!read) {
+    client.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
+    client.setQueryData(ticoRoomQuery.queryKey, null);
+  }
   const router = createRouter({ routeTree: createRootRoute({ component: tree }), history: createMemoryHistory({ initialEntries: ['/'] }) });
   const { container } = render(
     <QueryClientProvider client={client}>
@@ -46,5 +52,74 @@ describe("Tico's head", () => {
     expect(searchState().open).toBe(true);
     // the field that holds the cursor until the palette's own draws (search/state.ts)
     expect(document.activeElement?.tagName).toBe('INPUT');
+  });
+});
+
+describe("Tico's sheet when its read fails", () => {
+  afterEach(() => {
+    stopLive();
+    queryClient.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+  /** GET /api/v2/assistant fails as a restart does until `back` is set, then answers `info`. */
+  function assistant(info: object) {
+    const server: { back: boolean; asked: number; held: Promise<void> | null } = { back: false, asked: 0, held: null };
+    vi.stubGlobal('fetch', async (url: string) => {
+      if (String(url) !== '/api/v2/assistant') return json(404, { error: { code: 'not_found', detail: 'No.' } });
+      server.asked++;
+      await server.held;
+      return server.back
+        ? json(200, { bot: 'assistant', room_id: null, ...info })
+        : json(503, { error: { code: 'starting', detail: 'Restarting.' } });
+    });
+    vi.stubGlobal('EventSource', FakeEventSource);
+    return server;
+  }
+
+  it('says why in one line, logs it once, and reads again by itself once the stream is back', async () => {
+    const server = assistant({ available: true, can_turn_on: false, state: 'active' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // the stream is down with the server: connecting, not live
+    startLive();
+    await show(() => <TicoSheet />, true);
+    expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // the stream is back before the server is: the read goes out again with no click, fails again, and is the same
+    // fault (not logged again)
+    let answer = () => {};
+    server.held = new Promise((done) => (answer = done));
+    act(() => FakeEventSource.last.feed(opening(1)));
+    await waitFor(() => expect(server.asked).toBe(2));
+    // while it is on its way, Tico shows loading, not the fault
+    await waitFor(() => expect(screen.queryByText(/didn't load/)).toBeNull());
+    server.held = null;
+    answer();
+    expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // the server is back: the stream drops and returns, and the read goes out again
+    server.back = true;
+    const opened = FakeEventSource.all.length;
+    act(() => FakeEventSource.last.fail());
+    await waitFor(() => expect(FakeEventSource.all).toHaveLength(opened + 1));
+    act(() => FakeEventSource.last.feed(opening(5, 1)));
+    expect(await screen.findByRole('img', { name: 'Tico has no chat yet' })).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the power again with the room, so a Tico that is off shows Turn on, not an empty chat', async () => {
+    const server = assistant({ available: false, can_turn_on: true, state: 'archived' });
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    startLive();
+    await show(() => <TicoSheet />, true);
+    expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
+    server.back = true;
+    act(() => FakeEventSource.last.feed(opening(1)));
+    expect(await screen.findByRole('button', { name: 'Turn on' })).toBeTruthy();
+    expect(screen.queryByRole('img', { name: 'Tico has no chat yet' })).toBeNull();
   });
 });

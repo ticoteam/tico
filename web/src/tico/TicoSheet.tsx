@@ -7,6 +7,7 @@ import { useSetupOwed, useSetupTranscript, wentLive } from '@/features/start/rou
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
+import { useReadFault } from '@/live';
 // the open/close state alone, not the dialog: Tico's sheet only opens it
 import { openSearch } from '@/search/state';
 import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
@@ -15,7 +16,7 @@ import { Dot } from '@/tico/dot';
 import { TicoChips } from './Chips';
 import { IntroPin } from './Intro';
 import { okCard } from './OkCard';
-import { useTicoPower } from './power';
+import { ticoPowerQuery, useTicoPower } from './power';
 import { TicoOff } from './TicoOff';
 import { Tracker } from './Tracker';
 
@@ -34,12 +35,22 @@ const SetupChat = lazy(() => import('@/features/start/exports').then((m) => ({ d
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
+  // the power's own read state: one GET answers both, so one that failed fails both
+  const powerRead = useQuery(ticoPowerQuery);
   // what the person is looking at: its page, and what is open there
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   // On a phone the bar draws Tico's one Dot: the head has none of its own.
   const phone = usePhoneCards();
   const owed = useSetupOwed();
   const setupLines = useSetupTranscript();
+  // A failed read (most often a release's restart) says why, and is read again (both halves of it) once the stream is
+  // back; only while its fault is what the sheet shows.
+  const faulted = !owed && power?.available !== false && !room.data && room.isError;
+  const retry = () => {
+    void room.refetch();
+    if (powerRead.isError) void powerRead.refetch();
+  };
+  const fault = useReadFault('Tico', faulted ? (powerRead.isError ? [room, powerRead] : [room]) : [], room.isSuccess);
   // On a phone, going live from a setup file puts Tico's card down so Tasks shows (the shell brings it up for setup).
   const tuck = phone?.tuck;
   const wasOwed = useRef(owed);
@@ -76,13 +87,17 @@ export function TicoSheet() {
             extra={setupLines.length ? setupLines : undefined}
           />
         </>
-      ) : room.isError ? (
-        // The grey fault, then the one way out (the kit's empty-state row).
+      ) : fault ? (
+        // The grey fault and why, then the one way out (the kit's empty-state row).
         <div className="chat-body">
           <div className="empty">
-            <Fault label="Tico did not load" size={16} />
+            {/* the line says it: the mark is drawn only */}
+            <span aria-hidden="true">
+              <Fault label={fault} size={16} />
+            </span>
+            <p>{fault}</p>
             <div className="q-row">
-              <Button onClick={() => room.refetch()}>Try again</Button>
+              <Button onClick={retry}>Try again</Button>
             </div>
           </div>
         </div>

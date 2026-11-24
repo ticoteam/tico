@@ -9,6 +9,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { TaskRow } from '@/kit/Row';
 import { Section } from '@/kit/SectionHead';
+import { useReadFault } from '@/live';
 import { useFollow } from '@/live/follow';
 import { backQuery, markTrackerSeen, trackedQuery, trackerSeenQuery, type TrackedTask } from './queries';
 import { backSince, nextAgeOut, trackerGroups } from './tracked';
@@ -74,6 +75,8 @@ export function Tracker() {
     me && open.data && back.data && waiting && seen.data !== undefined
       ? trackerGroups(open.data, back.data, waiting, me, backSince(opened ? opened.seen : seen.data, at))
       : null;
+  // Said with why, and read again once the stream is back (a release's restart).
+  const fault = useReadFault('Tracking', !groups && me ? failed : [], !!groups);
   const ageOut = groups ? nextAgeOut(groups.back) : null;
   useEffect(() => {
     if (ageOut == null) return;
@@ -81,11 +84,17 @@ export function Tracker() {
     const timer = setTimeout(() => setNow(Date.now()), Math.max(0, ageOut - Date.now()));
     return () => clearTimeout(timer);
   }, [ageOut]);
-  if (!groups && me && failed.length)
+  if (fault)
     return (
       <div className="tracker">
         <div className="tracker-row is-fault">
-          <Fault label="Tracking did not load" size={16} />
+          {/* the line says it: the mark is drawn only */}
+          <span aria-hidden="true">
+            <Fault label={fault} size={16} />
+          </span>
+          <span className="tracker-why" title={fault}>
+            {fault}
+          </span>
           <Button variant="quiet" onClick={() => failed.forEach((r) => void r.refetch())}>
             Try again
           </Button>
