@@ -175,7 +175,7 @@ describe("Tico's tracker", () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
-  it('reads again by itself only the reads that may pass: a restart's 503, not a refusal; Try again reads both', async () => {
+  it('reads again by itself only the reads that may pass: a restart’s 503, not a refusal; Try again reads both', async () => {
     needsFail = true;
     seenDown = true;
     vi.stubGlobal('EventSource', FakeEventSource);
