@@ -292,13 +292,22 @@ struct Shared {
     /// This attempt went on in a kept process (Host::warm), and the scope that process was launched in.
     warm: AtomicBool,
     unit: Mutex<Option<String>>,
-    /// Tool calls and subagents started and not yet ended, by item: background work that keeps a kept process past
-    /// crate::keeper::IDLE (`Session::background`).
+    /// Tool calls and subagents started and not yet ended, by item, with the turn that started them: background work
+    /// that keeps a kept process past crate::keeper::IDLE (`Session::background`).
     running: Arc<Mutex<HashMap<String, String>>>,
     /// The last `turn/interrupt` was answered, so the turn it stopped is ending in the app server.
     interrupted: AtomicBool,
-    /// True once the process's output has ended or it has exited.
+    /// True once the process has exited (and been waited for).
     ended: tokio::sync::watch::Sender<bool>,
+    /// A plan's home made for one turn that this process was started on, held from when the keeper first takes it until
+    /// it has stopped (`release`, `finish_turn`).
+    home: Mutex<Option<crate::model_subscriptions::KeptHome>>,
+    /// The turn's own token is in this process's config (a bot's MCP server header names HUB_TOKEN): never kept.
+    holds_token: AtomicBool,
+    /// A `turn/start` went out to the process, so the turn may have begun there even with no answer.
+    turn_sent: AtomicBool,
+    /// The process's stderr tail, which a kept process starts afresh for each turn it goes on with (`take_kept`).
+    stderr: Mutex<Option<crate::run_diagnostics::Stderr>>,
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     pending: Mutex<HashMap<i64, oneshot::Sender<Reply>>>,
     next_id: AtomicI64,
@@ -348,6 +357,10 @@ impl CodexHost {
             running: Arc::default(),
             interrupted: AtomicBool::new(false),
             ended: tokio::sync::watch::channel(false).0,
+            home: Mutex::new(None),
+            holds_token: AtomicBool::new(false),
+            turn_sent: AtomicBool::new(false),
+            stderr: Mutex::new(None),
             stdin: tokio::sync::Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             next_id: AtomicI64::new(0),
@@ -448,11 +461,12 @@ impl CodexHost {
             .or_else(|| home("HOME").map(|home| PathBuf::from(home).join(".codex")))
     }
 
-    /// What a process for this turn would be started with, the turn's own token, scope and sweep mark aside: its command
-    /// line (a plan's settings among it), its environment, and the thread as this turn would resume it (its model,
-    /// folder, MCP servers, commands' environment and config, and company skills), which a kept process is not told
-    /// again. The effort goes with each turn. A plan's home made for each turn (model_subscriptions `turn_only`) is
-    /// named by its plan: a kept process goes on in the home it was started in, held until it goes (`release`).
+    /// What a process for this turn would be started with, the turn's own token, scope, sweep mark and company skills
+    /// folder aside: its command line (a plan's settings among it), its environment, and the thread as this turn would
+    /// resume it (its model, folder, MCP servers, commands' environment and config), which a kept process is not told
+    /// again. The effort goes with each turn, and the company skills with each turn's resume (`set_skill_roots`). A
+    /// plan's home made for each turn (model_subscriptions `turn_only`) is named by its plan, the payer: a kept process
+    /// goes on in the home it was started in, held until it goes (`release`).
     fn fingerprint(&self, settings: &Settings) -> Inputs {
         let mut inputs = Inputs::default();
         let plan = self.0.plan.as_ref().map(|p| {
@@ -491,13 +505,12 @@ impl CodexHost {
                 _ => inputs.add(&format!("thread:{name}"), &value.to_string()),
             }
         }
-        inputs.add("skill_roots", &json!(skill_roots(settings)).to_string());
         inputs
     }
 
-    /// `key` with the sign-in the process has now: a plan's tokens and its home's sign-in file. A login handed anew
-    /// since (a newer revision in the file, other plan tokens) starts the next turn cold; one the kept process
-    /// refreshed itself stays in place (model_subscriptions `place`), so it does not.
+    /// `key` with the sign-in a process started now would have: a plan's tokens and its home's sign-in file, as
+    /// handed to this turn. A kept process keeps the key it was started with, so a login handed anew since (a newer
+    /// revision, other plan tokens) starts the next turn cold.
     fn signed_in(&self, mut key: Inputs) -> Inputs {
         let plan = self
             .0
@@ -512,46 +525,74 @@ impl CodexHost {
         key
     }
 
-    /// The turn's settings are known: this host notes what its process would start with (`fingerprint`), lends its own
-    /// token file the turn's token, and takes the process the keeper holds for `previous` when that one was started the
+    /// Whether the bot's MCP servers would put the turn's own token in the process's config (a header naming
+    /// HUB_TOKEN, which Codex is given as it is, not as the token file).
+    fn holds_token(&self, settings: &Settings) -> bool {
+        let mut without = settings.env.clone();
+        without.remove("HUB_TOKEN");
+        let config = |env: &Env| crate::mcp::codex_config(&settings.mcp_servers, env, &self.0.env);
+        config(&settings.env) != config(&without)
+    }
+
+    /// The turn's settings are known: this host notes what its process would start with (`fingerprint`, and the
+    /// sign-in it would start on), and takes the process the keeper holds for `previous` when that one was started the
     /// same way and still runs, to go on in place of this host (Host::warm), with this attempt's events, capture,
-    /// masking and admission. None: this host starts its own.
+    /// masking and admission, and stderr afresh. A kept process gets the turn's token only once the hub has started the
+    /// turn (`lend_started`); its own process, not yet started, has it now. None: this host starts its own.
     pub(crate) async fn take_kept(
         &self,
         previous: Option<&str>,
         settings: &Settings,
     ) -> Option<CodexHost> {
         let keeper = self.0.keeper.clone()?;
-        let token = settings.env.get("HUB_TOKEN").map_or("", String::as_str);
-        if let Some(dir) = &self.0.tokens {
+        if let (Some(dir), Some(token)) = (&self.0.tokens, settings.env.get("HUB_TOKEN")) {
             crate::warm::write_token_for(&dir.join("lease-token"), token, None);
         }
-        let key = self.fingerprint(settings);
+        let key = self.signed_in(self.fingerprint(settings));
         *self.0.key.lock().unwrap() = Some(key.clone());
-        let mut kept = keeper
-            .take::<Kept>(previous?, &self.signed_in(key.clone()), token)
-            .await?;
+        let holds_token = self.holds_token(settings);
+        self.0.holds_token.store(holds_token, Ordering::SeqCst);
+        let mut kept = keeper.take::<Kept>(previous?, &key, "").await?;
         let host = kept.0.take()?;
         *host.0.tx.lock().unwrap() = self.0.tx.lock().unwrap().clone();
         *host.0.capture.lock().unwrap() = self.capture();
         *host.0.sweep_redactor.lock().unwrap() = self.0.sweep_redactor.lock().unwrap().clone();
-        *host.0.key.lock().unwrap() = Some(key);
+        if let Some(stderr) = host.0.stderr.lock().unwrap().as_ref() {
+            stderr.clear();
+        }
+        host.0.holds_token.store(holds_token, Ordering::SeqCst);
         let turn = self.0.allocation.0.lock().unwrap().turn.clone();
         if let Some(turn) = turn {
             host.0.allocation.track(turn);
         }
         host.0.interrupted.store(false, Ordering::SeqCst);
+        host.0.turn_sent.store(false, Ordering::SeqCst);
         host.0.warm.store(true, Ordering::SeqCst);
         log("codex: the thread's next turn goes on in its kept app-server");
         Some(host)
     }
 
+    /// The hub has started the turn (`/started`): a kept process this attempt went on in now gets its token.
+    pub(crate) fn lend_started(&self, settings: &Settings) {
+        if let (true, Some(dir), Some(token)) =
+            (self.warm(), &self.0.tokens, settings.env.get("HUB_TOKEN"))
+        {
+            crate::warm::write_token_for(&dir.join("lease-token"), token, None);
+        }
+    }
+
+    /// A `turn/start` went out to the process: the turn may have begun there, answered or not.
+    pub(crate) fn turn_sent(&self) -> bool {
+        self.0.turn_sent.load(Ordering::SeqCst)
+    }
+
     /// The attempt is over, its turn on `thread` ended: the process goes to the keeper for the thread's next turn
-    /// (crate::keeper), holding `held` (what its folder needs meanwhile) and a plan's home with its sign-in
-    /// (model_subscriptions::keep_home) until it goes. True once it has; false leaves it to be stopped as before: no
-    /// keeper or thread, a turn still running in it (a stopped one whose `turn/interrupt` was answered gets
-    /// crate::keeper::INTERRUPT_WAIT to end), or a process that has gone. A plan's home made for this turn alone stays
-    /// as long as the process does, and goes with it.
+    /// (crate::keeper), holding `held` (what its folder needs meanwhile) until it goes. True once it has; false leaves
+    /// it to be stopped as before: no keeper or thread, a turn still running in it (a stopped one whose
+    /// `turn/interrupt` was answered gets crate::keeper::INTERRUPT_WAIT to end), a process that has gone, one whose
+    /// config holds the turn's token, or one on a plan's home its turns share (another thread's turn or a newer
+    /// revision can rewrite its sign-in). A plan's home made for the turn it started in is the process's own, held
+    /// (model_subscriptions::keep_home) until it has stopped (`finish_turn`).
     pub(crate) async fn release(&self, thread: Option<&str>, held: Option<Held>) -> bool {
         let (Some(keeper), Some(thread)) = (self.0.keeper.clone(), thread) else {
             return false;
@@ -559,6 +600,9 @@ impl CodexHost {
         let Some(key) = self.0.key.lock().unwrap().clone() else {
             return false;
         };
+        if self.0.holds_token.load(Ordering::SeqCst) {
+            return false;
+        }
         if self.turn_running(thread) {
             if !self.0.interrupted.load(Ordering::SeqCst) {
                 return false;
@@ -574,13 +618,21 @@ impl CodexHost {
         if !self.alive() {
             return false;
         }
-        let plan = self
-            .codex_home()
-            .and_then(|home| crate::model_subscriptions::keep_home(&home));
-        let key = self.signed_in(key);
-        let held: Held = Box::new((held, plan));
+        if self.0.home.lock().unwrap().is_none() {
+            if let Some(home) = self.codex_home() {
+                let own = crate::model_subscriptions::turn_only(&home);
+                match crate::model_subscriptions::keep_home(&home) {
+                    Some(hold) if own => *self.0.home.lock().unwrap() = Some(hold),
+                    // A plan's home its turns share (the hold just taken goes again), or one made for the turn that is
+                    // no longer in place.
+                    Some(_) => return false,
+                    None if own => return false,
+                    None => {}
+                }
+            }
+        }
         keeper
-            .put(thread, key, Kept(Some(self.clone())), Some(held))
+            .put(thread, key, Kept(Some(self.clone())), held)
             .await;
         true
     }
@@ -669,6 +721,10 @@ impl CodexHost {
         self.0.allocation.mark();
         *self.0.unit.lock().unwrap() = crate::turn_limits::launch_unit(&self.0.env, child.id());
         self.0.ended.send_replace(false);
+        // A new process: no thread is loaded in it, nor company skills, whatever this host's earlier one had
+        // (`resume_thread`, `set_skill_roots`).
+        self.0.warm.store(false, Ordering::SeqCst);
+        self.0.skill_roots.lock().unwrap().clear();
         // Whatever the process prints goes to the attempt it is running for, and nowhere while it is kept.
         let sink = self.clone();
         let _stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -676,6 +732,7 @@ impl CodexHost {
             move |value| sink.emit(value),
             &self.0.env,
         );
+        *self.0.stderr.lock().unwrap() = Some(_stderr.clone());
         let stdout = child
             .stdout
             .take()
@@ -722,7 +779,6 @@ impl CodexHost {
             for (_, slot) in host.0.pending.lock().unwrap().drain() {
                 let _ = slot.send(Err(json!({"message": "codex app-server exited"})));
             }
-            host.0.ended.send_replace(true);
         });
         let host = self.clone();
         tokio::spawn(async move {
@@ -853,9 +909,12 @@ impl CodexHost {
         let mut reports = std::mem::take(&mut *self.0.sweep_reports.lock().unwrap());
         if self.0.sweep.lock().unwrap().is_none() {
             self.stop().await;
+            drop(self.0.home.lock().unwrap().take());
             return reports;
         }
         let reaped = self.stop_and_reap().await;
+        // The plan's home it was started on goes once it has stopped.
+        drop(self.0.home.lock().unwrap().take());
         let target = self.0.sweep.lock().unwrap().take();
         if let Some(target) = target {
             reports.extend(match reaped {
@@ -894,6 +953,10 @@ impl CodexHost {
         let Some(s) = stdin.as_mut() else {
             return Err(failed("codex app-server stdin closed"));
         };
+        if msg["method"] == "turn/start" {
+            // From here the process may read it, whatever comes back.
+            self.0.turn_sent.store(true, Ordering::SeqCst);
+        }
         if let Err(e) = async {
             s.write_all(line.as_bytes()).await?;
             s.flush().await
@@ -1124,10 +1187,9 @@ impl CodexHost {
                     self.0.active_turn.lock().unwrap().remove(tid);
                 }
                 let key = finished.clone().unwrap_or_default();
-                if done["status"] != "completed" && done["status"].is_string() {
-                    // A stopped or failed turn leaves nothing of its own running.
-                    let thread = tid.clone().unwrap_or_default();
-                    self.0.running.lock().unwrap().retain(|_, of| *of != thread);
+                if done["status"] != "completed" && done["status"].is_string() && !key.is_empty() {
+                    // A stopped or failed turn leaves nothing of its own running; an earlier turn's work goes on.
+                    self.0.running.lock().unwrap().retain(|_, of| *of != key);
                 }
                 if !self.0.done_turns.lock().unwrap().insert(key) {
                     return;
@@ -1290,7 +1352,7 @@ impl CodexHost {
                 _ => return,
             };
             if !child.is_empty() {
-                self.note_running(&format!("agent:{child}"), status == "started", &thread);
+                self.note_running(&format!("agent:{child}"), status == "started", u);
             }
             if !self
                 .0
@@ -1333,7 +1395,7 @@ impl CodexHost {
                 _ => "completed",
             }
         };
-        self.note_running(&id, !done, &thread);
+        self.note_running(&id, !done, u);
         if !self
             .0
             .tools_sent
@@ -1363,14 +1425,14 @@ impl CodexHost {
         }
     }
 
-    /// A tool call or subagent `item` of `thread` started (`on`) or ended: what `Kept::background` reads.
-    fn note_running(&self, item: &str, on: bool, thread: &str) {
+    /// A tool call or subagent `item` started (`on`) in `turn`, or ended: what `Kept::background` reads.
+    fn note_running(&self, item: &str, on: bool, turn: Option<&str>) {
         if item.is_empty() {
             return;
         }
         let mut running = self.0.running.lock().unwrap();
         if on {
-            running.insert(item.to_string(), thread.to_string());
+            running.insert(item.to_string(), turn.unwrap_or_default().to_string());
         } else {
             running.remove(item);
         }
@@ -1562,11 +1624,15 @@ impl CodexHost {
         settings: &Settings,
     ) -> Result<String, HostError> {
         // A kept process (`take_kept`) has the thread loaded, started as this turn would start it: its next turn goes
-        // straight in.
-        if self.warm() && self.alive() && self.0.confirmed.lock().unwrap().contains(thread_id) {
-            return Ok(thread_id.to_string());
+        // straight in, told only this turn's company skills. One that died since is replaced by a new process (no
+        // longer warm), which resumes the thread.
+        if self.warm() && !self.alive() {
+            self.start().await?;
         }
         self.set_skill_roots(settings).await;
+        if self.warm() && self.0.confirmed.lock().unwrap().contains(thread_id) {
+            return Ok(thread_id.to_string());
+        }
         let mut params = self.thread_params(settings);
         params["threadId"] = json!(thread_id);
         params["excludeTurns"] = json!(true);
@@ -1919,6 +1985,7 @@ impl Session for Kept {
         let ended = self.0.as_ref().map(|host| {
             *host.0.tx.lock().unwrap() = None;
             *host.0.capture.lock().unwrap() = None;
+            host.0.allocation.0.lock().unwrap().turn = None;
             host.0.ended.subscribe()
         });
         Box::pin(async move {
@@ -2833,6 +2900,8 @@ for line in sys.stdin:
         assert!(Arc::ptr_eq(&kept.0, &first.0) && kept.warm() && kept.alive());
         // What the previous turn left running cannot read the next turn's token before the hub has started it.
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "");
+        kept.lend_started(&two);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "turn-2");
         assert_eq!(kept.resume_thread(&th, &two).await.unwrap(), th);
         let turn = kept.start_turn(&th, "Go on", None).await.unwrap();
         ended(&kept, &turn).await;
@@ -3044,6 +3113,24 @@ for line in sys.stdin:
         assert!(!kept.warm());
         kept.finish_turn().await;
         drop((first, next, kept));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A `turn/start` the app-server read and died on, unanswered, may have begun the turn: it counts as sent, so no
+    /// fallback runs the message again (execute.rs `tools_settled`).
+    #[tokio::test]
+    async fn a_turn_start_the_app_server_died_on_counts_as_sent() {
+        let (dir, env) = kept_rig("codex-sent");
+        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+        host.start().await.unwrap();
+        let th = host
+            .start_thread("ops", &turn_settings("t", "gpt-5.5"))
+            .await
+            .unwrap();
+        assert!(!host.turn_sent());
+        assert!(host.start_turn(&th, "DIE", None).await.is_err());
+        assert!(host.turn_sent());
+        host.finish_turn().await;
         std::fs::remove_dir_all(dir).ok();
     }
 

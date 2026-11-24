@@ -146,13 +146,15 @@ A Codex thread's `codex app-server` is kept between its turns in the runner's se
 per thread: after a turn that completed, or one a Stop or drain interrupted once Codex has ended it, the next message
 is the next `turn/start` on the live thread, with no new process and no `thread/resume`. The hub still claims, starts
 and completes every message; only the process is reused. The app-server reads `HUB_TOKEN` from a token file of its own
-(`tico-file:`), blanked while it is kept. It goes after 2 minutes unused (up to 4 hours while a tool call or subagent
-still runs), when it exits, when the runner stops, or when the next turn would start it differently: another model,
-environment, folder, MCP servers, config, company skills, plan or sign-in (a new login revision too). A kept process that
-has died starts the next turn cold, which resumes the thread as before and sends its prompt once. A ChatGPT plan's home
-and sign-in file (a home made for one turn too) stay while the process does and go with it. Never kept: a fresh
-stateless chat, a relationship or one-off thread, a voice call, a Model exit or Gateway relay, a leased turn user, or a
-fallback hop.
+(`tico-file:`), blanked while it is kept and given the next turn's token once the hub has started that turn. It goes
+after 2 minutes unused (up to 4 hours while a tool call or subagent a turn started still runs), when it exits, when the
+runner stops, or when the next turn would start it differently: another model, environment, folder, MCP servers, config,
+plan or sign-in (a new login revision too). Each turn's company skills are given to it as that turn resumes. A kept
+process that has died starts the next turn cold, which resumes the thread as before and sends its prompt once. A ChatGPT
+plan's home made for the turn the process started in stays while the process does and goes with it. Never kept: a fresh
+stateless chat, a relationship or one-off thread, a voice call, a Model exit or Gateway relay, a leased turn user, a
+fallback's turn, a process on a plan's home its turns share (a legacy `codex_login` file), or one whose MCP server
+header names `HUB_TOKEN` (the token would sit in its config).
 
 pi is the one that best fits a headless run in a git repository with the least new code. If it stops being
 maintained, replacing the catch-all is a manifest and a host adapter, described below.

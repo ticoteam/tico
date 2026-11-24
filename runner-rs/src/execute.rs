@@ -2977,12 +2977,16 @@ impl Runner {
                 (host, _) => host,
             };
             // A thread's Codex app-server is kept between its turns (crate::keeper) when nothing in it is this turn's
-            // alone: not a fresh stateless chat or a relationship turn, a voice call, a Model exit or Gateway relay, or
-            // a leased user. The hub claims and completes each turn as before; only the process goes on.
+            // alone: not a fresh stateless chat, a relationship turn or a one-off thread, a fallback's turn (a task
+            // model's side session, or a turn going on in the harness it fell back to), a voice call, a Model exit or
+            // Gateway relay, or a leased user. The hub claims and completes each turn as before; only the process goes on.
             let made = match made {
                 Host::Codex(h)
                     if !fresh_chat
                         && !relationship
+                        && !one_off
+                        && !side_run
+                        && source_resume.is_none()
                         && !voice_call
                         && vault.model_exit.is_none()
                         && vault.relay.is_none()
@@ -3045,10 +3049,10 @@ impl Runner {
                     Host::Codex(c) => c.take_kept(previous.as_deref(), &settings).await,
                     _ => None,
                 };
-                if let Some(kept) = kept {
-                    *h = Host::Codex(kept);
+                match kept {
+                    Some(kept) => *h = Host::Codex(kept),
+                    None => h.start().await?,
                 }
-                h.start().await?;
                 mark("harness_started", &aid);
             }
             let mut resumed = false;
@@ -3183,6 +3187,10 @@ impl Runner {
                 } else {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
+            }
+            // Only now, started, does a kept app-server's token file hold this turn's token.
+            if let Host::Codex(c) = &*h {
+                c.lend_started(&settings);
             }
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
@@ -3544,7 +3552,8 @@ impl Runner {
             && !voice_reply
             && !native_control
             && continuing.is_empty()
-            && tools_settled(&drove, &flags, ran.is_err() && turn.is_some());
+            // A `turn/start` the app-server may have read, answered or not, may have begun the turn there.
+            && tools_settled(&drove, &flags, ran.is_err() && (turn.is_some() || matches!(&host, Some(Host::Codex(c)) if c.turn_sent())));
         let mut pending = if unavailable && drove.outcome != "completed" && fallback_allowed {
             crate::fallback::configured_for(
                 &fallback_config,

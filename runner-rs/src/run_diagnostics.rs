@@ -94,6 +94,8 @@ pub struct Stderr(
     Arc<std::sync::atomic::AtomicBool>,
     Arc<tokio::sync::Notify>,
     Arc<tokio::sync::Notify>,
+    /// Set by `clear`: the line being read when it came is dropped too.
+    Arc<std::sync::atomic::AtomicBool>,
 );
 
 impl Stderr {
@@ -132,6 +134,11 @@ impl Stderr {
                         _ = kept.3.notified() => Ok(0),
                     }} => {
                         let n = read.unwrap_or(0);
+                        if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                            pending.clear();
+                            oversized = false;
+                            dirty = false;
+                        }
                         if n == 0 {
                             if !pending.is_empty() || oversized {
                                 kept.push(if oversized { "[oversized stderr line omitted]".into() } else {
@@ -158,6 +165,11 @@ impl Stderr {
                         }
                     }
                     _ = tick.tick() => {
+                        if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                            pending.clear();
+                            oversized = false;
+                            dirty = false;
+                        }
                         if dirty {
                             send(json!({"kind": "diagnostic", "stderr_tail": kept.tail()}));
                             dirty = false;
@@ -193,6 +205,7 @@ impl Stderr {
 
     /// Forget what a process kept between turns said in an earlier turn, so a failure carries only its own turn's.
     pub fn clear(&self) {
+        self.4.store(true, std::sync::atomic::Ordering::SeqCst);
         self.0.lock().unwrap().clear();
     }
 

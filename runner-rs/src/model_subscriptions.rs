@@ -677,6 +677,15 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
             .unwrap_or_default();
         let written = if d.codex_external().is_some() {
             Folder::open(&d.root, &home, true).map_err(|_| "Cannot create Codex turn home")?;
+            // Held as a home with a file is (`place`): a Codex app-server kept on it holds it too (`keep_home`).
+            let mut homes = homes();
+            let live = homes.live.entry(home.clone()).or_insert(Live {
+                turns: 0,
+                revision: d.revision,
+                root: d.root.clone(),
+                watch: None,
+            });
+            live.turns += 1;
             d.value.clone()
         } else {
             place(&d.root, &home, &name, &d.value, d.revision)?
