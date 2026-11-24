@@ -338,6 +338,9 @@ def load(c):
         "company_import": stored.get("company_import") or None,
         # {pick: seat id}: the roles setup laid out as Recruiting seats (`Onboarding.complete`).
         "seats": dict(stored.get("seats") or {}),
+        # A company a setup file made before its owner signed in: the owner still goes live in the app (connect a plan,
+        # stay in touch), once. Cleared by their finish (`Onboarding.complete`).
+        "live_owed": bool(stored.get("live_owed")),
         "updated_at": stored.get("updated") or "",
         "updated_by": stored.get("updated_by") or "",
     }
@@ -363,13 +366,17 @@ def display_names(settings, record):
 
 
 def needed(c, who, record):
-    """Whether the owner still owes us the first-run wizard.
+    """Whether the owner still owes us the first run: Tico's setup in its chat (web/src/features/start).
 
-    A company that already runs active bots is past its first run even if nobody ever finished
+    A company a setup file made (`live_owed`) owes it until the owner finishes it, though the file completed setup. A company that already runs active bots is past its first run even if nobody ever finished
     the wizard: deployments older than onboarding, or one set up by hand, must not be sent back
     to screen one.
     """
-    if who is None or who.role != "owner" or record["completed"]:
+    if who is None or who.role != "owner":
+        return False
+    if record.get("live_owed"):
+        return True
+    if record["completed"]:
         return False
     active = c.execute("SELECT 1 FROM bots WHERE state='active' LIMIT 1").fetchone()
     return active is None
@@ -814,6 +821,12 @@ class Onboarding:
 
         self._owner(who)
         record = load(c)
+        if record["completed"] and record["live_owed"]:
+            # A setup file already made the team: the owner's finish only says they are live; nothing is laid out again.
+            record["live_owed"] = False
+            self._store(c, record, who.actor)
+            H.event(c, who.actor, "onboarding.live", "", {})
+            return self.view(c, who)
         first = not record["completed"]
         names = display_names(self.settings, record)
         cards = {card["template"]: card for card in read_cards(self.settings)}

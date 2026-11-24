@@ -666,6 +666,7 @@ def apply(onboarding, c, who, text, fingerprint):
     record = O.load(c)
     record["selected"] = {slug: choice.model_dump() for slug, choice in body.selected.items()}
     record["seats"] = made
+    record["live_owed"] = True  # the owner still connects a plan and goes live in the app (onboarding.needed)
     # The people who hold a role, to invite (Settings > People): each with the seats that report to them meanwhile.
     people = [
         {**person, "seats": sorted(made[key] for key, seat in seats.items() if seat["waits_on"] == person["id"])}
