@@ -3,8 +3,9 @@ tall each may grow, and the tabs over its task list, with their names, their ord
 
 A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same sidebar, and
 changing one bot's never moves another's. The Assistant is the exception, since its list is each person's own: there
-every person keeps a layout of their own. A bot without a saved layout shows Tasks, Updates, Files and Routines in that
-order with the four default tabs (Needs you, Open, Waiting, Assigned to others).
+every person keeps a layout of their own. A bot without a saved layout shows Updates, Tasks and Files in that order (as
+the web's agent page draws them, under what waits on the viewer) with the four default tabs (Needs you, Open, Waiting,
+Assigned to others).
 
 Needs you, Open and Waiting are editable filters with default conditions. Their built-in key preserves identity
 for Reset to default. Done recently keeps its own view. What a task waits on is read from the engine
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import models as M
+from .api_contract import api_v2
 from .store import H, Problem
 
 ACTIVE = ["open"]
@@ -52,7 +54,8 @@ DEFAULT = [
         ],
     },
 ]
-WIDGETS = ("tasks", "updates", "files")  # an old saved "routines" is dropped: they are automations
+# In the order the agent page draws them when nothing is saved; an old saved "routines" is dropped: they are automations.
+WIDGETS = ("updates", "tasks", "files")
 DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 # Pages and cards pinned to the sidebar (backend/cards.py): any number, beside or instead of the built-ins.
 ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
@@ -462,7 +465,15 @@ BRIEF = (
 def install(app, store, auth, mutate, settings, task_views=None):
     from .cards import Ctx
 
-    @app.get("/api/v2/bots/{bot}/task-tabs")
+    @app.get(
+        "/api/v2/bots/{bot}/task-tabs",
+        **api_v2(
+            "Bots",
+            "getBotSidebar",
+            "A bot's sidebar: its widgets (built-ins, pinned pages and cards) and task tabs in order, as the caller sees it",
+            "BotSidebar",
+        ),
+    )
     def task_tabs(request: Request, bot: str):
         """The bot's sidebar: its widgets in order and its task tabs in order (the defaults until someone saves a
         layout), and whether the caller may change them. The Assistant's are the caller's own."""

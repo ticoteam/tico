@@ -203,7 +203,7 @@ def test_the_pinning_rule(api):
     post(api, "pins", {"place": "bot:cpo", "item": "page:" + own}, bot, expected=403)
     post(api, "pins", {"place": "bot:ops", "item": "page:" + other}, bot, expected=404)  # not its own
     post(api, "pins", {"place": "bot:ops", "item": "page:" + own}, bot)
-    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == ["tasks", "updates", "files", "page:" + own]
+    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == ["updates", "tasks", "files", "page:" + own]
     # A bot pins only cards it made; a person who manages the bot pins another bot's page there.
     card = post(api, "cards", {"template": "tasks_by_status"})["card"]
     post(api, "pins", {"place": "bot:ops", "item": "card:" + card["id"]}, bot, expected=403)

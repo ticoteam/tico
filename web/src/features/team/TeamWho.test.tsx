@@ -300,7 +300,10 @@ describe('Loading a teammate', () => {
 
   it('reads what the page it opens on draws first, before it draws', async () => {
     queryClient.removeQueries({ queryKey: agentsQuery.queryKey });
-    expect(await read('ana')).toEqual([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open')]);
+    // an agent's page: its open tasks, and its sidebar's order with them
+    const first = await read('ana');
+    expect(first).toHaveLength(2);
+    expect(first).toEqual(expect.arrayContaining([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open'), '/api/v2/bots/ana/task-tabs']));
     expect(await read('ana', 'settings')).toEqual(['/api/employees']);
     expect(await read('p1', 'slack')).toEqual([expect.stringContaining('/humans/p1/slack')]);
     // a team's address reads nothing more: it goes home, the team shown in the menu
