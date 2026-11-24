@@ -211,7 +211,7 @@ def test_only_the_renamed_cards_exact_old_title_reads_the_new_name():
     assert D.renamed({"template": "botops", "title": "BotOps"})["title"] == "Agent Ops"
     assert D.renamed({"template": "botops", "title": "Fleet Fixer"})["title"] == "Fleet Fixer"
     assert "title" not in D.renamed({"template": "botops"})  # no default title for a row that had none
-    assert D.renamed({"template": "bookkeeper"}) == {"template": "finance-owner"}
+    assert D.renamed({"template": "agent-ops", "title": "BotOps"}) == {"template": "agent-ops", "title": "BotOps"}
 
 
 def test_a_held_slug_moves_to_the_first_free_one_even_before_the_built_in_exists(company):

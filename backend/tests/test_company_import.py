@@ -723,15 +723,11 @@ def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tm
     """Tico Team's case: a failed start, then the owner uploads a fixed file, while the server's company file setting
     still names the original plan. Later starts leave the team as it is, with no Health line, no event and no welcome
     card, whether that file doesn't load (a template this release lacks), loads but differs from what was imported
-    (an older release's slugs, read as today's), or can't be read. A failure kept from before ends at the next start."""
+    (one title the owner fixed in the upload), or can't be read. A failure kept from before ends at the next start."""
     start, failed = starts(tmp_path)
     good = company_text()
     broken = unknown_role_plan(good)
-    # The original plan, on an older release's slug and with one title the owner fixed in the upload: it loads (the
-    # old slug reads as today's), but it isn't the file imported.
-    older = starter.load(good.replace("Acme Payables", "Payables"))
-    next(b for b in older["bots"] if b["title"] == "Payables")["template"] = "accounts-payable"
-    older = packed_as_is(older)
+    older = packed_as_is(starter.load(good.replace("Acme Payables", "Payables")))
     assert starter.unpack(older) != starter.load(good)
 
     def failures(api):
@@ -760,7 +756,7 @@ def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tm
             }
             assert rows(api, "SELECT id,title,reports_to FROM seats ORDER BY id") == seats
             assert failures(api) == kept
-    with start(broken) as api:  # one kept from before (an older release kept them on set-up companies too)
+    with start(broken) as api:  # one kept from before
         with api.app.state.store.transaction() as c:
             c.execute(
                 "INSERT INTO registry_metadata VALUES(?,?)",
@@ -768,47 +764,6 @@ def test_a_company_already_set_up_never_shows_a_company_file_failure_at_start(tm
             )
     with start(broken) as api:
         assert failed(api) is None
-
-
-def test_hqs_starting_chart_from_an_older_release_imports_at_first_start_on_its_renamed_templates(tmp_path):
-    """HQ plans with an older release's chart (rc.6 refused HQ's `pr-reviewer` and `bookkeeper`): the server reads each
-    old slug as the template that has the role now. Two old roles that fold into one built-in (the Bookkeeper and a
-    Finance Lead) are that one built-in, and a line to either ends at it."""
-    from backend.tests.helpers.template_renames import CHARTS, employees_file
-
-    chart = copy.deepcopy(CHARTS["0.6 hotmic"])
-    assert {"pr-reviewer", "bookkeeper"} <= {r["template"] for r in chart}
-    chart.append(
-        {
-            "id": "finance-lead",
-            "template": "finance-lead",
-            "title": "Finance Lead",
-            "department": "finance",
-            "reports_to": None,
-            "team": "Corporate",
-            "live": False,
-        }
-    )
-    chart.append(
-        {
-            "id": "controller",
-            "template": "controller",
-            "title": "Controller",
-            "department": "finance",
-            "reports_to": "finance-lead",
-            "team": "Corporate",
-            "live": False,
-        }
-    )
-    start, failed = starts(tmp_path)
-    with start(starter.pack(employees_file(chart), starter.MAX_PACKED)) as api:
-        assert failed(api) is None
-        seats = {r["title"]: r for r in rows(api, "SELECT title,template,reports_to FROM seats")}
-        assert seats["Reviewer 1"]["template"] == seats["Reviewer 2"]["template"] == "reviewer"
-        assert seats["Finance Owner"]["template"] == "finance-owner" and "Finance Lead" not in seats
-        assert seats["Controller"]["reports_to"] == "finance-owner"
-        assert {"reviewer-1", "reviewer-2", "finance-owner"} <= {r["slug"] for r in rows(api, "SELECT slug FROM bots")}
-        assert not {r["template"] for r in seats.values()} & {"pr-reviewer", "bookkeeper", "finance-lead"}
 
 
 def started_tree(api):
@@ -831,53 +786,33 @@ def started_tree(api):
     }
 
 
-def test_hqs_chart_with_pipeline_managers_starts_one_manager_per_team_running_its_teams_pipelines(tmp_path):
-    """HQ still plans a 0.6 company with the chart that had a Team Manager seat and a Pipeline Manager per pipeline. A
-    server started on it has one Manager bot per team, who manages every pipeline of that team (none is left with the
-    General Manager standing in); a second start makes nothing; and it is the company a chart drawn in today's shape
-    starts."""
+def test_hqs_starting_chart_starts_one_manager_per_team_running_its_teams_pipelines(tmp_path):
+    """A server started on the chart the formula draws has one Manager bot per team, who manages every pipeline of that
+    team (none is left with the General Manager standing in), and a second start makes nothing."""
     from backend import pipeline_presets_more as more
     from backend.tests.helpers.template_renames import CHARTS, employees_file
 
-    golden = json.loads((Path(__file__).parent / "fixtures" / "chart_formula_golden.json").read_text())
-    todays = next(case for case in golden["cases"] if case["name"] == "hotmic")["expected"]["employees"]
-    theirs = CHARTS["0.6 hotmic"]
-    assert sum(row["template"] == "pipeline-manager" for row in theirs) == 7
-    trees = []
-    for name, chart in (("theirs", theirs), ("todays", todays)):
-        (tmp_path / name).mkdir()
-        start, failed = starts(tmp_path / name)
-        packed = starter.pack(employees_file(chart), starter.MAX_PACKED)
-        with start(packed) as api:
-            assert failed(api) is None
-            first = started_tree(api)
-        with start(packed) as api:
-            assert started_tree(api) == first, name  # a later start makes no bot or seat and moves no line
-        managers = {slug: row for slug, row in first["bots"].items() if slug.endswith("-manager")}
-        assert managers == {
-            "general-manager": ("general-manager", managers["general-manager"][1]),
-            "product-manager": ("product-manager", "human:owner"),
-            "engineering-manager": ("engineering-manager", "human:owner"),
-            "growth-manager": ("growth-manager", "human:owner"),
-            "success-manager": ("success-manager", "human:owner"),
-        }
-        assert not [slug for slug in first["bots"] if "pipeline-manager" in slug or "team-manager" in slug]
-        assert "pipeline-manager" not in first["seats"] and first["seats"].count("corporate-manager") == 1
-        expected = {"product": "product-manager", **more.MANAGERS}
-        assert {pid: first["pipelines"][pid] for pid in expected} == expected
-        assert "engineering" not in first["pipelines"]  # Product replaced the pair
-        lines = {template: above for template, above in first["bots"].values()}
-        assert lines["feature-owner"] == "product-manager"
-        if name == "theirs":
-            # Nov 14: the older chart's Product Owner reads as the Feature Owner under its old slug, and its Builder
-            # seat is still the Builder it asked for; today's chart has none. Compared without them, the rest is one.
-            assert first["bots"].pop("builder")[1] == "engineering-manager"
-            first["bots"] = {
-                slug.replace("-product-owner", "-feature-owner"): row for slug, row in first["bots"].items()
-            }
-            first["count"] = (first["count"][0] - 1, first["count"][1] - 1)
-        trees.append(first)
-    assert trees[0] == trees[1]
+    start, failed = starts(tmp_path)
+    packed = starter.pack(employees_file(CHARTS["hotmic"]), starter.MAX_PACKED)
+    with start(packed) as api:
+        assert failed(api) is None
+        first = started_tree(api)
+    with start(packed) as api:
+        assert started_tree(api) == first  # a later start makes no bot or seat and moves no line
+    managers = {slug: row for slug, row in first["bots"].items() if slug.endswith("-manager")}
+    assert managers == {
+        "general-manager": ("general-manager", managers["general-manager"][1]),
+        "product-manager": ("product-manager", "human:owner"),
+        "engineering-manager": ("engineering-manager", "human:owner"),
+        "growth-manager": ("growth-manager", "human:owner"),
+        "success-manager": ("success-manager", "human:owner"),
+    }
+    assert first["seats"].count("corporate-manager") == 1
+    expected = {"product": "product-manager", **more.MANAGERS}
+    assert {pid: first["pipelines"][pid] for pid in expected} == expected
+    assert "engineering" not in first["pipelines"]  # Product replaced the pair
+    lines = {template: above for template, above in first["bots"].values()}
+    assert lines["feature-owner"] == "product-manager"
 
 
 def test_every_way_out_of_a_failed_setup_import_clears_it(tmp_path):

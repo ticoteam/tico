@@ -102,8 +102,8 @@ def plan(onboarding, c, who, text):
         if card is not None and card["required"]:
             slug = onboarding._bot_slug(card["slug"])
             ids[bot["id"]] = slug
-            # There is one of each built-in. A second role on it (two roles an older release had that both fold into
-            # the Finance Owner, say) is that built-in too: the first keeps its place, and a line to either ends there.
+            # There is one of each built-in. A second role on it is that built-in too: the first keeps its place, and a
+            # line to either ends there.
             builtins.setdefault(slug, (bot, card))
         elif onboarding._bot_slug(bot["id"]) in required or bot["id"] in required:
             raise Problem("company_file", "An employee ID conflicts with another employee or a built-in role", 422)

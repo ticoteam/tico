@@ -10,8 +10,8 @@ Python environment of a current checkout (one release back has the same pins):
 
 It writes the database and, beside it, `company-<release>.json`: what the person's Needs you held on that release.
 
-It makes the company the way a hosted one is made and then used for a day: the starting chart HQ hands a new company
-(fixtures/hq_starting_charts.json, the 0.6 line) applied at the first start, setup completed, one shared cloud
+It makes the company the way a hosted one is made and then used for a day: the starting chart the release's chart
+formula draws for HotMic (fixtures/chart_formula_golden.json) applied at the first start, setup completed, one shared cloud
 computer enrolled, Agent Ops taking every seat bot live and closing its "Set up" task, a restart, then a person's own
 changes (two reporting lines set by hand) and work in flight: tasks at different stages of Product and Engineering,
 one snoozed, one waiting on a person's sign-off, a routine and an automation.
@@ -47,7 +47,7 @@ def build(out):
         from backend.tests.helpers.fresh_install import OWNER_EMAIL, rows, settings_for, signed_in
     except ImportError:  # 0.6.0 named it sample_company
         from backend.tests.helpers.sample_company import OWNER_EMAIL, rows, settings_for, signed_in
-    from backend.tests.helpers.template_renames import CHARTS, employees_file
+    from backend.tests.helpers.template_renames import employees_file
     from clients.environments import seed_registry
 
     logging.disable(logging.CRITICAL)
@@ -59,7 +59,9 @@ def build(out):
     app = create_app(settings)
     app.state.store.initialize()
     app.state.store.seed()
-    settings.company_file_data = starter.pack(employees_file(CHARTS["0.6 hotmic"]), starter.MAX_PACKED)
+    golden = json.loads(Path("backend/tests/fixtures/chart_formula_golden.json").read_text())
+    chart = next(case for case in golden["cases"] if case["name"] == "hotmic")["expected"]["employees"]
+    settings.company_file_data = starter.pack(employees_file(chart), starter.MAX_PACKED)
     settings.company_file_configured = True
 
     def call(api, method, path, body=None, token=None, expected=(200,)):
@@ -170,17 +172,26 @@ def build(out):
                 api, "POST", f"tasks/{found['id']}/move", {"to": to, "why": "Moved by hand.", "version": version}
             )
 
-        task("Dark mode for the dashboard", "creators-product-owner", "product")
-        spec = task("Export invoices as CSV", "creators-product-owner", "product")
+        # The chart's own Feature Owner (the first by slug: creators-feature-owner on today's HotMic chart) takes the
+        # feature work, and builds it too: today's chart has no Builder seat.
+        by_template = {}
+        for row in rows(
+            api,
+            "SELECT b.slug, s.template FROM bots b JOIN bot_settings s ON s.bot_id=b.id "
+            "WHERE b.state<>'archived' ORDER BY b.slug",
+        ):
+            by_template.setdefault(row["template"], row["slug"])
+        feature_owner = by_template["feature-owner"]
+        builder = by_template.get("builder", feature_owner)
+        task("Dark mode for the dashboard", feature_owner, "product")
+        spec = task("Export invoices as CSV", feature_owner, "product")
         move(spec, "next")
-        # 0.6.0 builds in Product (Pitch ... Build ... Done); 0.6.0-rc.7 had an Engineering pipeline (On deck, Build).
-        engineering = bool(rows(api, "SELECT 1 FROM pipelines WHERE id='engineering'"))
-        task("Fix the login redirect", "builder", "engineering" if engineering else "product")
-        review = task("Rate limit the public API", "builder", "engineering" if engineering else "product")
-        move(review, "next" if engineering else "product-build")
+        task("Fix the login redirect", builder, "product")
+        review = task("Rate limit the public API", builder, "product")
+        move(review, "product-build")
         snoozed = task("Look at the onboarding funnel", "growth-manager", "general")
         call(api, "POST", f"tasks/{snoozed['id']}/snooze", {"until": "2027-01-15", "why": "After the holidays."})
-        signoff = task("Ship the pricing page", "builder", "general")
+        signoff = task("Ship the pricing page", builder, "general")
         call(
             api,
             "POST",

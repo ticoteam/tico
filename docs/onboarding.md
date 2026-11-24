@@ -63,9 +63,8 @@ with no company file at all. A server start with the same broken file shows it a
 complete: once its team is in, a server start leaves it alone whatever the file says, and never shows a company file
 failure (`POST /api/v2/setup/company/import-failure/dismiss` still clears one by hand). The reason names the role the file got wrong by its title
 ("Reviewer 1 names a role template this version of Tico doesn't have: …"); the server log has the field the check
-refused. A file names the template slugs of the release it was made for: a slug a later release renamed reads as its new
-one (`RENAMED` in backend/company_file/draft.py), so a file saved from an older setup page, or a plan HQ writes with an
-older chart, still imports.
+refused. A file names the template slugs of the release it was made for: a slug a later 0.6 release renamed reads as its
+new one (`RENAMED` in backend/company_file/draft.py). A slug from before 0.6 is refused like any unknown one.
 
 **Unreleased:** A role's optional `team` (the name of its group) puts it in a group of that name: one group per name, made
 from the file, or the group that already has it. Without one, a role goes in its template's group.

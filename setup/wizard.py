@@ -178,7 +178,7 @@ def gather_company_file(args, s):
     except (OSError, UnicodeError):
         raise MissingInput("Cannot read --company-file; use a readable UTF-8 company YAML file") from None
     except DraftError as exc:
-        raise MissingInput(str(exc)) from None
+        raise MissingInput(exc.plain) from None
     explicit = getattr(args, "company", None)
     if explicit and explicit != plan["company"]["name"]:
         raise MissingInput("--company must match the name in --company-file; edit the file or omit --company")

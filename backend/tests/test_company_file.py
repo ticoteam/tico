@@ -205,6 +205,15 @@ def test_6_a_person_fills_a_seat_with_no_bot_yet():
     assert A.find_role("release manager")["slug"] == "release-owner"
 
 
+def test_every_everyday_word_names_a_template_bot_add_can_build():
+    """Each ALIASES target is a role in roles.json or a seat in seats.json (A.BY_SLUG), so the word finds it."""
+    assert {word: slug for word, slug in A.ALIASES.items() if slug not in A.BY_SLUG} == {}
+    assert A.find_role("social media")["slug"] == "social-media-manager" and A.find_role("PR")["slug"] == "pr-manager"
+    assert (
+        A.find_role("recruiter")["slug"] == "recruiter" and A.find_role("customer support")["slug"] == "support-owner"
+    )
+
+
 def test_7_show_me_everything_switches_the_chart_to_the_everything_model():
     draft, _ = first_chart("SaaS.", ["sells_software"])
     draft, results = run(
@@ -1457,41 +1466,6 @@ def test_a_bet_added_to_a_plan_with_no_strategy_starts_the_block_and_undo_takes_
     assert "version: 0.3" in C.to_yaml(draft, CREATED)
     undone, _ = run(draft, ("undo", {}))
     assert "strategy" not in undone
-
-
-def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_rest():
-    draft = started()
-    controller = next(b for b in draft["bots"] if b["template"] == "controller")
-    old = {
-        **copy.deepcopy(controller),
-        "id": "books",
-        "template": "bookkeeping",
-        "title": "Acme Books",
-        "lead": False,
-        "reports_to": controller["id"],
-    }
-    under = {
-        **copy.deepcopy(controller),
-        "id": "books-helper",
-        "template": "billing-specialist",
-        "title": "Acme Billing",
-        "lead": False,
-        "reports_to": "books",
-    }
-    built = {
-        **copy.deepcopy(controller),
-        "id": "old-books",
-        "template": "bookkeeping",
-        "title": "Our Books",
-        "lead": False,
-        "existing": True,
-        "runtime": "hermes",
-    }
-    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing-specialist"] + [old, under, built]
-    out = D.check(draft)
-    by_id = {b["id"]: b for b in out["bots"]}
-    assert "books" not in by_id and "old-books" in by_id
-    assert "reports_to" not in by_id["books-helper"]
 
 
 # ------------------------------------------------------------------------------------- where the company serves

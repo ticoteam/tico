@@ -575,7 +575,7 @@ except UnicodeError:
     print("Cannot read --company-file; use a readable UTF-8 company YAML file", file=sys.stderr)
     sys.exit(2)
 except draft.DraftError as exc:
-    print(exc, file=sys.stderr)
+    print(getattr(exc, "plain", None) or exc, file=sys.stderr)
     sys.exit(2)
 '
 pack_company_file() {
