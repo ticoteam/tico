@@ -7,6 +7,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { ContextMenu, Menu, MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
+import { waitsOnMe } from './needs';
 import type { Stage, TaskItem } from './queries';
 
 /** A teammate's face from the directory; nothing for nobody. */
@@ -16,9 +17,9 @@ export function Face({ actor, size = 22 }: { actor: string | null | undefined; s
   return <Avatar kind={who?.kind ?? (actor.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (actor.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={size} />;
 }
 
-/** What hangs in a row's margin: the Flow mark when it waits on you, else the stopped mark. */
-export function markOf(t: Pick<TaskItem, 'turn' | 'stuck'>, me: string | undefined): ReactNode {
-  if (me && t.turn?.state === 'person' && t.turn.who === me) return <FlowMark />;
+/** What hangs in a row's margin: the Flow mark when it waits on you (Needs you names it), else the stopped mark. */
+export function markOf(t: Pick<TaskItem, 'id' | 'stuck'>, needs: ReadonlySet<string> | undefined): ReactNode {
+  if (waitsOnMe(t, needs)) return <FlowMark />;
   return t.stuck ? <StoppedMark /> : null;
 }
 
@@ -29,7 +30,7 @@ export const StoppedMark = () => (
   </span>
 );
 
-export const waitsOnMe = (t: Pick<TaskItem, 'turn'>, me: string | undefined) => !!me && t.turn?.state === 'person' && t.turn.who === me;
+export { waitsOnMe } from './needs';
 
 /** The address a task row opens: the task inside its pipeline. */
 export const taskHref = (pipeline: string, t: Pick<TaskItem, 'id' | 'number'>) =>

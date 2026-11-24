@@ -84,8 +84,8 @@ function HeldBox({ t, summary }: { t: TaskData; summary: Hold }) {
   const sendable = whole && h.can_send && !!h.nonce;
 
   const decide = async (how: 'keep' | 'send') => {
-    start();
     const more = othersHeld(t.id, h.id);
+    start(t.id, more ? h.id : null);
     const res = how === 'send' ? await send.run({ task: t.id, hold: h.id, nonce: h.nonce }) : await keep.run({ task: t.id, hold: h.id });
     if (!res.ok) return refused(res);
     toast({ text: how === 'send' ? 'Sent anyway' : 'Kept blocked', name: holdName(h) });

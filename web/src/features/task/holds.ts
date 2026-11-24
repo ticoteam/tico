@@ -1,7 +1,7 @@
 import { queryOptions } from '@tanstack/react-query';
 import { api } from '@/api/client';
 import { queryClient, write } from '@/data';
-import { flowQuery } from '@/features/tasks/routing';
+import { settleNeedsYou } from '@/features/tasks/routing';
 
 /* What a company rule held (backend/org_rule_check.py): a message, an email, a task change an agent wrote that broke a
    rule set to Ask first. Its review task ("Held by: <rule>", labelled rule-review) waits on whoever reviews the rule,
@@ -77,19 +77,17 @@ export function decideHold(task: string, id: string, how: 'keep' | 'send', nonce
   const last = !othersHeld(task, id);
   const state = how === 'keep' ? 'kept' : 'sent';
   const decided = (h: Hold): Hold => (h.id === id ? { ...h, state, can_send: false, can_withdraw: false, nonce: undefined } : h);
-  return write<unknown>({
-    key: [taskHoldsQuery(task).queryKey, holdQuery(id).queryKey, ...(last ? [flowQuery.queryKey] : [])],
+  const done = write<unknown>({
+    key: [taskHoldsQuery(task).queryKey, holdQuery(id).queryKey],
     wait: true,
     optimistic: (cur: unknown) => {
       if (Array.isArray(cur)) return (cur as Hold[]).map(decided);
-      const f = cur as { items?: { id: string }[]; count?: number; requests?: unknown[] } | Hold | undefined;
-      if (f && 'items' in f && f.items) {
-        const items = f.items.filter((x) => x.id !== task);
-        // Flow's requests (access, key, key-drop) count too: they still wait.
-        return { ...f, items, count: items.length + (('requests' in f && f.requests?.length) || 0) };
-      }
+      const f = cur as Hold | undefined;
       return f && 'operation' in f ? decided(f) : cur;
     },
     send: (idempotencyKey) => api.post(`/api/v2/rule-holds/${enc(id)}/${how}`, how === 'send' ? { nonce } : {}, { idempotencyKey }),
   });
+  // the last one takes the review out of Needs you, its Dot with it, and Needs you is read again
+  if (last) void done.then(() => settleNeedsYou({ task, wait: null }), () => settleNeedsYou());
+  return done;
 }

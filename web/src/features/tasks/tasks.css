@@ -148,3 +148,17 @@ html[data-layout="cards"] .stage-fold a{min-height:var(--ctl);display:inline-fle
 .flow-wait{opacity:.45}
 .flow-sorting{min-height:1lh;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 :where(html[data-layout="cards"]) .flow-request .answer.askcard{padding:var(--s-2) var(--s-2) var(--s-2) var(--s-3h)}
+
+/* Needs you on top of Tasks: Mine's rows straight under the section's head; its head links the other views. On a
+   phone a row's Why here sits at the end of its second line, so the title keeps the row's width. */
+.ny-list{display:contents}
+:where(html[data-layout="cards"]) .ny-list .flow-row{display:block;position:relative}
+:where(html[data-layout="cards"]) .ny-list .flow-row .task .row-pills{display:flex;min-height:1lh;padding-inline-end:calc(var(--s-10) + var(--s-6))}
+:where(html[data-layout="cards"]) .ny-list .flow-row>.btn{position:absolute;inset-inline-end:0;bottom:var(--s-1);height:auto;padding-block:var(--s-2);font-size:var(--t-sm)}
+/* Tasks' pipelines: a name and its manager, the name on the section's line (no mark) */
+.pipe{grid-template-columns:24px minmax(0,1fr) var(--av-sm)}
+:where(html[data-layout="cards"]) .pipe{grid-template-columns:minmax(0,1fr) var(--av-sm)}
+:where(html[data-layout="cards"]) .pipe .row-mark{display:none}
+.ny-views{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;padding-inline-end:var(--s-2)}
+.ny-views a{color:inherit}
+.ny-views a:hover{color:var(--ink)}

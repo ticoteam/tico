@@ -115,6 +115,8 @@ describe('Roadmap @s2', () => {
       ],
       [task('d', 3, 'Gift cards', 'done', { status: 'done' })],
     );
+    // the Dot: what Needs you names
+    queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['b'] });
     show(<RoadmapPage search={{}} />, '/roadmap');
     const now = await screen.findByRole('region', { name: 'Now' });
     const row = within(now).getByTitle('Share a list by link');

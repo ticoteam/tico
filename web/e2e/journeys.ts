@@ -81,7 +81,7 @@ test('sign in; an old link and a /next link land on their page; a head title nev
   await expect(page).toHaveURL(new RegExp(`/tasks/launch/${draft!.number}(/|\\?|$)`));
   await expect(page.locator('.pk-head h1')).toHaveText(draft!.title);
   await page.goto(`${hub.url}/#/decide`);
-  await expect(page).toHaveURL(new RegExp('/needs-you(/|\\?|$)'));
+  await expect(page).toHaveURL(new RegExp('/tasks(/|\\?|$)'));
   // A link from when the app lived at /next drops the prefix and keeps its query.
   await page.goto(`${hub.url}/next/tasks/launch?view=list`);
   await expect(page).toHaveURL(`${hub.url}/tasks/launch?view=list`);
@@ -104,27 +104,36 @@ test('sign in; an old link and a /next link land on their page; a head title nev
   clean(page);
 });
 
-test('Needs you: open the case and approve the email; the send goes out', async ({ browser, hub }) => {
-  const { subject, approval } = hub.facts.mail;
+test('Needs you: open the first case and approve its email; the send goes out and the next case opens', async ({ browser, hub }) => {
+  const { mail } = hub.facts;
+  const cases = [mail, mail.next];
   const page = await open(browser, hub, '/tasks');
-  // Needs you, from its own row in the menu
-  await page.locator('[data-sheet="menu"]').getByRole('link', { name: /^Needs you/ }).click();
-  await expect(page).toHaveURL(/\/needs-you/);
-  await page.locator('a.row.task', { hasText: subject }).click();
-  await expect(page.locator('.ap-subj')).toHaveText(subject);
-  await expect(page.locator('article[aria-label="Email"]')).toContainText('order 1042 left our warehouse');
+  // Needs you, on top of Tasks: both held emails, in Tico's order
+  const needs = page.locator('section[aria-label="Needs you"]');
+  const rows = needs.locator('a.row.task');
+  await expect(rows).toHaveCount(2);
+  const top = (await rows.first().getAttribute('title')) ?? '';
+  const [first, second] = top.includes(mail.next.subject) ? [mail.next, mail] : cases;
+  await rows.first().click();
+  await expect(page.locator('.ap-subj')).toHaveText(first!.subject);
   const decision = page.locator('section[aria-label="The decision"]');
   const approve = decision.getByRole('button', { name: 'Approve', exact: true });
   await expect(approve).toBeEnabled();
+  const opened = page.url();
   await approve.click();
-  // The OK is Dana's own, bound to the copy she was shown
-  await expect
-    .poll(async () => (await sql(hub, `SELECT ok_at FROM ok_grants WHERE requirement_id='${approval}'`))[0]?.ok_at ?? null)
-    .not.toBeNull();
+  // nothing else on it waits on Dana: the next row of Needs you opens, Needs you still beside it
+  await expect(page.locator('.ap-subj')).toHaveText(second!.subject);
+  expect(page.url()).not.toBe(opened);
+  await expect(page.locator('nav[aria-label="Needs you"] a.li')).toHaveCount(1);
+  await expect(decision.getByRole('button', { name: 'Approve', exact: true })).toBeEnabled();
+  // The OK is Dana's own, bound to the copy she was shown; the other still waits
+  const okAt = async (approval: string) => (await sql(hub, `SELECT ok_at FROM ok_grants WHERE requirement_id='${approval}'`))[0]?.ok_at ?? null;
+  await expect.poll(() => okAt(first!.approval)).not.toBeNull();
+  expect(await okAt(second!.approval)).toBeNull();
   // and the server's sender takes it from the queue: it reaches the (fake) mail provider once
   expect(await call(hub, '/_e2e/drain', 'POST')).toEqual({ sent: 1 });
   const sent = await call<{ mime: string }[]>(hub, '/_e2e/sent');
-  expect(sent[0]?.mime).toContain(`Subject: ${subject}`);
+  expect(sent[0]?.mime).toContain(`Subject: ${first!.subject}`);
   clean(page);
 });
 

@@ -27,6 +27,7 @@ import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
 import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
+import { useNeedsYou } from './needs';
 import { NewTask } from './NewTask';
 import { Blocks, Face, isPending, markOf, Movable, StoppedMark, taskHref, waitsOnMe } from './parts';
 import {
@@ -82,6 +83,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const tasks = useSuspenseQuery(pipelineTasksQuery(pipeline, filters)).data;
   useBackstop(listParams(pipeline, filters));
   const me = useQuery(meQuery).data?.id;
+  const needs = useNeedsYou();
   const [folds, setFolds] = usePref<string[]>(`${FOLD_PREF}:${pipeline}`, []);
   const edit = useAction('tasks.editPipeline');
   const [newIn, setNewIn] = useState<{ stage: string | null } | null>(null);
@@ -138,7 +140,7 @@ function OpenPage({ pipeline, p, pipes, search, view, head }: PageProps & { view
   const fold = (id: string, open: boolean) => setFolds(open ? folds.filter((x) => x !== id) : [...folds, id]);
   const more = cut ? () => void loadMore(pipeline, filters) : undefined;
   const body: BodyProps | null = p
-    ? { p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
+    ? { p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle, onNew: (stage) => setNewIn({ stage }), onEdit: () => void edit.run({ pipeline }) }
     : null;
   const bare = body && !body.rows.length && !filtered && <Bare p={body.p} board={view === 'board'} onNew={onNew} />;
 
@@ -332,6 +334,8 @@ interface BodyProps {
   p: Pipeline;
   rows: readonly TaskItem[];
   me: string | undefined;
+  /** The tasks Needs you names: the Dot's one meaning. */
+  needs: ReadonlySet<string> | undefined;
   folds: readonly string[];
   fold: (stage: string, open: boolean) => void;
   /** Read the next page; only while the server has one. */
@@ -354,7 +358,7 @@ function byStage(stages: readonly Stage[], rows: readonly TaskItem[]) {
 }
 
 /** Shown order only: what waits on you leads its stage, so a long stage never hides it below the cap. Bulk moves keep the stage's own order. */
-const yoursFirst = (list: readonly TaskItem[], me: string | undefined) => [...list.filter((t) => waitsOnMe(t, me)), ...list.filter((t) => !waitsOnMe(t, me))];
+const yoursFirst = (list: readonly TaskItem[], needs: ReadonlySet<string> | undefined) => [...list.filter((t) => waitsOnMe(t, needs)), ...list.filter((t) => !waitsOnMe(t, needs))];
 
 /** In Select, the box in the mark's place. */
 const Pick = ({ on }: { on: boolean }) => (
@@ -372,9 +376,10 @@ const picker = (toggle: BodyProps['toggle'], id: string) =>
     toggle(id);
   });
 
-function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: string | undefined; picked?: boolean; onPick?: (e: MouseEvent) => void }) {
-  // The card's status line in the mark's place (Starting, Up next, Working, Needs you, Paused · Fix); Select's box while picking.
-  const line = !onPick && lineFor(t, me);
+function Card({ t, p, me, waits, picked, onPick }: { t: TaskItem; p: Pipeline; me: string | undefined; waits: boolean; picked?: boolean; onPick?: (e: MouseEvent) => void }) {
+  // The card's status line in the mark's place (Starting, Up next, Working, Needs you, Paused · Fix); Select's box while
+  // picking. Needs you is Needs you's own answer, not the turn's.
+  const line = !onPick && lineFor(t, me, waits);
   const inner = (
     <>
       <span className="card-title">{t.title}</span>
@@ -385,7 +390,7 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
               <Pick on={!!picked} />
             ) : (
               <>
-                {line && <StatusLine t={t} me={me} inLink />}
+                {line && <StatusLine t={t} me={me} waits={waits} inLink />}
                 {t.stuck && <StoppedMark />}
               </>
             )}
@@ -433,7 +438,7 @@ function Card({ t, p, me, picked, onPick }: { t: TaskItem; p: Pipeline; me: stri
 /** Where a board card lands: a stage's column. */
 const COLUMN = '.col[data-target^="stage:"]';
 
-function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
+function Columns({ p, rows, me, needs, folds, fold, more, cut, countOf, picking, toggle }: BodyProps) {
   const move = useAction('tasks.move');
   // Dragging only moves: a card let go over another stage's column moves there.
   const drag = useDrag({
@@ -448,12 +453,19 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
     },
   });
   const groups = byStage(p.stages, rows);
-  const shape = p.stages.map((s) => `${s.id}:${groups.get(s.id)?.length ?? 0}:${folds.includes(s.id) ? 1 : 0}`).join(',');
+  // what the fit counts: each column's cards, its fold and what of it waits on you (the arrows say so when it lies past
+  // the edge), so Needs you read late or changed fits the board again
+  const shape = p.stages
+    .map((s) => {
+      const list = groups.get(s.id) ?? [];
+      return `${s.id}:${list.length}:${folds.includes(s.id) ? 1 : 0}:${list.filter((t) => waitsOnMe(t, needs)).length}`;
+    })
+    .join(',');
   return (
     <>
       {p.stages.map((s) => {
         const list = groups.get(s.id) ?? [];
-        const waits = list.filter((t) => waitsOnMe(t, me)).length;
+        const waits = list.filter((t) => waitsOnMe(t, needs)).length;
         const folded = !list.length || folds.includes(s.id);
         return (
           <BoardColumn
@@ -473,7 +485,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
             }
           >
             <Capped
-              list={yoursFirst(list, me)}
+              list={yoursFirst(list, needs)}
               cap={COL_CAP}
               show={COL_SHOW}
               more={more}
@@ -487,7 +499,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
                   wrap={picking ? undefined : { 'data-task': t.id, ref: drag }}
                   after={!picking && <CardFix t={t} me={me} />}
                 >
-                  <Card t={t} p={p} me={me} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
+                  <Card t={t} p={p} me={me} waits={waitsOnMe(t, needs)} picked={picking?.has(t.id)} onPick={picker(toggle, t.id)} />
                 </Movable>
               )}
               moreRow={(n, open) => (
@@ -504,7 +516,7 @@ function Columns({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle
   );
 }
 
-function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
+function Sections({ p, rows, needs, folds, fold, more, cut, countOf, picking, toggle, onNew, onEdit, edit }: BodyProps & { edit?: boolean }) {
   const cards = useCards();
   const groups = byStage(p.stages, rows);
   const none = p.stages.filter((s) => !groups.get(s.id)?.length);
@@ -530,7 +542,7 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
               }
             >
               <Capped
-                list={yoursFirst(list, me)}
+                list={yoursFirst(list, needs)}
                 cap={LIST_CAP}
                 show={LIST_SHOW}
                 more={more}
@@ -542,7 +554,7 @@ function Sections({ p, rows, me, folds, fold, more, cut, countOf, picking, toggl
                       title={t.title}
                       href={isPending(t) ? undefined : taskHref(p.id, t)}
                       target={`task:${t.number ?? t.id}`}
-                      mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, me)}
+                      mark={picking ? <Pick on={picking.has(t.id)} /> : markOf(t, needs)}
                       selected={picking?.has(t.id)}
                       aria-pressed={picking ? picking.has(t.id) : undefined}
                       onClick={(e) => {

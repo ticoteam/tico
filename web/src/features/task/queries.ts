@@ -3,7 +3,7 @@ import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
-import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
+import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -173,8 +173,9 @@ export const giveTask = (id: string, owner: string, setAnyway?: boolean) =>
     starts again, and the server closes this task. The card stays, busy, until the answer; the task is read again after. */
 export async function releaseAgent(id: string, bot: string): Promise<unknown> {
   const done = await api.post<unknown>(`/api/v2/bots/${enc(bot)}/release`, {}, { idempotencyKey: crypto.randomUUID() });
+  // the server closes the notice: it leaves Needs you, its Dot with it, and Needs you is read again
+  settleNeedsYou({ task: id, wait: null });
   void queryClient.invalidateQueries({ queryKey: keys.tasks.detail(id) });
-  void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
   return done;
 }
 
@@ -200,20 +201,23 @@ export function answerAsk(id: string, rid: string, value: 'ok' | 'no', note?: st
     ),
     turn: t.turn?.requirement_id === rid ? null : t.turn,
   });
-  const gone = (cur: unknown): unknown => {
-    const f = cur as { count?: number; items?: { id: string }[]; requests?: unknown[] } | undefined;
-    if (!f?.items) return cur;
-    const items = f.items.filter((w) => w.id !== id);
-    // Needs you's requests (access, key, key-drop) count too: answering a task's ask leaves them waiting.
-    return { ...f, items, count: items.length + (f.requests?.length ?? 0) };
-  };
-  const flows = queryClient.getQueriesData({ queryKey: ['flow'] }).map(([k]) => k);
-  return write<TaskResult>({
-    key: [...shownIn(id), ...flows],
-    optimistic: (cur) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? gone(cur) : patch(id, answered)(cur)),
+  // Needs you takes this ask out at once: the task, its Dot and the counts too once it was the task's last there; once
+  // answered, it is read again (settleNeedsYou)
+  const undo = leaveNeedsYou(id, rid);
+  const answer = write<TaskResult>({
+    key: shownIn(id),
+    optimistic: patch(id, answered),
     send: (idem) => (value === 'ok' && shown ? post(`${taskPath(id)}/asks/${enc(rid)}/ok`, { shown_hash: shown }, idem) : sendAnswer(id, rid, value, note, idem, key)),
-    settle: (cur, answer) => (Array.isArray(cur) || (cur as { items?: unknown } | undefined)?.items ? cur : settled(id)(cur, answer)),
+    settle: settled(id),
   });
+  void answer.then(
+    () => settleNeedsYou({ task: id, wait: rid }),
+    () => {
+      undo(); // never sent, or refused: back as it was, then read again
+      settleNeedsYou();
+    },
+  );
+  return answer;
 }
 
 /** The version an answer on a page is given on, as the person sees it: `page_version` (`<file id>@<version>`, the whole

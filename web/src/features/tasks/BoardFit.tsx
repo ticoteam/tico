@@ -21,8 +21,9 @@ interface Edge {
 const isOpen = (c: Element) => !c.classList.contains('is-fold');
 const need = (list: Element[], w: number) => list.reduce((s, c) => s + (isOpen(c) ? w : STRIP), 0) + GAP * Math.max(0, list.length - 1);
 const stageOf = (c: Element) => c.getAttribute('data-target')?.slice('stage:'.length) ?? '';
-/** The column's own count of tasks that wait on you, from its head. */
-const waitsIn = (c: Element) => Number(c.querySelector(':scope > .col-head .col-flow b')?.textContent ?? 0);
+/** The column's own count of tasks that wait on you, from its head: the number beside the mark (the mark has a `b` of
+    its own, an empty one). */
+const waitsIn = (c: Element) => Number(c.querySelector(':scope > .col-head > .col-flow > b')?.textContent || 0);
 const edge = (list: Element[]): Edge | null =>
   list.length ? { stages: list.map(stageOf), waits: list.reduce((n, c) => n + waitsIn(c), 0) } : null;
 

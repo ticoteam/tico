@@ -1,8 +1,8 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useLocation } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActors } from '@/data';
+import { useActors } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
@@ -16,6 +16,7 @@ import { Table, Td, Th } from '@/kit/Table';
 import { FilterRow, List, PageMore, Section, type FilterChip } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { NewTask } from './NewTask';
+import { useNeedsYou } from './needs';
 import { Face, markOf, taskHref } from './parts';
 import { pipelinesQuery, tagKeyOf, tagQuery, tagsQuery, type Pipeline, type TaskItem } from './queries';
 import type { Tag } from '@/api/schema';
@@ -157,7 +158,7 @@ export function TagPage({ tag }: { tag: string }) {
   useFollow({ allTasks: true });
   const detail = useSuspenseQuery(tagQuery(tag)).data;
   const pipes = useSuspenseQuery(pipelinesQuery).data;
-  const me = useQuery(meQuery).data?.id;
+  const needs = useNeedsYou();
   const narrow = useNarrow();
   const filter = useAction('tags.filter');
   const more = useAction('tags.moreTasks');
@@ -189,7 +190,7 @@ export function TagPage({ tag }: { tag: string }) {
         title={x.title}
         href={p ? taskHref(p.id, x) : `/task/${x.number ?? encodeURIComponent(x.id)}`}
         target={`task:${x.number ?? x.id}`}
-        mark={markOf(x, me)}
+        mark={markOf(x, needs)}
         late={!!x.late}
         pills={<span className="row-stage">{stageName(x, p)}</span>}
         avatar={<Face actor={x.owner_id} />}

@@ -1,8 +1,7 @@
-import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
+import { useSuspenseQuery } from '@tanstack/react-query';
 import { Link } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
-import { meQuery } from '@/data';
 import { useFollow } from '@/live/follow';
 import { Button } from '@/kit/Button';
 import { FlowMark } from '@/kit/FlowMark';
@@ -18,6 +17,7 @@ import { fmtDate } from '@/lib';
 import { Capped, LIST_CAP, LIST_SHOW, RowMore, ROW_H } from './capped';
 import { FilterItems, FilterMenu } from './FilterMenu';
 import { NewTask } from './NewTask';
+import { useNeedsYou } from './needs';
 import { Face, isPending, taskHref, waitsOnMe } from './parts';
 import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, shelfParams, shelfQuery, shelfTotal, type Filters, type Pipeline, type TaskItem } from './queries';
 import { RequestersDialog } from './Requesters';
@@ -54,7 +54,7 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
   const filters = filtersOf(search);
   const open = useSuspenseQuery(pipelineTasksQuery(p.id, filters)).data;
   const shipped = useSuspenseQuery(shelfQuery(p.id, 'done', filters)).data;
-  const me = useQuery(meQuery).data?.id;
+  const needs = useNeedsYou();
   const [folds, setFolds] = usePref<Horizon[]>(FOLD_PREF, ['shipped']);
   const [adding, setAdding] = useState(false);
   const requesters = useAction('tasks.openRequesters');
@@ -86,7 +86,7 @@ function Roadmap({ p, pipes, search }: { p: Pipeline; pipes: readonly Pipeline[]
         }}
         filter={<Chips search={search} />}
         sections={
-          <Horizons p={p} rows={rows} done={done} me={me} folds={folds} fold={fold} cut={!!open.next_after} shippedCut={!!shipped.next_after} shippedCount={shelfTotal(shipped)} filters={filters} />
+          <Horizons p={p} rows={rows} done={done} needs={needs} folds={folds} fold={fold} cut={!!open.next_after} shippedCut={!!shipped.next_after} shippedCount={shelfTotal(shipped)} filters={filters} />
         }
       />
       {adding && <NewTask open onOpenChange={(o) => !o && setAdding(false)} pipelines={pipes} pipeline={p.id} owner={filters.owner ?? null} />}
@@ -133,7 +133,8 @@ interface HorizonsProps {
   p: Pipeline;
   rows: readonly TaskItem[];
   done: readonly TaskItem[];
-  me: string | undefined;
+  /** The tasks Needs you names: the Dot's one meaning. */
+  needs: ReadonlySet<string> | undefined;
   folds: readonly Horizon[];
   fold: (h: Horizon, open: boolean) => void;
   /** The server holds more open features than were read. */
@@ -144,7 +145,7 @@ interface HorizonsProps {
   filters: Filters;
 }
 
-function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCount, filters }: HorizonsProps) {
+function Horizons({ p, rows, done, needs, folds, fold, cut, shippedCut, shippedCount, filters }: HorizonsProps) {
   const cards = useCards();
   const groups = { ...byHorizon(p, rows), shipped: [...done] };
   const more = cut ? () => void loadMore(p.id, filters) : undefined;
@@ -175,7 +176,7 @@ function Horizons({ p, rows, done, me, folds, fold, cut, shippedCut, shippedCoun
               show={LIST_SHOW}
               height={ROW_H}
               more={h === 'shipped' ? moreShipped : more}
-              draw={(t) => <RoadmapRow key={t.id} t={t} p={p} me={me} />}
+              draw={(t) => <RoadmapRow key={t.id} t={t} p={p} needs={needs} />}
               moreRow={(n, open) => <RowMore key="more" n={n} cut={h === 'shipped' ? shippedCut : cut} onClick={open} />}
             />
           </Section>
@@ -199,13 +200,13 @@ function Track({ p, t }: { p: Pipeline; t: TaskItem }) {
 }
 
 /** A roadmap row (more.js roadmapRow): mark, title, Late and the lock, the track, owner, date; "⋯" holds Requesters. */
-function RoadmapRow({ t, p, me }: { t: TaskItem; p: Pipeline; me: string | undefined }) {
+function RoadmapRow({ t, p, needs }: { t: TaskItem; p: Pipeline; needs: ReadonlySet<string> | undefined }) {
   const requesters = useAction('tasks.openRequesters');
   const move = useAction('tasks.move');
   const locked = !!t.visibility && t.visibility !== 'public';
   const row = (
     <Row className="task rm" href={isPending(t) ? undefined : taskHref(p.id, t)} title={t.title} target={`task:${t.number ?? t.id}`}>
-      <span className="row-mark">{waitsOnMe(t, me) && <FlowMark />}</span>
+      <span className="row-mark">{waitsOnMe(t, needs) && <FlowMark />}</span>
       <span className="row-title">{t.title}</span>
       <span className="row-sub">
         <span className="row-pills">

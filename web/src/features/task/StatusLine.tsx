@@ -6,6 +6,7 @@ import { FlowMark } from '@/kit/FlowMark';
 import { Link } from '@/kit/Link';
 import { newAddressFor } from '@/oldAddress/map';
 import './status.css';
+import { useNeedsYouRead } from '@/features/tasks/routing';
 
 /* A task's one status line (the server's `status_line`, task_reads.status_line), the same on its board card, its head
    and over its chat's message box; the stream sends it again as it changes. What it is about is the task's turn: whose
@@ -22,9 +23,11 @@ const WORDS: Record<Line, string> = {
   paused: 'Paused',
 };
 
-/** The line this reader sees, or null: none, or Needs you for someone else. */
-export const lineFor = (t: Shown, me: string | undefined): Line | null => {
+/** The line this reader sees, or null: none, or Needs you for someone else. `waits`, where the caller knows it (a board
+    card): whether Needs you names the task, which then decides Needs you over the turn (Paused keeps its Fix). */
+export const lineFor = (t: Shown, me: string | undefined, waits?: boolean): Line | null => {
   const line = t.status_line ?? null;
+  if (waits !== undefined && line !== 'paused') return waits ? 'needs_you' : line === 'needs_you' ? null : line;
   return line === 'needs_you' && (!me || t.turn?.who !== me) ? null : line;
 };
 
@@ -33,13 +36,13 @@ export const fixHref = (href: string | null | undefined) => (href ? (href.starts
 
 /** The line. `inLink`: it sits inside a link (a board card), which may not hold another: Fix there is only its place,
     and `CardFix` beside the card is the link. */
-export function StatusLine({ t, me, inLink = false }: { t: Shown; me: string | undefined; inLink?: boolean }) {
-  const line = lineFor(t, me);
+export function StatusLine({ t, me, inLink = false, waits }: { t: Shown; me: string | undefined; inLink?: boolean; waits?: boolean }) {
+  const line = lineFor(t, me, waits);
   if (!line) return null;
   const href = line === 'paused' ? fixHref(t.turn?.href) : null;
   return (
     <span className={`status-line is-${line}`} data-state={line} title={line === 'paused' ? t.turn?.line : undefined}>
-      {line === 'needs_you' && (
+      {(waits ?? line === 'needs_you') && (
         <span aria-hidden="true">
           <FlowMark size={8} />
         </span>
@@ -97,8 +100,10 @@ export function CardFix({ t, me }: { t: Shown; me: string | undefined }) {
   );
 }
 
-/** The line for the signed-in person. */
-export function TaskStatus({ t }: { t: Shown }) {
+/** The line for the signed-in person: Needs you (the Dot) as Needs you names the task, from what is already read; no
+    Dot, never the turn's, until it is. */
+export function TaskStatus({ t }: { t: Shown & { id: string } }) {
   const me = useQuery(meQuery).data?.id;
-  return <StatusLine t={t} me={me} />;
+  const needs = useNeedsYouRead();
+  return <StatusLine t={t} me={me} waits={!!needs?.has(t.id)} />;
 }

@@ -8,7 +8,8 @@ const ROOT = new URL('../../../', import.meta.url).pathname;
 const SEEDED = new URL('./seeded.py', import.meta.url).pathname;
 
 export interface Facts {
-  mail: { send: string; approval: string; subject: string; mailbox: string };
+  /** The lead's held email, and the release manager's (`next`): two cases in Dana's Needs you. */
+  mail: { send: string; approval: string; subject: string; mailbox: string; next: { send: string; approval: string; subject: string } };
   board: { pipeline: string; tasks: { id: string; number: number; title: string }[] };
   thread: string;
 }

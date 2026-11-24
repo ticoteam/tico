@@ -18,11 +18,11 @@ import './Menu.css';
    Team is the org chart and your DMs; Threads every other conversation. No counts there: bold is new, and the Dot on
    a row marks a conversation that asks you (never on a tab or a folded row). */
 
-export type MenuRowId = 'tasks' | 'needs-you' | 'calendar' | 'company' | 'library';
+export type MenuRowId = 'tasks' | 'calendar' | 'company' | 'library';
 export type MenuTalk = 'team' | 'threads';
 
 export interface MenuCounts {
-  /* what waits on you, shown in the Dot's shape on Needs you */
+  /* what waits on you (Needs you, the top of Tasks), shown in the Dot's shape on Tasks */
   flow?: number;
   /* the next meeting's time, beside Calendar ("2:30 PM") */
   next?: string;
@@ -103,7 +103,6 @@ export interface MenuProps {
 
 const ROWS: { id: MenuRowId; label: string; icon: IconName }[] = [
   { id: 'tasks', label: 'Tasks', icon: 'tasks' },
-  { id: 'needs-you', label: 'Needs you', icon: 'inbox' },
   { id: 'calendar', label: 'Calendar', icon: 'calendar' },
   { id: 'company', label: 'Company', icon: 'company' },
   { id: 'library', label: 'Library', icon: 'library' },
@@ -156,7 +155,9 @@ export function Menu(p: MenuProps) {
   const sheet = useSheet();
   const phone = usePhoneCards();
   const folded = p.folded ?? sheet.folded;
-  const path = useLocation({ select: l => l.pathname.replace(/^\/next(?=\/|$)/, '') });
+  const at = useLocation({ select: l => l.pathname.replace(/^\/next(?=\/|$)/, '') });
+  // Needs you's views (All, Snoozed, Done) are Tasks' own: Tasks is the page there
+  const path = at === '/needs-you' ? '/tasks' : at;
   const can = p.can ?? (() => true);
   const top = topOf(path);
   /* What is open here is the person's: only the menu's own controls open or shut a section or a row. Until they do,
@@ -245,7 +246,15 @@ export function Menu(p: MenuProps) {
         <div className="nav-scroll">
           <div className="nav-items">
             {rows.map(r => (
-              <Link key={r.id} className="nav-item" to={to(`/${r.id}`)} activeProps={ACTIVE} aria-label={r.label} title={r.label}>
+              <Link
+                key={r.id}
+                className={at !== path && path === `/${r.id}` ? 'nav-item is-active' : 'nav-item'}
+                aria-current={at !== path && path === `/${r.id}` ? 'page' : undefined}
+                to={to(`/${r.id}`)}
+                activeProps={ACTIVE}
+                aria-label={r.label}
+                title={r.label}
+              >
                 <span className="slot-ico">
                   <Icon name={r.icon} />
                 </span>
@@ -273,21 +282,24 @@ export function Menu(p: MenuProps) {
   }
 
   const right = (id: MenuRowId, hasKids: boolean, expanded: boolean) => {
-    if (id === 'needs-you' && c.flow)
-      return (
+    const flow =
+      id === 'tasks' && c.flow ? (
         <span className="nav-flow">
           <FlowMark />
           <b>{c.flow}</b>
         </span>
-      );
+      ) : null;
     if (id === 'calendar' && c.next) return <span className="nav-next">{c.next}</span>;
     if (hasKids)
       return (
-        <span className={`nav-chev${expanded ? ' is-open' : ''}`}>
-          <Icon name="chevron" />
-        </span>
+        <>
+          {flow}
+          <span className={`nav-chev${expanded ? ' is-open' : ''}`}>
+            <Icon name="chevron" />
+          </span>
+        </>
       );
-    return null;
+    return flow;
   };
 
   // the head: the company over your name, then Tico support's "?" and the fold (the foot moved up here, concept D)
@@ -340,7 +352,8 @@ export function Menu(p: MenuProps) {
             // choosing a section here opens it, and shuts the others
             <Link
               key={r.id}
-              className="nav-item"
+              className={here && at !== path ? 'nav-item is-active' : 'nav-item'}
+              aria-current={here && at !== path ? 'page' : undefined}
               to={to(`/${r.id}`)}
               activeProps={ACTIVE}
               activeOptions={{ exact: expanded }}

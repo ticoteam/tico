@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { meQuery, useActor } from '@/data';
-import { flowQuery } from '@/features/tasks/routing';
+import { flowQuery, needsYouIds } from '@/features/tasks/routing';
 import { Avatar } from '@/kit/Avatar';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
@@ -49,7 +49,9 @@ export function Tracker() {
   useFollow(me ? { party: me } : null);
   const open = useQuery({ ...trackedQuery(me ?? ''), enabled: !!me, select: rows });
   const back = useQuery({ ...backQuery(me ?? ''), enabled: !!me, select: rows });
-  const flow = useQuery({ ...flowQuery, select: (f) => new Set(f.task_ids ?? f.items.map((i) => i.id)) });
+  // what waits on the person is what Needs you names: the board's Dot and the menu's count read the same list
+  const flow = useQuery({ ...flowQuery, select: needsYouIds });
+  const waiting = useMemo(() => (flow.data ? new Set(flow.data) : undefined), [flow.data]);
   const seen = useQuery(trackerSeenQuery);
   // Open: when, and the last opening before it, which Back counts from while it stays open.
   const [opened, setOpened] = useState<{ at: number; seen: string | null } | null>(null);
@@ -69,8 +71,8 @@ export function Tracker() {
   const reads = [open, back, flow, seen];
   const failed = reads.filter((r) => r.isError && r.data === undefined);
   const groups =
-    me && open.data && back.data && flow.data && seen.data !== undefined
-      ? trackerGroups(open.data, back.data, flow.data, me, backSince(opened ? opened.seen : seen.data, at))
+    me && open.data && back.data && waiting && seen.data !== undefined
+      ? trackerGroups(open.data, back.data, waiting, me, backSince(opened ? opened.seen : seen.data, at))
       : null;
   const ageOut = groups ? nextAgeOut(groups.back) : null;
   useEffect(() => {

@@ -251,19 +251,29 @@ are the person's task with Agent Ops' question on it; the Strategy Owner's asks 
 Agent Ops asks for it while it cannot run. The question goes when the task moves on.
 
 `GET /api/v2/needs-you` returns the list. With `?count=true`, `count` is the number of Needs you items and `flow_count`
-counts each task row once, plus each request. The menu's **Needs you** row shows `flow_count`.
+counts each task row once, plus each request. The menu's **Tasks** row shows `flow_count`.
 The count response gives `snooze_refresh_in_ms` for the next snoozed ask in server time, or null. The shell refreshes
 the count and any open Needs you lists at that deadline and at least every five minutes.
 
-**Needs you** (`/needs-you`, its own row in the menu) opens on **Mine**, with your tasks grouped by relationship and requests in their own cards. **All**
-shows your team's open work and public Support tasks with no assignee or an assignee who is off. Tasks without a
-visible relationship appear under **Other**. Each row shows whose turn it is or what it waits on. Open **Why
-here** for its origin. Open **Snoozed** or **Done** to see that shelf, or hide both via **Hide archive**. Mine's shelves
-show your own tasks. Its Snoozed shelf also shows asks you snoozed in Needs you. An ask returns to Mine when its
-snooze ends, or sooner if you choose Unsnooze. A row opens the task at its own address. Once you approve and nothing
-else on it waits on you (another approval, or a ❓ to you), the task closes back to the list you opened it from, with
-Undo; Back does the same, and a task opened from a link goes back to its board. Old `/flow` links open Needs you, and
-`/flow/<n>` the task. Task changes follow the usual permissions.
+**Needs you** is the top of **Tasks** (`/tasks`): one list in Tico's order, requests' cards and tasks' rows, each task
+with its relationship's name, and the pipelines below; on a phone the same stack. Each row shows whose turn it is or
+what it waits on. Open **Why here** for its origin. Needs you on Tasks asks Tico to sort the list
+(`POST /api/v2/needs-you/sort`); the list beside a task never does. A row opens the task at its own address, with Needs
+you as the list beside it (title only, in the same order). Once you approve and nothing else on it waits on you
+(another approval, or a ❓ to you), the next task in that order opens, whatever its pipeline; after the last, Tasks
+again. A new order that lands while you are on a row, or have a task from the list open, moves only the rows below it.
+The order holds on a phone, with the list tucked away, and past the list's cap.
+
+The Dot means one thing everywhere: Needs you names the task. A board's cards and column counts, the list beside a
+task, a task's own status line, Roadmap, Tags, a teammate's tasks, the Company floor's stage and Tico's tracker all read
+the same set (a paused agent's row names each of its tasks). A task that is your turn with nothing asked of you has no
+Dot.
+
+Needs you's head on Tasks links **All · Snoozed · Done** (`/needs-you?view=all|snoozed|done`). **All** shows your team's
+open work and public Support tasks with no assignee or an assignee who is off. **Snoozed** and **Done** show your own
+tasks; Snoozed also shows asks you snoozed in Needs you. An ask returns when its snooze ends, or sooner if you choose
+Unsnooze. Plain `/needs-you` and old `/flow` links open Tasks (`/flow?view=all` opens All), and `/flow/<n>` the task.
+Task changes follow the usual permissions.
 
 The same All scope is available via `GET /api/v2/tasks?status=open&claimable=true`, `tico task list --status open
 --claimable`, or `tico_task_list` with `claimable: true` and `status: ["open"]`.

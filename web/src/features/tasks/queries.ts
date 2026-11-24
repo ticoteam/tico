@@ -819,6 +819,9 @@ export interface Flow {
   requests?: FlowRequest[];
   /** Every task the Needs you list names, a grouped item's (a paused agent's `task_ids`) each one too. */
   task_ids?: string[];
+  /** What each of those tasks waits on: its items, each by its requirement (else its own id). An answer to one leaves
+      the task waiting while another names it. */
+  waits?: Record<string, string[]>;
   /** Each approval (an OK or a page) that waits on the person, from every row of the list, one per requirement: `items`
       keeps one row per task, the oldest, which may be another ask (the thread cards read this). */
   approvals?: ApprovalItem[];
@@ -897,6 +900,7 @@ export const flowQuery = queryOptions({
     // One row a task, where its first item is in Tico's order; an ask that says what it is about (`about`) names the row.
     const seen = new Map<string, number>();
     const named = new Set<string>();
+    const waits: Record<string, string[]> = {};
     const items: FlowItem[] = [];
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
@@ -917,7 +921,11 @@ export const flowQuery = queryOptions({
         continue;
       }
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
-      for (const id of [it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])]) if (id) named.add(id);
+      for (const id of new Set([it.task_id, it.task?.id, ...((it as { task_ids?: string[] }).task_ids ?? [])])) {
+        if (!id) continue;
+        named.add(id);
+        (waits[id] ??= []).push(it.ask?.requirement_id ?? it.requirement_id ?? it.id);
+      }
       const t = it.task;
       if (!t) continue;
       // One approval per requirement: two OKs on one task, emails or not, are two approvals. An entry names its own.
@@ -937,7 +945,7 @@ export const flowQuery = queryOptions({
       items.push(flowItemOf(it, t));
       order.push(t.id);
     }
-    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()], asks, order, sorting, sortingUntil, itemIds: needs.map((it) => it.id) };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], waits, approvals: [...approvals.values()], asks, order, sorting, sortingUntil, itemIds: needs.map((it) => it.id) };
   },
 });
 

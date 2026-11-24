@@ -18,7 +18,7 @@ export function TasksPending() {
   );
 }
 
-/** While Needs you is read: its title over the list's bars. */
-export function NeedsYouPending() {
-  return <List title="Needs you" path="/needs-you" state="loading" sections={null} className="tasks-page" />;
+/** While Tasks (Needs you, then the pipelines) is read: its title over the list's bars. */
+export function TasksHomePending() {
+  return <List title="Tasks" path="/tasks" state="loading" sections={null} className="tasks-page tasks-home" />;
 }

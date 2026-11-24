@@ -10,7 +10,8 @@ the rest are summed in `more`.
 - `count`: open tasks in the stage the reader may read (the task access filter every count uses).
 - `owners`: those grouped by the task's holder (`owner_id`, the `owner` filter of GET /v2/tasks). A task nobody holds,
   or held by a person the reader may not be told about (teammate_access.Known), counts in `count` and is in no group.
-- `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks).
+- `needs_you`: of those, the ones in the reader's own Needs you (the asks, tasks and @s a stage's Flow walks, and the
+  tasks a paused agent's row holds up): the tasks the app marks with the Dot.
 - `into`: the pipeline a stage files a linked task into (its `on_enter.file_into`, a handoff), when the reader sees
   that pipeline here; else null. The Floor joins a pipeline to the one it hands off to only where this is set.
 - `moved_into`: the pipelines the reader sees here that tasks the reader may read were moved into from this one (Move to
@@ -54,9 +55,12 @@ def _company_person(c: Any) -> str | None:
 
 
 def _needs_task_ids(c: Any, auth: Any, who: Any) -> list[str]:
-    """The tasks the reader's Needs you holds in a stage (views.NEEDS_STAGE_KINDS), each once."""
+    """The tasks the reader's Needs you names, each once: a stage's items (views.NEEDS_STAGE_KINDS) and each task a
+    paused agent's row holds up (`task_ids`), as the app marks them with the Dot (web features/tasks/needs.ts)."""
     items: list[dict[str, Any]] = V.needs_items(c, auth, who, None, count_only=True)
-    return sorted({str(it["task_id"]) for it in items if it.get("kind") in V.NEEDS_STAGE_KINDS and it.get("task_id")})
+    named = {str(it["task_id"]) for it in items if it.get("kind") in V.NEEDS_STAGE_KINDS and it.get("task_id")}
+    named |= {str(t) for it in items if it.get("kind") == "paused" for t in it.get("task_ids") or ()}
+    return sorted(named)
 
 
 def _rates(c: Any, pipeline_ids: list[str], visible_sql: str) -> dict[str, dict[str, dict[str, int]]]:

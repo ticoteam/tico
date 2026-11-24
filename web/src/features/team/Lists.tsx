@@ -24,12 +24,24 @@ export function useLists(slug: string) {
 }
 
 /** Its own lists on its page (ui bot-tasks custom tabs): one section each, its tasks as the Tasks section draws them. */
-export function ListSections({ slug, me }: { slug: string; me: string | undefined }) {
+export function ListSections({ slug, needs }: { slug: string; needs: ReadonlySet<string> | undefined }) {
   const { lists, canEdit } = useLists(slug);
-  return lists.map(({ key, tab }) => <ListSection key={key} slug={slug} list={key} tab={tab} me={me} canEdit={canEdit} />);
+  return lists.map(({ key, tab }) => <ListSection key={key} slug={slug} list={key} tab={tab} needs={needs} canEdit={canEdit} />);
 }
 
-function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: string; tab: TaskTab; me: string | undefined; canEdit: boolean }) {
+function ListSection({
+  slug,
+  list,
+  tab,
+  needs,
+  canEdit,
+}: {
+  slug: string;
+  list: string;
+  tab: TaskTab;
+  needs: ReadonlySet<string> | undefined;
+  canEdit: boolean;
+}) {
   const q = useQuery(listTasksQuery(slug, list));
   const remove = useAction('agents.removeList');
   const [editing, setEditing] = useState(false);
@@ -70,7 +82,7 @@ function ListSection({ slug, list, tab, me, canEdit }: { slug: string; list: str
         )
       }
     >
-      <OwnRows tasks={rows} me={me} label={tab.name} onEnd={next && !reading ? () => void readMore() : undefined} />
+      <OwnRows tasks={rows} needs={needs} label={tab.name} onEnd={next && !reading ? () => void readMore() : undefined} />
       {more > 0 && (
         <div className="stage-fold">
           <span className="fold-label">Earlier</span>

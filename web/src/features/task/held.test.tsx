@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -11,7 +11,13 @@ import { forgetPlaces, notePlace } from '@/lib';
 import { holdName } from './Held';
 import type { Hold } from './holds';
 import type { TaskData } from './queries';
-import { TaskChat } from './TaskPage';
+import { TaskChat, TaskPage } from './TaskPage';
+
+/** The task, drawn only while the address is the task's: the list it was opened from is another page. */
+function OnTask() {
+  const path = useLocation({ select: (l) => l.pathname });
+  return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+}
 
 /* A rule's review task ("Held by: <rule>"): the decision box shows what the rule held and is answered with Send anyway
    or Keep blocked (POST /api/v2/rule-holds/<id>/send and /keep). Made-up rows only; every answer is stubbed. */
@@ -168,6 +174,20 @@ describe('a held message on its review task', () => {
     await waitFor(() => expect(sent).toEqual([{ url: '/api/v2/rule-holds/h1/send', body: { nonce: 'n-1' } }]));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull());
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sent anyway'));
+  });
+
+  it('on the task opened from Needs you, deciding its last hold goes on, and the review leaves Needs you with its Dot', async () => {
+    reply = (url, method) => (method === 'POST' && url.endsWith('/rule-holds/h1/keep') ? { body: opened({ state: 'kept' }) } : null);
+    const row = { id: 't1', number: 12, pipeline_id: 'p1', title: 'Held by: Never name a customer to another customer' };
+    queryClient.setQueryData(['flow'], { count: 1, items: [row], requests: [], task_ids: ['t1'], order: ['t1'], waits: { t1: ['h1'] } } as never);
+    const router = show(<OnTask />, '/needs-you?view=all');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    const box = await loaded();
+    holds = [summary({ state: 'kept' })];
+    fireEvent.click(within(box).getByRole('button', { name: 'Keep blocked' }));
+    await waitFor(() => expect(router.state.location.href).toBe('/needs-you?view=all'));
+    const left = queryClient.getQueryData(['flow']) as { items: unknown[]; task_ids: string[]; order: string[]; waits: object; count: number };
+    expect([left.items, left.task_ids, left.order, left.waits, left.count]).toEqual([[], [], [], {}, 0]);
   });
 
   it('Keep blocked posts nothing but the press; a refusal from the server is said in the box', async () => {

@@ -17,7 +17,8 @@ describe('the trail over every page', () => {
     ['/tasks/legal/12/details', 'Small-claims redline: customer agreement', ['TIDY → /', 'Tasks → /tasks', 'Legal → /tasks/legal', 'Small-claims redline: customer agreement']],
     ['/tasks/all/12/details', 'A task with no pipeline', ['TIDY → /', 'Tasks → /tasks', 'A task with no pipeline']],
     ['/tasks/legal/edit', 'Legal', ['TIDY → /', 'Tasks → /tasks', 'Legal → /tasks/legal', 'Edit']],
-    ['/needs-you', 'Needs you', ['TIDY → /', 'Needs you']],
+    ['/needs-you', 'All', ['TIDY → /', 'Tasks → /tasks', 'Needs you → /tasks', 'All']],
+    ['/needs-you', 'Snoozed', ['TIDY → /', 'Tasks → /tasks', 'Needs you → /tasks', 'Snoozed']],
     ['/roadmap', 'Roadmap', ['TIDY → /', 'Tasks → /tasks', 'Roadmap']],
     ['/threads/mail', 'Mail', ['TIDY → /', 'Threads → /threads', 'Mail']],
     ['/threads/catch-up', '', ['TIDY → /', 'Threads → /threads', 'Catch up']],
@@ -62,9 +63,13 @@ describe("a phone's Back", () => {
     expect(up('/settings/people', 'Settings')).toEqual({ label: 'Settings', to: '/settings' });
     expect(up('/library/files', 'report.pdf')).toEqual({ label: 'Files', to: '/library/files' });
   });
-  it('is not there when the step up only passes on (the company, Tasks, Library) or has no page (Team)', () => {
+  it('goes up to Tasks from a pipeline’s board and Roadmap: Tasks is a page now (Needs you on top)', () => {
+    expect(up('/tasks/legal', 'Tasks')).toEqual({ label: 'Tasks', to: '/tasks' });
+    expect(up('/roadmap', 'Roadmap')).toEqual({ label: 'Tasks', to: '/tasks' });
+  });
+
+  it('is not there when the step up only passes on (the company, Library) or has no page (Team)', () => {
     expect(up('/calendar', 'Calendar')).toBeUndefined();
-    expect(up('/tasks/legal', 'Tasks')).toBeUndefined();
     expect(up('/library/docs', 'Docs')).toBeUndefined();
     expect(upOf(trailOf('/team/maya', names('Maya Okafor', { who: 'Maya Okafor' })))).toBeUndefined();
   });

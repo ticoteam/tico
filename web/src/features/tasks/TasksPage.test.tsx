@@ -1,6 +1,6 @@
 import { QueryClientProvider, QueryObserver } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRouteWithContext, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryHistory, createRootRouteWithContext, createRoute, createRouter, Outlet, RouterProvider } from '@tanstack/react-router';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -10,10 +10,11 @@ import { Toasts } from '@/kit/Toast';
 import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { follow, resetFollows } from '@/live/follow';
 import { forgetPlaces, nextInList, noteList, notePlace } from '@/lib';
-import { Route as needsRoute } from '@/routes/needs-you';
 import { dragTo } from '@/test/drag';
 import { ArchivedSections } from './Archived';
+import { useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
+import { NeedsYouViews } from './NeedsYouViews';
 import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, pipelinesQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
@@ -44,7 +45,16 @@ function show(node: ReactNode, at: string) {
       );
     },
   });
-  const routeTree = flow ? root.addChildren([needsRoute.update({ getParentRoute: () => root, id: '/needs-you', path: '/needs-you', component: () => node } as never)]) : root;
+  // the Needs you page as its route was before it moved to the top of Tasks: Mine's list read first
+  const needs = createRoute({
+    getParentRoute: () => root,
+    path: '/needs-you',
+    validateSearch: (s: Record<string, unknown>): { view?: 'all' } => (s.view === 'all' ? { view: 'all' } : {}),
+    loaderDeps: ({ search }) => ({ all: search.view === 'all' }),
+    loader: ({ deps }) => (deps.all ? undefined : queryClient.ensureQueryData(flowQuery)),
+    component: () => node,
+  });
+  const routeTree = flow ? root.addChildren([needs]) : root;
   const router = createRouter({ routeTree, context: { queryClient }, history: createMemoryHistory({ initialEntries: [at] }) });
   render(
     <QueryClientProvider client={queryClient}>
@@ -99,6 +109,8 @@ beforeAll(() => {
 });
 beforeEach(() => {
   posts = [];
+  // the row the person is on in Needs you, and the order it was drawn in, start over
+  forgetPlaces();
   resetPatchState();
   resetFollows();
   localStorage.clear();
@@ -148,7 +160,7 @@ it('finishes the route’s Needs you read when the shell unsubscribes', async ()
   const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
   stop();
   respond({ status: 200, body: { items: [] } });
-  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [], order: [], sorting: false, sortingUntil: null, itemIds: [] });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], waits: {}, approvals: [], asks: [], order: [], sorting: false, sortingUntil: null, itemIds: [] });
 });
 
 it('keeps the Reconcile summary on a Needs you row that folds several items of one task', async () => {
@@ -158,6 +170,8 @@ it('keeps the Reconcile summary on a Needs you row that folds several items of o
   serve(() => ({ status: 200, body: { items: [ask, shots] } }));
   const flow = await queryClient.fetchQuery(flowQuery);
   expect(flow.items.map((i) => i.about)).toEqual(['Reconcile 1 shot · Make the shots']);
+  // the one row waits on both: an answer to the OK leaves it waiting on the shots
+  expect(flow.waits).toEqual({ t1: ['r1', 'paid_render:t1'] });
 });
 
 it('a board card shows its shots to reconcile apart from its turn and status line', async () => {
@@ -266,6 +280,39 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     }
   });
 
+  it('the arrow past the edge counts what waits on you there, again as Needs you changes', async () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(220);
+    try {
+      serve(() => ({ status: 200, body: {} }));
+      seed([task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Review the export', 's2')]);
+      show(<TasksPage pipeline="eng" search={{ view: 'board' }} />, '/tasks/eng?view=board');
+      const later = (await screen.findByRole('button', { name: 'Later stages' })).closest('.board-more') as HTMLElement;
+      expect(later.querySelector('.col-flow')).toBeNull();
+      // Needs you now names the task in Doing, past the edge; the cards and folds are as they were
+      act(() => queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['a2'] }));
+      await waitFor(() => expect(later.querySelector('.col-flow > b')?.textContent).toBe('1'));
+      act(() => queryClient.setQueryData(['flow'], { count: 0, items: [], task_ids: [] }));
+      await waitFor(() => expect(later.querySelector('.col-flow')).toBeNull());
+    } finally {
+      width.mockRestore();
+    }
+  });
+
+  it('a Needs you read that names the same tasks keeps the same set, so nothing that reads it draws again', async () => {
+    seed([]);
+    queryClient.setQueryData(['flow'], { count: 1, items: [{ id: 'a1', title: 'Fix the export' }], task_ids: ['a1'] });
+    const { result } = renderHook(() => useNeedsYou(), { wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider> });
+    const first = result.current;
+    expect(first && [...first]).toEqual(['a1']);
+    act(() => queryClient.setQueryData(['flow'], { count: 1, items: [{ id: 'a1', title: 'Fix the export, renamed' }], task_ids: ['a1'] }));
+    // the read's news reaches the hook a moment later
+    await act(() => new Promise((r) => setTimeout(r, 20)));
+    expect(queryClient.getQueryData<{ items: { title: string }[] }>(['flow'])?.items[0]?.title).toBe('Fix the export, renamed');
+    expect(result.current).toBe(first);
+    act(() => queryClient.setQueryData(['flow'], { count: 2, items: [], task_ids: ['a1', 'a2'] }));
+    await waitFor(() => expect(result.current && [...result.current]).toEqual(['a1', 'a2']));
+  });
+
   it('a move shows at once and is taken back with the reason when the server refuses it', async () => {
     let refuse!: () => void;
     const rows = [task('a1', 7, 'Fix the export', 's1'), task('a2', 8, 'Write the notes', 's2')];
@@ -347,6 +394,8 @@ describe('Tasks board and list @s0 @s9 @s10', () => {
     const titles = () => screen.getAllByTitle(/^(Task \d+|Ana approves|You approve)$/).map((el) => el.getAttribute('title'));
     for (const view of ['board', 'list'] as const) {
       seed(many);
+      // what waits on you is what Needs you names
+      queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['a13'] });
       show(<TasksPage pipeline="eng" search={{ view }} />, `/tasks/eng?view=${view}`);
       await screen.findByTitle('You approve');
       // Only yours leads: a turn that is someone else's keeps its place.
@@ -700,6 +749,13 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
 
 describe('Needs you @s5 @s112', () => {
   const item = { id: 'a1', number: 7, title: 'Approve the copy', pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) };
+  // what waits on you and its Snoozed view (a link in its head on Tasks), side by side
+  const MineAndSnoozed = () => (
+    <>
+      <NeedsYouPage />
+      <NeedsYouViews view="snoozed" />
+    </>
+  );
 
   it('keeps the top 5 rows on the page live while Tico sorts, applies the order when the push lands below the row you are on', async () => {
     const tasks = [1, 2, 3, 4, 5, 6].map((n) => `t${n}`);
@@ -889,50 +945,28 @@ describe('Needs you @s5 @s112', () => {
     expect(posts).toEqual([{ url: '/api/v2/entities/names', body: { ids: ['organization/acme', 'organization/acme-partners'] } }]);
   });
 
-  it('switches to claimable work, explains a row on demand and folds and hides the archive', async () => {
-    queryClient.setQueryData(['flow'], { count: 1, items: [item] });
+  it('All (its link picks it) lists claimable work and explains a row on demand; no tabs, no archive of its own', async () => {
     const reads: string[] = [];
     const relationship = { entity_id: 'organization/acme' };
     const active = task('a2', 8, 'Help with the order', 's1', { ...relationship });
-    const snoozed = task('a3', 9, 'Send the quote', 's1', { ...relationship, snoozed: true });
-    const done = task('a4', 10, 'Send the form', 'sd', { ...relationship, status: 'done' });
     serve((url) => {
-      if (!url.endsWith('/needs-you/sort')) reads.push(url); // the page's ask to sort is no read of the list
+      reads.push(url);
       if (url.endsWith('/entities/names')) return { status: 200, body: { names: { [relationship.entity_id]: 'Acme' } } };
       if (url.includes('/origins/')) return { status: 200, body: { cause: { type: 'automation', name: 'Support intake' } } };
-      if (url.includes('claimable=true')) {
-        const p = new URL(url, 'http://localhost').searchParams;
-        return { status: 200, body: { tasks: [p.get('snoozed') === 'only' ? snoozed : p.get('status') === 'done' ? done : active] } };
-      }
+      if (url.includes('claimable=true')) return { status: 200, body: { tasks: [active] } };
       return { status: 200, body: { items: [] } };
     });
-    show(<NeedsYouPage />, '/needs-you');
-    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Mine' }).getAttribute('aria-current')).toBe('page');
-    expect(reads).toEqual([]);
-
-    fireEvent.click(screen.getByRole('link', { name: 'All' }));
+    show(<NeedsYouPage />, '/needs-you?view=all');
     expect((await screen.findByTitle('Help with the order')).getAttribute('href')).toBe('/task/8');
-    expect(screen.queryByTitle('Approve the copy')).toBeNull();
-    expect(screen.getByRole('link', { name: 'All' }).getAttribute('aria-current')).toBe('page');
+    expect(screen.getByRole('heading', { level: 1, name: 'All' })).toBeTruthy();
     expect(await screen.findByRole('region', { name: 'Acme' })).toBeTruthy();
-    expect(reads).toHaveLength(2);
+    // the link in Needs you's head on Tasks picked the view; Snoozed and Done are its other links
+    for (const name of ['Mine', 'All']) expect(screen.queryByRole('link', { name })).toBeNull();
+    for (const name of ['Snoozed', 'Done', 'Hide archive']) expect(screen.queryByRole('button', { name })).toBeNull();
+    expect(reads.some((u) => u.includes('/needs-you/sort'))).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Why here for Help with the order' }));
     expect(await within(await screen.findByRole('dialog', { name: 'Why here' })).findByText('Support intake')).toBeTruthy();
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Why here' }), { key: 'Escape' });
-
-    expect(screen.getByRole('button', { name: 'Snoozed' }).getAttribute('aria-expanded')).toBe('false');
-    expect(screen.getByRole('button', { name: 'Done' }).getAttribute('aria-expanded')).toBe('false');
-    fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
-    expect(await within(screen.getByRole('region', { name: 'Snoozed' })).findByTitle('Send the quote')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
-    expect(await within(screen.getByRole('region', { name: 'Done' })).findByTitle('Send the form')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Hide archive' }));
-    expect(screen.queryByRole('region', { name: 'Snoozed' })).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Done' })).toBeNull();
-    fireEvent.click(screen.getByRole('link', { name: 'Mine' }));
-    expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
   });
 
   it('opens All independently of Needs you and keeps later pages when a task is completed live', async () => {
@@ -970,15 +1004,14 @@ describe('Needs you @s5 @s112', () => {
     expect(needsReads).toBe(0);
   });
 
-  it('removes a reassigned task from Mine’s Snoozed shelf on a live event', async () => {
+  it('removes a reassigned task from Snoozed on a live event', async () => {
     const held = task('a3', 9, 'Send the quote', 's1', { owner_id: ME, snoozed: true });
     let reassigned = false;
     serve((url) => {
       if (url.includes('snoozed=only')) return { status: 200, body: { tasks: reassigned ? [] : [held], cursor: '1.read' } };
       return { status: 200, body: { items: [] } };
     });
-    show(<NeedsYouPage />, '/needs-you');
-    fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
+    show(<NeedsYouViews view="snoozed" />, '/needs-you?view=snoozed');
     expect(await screen.findByTitle('Send the quote')).toBeTruthy();
     reassigned = true;
     act(() => dispatch('tasks', [{ seq: 2, id: held.id, kind: 'update', task: { ...held, owner_id: 'human:teammate', version: 2 } }]));
@@ -1021,9 +1054,7 @@ describe('Needs you @s5 @s112', () => {
       }
       return { status: 200, body: { items: [] } };
     });
-    show(<NeedsYouPage />, '/needs-you');
-    expect(await screen.findByText('Acme Shop')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
+    show(<MineAndSnoozed />, '/needs-you');
     await waitFor(() => expect(screen.getAllByText('Acme Shop')).toHaveLength(2));
     visible = false;
     await act(() => queryClient.invalidateQueries({ queryKey: ['contacts', 'names'] }));
@@ -1062,7 +1093,7 @@ describe('Needs you @s5 @s112', () => {
     }
   });
 
-  it('brings back an ask from Mine’s Snoozed shelf even when someone else owns the task', async () => {
+  it('brings back an ask from Snoozed even when someone else owns the task', async () => {
     const ask = {
       id: 'ask:pay',
       kind: 'ask',
@@ -1081,17 +1112,16 @@ describe('Needs you @s5 @s112', () => {
       if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask] } };
       return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { count: +!snoozed } };
     });
-    show(<NeedsYouPage />, '/needs-you');
-    fireEvent.click(await screen.findByRole('button', { name: 'Snoozed' }));
-    const shelf = screen.getByRole('region', { name: 'Snoozed' });
+    show(<MineAndSnoozed />, '/needs-you');
+    const shelf = await screen.findByRole('region', { name: 'Asks' });
     expect(await within(shelf).findByTitle('Approve the transfer')).toBeTruthy();
     fireEvent.click(within(shelf).getByRole('button', { name: 'Unsnooze' }));
     expect(await screen.findByTitle('Approve the copy')).toBeTruthy();
-    await waitFor(() => expect(within(shelf).queryByTitle('Approve the transfer')).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Asks' })).toBeNull());
     expect(posts).toEqual([{ url: '/api/v2/needs-you/unsnooze', body: { id: ask.id } }]);
   });
 
-  it('refreshes Mine and its Snoozed shelf at the API’s next expiry', async () => {
+  it('refreshes Mine and Snoozed at the API’s next expiry', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
     try {
       queryClient.removeQueries({ queryKey: flowCountQuery.queryKey });
@@ -1109,19 +1139,17 @@ describe('Needs you @s5 @s112', () => {
         if (url.includes('/needs-you?limit=')) return { status: 200, body: { items: snoozed ? [] : [ask], snoozed_until: snoozed ? until : null } };
         return { status: 200, body: url.includes('/tasks?') ? { tasks: [] } : { flow_count: +!snoozed } };
       });
-      show(<NeedsYouPage />, '/needs-you');
-      await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Snoozed' })).toBeTruthy());
-      fireEvent.click(screen.getByRole('button', { name: 'Snoozed' }));
-      const shelf = within(screen.getByRole('region', { name: 'Snoozed' }));
-      await vi.waitFor(() => expect(shelf.getByTitle('Approve the transfer')).toBeTruthy());
+      show(<MineAndSnoozed />, '/needs-you');
+      await vi.waitFor(() => expect(screen.getByTitle('Approve the transfer')).toBeTruthy());
       expect(screen.queryByTitle('Approve the copy')).toBeNull();
       await act(() => vi.advanceTimersByTimeAsync(60_000));
       expect(countdowns).toBe(2);
-      expect(shelf.getByTitle('Approve the transfer')).toBeTruthy();
+      expect(screen.getByTitle('Approve the transfer')).toBeTruthy();
       await act(() => vi.advanceTimersByTimeAsync(5_000));
       await vi.waitFor(() => {
         expect(screen.getByTitle('Approve the copy')).toBeTruthy();
-        expect(shelf.queryByTitle('Approve the transfer')).toBeNull();
+        // Snoozed holds no ask now (its Asks go)
+        expect(screen.queryByRole('region', { name: 'Asks' })).toBeNull();
       });
       expect(posts).toEqual([]);
     } finally {
@@ -1252,8 +1280,14 @@ describe('an approved email on its card @s0', () => {
     send(3, { status_line: 'needs_you', turn: { ...bot, state: 'person', who: 'human:ana' } });
     await waitFor(() => expect(within(el).queryByText('Working')).toBeNull());
     expect(el.querySelector('.status-line')).toBeNull();
+    // One dot, one meaning: a turn that is yours says Needs you only once Needs you names the task.
     send(4, { status_line: 'needs_you', turn: { ...bot, state: 'person', who: ME } });
+    await waitFor(() => expect(queryClient.getQueryData<{ tasks: TaskItem[] }>(listKey)?.tasks[0]?.version).toBe(4));
+    expect(el.querySelector('.status-line')).toBeNull();
+    act(() => queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['a1'] }));
     expect(await within(el).findByText('Needs you')).toBeTruthy();
+    act(() => queryClient.setQueryData(['flow'], { count: 0, items: [], task_ids: [] }));
+    await waitFor(() => expect(el.querySelector('.status-line')).toBeNull());
     send(5, { status_line: 'paused', turn: { ...bot, state: 'paused', line: 'Birch has no computer', href: '#/settings/computers' } });
     const line = await within(el).findByTitle('Birch has no computer');
     expect(line.textContent).toBe('Paused · Fix');
