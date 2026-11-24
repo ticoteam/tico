@@ -53,7 +53,7 @@ def test_a_tasks_people_come_first(api):
     assert conforms(r.json(), schema, document) is None, conforms(r.json(), schema, document)
 
 
-def test_a_private_chat_and_a_thread_under_it_offer_only_its_members(api):
+def test_a_direct_chat_and_a_thread_under_it_offer_only_its_members(api):
     from backend.tests.threads_e2e import create_thread, say
 
     dm = api.get("/api/v2/threads/dm", params={"with": "human:ben"}, headers=headers()).json()["id"]
@@ -62,9 +62,9 @@ def test_a_private_chat_and_a_thread_under_it_offer_only_its_members(api):
     sub = say(api, "ana-test", dm, "One more thing.", parent_message_id=said["id"])["thread_id"]
     assert sub != dm
     assert ids(found(api, thread=sub, limit=50)) == ["human:ben"]
-    # A private group chat too: its outsiders would get only `mention_outside`.
-    room = create_thread(api, "ana-test", members=["human:ben", "bot:ops"])
-    assert ids(found(api, thread=room["id"], limit=50)) == ["human:ben", "bot:ops"]
+    # A group room is not narrowed: an outsider's @mention there gets the post's `mention_outside` warning.
+    room = create_thread(api, "ana-test", members=["human:ben"])
+    assert {"human:ben", "human:cara"} <= set(ids(found(api, thread=room["id"], limit=50)))
     found(api, "cara-test", 404, thread=room["id"])  # a thread the caller cannot read is never confirmed
 
 
@@ -132,6 +132,15 @@ def test_a_unique_first_name_is_a_handle_when_nothing_else_is(api):
     name_agent(api, "ops", "Operations")
     by_id = handles(api)
     assert by_id["human:ops"] == "@Nora" and by_id["bot:ops"] == "@Operations"
+
+
+def test_a_handle_never_begins_another_teammates_longer_name(api):
+    """`@ops can you check?` names only Ops, but `@ops please` would name the agent `Ops Please`: Ops gets its display
+    name instead."""
+    name_agent(api, "ops", "Operations")
+    name_agent(api, "finance", "Ops Please")
+    by_id = handles(api)
+    assert by_id["bot:ops"] == "@Operations" and by_id["bot:finance"] == "@finance"
 
 
 def test_no_handle_when_every_name_also_names_someone_else(api):

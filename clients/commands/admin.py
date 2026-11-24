@@ -628,7 +628,7 @@ def org(api, args):
     {
         "q": _s("What follows the @ so far; empty for everyone"),
         "task": _s("A task id, short id or #number: its people come first"),
-        "thread": _s("A thread id: a private chat (or a thread under one) offers only its members"),
+        "thread": _s("A thread id: a direct chat (or a thread under one) offers only its members"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "At most this many (default 8)"},
     },
 )

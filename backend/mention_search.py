@@ -150,9 +150,13 @@ def _named(text: str, index: list[tuple[str, list[str]]], me: str) -> set[str]:
 
 def handle(actor: Row, index: dict[str, list[str]], pairs: list[tuple[str, list[str]]], me: str) -> str | None:
     """The text to insert: the first one-word name of theirs (`handle_of`'s first) that a post reads as this one actor
-    and no one else; None when none does. Never a name with a space: the words after it could make a longer name."""
+    and no one else, and that begins no one else's longer name (`ops` beside `Ops Please`, which the next word could
+    complete); None when none does. Never a name with a space: the words after it could make a longer name."""
     tried = [handle_of(actor)[1:], *index.get(actor["id"], [])]
     for name in dict.fromkeys(n for n in tried if n and not any(ch.isspace() for ch in n)):
+        start = name.casefold() + " "
+        if any(a != actor["id"] and n.casefold().startswith(start) for a, known in pairs for n in known):
+            continue
         if _named(_PROBE.format("@" + name), pairs, me) == {actor["id"]}:
             return "@" + name
     return None
@@ -185,10 +189,10 @@ def search(
         row: Row = auth.task(c, who, auth.resolve_task(c, who, task), tags=False)
         first = _task_people(row, task_roles.roles_of(c, row["id"]))
     if thread:
-        # A private chat's @ reaches only its members, its sub-threads' too (an outsider gets `mention_outside`; only a
-        # task's thread widens): the list offers just them.
+        # A direct chat's @ reaches only its members, its sub-threads' too: the list offers just them. In a group
+        # room an outsider's @mention gets the post's `mention_outside` warning.
         root = threads.root_of(c, threads.require(c, threads.viewer(auth, who), thread))
-        if threads.audience_of(root) in ("members", "personal", "participants"):
+        if threads.audience_of(root) in ("personal", "participants"):
             only = threads._dm_members(c, root)
     bots: list[Row] = H.bots(c)
     picked = ranked(roster(c, auth, who, bots), q, me, first, only, limit)
