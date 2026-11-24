@@ -85,6 +85,8 @@ function show(node: ReactNode, at: string, load?: () => Promise<unknown>) {
   return router;
 }
 
+const CONFIG = { company_name: 'Sample Co', owner_email: 'owner@example.test', version: '0.0.1', app_name: 'Tico', public_url: '' };
+
 const ACCESS: AccessView = {
   owner: { email: 'owner@example.test', person: 'p1' },
   people: [
@@ -147,7 +149,7 @@ beforeEach(() => {
   queryClient.clear();
   queryClient.setQueryData(['me'], { id: 'human:p1', email: 'ana@example.test', role: 'owner', slug: null });
   queryClient.setQueryData(['directory'], { actors: [], byId: {} });
-  queryClient.setQueryData(['config'], { company_name: 'Sample Co', owner_email: 'owner@example.test', version: '0.0.1', app_name: 'Tico', public_url: '' });
+  queryClient.setQueryData(['config'], CONFIG);
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -645,12 +647,18 @@ describe('Settings › General @s1072', () => {
   };
   const repo = (full_name: string, enabled: boolean) => ({ full_name, enabled, reachable: true, default_branch: 'main', bot_repo: false, last_seen_at: null, setup_command: null, setup_source: null });
   const REPOS = { github_connected: true, github_installed: true, new_bot_default: 'own', repositories: [repo('acme/web', true), repo('acme/api', false)] };
-  /** The name's only route is the whole setup record (PUT /api/v2/setup): it is read and sent back with only the name changed. */
+  /** The name's only route is the whole setup record (PUT /api/v2/setup): it is read and sent back with only the name changed.
+      GET /api/v2/config reads the saved name (config is read again after a write). */
   const general = (putStatus = 200, repos: unknown = { github_connected: false, github_installed: false, new_bot_default: 'own', repositories: [] }) => {
+    let name = CONFIG.company_name;
     serve((url, method) => {
+      if (url === '/api/v2/config' && method === 'GET') return ok({ ...CONFIG, company_name: name });
       if (url === '/api/v2/setup' && method === 'GET') return ok(SETUP);
-      if (url === '/api/v2/setup' && method === 'PUT')
-        return putStatus === 200 ? ok(SETUP) : { status: putStatus, body: { error: { code: 'forbidden', detail: 'Only the owner may set this company up' } } };
+      if (url === '/api/v2/setup' && method === 'PUT') {
+        if (putStatus !== 200) return { status: putStatus, body: { error: { code: 'forbidden', detail: 'Only the owner may set this company up' } } };
+        name = (sent.at(-1)?.body as { names: { company_name: string } }).names.company_name;
+        return ok(SETUP);
+      }
       if (url.startsWith('/api/v2/repositories')) return ok(repos);
       if (url === '/api/v2/system/storage') return ok({ active: null, server: { mode: 'disk' }, tico: null, copy: { done: 0, total: 0 }, earlier: [] });
       return undefined;
@@ -689,6 +697,8 @@ describe('Settings › General @s1072', () => {
         selected: SETUP.selected,
       },
     });
+    // Config is read again once the server has taken the name; the read keeps it.
+    await waitFor(() => expect(read).toContain('/api/v2/config'));
     expect(companyName()).toBe('Renamed Co');
   });
 
