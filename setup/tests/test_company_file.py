@@ -106,10 +106,11 @@ def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path
 
 def test_a_refused_role_is_named_by_its_title(tmp_path):
     """A pre-0.6 template slug is refused; the installer says which role, by the title the owner knows it by."""
-    draft = chart()
-    draft["bots"][0]["template"] = "pr-reviewer"
-    draft["bots"][0]["title"] = "Code Reviewer"
+    lines = C.to_yaml(chart()).splitlines()  # a valid file, then a 0.5 slug in it (to_yaml itself refuses one)
+    at = next(i for i, x in enumerate(lines) if x.startswith("    template: "))
+    assert lines[at + 1].startswith("    title: ")
+    lines[at : at + 2] = ["    template: pr-reviewer", '    title: "Code Reviewer"']
     path = tmp_path / "tico.company.yaml"
-    path.write_text(C.to_yaml(draft))
+    path.write_text("\n".join(lines) + "\n")
     with pytest.raises(MissingInput, match="^Code Reviewer names a role template .*: pr-reviewer$"):
         wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None), settings.Settings())
