@@ -1708,3 +1708,26 @@ def test_keys_are_cut_from_drafts_and_said_rules_in_a_file_read_back():
     back = C.from_yaml(text)
     assert back["drafts"][0]["body"] == "Here: [removed]" and back["said"][0]["text"] == "Our key is [removed]"
     assert OPENAI not in C.to_yaml({**draft, "drafts": [{**draft["drafts"][0], "title": OPENAI}]}, CREATED)
+
+
+def test_drafts_near_the_size_cap_fit_turn_after_turn_and_a_bad_bot_or_list_is_refused_plainly():
+    """The swarm fills the draft to its size cap; the undo the next turn carries is held to the cap by itself, so the
+    chat keeps working turn after turn. A bot or goal that is not text is dropped from the swarm and refused in a file."""
+    body = "é" * D.LIMITS["draft_body"]  # 6 bytes each in the draft's JSON
+    rows = [{"bot": "content-owner", "kind": "post", "title": "Post %s" % tag(i), "body": body} for i in range(300)]
+    rows.append({"bot": ["content-owner"], "goal": {"x": 1}, "kind": "post", "title": "Odd", "body": ""})
+    draft, added = C.add_drafts(started(), rows)
+    assert 0 < added["added"] < 300 and added["dropped"] == 301 - added["added"]
+    one, results = run(draft, ("mark_draft", {"id": draft["drafts"][0]["id"], "status": "approved"}))
+    assert results[0]["ok"] and "drafts" in one["undo"]
+    two, results = run(one, ("mark_draft", {"id": draft["drafts"][1]["id"], "status": "skipped"}))
+    assert results[0]["ok"] and two["drafts"][1]["status"] == "skipped"
+    for bad, match in (
+        ([{**draft["drafts"][0], "bot": ["x"]}], "drafts\\[0\\].bot must be a short id"),
+        (False, "drafts must be a list"),
+    ):
+        with pytest.raises(C.DraftError, match=match):
+            C.validate({**draft, "drafts": bad})
+    text = C.to_yaml(swarm_draft(), CREATED).replace("bot: email-owner", "bot: [email-owner]")
+    with pytest.raises(C.DraftError, match="bot must be a short id"):
+        C.from_yaml(text)

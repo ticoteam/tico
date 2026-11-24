@@ -5088,8 +5088,8 @@ def task_create(
             )
         )
         dup = twins[0] if twins else None
-    elif occurrence:
-        dup = None
+    elif occurrence or (not deduplicate and actor == TICO_ACTOR):
+        dup = None  # an occurrence is its own key, and Tico filing without dedupe never refuses a twin: no title scan
     else:
         dup = _same_title(
             conn,

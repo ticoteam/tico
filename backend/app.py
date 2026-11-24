@@ -1268,6 +1268,8 @@ def _install_request_guard(
                     if captured
                     else 20_000_000
                     if docs_import or upload and request.state.identity.role in ("human", "owner")
+                    else 16_100_000  # a company file of up to 4,000,000 characters (models.OnboardingCompanyFile)
+                    if request.url.path in ("/api/v2/setup/company/preview", "/api/v2/setup/company/import")
                     else 14_200_000  # a website tool's upload, 10 MB in base64 (backend/browser_commands.py)
                     if request.url.path == "/api/v2/browser/commands"
                     else 20_100_000  # a website tool's download, from the computer

@@ -2102,7 +2102,8 @@ def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules
     text = swarm_text()
     assert "version: 0.4" in text
     summary = preview_and_import(api, text)
-    assert summary["drafts"] == {"waiting": 2, "approved": 2, "skipped": 1, "unowned": 0} and summary["said"] == 2
+    assert summary["drafts"] == {"waiting": 2, "approved": 2, "skipped": 1, "unowned": 0}
+    assert summary["said"] == ["Never offer a discount over 10%", "Sign off as the Acme Tea team"]
     assert {s["id"]: s.get("live") for s in summary["seats"]} == {"content-owner": True, "email-owner": True}
     ids = bot_ids(api)
     tasks = {
@@ -2160,14 +2161,11 @@ def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules
     )
     assert again.status_code == 200, again.text
     onboarding = api.app.state.onboarding
+    rules = {r["text"]: r["id"] for r in rows(api, "SELECT id,text FROM org_rules WHERE description LIKE 'Said%'")}
     with api.app.state.store.transaction() as c:
-        made = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (CI.MADE_KEY,)).fetchone()[0])
-        who = onboarding.auth.owner_identity(c)
-        saved = starter.load(text)
-        assert CI.import_drafts(c, who, saved, {}, {}, {}, made["drafts"]) == made["drafts"]
-        assert CI.import_said(onboarding, c, who, saved, made["said"]) == made["said"]
-        # Without the record, a rule whose words are already a rule is that rule.
-        assert CI.import_said(onboarding, c, who, saved) == made["said"]
+        # A rule whose words are already a rule is that rule.
+        made = CI.import_said(onboarding, c, onboarding.auth.owner_identity(c), starter.load(text))
+        assert made == {"s1": rules["Never offer a discount over 10%"], "s2": rules["Sign off as the Acme Tea team"]}
     assert len(rows(api, "SELECT id FROM tasks WHERE title NOT LIKE 'Set up %'")) == 4
     assert len(rows(api, "SELECT id FROM question_marks")) == 2
     assert len(rows(api, "SELECT id FROM org_rules WHERE description LIKE 'Said in setup%'")) == 2
@@ -2182,7 +2180,6 @@ def test_a_file_without_drafts_said_or_email_imports_as_before(environment):
     record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
     assert "drafts" not in record and "said" not in record
     assert not rows(api, "SELECT id FROM question_marks")
-    assert not rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file_made'")
 
 
 def test_a_file_with_300_drafts_imports_them_all_in_one_go(environment):
@@ -2206,3 +2203,37 @@ def test_a_file_with_300_drafts_imports_them_all_in_one_go(environment):
     assert summary["drafts"] == {"waiting": 150, "approved": 150, "skipped": 0, "unowned": 0}
     assert len(rows(api, "SELECT id FROM tasks WHERE title LIKE 'Draft %'")) == 300
     assert len(rows(api, "SELECT id FROM question_marks")) == 150
+
+
+def test_drafts_that_share_a_title_all_import_and_their_words_reach_nobody(environment):
+    """Two drafts may share a title (each is its own piece of work), and a draft's text is the agent's own words carried
+    in: an @name in it wakes no agent, and a waiting draft's queued wake goes (the agent's turn
+    comes with the owner's answer). A key Tico's own gate knows is masked in what lands."""
+    api = environment()
+    rows_ = [
+        {"id": "d1", "bot": "content-owner", "kind": "post", "title": "Spring", "body": "@assistant @owner look"},
+        {"id": "d2", "bot": "content-owner", "kind": "post", "title": "spring ", "body": "Second take."},
+        {
+            "id": "d3",
+            "bot": "email-owner",
+            "kind": "email",
+            "title": "Hello",
+            "body": "Use https://ana:hunter2pass@db.example.com",
+        },
+    ]
+    text = swarm_text(rows_)
+    preview_and_import(api, text)
+    ids = bot_ids(api)
+    tasks = rows(api, "SELECT id,title,conversation_id FROM tasks WHERE title IN ('Spring','spring','Hello')")
+    assert sorted(t["title"] for t in tasks) == ["Hello", "Spring", "spring"]
+    task_ids = [t["id"] for t in tasks]
+    queued = rows(
+        api,
+        "SELECT j.bot_id, json_extract(m.refs,'$.task') AS task FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued'",
+    )
+    assert not [q for q in queued if q["bot_id"] == ids["assistant"]]  # the @mention woke nobody
+    assert not [q for q in queued if q["task"] in task_ids]  # the waiting drafts' wakes went
+    hello = next(t for t in tasks if t["title"] == "Hello")
+    body = rows(api, "SELECT body FROM messages WHERE conversation_id='%s'" % hello["conversation_id"])
+    assert any("[key removed]" in m["body"] for m in body) and not any("hunter2pass" in m["body"] for m in body)

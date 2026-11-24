@@ -12,14 +12,16 @@ import zlib
 
 from . import draft as D
 from .keys import scrub_all
-from .yamlfile import from_yaml, to_yaml
+from .yamlfile import FILE_CHARS, from_document, read, to_yaml
 
-# A 300-seat plan, normalized, with room: about 320 KB at 300 bots and 329 goals, every text at full length, and about
-# 700 KB more for 300 drafts and 40 said rules at theirs.
-MAX_BYTES = 1572864
+# A normalized plan: never larger than its draft's JSON (D.check holds that to LIMITS["draft_bytes"]: about 320 KB at 300
+# bots and 329 goals, every text at full length, and about 700 KB more for 300 drafts), with room for the model choices.
+MAX_BYTES = D.LIMITS["draft_bytes"] + 65536
 # A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES, with room for
 # text that compresses badly.
-MAX_PACKED = 2097152
+MAX_PACKED = 3145728
+# The most a company file can take on disk: FILE_CHARS characters of up to four UTF-8 bytes each.
+FILE_BYTES = 4 * FILE_CHARS
 # A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB
 # with the install settings, and far below Linux's 128 KB limit on one environment string.
 ENV_PACKED = 7168
@@ -32,10 +34,8 @@ IMPORT_IN_APP = (
 
 def load(source):
     if isinstance(source, str):
-        import yaml
-
-        draft = from_yaml(source)
-        document = yaml.safe_load(source)
+        document = read(source)  # parsed once
+        draft = from_document(document)
     elif isinstance(source, dict):
         document = source
         draft = D.check(scrub_all({k: v for k, v in source.items() if k != "models"})[0])

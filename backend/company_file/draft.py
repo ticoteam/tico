@@ -1067,14 +1067,17 @@ def check(raw, snapshot=False):
             draft["company"]["regions"] = serves  # absent when the company says nothing about where it serves
     if raw.get("strategy") is not None:
         draft["strategy"] = _strategy(raw["strategy"])
-    if raw.get("drafts"):
+    if raw.get("drafts") is not None:
         rows = _list(raw["drafts"], "drafts", LIMITS["drafts"])
-        draft["drafts"] = [
-            _draft_row({**d, "bot": folded.get(d["bot"], d["bot"])} if _folded_bot(d, folded) else d, i)
-            for i, d in enumerate(rows)
-        ]
-    if raw.get("said"):
-        draft["said"] = [_said_row(s, i) for i, s in enumerate(_list(raw["said"], "said", LIMITS["said"]))]
+        if rows:  # absent when empty
+            draft["drafts"] = [
+                _draft_row({**d, "bot": folded.get(d["bot"], d["bot"])} if _folded_bot(d, folded) else d, i)
+                for i, d in enumerate(rows)
+            ]
+    if raw.get("said") is not None:
+        rows = _list(raw["said"], "said", LIMITS["said"])
+        if rows:
+            draft["said"] = [_said_row(s, i) for i, s in enumerate(rows)]
     for field in ("people", "bots", "goals", "drafts", "said"):
         if field in draft:
             _unique(draft[field], field)
@@ -1152,9 +1155,14 @@ def check(raw, snapshot=False):
             draft["pending"] = [_id(p, "pending") for p in pending]
             # A team that is no longer on the chart is no longer waiting on the visitor.
             draft["pending"] = [p for p in draft["pending"] if p in teams_in(draft)]
-    if len(json.dumps(draft)) > LIMITS["draft_bytes"]:
+    if _size(draft) > LIMITS["draft_bytes"]:
         raise DraftError("the draft is too large")
     return draft
+
+
+def _size(draft):
+    """A draft's size against LIMITS["draft_bytes"]: without its undo copy, which is held to the limit by itself."""
+    return len(json.dumps({key: value for key, value in draft.items() if key != "undo"}))
 
 
 def _clip(text, limit):
@@ -1180,12 +1188,13 @@ def add_drafts(draft, rows):
     makers = {b["id"] for b in out["bots"] if not b["existing"]}
     goals = {g["id"] for g in out["goals"]}
     taken = {d["id"] for d in kept}
-    size = len(json.dumps(out))
+    size = _size({**out, "drafts": kept})  # the `drafts` key counted even before the first row
     added = dropped = 0
     for raw in rows:
         raw = raw if isinstance(raw, dict) else {}
         title = _clip(raw.get("title") if isinstance(raw.get("title"), str) else "", LIMITS["draft_title"])
-        if raw.get("bot") not in makers or not title or len(kept) >= LIMITS["drafts"]:
+        bot = raw.get("bot")
+        if not isinstance(bot, str) or bot not in makers or not title or len(kept) >= LIMITS["drafts"]:
             dropped += 1
             continue
         ident = raw.get("id")
@@ -1202,7 +1211,7 @@ def add_drafts(draft, rows):
             "body": _clip(raw.get("body") if isinstance(raw.get("body"), str) else "", LIMITS["draft_body"]),
             "status": raw.get("status") if raw.get("status") in DRAFT_STATUSES else "waiting",
         }
-        if raw.get("goal") in goals:
+        if isinstance(raw.get("goal"), str) and raw["goal"] in goals:
             row["goal"] = raw["goal"]
         grows = len(json.dumps(row)) + 2
         if size + grows > LIMITS["draft_bytes"]:

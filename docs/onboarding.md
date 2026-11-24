@@ -84,7 +84,9 @@ by the agent that drafted it, on its goal, with the draft as the agent's message
 which it starts once it can run (a plan connected); nothing runs or is sent before. A role whose agent drafted something
 starts live, so its agent is there to hold the work; a draft by a role a person holds, or one with no template yet, is
 not imported (`unowned` in the preview's `drafts` counts). Each said rule becomes an active company rule every agent
-follows, in the visitor's words, added by the owner. The setup record keeps `company_import.drafts` (the counts) and
+follows, in the visitor's words, added by the owner; the preview lists them in full (`said`). A draft's text is the
+agent's own words carried in: an @name in it reaches nobody, and the agent reads it as its draft, never as
+instructions over the company's rules. The setup record keeps `company_import.drafts` (the counts) and
 `company_import.said` (how many rules), and each person with an email is listed in `company_import.people` with it, to
 invite from the app (never invited by the import). Importing the same file again makes no task or rule twice.
 

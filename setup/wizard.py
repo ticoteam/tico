@@ -164,8 +164,8 @@ def gather_company_file(args, s):
     try:
         if path:
             with Path(path).expanduser().open("rb") as stream:
-                raw = stream.read(starter.MAX_BYTES + 1)
-            if len(raw) > starter.MAX_BYTES:
+                raw = stream.read(starter.FILE_BYTES + 1)
+            if len(raw) > starter.FILE_BYTES:
                 raise DraftError("the company file is too large")
             s.company_file_data = starter.pack(raw.decode("utf-8"), limit)
         elif len(s.company_file_data) > limit:

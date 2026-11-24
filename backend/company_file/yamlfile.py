@@ -23,6 +23,9 @@ FORMAT = "0.2"
 STRATEGY_FORMAT = "0.3"
 SWARM_FORMAT = "0.4"
 FORMATS = (FORMAT, STRATEGY_FORMAT, SWARM_FORMAT)
+# The longest file read, in characters: the file of any draft within LIMITS["draft_bytes"] (its YAML is longer than
+# the draft's JSON by its keys and indents, never twice as long).
+FILE_CHARS = 2 * D.LIMITS["draft_bytes"]
 HEADER = (
     "# tico.company.yaml",
     "# Made with Tico setup at https://tico.team/setup",
@@ -397,12 +400,11 @@ def _strategy(raw):
     }
 
 
-def from_yaml(text):
-    """The draft a company file holds (D.DraftError when it isn't a format 0.2, 0.3 or 0.4 file Tico can read). Key-shaped
-    strings in it are removed. The draft starts on the chart tab with no undo, chat, removed or pending."""
+def read(text):
+    """A company file's parsed YAML, as it is (D.DraftError when it isn't a format 0.2, 0.3 or 0.4 file Tico can read)."""
     import yaml  # PyYAML: only reading a file needs it.
 
-    if not isinstance(text, str) or len(text) > D.LIMITS["draft_bytes"]:
+    if not isinstance(text, str) or len(text) > FILE_CHARS:
         raise D.DraftError("the file is too large")
     try:
         doc = yaml.safe_load(text)
@@ -410,6 +412,17 @@ def from_yaml(text):
         raise D.DraftError("the file isn't valid YAML") from None
     if not isinstance(doc, dict) or str(doc.get("version")) not in FORMATS:
         raise D.DraftError("the file isn't a format %s or %s company file" % (", ".join(FORMATS[:-1]), FORMATS[-1]))
+    return doc
+
+
+def from_yaml(text):
+    """The draft a company file holds (`read`, then `from_document`)."""
+    return from_document(read(text))
+
+
+def from_document(doc):
+    """The draft a parsed company file holds (`read`). Key-shaped strings in it are removed. The draft starts on the
+    chart tab with no undo, chat, removed or pending."""
     doc, _ = scrub_all(doc)
     company = doc.get("company")
     company = company if isinstance(company, dict) else {}
@@ -531,7 +544,8 @@ def from_yaml(text):
     drafts = [
         {
             "id": _str(d.get("id")),
-            "bot": folded.get(_str(d.get("bot")), _str(d.get("bot"))),
+            # A bot that is not text is left as it is, for D.check to refuse.
+            "bot": folded.get(bot, bot) if isinstance(bot := _str(d.get("bot")), str) else bot,
             "kind": _str(d.get("kind")),
             "title": _str(d.get("title")),
             "body": _str(d.get("body")),
