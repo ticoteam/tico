@@ -4794,7 +4794,7 @@ def human_roles(conn, actor, value, roles):
     wanted = [task_human(conn, actor, value)] if value else []
     if roles and "human" in roles:
         try:
-            given = TRo.clean({"human": roles["human"]})["human"]
+            given = (TRo.clean({"human": roles["human"]}) or {}).get("human") or []
         except ValueError as exc:
             refuse(conn, actor, "kind", str(exc))
         if [resolve_actor(conn, who) or who for who in given] != wanted:
