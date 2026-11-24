@@ -70,12 +70,31 @@ on the market graph with its site a watched page. The posts the page found are f
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
 
+**Unreleased:** A file from the setup page's swarm (format 0.4) also brings the agents' drafts and the rules the
+visitor said. `drafts` lists each agent's drafted work as `{id, bot, goal?, kind, title, body, status}`: `bot` a role
+in the file, `goal` one of its goals, `kind` one of `email`, `post`, `list`, `page`, `ad`, `reply`, `plan` or `other`,
+`status` `waiting`, `approved` or `skipped`; at most 300, a title up to 120 characters and a body up to 2000. `said`
+lists the rules the visitor said in their own words as `{id, text, by}` (`by` a person in the file; at most 40, each up
+to 200 characters). A person may carry the `email` the visitor typed for them. The file is written as 0.4 only when one
+of these is present; any other plan is written as 0.3 or 0.2 byte for byte, as before. Drafts come into the plan only
+from the swarm (`company_file.add_drafts`); the setup chat decides on them (`mark_draft`, `edit_draft`) and keeps or
+takes back what was said (`add_said_rule`, `remove_said_rule`). On import, each draft not skipped becomes a task owned
+by the agent that drafted it, on its goal, with the draft as the agent's message there: a waiting one asks the owner
+**Send**, **Edit** or **Later** in Needs you (a question with those choices), and an approved one is the agent's to do,
+which it starts once it can run (a plan connected); nothing runs or is sent before. A role whose agent drafted something
+starts live, so its agent is there to hold the work; a draft by a role a person holds, or one with no template yet, is
+not imported (`unowned` in the preview's `drafts` counts). Each said rule becomes an active company rule every agent
+follows, in the visitor's words, added by the owner. The setup record keeps `company_import.drafts` (the counts) and
+`company_import.said` (how many rules), and each person with an email is listed in `company_import.people` with it, to
+invite from the app (never invited by the import). Importing the same file again makes no task or rule twice.
+
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:
 they are kept on the setup record to invite, and a role under them reports to the owner until they are invited
 (Settings > People > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
-the seats waiting on them under them and sends the invite, see [People](people.md#invites)). Other coworkers, existing
-external agents and custom rules are refused with an explanation. The file's goals are imported onto
+the seats waiting on them under them and sends the invite, see [People](people.md#invites)). A coworker the file gives
+an email (format 0.4) is kept to invite the same way, with that email. Other coworkers, existing external agents and
+custom rules are refused with an explanation. The file's goals are imported onto
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
 built-ins out of its tree) and goals of roles that are seats (a seat holds no work) become company goals, each with the
 goal's measure as a KPI carrying the file's baseline and target (the file holds no readings, so a new KPI starts with
