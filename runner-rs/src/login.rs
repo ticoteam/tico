@@ -3166,7 +3166,7 @@ if sys.argv[1:] == ["acp", "--login", "--gemini-dir", home, "--app-data-dir", "a
     if said("exits"): sys.exit(7)
     if code != "4/pasted-code": sys.exit(6)
     os.makedirs(os.path.dirname(token), exist_ok=True)
-    open(token, "w").write(json.dumps({"token": {"access_token": "ya29.synthetic-new-access-token"}}))
+    open(token, "w").write('{"token":{"access_token":"ya29.synthetic-new-access-token"}}')
     sys.exit(0)
 if sys.argv[1:] != ["acp", "--gemini-dir", home, "--app-data-dir", "antigravity-cli"] or env.get("AGY_ACP_FORCE_FILE_STORAGE") != "1":
     sys.exit(2)
