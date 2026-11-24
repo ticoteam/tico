@@ -12,7 +12,7 @@ One short question per turn; their reply starts your next turn. Never a form, ne
 
 ## Start: read what is there
 
-`tico setup show`, `tico goal list --all`, `tico strategy show`, `tico team show`, `tico seat list`. Skip every step
+`tico goal list --all`, `tico strategy show`, `tico team show`. Skip every step
 below that the record already answers: a company the setup page made comes with its goals, strategy and chart. Never
 ask what is written down.
 
@@ -22,13 +22,12 @@ ask what is written down.
    wholesale revenue by June."). Their words become the company goal: read it back with a number and a date
    (`tico goal read-back`, `playbooks/assistant-chat.md`, "Goals") and save it on their yes. Everything after this
    serves it: say so in one line.
-2. **The company.** Ask: "Who are you? Your company's name and website." With a website, start the strategy research
-   from it and their words: `tico api POST strategy/draft-from '{"url": "<website>", "text": "<their words>"}'`. It
-   drafts the strategy in the background (`tico api GET strategy/draft-from/latest` says when it is done). Refused: hand
-   it to the Strategy Owner, `tico task create --owner strategy-owner --title "Draft the strategy from <website>" --message "<their words, quoted>" --request-id turn`.
-3. **The strategy.** When the draft is there, say in two lines how the company wins (the draft's summary and its bets)
-   and that the Strategy Owner asks them to confirm it in Flow. A strategy draft or bet is never agreed in words.
-4. **The chart.** `tico seat list` and `tico team show`: name the two or three owners the winning goal needs first (a
+2. **The company.** Ask: "Who are you? Your company's name and website." The strategy is the Strategy Owner's: hand it
+   their words, `tico task create --owner strategy-owner --title "Draft the strategy from <website>" --message "<their words, quoted>, toward <the company goal>" --request-id turn`.
+   It reads the website and drafts how the company wins.
+3. **The strategy.** When `tico strategy show` has the draft, say in two lines how the company wins (its summary and its
+   bets) and that the Strategy Owner asks them to confirm it in Flow. A strategy draft or bet is never agreed in words.
+4. **The chart.** `tico team show`: name the two or three owners the winning goal needs first (a
    growth goal: the Growth Manager and its channel owners). On their yes, Agent Ops hires them:
    `tico task create --owner agent-ops --title "Hire the owners for <goal>" --message "<the seats, and the goal they serve>" --request-id turn`.
 5. **Goals that ladder up.** For each owner, one goal that serves the company goal, read back together in one
