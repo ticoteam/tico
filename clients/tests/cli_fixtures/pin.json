@@ -239,6 +239,86 @@
  {
   "argv": [
    "pin",
+   "update",
+   "files",
+   "--hide",
+   "--place",
+   "bot:ops"
+  ],
+  "tools": [
+   [
+    "tico_pin_update",
+    {
+     "hidden": true,
+     "operation_id": null,
+     "pin": "files",
+     "place": "bot:ops"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "bots/ops/task-tabs/widgets/files",
+    {
+     "hidden": true
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
+   "update",
+   "tasks",
+   "--show",
+   "--position",
+   "0",
+   "--place",
+   "bot:ops"
+  ],
+  "tools": [
+   [
+    "tico_pin_update",
+    {
+     "hidden": false,
+     "operation_id": null,
+     "pin": "tasks",
+     "place": "bot:ops",
+     "position": 0
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "PATCH",
+    "bots/ops/task-tabs/widgets/tasks",
+    {
+     "hidden": false,
+     "position": 0
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "pin",
    "remove"
   ],
   "tools": [],

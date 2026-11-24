@@ -2470,6 +2470,13 @@ class BotSidebarWidget(Contract):
     height: int | None = Field(default=None, ge=80, le=2000)
 
 
+class BotSidebarWidgetEdit(Contract):
+    """One widget hidden or shown, or moved: a position counts every widget on the sidebar, 0 the top."""
+
+    hidden: bool | None = None
+    position: int | None = Field(default=None, ge=0, le=4 + SIDEBAR_ITEMS)
+
+
 class BotTaskTabs(Contract):
     # No cap on how many tabs (Task-list tabs spec): the request body limit bounds one write. Leaving widgets out keeps
     # the saved ones.

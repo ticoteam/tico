@@ -575,6 +575,12 @@ DEVELOPER_TOOLS = frozenset(
         "tico_tag_create",
         "tico_tag_show",
         "tico_tag_update",
+        # Its own sidebar, when someone asks (templates/catalog/_base/.claude/skills/arrange-your-sidebar).
+        "tico_card_list",
+        "tico_card_add",
+        "tico_pin_add",
+        "tico_pin_update",
+        "tico_pin_remove",
     }
 )
 

@@ -527,6 +527,23 @@ describe('the page it sits beside', () => {
     expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('What needs me on Tasks?');
     expect(sends()).toHaveLength(0);
   });
+
+  it('a starter left open ends where the typing goes on, in a focused box, and never replaces words typed there', async () => {
+    seed([]);
+    serve(() => ({ status: 200, body: {} }));
+    render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={['Add a widget showing…', 'What did you make?']} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    const box = (await screen.findByRole('textbox', { name: 'Message Ana' })) as HTMLTextAreaElement;
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a widget showing…' }));
+    expect(box.value).toBe('Add a widget showing ');
+    expect(document.activeElement).toBe(box);
+    expect(box.selectionStart).toBe('Add a widget showing '.length);
+    fireEvent.change(box, { target: { value: 'Hide Files please' } });
+    fireEvent.click(screen.getByRole('button', { name: 'What did you make?' }));
+    expect(box.value).toBe('Hide Files please');
+    expect(sends()).toHaveLength(0);
+  });
 });
 
 describe('scrolled up', () => {

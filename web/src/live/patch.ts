@@ -575,11 +575,17 @@ function patchMessages(batch: MessageEvent[]): void {
 
 // ---------------------------------------------------------------- agents' status lines
 
-/** backend/events.py `_bots`: an agent's status line; `status` is null before it has one. */
+/** backend/events.py `_bots`: an agent's status line; `status` is null before it has one. `sidebar`: its slug, when its
+    sidebar's sections or pins changed. */
 interface BotEvent {
   bot?: string;
   status?: StatusLine | null;
+  sidebar?: string;
 }
+
+/** A held sidebar with a card that counts tasks (backend/cards.py `tasks_by_stage`). */
+const countsTasks = (place: unknown) =>
+  !!(place as { pins?: { card?: { template?: string } | null }[] } | undefined)?.pins?.some((p) => p.card?.template === 'tasks_by_stage');
 
 function patchDirectory(batch: BotEvent[]): void {
   const held = queryClient.getQueryData<Directory>(keys.directory());
@@ -744,10 +750,21 @@ export function installPatchers(): void {
   onTopic<BotEvent>('bots', patchDirectory);
   // A task left the reader (who may read it changed, or it went): a page pinned to an agent's sidebar may have gone
   // with it, so the sidebars and their pins read again (backend/bot_task_tabs.py, cards.py place_view). A task's file
-  // or page changed (a new version, a pin on it): a pinned one shows its new version. An agent's own page and its
-  // sidebar's pins send no change of their own yet.
-  // A read already in flight answered from before the change: another follows it.
-  onRefetch<TaskEvent>('tasks', (e) => (e.gone ? [['team', 'tabs'], ['team', 'pins']] : e.kinds?.includes('files') ? [['team', 'pins']] : []), true);
+  // or page changed (a new version, a pin on it): a pinned one shows its new version. Any other change to a task may
+  // move what a tasks-by-stage card counts: the sidebars holding one read again. A read already in flight answered from
+  // before the change: another follows it.
+  onRefetch<TaskEvent>(
+    'tasks',
+    (e) =>
+      e.gone
+        ? [['team', 'tabs'], ['team', 'pins']]
+        : e.kinds?.includes('files')
+          ? [['team', 'pins']]
+          : queryClient.getQueriesData({ queryKey: ['team', 'pins'] }).filter(([, place]) => countsTasks(place)).map(([key]) => key),
+    true,
+  );
+  // Its sections or pins changed (backend/events.py `sidebar_moved`): an open page of it reads its sidebar again.
+  onRefetch<BotEvent>('bots', (e) => (e.sidebar ? [['team', 'tabs', e.sidebar], ['team', 'pins', e.sidebar]] : []));
   onRefetch<{ bot_id?: string; state?: string }>('runs', (e) => {
     if (!e.bot_id || !e.state) return [];
     const key = [...keys.team.paidBy(), e.bot_id, true];

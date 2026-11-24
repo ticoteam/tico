@@ -27,6 +27,23 @@ afterEach(() => {
 const open = ['tasks', 'list', { status: 'open', pipeline: 'p1' }];
 const done = ['tasks', 'list', { status: 'done', pipeline: 'p1' }];
 
+it('reads an agent sidebar again when it changed, and the sidebars counting tasks when a task changed', () => {
+  const held = (slug: string, template: string) => {
+    queryClient.setQueryData(['team', 'tabs', slug], { tabs: [], widgets: [] });
+    queryClient.setQueryData(['team', 'pins', slug], { pins: [{ item: 'card:c1', card: { template } }] });
+  };
+  const stale = (key: unknown[]) => queryClient.getQueryState(key)?.isInvalidated;
+  held('ops', 'tasks_by_stage');
+  held('sales', 'stat');
+  FakeEventSource.last.feed(frame(901, 'bots', { bot: 'b-sales', status: null, sidebar: 'sales' }));
+  flushFrame();
+  expect([stale(['team', 'tabs', 'sales']), stale(['team', 'pins', 'sales'])]).toEqual([true, true]);
+  expect([stale(['team', 'tabs', 'ops']), stale(['team', 'pins', 'ops'])]).toEqual([false, false]);
+  FakeEventSource.last.feed(taskFrame(902, task('t9')));
+  flushFrame();
+  expect([stale(['team', 'pins', 'ops']), stale(['team', 'tabs', 'ops'])]).toEqual([true, false]);
+});
+
 it('refreshes only the agent whose run state changed', () => {
   const payer = (bot: string) => [...keys.team.paidBy(), bot, true];
   queryClient.setQueryData(payer('ops'), { last_turn: null });

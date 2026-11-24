@@ -312,9 +312,9 @@ def test_automation_runs_count_the_whole_day_not_its_newest_500(api):
     assert data["runs"][0]["id"] == "run_early" and len(data["runs"]) == 5
 
 
-def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
-    """A pipeline's open tasks by stage, as the stage list reads them for its reader: a private task its reader is not
-    on is in no count and no row."""
+def videos(api):
+    """A Videos pipeline (Concept, Draft): Spring promo and Beach clean (private: Ana asked for it, Cara is not on it)
+    with ops in Concept, Host intro with cpo in Draft, and Weekly recap of ops done."""
     from backend import task_engine as E
     from backend.store import H
     from backend.tests.helpers.engine import pipeline
@@ -331,9 +331,19 @@ def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
                 E.move(c, tid["id"], to, "human:ana", "for the test")
 
         video("bot:ops", "Spring promo")
-        video("bot:ops", "Beach clean", private=True)  # Ana asked for it; Cara is not on it
+        video("bot:ops", "Beach clean", private=True)
         video("bot:cpo", "Host intro", to="Draft")
         video("bot:ops", "Weekly recap", to=E.DONE)
+
+
+def stages(card):
+    return [(s["name"], s["count"], [t["title"] for t in s["tasks"]]) for s in card["data"]["stages"]]
+
+
+def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
+    """A pipeline's open tasks by stage, as the stage list reads them for its reader: a private task its reader is not
+    on is in no count and no row, and a card with nothing to show its reader is hidden."""
+    videos(api)
     post(api, "cards", {"template": "tasks_by_stage", "settings": {"pipeline": "nowhere"}}, expected=422)
     post(
         api,
@@ -344,13 +354,9 @@ def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
     mine = post(
         api,
         "cards",
-        {"template": "tasks_by_stage", "settings": {"pipeline": "Videos", "agent": "ops"}, "place": "bot:ops"},
+        {"template": "tasks_by_stage", "settings": {"pipeline": "VIDEOS", "agent": "ops"}, "place": "bot:ops"},
     )["card"]
-    assert mine["settings"] == {"pipeline": "videos", "agent": "ops", "count": 3}
-
-    def stages(card):
-        return [(s["name"], s["count"], [t["title"] for t in s["tasks"]]) for s in card["data"]["stages"]]
-
+    assert mine["settings"] == {"pipeline": "videos", "agent": "ops", "count": 3}  # its name, in any case
     assert stages(mine) == [("Concept", 2, ["Spring promo", "Beach clean"])]
     shown = next(p["card"] for p in place(api, "bot:ops", "cara-test")["pins"] if "card" in p)
     assert stages(shown) == [("Concept", 1, ["Spring promo"])]
@@ -358,6 +364,50 @@ def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
     everyone = {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "count": 1}}
     everyone = post(api, "cards", everyone)["card"]
     assert stages(everyone) == [("Concept", 2, ["Spring promo"]), ("Draft", 1, ["Host intro"])]
+    # Nothing it may show: no box at all, not an empty one.
+    nothing = {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "agent": "inbox"}}
+    assert post(api, "cards", nothing)["card"]["hidden"] is True
+
+
+def test_tasks_by_stage_names_no_agent_its_reader_may_not_see(api):
+    """An agent its maker may not see is as unknown as one that is not there; a card about an agent its reader may not
+    see shows them nothing, and not which agent."""
+    videos(api)
+    with api.app.state.store.transaction() as c:
+        restrict(c, "cpo", people=["ana"])
+    unknown = post(
+        api,
+        "cards",
+        {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "agent": "nobody"}},
+        "cara-test",
+        expected=422,
+    )
+    hidden = post(
+        api,
+        "cards",
+        {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "agent": "cpo"}},
+        "cara-test",
+        expected=422,
+    )
+    assert hidden["error"]["detail"] == unknown["error"]["detail"].replace("nobody", "cpo")
+    made = post(
+        api,
+        "cards",
+        {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "agent": "cpo"}, "place": "bot:ops"},
+    )["card"]
+    assert stages(made) == [("Draft", 1, ["Host intro"])]
+    shown = next(p["card"] for p in place(api, "bot:ops", "cara-test")["pins"] if "card" in p)
+    assert shown["hidden"] is True and shown["data"] is None
+    assert shown["settings"] == {"pipeline": "videos", "count": 3} and "cpo" not in str(shown)
+    # The picker offers the pipelines, and only the agents its reader may see.
+    offered = get(api, "cards/choices", "cara-test")
+    assert {"id": "videos", "name": "Videos"} in offered["pipelines"]
+    assert "ops" in [a["slug"] for a in offered["agents"]] and "cpo" not in [a["slug"] for a in offered["agents"]]
+    assert "cpo" in [a["slug"] for a in get(api, "cards/choices")["agents"]]
+
+
+def widgets_of(token="ana-test"):
+    return lambda api: [(w["id"], w["hidden"]) for w in get(api, "bots/ops/task-tabs", token)["widgets"]]
 
 
 def test_an_agent_hides_and_moves_its_built_in_sections_with_tico_pin_update(api):
@@ -367,12 +417,96 @@ def test_an_agent_hides_and_moves_its_built_in_sections_with_tico_pin_update(api
     bot = attempt["token"]
     assert mcp(api, "tico_pin_update", {"pin": "files", "position": 0}, bot)[0] is False
     assert mcp(api, "tico_pin_update", {"pin": "updates", "hidden": True}, bot)[0] is False
-    widgets = get(api, "bots/ops/task-tabs")["widgets"]
-    assert [(w["id"], w["hidden"]) for w in widgets] == [("files", False), ("updates", True), ("tasks", False)]
+    assert widgets_of()(api) == [("files", False), ("updates", True), ("tasks", False)]
     assert mcp(api, "tico_pin_update", {"pin": "updates", "place": "bot:ops", "hidden": False}, bot)[0] is False
     assert not get(api, "bots/ops/task-tabs")["widgets"][1]["hidden"]
     # Another agent's sidebar is not its to arrange.
     assert mcp(api, "tico_pin_update", {"pin": "tasks", "place": "bot:cpo", "hidden": True}, bot)[0] is True
+
+
+def test_a_built_in_hidden_while_a_pin_and_tabs_are_saved_loses_neither(api):
+    """The hide is one write on the server: a card pinned and tabs saved between the tool's start and its write stay."""
+    from backend.tests.helpers.settings_assistant import mcp
+
+    _, _, attempt = setup_attempt(api, "ops")
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists})
+    meanwhile = []
+
+    class Racing:
+        """The test app, with another writer's pin and tabs landing just before the tool's first write."""
+
+        def request(self, method, path, **kw):
+            if method != "GET" and not meanwhile:
+                card = post(api, "cards", {"template": "tasks_by_status", "place": "bot:ops"})["card"]
+                put(api, "bots/ops/task-tabs", {"tabs": [*lists, {**lists[0], "name": "Later"}]})
+                meanwhile.append("card:" + card["id"])
+            return api.request(method, path, **kw)
+
+    refused, _ = mcp(
+        Racing(), "tico_pin_update", {"pin": "files", "place": "bot:ops", "hidden": True}, attempt["token"]
+    )
+    sidebar = get(api, "bots/ops/task-tabs")
+    assert refused is False and meanwhile
+    assert [(w["id"], w["hidden"]) for w in sidebar["widgets"]] == [
+        ("updates", False),
+        ("tasks", False),
+        ("files", True),
+        (meanwhile[0], False),
+    ]
+    assert [t["name"] for t in sidebar["tabs"]] == ["Launch", "Later"]
+
+
+def test_a_position_on_an_agents_sidebar_counts_its_built_ins(api):
+    """A card added at 0, or a pin moved to 0, is drawn first, above Updates, as the skill says."""
+    from backend.tests.helpers.settings_assistant import mcp
+
+    videos(api)
+    _, _, attempt = setup_attempt(api, "ops")
+    bot = attempt["token"]
+    settings = {"template": "tasks_by_stage", "pipeline": "videos", "agent": "ops", "place": "bot:ops"}
+    refused, added = mcp(api, "tico_card_add", {**settings, "position": 0}, bot)
+    assert refused is False, added
+    first = "card:" + added["card"]["id"]
+    refused, later = mcp(api, "tico_card_add", {**settings, "count": 1}, bot)
+    assert refused is False, later
+    assert [w for w, _ in widgets_of()(api)] == [first, "updates", "tasks", "files", "card:" + later["card"]["id"]]
+    assert mcp(api, "tico_pin_update", {"pin": later["pin"], "position": 0}, bot)[0] is False
+    assert [w for w, _ in widgets_of()(api)] == ["card:" + later["card"]["id"], first, "updates", "tasks", "files"]
+    pins = [p["item"] for p in place(api, "bot:ops")["pins"]]
+    assert pins == ["card:" + later["card"]["id"], first]
+
+
+def test_an_open_agent_page_hears_that_its_sidebar_changed(api):
+    """A change to an agent's sidebar is a `bots` event naming it (`sidebar`: its slug), to whoever may see the agent,
+    so its open page reads the sidebar again."""
+    from backend import events as E
+    from backend.auth import Identity
+    from backend.tests.helpers.settings_assistant import mcp
+
+    store = api.app.state.store
+    with store.read() as c:
+        cursor = E.latest(c)
+    _, _, attempt = setup_attempt(api, "ops")
+    assert mcp(api, "tico_pin_update", {"pin": "files", "hidden": True}, attempt["token"])[0] is False
+
+    def heard(person):
+        with store.read() as c:
+            events, _, _, _ = E.read(
+                c,
+                api.app.state.auth,
+                Identity(f"human:{person}", "human", f"{person}@acme.example"),
+                cursor,
+                topics=("bots",),
+                task_views=lambda rows, c, who, visible_sql="1": [],
+                task_view=None,
+            )
+        return [d.get("sidebar") for _, topic, d in events if topic == "bots" and d.get("sidebar")]
+
+    assert heard("cara") == ["ops"]
+    with store.transaction() as c:
+        restrict(c, "ops", people=["ana"])
+    assert heard("cara") == []
 
 
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):

@@ -85,8 +85,9 @@ export interface ComposerProps {
   to: string;
   /** An optimistic send returns nothing. A send without a pending row resolves to whether it accepted the draft. */
   onSend: (text: string, files: File[]) => void | Promise<boolean>;
-  /** Words to put back in the box (a failed message taken back); a new object each time. */
-  fill?: { text: string } | null;
+  /** Words to put in the box (a failed message taken back, a starter); a new object each time. `blank`: only into an
+      empty box, never over words typed there. The box takes the focus, its caret after them. */
+  fill?: { text: string; blank?: boolean } | null;
   /** The box's words in place of "Message <to>" ("Reply to Sam Lee"). */
   label?: string;
   /** false: no files (a mail reply attaches none). */
@@ -137,6 +138,14 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     placeAt.current = null;
   });
 
+  // Words put in the box: it takes the focus, the caret after them.
+  useLayoutEffect(() => {
+    if (!filled || !box.current) return;
+    const end = box.current.value.length;
+    box.current.focus();
+    box.current.setSelectionRange(end, end);
+  }, [filled]);
+
   // The row under the arrow keys stays in view when the list scrolls (a phone's rows are taller).
   useLayoutEffect(() => {
     if (open) document.getElementById(`${listId}-${current}`)?.scrollIntoView?.({ block: 'nearest' });
@@ -162,8 +171,10 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
   if (fill !== filled) {
     setFilled(fill);
     if (fill) {
-      setText(fill.text);
-      forget();
+      if (!fill.blank || !text.trim()) {
+        setText(fill.text);
+        forget();
+      }
     }
   }
 

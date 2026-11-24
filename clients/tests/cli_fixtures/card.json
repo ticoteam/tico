@@ -268,6 +268,62 @@
   "argv": [
    "card",
    "add",
+   "tasks_by_stage",
+   "--pipeline",
+   "Videos",
+   "--agent",
+   "ops",
+   "--place",
+   "bot:ops",
+   "--position",
+   "0",
+   "--title",
+   "Videos by stage"
+  ],
+  "tools": [
+   [
+    "tico_card_add",
+    {
+     "agent": "ops",
+     "operation_id": null,
+     "pipeline": "Videos",
+     "place": "bot:ops",
+     "position": 0,
+     "template": "tasks_by_stage",
+     "title": "Videos by stage"
+    }
+   ]
+  ],
+  "http": [
+   [
+    "GET",
+    "me",
+    null
+   ],
+   [
+    "POST",
+    "cards",
+    {
+     "template": "tasks_by_stage",
+     "settings": {
+      "pipeline": "Videos",
+      "agent": "ops"
+     },
+     "title": "Videos by stage",
+     "place": "bot:ops",
+     "size": "medium",
+     "position": 0
+    }
+   ]
+  ],
+  "stdout": "{\n  \"ok\": true\n}\n",
+  "stderr": "",
+  "exit": 0
+ },
+ {
+  "argv": [
+   "card",
+   "add",
    "kpi",
    "--size",
    "huge"

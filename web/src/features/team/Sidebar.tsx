@@ -1,4 +1,4 @@
-import { Fragment, type MouseEvent, type ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { Card, Place } from '@/api/schema';
 import { PageCard } from '@/conversation';
@@ -6,7 +6,7 @@ import { Ago } from '@/kit/Ago';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
-import { Row } from '@/kit/Row';
+import { Row, TaskRow } from '@/kit/Row';
 import { fmtMoney } from '@/lib';
 import { Section } from '@/pagekinds';
 import { taskHref } from './parts';

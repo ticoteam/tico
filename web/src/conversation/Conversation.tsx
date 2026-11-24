@@ -291,7 +291,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const here = useHerePage();
   const at = from === undefined ? here : from;
   // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
-  const [fill, setFill] = useState<{ text: string } | null>(null);
+  const [fill, setFill] = useState<{ text: string; blank?: boolean } | null>(null);
   // the Agent bar's box keeps its draft by its agent, not by the thread it shows (which may change under it)
   const draftId = toDm ? `dm:${toDm}` : undefined;
   // each view of a task's thread keeps its own draft: words for one agent never wait in another's box, or the comments'
@@ -510,7 +510,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       {myId && canPost && empty && (
         <div className="qchips">
           {starters!.map((words) => (
-            <button key={words} type="button" className="qchip" onClick={() => setFill({ text: words })}>
+            <button key={words} type="button" className="qchip" onClick={() => setFill({ text: words.replace(/…$/, ' '), blank: true })}>
               {words}
             </button>
           ))}

@@ -295,11 +295,13 @@ def test_every_agent_has_the_page_skill():
 
 
 def test_every_agent_with_a_shared_sidebar_has_the_sidebar_skill():
-    # Any agent may be asked to arrange its page's sidebar; the Assistant's is each person's own, with no pins.
+    # Any agent may be asked to arrange its page's sidebar. Not the Assistant, whose sidebar is each person's own with
+    # no pins, nor Agent Ops, which acts as the person who asked and so may not arrange its own for a member.
     templates = sorted(p.parent.name for p in CATALOG.glob("*/card.yaml"))
     skill = ".claude/skills/arrange-your-sidebar/SKILL.md"
-    missing = [t for t in templates if t != "assistant" and skill not in catalog.files(t)]
-    assert missing == [] and skill not in catalog.files("assistant")
+    without = ("assistant", "agent-ops")
+    missing = [t for t in templates if t not in without and skill not in catalog.files(t)]
+    assert missing == [] and not [t for t in without if skill in catalog.files(t)]
 
 
 def png(path, width, height):

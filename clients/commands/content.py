@@ -220,7 +220,7 @@ CARD_SETTINGS = {
         "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
         "1 to 10; Tasks by stage: titles per stage, 1 to 10; Growth channels 1 to 20; Growth board 1 to 5 per lane",
     },
-    "pipeline": _s("Tasks by stage: the pipeline, by id or name"),
+    "pipeline": _s("Tasks by stage (open, not snoozed): the pipeline, by id or name"),
     "agent": _s("Tasks by stage: only this agent's tasks (its slug); empty for everyone's"),
     "kpi": _s("KPI: the KPI id"),
     "metric": _s(
@@ -271,6 +271,7 @@ def card_list(api, args):
         "title": _s("Its heading; empty uses the card's name"),
         "place": PLACE,
         "size": SIZE,
+        "position": {"type": "integer", "description": "Where it goes at the place: 0 is first; left out, last"},
         **CARD_SETTINGS,
     },
     required=("template",),
@@ -284,6 +285,8 @@ def card_add(api, args):
         "place": args.get("place") or "",
         "size": args.get("size") or "medium",
     }
+    if args.get("position") is not None:
+        body["position"] = args["position"]
     return _as_person(api).post("cards", body, key=_key(args))
 
 
@@ -333,8 +336,8 @@ SIDEBAR_BUILTINS = ("updates", "tasks", "files")  # an agent sidebar's own secti
 
 @tool(
     "tico_pin_update",
-    "Resize or move a pin. On an agent's sidebar, pin may also be one of its built-in sections (updates, tasks, "
-    "files): hidden hides or shows it, position moves it among everything there.",
+    "Resize or move a pin. On an agent's sidebar a position counts everything there, its built-in sections too, and "
+    "pin may also be one of them (updates, tasks, files): hidden hides or shows it.",
     {
         "pin": _s("Pin id, from `card list --place`; or updates, tasks or files"),
         "place": _s("A built-in's sidebar: bot:<slug>; left out, your own"),
@@ -355,25 +358,17 @@ def pin_update(api, args):
 
 
 def _sidebar_builtin(api, args):
-    """Hide, show or move a built-in section of an agent's sidebar: its saved widgets, read and written back whole
-    with its task tabs as they are (PUT bots/{bot}/task-tabs). Pages the caller may not read stay where they were."""
+    """Hide, show or move a built-in section of an agent's sidebar, in one write on the server that changes nothing
+    else there (PATCH bots/{bot}/task-tabs/widgets/{widget})."""
     if args.get("size"):
         raise ValueError("A built-in has no size")
     place = args.get("place") or str(api.get("me").get("actor") or "")
     kind, _, bot = place.partition(":")
     if kind != "bot" or not bot:
         raise ValueError("A built-in is on an agent's sidebar: give place bot:<slug>")
-    person = _as_person(api)
-    path = f"bots/{quote(bot, safe='')}/task-tabs"
-    now = person.get(path)
-    widgets = [dict(w) for w in now["widgets"]]
-    at = next((i for i, w in enumerate(widgets) if w["id"] == args["pin"]), len(widgets))
-    entry = widgets.pop(at) if at < len(widgets) else {"id": args["pin"], "hidden": False, "height": None}
-    if args.get("hidden") is not None:
-        entry["hidden"] = bool(args["hidden"])
-    position = args.get("position")
-    widgets.insert(at if position is None else max(0, min(position, len(widgets))), entry)
-    return person.call("PUT", path, {"tabs": now["tabs"], "widgets": widgets}, _key(args))
+    body = {k: args[k] for k in ("hidden", "position") if args.get(k) is not None}
+    path = f"bots/{quote(bot, safe='')}/task-tabs/widgets/{args['pin']}"
+    return _as_person(api).call("PATCH", path, body, _key(args))
 
 
 @tool(

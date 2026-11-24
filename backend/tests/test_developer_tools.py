@@ -14,7 +14,7 @@ from backend import mcp as MCP
 from backend.auth import Identity
 from backend.tests.helpers.api import headers
 from backend.tests.helpers.assistant_template_commands import argv_of, commands_in, parse_error
-from clients import hubcli, hubtools
+from clients import catalog, hubcli, hubtools
 from clients.remotecli import tool_name
 
 CATALOG = Path(__file__).resolve().parents[2] / "templates" / "catalog"
@@ -38,22 +38,44 @@ def _tool_of(argv, parser):
     return None
 
 
+# Tools the shared skills (templates/catalog/_shared) name that a code bot is not offered, from before the walk read
+# them: each is a question of whether code bots should have that tool, not a slip. A new one fails.
+SHARED_GAPS = {
+    "tico_chat_ask",
+    "tico_decision_ask",
+    "tico_email_draft",
+    "tico_email_policy",
+    "tico_email_send",
+    "tico_email_thread",
+    "tico_market_delta",
+    "tico_market_find",
+    "tico_message_send",
+    "tico_repo_review",
+    "tico_task_file",
+    "tico_task_requester_save",
+    "tico_task_requesters",
+    "tico_tool_query_search",
+}
+
+
 def named_tools(template):
     """{tool: where it is named} for one code bot's template. bot.yaml and card.yaml are notes for people (the wizard,
     the seed), not instructions the bot runs, so they are left out."""
     parser = hubcli.parser()
     found = {}
-    for path in sorted((CATALOG / template).rglob("*")):
-        if not path.is_file() or path.name in ("bot.yaml", "card.yaml"):
+    # What the bot starts with: the catalog's _base and the _shared files its card names, then its own.
+    for rel, path in sorted(catalog.files(template, CATALOG).items()):
+        if path.name in ("bot.yaml", "card.yaml"):
             continue
-        where = str(path.relative_to(CATALOG))
+        where, gaps = f"{template}/{rel}", SHARED_GAPS if (CATALOG / "_shared") in path.parents else set()
         if path.suffix == ".md":
             text = path.read_text()
             for name in TOOL.findall(text):
-                found.setdefault(name, where)
+                if name not in gaps:
+                    found.setdefault(name, where)
             for number, line in commands_in(path):
                 argv = argv_of(line)
-                if argv and argv != ["\x00unbalanced quotes"] and (name := _tool_of(argv, parser)):
+                if argv and argv != ["\x00unbalanced quotes"] and (name := _tool_of(argv, parser)) and name not in gaps:
                     found.setdefault(name, f"{where}:{number}")
         elif path.suffix == ".py":
             for noun, verb in SCRIPT_CALL.findall(path.read_text()):
