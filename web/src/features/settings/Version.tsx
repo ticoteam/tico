@@ -38,17 +38,21 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
   const statusReads = client.getQueryState(updateStatusQuery.queryKey)?.dataUpdateCount ?? 0;
   const status = canCheck && isFetchedAfterMount && (isSuccess || progressTarget) ? statusQuery.data : undefined;
   const statusError = canCheck && isFetchedAfterMount ? statusQuery.error : null;
-  const progress = updateProgress(status);
-  const busy = starting || recovering || !!progress;
   const currentRelease = release(update.current);
   const latest = release(update.latest);
   const scheduled = release(update.scheduled ?? '');
   const target = release(status?.to ?? '');
+  const requested = pending?.target || progressTarget;
+  const statusProgress = updateProgress(status);
+  const progress = !requested || target === requested ? statusProgress : undefined;
+  const busy = starting || recovering || !!statusProgress;
   const terminal = isSuccess && status && TERMINAL.has(status.state) ? status : undefined;
+  const fresh = !starting && pending?.after !== statusReads;
   const running = release(status?.running ?? '');
-  const updated = status?.state === 'healthy' && target === progressTarget && (!running || running === target) ? target : '';
+  const updated = fresh && status?.state === 'healthy' && target === progressTarget && (!running || running === target) ? target : '';
   const current = update.available && latest === (running || updated) ? latest : currentRelease;
   const available = update.available && !!latest && latest !== current;
+  const matchesOutcome = fresh && !!target && target === (requested || (available ? latest : ''));
   const manual = status?.configured === false;
 
   if (canCheck && !readStatus && isFetchedAfterMount) {
@@ -60,14 +64,15 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
   }
   if (isSuccess && progress && target && progressTarget !== target) setProgressTarget(target);
   if (pending) {
-    const freshStatus = status && isSuccess && statusReads !== pending.after;
-    const recovered = freshStatus && (pending.source === 'mount' || status.configured === false || terminal);
-    if (!canCheck || recovered || (pending.target && currentRelease === pending.target)) {
-      if (freshStatus && terminal?.state === 'healthy' && target === pending.target) setProgressTarget(target);
+    const recovered =
+      fresh && status && isSuccess && (terminal ? target === pending.target : pending.source === 'mount' || status.configured === false);
+    if (!canCheck || recovered) {
+      if (recovered && terminal) setProgressTarget(target);
       setPending(null);
       setFeedback('');
     }
   }
+  if (feedback && isSuccess && (progress || (terminal && matchesOutcome))) setFeedback('');
 
   useEffect(() => {
     void client.invalidateQueries({ queryKey: configQuery.queryKey }, { cancelRefetch: false });
@@ -92,7 +97,10 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
       const answer = await refetchStatus({ cancelRefetch: false });
       if (stopped) return;
       const status = answer.isSuccess ? answer.data : undefined;
-      if (status && (pending.source === 'mount' || status.configured === false || TERMINAL.has(status.state))) {
+      if (
+        status &&
+        (TERMINAL.has(status.state) ? release(status.to ?? '') === pending.target : pending.source === 'mount' || status.configured === false)
+      ) {
         clearTimeout(deadline);
         return;
       }
@@ -136,7 +144,7 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
     setStarting(true);
     setFeedback('');
     setPending(null);
-    setProgressTarget('');
+    setProgressTarget(latest);
     try {
       await client.cancelQueries({ queryKey: updateStatusQuery.queryKey });
       client.setQueryData(updateStatusQuery.queryKey, await startUpdate(update.latest));
@@ -172,17 +180,14 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
   let outcome = '';
   if (updated) {
     outcome = `Updated to v${updated}.`;
-  } else if (available && target === latest) {
+  } else if (matchesOutcome) {
     if (status?.state === 'rolled_back') outcome = 'Tico went back to the previous version.';
     if (status?.state === 'failed') outcome = 'The update failed.';
     if (outcome && status?.message) outcome += ` ${status.message}`;
   }
   const readProblem = available && statusError && (statusError.message || 'Could not read update status.');
-  const message = recovering
-    ? progress || 'Restarting Tico…'
-    : starting
-      ? 'Starting the update…'
-      : feedback || progress || (checking ? 'Still checking…' : outcome || readProblem);
+  const action = starting ? 'Starting the update…' : recovering ? 'Restarting Tico…' : checking ? 'Still checking…' : '';
+  const message = progress || outcome || feedback || action || readProblem;
 
   return (
     <Line label="Version" target="setting:version">

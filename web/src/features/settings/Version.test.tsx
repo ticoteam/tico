@@ -263,22 +263,29 @@ describe('Company updates', () => {
     expect(posts).toBe(1);
   });
 
-  it('recovers when the first status read fails and config catches up', async () => {
+  it('waits for a terminal status when config catches up during recovery', async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async (path: string) => (path === CONFIG ? json(config(offer)) : json({}, 503)));
+    let applied = false;
+    const caughtUp = { ...offer, current: offer.latest, available: false };
+    const request = vi.fn(async (path: string) => {
+      if (path === CONFIG) return json(config(applied ? caughtUp : offer));
+      return applied ? json({ configured: true, state: 'healthy', to: `v${offer.latest}` }) : json({}, 503);
+    });
     vi.stubGlobal('fetch', request);
     show();
     await tick();
     await tick(3_050);
     expect(screen.getByText('Restarting Tico…')).toBeTruthy();
     expect(request.mock.calls.filter(([path]) => path === UPDATE)).toHaveLength(2);
-    const caughtUp = { ...offer, current: offer.latest, available: false };
+    applied = true;
     act(() => client.setQueryData(configQuery.queryKey, config(caughtUp)));
     await tick();
+    expect(screen.getByText('Restarting Tico…')).toBeTruthy();
     await tick(3_050);
+    expect(screen.getByText('Updated to v1.2.4.')).toBeTruthy();
     expect(screen.queryByText('Restarting Tico…')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Update now' })).toBeNull();
-    expect(request.mock.calls.filter(([path]) => path === UPDATE)).toHaveLength(2);
+    expect(request.mock.calls.filter(([path]) => path === UPDATE)).toHaveLength(3);
   });
 
   it('ends mount recovery on the first idle status', async () => {
@@ -298,32 +305,35 @@ describe('Company updates', () => {
     expect(reads).toBe(2);
   });
 
-  it('ends lost-start recovery on three consecutive idle statuses', async () => {
-    vi.useFakeTimers();
-    let reads = 0;
-    const request = vi.fn(async (path: string, init: RequestInit) => {
-      if (path === CONFIG) return json(config(offer));
-      if (init.method === 'POST') throw new TypeError('Failed to fetch');
-      reads++;
-      return json({ configured: true, state: 'idle' });
-    });
-    vi.stubGlobal('fetch', request);
-    show();
-    await tick();
-    const button = screen.getByRole('button', { name: 'Update now' });
-    fireEvent.click(button);
-    await tick();
-    await tick(6_050);
-    expect(reads).toBe(3);
-    expect(screen.getByText('Restarting Tico…')).toBeTruthy();
-    await tick(3_050);
-    expect(reads).toBe(4);
-    expect(screen.getByText("The update didn't start. Try again.")).toBeTruthy();
-    expect(button.hasAttribute('disabled')).toBe(false);
-    await tick(6_000);
-    expect(reads).toBe(4);
-    expect(request.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
-  });
+  it.each([{ state: 'idle' }, { state: 'healthy', to: `v${offer.current}` }])(
+    'ends lost-start recovery on three $state statuses from before the update',
+    async (status) => {
+      vi.useFakeTimers();
+      let reads = 0;
+      const request = vi.fn(async (path: string, init: RequestInit) => {
+        if (path === CONFIG) return json(config(offer));
+        if (init.method === 'POST') throw new TypeError('Failed to fetch');
+        reads++;
+        return json({ configured: true, ...status });
+      });
+      vi.stubGlobal('fetch', request);
+      show();
+      await tick();
+      const button = screen.getByRole('button', { name: 'Update now' });
+      fireEvent.click(button);
+      await tick();
+      await tick(6_050);
+      expect(reads).toBe(3);
+      expect(screen.getByText('Restarting Tico…')).toBeTruthy();
+      await tick(3_050);
+      expect(reads).toBe(4);
+      expect(screen.getByText("The update didn't start. Try again.")).toBeTruthy();
+      expect(button.hasAttribute('disabled')).toBe(false);
+      await tick(6_000);
+      expect(reads).toBe(4);
+      expect(request.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+    },
+  );
 
   it('reports success when an aborted start recovers directly to healthy', async () => {
     vi.useFakeTimers();
@@ -388,6 +398,35 @@ describe('Company updates', () => {
     expect(button.hasAttribute('disabled')).toBe(false);
     await tick(6_000);
     expect(request.mock.calls.filter(([path, init]) => path === UPDATE && init.method === 'GET')).toHaveLength(2);
+  });
+
+  it('clears a start error when status shows the requested update', async () => {
+    vi.useFakeTimers();
+    const error = 'The updater did not answer. Try again, or update by hand.';
+    let state = 'idle';
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      if (path === CONFIG) return json(config(offer));
+      if (init.method === 'POST') return json({ error: { code: 'updater_unreachable', detail: error } }, 502);
+      return json({ configured: true, state, to: `v${offer.latest}` });
+    });
+    show();
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }));
+    await tick();
+    expect(screen.getByText(error)).toBeTruthy();
+
+    state = 'pulling';
+    await act(() => client.refetchQueries({ queryKey: ['settings', 'update'] }));
+    await tick();
+    expect(screen.getByText('Downloading the update…')).toBeTruthy();
+    expect(screen.queryByText(error)).toBeNull();
+    state = 'healthy';
+    await tick(3_050);
+    expect(screen.getByText('Updated to v1.2.4.')).toBeTruthy();
+    state = 'idle';
+    await act(() => client.refetchQueries({ queryKey: ['settings', 'update'] }));
+    await tick();
+    expect(screen.queryByText(error)).toBeNull();
   });
 
   it.each([

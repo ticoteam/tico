@@ -1,5 +1,5 @@
 import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
-import { Link } from '@tanstack/react-router';
+import { Link, useNavigate } from '@tanstack/react-router';
 import { Suspense, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { meQuery } from '@/data';
 import { AddAgentButton } from '@/features/team/exports';
@@ -124,24 +124,27 @@ export const hitTarget = (card = ''): string | undefined => CARD[cardOf(card)]?.
 // The part to land on once the picked section has drawn it (a section reads its own data, so it may come later).
 let landing: string | null = null;
 
-function land(): boolean {
-  if (!landing) return true;
-  const el = document.querySelector<HTMLElement>(`[data-target="${landing}"]`);
-  if (!el) return false;
-  landing = null;
-  el.scrollIntoView?.({ block: 'start' });
-  const control = el.querySelector<HTMLElement>('input, select, textarea, button, [role="switch"], a[href]');
-  (control ?? el).focus({ preventScroll: true });
-  return true;
-}
-
 /** Land on the picked part when it is drawn; give up after a few seconds (it may not be shown to this reader). */
 function useLanding(section: SectionId, ready: boolean, open?: string) {
+  const navigate = useNavigate();
   useEffect(() => {
     const card = open ? CARD[open] : undefined;
     if (card?.[0] === section) landing = card[1];
   }, [section, open]);
   useEffect(() => {
+    const land = () => {
+      if (!landing) return true;
+      const el = document.querySelector<HTMLElement>(`[data-target="${landing}"]`);
+      if (!el) return false;
+      landing = null;
+      el.scrollIntoView?.({ block: 'start' });
+      const control = el.querySelector<HTMLElement>('input, select, textarea, button, [role="switch"], a[href]');
+      (control ?? el).focus({ preventScroll: true });
+      if (open === 'tico-version' && el.dataset.target === 'setting:version') {
+        void navigate({ to: '.', search: (prev) => ({ ...prev, open: undefined }), replace: true, resetScroll: false });
+      }
+      return true;
+    };
     if (!ready || land()) return;
     const watch = new MutationObserver(() => land() && watch.disconnect());
     watch.observe(document.body, { childList: true, subtree: true });
@@ -153,7 +156,7 @@ function useLanding(section: SectionId, ready: boolean, open?: string) {
       watch.disconnect();
       clearTimeout(stop);
     };
-  }, [section, ready, open]);
+  }, [section, ready, open, navigate]);
 }
 
 type Hit = SettingHit & { href: string };
