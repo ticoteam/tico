@@ -681,7 +681,7 @@ def private_task_write(fn):
     @functools.wraps(fn)
     def guarded(*args, **kwargs):
         values = signature.bind_partial(*args, **kwargs).arguments
-        conn, actor = values['conn'], values['actor']
+        conn = values['conn']
         row = task(conn, values.get('task_id')) if values.get('task_id') else None
         private = bool(row and task_private(conn, row) or values.get('private'))
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
