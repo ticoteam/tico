@@ -14,6 +14,8 @@ import { pipelineTasksQuery } from '@/features/tasks/routing';
 import { TasksHome } from '@/features/tasks/exports';
 import { forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
+import { answerAsk } from '@/features/task/queries';
+import { dispatch } from '@/live/patch';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
@@ -30,7 +32,7 @@ const { gate, q, catchUpRead, lists, owners, asks, hops, needsRead, shellDraws }
   /** Where `/task/<n>` passes on to, as its route does once the task is read: none unless a test names one. */
   hops: {} as Record<string, string>,
   /** The ❓ questions and asks agents put to Maya that wait (`asks`, from Needs you's items). */
-  asks: [] as { id: string; kind?: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[],
+  asks: [] as { id: string; kind?: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null; task?: string; wait?: string }[],
   gate: { screen: null as string | null, setup: false },
   /** Each page's owner, as GET /page-owners answers: none unless a test names one. */
   owners: {} as Record<string, { bot: string | null; own?: boolean }>,
@@ -111,6 +113,7 @@ vi.mock('@/features/tasks/routing', async () => {
   isNeedsYouRead: real.isNeedsYouRead,
   leaveNeedsYou: real.leaveNeedsYou,
   settleNeedsYou: real.settleNeedsYou,
+  asksGone: real.asksGone,
   needsYouRows: real.needsYouRows,
   useNeedsYouDrawn: real.useNeedsYouDrawn,
   useNeedsYouRead: real.useNeedsYouRead,
@@ -620,13 +623,43 @@ describe('the Agent bar @4857', () => {
 
   // an OK on a task in Engineering, its pipeline's agent being QA: Needs you's items as the server gives them
   const okOnTask = () => {
-    asks.push({ id: 'n5', kind: 'ask', by: 'bot:qa', pipeline: 'eng', href: '/task/t1' });
+    asks.push({ id: 'n5', kind: 'ask', by: 'bot:qa', pipeline: 'eng', href: '/task/t1', task: 't1', wait: 'r1' });
     queryClient.setQueryData(['pipelines'], [{ id: 'eng', name: 'Engineering', stages: [], manager: 'bot:qa', owner: null }]);
   };
   const askRead = async () => {
     await waitFor(() => expect(queryClient.getQueryData<{ asks: unknown[] }>(['flow'])?.asks).toHaveLength(1));
     await act(async () => {});
   };
+
+  const okLine = () => screen.queryByRole('link', { name: 'An OK waits on you' });
+
+  it('drops its line to the OK the moment the person approves it, before the server answers', async () => {
+    at(1440);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    await askRead();
+    expect(await screen.findByRole('link', { name: 'An OK waits on you' })).toBeTruthy();
+    // the approve is on its way: no reply yet, and so no read of Needs you either
+    const post = vi.spyOn(api, 'post').mockReturnValue(new Promise(() => {}));
+    onTestFinished(() => post.mockRestore());
+    act(() => void answerAsk('t1', 'r1', 'ok'));
+    await waitFor(() => expect(okLine()).toBeNull());
+  });
+
+  it('drops its line to the OK live, when the stream says it left Needs you (another tab, or the agent took it back)', async () => {
+    at(1440);
+    people(MAYA, QA);
+    owners.tasks = { bot: 'bot:qa' };
+    okOnTask();
+    show('/tasks/eng');
+    await askRead();
+    expect(await screen.findByRole('link', { name: 'An OK waits on you' })).toBeTruthy();
+    asks.length = 0; // settled on the server
+    act(() => dispatch('needs', [{ seq: 41, count: 3, changed: [], removed: ['n5'] }]));
+    await waitFor(() => expect(okLine()).toBeNull());
+  });
 
   it('on a phone keeps the board up when an OK from the owner waits on you: the ask stays behind the Agent icon', async () => {
     at(390);

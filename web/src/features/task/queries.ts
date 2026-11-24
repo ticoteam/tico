@@ -4,7 +4,7 @@ import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, Publi
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
 import { timelineQuery } from '@/conversation';
-import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
+import { asksGone, flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
 /* One open task: its detail (GET /api/v2/tasks/{tid}, kept current by the stream under keys.tasks.detail), the files
@@ -386,7 +386,9 @@ export async function answerQuestion(task: string, question: string, text: strin
 export async function answerInChat(thread: string, question: string, text: string): Promise<{ id: string; reason: string } | null> {
   try {
     const r = await api.post<{ id?: string; held?: { id?: string; reason?: string } }>(`/api/v2/threads/${enc(thread)}/messages`, { text, ask: question }, { idempotencyKey: newId() });
-    return r.id ? null : { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+    if (!r.id) return { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+    asksGone([question]); // sent: the Agent bar's line to it goes now
+    return null;
   } finally {
     void queryClient.invalidateQueries({ queryKey: timelineQuery(thread).queryKey });
     void queryClient.invalidateQueries({ queryKey: ['flow'] });
