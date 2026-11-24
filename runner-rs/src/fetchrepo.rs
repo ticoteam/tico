@@ -612,7 +612,9 @@ impl Runner {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "active".into());
             let here = !mine.is_empty() && text_of(&entry["runner_id"]) == mine;
+            // A borrowed Burst checkout is published only by its own turn: recovery can hold unscanned commits.
             if here
+                && entry["burst_guest"] != true
                 && !repository.is_empty()
                 && state == "active"
                 && publish_due(&bot, Instant::now())

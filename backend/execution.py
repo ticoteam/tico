@@ -4406,8 +4406,10 @@ class Execution:
         # The environment owner hosts any bot; every other operator hosts only their own.
         owner = self.auth.owner_id(c)
         rows = c.execute(
-            f"SELECT a.*,b.state,b.slug,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state FROM assignments a "
+            f"SELECT a.*,b.state,b.slug,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state,"
+            "g.bot IS NOT NULL AS burst_guest FROM assignments a "
             f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
+            "LEFT JOIN burst_guests g ON g.bot=a.bot AND g.runner_id=a.runner_id "
             "WHERE a.runner_id=? ORDER BY a.bot",
             (who.runner_id,),
         ).fetchall()
@@ -4464,10 +4466,13 @@ class Execution:
             sent = runner_versions.wire_template(stored)
             if stored is not original or sent is not stored:
                 wired["config_json"] = json.dumps(sent)
+            assignment = dict(row)
+            burst_guest = assignment.pop("burst_guest")
             result.append(
                 {
-                    **dict(row),
+                    **assignment,
                     **wired,
+                    **({"burst_guest": True} if burst_guest else {}),
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,
@@ -5170,6 +5175,7 @@ class Execution:
         eligible=None,
         accept=None,
         preparing=False,
+        prepare_after=None,
     ):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
         message (start_places.from_person), on a computer that holds every other start. `failed`: the claim's
@@ -5318,6 +5324,9 @@ class Execution:
             ),
         )
         candidates = candidates.fetchall()
+        if prepare_after is not None:
+            # Wrap in bot order so several failed checkouts cannot keep each other ahead of a healthy one.
+            candidates.sort(key=lambda row: (row["bot_id"] <= prepare_after, row["bot_id"]))
         if loads is not None and len(candidates) > 1:
             from .worktrees import worktree_links
 
