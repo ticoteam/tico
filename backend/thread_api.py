@@ -223,6 +223,23 @@ def _no_task_to(c, thread_id, body):
         raise Problem("task_to", "On a task, write to an agent with POST /api/v2/tasks/{task}/comments and its to", 422)
 
 
+def _task_session(c, who, conversation_id, to):
+    """The agent whose session a message `to` it is, when written in a task's own thread (not a sub-thread); None
+    anywhere else. A person who may not direct the task's agents gets the task route's 403."""
+    if not conversation_id or not str(to or "").startswith("bot:"):
+        return None
+    room = threads.thread_row(c, conversation_id)
+    if not room or room.get("parent_id") or threads.audience_of(room) != "task" or not room.get("task_id"):
+        return None
+    task = H.task(c, room["task_id"])
+    if task and who.role != "bot":
+        from .chat_goals import may_direct
+
+        if not may_direct(c, who, task):
+            raise Problem("delivery", "Only someone on this task can message its agents", 403)
+    return to
+
+
 def _reply_check(c, auth, who, thread_id, body):
     """A post's `in_reply_to`, checked before anything is written: a message of the same root's open subtree the poster
     reads (threads.reply_target), never beside `parent_message_id`. 422 reply_target_invalid otherwise."""
@@ -1565,10 +1582,10 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
         check_refs(c, who, body.refs)
         body = recipient_gate.require_recipient(c, who, body.to, body=body, auth=auth)
         to, refs, conversation_id, way = body.to, body.refs, body.conversation_id, body.delivery
-        if conversation_id and str(to).startswith("bot:"):
-            # A message to an agent in a task's thread is a session message: only the task's own route writes one
-            # (`_no_task_to`), Send anyway's replay included, since it writes through here too.
-            _no_task_to(c, conversation_id, body)
+        # A message to an agent in a task's own thread is that agent's session message, as the task's route writes one
+        # (task_comments_routes.session_target): a person must be one who may direct the task, and it is stamped.
+        # Send anyway's replay writes through here too.
+        session = _task_session(c, who, conversation_id, to)
         # Ride-along: a defer while the bot has a turn going in this chat goes in right after that turn.
         if (
             way == "defer"
@@ -1582,17 +1599,18 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
             refs["delivery"] = "queue"  # after the bot's running turn, not into it (execution.inputs)
         if to.startswith("bot:") and way == "defer":
             refs["quiet"] = True  # no job: the session's next turn, or its deadline, takes it
-        message = H.say(
-            c,
-            who.actor,
-            to,
-            body.text,
-            conversation_id=conversation_id,
-            kind=body.kind,
-            refs=refs,
-            in_reply_to=body.in_reply_to,
-            wait_s=body.wait_s,
-        )
+        with H.session_of(session, who.actor):
+            message = H.say(
+                c,
+                who.actor,
+                to,
+                body.text,
+                conversation_id=conversation_id,
+                kind=body.kind,
+                refs=refs,
+                in_reply_to=body.in_reply_to,
+                wait_s=body.wait_s,
+            )
         recipient_gate.require_recipient(c, who, to, body=body, auth=auth, delivered=message)
         due = None
         if to.startswith("bot:") and way == "defer":

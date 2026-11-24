@@ -724,15 +724,16 @@ def test_a_question_that_mentions_another_agent_is_checked_for_whom_it_reaches_a
     assert asked["question"]["person_id"] == "human:ana", asked
 
 
-def test_a_message_to_an_agent_in_a_tasks_thread_goes_through_the_task(ruled):
-    """/messages writes no message to an agent in a task's thread: that is a session message, which the task's own route
-    writes with its checks."""
+def test_a_message_to_an_agent_in_a_tasks_thread_is_its_session_message(ruled):
+    """/messages to an agent in a task's own thread writes what the task's route would: that agent's session message,
+    stamped, and only from someone who may direct the task (403 otherwise), Send anyway's replay included."""
     api, _ = ruled
     task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
-    r = api.post(
-        "/api/v2/messages",
-        json={"to": "ops", "text": "Ship it now.", "conversation_id": task["conversation_id"]},
-        headers=headers("cara-test"),
-    )
-    assert r.status_code == 422 and "task_to" in r.text, r.text
+    body = {"to": "ops", "text": "Ship it now.", "conversation_id": task["conversation_id"]}
+    r = api.post("/api/v2/messages", json=body, headers=headers("cara-test"))
+    assert r.status_code == 403, r.text
     assert bodies(api, "Ship it now.") == []
+    sent = post(api, "messages", body)
+    assert sql(api, "SELECT session_agent_id FROM messages WHERE id=?", (sent["id"],)) == [
+        {"session_agent_id": "bot:ops"}
+    ]
