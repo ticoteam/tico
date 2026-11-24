@@ -488,8 +488,8 @@ def test_fields_keeps_the_named_fields_and_reads_no_activity_it_leaves_out(api, 
 
 
 def test_bot_list_reads_each_open_task_and_bot_row_once(api, monkeypatch):
-    """The bots' open tasks are read once from the covering partial index (without body/title), and waiting_on_many
-    reuses those slim rows without reading SELECT * FROM tasks; every bot is read once."""
+    """The bots' open tasks are read once from the covering partial index (without body/title), never as SELECT * FROM
+    tasks; every bot is read once."""
     import contextlib
 
     from backend import waiting_on as W
@@ -563,6 +563,10 @@ def test_task_flow_open_tasks_query_uses_covering_partial_index(api):
             )
         ]
     assert any("COVERING INDEX tasks_open_owner_flow" in line for line in plan), plan
+    # Whose turn each is: a seek per task on the open-span index, never a scan of every span ever kept.
+    with store.read_transaction() as c:
+        plan = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + bot_rows.TURNS_SQL, ("bot", "[]"))]
+    assert any("USING INDEX index_task_wait_spans_on_task_id_open" in line for line in plan), plan
 
 
 def test_task_flow_counts_a_bots_turn_from_its_open_wait_span(api, monkeypatch):

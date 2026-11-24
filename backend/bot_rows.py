@@ -5,6 +5,8 @@ are per task, job or message stay per row (backend/task_privacy.py); only the re
 A bot's queue counts live here too (`job_queues`): the one count of a bot's waiting work, on its page and in the bot
 list. Health splits the same queue over every job (`health.queue_counts`)."""
 
+import json
+
 from . import task_privacy as privacy
 from . import read_cache
 from . import providers
@@ -144,15 +146,21 @@ def _live_runs(c, slugs):
     return out
 
 
+# The open spans of these tasks that are a bot's turn: a seek per task on the open-span partial index.
+TURNS_SQL = (
+    "SELECT task_id, who FROM task_wait_spans WHERE closed_at IS NULL AND kind=? "
+    "AND task_id IN (SELECT value FROM json_each(?))"
+)
+
+
 def task_flow(c, tasks_by_bot, who=None):
     """{bot: {"going", "waiting"}} over each bot's open tasks the reader may see: `going` has a live run, `waiting` is
     the bot's turn with nothing running (it is woken by the never-stuck check). A task that waits on a person,
     another task or room counts in neither. Whose turn a task is comes from its open wait span (backend/wait_spans.py:
-    its headline wait, kept by every engine write and checked by each never-stuck pass), one read for every task,
-    rather than working out each task's waits again on every list (TIDY, Nov 24: most of GET /api/v2/bots). A flip
-    no write made shows after the next pass, so never on a server running no scheduler (TICO_SCHEDULER=0)."""
-    import json
-
+    its headline wait, kept by the engine's moves, answers and snoozes and checked by each never-stuck pass), one read
+    for every task, rather than working out each task's waits again on every list (TIDY, Nov 24: most of GET
+    /api/v2/bots). Anything else (a ❓ marked or cleared, a bot Paused) shows after the next pass, so never on a
+    server running no scheduler (TICO_SCHEDULER=0)."""
     from . import waiting_on as W
 
     live = _live_runs(c, list(tasks_by_bot))
@@ -168,18 +176,7 @@ def task_flow(c, tasks_by_bot, who=None):
             elif row.get("pipeline_id"):
                 pending[bot].append(row["id"])
     every = sorted({tid for ids in pending.values() for tid in ids})
-    turn = (
-        {
-            str(task_id): actor
-            for task_id, actor in c.execute(
-                "SELECT task_id, who FROM task_wait_spans WHERE closed_at IS NULL AND kind=? "
-                "AND task_id IN (SELECT value FROM json_each(?))",
-                (W.BOT, json.dumps(every)),
-            )
-        }
-        if every
-        else {}
-    )
+    turn = {str(task_id): actor for task_id, actor in c.execute(TURNS_SQL, (W.BOT, json.dumps(every)))} if every else {}
     return {
         bot: {"going": going[bot], "waiting": sum(1 for tid in pending[bot] if turn.get(tid) == "bot:" + bot)}
         for bot in tasks_by_bot
