@@ -117,6 +117,7 @@ def test_a_preview_stored_before_a_later_write_fails_is_queued_for_removal(api, 
     drive = worker(api)
     blobs = api.app.state.blobs
     thread = new_thread(api, members=("human:ben",))
+    monkeypatch.setattr(file_metadata.shutil, "which", lambda name: "/usr/bin/" + name)  # no Poppler needed
     upload(api, thread["id"], [("plan.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")])
 
     def first_page(args, root):
