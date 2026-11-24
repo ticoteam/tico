@@ -3046,13 +3046,14 @@ def _install_target(c, auth, spec):
         state = tool.get("state") or ""
         busy = state in ("queued", "installing")
         active = choice is True or busy
-        found.append(
-            ((state == "failed", not active, not busy, runner["created_at"] or "", runner["id"]), runner, tool)
-        )
+        # The person's own agy, older than Tico runs, which Tico does not replace: only when no other is left.
+        blocked = bool(tool.get("installed") and not tool.get("managed") and not cli_current(runner, runtime))
+        key = (blocked, state == "failed", not active, not busy, runner["created_at"] or "", runner["id"])
+        found.append((key, runner, tool))
     if not found:
         return None
     key, runner, tool = min(found, key=lambda f: f[0])
-    return runner, tool, not key[1]
+    return runner, tool, not key[2]
 
 
 def connect_ready(c):
@@ -3164,7 +3165,7 @@ def connect(c, settings, auth, who, body):
         if target:
             runner, tool, active = target
             if tool.get("installed") and not tool.get("managed") and not cli_current(runner, spec["runtime"]):
-                # The person's own agy, older than Tico runs: Tico does not replace it.
+                # The person's own agy, older than Tico runs, on the only computer left: Tico does not replace it.
                 from clients import harness_manifests as manifests
 
                 least = (manifests.get(spec["runtime"]) or {}).get("minimum") or ""

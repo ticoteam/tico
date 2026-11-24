@@ -283,13 +283,14 @@ struct Live {
     watch: Option<(PathBuf, Option<Stamp>)>,
 }
 
-/// A file's inode, size and change time: what tells a rewrite of it without reading it.
+/// A file's inode, size and status-change time (which no rewrite can set back): what tells a rewrite of it without
+/// reading it.
 type Stamp = (u64, u64, i64, i64);
 
 fn stamp(path: &Path) -> Option<Stamp> {
     use std::os::unix::fs::MetadataExt;
     let m = std::fs::symlink_metadata(path).ok()?;
-    Some((m.ino(), m.size(), m.mtime(), m.mtime_nsec()))
+    Some((m.ino(), m.size(), m.ctime(), m.ctime_nsec()))
 }
 
 /// Mask, in every running turn's output from now on, the tokens a plan's CLI wrote when it refreshed its sign-in during
@@ -306,12 +307,16 @@ pub fn notice_refreshes() {
         if now == *seen {
             continue;
         }
-        *seen = now;
-        if let Some(text) = read_codex_auth(file) {
-            for secret in secrets_in(&text) {
-                crate::redact::hide_everywhere(&secret, false);
-            }
+        // Seen only once read whole: a file caught mid-write is read again next time.
+        let Some(text) = read_codex_auth(file)
+            .filter(|t| serde_json::from_str::<Value>(t).is_ok_and(|v| v.is_object()))
+        else {
+            continue;
+        };
+        for secret in secrets_in(&text) {
+            crate::redact::hide_everywhere(&secret, false);
         }
+        *seen = now;
     }
 }
 
@@ -604,6 +609,8 @@ pub fn start(
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {e}"
                 ));
+                // A file `hold` put in place before it failed goes with it.
+                secrets.extend(release(&mut delivered[at]));
                 delivered.remove(at);
             }
         }
@@ -1325,6 +1332,20 @@ mod tests {
         assert!(!homes().kept.contains_key(first[0].home.as_ref().unwrap()));
         finish(&mut second);
         assert!(!two.exists());
+        // A Claude turn's Codex shell login whose sessions folder cannot be made is left out, its file with it.
+        std::fs::remove_dir_all(state.join("subscriptions/plan/codex")).unwrap();
+        std::fs::write(state.join("subscriptions/plan/codex"), "not a folder").unwrap();
+        let mut got = apply(
+            &state,
+            &items("{\"tokens\":\"attempt three\"}"),
+            &mut Env::new(),
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        let three = got[0].file.clone().unwrap();
+        start(&mut got, "claude", &mut Env::new()).unwrap();
+        assert!(got.is_empty());
+        assert!(!three.exists());
         std::fs::remove_dir_all(state).unwrap();
     }
 

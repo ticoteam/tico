@@ -3883,6 +3883,8 @@ impl Runner {
                     segments.last_mut().unwrap().meter.add(&ev);
                 }
                 if ev["process_exit"] == true {
+                    // What the CLI said as it exited may hold a plan token it refreshed: masked before it is kept.
+                    crate::model_subscriptions::notice_refreshes();
                     let clean = redactor
                         .as_ref()
                         .map(|r| r.scrub_json(&ev).into_owned())
@@ -6779,6 +6781,8 @@ mod tests {
         starts: usize,
         /// Every event the turns sent Tico, in order.
         events: Vec<Value>,
+        /// The stderr tail kept for each turn that had one.
+        stderr: Vec<String>,
     }
 
     /// Turns on one session through a fake `pi --mode rpc` that reads 348 input tokens a turn (runner-rs/tests/fixtures/pi), one per
@@ -6960,6 +6964,14 @@ mod tests {
             .filter(|(_, p, _)| p.ends_with("/events"))
             .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
             .collect();
+        let stderr = runner
+            .state
+            .with(|c| {
+                let mut q = c.prepare("SELECT tail FROM attempt_stderr ORDER BY attempt_id")?;
+                let rows = q.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
         runner.pi.prune(true).await;
         std::fs::remove_dir_all(&dir).ok();
         Ran {
@@ -6970,6 +6982,7 @@ mod tests {
             diagnostics,
             starts,
             events,
+            stderr,
         }
     }
 
@@ -7453,11 +7466,16 @@ if not line:
 open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
 said = "Done."
 if os.path.exists(os.path.join(folder, "agy-refresh-%d" % n)):
-    # A plan turn's agy refreshes its access token in its sign-in file, then says it.
-    fresh = "ya29.synthetic-refreshed-mid-turn-0123456789"
+    # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on its
+    # stderr as it fails).
+    fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
     token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
     open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
     said = "Done. " + fresh
+    if os.path.exists(os.path.join(folder, "agy-crash-%d" % n)):
+        sys.stderr.write("refresh went wrong with " + fresh + "\n")
+        sys.stderr.flush()
+        sys.exit(3)
 late = []
 if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
     conv = str(uuid.uuid4())
@@ -7493,7 +7511,10 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         let folder =
             std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("agy-refresh-0"), "").unwrap();
+        // Turn 0 says the refreshed token; turn 1 writes it to its stderr as it fails.
+        for name in ["agy-refresh-0", "agy-refresh-1", "agy-crash-1"] {
+            std::fs::write(folder.join(name), "").unwrap();
+        }
         fake_agy_in(&folder);
         let token = format!("run-agy-{}", uuid::Uuid::new_v4().simple());
         grants().lock().unwrap().insert(
@@ -7505,19 +7526,26 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         );
         let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon",
                          "attempt": {"token": token, "credential_vault": true}});
-        let ran = session_turns(false, true, &[("m4", json!({}), agy)]).await;
+        let ran = session_turns(
+            false,
+            true,
+            &[("m4", json!({}), agy.clone()), ("m4", json!({}), agy)],
+        )
+        .await;
         let _ = std::fs::remove_dir_all(&folder);
         assert_eq!(
             ran.completions[0]["outcome"], "completed",
             "{}",
             ran.completions[0]
         );
+        assert_ne!(ran.completions[1]["outcome"], "completed");
         let said = serde_json::to_string(&ran.events).unwrap();
         assert!(said.contains("Done."), "{said}");
-        assert!(!said.contains("synthetic-refreshed-mid-turn"), "{said}");
-        assert!(!ran.completions[0]
-            .to_string()
-            .contains("synthetic-refreshed-mid-turn"));
+        assert!(said.contains("refresh went wrong with"), "{said}");
+        assert!(ran.stderr.iter().any(|t| t.contains("refresh went wrong with")), "{:?}", ran.stderr);
+        for kept in [said, ran.stderr.join("\n"), serde_json::to_string(&ran.completions).unwrap()] {
+            assert!(!kept.contains("synthetic-refreshed-mid-turn"), "{kept}");
+        }
     }
 
     #[tokio::test]

@@ -655,13 +655,26 @@ fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, Stri
 /// The status check's own answer: Some(signed in, detail), or None when it gave none (it could not run, timed
 /// out or said something unreadable, or this runtime has no check).
 fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)> {
+    sign_in_status_within(runtime, exe, env, Duration::MAX)
+}
+
+/// `sign_in_status`, given no longer than `most` (what is left of a sign-in's own time): None when that is too short.
+fn sign_in_status_within(
+    runtime: &str,
+    exe: &str,
+    env: &Env,
+    most: Duration,
+) -> Option<(bool, String)> {
     let run = |args: &[&str], secs: u64| -> Option<(bool, String)> {
+        if most.is_zero() {
+            return None;
+        }
         let mut c = model_command(exe, args, env);
         c.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = c.spawn().ok()?;
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let deadline = Instant::now() + Duration::from_secs(secs).min(most);
         loop {
             if let Ok(Some(_)) = child.try_wait() {
                 let out = child.wait_with_output().ok()?;
@@ -1523,11 +1536,26 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let value = match &switch {
                 _ if !finished && !stopped_after_token => None,
                 Some((_, side)) if full => full_login(side, &real_env),
-                // A sign-in a turn reads from its own home only counts once the CLI says it is signed in there.
-                Some(_) if plan_home.is_some() && !signed_in(&s.runtime, &exe, &env, false).0 => {
+                // A sign-in a turn reads from its own home only counts once the CLI says it is signed in there,
+                // asked within what is left of the sign-in's time.
+                Some(_)
+                    if plan_home.is_some()
+                        && !matches!(
+                            sign_in_status_within(
+                                &s.runtime,
+                                &exe,
+                                &env,
+                                deadline.saturating_duration_since(Instant::now())
+                            ),
+                            Some((true, _))
+                        ) =>
+                {
                     None
                 }
-                Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
+                // A plain file, read bounded and never through a link (a pipe or link there stalls nothing).
+                Some((_, side)) => {
+                    crate::model_subscriptions::read_codex_auth(&side.join(&login.connect_file))
+                }
                 None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
             };
             match value {
@@ -2972,7 +3000,7 @@ test -z "$DISPLAY$WAYLAND_DISPLAY$GEMINI_API_KEY$AGY_ADC_AUTH" || exit 4
 case "$GEMINI_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
 case "$*" in
   "acp --login --gemini-dir $GEMINI_HOME --app-data-dir antigravity-cli")
-    echo 'Open this link: https://accounts.google.com/o/oauth2/auth?redirect_uri=https%3A%2F%2Fantigravity.google%2Foauth-callback&state=s&response_type=code'
+    echo 'Open this link: https://accounts.acme.example/o/oauth2/auth?redirect_uri=https%3A%2F%2Fsignin.acme.example%2Foauth-callback&state=s&response_type=code'
     echo 'Then paste the authorization code, or the full URL:'
     read code
     test "$code" = "4/pasted-code" || exit 6
@@ -3054,7 +3082,7 @@ esac
                     .lock()
                     .unwrap()
                     .url
-                    .starts_with("https://accounts.google.com/o/oauth2/auth")
+                    .starts_with("https://accounts.acme.example/o/oauth2/auth")
             });
             login.submit("4/pasted-code");
             running.join().unwrap();

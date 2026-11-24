@@ -301,6 +301,11 @@ def test_an_agy_older_than_tico_runs_neither_signs_a_plan_in_nor_runs_its_turns(
         "Update Antigravity on Ana Mac to 1.5.15 or later.",
     )
     assert chosen(api) == []
+    # Another of the owner's computers, with no agy, is where it installs instead.
+    spare = computer(api, "Spare Mac", enrolled="2026-11-03T00:00:00Z")
+    asked = connect(api)
+    assert (asked["waking"], asked["message"]) == (True, "Installing Antigravity on Spare Mac.")
+    assert chosen(api) == [(spare["runner_id"], "antigravity", 1)]
     new = computer(api, "New Mac", installed=True, enrolled="2026-11-02T00:00:00Z")
     login = connect(api)
     assert login["runner_id"] == new["runner_id"]
