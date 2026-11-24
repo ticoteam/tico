@@ -1052,7 +1052,10 @@ mod tests {
             "Zz9_Yy8-Xx".repeat(6)
         );
         let masked = scrub_credentials(&google, &[]);
-        assert!(!masked.contains("a0B1") && !masked.contains("Zz9_"), "{masked}");
+        assert!(
+            !masked.contains("a0B1") && !masked.contains("Zz9_"),
+            "{masked}"
+        );
         let failure = git_failure(&format!("fatal: {stateless} refused"), &[], 300);
         assert!(
             !failure.contains("eyJ") && !failure.contains("S1g-n"),
