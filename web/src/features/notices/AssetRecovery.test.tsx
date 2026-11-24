@@ -272,6 +272,25 @@ describe('Asset recovery @s1197', () => {
     expect(go.reload).not.toHaveBeenCalled();
   });
 
+  it('keeps the card, not a reload, for a file picked while the server was being asked', async () => {
+    const go = page();
+    let answer = (_: boolean) => {};
+    vi.mocked(signedIn).mockReturnValue(new Promise((done) => (answer = done)));
+    recover();
+    const view = (file: boolean) => (
+      <>
+        {file && <button type="button" data-unsent="">plan.pdf</button>}
+        <AssetRecovery />
+      </>
+    );
+    const { rerender } = render(view(false));
+    fail();
+    rerender(view(true));
+    answer(true);
+    await card();
+    expect(go.reload).not.toHaveBeenCalled();
+  });
+
   it('reloads a session that ended, so the server sends it to sign-in, and never shows the card', async () => {
     const real = await vi.importActual<typeof Queries>('./queries');
     vi.mocked(signedIn).mockImplementation(real.signedIn);

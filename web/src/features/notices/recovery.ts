@@ -69,14 +69,15 @@ export function startRecovery(router?: AnyRouter): () => void {
       }
     if (failed || asking || Date.now() < leavingUntil || !isAssetFailure(e)) return;
     asking = true;
-    // decided now: by the answer, the composer holding a picked file may be gone with its page
+    // decided now (by the answer, the composer holding a picked file may be gone with its page) and again then (a call
+    // or a file may have started meanwhile)
     const keep = stay();
     void signedIn().then((answer) => {
       asking = false;
       // gone, or a full load the person started meanwhile
       if (!on || Date.now() < leavingUntil) return;
       if (answer === false) leave(() => location.reload());
-      else if (answer === null || keep || !reloadOnce()) setFailed(true);
+      else if (answer === null || keep || stay() || !reloadOnce()) setFailed(true);
     });
   };
   // A file's load error does not bubble: caught on the way down (capture).
