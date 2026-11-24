@@ -263,6 +263,7 @@ def parse_machine(value):
         "cost_month_usd": float(_number(value.get("cost_month_usd") or 0)),
         "starts_month": starts,
         "last_error": _text(value.get("last_error"), 200) or "",
+        "managed": value.get("managed") is True,
         **pending,
     }
 
@@ -1830,13 +1831,13 @@ def burst_managed(c, runner_id):
     return bool(current and burst_key(current["bot"]) and current["burst_managed"])
 
 
-def burst_work(c, runner_id):
+def burst_work(c, runner_id, *, include_settled=False):
     return (
         runner_id
         and c.execute(
             "SELECT 1 FROM attempts WHERE runner_id=? AND state IN ('leased','running') "
-            "UNION ALL SELECT 1 FROM burst_guests WHERE runner_id=? LIMIT 1",
-            (runner_id, runner_id),
+            "UNION ALL SELECT 1 FROM burst_guests WHERE runner_id=? AND (? OR return_pending<>'settled') LIMIT 1",
+            (runner_id, runner_id, include_settled),
         ).fetchone()
     )
 
@@ -2129,11 +2130,7 @@ class Manager:
             running = [
                 worker
                 for worker in workers
-                if worker["state"] == "running"
-                and worker["drain_started_at"] is None
-                and worker["burst_managed"]
-                and worker["ttl_s"]
-                and burst_lease_supported(c, worker["runner_id"])
+                if worker["state"] == "running" and worker["drain_started_at"] is None and worker["burst_managed"]
             ]
             idle = {
                 worker["bot"]: None if burst_work(c, worker["runner_id"]) else burst_idle_since(c, worker, at)
@@ -2233,7 +2230,7 @@ class Manager:
                     or (
                         worker["wake_key"] == "burst-job:" + job["id"]
                         and at < (worker["woke_at"] or 0) + CREATE_HOLD
-                        and not burst_work(c, worker["runner_id"])
+                        and not burst_work(c, worker["runner_id"], include_settled=True)
                     )
                 )
             ):
@@ -2251,7 +2248,7 @@ class Manager:
                 and w["machine_size"] == BURST_SIZE
                 and w["runner_id"]
                 and burst_lease_supported(c, w["runner_id"])
-                and not burst_work(c, w["runner_id"])
+                and not burst_work(c, w["runner_id"], include_settled=True)
                 and not w["deleting"]
                 and (w["next_try_at"] or 0) <= at
                 and (listed := inventory.get(w["bot"])) is not None
@@ -2401,7 +2398,9 @@ class Manager:
                     or ((current["state"] in DEAD or current["deleting"]) and machine["id"] != current["machine_id"])
                 ):
                     if current["machine_id"] != machine["id"]:
-                        if current["burst_managed"] and current["create_asked_at"] is None:
+                        if current["burst_managed"] and (
+                            current["create_asked_at"] is None or machine.get("managed") is not True
+                        ):
                             continue
                         self.adopt(c, current, machine, at)
                         continue
