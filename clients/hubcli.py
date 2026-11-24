@@ -146,8 +146,10 @@ def task_problems(actor, owner, title, body, pipeline=None):
 def readers_of(args):
     """`--share-with` and `--reader` name one list: either sets it, and both naming different people is refused, as
     the API refuses `readers` and `shared_with` that differ."""
+    from clients.commands.tasks import same_people
+
     readers, shared = getattr(args, "readers", None), getattr(args, "shared_with", None)
-    if readers is not None and shared is not None and sorted(readers) != sorted(shared):
+    if not same_people(readers, shared):
         raise CliError("--share-with and --reader name one list, and these differ: give one")
     return list(readers if readers is not None else shared or [])
 
@@ -156,7 +158,9 @@ def private_readers_line(args, body):
     """A dry run into a pipeline prints first, as the create does, who else reads the task if it is private
     (backend/private_readers.py). Only the server knows whether it will be private (a private parent, a bot's default)
     and who holds each stage, so this one read asks its dry run; it files nothing. A notice only: when the server
-    cannot be asked, the local answer stands."""
+    cannot be asked, the local answer stands. Conflicting --reader and --share-with are refused first, pipeline or
+    not, as the create would refuse them."""
+    readers = readers_of(args)
     pipeline = getattr(args, "pipeline", None)
     if not pipeline:
         return
@@ -169,7 +173,7 @@ def private_readers_line(args, body):
         "pipeline": pipeline,
         "private": True if args.private else None,
         "parent": getattr(args, "parent", None),
-        "readers": readers_of(args) or None,
+        "readers": readers or None,
     }
     try:
         client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), retries=0)

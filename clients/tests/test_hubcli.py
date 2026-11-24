@@ -1338,8 +1338,11 @@ def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
 
     task_create(Api(), {"owner": "human:ben", "title": "Draft the offer letter", "shared_with": ["ben"]})
     assert calls[-1][2]["readers"] == ["ben"] and "shared_with" not in calls[-1][2], calls
-    task_create(Api(), {"owner": "human:ben", "title": "Draft it", "shared_with": ["ben"], "readers": ["ben"]})
-    assert calls[-1][2]["readers"] == ["ben"], calls
+    # The same people, trimmed and in any order, agree, and `readers` goes as it was given, order included.
+    task_create(
+        Api(), {"owner": "human:ben", "title": "Draft it", "shared_with": ["cara", "ben"], "readers": [" ben ", "cara"]}
+    )
+    assert calls[-1][2]["readers"] == [" ben ", "cara"], calls
     sent = len(calls)
     # An empty list is a list, not "left out": against a non-empty other name it is a conflict, never a grant.
     for readers, shared in ((["cara"], ["ben"]), (["ben"], []), ([], ["ben"])):

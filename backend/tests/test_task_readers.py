@@ -401,6 +401,9 @@ def test_shared_with_is_the_reader_list_by_its_newer_name(api):
     assert who_sees(api, made["id"])["shared_with"] == ["human:cara"]
     r = change(api, made["id"], {"shared_with": []}, method="put")
     assert r.status_code == 200 and r.json()["shared_with"] == [], r.text
+    # The spec says what is taken: a list, never null.
+    spec = get(api, "openapi.json")["components"]["schemas"]["TaskFile"]["properties"]["shared_with"]
+    assert spec["type"] == "array" and "anyOf" not in spec, spec
 
 
 def test_a_bot_adds_anyone_to_a_task_it_owns_others_within_its_reach_and_never_a_group(api):

@@ -40,6 +40,16 @@ def task_context(api, args):
 
 
 # ----------------------------------------------------------------------------- tasks
+
+
+def same_people(readers, shared):
+    """Whether `readers` and `shared_with` (either may be left out) name the same people, in any order and with spaces
+    trimmed, as the server compares them (backend/models.py one_reader_list)."""
+    if readers is None or shared is None:
+        return True
+    return sorted(str(x).strip() for x in readers) == sorted(str(x).strip() for x in shared)
+
+
 @tool(
     "tico_task_create",
     "File a task for a bot or a person. A task for a person is a decision or a review: the title says what you "
@@ -189,7 +199,7 @@ def task_create(api, args):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
     readers, shared = args.get("readers"), args.get("shared_with")
-    if readers is not None and shared is not None and sorted(readers) != sorted(shared):
+    if not same_people(readers, shared):
         raise ValueError("shared_with and readers are one list, and these differ: give one")
     if chosen := (readers if readers is not None else shared):
         # Sent as `readers`, the name every server takes (backend/models.py one_reader_list).

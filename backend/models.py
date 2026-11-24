@@ -171,13 +171,11 @@ ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
 def one_reader_list(model: Any) -> Any:
     """`shared_with` is `readers` by the name the task read answers with, checked once both are validated: either name
     sets the list; both, naming different people, is refused; both naming the same people keeps `readers` as sent.
-    A null never clears it (only [] does). `shared_with` is never dumped, so an idempotency hash reads the same
-    whichever name was sent."""
+    Whether it was sent is `model_fields_set`: a null is refused as a list (only [] clears). `shared_with` is never
+    dumped, so an idempotency hash reads the same whichever name was sent."""
     sent = model.model_fields_set
     if "shared_with" not in sent:
         return model
-    if model.shared_with is None:
-        raise ValueError("shared_with is a list: [] clears it")
     if "readers" in sent:
         if sorted(model.readers) != sorted(model.shared_with):
             raise ValueError("readers and shared_with are one list, and these differ: send one of them")
@@ -238,7 +236,7 @@ class TaskCreate(Contract):
     # Who else sees a private task: people, bots and group:<id>s (hubdb.set_task_readers). `shared_with` is its newer
     # name (one_reader_list).
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
-    shared_with: list[ReaderName] | None = Field(default=None, exclude=True, max_length=50)
+    shared_with: list[ReaderName] = Field(default_factory=list, exclude=True, max_length=50)
     # The filer follows it too (backend/task_followers.py); its owner follows anyway.
     follow: StrictBool = False
     # With a model, the bot's own check session; review alone is a normal sub-task.
@@ -759,7 +757,7 @@ class TaskReaderList(Contract):
 
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
     # `readers` by its newer name (one_reader_list); never dumped.
-    shared_with: list[ReaderName] | None = Field(default=None, exclude=True, max_length=50)
+    shared_with: list[ReaderName] = Field(default_factory=list, exclude=True, max_length=50)
 
     @model_validator(mode="after")
     def same_readers(self):
