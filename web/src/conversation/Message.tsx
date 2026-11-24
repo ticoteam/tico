@@ -62,7 +62,7 @@ const VIA: Record<string, string> = { assistant: 'Assistant', botops: 'Agent Ops
 export function viaOf(m: Pick<ChatMessage, 'refs'>): string | null {
   const via = m.refs?.via;
   if (typeof via !== 'string' || !via) return null;
-  return VIA[via] ?? (via.startsWith('automation:') ? 'automation' : null);
+  return Object.hasOwn(VIA, via) ? VIA[via]! : via.startsWith('automation:') ? 'automation' : null;
 }
 
 /* ---------------------------------------------------------------- parts inside a message */

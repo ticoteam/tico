@@ -19,7 +19,7 @@ import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
 import { Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
-import { Face, LiveRow, Message, viaOf, whoOf } from './Message';
+import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
@@ -173,7 +173,7 @@ function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, i
     if (!m.deleted && !(m.body ?? '').trim() && !m.refs?.attachments?.length && !m.refs?.action) continue;
     // a task's comments are a log: each has its author row (where a phone's Reply sits), never run on from the one above;
     // one written for the person by someone else (refs.via) starts its own run, so its line says who wrote it
-    const cont = !nested && !!last && last.sender_id === m.sender_id && viaOf(last) === viaOf(m);
+    const cont = !nested && !!last && last.sender_id === m.sender_id && last.refs?.via === m.refs?.via;
     out.push({ k: 'msg', key: m.id, m, cont });
     last = m;
   }

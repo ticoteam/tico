@@ -252,6 +252,8 @@ describe('Your own messages', () => {
       msg(2, ME, 'Great'),
       msg(3, ME, 'Thanks'),
       msg(4, ME, 'Filed the bug', { refs: { via: 'assistant' } }),
+      msg(5, ME, 'Weekly report', { refs: { via: 'automation:a1' } }),
+      msg(6, ME, 'Daily report', { refs: { via: 'automation:a2' } }),
     ]);
     const mine = await screen.findByText('Great');
     const first = mine.closest('.msg')!;
@@ -261,7 +263,9 @@ describe('Your own messages', () => {
     const done = screen.getByText('Filed the bug').closest('.msg') as HTMLElement;
     expect(within(done).getByText('You')).toBeTruthy();
     expect(within(done).getByText('via Assistant')).toBeTruthy();
-    expect(screen.getAllByText(/^via /)).toHaveLength(1);
+    // two automations are two writers: each names itself
+    expect(within(screen.getByText('Daily report').closest('.msg') as HTMLElement).getByText('via automation')).toBeTruthy();
+    expect(screen.getAllByText(/^via /)).toHaveLength(3);
   });
 });
 
