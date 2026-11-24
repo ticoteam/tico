@@ -451,7 +451,7 @@ def import_drafts(c, who, saved, makers, made, goals):
         bot = bots.get(row["bot"])
         if not bot:
             continue
-        word = KIND_WORDS.get(row["kind"], row["kind"])
+        word = str(KIND_WORDS.get(row["kind"], row["kind"]))
         title, body = row["title"], row["body"].strip()  # one line, masked already (plan)
         waiting = row["status"] == "waiting"
         task = H.task_create(
