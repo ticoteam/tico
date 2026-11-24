@@ -1,12 +1,14 @@
 import * as z from 'zod/mini';
 import { defineAction, run } from '@/actions';
 import { sendMessage, ticoRoomQuery } from '@/conversation';
-import { meQuery, queryClient } from '@/data';
+import { configQuery, meQuery, queryClient } from '@/data';
+import { needsSetup } from '@/features/start/routing';
 import { fromPage, pageAt } from '@/shell/pageOwner';
 import { ticoPowerQuery, turnOnTico } from './queries';
 
 /* Handing words to Tico: search's last row, and anything else that asks Tico on the person's behalf. Tico does not
-   ask itself, so it is kept from Tico. While Tico is off, its sheet opens on the off state and nothing is sent. */
+   ask itself, so it is kept from Tico. While Tico is off, its sheet opens on the off state and nothing is sent; while
+   the owner's first run is owed (no plan yet), it opens on that and nothing is sent either. */
 export const ask = defineAction({
   id: 'tico.ask',
   title: 'Ask Tico',
@@ -15,6 +17,7 @@ export const ask = defineAction({
   input: z.strictObject({ text: z.string().check(z.minLength(1), z.maxLength(4000)) }),
   run: async (ctx, { text }) => {
     await run('shell.fold', { sheet: 'tico', folded: false }, { via: ctx.via });
+    if (needsSetup(await queryClient.ensureQueryData(configQuery))) throw Object.assign(new Error('Finish setup first'), { code: 'setup_owed' });
     const power = await queryClient.ensureQueryData(ticoPowerQuery);
     if (!power.available) throw Object.assign(new Error('Tico is off'), { code: 'assistant_off' });
     const [room, me] = await Promise.all([queryClient.ensureQueryData(ticoRoomQuery), queryClient.ensureQueryData(meQuery)]);

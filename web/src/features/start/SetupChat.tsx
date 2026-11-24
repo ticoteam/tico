@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { Suspense, lazy, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { reasonIn, run, useAction } from '@/actions';
+import { reasonIn, useAction } from '@/actions';
 import { Message, MessageBones, type ChatMessage } from '@/conversation';
 import { configQuery, meQuery } from '@/data';
 import { desktopApp, inOldDesktopApp } from '@/desktop';
@@ -37,7 +37,7 @@ const KEYS: readonly { value: KeyKind; label: string }[] = [
   { value: 'openai_key', label: 'OpenAI' },
 ];
 
-type Reach = 'desktop' | 'phone' | 'email' | 'later';
+type Reach = 'desktop' | 'phone' | 'later';
 
 interface Line {
   id: string;
@@ -312,30 +312,22 @@ function InviteCard({ people, onDone }: { people: FilePerson[]; onDone: (said: '
   );
 }
 
-/** Where Tico reaches the person, each doing the real thing: the desktop app's download (left out inside it), the
-    app on their phone's home screen, or the daily email summary. */
+/** Where Tico reaches the person, each doing the real thing: the desktop app's download (left out inside it), or the
+    app on their phone's home screen. (Email is Settings › You: what it sends depends on the install.) */
 function TouchChips({ onChoose }: { onChoose: (chosen: Chosen) => void }) {
   const inApp = !!desktopApp() || inOldDesktopApp();
   const system = inApp ? null : systemOf(navigator);
   const download = useQuery({ ...desktopDownloadQuery(system ?? 'mac'), enabled: !!system });
   const href = downloadHref(download.data);
   const direct = href !== downloadHref(undefined);
-  // One choice: a second press, or one while the email switch is saving, would go live twice.
+  // One choice: a second press would go live twice.
   const [busy, setBusy] = useState(false);
   const taken = useRef(false);
-  const take = () => {
-    if (taken.current) return false;
+  const choose = (chosen: Chosen) => {
+    if (taken.current) return;
     taken.current = true;
     setBusy(true);
-    return true;
-  };
-  const choose = (chosen: Chosen) => {
-    if (take()) onChoose(chosen);
-  };
-  const email = async () => {
-    if (!take()) return;
-    const r = await run('settings.notify', { field: 'email_digest', on: true }, { via: 'click' });
-    onChoose({ how: 'email', said: 'Email digest', text: r.ok ? 'Done. I’ll email you a daily summary.' : 'That did not go through. Turn it on in Settings › You.' });
+    onChoose(chosen);
   };
   return (
     <div className="qchips setup-chips">
@@ -355,10 +347,6 @@ function TouchChips({ onChoose }: { onChoose: (chosen: Chosen) => void }) {
       <button type="button" className="qchip" disabled={busy} onClick={() => choose({ how: 'phone', said: 'Phone', text: `Open ${location.host} on your phone and add it to your home screen.` })}>
         <Icon name="sms" />
         Phone
-      </button>
-      <button type="button" className="qchip" disabled={busy} onClick={() => void email()}>
-        <Icon name="mail" />
-        Email digest
       </button>
       <button type="button" className="qchip" disabled={busy} onClick={() => choose({ how: 'later', said: 'Not now', text: '' })}>
         Not now

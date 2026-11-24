@@ -58,12 +58,6 @@ export interface SetupNames {
   team_domain: string;
   website: string;
 }
-export interface SetupJob {
-  key: string;
-  label: string;
-  seat: string;
-  team: string;
-}
 export interface SetupTeam {
   team: string;
   on: boolean;
@@ -96,7 +90,6 @@ export interface SetupRecord {
   live_owed?: boolean;
   company_import?: FileImport | null;
   default_chart?: SetupTeam[];
-  first_jobs?: { choices: SetupJob[]; picked: string };
 }
 
 const SETUP = ['setup'] as const;
@@ -125,26 +118,27 @@ export async function inviteFromFile(person: FilePerson): Promise<void> {
 
 /**
  * The owner's finish. A company a setup file made already has its team: the server only marks it live, and its bots
- * are pinged for the setup questions they still have. A company set up here gets the chart setup offers first (the
- * first job's seat live, the rest Recruiting); Tico then sets the rest up with the owner in its chat, so no bot is
- * pinged. Names, setup state and Tico change for the whole app, so they are read again.
+ * are pinged for the setup questions they still have. A company set up here gets the chart setup offers first (every
+ * seat Recruiting) and the owner's "Set up my company." to Tico in the same write; Tico then sets the rest up with
+ * the owner in its chat, so no bot is pinged. Names, setup state and Tico change for the whole app, so they are read again.
  */
 export async function finishSetup(): Promise<{ fromFile: boolean }> {
   const record = await queryClient.fetchQuery(setupQuery);
   const fromFile = !!record.company_import;
   // A finish whose answer was lost already completed it: the starting team is saved once.
   if (!record.completed) {
-    const job = record.first_jobs?.picked ?? '';
-    const team = record.first_jobs?.choices.find((c) => c.key === job)?.team;
-    const teams_off = (record.default_chart ?? []).filter((t) => !t.on && !t.locked && t.team !== team).map((t) => t.team);
-    const next: SetupRecord = { ...record, answers: { ...record.answers, departments: [], briefings: {}, first_job: job, teams_off }, selected: {} };
+    // No seat starts on a guess: Tico asks what winning looks like first, then hires for it (its set-up-the-company skill).
+    const teams_off = (record.default_chart ?? []).filter((t) => !t.on && !t.locked).map((t) => t.team);
+    const next: SetupRecord = { ...record, answers: { ...record.answers, departments: [], briefings: {}, first_job: 'none', teams_off }, selected: {} };
     await write<SetupRecord>({
       key: SETUP,
       optimistic: () => next,
       send: (idem) => api.put<SetupRecord>('/api/v2/setup', draftOf(next), { idempotencyKey: idem }),
     });
   }
-  await api.post('/api/v2/setup/complete', {});
+  // One set up here hands the rest to Tico in the same write (backend/onboarding.py `complete`, hand_off): a reload or a
+  // lost answer cannot leave it live with no one asked.
+  await api.post('/api/v2/setup/complete', fromFile ? {} : { hand_off: true });
   // A ping that fails leaves the bots to ask on their own.
   if (fromFile) await api.post('/api/v2/flow/ping', { scope: 'setup' }).catch(() => undefined);
   await Promise.all([

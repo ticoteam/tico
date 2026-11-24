@@ -308,9 +308,10 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
     }
   });
   const onFold = useEffectEvent((id: SheetId, folded?: boolean) => {
+    // the phone's cards, as drawn (the sheets may be laid out behind them): Tico's card comes up or goes down instead
+    if (cards) return foldPhoneCard(id, folded);
     const cur = find(id);
-    // the phone's cards: no sheets, and Tico's card comes up or goes down instead
-    if (!cur) return foldPhoneCard(id, folded);
+    if (!cur) return;
     const shut = cur.state !== 'open';
     if (folded === undefined || folded !== shut) onPress(id);
   });

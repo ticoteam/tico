@@ -835,7 +835,8 @@ def default_chart(onboarding, c, home, every_team=False, first_job=None):
     on import.
 
     With a first job picked (`answers.first_job`, or `first_job` given), only that job's seat is live and its team is
-    never off; the built-ins' seats are as before. With none (a record from before the Your team step asked), every
+    never off; the built-ins' seats are as before. With "none" (the app's first run: Tico hires after the owner says
+    what winning looks like), no seat is live. With none picked (a record from before the Your team step asked), every
     live seat of the chart formula is live."""
     from .company_file import chart_formula as F
 
@@ -849,7 +850,8 @@ def default_chart(onboarding, c, home, every_team=False, first_job=None):
         if row["template"] in cards
         and not (no_software and (row["department"] in SOFTWARE_DEPARTMENTS or row["team"] in SOFTWARE_TEAMS))
     ]
-    picked = FIRST_JOB_SEATS.get((record["answers"].get("first_job") or "") if first_job is None else first_job)
+    job = (record["answers"].get("first_job") or "") if first_job is None else first_job
+    picked = FIRST_JOB_SEATS.get(job)
     if picked not in {row["id"] for row in rows}:
         picked = None
     off = set() if every_team else set(record["answers"].get("teams_off") or []) - locked_teams(rows, cards)
@@ -869,7 +871,7 @@ def default_chart(onboarding, c, home, every_team=False, first_job=None):
             "reports_to": row["reports_to"] if row["reports_to"] in keys else home,
             "waits_on": None,
             "team": row["team"],
-            "live": bool(row["live"]) and not built_in and (picked is None or row["id"] == picked),
+            "live": bool(row["live"]) and not built_in and job != "none" and (picked is None or row["id"] == picked),
             **({"fills": built_in} if built_in else {}),
         }
     return seats

@@ -13,10 +13,14 @@ in the chat:
 3. **Invite.** Only for a setup file that named people with an email: "Invite Priya and Leo?", one tap, through the
    same invite as Settings > People (`POST /api/v2/setup/company/people/{key}/invite`).
 4. **Stay in touch.** Desktop app (its download for this computer; left out inside the desktop app), Phone (open Tico
-   there and add it to the home screen, [push](push.md)), Email digest (the person's daily email summary), or Not now.
+   there and add it to the home screen, [push](push.md)), or Not now. Email is in Settings › You: what it sends depends on
+   the install ([the thread digest](thread-helper.md)).
 5. **Live.** A company a setup file made lands on Tasks, Needs you on top, and its bots are pinged for what they still
-   need ([Setup in Flow](#setup-in-flow)). A company started in the app gets its starting team (the first job's seat live, the
-   rest Recruiting, below), and Tico takes the setup over in its chat, winning first: what winning looks like, the company
+   need ([Setup in Flow](#setup-in-flow)). A company started in the app gets its starting chart with no seat live
+   (`answers.first_job` `none`: every role Recruiting, below), and the finish itself (`POST /api/v2/setup/complete` with
+   `hand_off`) owes the owner's "Set up my company." to Tico, said in their chat once the Assistant runs (at once, or when
+   the first computer enrolls; `hand_off_owed` until then), so a reload or a lost answer never loses it. Tico takes the
+   setup over in its chat, winning first: what winning looks like, the company
    and its website, the strategy, the chart, each owner's goal under the company's, then their first drafts in Flow, and
    the owner's feedback becomes rules (`templates/catalog/assistant/skills/set-up-the-company/`).
 
@@ -30,7 +34,8 @@ first team and get the most from it, read the [setup guide](onboarding-guide.md)
 
 Nobody else sees setup: anyone but the owner lands on Tasks. Setup is owed while `GET /api/v2/config` says
 `onboarding_needed`: until the owner finishes, for a company a setup file made too (`live_owed` on the setup record, set by
-the import and cleared by the owner's finish, which then lays nothing out again). The pages stay usable beside it. Once it
+the import and cleared by the owner's finish, which then lays nothing out again, however often it is sent). While it is
+owed, nothing asks Tico (Search's Ask Tico opens setup instead). The pages stay usable beside it. Once it
 is done, **Set up** on the Company page asks Tico to set up the rest in its chat. GitHub is connected from Tools › GitHub.
 
 ### A company file
@@ -257,7 +262,9 @@ second). It reaches no computer.
 - With nothing picked and a first job saved (`answers.first_job`), only that job's seat is live: the company starts with
   the built-ins and one bot, and every other seat of the default chart is a Recruiting seat with its reporting line. The
   job's team is made even if it is in `answers.teams_off`. A record with no first job (one saved before the Your team
-  step asked) keeps every live seat of the chart. A company file and the team builder keep their own live seats.
+  step asked) keeps every live seat of the chart. `none` (the app's first run) makes no seat live: Tico hires once the
+  owner has said what winning looks like. A company file and the team builder keep their own live seats.
+- Finishing a company a setup file made only marks it live; finishing it again returns the same record.
 
 ### A bot's stages
 

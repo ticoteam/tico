@@ -36,7 +36,6 @@ const FRESH: SetupRecord = {
     { team: 'Growth', on: true },
     { team: 'Product', on: false },
   ],
-  first_jobs: { choices: [{ key: 'grow', label: 'Get more customers', seat: 'growth-manager', team: 'Growth' }], picked: 'grow' },
 };
 const PEOPLE = [
   { id: 'priya', name: 'Priya Shah', email: 'priya@acme.example' },
@@ -62,7 +61,6 @@ function serve(record: SetupRecord, subs: unknown = READY) {
     'POST /api/v2/setup/complete': { body: { ...record, completed: record.completed ?? 'now', live_owed: false, needed: false } },
     'PUT /api/v2/setup': { body: record },
     'POST /api/v2/flow/ping': { body: { pinged: [] } },
-    'POST /api/v2/humans/me': { body: {} },
     'GET /api/v2/assistant': { body: { available: true, bot: 'assistant', can_turn_on: false, state: 'active', room_id: 'room-1' } },
     'POST /api/v2/assistant/messages': { body: { id: 'm1' } },
   };
@@ -137,12 +135,13 @@ describe('Setup in Tico’s chat, for a company a setup file made', () => {
     expect(sent('POST', '/api/v2/setup/company/people/leo/invite')).toHaveLength(1);
     expect(calls.some((c) => c.path.includes('/people/sam/'))).toBe(false);
 
-    fireEvent.click(await log().findByRole('button', { name: 'Email digest' }));
+    // no email chip: what the digest sends depends on the install (Settings › You has it)
+    expect(log().queryByRole('button', { name: /Email/ })).toBeNull();
+    fireEvent.click(await log().findByRole('button', { name: 'Phone' }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
-    expect(sent('POST', '/api/v2/humans/me')[0]!.body).toEqual({ email_digest: true });
     // the file made the team: going live lays nothing out, and its agents are asked for what they still need
     expect(sent('PUT', '/api/v2/setup')).toHaveLength(0);
-    expect(sent('POST', '/api/v2/setup/complete')).toHaveLength(1);
+    expect(sent('POST', '/api/v2/setup/complete')[0]!.body).toEqual({});
     expect(sent('POST', '/api/v2/flow/ping')[0]!.body).toEqual({ scope: 'setup' });
     expect(sent('POST', '/api/v2/assistant/messages')).toHaveLength(0);
     // what was said stays above Tico's chat, ending live
@@ -197,11 +196,13 @@ describe('Setup in Tico’s chat, for a company started here', () => {
     expect(log().queryByText(/Invite/)).toBeNull();
 
     fireEvent.click(await log().findByRole('button', { name: 'Not now' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/assistant/messages')).toHaveLength(1));
-    expect(sent('POST', '/api/v2/assistant/messages')[0]!.body).toMatchObject({ text: 'Set up my company.' });
-    // the starting team: the first job setup offers, the rest off; Tico asks the rest, so no agent is pinged
-    expect(sent('PUT', '/api/v2/setup')[0]!.body).toMatchObject({ answers: { first_job: 'grow', teams_off: ['Product'] }, selected: {} });
-    expect(sent('POST', '/api/v2/setup/complete')).toHaveLength(1);
+    // the finish itself hands the setup to Tico (the server says it once Tico runs): nothing is sent from here that a
+    // reload could lose
+    await waitFor(() => expect(sent('POST', '/api/v2/setup/complete')).toHaveLength(1));
+    expect(sent('POST', '/api/v2/setup/complete')[0]!.body).toEqual({ hand_off: true });
+    expect(sent('POST', '/api/v2/assistant/messages')).toHaveLength(0);
+    // no seat starts on a guess: Tico asks what winning looks like, then hires; the chart's off teams stay off
+    expect(sent('PUT', '/api/v2/setup')[0]!.body).toMatchObject({ answers: { first_job: 'none', teams_off: ['Product'] }, selected: {} });
     expect(sent('POST', '/api/v2/flow/ping')).toHaveLength(0);
     expect(renderHook(() => useSetupTranscript()).result.current.some((m) => /You're live/.test(m.body ?? ''))).toBe(false);
   });
@@ -217,7 +218,9 @@ describe('Setup in Tico’s chat, for a company started here', () => {
     expect(renderHook(() => useSetupTranscript()).result.current).toEqual([]);
     answers['POST /api/v2/setup/complete'] = { body: { ...FRESH, completed: 'now', needed: false } };
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-    await waitFor(() => expect(sent('POST', '/api/v2/assistant/messages')).toHaveLength(1));
+    await waitFor(() => expect(sent('POST', '/api/v2/setup/complete')).toHaveLength(2));
+    expect(await screen.findByRole('log', { name: 'Setup with Tico' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 

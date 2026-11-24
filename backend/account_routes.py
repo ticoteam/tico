@@ -86,9 +86,9 @@ def register(app, auth, mutate, onboarding, owner_only, recruiter, settings, sto
         return recruiter.recruit(request.state.identity, body)
 
     @app.post("/api/v2/setup/complete")
-    def onboarding_complete(request: Request, body: M.Empty):
+    def onboarding_complete(request: Request, body: M.SetupComplete):
         who = request.state.identity
-        return mutate(request, body, lambda c: onboarding.complete(c, who))
+        return mutate(request, body, lambda c: onboarding.complete(c, who, hand_off=body.hand_off))
 
     @app.post("/api/v2/setup/company/preview")
     def onboarding_company_preview(request: Request, body: M.OnboardingCompanyFile):

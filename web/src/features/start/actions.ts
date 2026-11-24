@@ -90,8 +90,8 @@ export const invite = defineAction({
 });
 
 /* The owner's finish, from their press in the first run. A company a setup file made goes live and lands on Tasks;
-   one set up here gets its starting team, and Tico takes the setup over in its chat. Answers which: 'live',
-   'handed', or 'tico_off' when Tico could not be asked (its sheet then says why). */
+   one set up here gets its starting team, and Tico takes the setup over in its chat (the server asks it in the same
+   write). Answers which: 'live' or 'handed'. */
 export const finish = defineAction({
   id: 'setup.finish',
   title: 'Go live',
@@ -105,7 +105,7 @@ export const finish = defineAction({
       await router.navigate({ to: '/tasks' });
       return 'live';
     }
-    return (await askTico()) ? 'handed' : 'tico_off';
+    return 'handed';
   },
   did: () => 'Went live',
   target: () => ({ kind: 'page', id: '/tasks' }),

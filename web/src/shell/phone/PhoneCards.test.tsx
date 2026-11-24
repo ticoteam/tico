@@ -377,6 +377,11 @@ describe('phone: the frame', () => {
     expect(up()).toBe('tico');
     act(() => foldSheet('tico', true));
     expect(up()).not.toBe('tico');
+    // grown past 760 but inside the hysteresis: still the cards, so the fold is still the card's
+    width(780);
+    expect(document.querySelector('.phone')).toBeTruthy();
+    act(() => foldSheet('tico', false));
+    expect(up()).toBe('tico');
   });
 
   it('a task opened by its own address shows its head, its chat behind the Agent icon; no trail over it', async () => {

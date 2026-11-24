@@ -1,6 +1,6 @@
 ---
 name: set-up-the-company
-description: "Sets the company up with its owner in their chat, winning first: what winning looks like, the company and its website, the strategy, the chart, each owner's goal under the company's, their first drafts in Flow, and feedback that becomes rules. Use it when the owner says \"Set up my company.\" (the app sends it once their plan is connected) or asks to set the company up from the top."
+description: "Sets the company up with its owner in their chat, winning first: what winning looks like, the company and its website, the strategy, the chart, each owner's goal under the company's, their first drafts in Flow, and feedback that becomes rules. Use it when the owner says \"Set up my company.\" (the app's first run says it for them once their plan is connected) or asks to set the company up from the top."
 metadata:
   function: tico
 ---
@@ -28,7 +28,8 @@ ask what is written down.
 3. **The strategy.** When `tico strategy show` has the draft, say in two lines how the company wins (its summary and its
    bets) and that the Strategy Owner asks them to confirm it in Flow. A strategy draft or bet is never agreed in words.
 4. **The chart.** `tico team show`: name the two or three owners the winning goal needs first (a
-   growth goal: the Growth Manager and its channel owners). On their yes, Agent Ops hires them:
+   growth goal: the Growth Manager and its channel owners). A company the app set up starts with every seat Recruiting, so
+   nothing is hired before this. On their yes, Agent Ops hires them:
    `tico task create --owner botops --title "Hire the owners for <goal>" --message "<the seats, and the goal they serve>" --request-id turn`.
 5. **Goals that ladder up.** For each owner, one goal that serves the company goal, read back together in one
    `tico goal read-back` and saved on their yes. No owner acts before its goal is saved.
