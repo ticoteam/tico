@@ -150,8 +150,7 @@ one `SELECT` at a time, each caller seeing only what the JSON API would show it,
 **Your Mac's runner** — the Rust runner `tico-runner` (`runner-rs/`), with Python helpers in `runner_support/` for the side
 jobs, registered once with **Add computer** in **Settings → Computers** (`scripts/setup-runner.sh`, credential in
 `~/.config/tico/runner.json`). Three launchd jobs, installed and managed with `scripts/tico-computer`. Their plists name
-`runner`, which forwards to `runner_support/` (runner/__init__.py), so a computer moved back to an older release still
-starts them:
+`runner`, which forwards to `runner_support/` (runner/__init__.py):
 
 | Job | Command | What it does |
 |---|---|---|

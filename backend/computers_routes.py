@@ -70,7 +70,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 result["burst_lease"] = lease
         # No bot list: every runner the server accepts (0.6.0-rc.1 on) reads its bots from GET runners/assignments when a
         # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
-        # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
+        # Kept as an empty list for the 0.6.0 contract, which requires the field (contracts/runner/releases).
         result["assignments"] = []
         return result
 

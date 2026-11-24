@@ -147,7 +147,6 @@ def test_repeated_update_deferrals_show_the_blocked_cause_in_health_and_release_
 
     r = queue_work(api)
     report(api, r, "0.2.5", update={"state": "updating", "target": "0.3.0", "error": ""})
-    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
     reason = "the runner binary is not published yet"
     for _ in range(ru.MAX_DEFERRALS):
         outcome = ru.defer_update(tmp_path, "0.3.0", reason)
@@ -166,7 +165,6 @@ def test_repeated_update_deferrals_show_the_blocked_cause_in_health_and_release_
 def test_transient_update_retries_never_report_a_hold_or_blocked_in_health(api, tmp_path, monkeypatch):
     from runner_support import release_update as ru
 
-    monkeypatch.setenv("TICO_UPDATE_RETRY", "short")
     r = queue_work(api)
     for reason in ("active work", "checkout lock busy", "Git gate busy") * 3:
         outcome = ru.defer_update(tmp_path, "0.3.0", reason, transient=True)

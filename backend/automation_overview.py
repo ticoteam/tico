@@ -34,7 +34,6 @@ STATUSES = {
     "held": ("held",),
 }
 JOB_PREFIX = "tico.builtin.job."
-TASK_RULE = "tico.builtin.task_rule"  # a task rule's mirror, from before 0.6: retired (automations.sync_system_mirrors)
 SYSTEM_RUN = "sys_"  # a system job's run id, so it never meets an automation run's
 MAINT = "maintenance"  # the Maintenance row's id and the run's owner: Tico itself
 MAINT_RUN = "mnt_"  # a Maintenance run's id here

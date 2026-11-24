@@ -165,6 +165,7 @@ FAIL_FAST_UNDER = timedelta(minutes=40)
 rollout = _load("tico_rollout", ROLLOUT_PATH)
 release_notes = _load("tico_release_notes", NOTES_PATH)
 increment = _load("tico_release_increment", INCREMENT_PATH)
+release_floor = _load("tico_release_floor", ROOT / "backend/release_floor.py")
 
 
 def sleep(seconds):
@@ -199,22 +200,9 @@ def next_patch(tag):
     return "v%d.%d.%d" % (major, minor, patch + 1)
 
 
-# The release line main is on: the train cuts patches of it only. Main's first release of a new line (v0.6.0, the
-# Pipelines v3 engine) is tagged by hand; until then the train cuts nothing, so a 0.6 main never ships as a 0.5 patch.
+# The release line main is on: the train cuts patches of it only. Main's first release of a new line (v0.7.0) is tagged
+# by hand; until then the train cuts nothing, so a new line's main never ships as a patch of the old one.
 LINE = (0, 6)
-# 0.6 starts fresh (docs/updates.md, "From 0.5 to 0.6"): an install below it is never updated to it or past it here.
-FRESH_START = (0, 6, 0)
-FRESH_WORDS = "0.6 starts fresh: this company's tasks would not carry over"
-
-
-def crosses_fresh_start(running_version, target):
-    """Whether updating an install that runs `running_version` to `target` crosses FRESH_START. A version that does not
-    parse (an rc, say) is judged by its numbers."""
-    have, want = (re.match(r"^v?(\d+)\.(\d+)\.(\d+)", str(v or "").strip()) for v in (running_version, target))
-    if not have or not want:
-        return False
-    have, want = (tuple(int(p) for p in m.groups()) for m in (have, want))
-    return have < FRESH_START <= want
 
 
 def off_line(newest):
@@ -738,13 +726,17 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     `pulling`, then restarts the server; or its state, target or message is no longer what it said before the request):
     an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
+    why = release_floor.refused(want)
+    if why:
+        raise Fail("%s: not updated to %s: %s" % (name, version, why))
     snapshot = read_status(target)
     before = rollout.plain(snapshot.get("running"))
+    why = release_floor.refused(before)
+    if why:
+        raise Fail("%s runs %s, which the train does not update: %s" % (name, before, why))
     if before == want:
         note("%s already runs v%s" % (name, want))
         return
-    if crosses_fresh_start(before, want):
-        raise Fail("%s runs v%s, not updated to v%s: %s" % (name, before, want, FRESH_WORDS))
     try:
         rollout.call(target, "POST", UPDATE_PATH + "/check")  # 429 within a minute of another check is fine
         code, started = rollout.call(target, "POST", UPDATE_PATH, {"version": want})
@@ -1573,9 +1565,6 @@ def promote(gh, env):
         return
     if not parse_version(want) or not parse_version(have) or parse_version(want) <= parse_version(have):
         note("Promote: skipped, the canary's %s is not a stable release ahead of stable's %s" % (want, have))
-        return
-    if crosses_fresh_start(have, want):
-        note("Promote: skipped, stable runs %s and the canary %s: %s" % (have, want, FRESH_WORDS))
         return
     issue = find_approval(gh, want)
     approval, held, why = approval_state(gh, issue, env) if issue else ("", False, "")

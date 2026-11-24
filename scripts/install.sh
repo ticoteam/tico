@@ -456,6 +456,13 @@ resolve_version() {
   fi
   case $VERSION in v*) ;; *) VERSION=v$VERSION ;; esac
   printf '%s' "$VERSION" | grep -Eq "$VERSION_RE" || die 2 "Version must look like v1.2.3, not '$VERSION'."
+  # The floor (backend/release_floor.py): v0.6.0 or later by semver, checked before anything is downloaded. A prerelease
+  # counts below its release, so v0.6.0-rc.1 is refused and v0.6.259-rc.1 is not.
+  number=${VERSION#v}; number=${number%%-*}
+  major=${number%%.*}; minor=${number#*.}; patch=${minor#*.}; minor=${minor%%.*}
+  if [ "$major" -eq 0 ] && { [ "$minor" -lt 6 ] || { [ "$minor" -eq 6 ] && [ "$patch" -eq 0 ] && [ "$number" != "${VERSION#v}" ]; }; }; then
+    die 2 "$VERSION is older than v0.6.0, and no release before v0.6.0 is supported. Pass --version v0.6.0 or later."
+  fi
 }
 
 installed_version() { sed -n 's/^TICO_TAG=//p' "$DIR/.env" 2>/dev/null | head -n 1; }

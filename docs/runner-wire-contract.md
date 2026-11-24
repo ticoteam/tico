@@ -52,10 +52,9 @@ and receives an attach ticket. The exit redeems its one-use ticket with its runn
 `runners/me/browser-exit/tunnels/redeem` to receive the credential. The hub returns HTTP 409 with
 `model_exit_offline` for a missing link or `model_exit_stale` for a stale binding.
 
-A runner and a server work together when each is on the current or the previous minor release, in either direction:
-a 0.5 runner with a 0.6 server, and a 0.6 runner with a 0.5 server. The server's floor (`MIN_RUNNER_RELEASE`,
-0.6.0-rc.1) pauses any runner below it, so 0.5 runners are paused, not served, and the supported window starts at
-0.6.0-rc.1. `scripts/check_wire_contract.py` checks the current contract against each kept release copy in both
+A runner and a server work together when each is on the current or the previous minor release, in either direction.
+The server's floor (`MIN_RUNNER_RELEASE`, 0.6.0) pauses any runner below it (a 0.6.0 release candidate included), and
+it can still read the update feed to update; the supported window starts at 0.6.0. `scripts/check_wire_contract.py` checks the current contract against each kept release copy in both
 directions and fails on any break.
 
 ## Compatibility rules

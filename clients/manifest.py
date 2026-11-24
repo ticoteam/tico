@@ -7,7 +7,6 @@ Tico reads both for one release (the new name wins), and a template refresh rena
   tools:       <- access:                  inside the manifest (the bot's declared tools)
   bot-<slug>   <- emp-<slug>               the bot's repository folder on a computer (the server records it:
                                            folder_dir, since a rename keeps it)
-  groups.yaml  <- departments.yaml         the template catalog's groups
   group:       <- department:              a catalog card's group
 
 Repository folders are checked against the active Tico installation after resolving links.
@@ -20,7 +19,6 @@ from clients.repo_safety import outside_installation
 MANIFEST = "bot.yaml"
 OLD_MANIFEST = "employee.yaml"
 GROUPS_FILE = "groups.yaml"
-OLD_GROUPS_FILE = "departments.yaml"
 REPO_PREFIX = "bot-"  # new bot repositories
 OLD_REPO_PREFIX = "emp-"  # existing ones keep their names
 

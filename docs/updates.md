@@ -190,11 +190,7 @@ show the plain cause. A lock that is a link, a special file, or larger than 4 Ki
 The Rust runner also saves this wait when its own lock check or updater launch fails. Polls keep the saved
 retry time; they do not start a fresh wait on each check.
 
-The Rust follower sets `TICO_UPDATE_RETRY=short` for the updater, including under systemd. Older Python followers,
-including v0.3.45, ignore `not_before` and treat `waiting` and `busy` as due at once. For them alone, the updater
-uses `failed` and the six-hour wait they already honor, so they take work between tries instead of draining
-without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
-the shared update lock.
+The updater never installs, restarts or rolls back without the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico-computer install` once
 
@@ -442,13 +438,9 @@ not drive is not ready, with the reason on that bot; the other bots on the compu
 
 The Python runner is gone. `"engine": "python"` in `runner.json` and `TICO_RUNNER_ENGINE=python` are ignored. Python
 still runs the side jobs (Close calls, meeting importers), the catalog set-up and the update process, from
-`runner_support/`. A small `runner/` package forwards the two entry points saved things still start: `python -m runner ...`
-(launchd plists and systemd units, written before the move and by this release) and `python -m runner.cloud_machine boot`
-(cloud machine images). The other old `runner.<module>` paths were removed once no supported release predated the move, so
-an earlier release's process that still imports one when its checkout moves will fail. What is saved on a computer and started later
-keeps the old names on purpose: `scripts/tico-computer install` still writes `python -m runner --config <path> <job>` into the
-launchd plists and systemd units, and a cloud machine image still boots `python -m runner.cloud_machine boot`. So a
-computer moved back to a release from before the move (hosted staff can set an older target) still starts.
+`runner_support/`. A small `runner/` package forwards the two entry points saved things start: `python -m runner ...`
+(the launchd plists and systemd units `scripts/tico-computer install` writes, `python -m runner --config <path> <job>`)
+and `python -m runner.cloud_machine boot` (cloud machine images).
 
 ## A Docker runner
 
@@ -534,71 +526,20 @@ The computer does the refresh, so an existing company gets its first one when bo
 the release with this change (on Tico's hosting, the company's computers update with it). An older server keeps the
 files refreshed but cannot record them; the version is reported again after the computer's next start.
 
-## Coming from an older version
+## Releases before 0.6
 
-### From 0.5 to 0.6: every company starts over
+Tico supports v0.6.0 and later only. A 0.6 server opens only a database that Tico 0.6.0-rc.1 or later made, and
+refuses an older one without changing it: "This database was made by a Tico older than 0.6.0, or not by Tico. Tico 0.6
+does not carry tasks over: every company starts on a new database. Nothing was changed. Run the release that made it on
+this database, or set up a new company on 0.6."
 
-Tico 0.6 does not carry tasks over. Every company starts on a new database. A 0.6 server opens only a database that
-Tico 0.6.0-rc.1 or later made, and refuses a 0.5 database without changing it: "This database was made by a Tico older
-than 0.6.0, or not by Tico. Tico 0.6 does not carry tasks over: every company starts on a new database. Nothing was
-changed. Run the release that made it on this database, or set up a new company on 0.6."
-
-### Moving to Automations (one time)
-
-This release runs routines and wake rules as Automations. The first start of v0.5.0 moves them by itself, once: each
-routine, wake rule, inbox, hourly spend limit and low turn budget becomes its Automations equivalent, one write per
-object, and a restart part way goes on where it stopped. What cannot move stays as it was and is listed once in a task
-for the owner; otherwise the owner gets one notice. The old tables keep their rows. No setting is needed. A new install,
-or one with nothing to move, does nothing extra.
-
-1. Before updating, see what will move, with the new release's image (the old one has no report). It reads a copy and
-   never writes to the database, so it can run beside the running server:
-
-   ```
-   TICO_TAG=vX.Y.Z docker compose pull server
-   TICO_TAG=vX.Y.Z docker compose run --rm --no-deps --entrypoint python server \
-     -m backend.redesign_migration report --db /data/hub.sqlite
-   ```
-
-   (A checkout: the same command from the new release's code, `--db` set to `TICO_DB` from its `server.env`.) It says
-   what the next start moves, and lists every routine, rule and system job, what each becomes, and anything that stays,
-   with the reason.
-2. Update as usual.
-3. After the start, check the log for `redesign cutover ...: N moved to automations`, run the report again (every
-   object shows `moved`, `runs as before`, `kept` or `unchanged`; none `pending`), and open Automations.
-
-To go back, restore the snapshot taken before the update and run v0.4.17 again ([Rolling back](#rolling-back)).
-
-### You're on 0.2: update to get one-tap support
-
-Tico 0.3 can reach the Tico team from anywhere in the app, with what went wrong attached, and shows replies, fixed-in notices
-and **Known issues in your version** under Help. On 0.2, open **New version** in the sidebar and press **Update now** (the
-owner), or follow the steps for your version below. Help > Contact support keeps working on 0.2 until you do.
-
-Tico HQ can also show a short message for a version once in the app ([tico-hq.md](tico-hq.md#messages-known-issues-and-fixed-in-notices)).
-
-- **v0.2.5 or older:** the updaters of these versions cannot replace themselves or install new configuration files, so
-  run the release's install command once more on each computer (server, then each runner computer). From then on, Update
-  in the app does everything.
-- **v0.2.6 to v0.2.8:** Update in the app to v0.2.9 or later. An updater that replaced itself in these versions stopped
-  pulling images, so a Linux runner computer may then show "No such image" under Settings > General > Health > Details and stay on its old
-  version. Run this once in its directory (`/opt/tico-runner`):
-
-  ```
-  docker compose -f runner.compose.yaml up -d --no-deps --force-recreate updater
-  ```
-
-  Its next update follows the server as usual. The server's updater repairs itself when the server updates.
-- **v0.2.10 or v0.2.11 runner computer whose updater keeps restarting** (`docker ps` shows `tico-runner-updater-1 Restarting`):
-  run once in `/opt/tico-runner`:
-
-  ```
-  sed -i 's/^TICO_UPDATER_TAG=.*/TICO_UPDATER_TAG=v0.3.3/' .env && docker compose -f runner.compose.yaml up -d updater
-  ```
-
-- **v0.2.16 to v0.2.18:** the update is in the app, with no manual steps. Browser tabs left open show "New version · Reload".
-  A Mac runner's background jobs now restart on their own after an update; on v0.2.17 or older, run `scripts/tico restart all` once
-  after updating.
+Every place that takes a release to install or update to accepts only a release at v0.6.0 or later by semver, and
+refuses anything else (an older release, a prerelease of v0.6.0 such as v0.6.0-rc.1, a malformed version) with the
+reason, before it changes anything. A prerelease above the floor (v0.6.259-rc.1, v0.7.0-rc.1) is accepted. The places:
+Update now and the update key (`POST /api/v2/system/update`), a target Tico support sets for a hosted server (stable
+releases only), `scripts/install.sh --version` (server and runner), `install-wsl.ps1 -Version`, `setup/cell.py`
+add and update, the release train and the release journey (`backend/release_floor.py`). A computer below v0.6.0 gets
+no work, but still reads the release to update to.
 
 ## For maintainers
 

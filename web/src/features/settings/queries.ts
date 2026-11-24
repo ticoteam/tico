@@ -99,7 +99,7 @@ export const updateStatusQuery = queryOptions({
 });
 
 export const startUpdate = (version: string) => api.post<UpdateStatus>(UPDATE, { version });
-export const checkForUpdate = () => api.post<{ checking: boolean; available: boolean; held?: string }>(`${UPDATE}/check`);
+export const checkForUpdate = () => api.post<{ checking: boolean; available: boolean }>(`${UPDATE}/check`);
 
 const patchPerson = (pid: string, change: Partial<AccessPerson>) => (v: AccessView | undefined) =>
   v && { ...v, people: v.people.map((p) => (p.id === pid ? { ...p, ...change } : p)) };

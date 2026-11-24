@@ -1,8 +1,5 @@
-"""scripts/journey_plan.py picks the journey for a release pair, and scripts/journey-test.sh runs the steps it names.
-
-0.6 starts fresh: a 0.6 server refuses a 0.5 database with tasks, so the release gate's journey from a 0.5 release to a
-0.6 candidate proves that refusal instead of an in-place upgrade (v0.6.0-rc.1 could not publish otherwise), and a pair
-on one side of the line keeps the ordinary upgrade.
+"""scripts/journey-test.sh: the release gate's upgrade journey from the previous release to the candidate. The previous
+release is v0.6.0 or later; no release before 0.6 is supported.
 """
 
 import os
@@ -11,31 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import journey_plan
-
 ROOT = Path(__file__).resolve().parents[2]
-
-
-@pytest.mark.parametrize(
-    'previous, candidate, want',
-    [
-        ('v0.5.216', 'v0.6.0-rc.1', 'fresh-start'),
-        ('v0.5.216', 'v0.6.0', 'fresh-start'),
-        ('v0.5.216', 'v9.9.9', 'fresh-start'),  # a local build of a 0.6 checkout
-        ('v0.5.215', 'v0.5.216', 'upgrade'),
-        ('v0.6.0', 'v0.6.1', 'upgrade'),
-        ('v0.6.0-rc.1', 'v0.6.0-rc.2', 'upgrade'),
-    ],
-)
-def test_the_journey_for_a_release_pair(previous, candidate, want):
-    assert journey_plan.journey(previous, candidate) == want
-
-
-@pytest.mark.parametrize('previous, candidate', [('main', 'v0.6.0'), ('v0.5.216', ''), ('0.5.216', 'v0.6.0')])
-def test_a_pair_that_is_not_two_release_tags_is_refused(previous, candidate):
-    with pytest.raises(ValueError):
-        journey_plan.journey(previous, candidate)
-    assert journey_plan.main([previous, candidate]) == 2
 
 
 def run_journey(tmp_path, previous):
@@ -82,3 +55,10 @@ def test_a_reason_only_on_stderr_reaches_the_summary(tmp_path):
     assert "stderr: curl: (37) Couldn't open file" in why
     assert why.count('curl: (37)') == 1  # repeated lines once
     assert why in '\n'.join(result.stdout.splitlines()[-40:])
+
+
+@pytest.mark.parametrize('previous', ['v0.5.216', 'v0.2.5', 'v0.6.0-rc.1', 'main', 'v0.6'])
+def test_a_previous_release_before_0_6_or_not_a_release_is_refused_before_any_step(tmp_path, previous):
+    result, steps = run_journey(tmp_path, previous)
+    assert result.returncode == 2 and steps == []
+    assert f'the previous release must be a release v0.6.0 or later (like v0.6.1), not {previous}' in result.stderr

@@ -169,7 +169,7 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
       if (found.checking) {
         setChecking(true);
       } else {
-        setFeedback(found.available || found.held ? '' : 'Up to date.');
+        setFeedback(found.available ? '' : 'Up to date.');
         await client.invalidateQueries({ queryKey: configQuery.queryKey });
       }
     } catch (error) {
@@ -195,14 +195,13 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
         <span>Tico {/^\d/.test(current) ? `v${current}` : current}</span>
         {available && <span>v{latest} is out</span>}
         {scheduled && <span>Tico will update to v{scheduled} when idle.</span>}
-        {update.held && <span>{update.held}</span>}
         {update.managed && <span>Tico manages updates for this installation.</span>}
         {available && !update.managed && !owner && <span>The owner can update Tico.</span>}
         {available && manual && <span>Update this installation manually. {status.command && <code>{status.command}</code>}</span>}
         {message && <span role="status">{message}</span>}
         {canCheck && (
           <span className="set-version-actions">
-            {(busy || (available && !update.held && !manual)) && (
+            {(busy || (available && !manual)) && (
               <Button busy={busy} disabled={!isSuccess || status?.configured !== true} onClick={start}>
                 Update now
               </Button>

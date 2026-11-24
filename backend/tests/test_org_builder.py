@@ -224,8 +224,7 @@ def org(environment):
     api = environment(
         cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")] + [(row, "") for row in CARDS[:-1]]
     )
-    # The older file name is still read (backend/recruit.py).
-    (Path(api.app.state.store.settings.catalog_dir).parent / "departments.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
+    (Path(api.app.state.store.settings.catalog_dir).parent / "groups.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     api.put(
         "/api/v2/setup",
         headers=signed_in(),

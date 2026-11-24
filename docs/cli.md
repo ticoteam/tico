@@ -137,5 +137,3 @@ Only 1 means "the same call may work if retried". The answer to an error is JSON
 `{"error": <code>, "detail": "...", "retryable": false, "operation_id": "..."}` (`tico browser` and `tico login`
 print one sentence instead, unless `--json`); argparse's usage text goes to stderr. Two old exceptions stay: `tico file approved` exits 1 when the file is not approved (`"approved": false` in
 its answer), and a command that is gone exits 1 with one line on stderr naming what to use instead.
-
-Before 0.6, 4 and 5 were 2, and 64 was 1.

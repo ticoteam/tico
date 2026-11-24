@@ -33,7 +33,7 @@ function ReleaseNote({ latest, storageKey }: { latest: string; storageKey: strin
 export function UpdateNotice() {
   const { data: me } = useQuery(meQuery);
   const { data: update } = useQuery({ ...configQuery, select: (config) => config.update });
-  const latest = update?.available && !update.held && !update.managed ? update.latest : '';
+  const latest = update?.available && !update.managed ? update.latest : '';
   if (!latest || !me || (me.role !== 'owner' && me.kind !== 'admin')) return null;
   const storageKey = `tico-next:update-dismissed:${me.id}:${latest}`;
   return <ReleaseNote key={storageKey} latest={latest} storageKey={storageKey} />;

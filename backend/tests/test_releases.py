@@ -133,29 +133,40 @@ def test_update_is_forwarded_to_the_updater_with_the_token(environment, monkeypa
                 json.loads(request.content) if request.content else None,
             )
         )
-        return httpx.Response(200, json={"state": "pulling", "from": "0.1.0", "to": "0.2.0", "message": ""})
+        return httpx.Response(200, json={"state": "pulling", "from": "0.6.0", "to": "0.6.2", "message": ""})
 
     network(monkeypatch, updater)
     monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000/")
     monkeypatch.setenv("TICO_UPDATER_TOKEN", "s3cret")
-    monkeypatch.setenv("TICO_VERSION", "v0.1.9")
+    monkeypatch.setenv("TICO_VERSION", "v0.6.1")
     api = environment()
-    r = api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=signed_in())
+    r = api.post("/api/v2/system/update", json={"version": "v0.6.2"}, headers=signed_in())
     assert r.status_code == 200 and r.json()["state"] == "pulling"
     # The release this server runs goes along, so the updater never has to guess "from".
-    assert seen[0] == ("POST", "/update", "Bearer s3cret", {"version": "0.2.0", "from": "0.1.9"})
+    assert seen[0] == ("POST", "/update", "Bearer s3cret", {"version": "0.6.2", "from": "0.6.1"})
     assert seen[1][:3] == ("GET", "/status", "Bearer s3cret")
     got = api.get("/api/v2/system/update", headers=signed_in()).json()
     assert {k: got[k] for k in ("configured", "state", "from", "to", "message", "snapshot", "restored")} == {
         "configured": True,
         "state": "pulling",
-        "from": "0.1.0",
-        "to": "0.2.0",
+        "from": "0.6.0",
+        "to": "0.6.2",
         "message": "",
         "snapshot": "",
         "restored": False,
     }
-    assert got["running"] == "0.1.9"  # the server's own record, beside the updater's view
+    assert got["running"] == "0.6.1"  # the server's own record, beside the updater's view
+    # Nothing before v0.6.0 (v0.6.0-rc.1 counts below it) and nothing malformed reaches the updater.
+    for version in ("v0.5.216", "0.6.0-rc.1", "latest"):
+        r = api.post("/api/v2/system/update", json={"version": version}, headers=signed_in())
+        assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_version"
+    assert (
+        "older than v0.6.0"
+        in api.post("/api/v2/system/update", json={"version": "v0.5.216"}, headers=signed_in()).json()["error"][
+            "detail"
+        ]
+    )
+    assert [s[:2] for s in seen].count(("POST", "/update")) == 1
 
 
 def test_a_server_tico_updates_offers_no_update_now(environment, monkeypatch):
@@ -167,7 +178,7 @@ def test_a_server_tico_updates_offers_no_update_now(environment, monkeypatch):
     releases.CHECKER.checked = releases.CHECKER.clock()
     assert releases.notice()["managed"] is True and releases.notice()["available"] is True
     api = environment()
-    r = api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=signed_in())
+    r = api.post("/api/v2/system/update", json={"version": "v0.6.2"}, headers=signed_in())
     assert r.status_code == 409 and r.json()["error"]["code"] == "managed_update"
     assert "command" not in r.json()["error"]
     assert api.get("/api/v2/system/update", headers=signed_in()).json()["managed"] is True

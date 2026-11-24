@@ -565,6 +565,18 @@ class System:
 # --- inputs ----------------------------------------------------------------------------------------------------
 
 
+def check_release(version):
+    """A --version to add or update a company to: a release such as v1.2.3, at v0.6.0 or later (backend/release_floor.py),
+    checked before anything is downloaded."""
+    from backend.release_floor import refused
+
+    if not VERSION_RE.fullmatch(version or ""):
+        raise CellError("bad_args", "--version is a release such as v1.2.3")
+    why = refused(version)
+    if why:
+        raise CellError("bad_args", "--version: %s" % why)
+
+
 def check_slug(value: str, *, new: bool = False) -> str:
     slug = value or ""
     if not SLUG_RE.fullmatch(slug) or "--" in slug:
@@ -2454,8 +2466,8 @@ class Cell:
         label = SIGNIN_LABEL if args.signin_label is None else args.signin_label
         if len(label) > 40 or any(ch in label for ch in "<>\n\r"):
             raise CellError("bad_args", "--signin-label is at most 40 characters, without < > or line breaks")
-        if args.version is not None and not VERSION_RE.fullmatch(args.version):
-            raise CellError("bad_args", "--version is a release such as v1.2.3")
+        if args.version is not None:
+            check_release(args.version)
         memory = check_memory(args.memory) if args.memory is not None else None
         sleep_minutes = (
             check_sleep_minutes(args.sleep_minutes, "--sleep-minutes") if args.sleep_minutes is not None else None
@@ -3155,8 +3167,7 @@ class Cell:
 
     def _update(self, args) -> dict:
         started = self.system.monotonic()
-        if not VERSION_RE.fullmatch(args.version or ""):
-            raise CellError("bad_args", "--version is a release such as v1.2.3")
+        check_release(args.version)
         slug = check_slug(args.company)
         kms_arn = check_kms_key(args.kms_key) if getattr(args, "kms_key", None) else None
         kms_keys = None

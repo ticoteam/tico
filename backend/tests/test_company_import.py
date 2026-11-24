@@ -1364,7 +1364,7 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
 
 def test_a_0_2_file_without_a_strategy_imports_as_before_and_adds_nothing_to_strategy_or_market(environment):
     api = environment()
-    text = company_text()
+    text = company_text().replace("version: 0.3\n", "version: 0.2\n")  # a file saved as 0.2 (read only now)
     assert "version: 0.2\n" in text
     assert "strategy" not in preview_and_import(api, text)
     assert api.get("/api/v2/strategy", headers=signed_in()).json()["bets"] == []
@@ -2128,7 +2128,7 @@ def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules
 def test_a_file_without_drafts_said_or_email_imports_as_before(environment):
     api = environment()
     text = company_text()
-    assert "version: 0.2" in text
+    assert "version: 0.3" in text
     summary = preview_and_import(api, text)
     assert "drafts" not in summary and "said" not in summary
     record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]

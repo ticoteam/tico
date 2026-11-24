@@ -145,7 +145,7 @@ allocated process on start-place and started requests, so neither the runner nor
 allocation’s memory use. The boundary stays crossed through fallback. If a lazy harness acknowledges its start but
 fails to launch, its fallback checks memory locally until it allocates a process, keeping the running turn's place.
 It does not request pre-start admission again. Runners advertise allocation reporting through the
-`harness_allocation_v1` heartbeat capability. Every runner the server accepts advertises it (the minimum release is 0.6.0-rc.1). A runner talking to an older hub drops the new field or capability if that hub refuses it.
+`harness_allocation_v1` heartbeat capability. Every runner the server accepts advertises it (the minimum release is 0.6.0). A runner talking to an older hub drops the new field or capability if that hub refuses it.
 The Mac runner never parks a turn on local memory readings;
 macOS's Memory Used includes memory it can reclaim through compression and swap. This does not cap the memory of
 tools already running inside a turn, or change your account, model or computer size.

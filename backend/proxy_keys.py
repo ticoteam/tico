@@ -11,7 +11,8 @@ the person who rotates the keys at each vendor:
 - `direct`: each one whose key still reaches runs as it is, with its level: a Read key, or any key of Google Ads or of
   a tool the proxy cannot call (Not covered on Rules › Links);
 - `unknown`: each one only the key's value would decide (a Read key under an id-like variable: an id goes as it is);
-- `computers`: each computer whose runner predates proxy tokens (PROXY_RELEASE) or reports no release.
+- `computers`: each computer that reports no release, or one below the runner floor (MIN_RUNNER_RELEASE, which takes
+  proxy tokens): every runner the server accepts takes a proxy token in a key's place.
 Nothing is revoked, rotated or changed: rotating a key is the person's, at the vendor.
 """
 
@@ -24,6 +25,7 @@ from . import api_tools as _api_tools
 from . import credentials as _credentials
 from . import migrations as _migrations
 from . import releases as _releases
+from . import runner_versions as _runner_versions
 from . import tool_services as _tool_services
 
 # Untyped neighbours, typed as Any at the door.
@@ -31,9 +33,8 @@ api_tools: Any = _api_tools
 credentials: Any = _credentials
 migrations: Any = _migrations
 releases: Any = _releases
+runner_versions: Any = _runner_versions
 TS: Any = _tool_services
-
-PROXY_RELEASE = "0.5.192"  # the first runner that takes a proxy token in a key's place (runner-rs/src/env.rs)
 
 
 def report(c: Any) -> dict[str, Any]:
@@ -70,7 +71,7 @@ def report(c: Any) -> dict[str, Any]:
                     "granted_at": row["granted_at"],
                 }
             )
-    want = releases.parse(PROXY_RELEASE)
+    want = releases.parse(runner_versions.MIN_RUNNER_RELEASE)
     computers: list[dict[str, Any]] = []
     for row in c.execute(
         "SELECT r.id, r.label, v.release FROM runners r LEFT JOIN runner_versions v ON v.runner_id=r.id "

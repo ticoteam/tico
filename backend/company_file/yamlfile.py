@@ -1,15 +1,17 @@
-"""tico.company.yaml, formats 0.2, 0.3 and 0.4: written from a draft as the setup page's `toYAML()` writes it, and read back.
+"""tico.company.yaml: written from a draft as format 0.3 or 0.4, and read back from format 0.2, 0.3 or 0.4.
 
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
 a bot's `reports_to` set by the visitor or Agent Ops, the one `first_job`, and an existing agent's department and reason.
-Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. The strategy's optional `channels`, and a bet's
-optional `name` and `segment`, are written only when present. A plan without a strategy is still written as 0.2, byte
-for byte, so its file imports on an app from before 0.3; the reader takes both.
-An employee's or existing agent's optional `team` (the name of its group) is read and written in either format.
+Format 0.3 adds the optional `strategy` block (after `goals:`) and a goal's `bet`. The strategy's optional `channels`,
+and a bet's optional `name` and `segment`, are written only when present. Every Tico from v0.4.11 reads 0.3, so a plan
+without a strategy is written as 0.3 too, with no strategy block. 0.2 is read only: the files saved before (HQ's setup
+drafts among them) still import.
+An employee's or existing agent's optional `team` (the name of its group) is read and written in any format.
 Format 0.4 adds what the setup page's swarm made: `drafts` (each agent's drafted work and the visitor's decision on it)
 and `said` (the rules the visitor said in their own words), written after `tools:`, and a person's optional `email`. It
-is written only when one of them is present, so any other plan is written as 0.3 or 0.2, byte for byte, as before.
+is written only when one of them is present (a release before v0.6.258 cannot read it), so any other plan is written
+as 0.3, byte for byte, as before.
 """
 
 import datetime as dt
@@ -19,7 +21,7 @@ import re
 from . import draft as D
 from .keys import scrub_all
 
-FORMAT = "0.2"
+FORMAT = "0.2"  # read only: never written
 STRATEGY_FORMAT = "0.3"
 SWARM_FORMAT = "0.4"
 FORMATS = (FORMAT, STRATEGY_FORMAT, SWARM_FORMAT)
@@ -77,7 +79,7 @@ def to_yaml(draft, created=None):
     head_id = head["id"] if head else "you"
     strategy = D.has_strategy(draft) or any("bet" in g for g in draft["goals"])
     swarm = bool(draft.get("drafts") or draft.get("said")) or any(p.get("email") for p in draft["people"])
-    version = SWARM_FORMAT if swarm else STRATEGY_FORMAT if strategy else FORMAT
+    version = SWARM_FORMAT if swarm else STRATEGY_FORMAT
     L = [line % version if "%s" in line else line for line in HEADER]
     L += [
         "version: %s" % version,

@@ -58,11 +58,11 @@ def rel(tmp_path_factory):
     (src / "setup" / "support.py").write_text("")
     (src / "backend").mkdir()
     (src / "backend" / "redaction.py").write_text("")
-    for v in ("v0.2.0", "v0.3.0", "v0.9.0"):
-        release(base, src, v, tamper=v == "v0.9.0")
+    for v in ("v0.6.2", "v0.6.3", "v0.6.9"):
+        release(base, src, v, tamper=v == "v0.6.9")
     (base / "unpinned").mkdir()
     shutil.copy(SCRIPTS / "install.sh", base / "unpinned" / "install.sh")
-    (base / "latest.json").write_text('{"url": "x", "tag_name": "v0.3.0", "name": "v0.3.0"}\n')
+    (base / "latest.json").write_text('{"url": "x", "tag_name": "v0.6.3", "name": "v0.6.3"}\n')
     return base
 
 
@@ -138,6 +138,8 @@ def test_installer_scenarios(image, rel, docker_ready):
         "upgrade-keeps-settings",
         "checksum-mismatch-refused",
         "checksum-installs-nothing",
+        "floor-installs-nothing",
+        "floor-prerelease-above-passes",
         "unpinned-uses-latest-release",
         "version-flag-overrides-baked",
         "older-installer-holds",

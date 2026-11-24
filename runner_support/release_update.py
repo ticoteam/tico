@@ -290,7 +290,7 @@ def write_status(directory, **fields):
 
 
 def defer_update(directory, version, reason, *, clock=time.time, transient=False):
-    """Release claims until the next try; old followers need failed because they ignore not_before."""
+    """Release claims until the next try: `idle` (or `blocked`) with `not_before`, which the runner's follower honors."""
     target = version.lstrip("v")
     reason = " ".join(str(reason).split())[:250]
     try:
@@ -314,9 +314,8 @@ def defer_update(directory, version, reason, *, clock=time.time, transient=False
     else:
         repeats = 1
     blocked = not transient and (repeats == MAX_DEFERRALS or now - since >= DEFERRAL_LIMIT_S)
-    short = os.environ.get("TICO_UPDATE_RETRY") == "short"
-    delay = DEFERRAL_DELAYS_S[count - 1] if short else 6 * 3600
-    state = "blocked" if blocked else "idle" if short else "failed"
+    delay = DEFERRAL_DELAYS_S[count - 1]
+    state = "blocked" if blocked else "idle"
     prefix = "update paused: "
     if blocked:
         prefix = (
@@ -325,8 +324,7 @@ def defer_update(directory, version, reason, *, clock=time.time, transient=False
             else "update blocked after two hours: "
         )
     error = prefix + reason
-    error = error[:250] + (f"; retrying in {delay // 60} minutes" if short else "; retrying in six hours")
-    timer = {"not_before": now + delay} if short else {}
+    error = error[:250] + f"; retrying in {delay // 60} minutes"
     write_status(
         directory,
         state=state,
@@ -337,7 +335,7 @@ def defer_update(directory, version, reason, *, clock=time.time, transient=False
         deferred_since=now if transient else since,
         deferral_cause="" if transient else reason,
         cause_count=repeats,
-        **timer,
+        not_before=now + delay,
     )
     return {"state": state, "target": target, "error": error}
 

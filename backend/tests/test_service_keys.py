@@ -108,26 +108,26 @@ def test_an_update_key_checks_starts_and_follows_an_update_and_reaches_nothing_e
     def network(request):
         calls.append((request.method, request.url.path))
         if request.url.host == "updater":
-            return httpx.Response(200, json={"state": "pulling", "from": "0.1.0", "to": "0.2.0", "message": ""})
-        return httpx.Response(200, json={"tag_name": "v0.2.0", "html_url": "", "published_at": "", "name": "v0.2.0"})
+            return httpx.Response(200, json={"state": "pulling", "from": "0.6.1", "to": "0.6.2", "message": ""})
+        return httpx.Response(200, json={"tag_name": "v0.6.2", "html_url": "", "published_at": "", "name": "v0.6.2"})
 
     monkeypatch.setattr(releases, "CHECKER", releases.Checker())
     monkeypatch.setattr(releases, "TRANSPORT", httpx.MockTransport(network))
     monkeypatch.setenv("TICO_UPDATE_CHECK", "on")
     monkeypatch.setenv("TICO_RELEASES_URL", "https://releases.acme.example/latest")
     monkeypatch.setenv("TICO_UPDATER_URL", "http://updater:9000")
-    monkeypatch.setenv("TICO_VERSION", "0.1.0")
+    monkeypatch.setenv("TICO_VERSION", "0.6.1")
     # Only the owner makes one: only the owner updates the install.
     post(api, "service-keys", {"label": "Release bot", "scope": "update"}, token="ben-test", expected=403)
     made = post(api, "service-keys", {"label": "Release bot", "scope": "update"})
     assert made["scope"] == "update"
     assert {k["id"]: k["scope"] for k in get(api, "service-keys")["keys"]} == {made["id"]: "update"}
     sk = {"Authorization": "Bearer " + made["key"]}
-    assert api.post("/api/v2/system/update/check", headers=sk).json()["latest"] == "0.2.0"
-    started = api.post("/api/v2/system/update", json={"version": "v0.2.0"}, headers=sk)
+    assert api.post("/api/v2/system/update/check", headers=sk).json()["latest"] == "0.6.2"
+    started = api.post("/api/v2/system/update", json={"version": "v0.6.2"}, headers=sk)
     assert started.status_code == 200 and started.json()["state"] == "pulling"
     status = api.get("/api/v2/system/update", headers=sk).json()
-    assert status["to"] == "0.2.0" and status["running"] == "0.1.0" and isinstance(status["computers"], dict)
+    assert status["to"] == "0.6.2" and status["running"] == "0.6.1" and isinstance(status["computers"], dict)
     assert ("POST", "/update") in calls
     with api.app.state.store.read() as c:
         started_by = c.execute("SELECT actor FROM events WHERE action='system.update.started'").fetchone()[0]

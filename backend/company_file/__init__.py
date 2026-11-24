@@ -1,5 +1,5 @@
-"""The company file engine behind tico.team/setup: the draft, its edit actions, and tico.company.yaml (format 0.2,
-0.3 when the plan has a strategy, 0.4 when it has the agents' drafts, the rules the visitor said or a teammate's email).
+"""The company file engine behind tico.team/setup: the draft, its edit actions, and tico.company.yaml (written as
+format 0.3, or 0.4 when it has the agents' drafts, the rules the visitor said or a teammate's email; 0.2 is read only).
 
 No model and no transport: functions over the draft dict the page keeps. Whatever serves the page's
 `POST /api/onboarding/turn` gives the model `SPEC["actions"]` as its tools and runs each tool call through a `Turn`:
