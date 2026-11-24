@@ -3156,7 +3156,7 @@ def _post(
 
     for item in attachments or ():
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
-        if derives(item.get("content_type")) and (item.get("size") or 0) <= MAX_BYTES:
+        if derives(item.get("content_type"), item.get("name")) and (item.get("size") or 0) <= MAX_BYTES:
             c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (item["id"],))
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
     return message

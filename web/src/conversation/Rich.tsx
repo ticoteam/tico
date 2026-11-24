@@ -397,9 +397,9 @@ function sheetOf(page: string): string {
 
 /**
  * A Word or Excel file: the preview the server made of it (backend/office_preview.py, at its `/preview`), drawn small
- * and closed as a page card is (lib/safeFrame, no scripts); Expand shows it large with Download. While the first read
- * is out it is a quiet card; with no preview (not made yet, or never) it is the plain file chip, which gives way to
- * the card if the preview arrives while the card asks again.
+ * and closed as a page card is (lib/safeFrame, no scripts); Expand shows it large with Download. Until a preview is
+ * read (being made, or none) it is the plain file chip, so a file without one never moves; a preview the server is
+ * still making replaces the chip when it arrives.
  */
 function OfficeCard({ f, own, kind }: { f: Attachment; own: OwnFile; kind: 'docx' | 'xlsx' }) {
   const src = previewOf(own.href, 'preview');
@@ -409,18 +409,12 @@ function OfficeCard({ f, own, kind }: { f: Attachment; own: OwnFile; kind: 'docx
   const label = useMemo(() => (kind === 'xlsx' && page ? sheetOf(page) : ''), [kind, page]);
   const name = attachmentLabel(f);
   const type = attachmentType(f);
-  if (!src || page === null || (page === undefined && (read.failureCount > 0 || read.isError))) return <FileLink f={f} own={own} />;
+  if (!src || typeof page !== 'string') return <FileLink f={f} own={own} />;
   return (
     <>
       <div className={`pcard is-office is-${kind}`}>
         <span className="pcard-view" aria-hidden="true">
-          {page !== undefined ? (
-            <iframe srcDoc={page} sandbox="" title={name} tabIndex={-1} loading="lazy" referrerPolicy="no-referrer" />
-          ) : (
-            <span className="pcard-none is-loading">
-              <Icon name={kind === 'xlsx' ? 'columns' : 'file'} />
-            </span>
-          )}
+          <iframe srcDoc={page} sandbox="" title={name} tabIndex={-1} loading="lazy" referrerPolicy="no-referrer" />
         </span>
         <span className="pcard-foot">
           <Icon name={kind === 'xlsx' ? 'columns' : 'file'} />
@@ -428,9 +422,9 @@ function OfficeCard({ f, own, kind }: { f: Attachment; own: OwnFile; kind: 'docx
           {label ? <em>{label}</em> : type && <em>{type}</em>}
           <Icon name="expand" className="end" />
         </span>
-        <button type="button" className="pcard-hit" aria-label={name} onClick={() => setOpen(true)} disabled={page === undefined} />
+        <button type="button" className="pcard-hit" aria-label={name} onClick={() => setOpen(true)} />
       </div>
-      {open && page && (
+      {open && (
         <span className="fcard-layer" onClick={stopHere} onContextMenu={stopHere} onTouchStart={stopHere} onPointerDown={stopHere}>
           <Viewer
             open

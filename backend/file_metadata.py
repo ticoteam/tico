@@ -96,17 +96,44 @@ OFFICE = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 }
+# A type that says nothing of what the file is: a Word or Excel file sent as one is known by its name, as the chat's card
+# knows it (web/src/lib/fileKind.ts); office_preview.py still checks it is one.
+GENERIC = {"", "application/octet-stream", "binary/octet-stream"}
+BY_NAME = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
 TRIES = 5  # failed passes before a source is given up on (`Metadata.retry`)
 MAX_BYTES = 25 * 1024**2  # a larger source gets no preview: it is never copied in to be read (the file still opens)
 WALL_SECONDS = 30
 RSS_KIB = 1024 * 1024  # what a child may hold on macOS, where address-space limits are refused
 
 
-def derives(mime):
+PREVIEW_PENDING = "preview_pending"
+
+
+def preview_missing(derivative, media):
+    """The refusal for a preview that is not there: `preview_pending` while the worker has a Word or Excel file's
+    preview still to make (the route answers 202 so the chat asks again), else not found."""
+    if derivative == "preview_html" and media is not None and media["media_state"] == "pending":
+        return Problem(PREVIEW_PENDING, "The preview is still being made", 404)
+    return Problem("not_found", "File preview not found", 404)
+
+
+def media_type(mime, name=None):
+    """A file's type as the worker reads it: its own, parameters dropped, or for a generic type a Word or Excel type
+    its name gives."""
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    if mime in GENERIC:
+        return BY_NAME.get(Path(name or "").suffix.lower(), mime)
+    return mime
+
+
+def derives(mime, name=None):
     """Whether the worker makes anything from a file of this type on this server: a picture always (its size, and a
     thumbnail with Pillow), a Word or Excel file always (its HTML preview); a video or a PDF only with its tool
     installed. The chat queues only these."""
-    mime = (mime or "").split(";", 1)[0].strip().lower()
+    mime = media_type(mime, name)
     return (
         mime in IMAGES
         or mime in OFFICE
@@ -194,7 +221,7 @@ class Metadata:
             preview_html_blob_id=None,
             media_state="none",
         )
-        mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
+        mime = media_type(blob["content_type"], blob.get("name"))
         if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf" or mime in OFFICE):
             return self.save(blob, result, [])
         if not derives(mime) or (blob.get("size") or 0) > MAX_BYTES:
@@ -311,7 +338,13 @@ class Metadata:
                         prepared.append(
                             (
                                 field,
-                                {"digest": digest, "size": path.stat().st_size, "name": path.name, "content_type": kind},
+                                {
+                                    "digest": digest,
+                                    "size": path.stat().st_size,
+                                    "name": path.name,
+                                    "content_type": kind,
+                                },
+                            )
                         )
                 except BaseException:
                     # Previews stored before the failure are queued for removal; a later try that stores them again

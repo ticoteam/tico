@@ -567,7 +567,7 @@ with `path` and optional `poster`; server MCP calls keep using text/base64 and c
 
 Every file, version, poster, and thumbnail request checks the existing Tico rights first.
 `GET /api/v2/files/{id}?v=N` selects a version; `/versions/N` remains supported for stored bot
-files. `/poster?v=N`, `/thumb?v=N` and `/preview?v=N` (a Word or Excel file's HTML preview) return 404 when a preview is unavailable. Tico streams S3 or local bytes, supports HEAD and a single HTTP byte range (206/416; multiple ranges return the full 200 response), and returns a digest
+files. `/poster?v=N`, `/thumb?v=N` and `/preview?v=N` (a Word or Excel file's HTML preview) return 404 when a preview is unavailable; `/preview` answers 202 with no body while the worker is still making it. Tico streams S3 or local bytes, supports HEAD and a single HTTP byte range (206/416; multiple ranges return the full 200 response), and returns a digest
 ETag. Versioned responses are immutable for a year; latest responses use `no-cache` and can return
 304. Downloads preserve the stored bytes exactly, including JSON whitespace and encoding;
 API display-name annotations never change file contents. `X-Content-SHA256` and ETag identify
@@ -580,7 +580,8 @@ Media fields live on each file version: `width`, `height`, `duration_ms`, `poste
 `thumb_blob_id`, `preview_html_blob_id`, and `media_state` (`pending`, `ready`, `none`). One background worker fills them;
 existing versions default to `none` and are not automatically backfilled. New versions are `pending`.
 A picture, video, PDF, Word or Excel file posted in a thread (a plain attachment, with no file version) is queued the same way when its
-message is written, only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
+message is written (a `.docx` or `.xlsx` sent as `application/octet-stream` or with no type is known by its name, as the
+web app knows it), only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
 preview and is never read for one. The web app draws a chat picture from its `/thumb` (which checks its reader as the
 file does, and is 404 until made), falling back to the file itself; messages carry no preview fields. A chat video
 shows its `/poster` with a play mark (a plain card when there is none) and plays in place on a tap, read from its
@@ -591,7 +592,7 @@ text, Markdown, JSON or log file's first 8 KB, a calendar invite, contact or ema
 64 KB and its directory (at most 256 KB). Opened, a card shows at most 2 MB, 2,000 rows of 200 cells, 5,000 lines or
 1,000 names, with Download where that cuts it; JSON shows as written. A Word (`.docx`) or Excel (`.xlsx`) file shows
 the HTML preview the worker made of it (`/preview`, drawn like an HTML page's card, with Expand), and its plain chip
-until there is one or when there is none; other Office files (PowerPoint and the old formats) download. An uploaded HTML page (its card reads up to 256 KB) draws in a
+until there is one or when there is none (it asks again only while `/preview` answers 202); other Office files (PowerPoint and the old formats) download. An uploaded HTML page (its card reads up to 256 KB) draws in a
 sandboxed frame whose own policy lets it load nothing from outside (pictures and fonts only as `data:`), with its
 meta, link, base and script tags removed.
 Transient storage failures retry with bounded backoff, and a source that fails five passes becomes `none`; permanent
@@ -601,8 +602,11 @@ video or PDF without its tool) becomes `none` without being read: in Tico's buck
 50 MP and a 30-second timeout (macOS uses parent RSS supervision for memory), and makes thumbnails up to 480 px; without Pillow, PNG/JPEG/GIF/WebP headers still provide dimensions. ffprobe/ffmpeg make
 video posters at the earlier of 1 second or 10% of duration, up to 640 px, on one thread and reading local files
 only. pdftoppm renders PDF page one. `backend/office_preview.py` turns a Word file into HTML with mammoth
-(no pictures) and an Excel file's first visible sheet (200 rows by 30 columns, plus its sheet names) into a table with
-the standard library, after docs_import's archive check, stopping at 256 KB. Each tool runs through `backend/limited.py`: 1.5 GiB of address space, 20 CPU
+(no pictures) and an Excel file's first visible worksheet (200 rows by 30 columns, plus its sheet names) into a table
+with the standard library, numbers as stored and dates by Excel's 1900 or 1904 calendar where the cell's style shows a
+date, stopping at 256 KB. The archive passes docs_import's size and part caps first, and every part it parses as XML
+(for Word, all but pictures, embedded files and fonts) is refused if it declares a DOCTYPE or entity; pictures are
+never read. Each tool runs through `backend/limited.py`: 1.5 GiB of address space, 20 CPU
 seconds, 10 MiB per file it writes (its output included), a bare environment and its own scratch folder, in a
 process group killed whole past the 30-second wall. A supplied poster is preserved.
 

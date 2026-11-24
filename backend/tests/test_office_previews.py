@@ -3,9 +3,13 @@ backend/limited.py: the card reads it at /api/v2/files/<id>/preview, which check
 that unpacks past the limits gets none and keeps its Download card, and the preview goes with its file. Fictional
 people only: ana and ben share a thread, cara is in none of it."""
 
+import re
+
+import pytest
+
 from backend import file_library, file_metadata, office_preview
 from backend.tests.helpers.api import headers
-from backend.tests.helpers.office_files import DOCX, XLSX, bomb, docx, xlsx
+from backend.tests.helpers.office_files import DOCX, PKG, R, S, W, XLSX, bomb, docx, xlsx
 from backend.tests.helpers.thread_api import new_thread
 
 
@@ -35,7 +39,8 @@ def test_word_and_excel_files_get_previews_only_their_readers_open(api):
     budget = xlsx([("Budget", [["Item", "Cost", "Due"], ["Rent", 1200, (45627, 1)]]), ("Notes", [["x"]])])
     message = upload(api, thread["id"], [("plan.docx", report, DOCX), ("budget.xlsx", budget, XLSX)])
     word, sheet = message["refs"]["attachments"]
-    assert api.get(word["url"] + "/preview", headers=headers("ben-test")).status_code == 404  # not made yet
+    waiting = api.get(word["url"] + "/preview", headers=headers("ben-test"))
+    assert waiting.status_code == 202 and not waiting.content  # being made: the card asks again
     assert drive.batch() is True
     shown = api.get(word["url"] + "/preview", headers=headers("ben-test"))
     assert shown.status_code == 200 and shown.headers["content-type"].startswith("text/html")
@@ -87,3 +92,110 @@ def test_a_sheet_preview_is_its_first_rows_and_columns_under_the_size_cap():
     long = [["x" * 1000] * 30 for _ in range(200)]
     capped = office_preview.sheet(xlsx([("Long", long)]))
     assert len(capped.encode()) <= office_preview.MAX_HTML and capped.endswith("</nav></body></html>")
+
+
+def test_a_word_file_sent_with_no_type_is_known_by_its_name(api):
+    drive = worker(api)
+    thread = new_thread(api, members=("human:ben",))
+    message = upload(api, thread["id"], [("plan.docx", docx([(None, "Hello")]), "application/octet-stream")])
+    (f,) = message["refs"]["attachments"]
+    assert drive.batch() is True
+    assert "Hello" in api.get(f["url"] + "/preview", headers=headers("ben-test")).text
+
+
+def test_a_preview_made_for_a_document_deleted_meanwhile_leaves_no_bytes_behind(api, monkeypatch):
+    """The Word file goes between the conversion and the save: the preview page already stored is queued and removed."""
+    drive = worker(api)
+    blobs = api.app.state.blobs
+    thread = new_thread(api, members=("human:ben",))
+    message = upload(api, thread["id"], [("plan.docx", docx([(None, "Hello")]), DOCX)])
+    save, made = drive.save, []
+
+    def deleted_first(blob, result, prepared):
+        with api.app.state.store.transaction() as c:
+            assert file_library.release_message_files(c, "human:ana", message["id"]) == 1
+        made.extend(upload["digest"] for field, upload in prepared if field == "preview_html_blob_id")
+        save(blob, result, prepared)
+
+    monkeypatch.setattr(drive, "save", deleted_first)
+    drive.batch()
+    assert made and blobs.get(made[0])  # stored before the save found its source gone
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM blob_purges WHERE digest=?", (made[0],)).fetchone()
+        assert c.execute("SELECT count(*) FROM blobs").fetchone()[0] == 0
+    monkeypatch.setattr(blobs, "_fresh", {})  # past the wait for fresh writes
+    file_library.drain(api.app.state.store, blobs)
+    with pytest.raises(Exception):
+        blobs.get(made[0])
+
+
+def sheet_xml(rows):
+    return f'<?xml version="1.0"?><worksheet xmlns="{S}"><sheetData>{rows}</sheetData></worksheet>'
+
+
+def test_sheet_cells_show_as_stored_and_dates_by_excels_own_calendar():
+    rows = (
+        '<row r="0"><c r="A0"><v>9</v></c></row>'  # no row 0 in a sheet: left out
+        '<row r="1"><c r="A1"><v>1234567890.01</v></c><c r="B1" t="s"><v/></c><c r="C1"><v>NaN</v></c>'
+        '<c r="D1" s="1"><v>inf</v></c><c r="E1" s="1"><v>61</v></c><c r="F1" t="s"><v>0</v></c></row>'
+    )
+    out = office_preview.sheet(xlsx([("One", [["first"]])], extra={"xl/worksheets/sheet1.xml": sheet_xml(rows)}))
+    assert (
+        '<tbody><tr><th>1</th><td class="n">1234567890.01</td><td></td><td class="n">NaN</td><td class="n">inf</td>'
+        '<td class="n">1900-03-01</td><td>first</td></tr></tbody>'
+    ) in out
+    when = office_preview.excel_date
+    assert [when(1, False), when(59, False), when(60, False), when(61, False), when(45627, False)] == [
+        "1900-01-01",
+        "1900-02-28",
+        "1900-02-29",  # the day Excel keeps from Lotus
+        "1900-03-01",
+        "2024-12-01",
+    ]
+    assert when(0.5, False) == "12:00" and when(45627.25, False) == "2024-12-01 06:00" and when(0, True) == "1904-01-01"
+    assert when(float("nan"), False) is None and when(-1, False) is None
+
+
+def test_the_first_worksheet_shows_past_a_chart_and_only_parsed_parts_are_checked():
+    rels = (
+        f'<Relationships xmlns="{PKG}">'
+        f'<Relationship Id="rId1" Type="{R}/chartsheet" Target="chartsheets\\sheet1.xml"/>'
+        f'<Relationship Id="rId2" Type="{R}/worksheet" Target="worksheets\\sheet2.xml"/></Relationships>'
+    )
+    book = (
+        f'<workbook xmlns="{S}" xmlns:r="{R}"><sheets><sheet name="Chart" sheetId="1" r:id="rId1"/>'
+        f'<sheet name="Data" sheetId="2" r:id="rId2"/></sheets></workbook>'
+    )
+    parts = {
+        "xl/workbook.xml": book,
+        "xl/_rels/workbook.xml.rels": rels,
+        "xl/worksheets/sheet2.xml": sheet_xml('<row r="1"><c r="A1"><v>7</v></c></row>'),
+        "xl/chartsheets/sheet1.xml": "<!DOCTYPE chart>",  # never parsed, so never refused
+        "xl/media/logo.svg": "<!DOCTYPE svg>",
+    }
+    out = office_preview.sheet(xlsx([("x", [["y"]])], extra=parts))
+    assert 'data-sheet="Data" data-sheets="2"' in out and '<td class="n">7</td>' in out
+    with pytest.raises(ValueError, match="XML features"):
+        office_preview.sheet(xlsx([("x", [["y"]])], extra={**parts, "xl/worksheets/sheet2.xml": "<!DOCTYPE x>"}))
+
+
+def test_a_word_part_is_checked_wherever_it_lives_and_pictures_are_not_read():
+    picture = (
+        f'<Relationships xmlns="{PKG}"><Relationship Id="rId9" Type="{R}/image" Target="media/a.svg"/></Relationships>'
+    )
+    shown = docx([(None, "Hi")], extra={"word/media/a.svg": "<!DOCTYPE svg>", "word/_rels/document.xml.rels": picture})
+    assert "Hi" in office_preview.word(shown)
+    moved = (
+        f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/officeDocument" '
+        f'Target="word/media/doc.xml"/></Relationships>'
+    )
+    hidden = f'<!DOCTYPE x><w:document xmlns:w="{W}"><w:body/></w:document>'
+    with pytest.raises(ValueError, match="XML features"):
+        office_preview.word(docx([(None, "Hi")], extra={"_rels/.rels": moved, "word/media/doc.xml": hidden}))
+
+
+def test_one_long_paragraph_is_cut_inside_its_words_not_to_nothing():
+    out = office_preview.word(docx([(None, "é & " * 100_000)]))
+    assert len(out.encode()) <= office_preview.MAX_HTML and out.endswith("</body></html>")
+    body = out.split("<body>", 1)[1]
+    assert body.startswith("<p>é &amp; é") and not re.search(r"&(?!amp;)", body)  # no entity cut in half
