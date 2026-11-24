@@ -80,8 +80,9 @@ KINDS: dict[str, dict[str, Any]] = {
         "help": "Connect signs the plan in on one of your computers.",
         "connect": True,
         "paste": False,
-        # Only a computer that reports this signs it in, installs agy for it, or runs its turns (`carries`).
-        "capability": "antigravity_plan_v1",
+        # Only a computer that reports this signs it in, installs agy for it, or runs its turns (`carries`): one that runs
+        # agy over ACP. A runner that reports only antigravity_plan_v1 runs it headless, which no longer works.
+        "capability": "antigravity_acp_v1",
     },
     "anthropic_key": {
         "name": "Anthropic API",

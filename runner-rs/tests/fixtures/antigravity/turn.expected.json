@@ -5,13 +5,19 @@
  },
  {
   "kind": "delta",
+  "text": "Planning",
+  "delta_kind": "thought"
+ },
+ {
+  "kind": "delta",
   "text": "Acme ",
   "delta_kind": "text"
  },
  {
   "kind": "tool",
-  "tool": "run_command",
-  "state": "running"
+  "tool": "execute",
+  "status": "started",
+  "item_id": "t1"
  },
  {
   "kind": "delta",
@@ -20,12 +26,12 @@
  },
  {
   "kind": "tokens",
-  "input": 120,
+  "input": 184,
   "output": 8,
   "cached": 64,
-  "total": 128,
+  "total": 192,
   "usage": {
-   "input": 120,
+   "input": 184,
    "cached": 64,
    "output": 8
   }

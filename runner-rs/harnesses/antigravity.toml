@@ -21,9 +21,9 @@ latest_pattern = '"version"\s*:\s*"(\d+\.\d+\.\d+)"'
 [version]
 args = ["--version"]
 pattern = '(\d+\.\d+\.\d+)'
-# The oldest release checked to take its home from GEMINI_HOME, keep a sign-in in GEMINI_HOME's
+# The oldest release checked to take its home from `acp --gemini-dir`, keep a sign-in in that home's
 # antigravity-cli/antigravity-oauth-token when it sees SSH_CONNECTION, read `acp --login`'s code from its input and
-# print the stream-json events hosts/antigravity.rs reads.
+# speak the ACP hosts/antigravity.rs speaks.
 minimum = "1.5.15"
 
 [update]
@@ -40,7 +40,8 @@ terminal = true
 paste_code = true
 files = ["antigravity-cli/antigravity-oauth-token"]
 # Connect (Settings > Providers): the same sign-in in a home of its own ({home}), told it runs over SSH so it writes
-# this file there and never the keychain (model_subscriptions.rs TURN_HOMES).
+# this file there and never the keychain (model_subscriptions.rs TURN_HOMES). It counts once `agy acp` starts a session
+# with a model there (login.rs `agy_session`): `agy models` reads only $HOME/.gemini.
 connect = ["acp", "--login", "--gemini-dir", "{home}", "--app-data-dir", "antigravity-cli"]
 connect_file = "antigravity-cli/antigravity-oauth-token"
 
@@ -53,7 +54,7 @@ AGY_CLI_DISABLE_AUTO_UPDATE = "1"
 # No subscription profiles: a profile's own home would hold no sign-in, and a profile's bots would lose the computer's.
 # A plan's sign-in is put in a home of each turn's own instead (model_subscriptions.rs TURN_HOMES).
 tool_events = true
-mcp_unsupported = "it reads MCP servers only from a config file in the operator's home, which Tico does not touch (the operator's own servers would reach every bot)"
+mcp_unsupported = "agy takes no http or sse MCP servers over ACP (its initialize offers none), and Tico does not touch the config file in the operator's home (the operator's own servers would reach every bot)"
 resume_command = "agy --conversation"
 
 [capabilities.sign_in_status]

@@ -76,10 +76,12 @@ pub const CAPABILITIES: &[&str] = &[
     crate::model_exit::CLAUDE_CAPABILITY,
     crate::model_exit::CODEX_CAPABILITY,
     BURST_PREPARATION,
+    // Antigravity turns and Connect's check over ACP (hosts/antigravity.rs): plans go only to a runner with this.
+    crate::model_subscriptions::AGY_ACP_CAPABILITY,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
-// A 0.6.0 hub that reports only a list refusal can need seventeen capability drops before it accepts the heartbeat.
-pub const MAX_HEARTBEAT_POSTS: u32 = 18;
+// A 0.6.0 hub that reports only a list refusal can need eighteen capability drops before it accepts the heartbeat.
+pub const MAX_HEARTBEAT_POSTS: u32 = 19;
 
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -156,6 +158,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
+    crate::model_subscriptions::AGY_ACP_CAPABILITY,
     BURST_PREPARATION,
     crate::model_exit::CODEX_CAPABILITY,
     crate::model_exit::CLAUDE_CAPABILITY,
@@ -749,6 +752,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    crate::model_subscriptions::AGY_ACP_CAPABILITY,
                     BURST_PREPARATION,
                     crate::model_exit::CODEX_CAPABILITY,
                     crate::model_exit::CLAUDE_CAPABILITY,
@@ -793,11 +797,19 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(BURST_PREPARATION)
+            Some(crate::model_subscriptions::AGY_ACP_CAPABILITY)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != crate::model_subscriptions::AGY_ACP_CAPABILITY)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(BURST_PREPARATION)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != BURST_PREPARATION)
             .collect();
         assert_eq!(

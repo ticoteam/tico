@@ -1113,11 +1113,12 @@
        "plan_switch_resume_v1",
        "push_hints_v1",
        "relay_hints_v1",
-       "antigravity_plan_v1"
+       "antigravity_plan_v1",
+       "antigravity_acp_v1"
       ],
       "type": "string"
      },
-     "maxItems": 38,
+     "maxItems": 39,
      "title": "Capabilities",
      "type": "array"
     },

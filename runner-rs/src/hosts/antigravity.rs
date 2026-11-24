@@ -1,15 +1,18 @@
-//! The Antigravity host: each turn starts its own `agy` and reaps it when the turn ends. The prompt is one stream-json
-//! user line on stdin, closed once the result is in; the provider's conversation id is saved beside the stable thread id
-//! (`<home>/<thread>.json`, supervisor-only), so the next turn resumes it with `--conversation` on any model or effort.
-//! A failed or interrupted turn is never replayed. `agy` runs in a process group of its own, owned by the shared process
-//! owner: a stop reaches the group, and whatever of it is left when `agy` exits goes too. A resumed turn's prompt is held
-//! until `agy` names its conversation (`init`, sent before it reads its input): a turn that must continue the saved one
-//! is never sent into another. On any other turn, a conversation `agy` began in place of the saved one before the
-//! prompt went is left unprompted: a new `agy` starts the turn over, given the whole prompt with the conversation's
-//! history (`full_prompt`). One it moves to after the model worked is kept, its record asking that the next turn be
-//! told everything again (`needs_history`).
+//! The Antigravity host: each turn starts its own `agy acp` and reaps it when the turn ends. It speaks ACP (JSON-RPC 2.0
+//! over stdio) as T3 Code does: `initialize`, `authenticate` with the sign-in's method (`auth_method`), `session/resume` of the
+//! thread's saved conversation (`session/load` on an agy without resume) or `session/new`, the model and thinking level
+//! as the session's config options, then `session/prompt`, whose `session/update`s are the turn's events. Its
+//! `--gemini-dir` is the turn's home: a plan's own (model_subscriptions.rs TURN_HOMES), else the bot's `~/.gemini`,
+//! where the computer's own sign-in is. The conversation id is saved beside the stable thread id
+//! (`<home>/<thread>.json`, supervisor-only), so the next turn resumes it on any model or effort. A failed or
+//! interrupted turn is never replayed. `agy` runs in a process group of its own, owned by the shared process owner: a
+//! stop reaches the group, and whatever of it is left when `agy` exits goes too. The prompt goes only once agy has
+//! resumed the saved conversation or begun the turn's own: a turn that must continue the saved one is never sent into
+//! another, and stops instead. On any other turn a conversation agy could not resume gives way to a new one in the same
+//! process, given the whole prompt with the conversation's history when there is one (`full_prompt`); the thread moves
+//! to it only once the model has worked there, its record asking that the next turn be told everything again
+//! (`needs_history`) unless this one was and succeeded.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -17,22 +20,37 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
-use tokio::process::{ChildStdout, Command};
-use tokio::sync::{oneshot, watch};
+use tokio::process::{ChildStdin, ChildStdout};
+use tokio::sync::watch;
 
 use super::{event, failed, is_limit, Events, HostError, Settings};
-use crate::util::{log, py_dumps, text_of};
+use crate::env::Env;
+use crate::util::{log, py_dumps, text_of, truthy};
 
 pub const DEFAULT_MODEL: &str = "gemini-4-neon";
 const EFFORTS: &[&str] = &["low", "medium", "high", "xhigh"];
 const DEFAULT_EFFORT: &str = "high";
+/// Where agy keeps its sign-in, settings and conversations under its `--gemini-dir` (model_subscriptions::AGY_TOKEN).
+pub const APP_DATA_DIR: &str = "antigravity-cli";
+/// The Google account's sign-in method, which `authenticate` names (T3 Code's `oauth-personal`).
+pub const AUTH_METHOD: &str = "oauth-personal";
+/// What a typed `refusal` is: agy gives it for the model API's QUOTA_EXHAUSTED only (T3 Code's turnFailure).
+const QUOTA: &str =
+    "Antigravity usage limit: you have reached your Antigravity quota for this period (QUOTA_EXHAUSTED)";
+/// The native session log's step that records an error (CORTEX_STEP_TYPE_ERROR_MESSAGE), and how much of what it says
+/// is read: the error leads, a Go stack trace follows.
+const ERROR_STEP: i64 = 17;
+const ERROR_PAYLOAD: i64 = 16_384;
+/// What agy prints in place of a protocol line when it would have a person open a sign-in link.
+const AUTH_LINK: &str = "Open the following link to authenticate the ACP server: ";
 // A test's stuck fake waits out the grace; a second is as good a proof as five.
 const STOP_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
-/// How long `agy` may go on writing after its result before the turn stops reading it.
-const DRAIN: Duration = Duration::from_secs(5);
-/// How long `agy` has to exit on its own once its stdin closes after the result, before the turn ends (and a stop
-/// signals it).
+/// How long `agy` has to exit on its own once its input closes after the turn, before it is stopped.
 const EXIT_WAIT: Duration = Duration::from_secs(1);
+/// How long `initialize` may take: agy unpacks its runtime on every start before it answers.
+const START_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 120 });
+/// How long any other request before the prompt may take.
+const REQUEST_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
 /// Lines that are not JSON (a banner, a warning) skipped before the stream counts as broken, and how many of the last
 /// ones a failure's error keeps (each cut to KEPT_CHARS).
 const SKIP_MAX: usize = 100;
@@ -42,22 +60,150 @@ const KEPT_CHARS: usize = 300;
 const ERROR_CHARS: usize = 1000;
 /// What resuming a thread whose record is gone says: worded for continuity::missing, so the turn moves to a new thread.
 const MISSING: &str = "No conversation found for this Antigravity thread on this computer";
-/// A turn that must continue its saved conversation, which `agy` did not resume.
-const LOST: &str =
-    "No conversation found: Antigravity began a new conversation in place of the saved one";
-/// A turn that must continue its saved conversation, which `agy` never named before it would have read the prompt.
+/// A turn that must continue its saved conversation, which `agy` would not resume.
+const LOST: &str = "No conversation found: Antigravity could not resume the saved conversation, so this turn was not sent";
+/// A turn that must continue its saved conversation, which `agy` did not say it resumed in time.
 const UNCONFIRMED: &str = "No conversation found: Antigravity did not say it resumed the saved conversation, so this turn was not sent";
-/// How long a resumed turn's prompt waits for `agy` to name its conversation (`init`, which agy 1.5.15 sends before it
-/// reads its input). A turn that must continue it is never sent without it; any other is sent after the wait.
-const INIT_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 60 });
 
-/// `agy`'s argv: model `<model>-<effort>`, effort high unless set, permissions skipped, the saved conversation if any.
-pub fn argv(
-    cmd: &[String],
-    settings: &Settings,
-    effort: Option<&str>,
-    provider: Option<&str>,
-) -> Result<Vec<String>, HostError> {
+/// `agy acp` on `home` (its `--gemini-dir`), everything of its own in APP_DATA_DIR there.
+pub fn acp_argv(cmd: &[String], home: &str) -> Vec<String> {
+    let mut argv = cmd.to_vec();
+    argv.extend(["acp", "--gemini-dir", home, "--app-data-dir", APP_DATA_DIR].map(String::from));
+    argv
+}
+
+/// The environment `agy acp` runs in (T3 Code's antigravityEnvironment): `env` without what would point it at another
+/// home or open a browser, then its home, no self-update, unbuffered output, `tmp` as its TMPDIR and, on Linux, a CA
+/// bundle its own Python may not find. A plan's (`plan`) also goes without any other Google sign-in, and keeps its
+/// sign-in in a file of its home, never the keyring: told it runs over SSH, which the 1.5 CLI needs for that. Any other
+/// keeps the computer's own sign-in (its keyring, a key or its Application Default Credentials) as it is.
+pub fn acp_env(env: &Env, home: &str, plan: bool, tmp: &Path) -> Env {
+    let t = crate::model_subscriptions::turn_home("antigravity");
+    let mut strip: Vec<String> = vec!["GEMINI_HOME".into(), "BROWSER".into()];
+    if plan {
+        strip.extend(t.iter().flat_map(|t| t.strip.iter().map(|k| k.to_string())));
+        strip.extend(crate::harness_tools::api_key_env("antigravity"));
+    }
+    let mut out: Env = env
+        .iter()
+        .filter(|(k, _)| {
+            !strip.contains(*k) && !k.starts_with("AGY_ACP_") && !(plan && k.starts_with("AGY_"))
+        })
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    out.extend(crate::harness_tools::env_for("antigravity"));
+    for (k, v) in [
+        ("GEMINI_HOME", home),
+        ("AGY_CLI_DISABLE_AUTO_UPDATE", "1"),
+        ("PYTHONUNBUFFERED", "1"),
+    ] {
+        out.insert(k.into(), v.into());
+    }
+    out.insert("TMPDIR".into(), tmp.display().to_string());
+    if let Some(ca) = ca_bundle(env) {
+        out.insert("SSL_CERT_FILE".into(), ca);
+    }
+    if plan {
+        out.insert("AGY_ACP_FORCE_FILE_STORAGE".into(), "1".into());
+        out.extend(
+            t.iter()
+                .flat_map(|t| t.env.iter().map(|(k, v)| (k.to_string(), v.to_string()))),
+        );
+    }
+    out
+}
+
+/// The method `authenticate` names (T3 Code's authMethod): a plan's is always the Google account's. Any other turn keeps
+/// the computer's own sign-in as `env` selects it: a Gemini API key, Google Cloud (its key or its Application Default
+/// Credentials), else the Google account.
+pub fn auth_method(env: &Env, plan: bool) -> &'static str {
+    let set = |k: &str| env.get(k).is_some_and(|v| !v.trim().is_empty());
+    if plan {
+        AUTH_METHOD
+    } else if set("GEMINI_API_KEY") {
+        "gemini-api-key"
+    } else if [
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "AGY_ADC_AUTH",
+    ]
+    .iter()
+    .any(|k| set(k))
+        || env
+            .get("GOOGLE_GENAI_USE_VERTEXAI")
+            .is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true"))
+    {
+        "agent-platform"
+    } else {
+        AUTH_METHOD
+    }
+}
+
+/// A CA bundle for agy's own Python on Linux, which may look for one where this distribution has none, unless `env`
+/// names one already.
+fn ca_bundle(env: &Env) -> Option<String> {
+    if !cfg!(target_os = "linux")
+        || env.contains_key("SSL_CERT_FILE")
+        || env.contains_key("SSL_CERT_DIR")
+    {
+        return None;
+    }
+    env.get("NIX_SSL_CERT_FILE")
+        .cloned()
+        .into_iter()
+        .chain(
+            [
+                "/etc/ssl/certs/ca-bundle.crt",
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/cert.pem",
+            ]
+            .map(String::from),
+        )
+        .find(|p| Path::new(p).is_absolute() && Path::new(p).exists())
+}
+
+/// `initialize`'s parameters: Tico reads and writes files itself and runs no terminal for agy.
+pub fn initialize_params() -> Value {
+    json!({"protocolVersion": 1,
+           "clientCapabilities": {"fs": {"readTextFile": false, "writeTextFile": false}, "terminal": false},
+           "clientInfo": {"name": "tico", "title": "Tico", "version": env!("CARGO_PKG_VERSION")}})
+}
+
+/// How many models a session offers: its `model` config option's values, else ACP's `models` list.
+pub fn models(session: &Value) -> usize {
+    match option(&session["configOptions"], |o| o["id"] == "model") {
+        Some(o) => values(o).len(),
+        None => session["models"]["availableModels"]
+            .as_array()
+            .map_or(0, Vec::len),
+    }
+}
+
+/// The values a select config option offers, its groups' included.
+fn values(option: &Value) -> Vec<String> {
+    option["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|o| match o.get("options").and_then(Value::as_array) {
+            Some(group) => group.clone(),
+            None => vec![o.clone()],
+        })
+        .filter_map(|o| o["value"].as_str().map(String::from))
+        .collect()
+}
+
+fn option(options: &Value, which: impl Fn(&Value) -> bool) -> Option<&Value> {
+    options
+        .as_array()?
+        .iter()
+        .find(|o| o["type"] == "select" && which(o))
+}
+
+/// The model and effort a turn asks for: effort high unless set; a model id that names an effort (`gemini-4-neon-low`)
+/// takes this turn's in its place.
+fn model_effort(settings: &Settings, effort: Option<&str>) -> Result<(String, String), HostError> {
     let model = settings
         .model
         .clone()
@@ -70,31 +216,210 @@ pub fn argv(
     if !EFFORTS.contains(&effort) {
         return Err(failed("Unsupported Antigravity effort"));
     }
-    // A model id that already names an effort (`gemini-4-neon-low`) takes this turn's in its place.
     let base = EFFORTS
         .iter()
         .find_map(|e| model.strip_suffix(&format!("-{e}")))
         .unwrap_or(&model);
-    let mut argv = cmd.to_vec();
-    for a in [
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--model",
-    ] {
-        argv.push(a.into());
+    Ok((base.to_string(), effort.to_string()))
+}
+
+/// The value to set the session's `model` option to for `model` at `effort` (T3 Code's
+/// applyAntigravityAcpModelSelection): the model when listed, else its id with the effort when that is (an older agy
+/// lists them so); None when it is current or the session offers no choice. Err when the account does not have it.
+fn model_value(options: &Value, model: &str, effort: &str) -> Result<Option<String>, String> {
+    let Some(o) = option(options, |o| o["id"] == "model") else {
+        return Ok(None);
+    };
+    let listed = values(o);
+    let legacy = format!("{model}-{effort}");
+    let want = if listed.iter().any(|v| v == model) {
+        model.to_string()
+    } else if listed.contains(&legacy) {
+        legacy
+    } else {
+        return Err(format!("Antigravity model '{model}' is unavailable for this Google account. Select an available model."));
+    };
+    Ok((o["currentValue"].as_str() != Some(want.as_str())).then_some(want))
+}
+
+/// The id of the session's thinking level option (`thought_level`, offered for the current model only) to set to
+/// `effort`: None when there is none, it does not offer `effort`, or that is current.
+fn effort_option(options: &Value, effort: &str) -> Option<String> {
+    let o = option(options, |o| o["category"] == "thought_level")?;
+    (values(o).iter().any(|v| v == effort) && o["currentValue"].as_str() != Some(effort))
+        .then(|| text_of(&o["id"]))
+}
+
+/// The bot's MCP servers as ACP names them (as hosts/grok.rs passes them), of the transports agy says it takes
+/// (`mcpCapabilities`) only, as T3 Code passes them.
+fn servers(settings: &Settings, init: &Value) -> Value {
+    let caps = &init["agentCapabilities"]["mcpCapabilities"];
+    let taken: Vec<Value> = settings
+        .mcp_servers
+        .iter()
+        .filter(|s| caps[text_of(&s["transport"]).as_str()] == true)
+        .cloned()
+        .collect();
+    json!(crate::mcp::grok_config(&taken, &settings.env))
+}
+
+/// A sign-in agy has not got (T3 Code's isAntigravitySignInRequiredError): `Authentication required` (-32000), or the
+/// 1.5 CLI's -32603 when it has no sign-in and no browser.
+fn signed_out(error: &Value) -> bool {
+    match error["code"].as_i64() {
+        Some(-32000) => true,
+        Some(-32603) => error["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("No browser is available here")),
+        _ => false,
     }
-    argv.extend([
-        format!("{base}-{effort}"),
-        "--effort".into(),
-        effort.into(),
-        "--dangerously-skip-permissions".into(),
-    ]);
-    if let Some(p) = provider {
-        argv.extend(["--conversation".into(), p.into()]);
+}
+
+/// What agy said refusing a request: its message, scrubbed of credentials and bounded, never its `data` as it is. The
+/// data is read in memory only, for a usage limit or a sign-in agy has not got (hosts::is_auth_rejected_on), which
+/// the text then names.
+fn said(error: &Value, scrub: &crate::redact::Redactor) -> String {
+    let message = error["message"].as_str().unwrap_or_default();
+    let text: String = crate::run_diagnostics::safe(message.trim(), scrub)
+        .chars()
+        .take(ERROR_CHARS)
+        .collect();
+    let text = if text.is_empty() {
+        format!("error {}", error["code"])
+    } else {
+        text
+    };
+    let data = error.get("data").map(|d| match d {
+        Value::String(d) => d.clone(),
+        d => d.to_string(),
+    });
+    let all = format!("{message} {}", data.unwrap_or_default());
+    let auth = |t: &str| super::is_auth_rejected_on("antigravity", t);
+    if (signed_out(error) || auth(&all)) && !auth(&text) {
+        format!("Authentication required: {text}")
+    } else if is_limit(&all) && !is_limit(&text) {
+        format!("Antigravity usage limit: {text}")
+    } else {
+        text
     }
-    Ok(argv)
+}
+
+/// The turn's native session log (T3 Code's AntigravityTurnOutcome): agy records each step of `session`'s conversation
+/// in it, an error it streams as chat text and ends with `end_turn` among them.
+fn session_log(home: &str, session: &str) -> PathBuf {
+    Path::new(home)
+        .join(APP_DATA_DIR)
+        .join("conversations")
+        .join(format!("{session}.db"))
+}
+
+/// `read` on the session log's `steps` table, read only: Some(None) when it has no such table yet, None when the log
+/// is not a plain file (a link could be another session's) or cannot be read.
+fn steps<T>(
+    log: &Path,
+    read: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>,
+) -> Option<Option<T>> {
+    use rusqlite::OpenFlags;
+    if !std::fs::symlink_metadata(log).ok()?.is_file() {
+        return None;
+    }
+    let db = rusqlite::Connection::open_with_flags(
+        log,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    db.busy_timeout(Duration::from_millis(100)).ok()?;
+    let tables: i64 = db
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'steps'",
+            [],
+            |r| r.get(0),
+        )
+        .ok()?;
+    if tables == 0 {
+        return Some(None);
+    }
+    read(&db).ok().map(Some)
+}
+
+/// The log's last step before the prompt: -1 when there is no log yet (a conversation agy begins with this turn); None
+/// when it cannot be read, and only the prompt's typed answer counts, so no earlier step is taken for this turn's.
+fn last_step(log: &Path) -> Option<i64> {
+    match std::fs::symlink_metadata(log) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(-1),
+        Err(_) => return None,
+        Ok(_) => {}
+    }
+    let last = steps(log, |db| {
+        db.query_row("SELECT coalesce(max(idx), -1) FROM steps", [], |r| r.get(0))
+    })?;
+    Some(last.unwrap_or(-1))
+}
+
+/// What the prompt's last step says when it records an error: a step after `before`, so never an earlier turn's.
+fn step_error(log: &Path, before: i64) -> Option<String> {
+    use rusqlite::types::Value as Sql;
+    let (kind, payload) = steps(log, |db| {
+        db.query_row(
+            "SELECT step_type, substr(step_payload, 1, ?1) FROM steps WHERE idx > ?2 ORDER BY idx DESC LIMIT 1",
+            rusqlite::params![ERROR_PAYLOAD, before],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Sql>(1)?)),
+        )
+    })??;
+    (kind == ERROR_STEP).then(|| match payload {
+        Sql::Text(t) => t,
+        Sql::Blob(b) => String::from_utf8_lossy(&b).into_owned(),
+        _ => String::new(),
+    })
+}
+
+/// A failure from what an error step says (T3 Code's turnFailure): the quota, else the model API's own message and
+/// status, else that there was an error. Scrubbed of credentials and bounded.
+fn step_failure(text: &str, scrub: &crate::redact::Redactor) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static R: OnceLock<[Regex; 3]> = OnceLock::new();
+    let [quota, api, status] = R.get_or_init(|| {
+        [
+            Regex::new(r"\breason:QUOTA_EXHAUSTED\b").unwrap(),
+            // The Go harness's rendering of a Google API error.
+            Regex::new(r"(?s)Error (\d{3}), Message: (.+?), Status: ([A-Z_]+|\d{3}[^,\n]*)")
+                .unwrap(),
+            // Antigravity 1.5 with a Google account: "STATUS (code NNN): message".
+            Regex::new(r"(?:^|[^A-Z_])([A-Z_]+) \(code (\d{3})\): ([^\x00-\x1f\x7f]+)").unwrap(),
+        ]
+    });
+    if quota.is_match(text) {
+        return QUOTA.into();
+    }
+    let (code, message, name) = match (api.captures(text), status.captures(text)) {
+        (Some(c), _) => (c[1].to_string(), c[2].to_string(), c[3].to_string()),
+        (None, Some(c)) => (c[2].to_string(), c[3].to_string(), c[1].to_string()),
+        (None, None) => return "Antigravity stopped this turn because of an error".into(),
+    };
+    let bounded = |text: &str, most: usize| -> String {
+        crate::run_diagnostics::safe(text.trim(), scrub)
+            .chars()
+            .take(most)
+            .collect()
+    };
+    format!(
+        "Antigravity stopped this turn: HTTP {code} {}: {}",
+        bounded(&name, KEPT_CHARS),
+        bounded(&message, ERROR_CHARS)
+    )
+}
+
+/// What a stop reason that ends the turn unfinished means, as the turn's failure: None for `end_turn` and `cancelled`.
+fn stopped(stop: &str) -> Option<String> {
+    let why = match stop {
+        "refusal" => QUOTA,
+        "error" => "Antigravity stopped: error",
+        "max_tokens" => "Antigravity stopped: the answer reached the model's output token limit",
+        "max_turn_requests" => "Antigravity stopped: the turn reached its limit of model requests",
+        _ => return None,
+    };
+    Some(why.into())
 }
 
 /// Python's `str(uuid.UUID(text))`: the canonical lower-case hyphenated form, or None when it is no uuid.
@@ -102,6 +427,18 @@ fn canonical(text: &str) -> Option<String> {
     uuid::Uuid::parse_str(text.trim())
         .ok()
         .map(|u| u.hyphenated().to_string())
+}
+
+/// A conversation id agy names: a uuid in its canonical form, else a plain token as it is.
+fn conversation(text: &str) -> Option<String> {
+    canonical(text).or_else(|| {
+        let t = text.trim();
+        (!t.is_empty()
+            && t.len() <= 128
+            && t.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+        .then(|| t.to_string())
+    })
 }
 
 /// Python's `int(value or 0)` for a usage count.
@@ -123,6 +460,30 @@ fn last_chars(text: &str, n: usize) -> String {
     text.chars().skip(skip).collect()
 }
 
+/// The environment the turn's agy starts from: the turn's own, else this runner's.
+fn env_of(settings: &Settings) -> Env {
+    if settings.env.is_empty() {
+        crate::env::process_environment()
+    } else {
+        settings.env.clone()
+    }
+}
+
+/// The turn's `--gemini-dir`: its plan's home, else the bot's own `~/.gemini`.
+fn home_for(settings: &Settings) -> Result<String, HostError> {
+    if let Some(home) = &settings.plan_home {
+        return Ok(home.clone());
+    }
+    settings
+        .env
+        .get("HOME")
+        .cloned()
+        .or_else(|| std::env::var("HOME").ok())
+        .filter(|h| !h.is_empty())
+        .map(|h| Path::new(&h).join(".gemini").display().to_string())
+        .ok_or_else(|| failed("Antigravity needs a HOME"))
+}
+
 /// A running `agy`, owned by the shared process owner (super::own_with_before_reap): its exit code once reaped.
 #[derive(Clone)]
 struct Proc {
@@ -131,8 +492,8 @@ struct Proc {
 }
 
 impl Proc {
-    /// SIGTERM to the group, SIGKILL after STOP_GRACE, then until it has gone: whatever it was given (its home, the
-    /// turn's folder) is not removed while it runs.
+    /// SIGTERM to the group, SIGKILL after STOP_GRACE, then until it has gone: whatever it was given (its home, its
+    /// TMPDIR, the turn's folder) is not removed while it runs.
     async fn reap(&self) {
         let mut exited = self.exited.clone();
         if exited.borrow().is_none() {
@@ -142,54 +503,85 @@ impl Proc {
     }
 }
 
-/// What the turn's reader holds of its process: stdout, stderr, and the stdin it closes once the result is in.
-struct Running {
+/// The two ends of agy's protocol stream.
+struct Io {
+    stdin: Option<ChildStdin>,
     stdout: Lines<BufReader<ChildStdout>>,
+    next: i64,
+}
+
+/// What the turn's reader holds of its process.
+struct Running {
+    io: Io,
     stderr: crate::run_diagnostics::Stderr,
-    /// Sends the held prompt (a resumed turn's, once `agy` names the saved conversation); dropped unsent, it is never
-    /// written.
-    release: Option<oneshot::Sender<()>>,
-    close: Option<oneshot::Sender<()>>,
     exited: watch::Receiver<Option<i32>>,
 }
 
-/// One process's stream as the reader sees it.
+/// One turn's stream as the reader sees it.
 #[derive(Default)]
 struct Stream {
-    /// The turn's streamed text as it was sent, and with a paragraph between its messages (a tool call ends one).
-    streamed: (String, String),
+    /// The session the turn runs in: only its updates are the turn's.
+    session: String,
+    /// The prompt has gone: updates from here on are the turn's events.
+    prompting: bool,
+    /// The turn's streamed reply, a paragraph between its messages (a tool call ends one).
+    streamed: String,
     new_message: bool,
-    /// Per-step usage emitted by `step_update`, keyed by `step_index`.
-    step_usage: BTreeMap<i64, Value>,
-    /// Usage on steps with no `step_index`: each counts on its own.
-    unindexed_usage: Vec<Value>,
-    /// A step other than the prompt's own (`user_input`) has run: the model worked in this conversation.
+    /// The `messageId` of the last text chunk.
+    message: Option<String>,
+    /// The model worked in this conversation (a reply, a thought or a tool).
     worked: bool,
-    /// `agy` named its conversation (`init`) and the turn may go on: its held prompt is sent.
-    confirmed: bool,
-    /// Another conversation than the saved one that an event named: kept only once the model works in it or the turn
-    /// succeeds, so a refusal before any work leaves the saved one as it was.
+    /// A conversation agy began for this turn: kept only once the model works in it or the turn succeeds, so a refusal
+    /// before any work leaves the saved one as it was.
     staged: Option<String>,
-    /// This process starts the turn over with its whole prompt (`End::Replaced`), outside the saved conversation.
-    replacing: bool,
-    /// The conversation a `replacing` process began: once the turn succeeds there, it holds everything.
-    fresh: Option<String>,
-    /// The first conversation a new thread's process named: its own, which holds the whole turn.
-    begun: Option<String>,
+    /// agy could not resume the saved conversation, so `staged` is in its place.
+    restored: bool,
+    /// The turn's prompt was the whole one, the conversation's history included.
+    told_all: bool,
     skipped: Vec<String>,
     skipped_count: usize,
+    /// The tool calls reported (by `toolCallId`): each once, from its `tool_call` or an update that came first.
+    tools: Vec<Value>,
 }
 
-/// How a process's stream ended.
+/// How a turn's stream ended.
 enum End {
-    Result(Value),
-    /// No result: the stream closed, or broke (why).
+    /// `session/prompt` answered: its result, and the failure the session log recorded for an `end_turn`.
+    Result(Value, Option<String>),
+    /// agy refused a request, or did not answer it in time: why.
+    Failed(String),
+    /// The stream closed, or broke (why).
     Closed(Option<String>),
     /// `agy` did not continue the saved conversation on a turn that must continue it: why.
     Mismatch(&'static str),
-    /// `agy` began another conversation before the held prompt went: the turn starts over in a new one with its whole
-    /// prompt (`full_prompt`), so this turn's part alone never goes into an empty conversation.
-    Replaced,
+}
+
+/// A request's answer.
+enum Answer {
+    Ok(Value),
+    Err(Value),
+    /// None in the time it had.
+    Late,
+}
+
+/// `method` refused (or not answered in time) before the prompt went.
+fn refused(method: &str, answer: Answer, scrub: &crate::redact::Redactor) -> String {
+    match answer {
+        Answer::Err(e) => format!("Antigravity {method} failed: {}", said(&e, scrub)),
+        _ => format!("Antigravity did not answer {method} in time"),
+    }
+}
+
+/// What one turn's reader works with.
+struct Conv<'a> {
+    tid: &'a str,
+    turn: &'a str,
+    io: &'a mut Io,
+    stream: &'a mut Stream,
+    scrub: crate::redact::Redactor,
+    /// `authenticate` names the Google account: a sign-in link agy prints ends the turn, as no person is there to open
+    /// it. On a key or Google Cloud sign-in it is only skipped.
+    oauth: bool,
 }
 
 struct Inner {
@@ -212,6 +604,8 @@ struct Inner {
 }
 
 struct Shared {
+    /// Held while `session/prompt` is written, and by `stop` while it records the stop: no prompt goes after one.
+    gate: tokio::sync::Mutex<()>,
     allocation: super::Allocation,
     home: PathBuf,
     cmd: Vec<String>,
@@ -224,6 +618,7 @@ pub struct AntigravityHost(Arc<Shared>);
 impl AntigravityHost {
     pub fn new(home: &Path, cmd: Vec<String>, tx: Events) -> AntigravityHost {
         AntigravityHost(Arc::new(Shared {
+            gate: tokio::sync::Mutex::new(()),
             allocation: super::Allocation::default(),
             home: home.to_path_buf(),
             cmd,
@@ -302,7 +697,7 @@ impl AntigravityHost {
                 .map_err(|_| missing())?;
         let provider = record["conversation_id"]
             .as_str()
-            .and_then(canonical)
+            .and_then(conversation)
             .ok_or_else(missing)?;
         let mut inner = self.inner();
         inner.provider = Some(provider);
@@ -321,7 +716,7 @@ impl AntigravityHost {
     }
 
     /// A turn that told `thread_id` everything completed: its record stops asking for the history, unless agy moved it
-    /// again during that turn.
+    /// during that turn.
     pub fn history_told(&self, thread_id: &str) {
         let mut inner = self.inner();
         if inner.thread.as_deref() != Some(thread_id) || !inner.needs_history || inner.flagged {
@@ -381,106 +776,70 @@ impl AntigravityHost {
         Ok(())
     }
 
-    /// A conversation `agy` named, on any event, staged until the model works or the turn succeeds (`commit`); naming
-    /// the saved one again unstages it. Another than the saved one ends a turn that must continue it (`Mismatch`).
-    fn named(
-        &self,
-        inner: &mut Inner,
-        stream: &mut Stream,
-        cid: &str,
-        must_continue: bool,
-    ) -> Result<Option<End>, String> {
-        let cid = canonical(cid).ok_or("not a conversation id")?;
-        match inner.provider.clone() {
-            // A new thread's first conversation is staged too: a refusal before any work leaves no record.
-            None => {
-                if stream.begun.is_none() {
-                    stream.begun = Some(cid.clone());
-                }
-                stream.staged = Some(cid);
-            }
-            // Back on the saved one: whatever another event named is not where the turn went.
-            Some(saved) if saved == cid => stream.staged = None,
-            Some(_) if must_continue => return Ok(Some(End::Mismatch(LOST))),
-            Some(_) => {
-                if stream.replacing && stream.fresh.is_none() {
-                    stream.fresh = Some(cid.clone());
-                }
-                stream.staged = Some(cid);
-            }
-        }
-        Ok(None)
-    }
-
-    /// A staged conversation, once the model worked in it or the turn succeeded: kept for the thread, which reads
-    /// restored, with its record saying it lacks the history (it holds this turn only), so the next turn is told
-    /// everything again; a turn started over with everything clears that once it succeeds. Nothing is started again
-    /// once the prompt went, so no work runs twice.
+    /// The conversation agy began for this turn, once the model worked in it or the turn succeeded: a new thread's own,
+    /// or one in place of the saved one, which then reads restored, its record saying it lacks the history (it holds
+    /// this turn only) until a turn told everything succeeds there. Nothing is started again once the prompt went, so
+    /// no work runs twice.
     fn commit(&self, inner: &mut Inner, stream: &mut Stream) -> Result<(), String> {
         if let Some(cid) = stream.staged.take() {
-            if inner.provider.is_none() && stream.begun.as_deref() == Some(cid.as_str()) {
-                // A new thread's own conversation: nothing was replaced.
-                return self.save(inner, &cid, false);
+            if stream.restored {
+                inner.restored = true;
             }
-            inner.restored = true;
-            self.save(inner, &cid, true)?;
+            self.save(inner, &cid, stream.restored)?;
         }
         Ok(())
     }
 
+    /// `agy acp` for a turn on `home` with `tmp` as its TMPDIR, in a process group of its own, so a stop reaches the
+    /// tools it started too.
     fn command(
         &self,
         settings: &Settings,
-        effort: Option<&str>,
-        provider: Option<&str>,
-    ) -> Result<Command, HostError> {
-        let argv = argv(&self.0.cmd, settings, effort, provider)?;
+        home: &str,
+        tmp: &Path,
+    ) -> Result<tokio::process::Command, HostError> {
+        // A plan's turn (model_subscriptions.rs TURN_HOMES): its sign-in is the file in its own home, and nothing else
+        // may sign it in. Without that file in place agy is not started at all, so it never runs on the computer's own
+        // sign-in instead.
+        if let Some(home) = &settings.plan_home {
+            crate::model_subscriptions::turn_home("antigravity")
+                .ok_or_else(|| failed("Antigravity plans are not supported here"))?
+                .sign_in(home)
+                .map_err(failed)?;
+        }
+        let argv = acp_argv(&self.0.cmd, home);
+        let env = env_of(settings);
         let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .current_dir(&settings.cwd);
-        if !settings.env.is_empty() {
-            command.env_clear().envs(&settings.env);
-        }
-        command.envs(crate::harness_tools::env_for("antigravity"));
-        // A plan's turn (model_subscriptions.rs TURN_HOMES): its sign-in is the file in its own GEMINI_HOME, which agy
-        // reads only when it believes it runs over SSH, and nothing else may sign it in. Without that file in place
-        // agy is not started at all, so it never runs on the computer's own sign-in instead.
-        if let Some(home) = &settings.plan_home {
-            let t = crate::model_subscriptions::turn_home("antigravity")
-                .ok_or_else(|| failed("Antigravity plans are not supported here"))?;
-            t.sign_in(home).map_err(failed)?;
-            for key in t
-                .strip
-                .iter()
-                .map(|k| k.to_string())
-                .chain(crate::harness_tools::api_key_env("antigravity"))
-            {
-                command.env_remove(key);
-            }
-            command.env(t.var, home).envs(t.env.iter().copied());
-        }
-        // Its own process group, so a stop reaches the tools it started too.
+            .current_dir(&settings.cwd)
+            .env_clear()
+            .envs(acp_env(&env, home, settings.plan_home.is_some(), tmp));
         super::new_group(&mut command);
         Ok(command)
     }
 
-    /// Start `agy` on `text`: its stdin gets the one user line and stays open until the reader closes it.
-    fn spawn(
-        &self,
-        settings: &Settings,
-        effort: Option<&str>,
-        provider: Option<&str>,
-        text: &str,
-        hold: bool,
-    ) -> Result<(Proc, Running), HostError> {
-        let mut child = self
-            .command(settings, effort, provider)?
-            .spawn()
-            .map_err(|e| failed(format!("could not start agy: {e}")))?;
+    /// Start the turn's `agy acp`, with a TMPDIR of its own (it unpacks its runtime there on every start), removed once
+    /// it and its group have gone.
+    fn spawn(&self, settings: &Settings) -> Result<(Proc, Running), HostError> {
+        let home = home_for(settings)?;
+        let tmp = std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        crate::isolation::mkdir(&tmp, 0o700)
+            .map_err(|e| failed(format!("could not make Antigravity's TMPDIR: {e}")))?;
+        let started = self.command(settings, &home, &tmp).and_then(|mut c| {
+            c.spawn()
+                .map_err(|e| failed(format!("could not start agy: {e}")))
+        });
+        let mut child = match started {
+            Ok(child) => child,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&tmp);
+                return Err(e);
+            }
+        };
         self.0.allocation.mark();
         let host = self.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -501,21 +860,7 @@ impl AntigravityHost {
             .stdout
             .take()
             .ok_or_else(|| failed("agy has no stdout"))?;
-        let mut stdin = child.stdin.take();
-        let line = py_dumps(&json!({"event": "user", "message": {"content": text}})) + "\n";
-        let (close, closed) = oneshot::channel::<()>();
-        let (release, released) = oneshot::channel::<()>();
-        tokio::spawn(async move {
-            // A held prompt goes only once the reader releases it; never when it is dropped unsent.
-            if hold && released.await.is_err() {
-                return;
-            }
-            if let Some(s) = stdin.as_mut() {
-                let _ = s.write_all(line.as_bytes()).await;
-                let _ = s.flush().await;
-            }
-            let _ = closed.await;
-        });
+        let stdin = child.stdin.take();
         // Whatever is left of its group when agy exits, however it exits, goes with it: a tool it started never outlives
         // the turn. Sent before agy is reaped, so the group's number is still its own.
         let group = child.id().map(|p| p as i32);
@@ -532,6 +877,7 @@ impl AntigravityHost {
                 Ok(status) => super::return_code(&status),
                 Err(_) => -1,
             };
+            let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&tmp)).await;
             let _ = done.send(Some(code));
         });
         Ok((
@@ -540,10 +886,12 @@ impl AntigravityHost {
                 exited: exited.clone(),
             },
             Running {
-                stdout: BufReader::new(stdout).lines(),
+                io: Io {
+                    stdin,
+                    stdout: BufReader::new(stdout).lines(),
+                    next: 0,
+                },
                 stderr,
-                release: hold.then_some(release),
-                close: Some(close),
                 exited,
             },
         ))
@@ -563,26 +911,15 @@ impl AntigravityHost {
             ));
         }
         let settings = inner.settings.clone().unwrap_or_default();
+        let (model, effort) = model_effort(&settings, effort)?;
         inner.flagged = false;
-        // A resumed turn's prompt waits until agy names the conversation it resumed.
-        let provider = inner.provider.clone();
-        let (proc, running) = self.spawn(
-            &settings,
-            effort,
-            provider.as_deref(),
-            text,
-            provider.is_some(),
-        )?;
+        let (proc, running) = self.spawn(&settings)?;
         inner.proc = Some(proc);
         inner.turn = Some(turn.clone());
         let host = self.clone();
-        let (tid, id, effort) = (
-            thread_id.to_string(),
-            turn.clone(),
-            effort.map(String::from),
-        );
+        let (tid, id, text) = (thread_id.to_string(), turn.clone(), text.to_string());
         inner.reader = Some(tokio::spawn(async move {
-            host.run(&tid, &id, effort, running).await
+            host.run(&tid, &id, &text, (&model, &effort), running).await
         }));
         let _ = inner.tx.send(event(
             "status",
@@ -594,140 +931,496 @@ impl AntigravityHost {
     }
 
     /// The turn's one reader: it alone says how the turn ended.
-    async fn run(&self, tid: &str, turn: &str, effort: Option<String>, mut running: Running) {
+    async fn run(
+        &self,
+        tid: &str,
+        turn: &str,
+        text: &str,
+        (model, effort): (&str, &str),
+        mut running: Running,
+    ) {
         let mut stream = Stream::default();
-        loop {
-            let end = self.read(tid, turn, &mut stream, &mut running).await;
-            // A prompt still held is never sent, and stdin closes, whatever the end: agy takes that as the end of its
-            // input and exits.
-            drop(running.release.take());
-            if let Some(close) = running.close.take() {
-                let _ = close.send(());
+        let scrub = {
+            let inner = self.inner();
+            let env = inner
+                .settings
+                .as_ref()
+                .map(|s| s.env.clone())
+                .unwrap_or_default();
+            crate::redact::Redactor::new(&crate::redact::env_secrets(&env))
+        };
+        let oauth = {
+            let inner = self.inner();
+            let settings = inner.settings.clone().unwrap_or_default();
+            auth_method(&env_of(&settings), settings.plan_home.is_some()) == AUTH_METHOD
+        };
+        let end = {
+            let mut c = Conv {
+                tid,
+                turn,
+                io: &mut running.io,
+                stream: &mut stream,
+                scrub,
+                oauth,
+            };
+            self.converse(&mut c, text, model, effort).await
+        };
+        // Its input closes, whatever the end: agy takes that as the end of its work and exits.
+        drop(running.io.stdin.take());
+        // A stopped turn says nothing more, so nothing waits for its code.
+        let code = if self.inner().up {
+            let wait = if matches!(end, End::Closed(_)) {
+                STOP_GRACE
+            } else {
+                EXIT_WAIT
+            };
+            tokio::time::timeout(wait, running.exited.wait_for(|e| e.is_some()))
+                .await
+                .ok()
+                .and_then(|e| e.ok().and_then(|e| *e))
+        } else {
+            None
+        };
+        // Gone, its group with it, before the turn ends: the next turn is never admitted beside it.
+        self.reap_current().await;
+        running.stderr.drained().await;
+        let stderr = running.stderr.tail();
+        match end {
+            End::Result(result, failure) => {
+                self.finish(tid, turn, &result, failure, &stream, &stderr)
             }
-            let up = self.inner().up;
-            match end {
-                End::Result(result) => {
-                    if up {
-                        let _ = tokio::time::timeout(
-                            EXIT_WAIT,
-                            running.exited.wait_for(|e| e.is_some()),
-                        )
-                        .await;
-                    }
-                    // Gone, its group with it, before the turn ends: the next turn is never admitted beside it.
-                    self.reap_current().await;
-                    running.stderr.drained().await;
-                    self.finish(tid, turn, &result, &stream, &running.stderr.tail());
-                    let _ = tokio::time::timeout(DRAIN, async {
-                        while let Ok(Some(_)) = running.stdout.next_line().await {}
-                    })
-                    .await;
-                    return;
+            End::Failed(error) => self.fail(tid, turn, &error, &stderr),
+            End::Closed(why) => {
+                if let Some(why) = &why {
+                    log(&format!("Antigravity stream failed: {why}"));
                 }
-                End::Closed(why) => {
-                    if let Some(why) = &why {
-                        log(&format!("Antigravity stream failed: {why}"));
-                    }
-                    // A stopped turn says nothing more, so nothing waits for its code.
-                    let code = if up {
-                        tokio::time::timeout(STOP_GRACE, running.exited.wait_for(|e| e.is_some()))
-                            .await
-                            .ok()
-                            .and_then(|e| e.ok().and_then(|e| *e))
-                    } else {
-                        None
-                    };
-                    self.reap_current().await;
-                    running.stderr.drained().await;
-                    self.fail_closed(
-                        tid,
-                        turn,
-                        code,
-                        why.as_deref(),
-                        &running.stderr.tail(),
-                        &stream,
-                    );
-                    return;
+                self.fail_closed(tid, turn, code, why.as_deref(), &stderr, &stream);
+            }
+            // The saved conversation stays as it was: a continuation must not run on another one.
+            End::Mismatch(error) => self.end(
+                tid,
+                turn,
+                event(
+                    "turn_failed",
+                    Some(tid),
+                    Some(turn),
+                    json!({"error": error, "limit": false}),
+                ),
+            ),
+        }
+    }
+
+    /// The turn's whole conversation with agy, from `initialize` to the prompt's answer.
+    async fn converse(&self, c: &mut Conv<'_>, text: &str, model: &str, effort: &str) -> End {
+        let settings = self.inner().settings.clone().unwrap_or_default();
+        let plan = settings.plan_home.is_some();
+        let init = match self
+            .call(c, "initialize", initialize_params(), Some(START_WAIT))
+            .await
+        {
+            Ok(Answer::Ok(v)) => v,
+            Ok(a) => return End::Failed(refused("initialize", a, &c.scrub)),
+            Err(why) => return End::Closed(why),
+        };
+        let method = auth_method(&env_of(&settings), plan);
+        match self
+            .call(
+                c,
+                "authenticate",
+                json!({"methodId": method}),
+                Some(REQUEST_WAIT),
+            )
+            .await
+        {
+            Ok(Answer::Ok(_)) => {}
+            Ok(a) if plan => return End::Failed(refused("authenticate", a, &c.scrub)),
+            // The session says whether the computer's own sign-in holds at all.
+            Ok(a) => log(&format!(
+                "Antigravity: {}",
+                refused("authenticate", a, &c.scrub)
+            )),
+            Err(why) => return End::Closed(why),
+        }
+        let servers = servers(&settings, &init);
+        let saved = self.inner().provider.clone();
+        let mut resumed = None;
+        if let Some(saved) = saved {
+            let caps = &init["agentCapabilities"];
+            // Resumed, as T3 Code does: a load would replay the conversation's history as updates.
+            let method = if caps["sessionCapabilities"]["resume"].is_object() {
+                "session/resume"
+            } else if caps["loadSession"] == true {
+                "session/load"
+            } else {
+                ""
+            };
+            let answer = if method.is_empty() {
+                Answer::Err(json!({"message": "this agy cannot resume a conversation"}))
+            } else {
+                let params =
+                    json!({"sessionId": saved, "cwd": settings.cwd, "mcpServers": servers});
+                match self.call(c, method, params, Some(REQUEST_WAIT)).await {
+                    Ok(a) => a,
+                    Err(why) => return End::Closed(why),
                 }
-                End::Mismatch(error) => {
-                    // Kept on the host while it goes, so a stop meanwhile waits for it too. The saved conversation
-                    // stays as it was: a continuation must not run on another one.
-                    let proc = self.inner().proc.clone();
-                    if let Some(p) = proc {
-                        p.reap().await;
-                    }
-                    self.end(
-                        tid,
-                        turn,
-                        event(
-                            "turn_failed",
-                            Some(tid),
-                            Some(turn),
-                            json!({"error": error, "limit": false}),
-                        ),
-                    );
-                    return;
+            };
+            match answer {
+                Answer::Ok(v) => resumed = Some((saved, v)),
+                Answer::Err(e) if signed_out(&e) => {
+                    return End::Failed(refused(method, Answer::Err(e), &c.scrub))
                 }
-                End::Replaced => {
-                    // Nothing went to the conversation agy began: it exits on its closed input having done nothing.
-                    // Kept on the host while it goes, so a stop meanwhile waits for it too.
-                    let _ =
-                        tokio::time::timeout(EXIT_WAIT, running.exited.wait_for(|e| e.is_some()))
-                            .await;
-                    let proc = self.inner().proc.clone();
-                    if let Some(p) = proc {
-                        p.reap().await;
-                    }
-                    // One new start, with no saved conversation and the whole prompt (the history included), begun
-                    // while the host holds its lock: a stop either takes this process or finds none started.
-                    let started = {
-                        let mut inner = self.inner();
-                        if !inner.up || inner.turn.as_deref() != Some(turn) {
-                            return;
-                        }
-                        // The saved conversation and its record stay as they are until the new one has worked
-                        // (`commit`): a refusal or a crash before then loses nothing.
-                        let text = inner.full_prompt.take().unwrap_or_default();
-                        let settings = inner.settings.clone().unwrap_or_default();
-                        match self.spawn(&settings, effort.as_deref(), None, &text, false) {
-                            Ok((proc, again)) => {
-                                inner.proc = Some(proc);
-                                Ok(again)
-                            }
-                            Err(e) => Err(e.to_string()),
-                        }
-                    };
-                    match started {
-                        Ok(again) => {
-                            self.emit(event(
-                                "diagnostic",
-                                Some(tid),
-                                Some(turn),
-                                json!({"text": super::claude::RESTORING}),
-                            ));
-                            running = again;
-                            stream = Stream {
-                                replacing: true,
-                                ..Stream::default()
-                            };
-                        }
-                        Err(error) => {
-                            self.end(
-                                tid,
-                                turn,
-                                event(
-                                    "turn_failed",
-                                    Some(tid),
-                                    Some(turn),
-                                    json!({"error": error, "limit": is_limit(&error)}),
-                                ),
-                            );
-                            return;
-                        }
-                    }
+                Answer::Err(_) if settings.require_existing_session => return End::Mismatch(LOST),
+                Answer::Late if settings.require_existing_session => {
+                    return End::Mismatch(UNCONFIRMED)
                 }
+                // agy could not resume it: a new conversation takes its place, given everything when that is to hand.
+                _ => c.stream.restored = true,
             }
         }
+        let (session, setup) = match resumed {
+            Some(resumed) => resumed,
+            None => {
+                let params = json!({"cwd": settings.cwd, "mcpServers": servers});
+                let v = match self
+                    .call(c, "session/new", params, Some(REQUEST_WAIT))
+                    .await
+                {
+                    Ok(Answer::Ok(v)) => v,
+                    Ok(a) => return End::Failed(refused("session/new", a, &c.scrub)),
+                    Err(why) => return End::Closed(why),
+                };
+                // Kept as agy named it, which its updates name it by too.
+                let Some(id) = v["sessionId"]
+                    .as_str()
+                    .filter(|id| conversation(id).is_some())
+                    .map(String::from)
+                else {
+                    return End::Failed("Antigravity session/new named no conversation".into());
+                };
+                c.stream.staged = Some(id.clone());
+                (id, v)
+            }
+        };
+        c.stream.session = session.clone();
+        let mut options = setup["configOptions"].clone();
+        match model_value(&options, model, effort) {
+            Err(e) => return End::Failed(e),
+            Ok(Some(value)) => match self.set(c, &session, "model", &value).await {
+                Ok(Some(now)) => options = now,
+                Ok(None) => {}
+                Err(end) => return end,
+            },
+            Ok(None) => {}
+        }
+        if let Some(id) = effort_option(&options, effort) {
+            if let Err(end) = self.set(c, &session, &id, effort).await {
+                return end;
+            }
+        }
+        let full = if c.stream.restored {
+            self.inner().full_prompt.take()
+        } else {
+            None
+        };
+        let prompt = match full {
+            Some(full) => {
+                c.stream.told_all = true;
+                self.emit(event(
+                    "diagnostic",
+                    Some(c.tid),
+                    Some(c.turn),
+                    json!({"text": super::claude::RESTORING}),
+                ));
+                full
+            }
+            None => text.to_string(),
+        };
+        // Where the session log stands before the prompt, so only the steps it adds are read after.
+        let native = home_for(&settings)
+            .map(|home| session_log(&home, &session))
+            .ok();
+        let before = match native.clone() {
+            Some(log) => tokio::task::spawn_blocking(move || last_step(&log))
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        c.stream.prompting = true;
+        let params = json!({"sessionId": session, "prompt": [{"type": "text", "text": prompt}]});
+        let answer = match self.call(c, "session/prompt", params, None).await {
+            // An answer with neither a result nor an error is no answer.
+            Ok(Answer::Ok(result)) if !result.is_object() => {
+                Answer::Err(json!({"message": "Antigravity answered the prompt with no result"}))
+            }
+            Ok(a) => a,
+            Err(why) => return End::Closed(why),
+        };
+        // An end_turn whose last step records an error: the model API failed and agy streamed that as its answer.
+        let failure = match (&answer, native, before) {
+            (Answer::Ok(result), Some(log), Some(before))
+                if stopped(result["stopReason"].as_str().unwrap_or_default()).is_none() =>
+            {
+                tokio::task::spawn_blocking(move || step_error(&log, before))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|text| step_failure(&text, &c.scrub))
+            }
+            _ => None,
+        };
+        let mut inner = self.inner();
+        let stream = &mut *c.stream;
+        match answer {
+            Answer::Ok(result) => {
+                let stop = result["stopReason"].as_str().unwrap_or_default();
+                let ok = failure.is_none() && stopped(stop).is_none();
+                // A refusal before any work leaves the saved conversation as it was.
+                if ok || stream.worked {
+                    if let Err(e) = self.commit(&mut inner, stream) {
+                        return End::Closed(Some(e));
+                    }
+                }
+                // A turn told everything that completed in the conversation it began holds the history. Its answer
+                // stands if that is not written down: the next turn is told everything again.
+                if ok
+                    && stop != "cancelled"
+                    && stream.restored
+                    && stream.told_all
+                    && inner.needs_history
+                {
+                    let cid = inner.provider.clone().unwrap_or_default();
+                    if let Err(e) = self.save(&mut inner, &cid, false) {
+                        log(&format!(
+                            "Antigravity: could not note the conversation holds its history: {e}"
+                        ));
+                    }
+                }
+                End::Result(result, failure)
+            }
+            Answer::Err(e) => {
+                if stream.worked {
+                    if let Err(e) = self.commit(&mut inner, stream) {
+                        return End::Closed(Some(e));
+                    }
+                }
+                End::Failed(said(&e, &c.scrub))
+            }
+            Answer::Late => End::Closed(None),
+        }
+    }
+
+    /// Set the session's config option `id` to `value`: the session's options as they are now, when it says them.
+    async fn set(
+        &self,
+        c: &mut Conv<'_>,
+        session: &str,
+        id: &str,
+        value: &str,
+    ) -> Result<Option<Value>, End> {
+        let params = json!({"sessionId": session, "configId": id, "value": value});
+        match self
+            .call(c, "session/set_config_option", params, Some(REQUEST_WAIT))
+            .await
+        {
+            Ok(Answer::Ok(v)) => Ok(v.get("configOptions").filter(|o| o.is_array()).cloned()),
+            Ok(a) => Err(End::Failed(refused(
+                "session/set_config_option",
+                a,
+                &c.scrub,
+            ))),
+            Err(why) => Err(End::Closed(why)),
+        }
+    }
+
+    /// Send `method` and read agy's stream until it answers, within `wait` when given: what agy asks meanwhile is
+    /// answered, and the session's updates once the prompt went are the turn's events. Err(why) when the stream ended
+    /// (None: it closed, or the turn stopped).
+    async fn call(
+        &self,
+        c: &mut Conv<'_>,
+        method: &str,
+        params: Value,
+        wait: Option<Duration>,
+    ) -> Result<Answer, Option<String>> {
+        c.io.next += 1;
+        let id = c.io.next;
+        let gate = match method {
+            "session/prompt" => Some(self.0.gate.lock().await),
+            _ => None,
+        };
+        if gate.is_some() && !self.inner().up {
+            return Err(None);
+        }
+        write(
+            c.io,
+            &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        )
+        .await?;
+        drop(gate);
+        let by = wait.map(|w| tokio::time::Instant::now() + w);
+        loop {
+            let next = match by {
+                Some(by) => match tokio::time::timeout_at(by, c.io.stdout.next_line()).await {
+                    Ok(next) => next,
+                    Err(_) => return Ok(Answer::Late),
+                },
+                None => c.io.stdout.next_line().await,
+            };
+            let line = match next {
+                Ok(Some(l)) => l,
+                Ok(None) => return Err(None),
+                Err(e) => return Err(Some(e.to_string())),
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let msg: Value = match serde_json::from_str(line.trim()) {
+                Ok(v) => v,
+                Err(_) => {
+                    // Its link is never passed on or kept: no person is there to open it.
+                    if line.starts_with(AUTH_LINK) {
+                        if !c.oauth {
+                            continue;
+                        }
+                        return Err(Some(
+                            "Authentication required: Antigravity asked for a Google sign-in in a browser".into(),
+                        ));
+                    }
+                    // A banner or warning: skipped, and the last few kept, redacted, for a failure's error.
+                    let stream = &mut *c.stream;
+                    stream.skipped_count += 1;
+                    if stream.skipped_count > SKIP_MAX {
+                        return Err(Some("too many lines that are not JSON".into()));
+                    }
+                    let kept = crate::run_diagnostics::safe(&line, &c.scrub);
+                    stream
+                        .skipped
+                        .push(kept.trim().chars().take(KEPT_CHARS).collect());
+                    if stream.skipped.len() > SKIP_KEPT {
+                        stream.skipped.remove(0);
+                    }
+                    continue;
+                }
+            };
+            if !self.inner().up {
+                return Err(None);
+            }
+            let asked = msg.get("id").filter(|i| !i.is_null()).cloned();
+            match (asked, msg["method"].as_str()) {
+                (Some(asked), None) => {
+                    if asked.as_i64() == Some(id) {
+                        return Ok(match msg.get("error") {
+                            Some(e) => Answer::Err(e.clone()),
+                            None => Answer::Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
+                        });
+                    }
+                }
+                // agy asks its client: a tool's permission is given, as the turn runs with every permission (T3 Code
+                // keeps such a session in its `default` mode and answers; the CLI refuses `yolo`).
+                (Some(asked), Some(m)) => {
+                    let reply = if m == "session/request_permission" {
+                        json!({"jsonrpc": "2.0", "id": asked, "result": super::grok::permission(&msg["params"])})
+                    } else {
+                        json!({"jsonrpc": "2.0", "id": asked, "error": {"code": -32601, "message": "unsupported client request"}})
+                    };
+                    write(c.io, &reply).await?;
+                }
+                (None, Some("session/update")) => {
+                    let p = &msg["params"];
+                    if c.stream.prompting && text_of(&p["sessionId"]) == c.stream.session {
+                        let done = {
+                            let mut inner = self.inner();
+                            self.on_update(&mut inner, c.tid, c.turn, c.stream, &p["update"])
+                        };
+                        done.map_err(Some)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// One of the turn's session updates; Err ends the stream.
+    fn on_update(
+        &self,
+        inner: &mut Inner,
+        tid: &str,
+        turn: &str,
+        stream: &mut Stream,
+        u: &Value,
+    ) -> Result<(), String> {
+        let text = u["content"]["text"]
+            .as_str()
+            .filter(|t| !t.is_empty())
+            .map(String::from);
+        let (tid, turn) = (Some(tid), Some(turn));
+        match u["sessionUpdate"].as_str().unwrap_or_default() {
+            "agent_message_chunk" => {
+                stream.worked = true;
+                if let Some(text) = text {
+                    // A chunk names its message: one of another message than the chunk before it starts a new one.
+                    let id = u["messageId"]
+                        .as_str()
+                        .filter(|i| !i.is_empty())
+                        .map(String::from);
+                    let moved = id.is_some() && stream.message.is_some() && id != stream.message;
+                    if id.is_some() {
+                        stream.message = id;
+                    }
+                    let new_message = std::mem::take(&mut stream.new_message) || moved;
+                    let piece = super::add_piece(&mut stream.streamed, new_message, &text);
+                    let _ = inner.tx.send(event(
+                        "delta",
+                        tid,
+                        turn,
+                        json!({"text": piece, "delta_kind": "text"}),
+                    ));
+                }
+            }
+            "agent_thought_chunk" => {
+                stream.worked = true;
+                if let Some(text) = text {
+                    let _ = inner.tx.send(event(
+                        "delta",
+                        tid,
+                        turn,
+                        json!({"text": text, "delta_kind": "thought"}),
+                    ));
+                }
+            }
+            // A tool call ends the message before it. It is reported once, by its kind, never its title or input:
+            // from its update when that comes first, so a tool that ran always counts as one.
+            kind @ ("tool_call" | "tool_call_update") => {
+                stream.worked = true;
+                if kind == "tool_call" {
+                    stream.new_message = true;
+                }
+                let id = u.get("toolCallId").cloned().unwrap_or(Value::Null);
+                if id.is_null() || !stream.tools.contains(&id) {
+                    if !id.is_null() {
+                        stream.tools.push(id.clone());
+                    }
+                    let kind = u
+                        .get("kind")
+                        .filter(|k| truthy(Some(k)))
+                        .map(text_of)
+                        .unwrap_or_else(|| "tool".into());
+                    let _ = inner.tx.send(event(
+                        "tool",
+                        tid,
+                        turn,
+                        json!({"tool": kind, "status": "started", "item_id": id}),
+                    ));
+                }
+            }
+            "plan" => stream.worked = true,
+            _ => {}
+        }
+        if stream.worked {
+            self.commit(inner, stream)?;
+        }
+        Ok(())
     }
 
     /// Stop the turn's process if it is still running and wait until it and its group are gone. It stays on the host
@@ -739,293 +1432,92 @@ impl AntigravityHost {
         }
     }
 
-    /// Read one process's stream to its result or its end.
-    async fn read(&self, tid: &str, turn: &str, stream: &mut Stream, running: &mut Running) -> End {
-        let settings = self.inner().settings.clone().unwrap_or_default();
-        let scrub = crate::redact::Redactor::new(&crate::redact::env_secrets(&settings.env));
-        // While its prompt is held, agy has INIT_WAIT in all to name its conversation, whatever else it prints.
-        let init_by = tokio::time::Instant::now() + INIT_WAIT;
-        loop {
-            let next = if running.release.is_some() {
-                match tokio::time::timeout_at(init_by, running.stdout.next_line()).await {
-                    Ok(next) => next,
-                    Err(_) if settings.require_existing_session => {
-                        return End::Mismatch(UNCONFIRMED)
-                    }
-                    Err(_) => {
-                        // The prompt goes unconfirmed: from here on the turn runs in whatever conversation agy names,
-                        // never started over.
-                        if let Some(release) = running.release.take() {
-                            let _ = release.send(());
-                        }
-                        stream.confirmed = true;
-                        continue;
-                    }
-                }
-            } else {
-                running.stdout.next_line().await
-            };
-            let line = match next {
-                Ok(Some(l)) => l,
-                Ok(None) => return End::Closed(None),
-                Err(e) => return End::Closed(Some(e.to_string())),
-            };
-            if line.trim().is_empty() {
-                continue;
-            }
-            let ev: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => {
-                    // A banner or warning: skipped, and the last few kept, redacted, for a failure's error.
-                    stream.skipped_count += 1;
-                    if stream.skipped_count > SKIP_MAX {
-                        return End::Closed(Some("too many lines that are not JSON".into()));
-                    }
-                    let kept = crate::run_diagnostics::safe(&line, &scrub);
-                    stream
-                        .skipped
-                        .push(kept.trim().chars().take(KEPT_CHARS).collect());
-                    if stream.skipped.len() > SKIP_KEPT {
-                        stream.skipped.remove(0);
-                    }
-                    continue;
-                }
-            };
-            let mut inner = self.inner();
-            if !inner.up {
-                return End::Closed(None);
-            }
-            let held = running.release.is_some();
-            match self.on_event(&mut inner, tid, turn, stream, &ev, held) {
-                Ok(None) => {}
-                Ok(Some(end)) => return end,
-                Err(e) => return End::Closed(Some(e)),
-            }
-            if stream.confirmed {
-                if let Some(release) = running.release.take() {
-                    let _ = release.send(());
-                }
-            }
-        }
-    }
-
-    /// One stdout event; Err ends the stream.
-    fn on_event(
+    /// The turn's events from the prompt's answer.
+    fn finish(
         &self,
-        inner: &mut Inner,
         tid: &str,
         turn: &str,
-        stream: &mut Stream,
-        ev: &Value,
-        held: bool,
-    ) -> Result<Option<End>, String> {
-        // A turn that must continue its saved conversation never runs in another (checked on every id agy names).
-        let must_continue = inner
-            .settings
-            .as_ref()
-            .is_some_and(|s| s.require_existing_session);
-        if ev["event"] == "init" {
-            let cid = Some(&ev["conversation_id"])
-                .filter(|c| crate::util::truthy(Some(c)))
-                .unwrap_or(&ev["init"]["conversation_id"]);
-            if crate::util::truthy(Some(cid)) {
-                // A continuation is not sent at all into another conversation.
-                if let Some(end) = self.named(inner, stream, &text_of(cid), must_continue)? {
-                    return Ok(Some(end));
-                }
-                // agy began another while the prompt is still held: with the whole prompt to give a new one, the turn
-                // starts over there rather than send this turn's part alone into an empty conversation. Once the prompt
-                // went, it never starts over (that would run it twice).
-                if held
-                    && stream.staged.is_some()
-                    && !stream.confirmed
-                    && inner.full_prompt.is_some()
-                {
-                    return Ok(Some(End::Replaced));
-                }
-            } else if must_continue {
-                return Ok(Some(End::Mismatch(UNCONFIRMED)));
-            }
-            stream.confirmed = true;
-        }
-        let step = ev
-            .get("step_update")
-            .filter(|s| crate::util::truthy(Some(s)))
-            .cloned()
-            .unwrap_or(json!({}));
-        // Model work: any step but the echo of the prompt (`user_input`), and not a bare conversation id.
-        stream.worked |= step["step_type"]
-            .as_str()
-            .is_some_and(|t| !t.is_empty() && t != "user_input");
-        if crate::util::truthy(step.get("conversation_id")) {
-            if let Some(end) = self.named(
-                inner,
-                stream,
-                &text_of(&step["conversation_id"]),
-                must_continue,
-            )? {
-                return Ok(Some(end));
-            }
-        }
-        if stream.worked {
-            self.commit(inner, stream)?;
-        }
-        let (tid, turn) = (Some(tid), Some(turn));
-        if let Some(usage) = step.get("usage").filter(|u| u.is_object()) {
-            // A repeated index is a newer snapshot of that step; one with none is a step of its own.
-            match step.get("step_index").and_then(Value::as_i64) {
-                Some(idx) => {
-                    stream.step_usage.insert(idx, usage.clone());
-                }
-                None => stream.unindexed_usage.push(usage.clone()),
-            }
-        }
-        if step["step_type"] == "agent_response" && crate::util::truthy(step.get("text_delta")) {
-            let text = text_of(&step["text_delta"]);
-            stream.streamed.0.push_str(&text);
-            let piece = super::add_piece(
-                &mut stream.streamed.1,
-                std::mem::take(&mut stream.new_message),
-                &text,
-            );
-            let _ = inner.tx.send(event(
-                "delta",
-                tid,
-                turn,
-                json!({"text": piece, "delta_kind": "text"}),
-            ));
-        }
-        if step["step_type"] == "tool" {
-            stream.new_message = true;
-            let tool = step.get("tool_name").cloned().unwrap_or(json!("tool"));
-            let _ = inner.tx.send(event(
-                "tool",
-                tid,
-                turn,
-                json!({"tool": tool, "state": step.get("state").cloned().unwrap_or(Value::Null)}),
-            ));
-        }
-        if ev["event"] != "result" {
-            return Ok(None);
-        }
-        let result = ev
-            .get("result")
-            .filter(|r| r.is_object())
-            .ok_or("KeyError: 'result'")?;
-        // A refusal before any work names no conversation the thread should move to: the saved one stays.
-        if result["status"] == "SUCCESS" || stream.worked {
-            if crate::util::truthy(result.get("conversation_id")) {
-                if let Some(end) = self.named(
-                    inner,
-                    stream,
-                    &text_of(&result["conversation_id"]),
-                    must_continue,
-                )? {
-                    return Ok(Some(end));
-                }
-            }
-            self.commit(inner, stream)?;
-            // A turn started over with everything that succeeded in the conversation it began holds the history.
-            if result["status"] == "SUCCESS"
-                && stream.replacing
-                && stream.fresh.is_some()
-                && inner.provider == stream.fresh
-                && inner.needs_history
-            {
-                let cid = inner.provider.clone().unwrap_or_default();
-                self.save(inner, &cid, false)?;
-            }
-        }
-        Ok(Some(End::Result(result.clone())))
-    }
-
-    /// The turn's events from its result.
-    fn finish(&self, tid: &str, turn: &str, result: &Value, stream: &Stream, stderr: &str) {
-        // A turn stopped (or replaced) meanwhile says nothing more: no usage or answer after the stop.
+        result: &Value,
+        failure: Option<String>,
+        stream: &Stream,
+        stderr: &str,
+    ) {
+        // A turn stopped meanwhile says nothing more: no usage or answer after the stop.
         {
             let inner = self.inner();
             if !inner.up || inner.turn.as_deref() != Some(turn) {
                 return;
             }
         }
-        let usage = result
-            .get("usage")
-            .filter(|u| u.is_object())
-            .cloned()
-            .unwrap_or(json!({}));
-        // agy reports per-step usage on step_update and conversation-cumulative usage on result (across --conversation
-        // resumes too), so this turn's steps are summed; an older build without steps reports this process's total.
-        let spent = |k: &str| {
-            if stream.step_usage.is_empty() && stream.unindexed_usage.is_empty() {
-                count(&usage[k]).max(0)
-            } else {
-                stream
-                    .step_usage
-                    .values()
-                    .chain(&stream.unindexed_usage)
-                    .map(|u| count(&u[k]))
-                    .sum::<i64>()
-                    .max(0)
-            }
-        };
+        // The prompt's own usage: this turn's, however long the conversation. agy's input leaves out what it read from
+        // the cache, which Tico's input counts.
+        let usage = &result["usage"];
         let (i, o, c) = (
-            spent("input_tokens"),
-            spent("output_tokens"),
-            spent("cache_read_tokens"),
+            count(&usage["inputTokens"]).max(0),
+            count(&usage["outputTokens"]).max(0),
+            count(&usage["cachedReadTokens"]).max(0),
         );
-        let (tid, turn) = (Some(tid), Some(turn));
         // A refusal before any model call spent nothing, and says so by sending no usage: the hub may queue it again.
         if i + o + c > 0 {
             self.emit(event(
                 "tokens",
-                tid,
-                turn,
-                json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}}),
+                Some(tid),
+                Some(turn),
+                json!({"input": i + c, "output": o, "cached": c, "total": i + c + o, "usage": {"input": i + c, "cached": c, "output": o}}),
             ));
         }
-        let outcome = if result["status"] == "SUCCESS" {
-            let mut text = result["response"]
-                .as_str()
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            // Antigravity's answer runs the turn's messages together with nothing between them: when it is just the
-            // streamed text, each message keeps its own paragraph.
-            if !text.is_empty() && text == stream.streamed.0.trim() {
-                text = stream.streamed.1.trim().to_string();
-            }
-            self.emit(event(
-                "message",
-                tid,
-                turn,
-                json!({"text": text, "final": true}),
-            ));
-            event("turn_completed", tid, turn, json!({"status": "completed"}))
+        let stop = result["stopReason"].as_str().unwrap_or("end_turn");
+        let failure = stopped(stop).or(failure);
+        if let Some(failure) = failure {
+            return self.fail(tid, turn, &failure, stderr);
+        }
+        self.emit(event(
+            "message",
+            Some(tid),
+            Some(turn),
+            json!({"text": stream.streamed.trim(), "final": true}),
+        ));
+        let status = if stop == "cancelled" {
+            "interrupted"
         } else {
-            let error = [&result["error"], &result["status"]]
-                .into_iter()
-                .find(|v| crate::util::truthy(Some(v)))
-                .map(text_of)
-                .unwrap_or_else(|| "Antigravity failed".into());
-            // What it printed (stderr, redacted and bounded: run_diagnostics::Stderr) may name the reason a plain
-            // result does not, a sign-in or a quota: it is read with it.
-            let said = stderr.trim();
-            let error = if said.is_empty() {
-                error
-            } else {
-                format!("{error}: {}", last_chars(said, ERROR_CHARS))
-            };
-            event(
-                "turn_failed",
-                tid,
-                turn,
-                json!({"error": error, "limit": is_limit(&error)}),
-            )
+            "completed"
         };
-        self.end(tid.unwrap_or_default(), turn.unwrap_or_default(), outcome);
+        self.end(
+            tid,
+            turn,
+            event(
+                "turn_completed",
+                Some(tid),
+                Some(turn),
+                json!({"status": status}),
+            ),
+        );
     }
 
-    /// A process that ended with no result: one failure carrying what it said, so a refusal it printed (on stderr or as
+    /// A turn agy refused: one failure carrying what it printed too (stderr, redacted and bounded:
+    /// run_diagnostics::Stderr), which may name the reason a refusal does not, a sign-in or a quota.
+    fn fail(&self, tid: &str, turn: &str, error: &str, stderr: &str) {
+        // The quota (a typed refusal, or the session log's QUOTA_EXHAUSTED) is a usage limit whatever stderr says.
+        let quota = error == QUOTA;
+        let said = stderr.trim();
+        let error = if said.is_empty() {
+            error.to_string()
+        } else {
+            format!("{error}: {}", last_chars(said, ERROR_CHARS))
+        };
+        self.end(
+            tid,
+            turn,
+            event(
+                "turn_failed",
+                Some(tid),
+                Some(turn),
+                json!({"error": error, "limit": quota || is_limit(&error)}),
+            ),
+        );
+    }
+
+    /// A process that ended with no answer: one failure carrying what it said, so a refusal it printed (on stderr or as
     /// a plain line) is read as one.
     fn fail_closed(
         &self,
@@ -1092,14 +1584,17 @@ impl AntigravityHost {
         self.stop().await;
     }
 
-    /// Stop the turn's process (crate::hosts Proc::reap) and its reader.
+    /// Stop the turn's process (Proc::reap) and its reader.
     pub async fn stop(&self) {
+        // A prompt being written finishes first, unless agy has stopped reading it: its stop ends that write.
+        let gate = tokio::time::timeout(STOP_GRACE, self.0.gate.lock()).await;
         let (proc, reader) = {
             let mut inner = self.inner();
             inner.up = false;
             inner.turn = None;
             (inner.proc.take(), inner.reader.take())
         };
+        drop(gate);
         if let Some(p) = proc {
             p.reap().await;
         }
@@ -1109,13 +1604,26 @@ impl AntigravityHost {
     }
 }
 
+/// One protocol line to agy. A write that fails is agy gone: its exit says why.
+async fn write(io: &mut Io, msg: &Value) -> Result<(), Option<String>> {
+    let Some(s) = io.stdin.as_mut() else {
+        return Err(None);
+    };
+    let line = msg.to_string() + "\n";
+    s.write_all(line.as_bytes()).await.map_err(|_| None)?;
+    s.flush().await.map_err(|_| None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use tokio::sync::mpsc;
 
     const SAVED: &str = "6f9619ff-8b86-d011-b42d-00c04fc964ff";
     const OTHER: &str = "0b2e6f1c-3a1d-4f43-9a51-6c2f2f7e9d10";
+    /// agy 1.5.16's own answers with no sign-in, as it gave them on a Linux computer told it runs over SSH.
+    const NO_BROWSER: &str = "No browser is available here (this is a remote (SSH) session, so the browser's sign-in redirect can't reach this machine). Run `agy acp --login` in a terminal on this machine, then retry; or use a Gemini API key.";
 
     #[tokio::test]
     async fn turn_launch_keeps_the_bot_identity_and_a_supervisor_only_record() {
@@ -1127,9 +1635,11 @@ mod tests {
             f.argv(),
             mpsc::unbounded_channel().0,
         );
+        let home = home_for(&settings).unwrap();
+        let tmp = f.root.join("tmp");
         super::super::isolationtests::prefix(
-            &host.command(&settings, None, None).unwrap(),
-            &argv(&f.argv(), &settings, None, None).unwrap(),
+            &host.command(&settings, &home, &tmp).unwrap(),
+            &acp_argv(&f.argv(), &home),
         );
         if !f.actual() {
             return;
@@ -1141,12 +1651,8 @@ mod tests {
         settings
             .env
             .insert("TEST_PRIVATE".into(), record.display().to_string());
-        f.run(
-            host.command(&settings, None, Some(SAVED)).unwrap(),
-            &[],
-            &[],
-        )
-        .await;
+        f.run(host.command(&settings, &home, &tmp).unwrap(), &[], &[])
+            .await;
         use std::os::unix::fs::MetadataExt;
         assert_eq!(
             record.metadata().unwrap().uid(),
@@ -1155,57 +1661,122 @@ mod tests {
         );
     }
 
-    /// An `agy` for one turn, which names its conversation (`init`) before it reads its input, as agy 1.5.15 does: it
-    /// logs its argv, its pid and the user line it read (`.prompts`), and answers with the fixture (`$FIXTURE`, printed
-    /// first, then the fixture's `.stderr` beside it on stderr and exit 1), or with its conversation (`$NEW` when it
-    /// begins one) and the prompt it was given. `--conversation` resumes that one unless `$LOSE` names the one it begins
-    /// instead; with `$LATE` it names the asked one first and the other only after a step; with `$NOINIT` it names none;
-    /// with `$SLOWINIT` it names it only after INIT_WAIT. With `$REFUSE_FRESH`, one begun without `--conversation` refuses
-    /// the prompt.
-    /// With `$STUCK` it ignores SIGTERM (then writes `.ready`) and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM in its
-    /// group. It exits when stdin closes.
+    /// An `agy acp` for one turn, answering as agy 1.5.16 does (its `initialize` as it gave it). It logs its argv, its
+    /// pid, every request after `initialize` (`.calls`), its client's answers (`.replies`) and the prompt (`.prompts`).
+    /// A prompt is answered with the fixture (`$FIXTURE`: its lines, `@ID@` the prompt's id and `@SID@` the session's;
+    /// with its `.stderr` beside it, that on stderr and exit 1 in place of an answer), or with the prompt as the reply.
+    /// `session/new` begins `$NEW` (else SAVED). A resume is refused with `$LOSE`, never answered with `$NOINIT`. With
+    /// `$REFUSE_FRESH` a prompt in a conversation it began is refused; with `$SIGNED_OUT` it has no sign-in; with `$LINK`
+    /// it prints a sign-in link on `authenticate` and has no Google sign-in. A prompt adds a `$STEP` step (`$STEP_TEXT`)
+    /// to the conversation's session log. With `$STUCK`
+    /// it ignores SIGTERM (then writes `.ready`) and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM
+    /// in its group. It exits when its input closes.
     fn fake_agy(dir: &Path) -> String {
         let path = dir.join("fake-agy");
         crate::util::write_script(
             &path,
-            &format!(
-                r##"#!/bin/sh
-echo "$@" >> "$ARGS_LOG"
-echo $$ > "$ARGS_LOG.pid"
-if [ -n "$STUCK" ]; then trap '' TERM; : > "$ARGS_LOG.ready"; while :; do sleep 1; done; fi
-if [ -n "$ORPHAN" ]; then (trap '' TERM; exec sleep 30) >/dev/null 2>&1 & echo $! > "$ARGS_LOG.orphan"; fi
-if [ -n "$FIXTURE" ]; then
-  cat "$FIXTURE"
-  IFS= read -r line || exit 0
-  printf '%s\n' "$line" >> "$ARGS_LOG.prompts"
-  if [ -f "${{FIXTURE%.jsonl}}.stderr" ]; then cat "${{FIXTURE%.jsonl}}.stderr" >&2; exit 1; fi
-else
-  conv=${{NEW:-{SAVED}}}
-  asked=""
-  prev=""
-  for a in "$@"; do [ "$prev" = --conversation ] && asked="$a" && conv="${{LOSE:-$a}}"; prev="$a"; done
-  if [ -n "$SLOWINIT" ]; then sleep 3; fi
-  if [ -n "$LATE" ]; then
-    echo "{{\"event\": \"init\", \"conversation_id\": \"${{asked:-$conv}}\"}}"
-  elif [ -z "$NOINIT" ]; then
-    echo "{{\"event\": \"init\", \"conversation_id\": \"$conv\"}}"
-  fi
-  IFS= read -r line || exit 0
-  printf '%s\n' "$line" >> "$ARGS_LOG.prompts"
-  if [ -n "$REFUSE_FRESH" ] && [ -z "$asked" ]; then
-    echo "{{\"event\": \"result\", \"result\": {{\"status\": \"ERROR\", \"error\": \"no\", \"conversation_id\": \"$conv\"}}}}"
-    exit 1
-  fi
-  text=$(printf '%s' "$line" | sed 's/.*"content": "\(.*\)"}}}}$/\1/')
-  if [ -n "$LATE" ]; then
-    echo '{{"event": "step_update", "step_update": {{"step_type": "agent_response", "text_delta": "x"}}}}'
-    echo "{{\"event\": \"step_update\", \"step_update\": {{\"conversation_id\": \"$conv\"}}}}"
-  fi
-  echo "{{\"event\": \"result\", \"result\": {{\"status\": \"SUCCESS\", \"response\": \"$text\", \"usage\": {{\"input_tokens\": 10, \"output_tokens\": 2}}}}}}"
-fi
-read -r _
+            &r##"#!/usr/bin/env python3
+import json, os, signal, subprocess, sys, time
+env = os.environ.get
+log = env("ARGS_LOG")
+open(log, "a").write(" ".join(sys.argv[1:]) + "\n")
+open(log + ".pid", "w").write(str(os.getpid()))
+if env("STUCK"):
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    open(log + ".ready", "w").close()
+    while True:
+        time.sleep(1)
+if env("ORPHAN"):
+    tool = subprocess.Popen(["sh", "-c", "trap '' TERM; exec sleep 30"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    open(log + ".orphan", "w").write(str(tool.pid))
+INIT = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True}, "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}}, "auth": {"logout": {}}, "_meta": {"antigravity": {"tier": True, "systemPrompt": {"append": True}}}}, "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.16"}, "authMethods": [{"id": "oauth-personal", "name": "Log in with Google", "description": "Log in with your Google account"}]}
+NO_BROWSER = "@NO_BROWSER@"
+model, level, sid, fresh = "gemini-4-neon", "high", None, False
+def options():
+    return [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
+             "options": [{"value": "gemini-4-neon", "name": "Gemini 4 Neon"}, {"value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen"}]},
+            {"id": "thinking_level", "name": "Thinking", "category": "thought_level", "type": "select", "currentValue": level,
+             "options": [{"value": e, "name": e} for e in ("low", "medium", "high", "xhigh")]}]
+def send_line(text):
+    sys.stdout.write(text + "\n")
+    sys.stdout.flush()
+def send(m):
+    send_line(json.dumps(m))
+def answer(i, result):
+    send({"jsonrpc": "2.0", "id": i, "result": result})
+def refuse(i, code, message):
+    send({"jsonrpc": "2.0", "id": i, "error": {"code": code, "message": message}})
+for line in sys.stdin:
+    m = json.loads(line)
+    i, method, p = m.get("id"), m.get("method"), m.get("params") or {}
+    if method is None:
+        open(log + ".replies", "a").write(line)
+        continue
+    if method != "initialize":
+        open(log + ".calls", "a").write(method + " " + json.dumps(p, sort_keys=True) + "\n")
+    if method == "initialize":
+        answer(i, INIT)
+    elif method == "authenticate":
+        if env("LINK"):
+            send_line("Open the following link to authenticate the ACP server: https://accounts.acme.example/o/oauth2/auth?state=s1")
+        if env("SIGNED_OUT") or (env("LINK") and p["methodId"] == "oauth-personal"):
+            refuse(i, -32603, NO_BROWSER)
+        else:
+            answer(i, {})
+    elif method in ("session/resume", "session/load"):
+        if env("SIGNED_OUT"):
+            refuse(i, -32000, "Authentication required")
+        elif env("LOSE"):
+            refuse(i, -32603, "Conversation not found")
+        elif not env("NOINIT"):
+            sid = p["sessionId"]
+            answer(i, {"configOptions": options()})
+    elif method == "session/new":
+        if env("SIGNED_OUT"):
+            refuse(i, -32000, "Authentication required")
+        else:
+            sid, fresh = env("NEW") or "@SAVED@", True
+            answer(i, {"sessionId": sid, "configOptions": options()})
+    elif method == "session/set_config_option":
+        if p["configId"] == "model":
+            model = p["value"]
+        else:
+            level = p["value"]
+        answer(i, {"configOptions": options()})
+    elif method == "session/prompt":
+        text = p["prompt"][0]["text"]
+        open(log + ".prompts", "a").write(text + "\n")
+        if env("STEP"):
+            import sqlite3
+            home = sys.argv[sys.argv.index("--gemini-dir") + 1]
+            folder = os.path.join(home, "antigravity-cli", "conversations")
+            os.makedirs(folder, exist_ok=True)
+            db = sqlite3.connect(os.path.join(folder, sid + ".db"))
+            db.execute("CREATE TABLE IF NOT EXISTS steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+            db.execute("INSERT INTO steps (step_type, step_payload) VALUES (?, ?)", (int(env("STEP")), (env("STEP_TEXT") or "").encode()))
+            db.commit()
+            db.close()
+        fixture = env("FIXTURE")
+        if fixture:
+            for row in open(fixture).read().splitlines():
+                if row.strip():
+                    sys.stdout.write(row.replace("@ID@", str(i)).replace("@SID@", sid) + "\n")
+            sys.stdout.flush()
+            stderr = fixture[: -len(".jsonl")] + ".stderr"
+            if os.path.exists(stderr):
+                sys.stderr.write(open(stderr).read())
+                sys.stderr.flush()
+                sys.exit(1)
+        elif env("REFUSE_FRESH") and fresh:
+            refuse(i, -32603, "no")
+        else:
+            send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
+            answer(i, {"stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 2}})
+    else:
+        refuse(i, -32601, "unknown")
 "##
-            ),
+            .replace("@SAVED@", SAVED)
+            .replace("@NO_BROWSER@", NO_BROWSER),
         );
         path.display().to_string()
     }
@@ -1218,10 +1789,10 @@ read -r _
         let items = json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
                             "file": subs::AGY_TOKEN, "value": value, "revision": 1, "billing": "subscription"}]);
         let mut env = rig.settings(&[]).env;
-        env.insert("HOME".into(), rig.dir.join("home").display().to_string());
         env.insert("GEMINI_API_KEY".into(), "AIza-computer-key".into());
         // The computer's Google Cloud credentials (Application Default Credentials), which no plan turn may use.
         env.insert("AGY_ADC_AUTH".into(), "1".into());
+        env.insert("BROWSER".into(), "firefox".into());
         let mut got = subs::apply(
             &rig.dir,
             &items,
@@ -1244,42 +1815,73 @@ read -r _
                 ..rig.settings(&[])
             };
             let (host, _rx) = rig.host();
-            host.command(&settings, None, None).map(|command| {
-                command
-                    .as_std()
-                    .get_envs()
-                    .map(|(k, v)| {
-                        (
-                            k.to_string_lossy().to_string(),
-                            v.map(|v| v.to_string_lossy().to_string()),
-                        )
-                    })
-                    .collect::<BTreeMap<String, Option<String>>>()
-            })
+            let home = home_for(&settings).unwrap();
+            host.command(&settings, &home, &rig.dir.join("tmp"))
+                .map(|command| {
+                    let command = command.as_std();
+                    let args: Vec<String> = command
+                        .get_args()
+                        .map(|a| a.to_string_lossy().to_string())
+                        .collect();
+                    let envs = command
+                        .get_envs()
+                        .map(|(k, v)| {
+                            (
+                                k.to_string_lossy().to_string(),
+                                v.map(|v| v.to_string_lossy().to_string()),
+                            )
+                        })
+                        .collect::<BTreeMap<String, Option<String>>>();
+                    (args, envs)
+                })
         };
         // A plan turn's agy, and one started again on the same turn whatever its environment says, runs over SSH on
-        // the plan's home and nothing else.
+        // the plan's home, with its sign-in in a file there, and nothing else.
         let mut lost = env.clone();
         lost.remove("GEMINI_HOME");
         for env in [&env, &lost] {
-            let plan = command(env, &plan_home).unwrap();
+            let (args, plan) = command(env, &plan_home).unwrap();
+            assert_eq!(
+                args.join(" "),
+                format!(
+                    "acp --gemini-dir {} --app-data-dir antigravity-cli",
+                    home.display()
+                )
+            );
             assert_eq!(plan["SSH_CONNECTION"].as_deref(), Some(subs::OVER_SSH.1));
             assert_eq!(plan["GEMINI_HOME"], plan_home);
-            for key in ["GEMINI_API_KEY", "AGY_ADC_AUTH"] {
+            assert_eq!(plan["AGY_ACP_FORCE_FILE_STORAGE"].as_deref(), Some("1"));
+            assert_eq!(plan["AGY_CLI_DISABLE_AUTO_UPDATE"].as_deref(), Some("1"));
+            assert_eq!(
+                plan["TMPDIR"].as_deref(),
+                Some(rig.dir.join("tmp").to_str().unwrap())
+            );
+            for key in ["GEMINI_API_KEY", "AGY_ADC_AUTH", "BROWSER"] {
                 assert!(plan.get(key).is_none_or(Option::is_none), "{plan:?}");
             }
         }
         // Tico's own commands in the turn (git) get the turn's environment, which never says SSH and keeps the bot's key.
         assert!(!env.contains_key("SSH_CONNECTION") && env.contains_key("GEMINI_API_KEY"));
-        // On the computer's own sign-in (a Mac's keychain) agy is never told it runs over SSH.
+        // On the computer's own sign-in (a Mac's keychain) agy runs on the bot's own ~/.gemini, never told it runs
+        // over SSH or to keep its sign-in in a file, and keeps the computer's key.
         let mut own = env.clone();
         own.remove("GEMINI_HOME");
-        let computer = command(&own, &None).unwrap();
-        assert!(!computer.contains_key("SSH_CONNECTION"));
+        let (args, computer) = command(&own, &None).unwrap();
+        let gemini = format!("{}/.gemini", own["HOME"]);
+        assert!(
+            args.join(" ").contains(&format!("--gemini-dir {gemini} ")),
+            "{args:?}"
+        );
+        assert_eq!(computer["GEMINI_HOME"].as_deref(), Some(gemini.as_str()));
+        assert!(
+            !computer.contains_key("SSH_CONNECTION")
+                && !computer.contains_key("AGY_ACP_FORCE_FILE_STORAGE")
+        );
         assert_eq!(
             computer["GEMINI_API_KEY"].as_deref(),
             Some("AIza-computer-key")
         );
+        assert!(!computer.contains_key("BROWSER"));
         // Its sign-in gone (a home let go), a plan turn's agy is not started at all.
         subs::finish(&mut got);
         assert!(!home.exists());
@@ -1326,6 +1928,8 @@ read -r _
                 ..Default::default()
             };
             s.env.insert("PATH".into(), "/usr/bin:/bin".into());
+            s.env
+                .insert("HOME".into(), self.dir.join("home").display().to_string());
             s.env.insert(
                 "ARGS_LOG".into(),
                 self.dir.join("args.log").display().to_string(),
@@ -1343,12 +1947,12 @@ read -r _
             (host, rx)
         }
 
+        fn read(&self, what: &str) -> String {
+            std::fs::read_to_string(self.dir.join(format!("args.log{what}"))).unwrap_or_default()
+        }
+
         fn runs(&self) -> Vec<String> {
-            std::fs::read_to_string(self.dir.join("args.log"))
-                .unwrap_or_default()
-                .lines()
-                .map(String::from)
-                .collect()
+            self.read("").lines().map(String::from).collect()
         }
     }
 
@@ -1369,6 +1973,12 @@ read -r _
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
         }
+        // The tool's permission agy asked for was given.
+        assert!(
+            rig.read(".replies").contains(r#""optionId":"allow""#),
+            "{}",
+            rig.read(".replies")
+        );
     }
 
     #[tokio::test]
@@ -1379,9 +1989,9 @@ read -r _
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", Some("medium")).unwrap();
         let first = turn_events(&mut rx).await;
-        assert_eq!(
-            first[2],
-            json!({"kind": "message", "text": "one", "final": true})
+        assert!(
+            first.contains(&json!({"kind": "message", "text": "one", "final": true})),
+            "{first:?}"
         );
         host.stop().await;
         // The next turn, on another effort and another host: the saved conversation goes on.
@@ -1394,21 +2004,212 @@ read -r _
         ));
         cold.resume_thread(&thread, &s).unwrap();
         cold.start_turn(&thread, "two", Some("xhigh")).unwrap();
-        assert_eq!(turn_events(&mut rx).await[2]["text"], "two");
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "two", "final": true})));
         assert!(!cold.restored(&thread));
         cold.stop().await;
-        let runs = rig.runs();
-        assert_eq!(runs[0], "--input-format stream-json --output-format stream-json --model gemini-4-hydrogen-medium --effort medium --dangerously-skip-permissions");
-        assert_eq!(runs[1], format!("--input-format stream-json --output-format stream-json --model gemini-4-hydrogen-xhigh --effort xhigh --dangerously-skip-permissions --conversation {SAVED}"));
+        let home = rig.dir.join("home/.gemini");
+        let argv = format!(
+            "acp --gemini-dir {} --app-data-dir antigravity-cli",
+            home.display()
+        );
+        assert_eq!(rig.runs(), [argv.clone(), argv]);
+        let calls: Vec<String> = rig.read(".calls").lines().map(String::from).collect();
+        let cwd = rig.dir.display().to_string();
+        let set = |id: &str, value: &str| {
+            format!(
+                r#"session/set_config_option {{"configId": "{id}", "sessionId": "{SAVED}", "value": "{value}"}}"#
+            )
+        };
+        assert_eq!(
+            calls[..4],
+            [
+                r#"authenticate {"methodId": "oauth-personal"}"#.to_string(),
+                format!(r#"session/new {{"cwd": "{cwd}", "mcpServers": []}}"#),
+                set("model", "gemini-4-hydrogen"),
+                set("thinking_level", "medium"),
+            ]
+        );
+        assert_eq!(
+            calls[5..9],
+            [
+                r#"authenticate {"methodId": "oauth-personal"}"#.to_string(),
+                format!(
+                    r#"session/resume {{"cwd": "{cwd}", "mcpServers": [], "sessionId": "{SAVED}"}}"#
+                ),
+                set("model", "gemini-4-hydrogen"),
+                set("thinking_level", "xhigh"),
+            ]
+        );
     }
 
     #[tokio::test]
-    async fn a_conversation_agy_did_not_resume_is_kept_and_the_turn_runs_once() {
-        // agy names the conversation it began in place of the saved one before it reads the prompt. With no fuller
-        // prompt to start again with, the turn runs there once: kept after its work, the thread reads restored, and
-        // the record asks for the history on the next turn.
+    async fn a_sign_in_agy_has_not_got_fails_the_turn_as_one() {
+        // agy's own answers with no sign-in: authenticate's (a computer's own sign-in may be another method, so the
+        // turn goes on to ask for a session), then session/new's.
         let rig = Rig::new();
-        let s = rig.settings(&[("LOSE", OTHER.into())]);
+        let s = rig.settings(&[("SIGNED_OUT", "1".into())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        let error = text_of(&failed["error"]);
+        assert!(
+            super::super::is_auth_rejected_on("antigravity", &error),
+            "{error}"
+        );
+        assert_eq!(failed["limit"], false);
+        host.stop().await;
+        assert!(!rig.dir.join("args.log.prompts").exists(), "never sent");
+        // A plan turn's authenticate refusal, and a -32000 by any words, read as a sign-in it has not got too.
+        for refusal in [
+            json!({"code": -32603, "message": NO_BROWSER}),
+            json!({"code": -32000, "message": "Not signed in"}),
+        ] {
+            let error = refused(
+                "authenticate",
+                Answer::Err(refusal),
+                &crate::redact::Redactor::new(&[]),
+            );
+            assert!(
+                super::super::is_auth_rejected_on("antigravity", &error),
+                "{error}"
+            );
+        }
+        // Its data is read for what it is, never passed on.
+        let data = json!({"code": -32603, "message": "Internal error",
+                          "data": {"token": "ya29.synthetic-secret", "reason": "QUOTA_EXHAUSTED"}});
+        let text = said(&data, &crate::redact::Redactor::new(&[]));
+        assert!(!text.contains("ya29") && is_limit(&text), "{text}");
+        assert!(!super::super::is_auth_rejected_on(
+            "antigravity",
+            &said(
+                &json!({"code": -32603, "message": "Internal error"}),
+                &crate::redact::Redactor::new(&[])
+            )
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_key_or_google_cloud_turn_keeps_its_method_and_a_sign_in_link_does_not_end_it() {
+        for (var, method) in [
+            ("GEMINI_API_KEY", "gemini-api-key"),
+            ("AGY_ADC_AUTH", "agent-platform"),
+        ] {
+            let rig = Rig::new();
+            let s = rig.settings(&[(var, "1".into()), ("LINK", "1".into())]);
+            let (host, mut rx) = rig.host();
+            let thread = host.start_thread(&s);
+            host.start_turn(&thread, "hi", None).unwrap();
+            let events = turn_events(&mut rx).await;
+            assert!(
+                events.iter().any(|e| e["kind"] == "turn_completed"),
+                "{var}: {events:?}"
+            );
+            assert!(events
+                .iter()
+                .all(|e| !e.to_string().contains("accounts.acme.example")));
+            host.stop().await;
+            assert!(
+                rig.read(".calls")
+                    .starts_with(&format!(r#"authenticate {{"methodId": "{method}"}}"#)),
+                "{}",
+                rig.read(".calls")
+            );
+        }
+        // On the Google account the link ends the turn as a sign-in it has not got, and a plan's is always that.
+        let rig = Rig::new();
+        let s = rig.settings(&[("LINK", "1".into())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert!(super::super::is_auth_rejected_on(
+            "antigravity",
+            &text_of(&failed["error"])
+        ));
+        host.stop().await;
+        let key: Env = [("GEMINI_API_KEY".to_string(), "k".to_string())].into();
+        assert_eq!(auth_method(&key, true), AUTH_METHOD);
+        assert_eq!(auth_method(&Env::new(), false), AUTH_METHOD);
+    }
+
+    #[tokio::test]
+    async fn an_error_the_session_log_records_fails_the_turn_agy_ended_as_an_answer() {
+        let rig = Rig::new();
+        let error = "Error 503, Message: The model is overloaded., Status: UNAVAILABLE, Details: []\ngoroutine 1";
+        let quota = "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [reason:QUOTA_EXHAUSTED]";
+        let turn = |vars: Vec<(&'static str, String)>, resume: Option<String>| {
+            let s = rig.settings(&vars);
+            let (host, mut rx) = rig.host();
+            let thread = match resume {
+                Some(t) => {
+                    host.resume_thread(&t, &s).unwrap();
+                    t
+                }
+                None => host.start_thread(&s),
+            };
+            async move {
+                host.start_turn(&thread, "hi", None).unwrap();
+                let events = turn_events(&mut rx).await;
+                host.stop().await;
+                (thread, events)
+            }
+        };
+        let end = |events: &[Value]| {
+            events
+                .iter()
+                .find(|e| e["kind"] == "turn_failed" || e["kind"] == "turn_completed")
+                .cloned()
+                .unwrap()
+        };
+        // The model API failed: agy streamed that as its answer and ended the turn, its log's last step an error.
+        let (thread, events) = turn(
+            vec![("STEP", "17".into()), ("STEP_TEXT", error.into())],
+            None,
+        )
+        .await;
+        let failed = end(&events);
+        assert_eq!(failed["kind"], "turn_failed", "{events:?}");
+        assert_eq!(
+            failed["error"],
+            "Antigravity stopped this turn: HTTP 503 UNAVAILABLE: The model is overloaded."
+        );
+        assert!(events.iter().all(|e| e["kind"] != "message"), "{events:?}");
+        // The next turn's own steps are read, never that error before it.
+        let (thread, events) = turn(vec![("STEP", "15".into())], Some(thread)).await;
+        assert_eq!(end(&events)["kind"], "turn_completed", "{events:?}");
+        let (_, events) = turn(
+            vec![("STEP", "17".into()), ("STEP_TEXT", quota.into())],
+            Some(thread),
+        )
+        .await;
+        let failed = end(&events);
+        assert_eq!(
+            (failed["error"].as_str(), failed["limit"].as_bool()),
+            (Some(QUOTA), Some(true))
+        );
+        // A typed refusal is the quota, whatever agy printed.
+        let refusal = json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "refusal"}});
+        let (host, _, events) = played(&rig, "typed-refusal", &[refusal], None).await;
+        let failed = end(&events);
+        assert_eq!(
+            (failed["error"].as_str(), failed["limit"].as_bool()),
+            (Some(QUOTA), Some(true))
+        );
+        host.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_conversation_agy_did_not_resume_is_replaced_and_the_turn_runs_once() {
+        // agy refuses to resume the saved conversation. With no fuller prompt to give, the turn runs in the one it
+        // begins instead: kept after its work, the thread reads restored, and the record asks for the history on the
+        // next turn.
+        let rig = Rig::new();
+        let s = rig.settings(&[("LOSE", "1".into()), ("NEW", OTHER.into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
@@ -1418,9 +2219,7 @@ read -r _
         assert_eq!(message["text"], "short");
         assert!(host.restored(&thread));
         host.stop().await;
-        let runs = rig.runs();
-        assert_eq!(runs.len(), 1, "never started again");
-        assert!(runs[0].ends_with(&format!("--conversation {SAVED}")));
+        assert_eq!(rig.runs().len(), 1, "one process");
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert!(
             record.contains(OTHER) && record.contains("needs_history"),
@@ -1429,10 +2228,9 @@ read -r _
     }
 
     #[tokio::test]
-    async fn a_conversation_agy_began_before_the_prompt_starts_again_with_everything() {
-        // The process that named another conversation is closed without the prompt; a new one is given the full one.
+    async fn a_conversation_agy_did_not_resume_is_given_everything_when_there_is_more() {
         let rig = Rig::new();
-        let s = rig.settings(&[("LOSE", OTHER.into()), ("NEW", OTHER.into())]);
+        let s = rig.settings(&[("LOSE", "1".into()), ("NEW", OTHER.into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
@@ -1445,15 +2243,10 @@ read -r _
         assert!(host.restored(&thread));
         assert!(!host.needs_history(&thread), "it was told everything");
         host.stop().await;
-        let runs = rig.runs();
-        assert_eq!(runs.len(), 2, "{runs:?}");
-        assert!(runs[0].ends_with(&format!("--conversation {SAVED}")));
-        assert!(!runs[1].contains("--conversation"), "{}", runs[1]);
-        let prompts = std::fs::read_to_string(rig.dir.join("args.log.prompts")).unwrap();
         assert_eq!(
-            prompts.lines().count(),
-            1,
-            "the first process never had the prompt: {prompts}"
+            rig.read(".prompts"),
+            "everything\n",
+            "only the whole prompt went"
         );
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert!(
@@ -1463,13 +2256,11 @@ read -r _
     }
 
     #[tokio::test]
-    async fn a_turn_started_over_that_is_refused_keeps_the_saved_record() {
-        // The new agy is refused before any work: the saved conversation and its mark stay, untouched.
+    async fn a_replacement_refused_before_any_work_keeps_the_saved_record() {
         let rig = Rig::new();
-        let third = "3c1a9e2b-7d4f-4b8a-9c6e-1f2d3e4a5b6c";
         let s = rig.settings(&[
-            ("LOSE", OTHER.into()),
-            ("NEW", third.into()),
+            ("LOSE", "1".into()),
+            ("NEW", OTHER.into()),
             ("REFUSE_FRESH", "1".into()),
         ]);
         let (host, mut rx) = rig.host();
@@ -1483,63 +2274,24 @@ read -r _
             events.iter().any(|e| e["kind"] == "turn_failed"),
             "{events:?}"
         );
-        assert_eq!(rig.runs().len(), 2);
         assert!(!host.restored(&thread));
         assert!(host.needs_history(&thread));
         host.stop().await;
         let after = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert_eq!(after, before);
-        assert!(
-            after.contains(SAVED) && after.contains("needs_history"),
-            "{after}"
-        );
     }
 
     #[tokio::test]
-    async fn a_conversation_named_after_the_prompt_went_unconfirmed_never_starts_the_turn_over() {
-        // agy names another conversation only after INIT_WAIT let the prompt go: it already has the prompt, so the turn
-        // runs there once, and the next is told everything.
+    async fn a_refusal_before_any_work_keeps_the_saved_conversation() {
         let rig = Rig::new();
-        let s = rig.settings(&[("LOSE", OTHER.into()), ("SLOWINIT", "1".into())]);
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&s);
-        host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.full_prompt(&thread, Some("everything".into()));
-        host.start_turn(&thread, "short", None).unwrap();
-        let events = turn_events(&mut rx).await;
-        let message = events.iter().find(|e| e["kind"] == "message").unwrap();
-        assert_eq!(message["text"], "short");
-        assert!(host.needs_history(&thread));
-        host.stop().await;
-        assert_eq!(rig.runs().len(), 1, "never started over");
-        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(
-            record.contains(OTHER) && record.contains("needs_history"),
-            "{record}"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_refusal_before_any_step_keeps_the_saved_conversation() {
-        let rig = Rig::new();
-        let dir = rig.dir.join("refusal");
-        std::fs::create_dir_all(&dir).unwrap();
-        let fixture = dir.join("other.jsonl");
-        std::fs::write(
-            &fixture,
-            // agy names another conversation, then refuses before any work.
-            format!("{{\"event\": \"init\", \"conversation_id\": \"{OTHER}\"}}\n{{\"event\": \"result\", \"result\": {{\"status\": \"ERROR\", \"error\": \"no\", \"conversation_id\": \"{OTHER}\"}}}}\n"),
+        let (host, thread, events) = played(
+            &rig,
+            "refusal",
+            &[json!({"jsonrpc": "2.0", "id": "@ID@", "error": {"code": -32603, "message": "no"}})],
+            Some(SAVED),
         )
-        .unwrap();
-        let s = rig.settings(&[("FIXTURE", fixture.display().to_string())]);
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&s);
-        host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "hi", None).unwrap();
-        assert!(turn_events(&mut rx)
-            .await
-            .iter()
-            .any(|e| e["kind"] == "turn_failed"));
+        .await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_failed"));
         host.stop().await;
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert!(
@@ -1548,7 +2300,8 @@ read -r _
         );
     }
 
-    /// A turn whose `agy` prints `lines` (JSON events, one per line), on `thread` of `host`; its events.
+    /// A turn whose prompt `agy` answers with `lines` (protocol lines, one per line), on a new thread of a new host, or
+    /// on `saved`; its events.
     async fn played(
         rig: &Rig,
         name: &str,
@@ -1558,9 +2311,15 @@ read -r _
         let dir = rig.dir.join(name);
         std::fs::create_dir_all(&dir).unwrap();
         let fixture = dir.join("turn.jsonl");
-        let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+        let text: String = lines
+            .iter()
+            .map(|l| format!("{l}\n").replace(r#""@ID@""#, "@ID@"))
+            .collect();
         std::fs::write(&fixture, text).unwrap();
-        let s = rig.settings(&[("FIXTURE", fixture.display().to_string())]);
+        let s = rig.settings(&[
+            ("FIXTURE", fixture.display().to_string()),
+            ("NEW", OTHER.into()),
+        ]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         if let Some(cid) = saved {
@@ -1572,90 +2331,96 @@ read -r _
     }
 
     #[tokio::test]
-    async fn a_new_threads_refusal_before_any_work_leaves_no_record() {
+    async fn a_turn_cut_short_fails_and_a_tool_seen_only_in_an_update_still_ran() {
         let rig = Rig::new();
-        let (host, thread, events) = played(
+        let chunk = json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@",
+                           "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "partial"}}}});
+        let failed = |events: &[Value]| {
+            events
+                .iter()
+                .find(|e| e["kind"] == "turn_failed")
+                .cloned()
+                .unwrap_or_else(|| panic!("{events:?}"))
+        };
+        // A truncated answer is not a completed turn, and an answer with no result is none.
+        for (name, result) in [
+            ("max-tokens", json!({"stopReason": "max_tokens"})),
+            ("max-requests", json!({"stopReason": "max_turn_requests"})),
+            ("no-result", Value::Null),
+        ] {
+            let answer = json!({"jsonrpc": "2.0", "id": "@ID@", "result": result});
+            let (host, _, events) = played(&rig, name, &[chunk.clone(), answer], None).await;
+            assert!(events.iter().all(|e| e["kind"] != "message"), "{events:?}");
+            assert_eq!(failed(&events)["limit"], false, "{name}");
+            host.stop().await;
+        }
+        // A completed tool agy reports only by its update ran, and is reported once; the quota after it stays a limit.
+        let update = json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@",
+                            "update": {"sessionUpdate": "tool_call_update", "toolCallId": "t9", "status": "completed"}}});
+        let refusal = json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "refusal"}});
+        let (host, _, events) = played(
             &rig,
-            "new-refusal",
-            &[
-                json!({"event": "init", "conversation_id": OTHER}),
-                json!({"event": "result", "result": {"status": "ERROR", "error": "no", "conversation_id": OTHER}}),
-            ],
+            "update-only",
+            &[update.clone(), update, refusal],
             None,
         )
         .await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_failed"));
-        assert!(!host.path(&thread).unwrap().exists());
-        assert!(!host.restored(&thread));
+        let tools: Vec<&Value> = events.iter().filter(|e| e["kind"] == "tool").collect();
+        assert_eq!(
+            tools,
+            [&json!({"kind": "tool", "tool": "tool", "status": "started", "item_id": "t9"})]
+        );
+        assert_eq!(failed(&events)["limit"], true);
         host.stop().await;
+        // A session id agy names in capitals is kept as it is, so its updates are the turn's.
+        let upper = OTHER.to_uppercase();
+        let dir = rig.dir.join("upper");
+        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = dir.join("turn.jsonl");
+        std::fs::write(
+            &fixture,
+            format!(
+                "{chunk}\n{}\n",
+                json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "end_turn"}})
+            )
+            .replace(r#""@ID@""#, "@ID@"),
+        )
+        .unwrap();
+        let s = rig.settings(&[
+            ("FIXTURE", fixture.display().to_string()),
+            ("NEW", upper.clone()),
+        ]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "partial", "final": true})));
+        host.stop().await;
+        assert!(std::fs::read_to_string(host.path(&thread).unwrap())
+            .unwrap()
+            .contains(&upper));
     }
 
     #[tokio::test]
-    async fn a_new_threads_first_conversation_is_kept_once_the_turn_succeeds() {
+    async fn a_new_threads_conversation_is_kept_only_once_the_model_worked_or_the_turn_succeeded() {
         let rig = Rig::new();
-        let (host, thread, events) = played(
-            &rig,
-            "new-success",
-            &[
-                json!({"event": "init", "conversation_id": OTHER}),
-                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok", "conversation_id": OTHER}}),
-            ],
-            None,
-        )
-        .await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
+        let refusal =
+            json!({"jsonrpc": "2.0", "id": "@ID@", "error": {"code": -32603, "message": "no"}});
+        let (host, thread, events) = played(&rig, "new-refusal", &[refusal.clone()], None).await;
+        assert!(events.iter().any(|e| e["kind"] == "turn_failed"));
+        assert!(!host.path(&thread).unwrap().exists());
+        host.stop().await;
+        // Work before the refusal: the conversation holds it, so it is the thread's.
+        let chunk = json!({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": "@SID@",
+                           "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "a"}}}});
+        let (host, thread, _) = played(&rig, "new-work", &[chunk, refusal], None).await;
         let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         assert!(
             record.contains(OTHER) && !record.contains("needs_history"),
             "{record}"
         );
         assert!(!host.restored(&thread) && !host.needs_history(&thread));
-        host.stop().await;
-    }
-
-    #[tokio::test]
-    async fn a_success_back_on_the_saved_conversation_drops_another_one_named_before() {
-        let rig = Rig::new();
-        let (host, thread, events) = played(
-            &rig,
-            "back",
-            &[
-                json!({"event": "init", "conversation_id": SAVED}),
-                json!({"event": "step_update", "step_update": {"step_type": "user_input", "conversation_id": OTHER}}),
-                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ok", "conversation_id": SAVED}}),
-            ],
-            Some(SAVED),
-        )
-        .await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
-        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(
-            record.contains(SAVED) && !record.contains(OTHER),
-            "{record}"
-        );
-        assert!(!host.restored(&thread));
-        host.stop().await;
-    }
-
-    #[tokio::test]
-    async fn usage_on_a_step_with_no_index_adds_to_the_indexed_ones() {
-        let rig = Rig::new();
-        let (host, _thread, events) = played(
-            &rig,
-            "usage",
-            &[
-                json!({"event": "init", "conversation_id": OTHER}),
-                json!({"event": "step_update", "step_update": {"step_index": 1, "step_type": "agent_response", "text_delta": "a", "usage": {"input_tokens": 10, "output_tokens": 1}}}),
-                json!({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "b", "usage": {"input_tokens": 20, "output_tokens": 2}}}),
-                json!({"event": "step_update", "step_update": {"step_index": 1, "step_type": "agent_response", "usage": {"input_tokens": 12, "output_tokens": 1}}}),
-                json!({"event": "result", "result": {"status": "SUCCESS", "response": "ab", "usage": {"input_tokens": 999, "output_tokens": 999}}}),
-            ],
-            None,
-        )
-        .await;
-        let tokens = events.iter().find(|e| e["kind"] == "tokens").unwrap();
-        assert_eq!(tokens["input"], 32, "{tokens}");
-        assert_eq!(tokens["output"], 3, "{tokens}");
         host.stop().await;
     }
 
@@ -1670,11 +2435,7 @@ read -r _
             .await
             .iter()
             .any(|e| e["kind"] == "turn_completed"));
-        let orphan: i32 = std::fs::read_to_string(rig.dir.join("args.log.orphan"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let orphan: i32 = rig.read(".orphan").trim().parse().unwrap();
         host.stop().await;
         let gone = (0..50).any(|_| {
             std::thread::sleep(Duration::from_millis(20));
@@ -1686,49 +2447,35 @@ read -r _
     #[tokio::test]
     async fn a_turn_that_must_continue_its_conversation_stops_rather_than_start_another() {
         let rig = Rig::new();
-        let mut s = rig.settings(&[("LOSE", OTHER.into())]);
-        s.require_existing_session = true;
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&s);
-        host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "go on", None).unwrap();
-        let events = turn_events(&mut rx).await;
-        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
-        assert!(crate::continuity::missing(&text_of(&failed["error"])));
-        host.stop().await;
-        assert_eq!(rig.runs().len(), 1, "no second start");
-        assert!(
-            !rig.dir.join("args.log.prompts").exists(),
-            "the prompt never went to the other conversation"
-        );
-        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(
-            record.contains(SAVED) && !record.contains(OTHER),
-            "{record}"
-        );
+        for (flag, error) in [("LOSE", LOST), ("NOINIT", UNCONFIRMED)] {
+            let mut s = rig.settings(&[(flag, "1".into()), ("NEW", OTHER.into())]);
+            s.require_existing_session = true;
+            let (host, mut rx) = rig.host();
+            let thread = host.start_thread(&s);
+            host.save(&mut host.inner(), SAVED, false).unwrap();
+            host.start_turn(&thread, "go on", None).unwrap();
+            let events = turn_events(&mut rx).await;
+            let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+            assert_eq!(failed["error"], error);
+            assert!(crate::continuity::missing(error));
+            host.stop().await;
+            assert!(
+                !rig.read(".calls").contains("session/new") && rig.read(".prompts").is_empty(),
+                "no other conversation, and the prompt never went"
+            );
+            let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
+            assert!(
+                record.contains(SAVED) && !record.contains(OTHER),
+                "{record}"
+            );
+        }
     }
 
     #[tokio::test]
-    async fn a_continuation_agy_never_confirms_is_not_sent() {
+    async fn any_other_resumed_turn_agy_does_not_confirm_begins_a_new_conversation_after_the_wait()
+    {
         let rig = Rig::new();
-        let mut s = rig.settings(&[("NOINIT", "1".into())]);
-        s.require_existing_session = true;
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&s);
-        host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "go on", None).unwrap();
-        let events = turn_events(&mut rx).await;
-        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
-        assert_eq!(failed["error"], UNCONFIRMED);
-        assert!(crate::continuity::missing(UNCONFIRMED));
-        host.stop().await;
-        assert!(!rig.dir.join("args.log.prompts").exists(), "never sent");
-    }
-
-    #[tokio::test]
-    async fn any_other_resumed_turn_is_sent_after_the_wait_when_agy_names_no_conversation() {
-        let rig = Rig::new();
-        let s = rig.settings(&[("NOINIT", "1".into())]);
+        let s = rig.settings(&[("NOINIT", "1".into()), ("NEW", OTHER.into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
@@ -1738,30 +2485,7 @@ read -r _
             events.iter().any(|e| e["kind"] == "turn_completed"),
             "{events:?}"
         );
-        host.stop().await;
-    }
-
-    #[tokio::test]
-    async fn another_conversation_named_after_a_step_is_kept_and_the_thread_reads_restored() {
-        let rig = Rig::new();
-        let s = rig.settings(&[("LOSE", OTHER.into()), ("LATE", "1".into())]);
-        let (host, mut rx) = rig.host();
-        let thread = host.start_thread(&s);
-        host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "hi", None).unwrap();
-        let events = turn_events(&mut rx).await;
-        assert!(events.iter().any(|e| e["kind"] == "turn_completed"));
         assert!(host.restored(&thread));
-        assert_eq!(rig.runs().len(), 1, "nothing is replayed after a step");
-        assert!(host.needs_history(&thread));
-        let record = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
-        assert!(
-            record.contains(OTHER) && record.contains("needs_history"),
-            "{record}"
-        );
-        // Told everything in the very turn agy moved it in is not told it in the new conversation: the mark stays.
-        host.history_told(&thread);
-        assert!(host.needs_history(&thread));
         host.stop().await;
     }
 
@@ -1772,18 +2496,14 @@ read -r _
         let (host, _rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "hi", None).unwrap();
-        // Its SIGTERM trap is in place once it says it is ready, so the stop must escalate.
+        // Its SIGTERM is ignored once it says it is ready, so the stop must escalate.
         let ready = rig.dir.join("args.log.ready");
         let by = std::time::Instant::now() + Duration::from_secs(10);
         while !ready.exists() {
             assert!(std::time::Instant::now() < by, "the fake never got ready");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        let pid: i32 = std::fs::read_to_string(rig.dir.join("args.log.pid"))
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
+        let pid: i32 = rig.read(".pid").trim().parse().unwrap();
         host.stop().await;
         assert_eq!(
             unsafe { libc::kill(pid, 0) },
@@ -1793,24 +2513,75 @@ read -r _
     }
 
     #[test]
-    fn efforts_default_to_high_replace_a_named_one_and_reject_unsupported_levels() {
+    fn efforts_default_to_high_and_pick_the_sessions_model_and_thinking_level() {
         let s = Settings {
             effort: Some("max".into()),
             ..Default::default()
         };
-        assert!(argv(&["agy".into()], &s, None, None).is_err());
+        assert!(model_effort(&s, None).is_err());
         assert_eq!(
-            argv(&["agy".into()], &s, Some("xhigh"), None).unwrap()[6],
-            "gemini-4-neon-xhigh"
+            model_effort(&s, Some("xhigh")).unwrap(),
+            ("gemini-4-neon".to_string(), "xhigh".to_string())
         );
         let named = Settings {
             model: Some("gemini-4-hydrogen-low".into()),
             ..Default::default()
         };
-        let default = argv(&["agy".into()], &named, None, None).unwrap();
         assert_eq!(
-            (default[6].as_str(), default[8].as_str()),
-            ("gemini-4-hydrogen-high", "high")
+            model_effort(&named, None).unwrap(),
+            ("gemini-4-hydrogen".to_string(), "high".to_string())
+        );
+        let options = json!([
+            {"id": "model", "type": "select", "currentValue": "gemini-4-neon", "options": [
+                {"group": "g", "name": "Gemini", "options": [{"value": "gemini-4-neon"}, {"value": "gemini-4-hydrogen"}]}]},
+            {"id": "thinking_level", "category": "thought_level", "type": "select", "currentValue": "high",
+             "options": [{"value": "low"}, {"value": "high"}]}]);
+        assert_eq!(models(&json!({"configOptions": options})), 2);
+        assert_eq!(models(&json!({"sessionId": "s"})), 0);
+        assert_eq!(
+            model_value(&options, "gemini-4-hydrogen", "low"),
+            Ok(Some("gemini-4-hydrogen".into()))
+        );
+        assert_eq!(model_value(&options, "gemini-4-neon", "low"), Ok(None));
+        assert!(model_value(&options, "gemini-9", "low")
+            .unwrap_err()
+            .contains("unavailable for this Google account"));
+        // An older agy lists each model with its level in its id.
+        let legacy = json!([{"id": "model", "type": "select", "currentValue": "x", "options": [{"value": "gemini-4-neon-low"}]}]);
+        assert_eq!(
+            model_value(&legacy, "gemini-4-neon", "low"),
+            Ok(Some("gemini-4-neon-low".into()))
+        );
+        assert_eq!(model_value(&Value::Null, "gemini-4-neon", "low"), Ok(None));
+        assert_eq!(
+            effort_option(&options, "low"),
+            Some("thinking_level".into())
+        );
+        assert_eq!(effort_option(&options, "high"), None);
+        assert_eq!(effort_option(&options, "xhigh"), None);
+    }
+
+    #[test]
+    fn mcp_servers_go_to_agy_only_in_a_transport_it_says_it_takes() {
+        let settings = Settings {
+            mcp_servers: vec![
+                json!({"name": "docs", "transport": "http", "url": "https://docs.acme.example/mcp"}),
+                json!({"name": "feed", "transport": "sse", "url": "https://feed.acme.example/sse"}),
+            ],
+            ..Default::default()
+        };
+        // agy 1.5.16 says none.
+        assert_eq!(
+            servers(&settings, &json!({"agentCapabilities": {}})),
+            json!([])
+        );
+        let http = servers(
+            &settings,
+            &json!({"agentCapabilities": {"mcpCapabilities": {"http": true}}}),
+        );
+        assert_eq!(
+            http,
+            json!([{"type": "http", "name": "docs", "url": "https://docs.acme.example/mcp", "headers": []}])
         );
     }
 }

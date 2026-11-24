@@ -1010,7 +1010,7 @@ pub fn new_group(command: &mut tokio::process::Command) -> &mut tokio::process::
 
 /// Whether child `pid` has exited, without reaping it: while it stays unreaped its pid, and so the number of the
 /// group it leads, can go to no other process. An error (it was reaped already) counts as exited.
-fn exited_unreaped(pid: i32) -> bool {
+pub(crate) fn exited_unreaped(pid: i32) -> bool {
     // SAFETY: with WNOWAIT, waitid only writes the child's state into `info`.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let r = unsafe {
@@ -1409,8 +1409,8 @@ impl Host {
     }
 
     /// Whether a thread this host was asked to resume turned out not to be on this computer, and the harness began a
-    /// new session in its place (Claude Code and Gemini find out only when the turn runs; Antigravity when its process
-    /// names its conversation, before it reads the prompt).
+    /// new session in its place (Claude Code and Gemini find out only when the turn runs; Antigravity when `agy` will not
+    /// resume it, before the prompt goes).
     pub fn restored(&self, thread_id: &str) -> bool {
         match self {
             Host::Claude(h) => h.restored(thread_id),
@@ -1421,8 +1421,8 @@ impl Host {
     }
 
     /// Whether `thread_id`'s saved conversation lacks the conversation's history (Antigravity: agy began a new one in
-    /// place of the saved one after the model had worked in it, so it holds only that turn). Its record says so, saved
-    /// with the new id; the thread's turns are told everything again until one completes (`history_told`).
+    /// place of the saved one, which holds only that turn). Its record says so, saved with the new id; the thread's turns
+    /// are told everything again until one completes (`history_told`).
     pub fn needs_history(&self, thread_id: &str) -> bool {
         match self {
             Host::Antigravity(h) => h.needs_history(thread_id),

@@ -32,13 +32,15 @@
 //! this computer or another, claude_login.rs) the file in every home running on it is rewritten (`rewrite`) before the
 //! old token is revoked or, at worst, before the turn's next call.
 //!
-//! An Antigravity plan (`antigravity_login`) is a home subscription made for each turn too (`TURN_HOMES`): `agy` reads its
-//! sign-in from `<GEMINI_HOME>/antigravity-cli/antigravity-oauth-token` only when it believes it runs over SSH (else
-//! from the system keyring), so a plan turn's GEMINI_HOME is a home of its own holding that file, and its `agy` alone
-//! is told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from `plan_home`, so even an `agy`
-//! started again later never falls back to the keyring). The bot's own `~/.gemini` rules, skills and conversations are
-//! linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so a move between
-//! plans resumes the same conversation. Its conversation summaries (`conversation_summaries.db`) are not: a SQLite
+//! An Antigravity plan (`antigravity_login`) is a home subscription made for each turn too (`TURN_HOMES`): `agy acp
+//! --gemini-dir <home>` reads its sign-in from `<home>/antigravity-cli/antigravity-oauth-token` only when it believes it
+//! runs over SSH (else from the system keyring), so a plan turn's home is one of its own holding that file, and its
+//! `agy` alone runs there, told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from
+//! `plan_home`, so even an `agy` started again later never falls back to the keyring). Only `agy acp` takes its home
+//! from that flag: headless `agy -p` and `agy models` read `$HOME/.gemini` whatever GEMINI_HOME says, so they never run
+//! on a plan. GEMINI_HOME is the home too, for the turn's tools. The bot's own `~/.gemini` rules, skills and
+//! conversations are linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so
+//! a move between plans resumes the same conversation. Its conversation summaries (`conversation_summaries.db`) are not: a SQLite
 //! file cannot be shared through a link, so they do not carry across plans.
 //!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
@@ -66,6 +68,9 @@ pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
 pub const OVER_SSH: (&str, &str) = ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0");
 /// This runner can sign in, install and run Antigravity plans; the hub gives such work to no other runner.
 pub const AGY_PLAN_CAPABILITY: &str = "antigravity_plan_v1";
+/// This runner runs Antigravity over ACP (hosts/antigravity.rs): 0.6.250 to 0.6.253 report AGY_PLAN_CAPABILITY but
+/// run agy headless, so the hub gives plans only to a runner that reports this.
+pub const AGY_ACP_CAPABILITY: &str = "antigravity_acp_v1";
 
 /// A runtime whose plan login lives in a home made for each turn, which its CLI finds through `var`.
 pub struct TurnHome {
@@ -89,6 +94,8 @@ pub const TURN_HOMES: &[TurnHome] = &[TurnHome {
     var: "GEMINI_HOME",
     default: ".gemini",
     file: AGY_TOKEN,
+    // T3 Code's linkAntigravityUserConfig (rules and skills), then the conversations' own folders, which a move
+    // between plans resumes.
     links: &[
         "AGENTS.md",
         "GEMINI.md",

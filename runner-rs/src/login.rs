@@ -341,6 +341,151 @@ fn failure_message(category: &str, waiting: bool) -> &'static str {
     }
 }
 
+/// An Antigravity Connect's failures in a person's words (T3 Code's AntigravityAuth.ts and `safeAuthFailure`).
+const AGY_NOT_STARTED: &str =
+    "Antigravity has not started after 90 seconds. Its runtime may be stuck starting on this machine.";
+const AGY_NO_LINK: &str = "Antigravity has not reached Google after 30 seconds. Check this machine's network connection. Broken IPv6 is a common cause.";
+const AGY_EXPIRED: &str = "Google sign-in expired. Start sign-in again.";
+const AGY_NOT_APPROVED: &str = "Google sign-in was not approved. Start sign-in again.";
+const AGY_SUBSCRIPTION: &str =
+    "Google requires an eligible Antigravity subscription for this account.";
+const AGY_NO_SESSION: &str = "Signed in, but Antigravity could not start a session or load models.";
+/// How long `agy acp --login` has to print anything, and then Google's link.
+const AGY_START: Duration = Duration::from_secs(90);
+const AGY_LINK: Duration = Duration::from_secs(30);
+/// The most an Antigravity sign-in's session check takes.
+const AGY_CHECK: Duration = Duration::from_secs(90);
+
+/// What a person reads for an Antigravity Connect that got no sign-in: what its session check found (`checked`), else
+/// what `agy acp --login` said, else how it exited. The CLI's own text never leaves this computer.
+fn agy_failure(raw: &str, checked: Option<&str>, code: Option<i32>) -> String {
+    static DENIED: OnceLock<Regex> = OnceLock::new();
+    let text = format!("{} {}", checked.unwrap_or_default(), plain(raw)).to_lowercase();
+    if text.contains("subscription_required") {
+        return AGY_SUBSCRIPTION.into();
+    }
+    if checked.is_some() {
+        return AGY_NO_SESSION.into();
+    }
+    if DENIED
+        .get_or_init(|| Regex::new(r"access_denied|denied access|cancelled").unwrap())
+        .is_match(&text)
+    {
+        return AGY_NOT_APPROVED.into();
+    }
+    if text.contains("invalid_grant") || text.contains("expired") {
+        return AGY_EXPIRED.into();
+    }
+    match code {
+        Some(0) => AGY_NO_SESSION.into(),
+        Some(c) => format!("Antigravity exited with code {c}. Start sign-in again."),
+        None => "Antigravity exited unexpectedly. Start sign-in again.".into(),
+    }
+}
+
+/// An Antigravity sign-in in `home` counts once a session starts on it there, as T3 Code checks one: `agy acp` says
+/// `initialize`, `authenticate` and `session/new`, and the session offers a model. Headless `agy models` would read
+/// `$HOME/.gemini` whatever the home. Err is what agy said, for `agy_failure` only.
+fn agy_session(exe: &str, home: &std::path::Path, env: &Env, most: Duration) -> Result<(), String> {
+    use crate::hosts::antigravity as agy;
+    use std::io::{BufRead, Write};
+    let scratch =
+        std::env::temp_dir().join(format!("tico-agy-check-{}", uuid::Uuid::new_v4().simple()));
+    let (cwd, tmp) = (scratch.join("work"), scratch.join("tmp"));
+    let checked = (|| -> Result<(), String> {
+        for dir in [&cwd, &tmp] {
+            crate::isolation::mkdir(dir, 0o700).map_err(|e| e.to_string())?;
+        }
+        let home = home.display().to_string();
+        let argv = agy::acp_argv(&[], &home);
+        let args: Vec<&str> = argv.iter().map(String::as_str).collect();
+        let mut command = model_command(exe, &args, &agy::acp_env(env, &home, true, &tmp));
+        command
+            .current_dir(&cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        unsafe {
+            command.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
+        let mut child = command.spawn().map_err(|e| e.to_string())?;
+        let (Some(mut stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+            kill(&mut child);
+            return Err("agy has no pipes".into());
+        };
+        let (tx, rx) = std::sync::mpsc::channel::<Value>();
+        let reader = std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Ok(v) = serde_json::from_str::<Value>(line.trim()) {
+                    if tx.send(v).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let deadline = Instant::now() + most.min(AGY_CHECK);
+        let mut ask = |id: i64, method: &str, params: Value| -> Result<Value, String> {
+            let line = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
+            writeln!(stdin, "{line}").map_err(|e| format!("{method}: {e}"))?;
+            loop {
+                let left = deadline.saturating_duration_since(Instant::now());
+                let msg = rx
+                    .recv_timeout(left)
+                    .map_err(|_| format!("{method}: Antigravity did not answer"))?;
+                if msg["id"] == id && msg.get("method").is_none() {
+                    return match msg.get("error") {
+                        Some(e) => Err(format!("{method}: {e}")),
+                        None => Ok(msg["result"].clone()),
+                    };
+                }
+            }
+        };
+        let mut session = ask(1, "initialize", agy::initialize_params());
+        if session.is_ok() {
+            session = ask(2, "authenticate", json!({"methodId": agy::AUTH_METHOD}));
+        }
+        if session.is_ok() {
+            session = ask(3, "session/new", json!({"cwd": cwd, "mcpServers": []}));
+        }
+        drop(stdin);
+        // agy has a moment to exit on its own, watched without reaping it: then its whole group goes while the group's
+        // number is still its own (as hosts/antigravity.rs's turns), and only then is it reaped.
+        let pid = child.id() as i32;
+        let until = Instant::now() + Duration::from_secs(2);
+        while !crate::hosts::exited_unreaped(pid) && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // SAFETY: agy leads group `pid` (setsid above) and is not reaped yet.
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+        let _ = child.wait();
+        // Nothing of the group holds agy's output now, so its reader ends (its sender with it) before the scratch it ran
+        // in goes; a process that left the group could hold it open, so it has two seconds.
+        let until = Instant::now() + Duration::from_secs(2);
+        while let Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            rx.recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            if Instant::now() >= until {
+                break;
+            }
+        }
+        if reader.is_finished() {
+            let _ = reader.join();
+        }
+        if agy::models(&session?) == 0 {
+            return Err("session/new: no models".into());
+        }
+        Ok(())
+    })();
+    let _ = std::fs::remove_dir_all(&scratch);
+    checked
+}
+
 /// What the login command has shown so far: {url, code, lines, prompt} (login.py `parse`). `hide` is a pasted
 /// code a terminal may echo.
 pub fn parse(raw: &str, hide: &str) -> (String, String, Vec<String>, bool) {
@@ -655,26 +800,13 @@ fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, Stri
 /// The status check's own answer: Some(signed in, detail), or None when it gave none (it could not run, timed
 /// out or said something unreadable, or this runtime has no check).
 fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)> {
-    sign_in_status_within(runtime, exe, env, Duration::MAX)
-}
-
-/// `sign_in_status`, given no longer than `most` (what is left of a sign-in's own time): None when that is too short.
-fn sign_in_status_within(
-    runtime: &str,
-    exe: &str,
-    env: &Env,
-    most: Duration,
-) -> Option<(bool, String)> {
     let run = |args: &[&str], secs: u64| -> Option<(bool, String)> {
-        if most.is_zero() {
-            return None;
-        }
         let mut c = model_command(exe, args, env);
         c.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = c.spawn().ok()?;
-        let deadline = Instant::now() + Duration::from_secs(secs).min(most);
+        let deadline = Instant::now() + Duration::from_secs(secs);
         loop {
             if let Ok(Some(_)) = child.try_wait() {
                 let out = child.wait_with_output().ok()?;
@@ -1432,13 +1564,16 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let _ = done_tx.send(());
         })
     };
-    let deadline = Instant::now() + lifetime;
+    let started_at = Instant::now();
+    let deadline = started_at + lifetime;
     // A Connect's command that printed its token and then would not end: its token still counts.
     let mut token_at = None;
     let mut stopped_after_token = false;
     // After a Connect's code is typed: what the command shows, as a scrubbed line, when it changes (`after_code`).
     let mut watch: Option<AfterCode> = None;
     let mut enter_at: Option<Instant> = None;
+    // When an Antigravity Connect's command first printed anything.
+    let mut printed_at: Option<Instant> = None;
     let verdict: Option<(String, String)> = loop {
         match child.try_wait() {
             Ok(Some(_)) | Err(_) => break None,
@@ -1451,10 +1586,36 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         if Instant::now() > deadline {
             s.trace("timed_out", None);
             kill(&mut child);
+            if plan_home.is_some() {
+                s.why(None);
+                break Some(("failed".into(), AGY_EXPIRED.into()));
+            }
             break Some((
                 "failed".into(),
                 "The sign-in was not finished in time".into(),
             ));
+        }
+        // Antigravity shows Google's link within seconds once it runs (T3 Code's AntigravityAuth hints).
+        if plan_home.is_some() {
+            let (printed, linked) = {
+                let i = s.inner.lock().unwrap();
+                (i.seen > 0, !i.url.is_empty())
+            };
+            if printed && printed_at.is_none() {
+                printed_at = Some(Instant::now());
+            }
+            let stalled = match printed_at {
+                _ if linked => None,
+                None if started_at.elapsed() > AGY_START => Some(AGY_NOT_STARTED),
+                Some(at) if at.elapsed() > AGY_LINK => Some(AGY_NO_LINK),
+                _ => None,
+            };
+            if let Some(message) = stalled {
+                s.trace("timed_out", None);
+                kill(&mut child);
+                s.why(None);
+                break Some(("failed".into(), message.into()));
+            }
         }
         if connect && oauth_retry(&s.inner.lock().unwrap().raw) {
             let reason = s.why(None);
@@ -1532,26 +1693,29 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         Some(v) => v,
         None if s.canceled.load(Ordering::SeqCst) => ("cancelled".into(), "Canceled".into()),
         None if connect => {
-            let finished = child.wait().map(|st| st.success()).unwrap_or(false);
+            let status = child.wait().ok();
+            let finished = status.is_some_and(|st| st.success());
+            // Why Antigravity's own check refused a sign-in its command finished.
+            let mut checked = None;
             let value = match &switch {
                 _ if !finished && !stopped_after_token => None,
                 Some((_, side)) if full => full_login(side, &real_env),
-                // A sign-in a turn reads from its own home only counts once the CLI says it is signed in there,
-                // asked within what is left of the sign-in's time.
-                Some(_)
-                    if plan_home.is_some()
-                        && !matches!(
-                            sign_in_status_within(
-                                &s.runtime,
-                                &exe,
-                                &env,
-                                deadline.saturating_duration_since(Instant::now())
-                            ),
-                            Some((true, _))
-                        ) =>
-                {
-                    None
-                }
+                // A sign-in a turn reads from its own home only counts once a session starts on it there, within what
+                // is left of the sign-in's time.
+                Some((_, side)) if plan_home.is_some() => match agy_session(
+                    &exe,
+                    side,
+                    &env,
+                    deadline.saturating_duration_since(Instant::now()),
+                ) {
+                    Ok(()) => {
+                        crate::model_subscriptions::read_codex_auth(&side.join(&login.connect_file))
+                    }
+                    Err(why) => {
+                        checked = Some(why);
+                        None
+                    }
+                },
                 // A plain file, read bounded and never through a link (a pipe or link there stalls nothing).
                 Some((_, side)) => {
                     crate::model_subscriptions::read_codex_auth(&side.join(&login.connect_file))
@@ -1571,7 +1735,16 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
                         .as_ref()
                         .map(|w| s.inner.lock().unwrap().seen.saturating_sub(w.seen_at));
                     let reason = s.why(since);
-                    ("failed".into(), failure_message(reason, false).into())
+                    let message = if plan_home.is_some() {
+                        agy_failure(
+                            &s.inner.lock().unwrap().raw,
+                            checked.as_deref(),
+                            status.and_then(|st| st.code()),
+                        )
+                    } else {
+                        failure_message(reason, false).into()
+                    };
+                    ("failed".into(), message)
                 }
             }
         }
@@ -2981,8 +3154,9 @@ mod tests {
     }
 
     /// An Antigravity Connect signs in as a plan turn runs: in a side home of its own, told it runs over SSH, with no
-    /// display and no other Google sign-in; the code goes to its input, and its file counts only once `agy models`
-    /// says it is signed in there. The computer's own sign-in, and its keyring, are never touched.
+    /// display and no other Google sign-in; the code goes to its input, and its file counts only once `agy acp` starts
+    /// a session with a model there. Each failure says why in a person's words. The computer's own sign-in, and its
+    /// keyring, are never touched.
     #[test]
     fn an_antigravity_connect_signs_in_on_the_side_and_counts_only_what_agy_accepts() {
         const CHILD: &str = "TICO_TEST_AGY_CONNECT";
@@ -2994,26 +3168,42 @@ mod tests {
             std::fs::create_dir_all(root.join("bin")).unwrap();
             crate::util::write_script(
                 &root.join("bin/agy"),
-                r#"#!/bin/sh
-test "$SSH_CONNECTION" = "127.0.0.1 0 127.0.0.1 0" || exit 3
-test -z "$DISPLAY$WAYLAND_DISPLAY$GEMINI_API_KEY$AGY_ADC_AUTH" || exit 4
-case "$GEMINI_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
-case "$*" in
-  "acp --login --gemini-dir $GEMINI_HOME --app-data-dir antigravity-cli")
-    echo 'Open this link: https://accounts.acme.example/o/oauth2/auth?redirect_uri=https%3A%2F%2Fsignin.acme.example%2Foauth-callback&state=s&response_type=code'
-    echo 'Then paste the authorization code, or the full URL:'
-    read code
-    test "$code" = "4/pasted-code" || exit 6
-    mkdir -p "$GEMINI_HOME/antigravity-cli"
-    echo '{"token":{"access_token":"ya29.synthetic-new-access-token"}}' > "$GEMINI_HOME/antigravity-cli/antigravity-oauth-token" ;;
-  models)
-    if test -e "$HOME/refuses" || ! test -s "$GEMINI_HOME/antigravity-cli/antigravity-oauth-token"; then
-      echo 'Please sign in to view available models'
-    else
-      echo 'gemini-4-neon'
-    fi ;;
-  *) exit 2 ;;
-esac
+                r#"#!/usr/bin/env python3
+import json, os, sys
+env = os.environ
+if env.get("SSH_CONNECTION") != "127.0.0.1 0 127.0.0.1 0": sys.exit(3)
+if any(env.get(k) for k in ("DISPLAY", "WAYLAND_DISPLAY", "GEMINI_API_KEY", "AGY_ADC_AUTH")): sys.exit(4)
+home = env.get("GEMINI_HOME", "")
+if ".tico-switch-" not in home: sys.exit(5)
+token = os.path.join(home, "antigravity-cli", "antigravity-oauth-token")
+said = lambda name: os.path.exists(os.path.join(env["HOME"], name))
+if sys.argv[1:] == ["acp", "--login", "--gemini-dir", home, "--app-data-dir", "antigravity-cli"]:
+    print("Open this link: https://accounts.acme.example/o/oauth2/auth?redirect_uri=https%3A%2F%2Fsignin.acme.example%2Foauth-callback&state=s&response_type=code", flush=True)
+    print("Then paste the authorization code, or the full URL:", flush=True)
+    code = sys.stdin.readline().strip()
+    if said("exits"): sys.exit(7)
+    if code != "4/pasted-code": sys.exit(6)
+    os.makedirs(os.path.dirname(token), exist_ok=True)
+    open(token, "w").write('{"token":{"access_token":"ya29.synthetic-new-access-token"}}')
+    sys.exit(0)
+if sys.argv[1:] != ["acp", "--gemini-dir", home, "--app-data-dir", "antigravity-cli"] or env.get("AGY_ACP_FORCE_FILE_STORAGE") != "1":
+    sys.exit(2)
+# A tool of agy's that ignores SIGTERM and holds its output: it goes with agy's group.
+import subprocess
+helper = subprocess.Popen(["sh", "-c", "trap '' TERM; exec sleep 30"])
+open(os.path.join(env["HOME"], "helper.pid"), "w").write(str(helper.pid))
+for line in sys.stdin:
+    m = json.loads(line)
+    i, method = m["id"], m["method"]
+    if method == "session/new" and (said("refuses") or not os.path.getsize(token)):
+        reply = {"error": {"code": -32000, "message": "Authentication required"}}
+    elif method == "session/new" and said("subscription"):
+        reply = {"error": {"code": -32603, "message": "SUBSCRIPTION_REQUIRED: this account has no Antigravity plan"}}
+    elif method == "session/new":
+        reply = {"result": {"sessionId": "s1", "configOptions": [{"id": "model", "type": "select", "currentValue": "gemini-4-neon", "options": [{"value": "gemini-4-neon"}]}]}}
+    else:
+        reply = {"result": {}}
+    print(json.dumps(dict(reply, jsonrpc="2.0", id=i)), flush=True)
 "#,
             );
             let out = Command::new(std::env::current_exe().unwrap())
@@ -3067,9 +3257,14 @@ esac
             client,
             crate::state::State::open(&root.join("state")).unwrap(),
         ));
-        for (id, refuses) in [("g1", false), ("g2", true)] {
-            if refuses {
-                std::fs::write(root.join("refuses"), "").unwrap();
+        for (id, said) in [
+            ("g1", ""),
+            ("g2", "refuses"),
+            ("g3", "subscription"),
+            ("g4", "exits"),
+        ] {
+            if !said.is_empty() {
+                std::fs::write(root.join(said), "").unwrap();
             }
             let login =
                 Session::new(&json!({"id": id, "runtime": "antigravity", "kind": "connect"}));
@@ -3086,14 +3281,30 @@ esac
             });
             login.submit("4/pasted-code");
             running.join().unwrap();
+            if let Ok(pid) = std::fs::read_to_string(root.join("helper.pid")) {
+                let pid: i32 = pid.trim().parse().unwrap();
+                let gone = (0..50).any(|_| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    (unsafe { libc::kill(pid, 0) }) == -1
+                });
+                assert!(gone, "{id}: the tool agy left in its group is gone");
+                std::fs::remove_file(root.join("helper.pid")).unwrap();
+            }
             let i = login.inner.lock().unwrap();
-            if refuses {
-                assert!(i.captured.is_none() && i.state == "failed", "{:?}", i.state);
-            } else {
+            if said.is_empty() {
                 assert_eq!(
                     i.captured.as_deref().map(str::trim),
                     Some("{\"token\":{\"access_token\":\"ya29.synthetic-new-access-token\"}}")
                 );
+            } else {
+                let why = match said {
+                    "refuses" => AGY_NO_SESSION.to_string(),
+                    "subscription" => AGY_SUBSCRIPTION.to_string(),
+                    _ => "Antigravity exited with code 7. Start sign-in again.".to_string(),
+                };
+                assert!(i.captured.is_none() && i.state == "failed", "{:?}", i.state);
+                assert_eq!(i.message, why);
+                std::fs::remove_file(root.join(said)).unwrap();
             }
         }
         assert_eq!(
