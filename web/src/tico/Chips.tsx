@@ -5,7 +5,6 @@ import { run } from '@/actions';
 import { liveQuery, timelineQuery } from '@/conversation';
 import { catchUpQuery } from '@/features/threads/routing';
 import { Icon, type IconName } from '@/kit/Icon';
-import { arrangementFor } from '@/shell';
 import { askReplay, hereKey, nowShown, subscribe } from './intros';
 
 /* What to ask Tico, over its box (plan/threads-team.html "Catch up", widened): at most a few plain asks that follow
@@ -21,8 +20,6 @@ export interface Chip {
 
 const CATCH_UP: Chip = { text: 'Catch up', icon: 'archive' };
 const NEEDS: Chip = { text: 'What needs me?', icon: 'inbox' };
-const SUMMARY: Chip = { text: 'Summarize this', icon: 'list' };
-const NEXT: Chip = { text: "What's next?", icon: 'arrow' };
 const THREAD: Chip = { text: 'Summarize thread', icon: 'list' };
 const CHANGED: Chip = { text: 'What changed?', icon: 'clock' };
 /** A page with a first-visit intro (intros.ts) plays it again: here, with nothing sent. */
@@ -33,9 +30,8 @@ const THREAD_TABS = new Set(['mail', 'messaging', 'catch-up']);
 /** The Company pages that read as numbers over time. */
 const NUMBERS = new Set([undefined, 'finance', 'growth']);
 
-/** The asks for a page: a task's, a thread's, the Company numbers', or the default (Catch up only while something is new). */
+/** The asks for a page: a thread's, the Company numbers', or the default (Catch up only while something is new). */
 export function chipsFor(pathname: string, news: boolean): Chip[] {
-  if (arrangementFor(pathname) === 'task') return [SUMMARY, NEXT];
   const [root, a] = pathname.replace(/^\/next(?=\/|$)/, '').split('/').filter(Boolean);
   if (root === 'threads' && a && !THREAD_TABS.has(a)) return [THREAD];
   if (root === 'company' && NUMBERS.has(a)) return [CHANGED];

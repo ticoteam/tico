@@ -38,8 +38,6 @@ describe("Tico's chips", () => {
   it('follow the open page, a few at most', () => {
     expect(texts('/next/threads')).toEqual(['What needs me?']);
     expect(texts('/next/needs-you', true)).toEqual(['Catch up', 'What needs me?']);
-    expect(texts('/next/tasks/p1/t1')).toEqual(['Summarize this', "What's next?"]);
-    expect(texts('/next/task/t1')).toEqual(['Summarize this', "What's next?"]);
     expect(texts('/next/tasks/p1/edit')).toEqual(['What needs me?']);
     expect(texts('/next/threads/th1', true)).toEqual(['Summarize thread']);
     expect(texts('/next/threads/mail')).toEqual(['What needs me?']);
@@ -50,11 +48,10 @@ describe("Tico's chips", () => {
   });
 
   it('send their words to Tico, then go until the page is left', async () => {
-    await mount('/tasks/p1/t1');
-    fireEvent.click(screen.getByRole('button', { name: 'Summarize this' }));
-    expect(vi.mocked(run)).toHaveBeenCalledWith('tico.ask', { text: 'Summarize this' }, { via: 'click' });
-    expect(screen.queryByRole('button', { name: 'Summarize this' })).toBeNull();
-    expect(screen.getByRole('button', { name: "What's next?" })).toBeTruthy();
+    await mount('/threads/th1');
+    fireEvent.click(screen.getByRole('button', { name: 'Summarize thread' }));
+    expect(vi.mocked(run)).toHaveBeenCalledWith('tico.ask', { text: 'Summarize thread' }, { via: 'click' });
+    expect(screen.queryByRole('button', { name: 'Summarize thread' })).toBeNull();
   });
 
   it('show Catch up only while something is new, and hide while Tico answers', async () => {
