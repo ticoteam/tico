@@ -10,11 +10,12 @@ import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
-import { loadMore, pipelineTasksQuery } from '@/features/tasks/routing';
+import { loadMore, pipelineTasksQuery, stagePriorityQuery, useStageSort } from '@/features/tasks/routing';
 import { TasksHome } from '@/features/tasks/exports';
-import { boardSearch, forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
+import { boardSearch, changeBoardSearch, forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
 import { dispatch, installPatchers } from '@/live/patch';
+import { useFollow } from '@/live/follow';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
@@ -25,7 +26,7 @@ import { tabTitle, useTabTitle } from './title';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists, pages, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, pages, ranked, rankFails, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
   /** Needs you read as the app reads it (GET /needs-you), where a test serves it: else the stand-in below. */
   needsRead: { real: false },
   /** Where `/task/<n>` passes on to, as its route does once the task is read: none unless a test names one. */
@@ -39,6 +40,10 @@ const { gate, q, catchUpRead, lists, pages, owners, asks, hops, needsRead, shell
   lists: {} as Record<string, unknown[]>,
   /** More of a pipeline's first read where a test names it: `next_after`, the counts. */
   pages: {} as Record<string, Record<string, unknown>>,
+  /** A stage's open tasks in Tico's order (its read by priority), where a test names it: else its list read's rows. */
+  ranked: {} as Record<string, unknown[]>,
+  /** How many of the next reads by priority fail (a 503, not tried again). */
+  rankFails: { n: 0 },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
@@ -126,6 +131,19 @@ vi.mock('@/features/tasks/routing', async () => {
   stageCount: real.stageCount,
   loadListTools: real.loadListTools,
   loadMore: vi.fn(async () => {}),
+  // the real key (a stage by priority), its rows served here
+  stagePriorityQuery: vi.fn((pipeline: string, stage: string, f: TasksRouting.Filters) => ({
+    ...real.stagePriorityQuery(pipeline, stage, f),
+    queryFn: async () => {
+      if (rankFails.n > 0) {
+        rankFails.n -= 1;
+        throw new ApiError(503, 'starting', 'Starting');
+      }
+      return { tasks: ranked[stage] ?? (lists[pipeline] ?? []).filter((r) => (r as { stage_id: string }).stage_id === stage), cursor: '' };
+    },
+    staleTime: Infinity,
+  })),
+  useStageSort: vi.fn(() => false),
   pipelineTasksQuery: vi.fn((pipeline: string, f: object) => ({
     queryKey: ['tasks', 'list', pipeline, JSON.stringify(f)],
     queryFn: async () => ({ tasks: lists[pipeline] ?? [], cursor: '', ...pages[pipeline] }),
@@ -280,6 +298,8 @@ beforeEach(() => {
   forgetPlaces();
   for (const k of Object.keys(lists)) delete lists[k];
   for (const k of Object.keys(pages)) delete pages[k];
+  for (const k of Object.keys(ranked)) delete ranked[k];
+  rankFails.n = 0;
   for (const k of Object.keys(owners)) delete owners[k];
   for (const k of Object.keys(hops)) delete hops[k];
   needsRead.real = false;
@@ -1144,6 +1164,50 @@ describe('a task opened from a board', () => {
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
     expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
   });
+
+  it('by Priority reads the stage shown on its own, by priority and whole, draws it in Tico’s order, asks Tico to sort it, and reads it again when a sort lands', async () => {
+    lists.eng = [row(7, 'Bulk edit stock', 'qa'), row(3, 'Postal codes', 'qa'), row(5, 'Rate fallback', 'review')];
+    // the pipeline's read holds two of QA's three: the stage's own read has all three, in Tico's order, and no More
+    pages.eng = { next_after: 'p2', counts: { total: 4, stage: { review: 1, qa: 3 } }, counted: { review: 1, qa: 2 } };
+    ranked.qa = [row(3, 'Postal codes', 'qa'), row(4, 'Shelf labels', 'qa'), row(7, 'Bulk edit stock', 'qa')];
+    await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    const titles = () => [...list.querySelectorAll('.li-title')].map((t) => t.textContent);
+    await waitFor(() => expect(titles()).toEqual(['Postal codes', 'Shelf labels', 'Bulk edit stock']));
+    expect(head(list).textContent).toBe('EngineeringQA3');
+    expect(within(list).queryByRole('button', { name: 'More tasks' })).toBeNull();
+    // Approve goes on in that order
+    expect(nextInList('t3')).toEqual({ pipeline: 'eng', task: '4' });
+    // the read: the board's filters, the stage and sort=priority, no counts, under the key a landed sort reads again
+    expect(vi.mocked(stagePriorityQuery)).toHaveBeenLastCalledWith('eng', 'qa', expect.objectContaining({ owner: 'bot:qa' }));
+    const read = queryClient.getQueryCache().findAll({ queryKey: ['tasks', 'list', { stage: 'qa', sort: 'priority' }] });
+    expect(read.map((r) => r.queryKey[2])).toEqual([{ pipeline: 'eng', status: 'open', limit: 500, brief: 'true', owner: 'bot:qa', stage: 'qa', sort: 'priority' }]);
+    expect(vi.mocked(useStageSort)).toHaveBeenLastCalledWith('qa', expect.objectContaining({ tasks: ranked.qa }));
+    // a sort lands (`setup`, area `stage_order`, live/patch.ts): read again, drawn in the new order
+    ranked.qa = [ranked.qa[2], ranked.qa[0], ranked.qa[1]];
+    await act(() => queryClient.invalidateQueries({ queryKey: ['tasks', 'list', { stage: 'qa', sort: 'priority' }] }));
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Postal codes', 'Shelf labels']));
+    // Newest is the pipeline's read again, in made order and paged; Tico is not asked to sort it
+    act(() => changeBoardSearch('eng', { sort: 'newest' }));
+    await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Postal codes', 'More tasks']));
+    expect(vi.mocked(useStageSort).mock.lastCall?.[0]).toBeNull();
+  });
+
+  it('follows every task’s change while it shows, as its board does, and a read by priority that failed says so with Try again', async () => {
+    rankFails.n = 1;
+    await board();
+    vi.mocked(useFollow).mockClear();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ allTasks: true });
+    const again = await within(list).findByRole('button', { name: 'Try again' });
+    expect(within(list).getByText('These tasks did not load')).toBeTruthy();
+    expect(within(list).queryByText('No open tasks')).toBeNull();
+    fireEvent.click(again);
+    expect(await within(list).findByRole('link', { name: /Bulk edit stock/ })).toBeTruthy();
+    expect(within(list).queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
 });
 
 describe('an answer on a task beside its pipeline’s list', () => {
@@ -1251,12 +1315,13 @@ describe('an answer on a task beside its pipeline’s list', () => {
     expect(within(list).getByRole('link', { name: /Task 8/ }).classList.contains('is-on')).toBe(true);
   });
 
-  it('at a stage’s last row read, with more of it on the server, Approve goes back to the board: never to the next stage’s first, never past rows not read', async () => {
+  it('in made order, at a stage’s last row read, with more of it on the server, Approve goes back to the board: never to the next stage’s first, never past rows not read', async () => {
     lists.eng = [row(7, 'review'), row(8, 'qa')];
     pages.eng = { next_after: 'p2', counts: { total: 3, stage: { review: 2, qa: 1 } }, counted: { review: 1, qa: 1 } };
     const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
     fireEvent.click(await screen.findByRole('link', { name: 'Bulk edit stock' }));
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    act(() => changeBoardSearch('eng', { sort: 'newest' }));
     expect(await within(list).findByRole('button', { name: 'More tasks' })).toBeTruthy();
     expect(within(list).queryByText('No open tasks')).toBeNull();
     expect(nextInList('t7')).toBeNull();

@@ -151,8 +151,9 @@ export type Due = 'overdue' | 'week' | 'any';
 /** A list's order: Priority (the default), or by when each task was made. */
 export type Sort = 'priority' | 'newest' | 'oldest';
 
-/** Each sort as the server's `sort` names it (backend/hubdb.py TASK_ORDERS). Priority sends none, so it is the server's
-    queue order, until the server ranks a stage for the person (`sort=priority`). */
+/** Each sort as the server's `sort` names it (backend/hubdb.py TASK_ORDERS). Priority sends none here: a pipeline's
+    read is in the server's queue order, and the stage the list beside an open task shows is read on its own by priority
+    (`stagePriorityQuery`). */
 const SERVER_SORT: Partial<Record<Sort, string>> = { newest: 'newest', oldest: 'oldest' };
 
 /** The server's most, one page at a time (backend/task_list_routes.py). */
@@ -400,7 +401,8 @@ export const listsOf = (pipeline: string): QueryKey[] =>
     .getQueriesData<TaskPage>({ queryKey: ['tasks', 'list'] })
     .filter(([k, d]) => {
       const p = k[2] as Record<string, unknown> | undefined;
-      return !!d && p?.pipeline === pipeline && p.status === 'open' && !p.snoozed;
+      // not a stage by priority: the stream's row reads it again, in Tico's order
+      return !!d && p?.pipeline === pipeline && p.status === 'open' && !p.snoozed && p.sort !== 'priority';
     })
     .map(([k]) => k);
 
@@ -896,6 +898,18 @@ export function useNeedsYouSort(flow: Flow | undefined): boolean {
     `stage_order`, live/patch.ts) or starts reads it again. */
 export const stagePriorityKey = (stage: string) => keys.tasks.list({ stage, sort: 'priority' });
 
+/** The stage shown beside an open task, by priority, under the list's filters: whole in one answer (no next page, no
+    More; `truncated` past 500), under `stagePriorityKey`. A live insert or move into it reads it again (live/patch.ts),
+    never spliced into the order. */
+export const stagePriorityQuery = (pipeline: string, stage: string, f: Filters) => {
+  const params: Record<string, string | number> = { ...listParams(pipeline, f), stage, sort: 'priority' };
+  delete params.counts; // the pipeline's read has the counts
+  return queryOptions({
+    queryKey: keys.tasks.list(params),
+    queryFn: ({ signal }) => api.get<TaskPage & { sorting?: boolean; sorting_until?: string | null }>(`/api/v2/tasks?${query(params)}`, { signal }),
+  });
+};
+
 /** The list's ask for Tico to sort the stage when it is due (`POST /api/v2/stages/{id}/sort` with the ids it shows),
     once as it opens and again when the set of what it shows changes. Its own key, so no other read asks. */
 const stageSortQuery = (stage: string, set: string) => queryOptions({
@@ -911,8 +925,7 @@ const stageSortQuery = (stage: string, set: string) => queryOptions({
 
 /** For a stage list shown by priority (`stage` null when it is not): asks for the sort, and whether Tico is sorting it
     now, from the list's newest read (`sorting`, `sorting_until`). One timer at `sorting_until` shows it live again and
-    reads it again, so a sort whose server went away ends there. Wiring note: the live task patcher appends new tasks to
-    list caches; a priority list must read again instead (it is read whole: no next page, no changed_after). */
+    reads it again, so a sort whose server went away ends there. */
 export function useStageSort(stage: string | null, page: { tasks: { id: string }[]; sorting?: boolean; sorting_until?: string | null } | undefined): boolean {
   const set = stage && page ? page.tasks.map((t) => t.id).filter((id) => !id.startsWith('tmp:')).sort().join(',') : '';
   useQuery({ ...stageSortQuery(stage ?? '', set), enabled: !!stage && set.includes(',') }); // one task has one order
