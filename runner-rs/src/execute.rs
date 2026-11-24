@@ -3069,7 +3069,7 @@ impl Runner {
             };
             // The host this turn made, kept ready while it goes on in its thread's kept app-server, until its prompt has
             // gone there: one found gone before then is dropped, and the turn goes on as a cold one (`go_cold`).
-            let mut cold: Option<Host> = None;
+            let mut standby: Option<Host> = None;
             if deferred {
                 let login = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
                     .map(|d| (d.id.as_str(), d.revision));
@@ -3078,14 +3078,14 @@ impl Runner {
                     _ => None,
                 };
                 match kept {
-                    Some(kept) => cold = Some(std::mem::replace(h, Host::Codex(kept))),
+                    Some(kept) => standby = Some(std::mem::replace(h, Host::Codex(kept))),
                     None => h.start().await?,
                 }
                 mark("harness_started", &aid);
             }
             #[cfg(test)]
             tests::kill_kept_at("taken", h).await;
-            self.go_cold(h, &mut cold, &aid).await?;
+            self.go_cold(h, &mut standby, &aid).await?;
             let mut resumed = false;
             let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
                 && !cleared && !binding_changed && !fresh_chat && !release_run && continuing.is_empty();
@@ -3348,7 +3348,7 @@ impl Runner {
             let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
             #[cfg(test)]
             tests::kill_kept_at("started", h).await;
-            if self.go_cold(h, &mut cold, &aid).await? {
+            if self.go_cold(h, &mut standby, &aid).await? {
                 // Started already: the thread is resumed in the new process as it would have been, or the turn ends here,
                 // its prompt sent nowhere.
                 match h.resume_thread(&th, &settings).await {
@@ -3358,7 +3358,7 @@ impl Runner {
             }
             // The prompt goes to the kept app-server now: the plan login it refreshes in its own home is this turn's to
             // send back (model_subscriptions::go_on_in).
-            if let (Some(_), Host::Codex(c)) = (cold.take(), &*h) {
+            if let (Some(_), Host::Codex(c)) = (standby.take(), &*h) {
                 if let Some(home) = c.own_home() {
                     crate::model_subscriptions::go_on_in(&mut vault.subscriptions, &runtime, &home);
                 }
