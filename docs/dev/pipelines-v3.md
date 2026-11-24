@@ -1467,7 +1467,7 @@ late. Nothing depends on the exact 10 seconds.
   queued then, and if GitHub now says it conflicts, the owner's send-back to QA names #40 for the Builder to
   rebase onto. When #40 is closed without merging, the order ends and it is the owner's turn once: Tico does not
   queue it by itself. Both tasks show the order, read-only: "After #40 · Merge" and "Before #42 · Build" (to a
-  reader who cannot open #40: "After a task you can't open").
+  reader who cannot open #40: "After a private task").
 - **A commit after the person's OK** does not merge on that OK unless it changes the same lines. Otherwise the last reviewer
   reads it in QA (from Merge, the Release Owner sends the task back; the person's OK comes back with it, on the
   page they OK'd). The reviewer's OK keeps the person's. A send back goes to the Builder, who attaches the page again,

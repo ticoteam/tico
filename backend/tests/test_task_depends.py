@@ -13,6 +13,7 @@ from backend import task_relations as TR
 from backend import waiting_on as W
 from backend.store import H
 from backend.tests.helpers import engine as X
+from backend.tests.helpers.task_depends import APP, merged_pr, published
 
 B = "bot:builder"
 # The column the until-released migration (20261113070100) adds: a table from before it has no such line.
@@ -274,7 +275,7 @@ def test_the_note_for_a_dependency_taken_off_names_a_private_blocker_only_if_eve
     X.settled(c)
     TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
     (body,) = bodies(c, blocked)
-    assert D.UNLINKED_UNNAMED in body and ref(c, blocker) not in body
+    assert "A private task no longer blocks this task" in body and ref(c, blocker) not in body
 
 
 def test_taking_one_of_two_dependencies_off_wakes_nobody(c):
@@ -389,45 +390,6 @@ def test_a_blocker_restored_from_the_trash_does_not_block_again(c):
 
 
 # ----------------------------------------------------------------------------- until released
-APP = "acme/app"
-
-
-def merged_pr(c, task_id, number, sha, repo=APP):
-    """A PR of the task, merged as `sha`."""
-    from backend import item_metadata as IM
-
-    c.execute(
-        "INSERT INTO task_links (id, task_id, kind, url, repo, number, source, item_type, item_key, created_at) "
-        "VALUES (?,?,?,?,?,?,'github','pr',?,?)",
-        (
-            H.new_id(),
-            task_id,
-            "pr",
-            f"https://github.com/{repo}/pull/{number}",
-            repo,
-            number,
-            f"{repo}#{number}",
-            H.now(),
-        ),
-    )
-    IM.save(c, "github", "pr", f"{repo}#{number}", {"state": "merged", "head_sha": sha, "merged_sha": sha}, 1)
-
-
-def published(c, tag, *holding, repo=APP):
-    """A release Tico has saved, whose history holds the commits `holding`."""
-    rid, at = H.new_id(), H.now()
-    c.execute(
-        "INSERT INTO github_releases (id, repo, tag, commit_sha, published_at, metadata_version, read_at, created_at) "
-        "VALUES (?,?,?,?,?,1,?,?)",
-        (rid, repo, tag, "x" + tag, at, at, at),
-    )
-    for sha in holding:
-        c.execute(
-            "INSERT INTO github_release_commits (release_id, commit_sha, included, checked_at) VALUES (?,?,1,?)",
-            (rid, sha, at),
-        )
-
-
 def test_until_released_stays_blocked_after_done_and_wakes_once_when_production_runs_its_release(c):
     """The spec's acceptance: a Validate task that depends on its Engineering task until released stays blocked when
     that task is Done; when production runs a release holding its merged PRs, its owner is woken once. Nov 13: 45 tasks

@@ -519,8 +519,9 @@ def prime_messages(c, messages):
 # Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
 # of an input that a later run took over after this one had already read it.
 # Message columns threads keeps for itself (backend/threads.py): never part of an API row. A page only holds live
-# messages, so `deleted_at` is always empty there.
-INTERNAL_MESSAGE_COLUMNS = frozenset({"restricted", "legacy_audience", "deleted_at"})
+# messages, so `deleted_at` is always empty there. A wake's key is the engine's, and may name another task
+# (`<task>:<visit>:unblocked:<other task>`).
+INTERNAL_MESSAGE_COLUMNS = frozenset({"restricted", "legacy_audience", "deleted_at", "wake_key"})
 INPUT_MOVED = "attempt.input.moved"
 RUN_TASK_EVENTS_SQL = "'task.next-run.carried','" + INPUT_MOVED + "'"
 

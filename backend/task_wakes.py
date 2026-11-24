@@ -271,13 +271,11 @@ def review_new(conn: "sqlite3.Connection", task_id: str) -> str | None:
 
 
 def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:
-    """Whether a wake or a note to `to` about open task `task` may name a task it filed (waiting_on.unnamed): `to` may
-    open it, and, since the words are kept in the task's thread for whoever reads the task later, a private one only
-    when its words may reach them all (task_calls.hidden_filed, `kept`)."""
+    """Whether a wake or a note to `to` about open task `task` may name another task (waiting_on.unnamed): the words
+    are kept in the task's thread for whoever reads it later, so only one that is not private (task_calls.may_name)."""
     from . import task_calls
 
-    hidden = set(task_calls.hidden_filed(conn, task, to, kept=True))
-    return lambda task_id: task_id not in hidden
+    return lambda task_id: task_calls.may_name(conn, task_id)
 
 
 # What a wake's refs hold that is the engine's or the run's own. A caller's refs never set one, and a folded wake never
@@ -355,14 +353,14 @@ def add(
             carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
             parts += _parts(was, found[3], found[1])
         if parts:
-            parts.append({"key": wake_key, "text": text})
+            parts.append({"key": _part_key(wake_key), "text": text})
             text = _joined(parts)
     own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     own["version"] = task.get("version")
     if quiet:
         own["quiet"] = True
     if parts:
-        own["parts"] = parts  # what was folded into it, each with its key and its words (`cancel`)
+        own["parts"] = parts  # what was folded into it, each with its key's digest and its words (`cancel`)
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
     if not theirs.get("wake_batch"):
         carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
@@ -1169,7 +1167,15 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
 def _parts(refs: Row, wake_key: object, body: object) -> list[Row]:
     """What one queued wake is made of: the wakes folded into it, or itself alone."""
     folded: list[Row] | None = refs.get("parts")
-    return list(folded) if folded else [{"key": str(wake_key or ""), "text": str(body or "")}]
+    if folded:  # one folded before keys were kept as digests keeps its key: it is kept as one now
+        return [{**part, "key": _part_key(part.get("key"))} if ":" in str(part.get("key")) else part for part in folded]
+    return [{"key": _part_key(wake_key), "text": str(body or "")}]
+
+
+def _part_key(wake_key: object) -> str:
+    """A folded wake's key as its message's refs keep it: a digest, since the refs reach whoever reads the thread and
+    a key may name a task they may not open (`unblocked:<task id>`). `cancel` finds it by the same digest."""
+    return hashlib.sha256(str(wake_key or "").encode()).hexdigest()[:32]
 
 
 def _joined(parts: list[Row]) -> str:
@@ -1189,7 +1195,7 @@ def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
     for job_id, message_id, own_key, raw, body in rows:
         refs: Row = H._json(raw, {}) or {}
         parts = _parts(refs, own_key, body)
-        rest = [part for part in parts if part.get("key") != wake_key]
+        rest = [part for part in parts if part.get("key") != _part_key(wake_key)]
         if len(rest) == len(parts):
             continue
         if not rest:

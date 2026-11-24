@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from .. import item_metadata as IM
 from .. import merge_order as MO
 from .. import source_actions as SA
+from .. import task_calls as TC
 from . import github_release as GR
 
 if TYPE_CHECKING:
@@ -1484,7 +1485,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
     earlier = MO.held(conn, row)
     if earlier and not E.is_human(by):
-        refuse("task_requirement", HELD_FOR.format(earlier=MO.ref(earlier)))
+        refuse("task_requirement", HELD_FOR.format(earlier=TC.named(conn, earlier["id"], MO.ref(earlier))))
     first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
@@ -1544,7 +1545,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
         if earlier:
-            note, data = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier)), {"before_merged": earlier["id"]}
+            shown = TC.may_name(conn, earlier["id"])
+            note = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier) if shown else TC.PRIVATE_TASK)
+            data = {"before_merged": earlier["id"]} if shown else {}
         else:
             note, data = "Queue again", {}
         E._event(conn, task_id, by, "pr_queued", None, ref, note, {"ref": ref, "head": head, "again": True, **data})
@@ -2456,11 +2459,13 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
     if queues:
         earlier = MO.held(conn, task)
         if earlier:
-            # It goes after a task that has not merged: merge_order's own standing is its turn; this says why.
-            return Standing(requirement, WAITING, SOURCE, f"Not queued until {MO.ref(earlier)} merges")
+            # It goes after a task that has not merged: merge_order's own standing is its turn; this says why, naming
+            # that task to whoever may open it (`about`, waiting_on.unnamed).
+            line = MO.NOT_QUEUED.format(ref=MO.ref(earlier))
+            return Standing(requirement, WAITING, SOURCE, line, about=str(earlier["id"]))
         closed = MO.closed_before(conn, task)
         if closed:
-            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(conn, closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 

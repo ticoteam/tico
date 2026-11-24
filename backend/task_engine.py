@@ -1034,12 +1034,12 @@ def _skipped(conn: "sqlite3.Connection", row: Row, target: Row) -> list[R.Standi
 
 
 def _said(conn: "sqlite3.Connection", viewer: str | None, row: Row, missing: Sequence[R.Standing]) -> list[str]:
-    """How each missing requirement stands, said to `viewer`: a sub-task they may not read is not named, as task_view
-    does not name it (task_calls.standing_line). None is the engine (nothing hidden); task_calls.ON_RECORD is what is
-    kept on record."""
+    """How each missing requirement stands, said to `viewer`: a sub-task, or a task it merges after, they may not read
+    is not named, as task_view does not name it (task_calls.standing_line). None is the engine (nothing hidden);
+    task_calls.ON_RECORD is what is kept on record."""
     from . import task_calls
 
-    hidden = task_calls.hidden_filed(conn, row, viewer)
+    hidden = task_calls.hidden_named(conn, row, viewer, [each.about for each in missing])
     return [task_calls.standing_line(each, hidden) for each in missing]
 
 

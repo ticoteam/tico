@@ -2568,6 +2568,12 @@ def hydrated(store):
     return existing
 
 
+def _served(message):
+    """A message row as the stream sends it: without its wake key, the server's, which may name a task the reader may
+    not open (task_wakes: `<task>:<visit>:unblocked:<other task>`)."""
+    return {key: value for key, value in message.items() if key != "wake_key"}
+
+
 def _stored_messages(c, rows, shared=None):
     """{message id: (row as a dict, refs) or None} for these `messages` change rows: from `shared` where another stream
     read the same change, the rest in one query per 500."""
@@ -2605,7 +2611,12 @@ class _SameForAll:
                 "id": self.message["id"],
                 "conversation_id": self.cid,
                 **self.place,
-                "message": {**self.message, "refs": self.refs, "thread_id": self.cid, "root_id": self.place["root_id"]},
+                "message": {
+                    **_served(self.message),
+                    "refs": self.refs,
+                    "thread_id": self.cid,
+                    "root_id": self.place["root_id"],
+                },
             },
         )
 
@@ -2693,7 +2704,7 @@ def _messages(view, rows, shared=None):
                             "id": subject,
                             "conversation_id": cid,
                             **place,
-                            "message": {**shown, "refs": refs, "thread_id": cid, "root_id": place["root_id"]},
+                            "message": {**_served(shown), "refs": refs, "thread_id": cid, "root_id": place["root_id"]},
                         },
                     )
                 )

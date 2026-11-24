@@ -13,7 +13,7 @@ queues PRs (Merge): both tasks build and are reviewed side by side.
   (`metadata_changed`) and `tico task queue` (`requeue`) all ask it, and nothing else holds a queue.
 - `standing`: while held, one more thing the task needs to leave its stage, put first (task_requirements.standings):
   waiting on the earlier task (waiting_on's `tasks` state), "After #40: waits for it to merge". Nobody's turn and
-  nobody is woken, and it is not Late (never_stuck). A reader who may not open #40 reads "After a task you can't open".
+  nobody is woken, and it is not Late (never_stuck). A reader who may not open #40 reads "After a private task".
 - `release`: when a task ends or its PR merges, every task held on it is read again. One no longer held is queued now
   (its `queue` actions owed, as on entering Merge; GitHub's `mergeable` is read when they are carried out, and a PR that
   now conflicts goes to the owner with the send-back to QA naming the task it is to be rebased on,
@@ -28,6 +28,8 @@ refused (`check`).
 
 from typing import TYPE_CHECKING, Any
 
+from .task_calls import PRIVATE_TASK, capital, may_name, named, named_line
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -38,10 +40,14 @@ Row = dict[str, Any]
 KIND = "merge_order"  # the standing's requirement kind; never a stored requirement
 RELATION = "after"
 LINE = "After {ref}: waits for it to merge"
-UNNAMED = "After a task you can't open: waits for it to merge"
+UNNAMED = f"After {PRIVATE_TASK}: waits for it to merge"
 CLOSED = "{ref} closed without merging. Queue it, or send it back."
 WAKE_CLOSED = "after_closed"
 QUEUED_ANYWAY = "Queued before {ref} merged"
+# GitHub's PR merged while the task is held (item_sources.github), and as a reader who may not open the earlier task
+# reads it (waiting_on.unnamed).
+NOT_QUEUED = "Not queued until {ref} merges"
+NOT_QUEUED_UNNAMED = NOT_QUEUED.format(ref=PRIVATE_TASK)
 
 
 def _engine() -> Any:
@@ -193,8 +199,8 @@ def stops_queue(conn: "sqlite3.Connection", row: Row) -> Row | None:
     return held(conn, row) or closed_before(conn, row)
 
 
-def closed_line(earlier: Row) -> str:
-    return CLOSED.format(ref=ref(earlier))
+def closed_line(conn: "sqlite3.Connection", earlier: Row) -> str:
+    return named_line(conn, CLOSED, earlier["id"], ref(earlier))  # kept: named only if not private
 
 
 def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:
@@ -215,7 +221,8 @@ def conflict_line(conn: "sqlite3.Connection", row: Row, ref_: str) -> str:
     SENT_BACK_FOR_CONFLICT), naming the task it goes after that merged, for the Builder to rebase onto."""
     GS = _github()
     earlier = just_merged(conn, row)
-    if not earlier:
+    # A private task is not named: the plain send-back (the base branch has it once it merged).
+    if not earlier or not may_name(conn, earlier["id"]):
         return GS.SENT_BACK_FOR_CONFLICT.format(ref=ref_, task=row["id"])
     return GS.SENT_BACK_AFTER.format(ref=ref_, task=row["id"], earlier=ref(earlier))
 
@@ -228,18 +235,18 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
     from . import hubdb
 
     H: Any = hubdb
-    for row, what in ((later, "it"), (earlier, ref(earlier))):
+    said = named(conn, earlier["id"], ref(earlier))  # a refusal is kept on record: a private task is not named
+    for row, what in ((later, "The task"), (earlier, capital(said))):
         if row["status"] != "open":
-            who = "The task" if what == "it" else what
-            H.refuse(conn, actor, "task_ended", f"{who} has ended: there is no merge to wait for")
+            H.refuse(conn, actor, "task_ended", f"{what} has ended: there is no merge to wait for")
     path = _path(conn, str(earlier["id"]), str(later["id"]))
     if path:
-        names = " → ".join(ref(_engine().task(conn, tid)) for tid in [str(later["id"]), *path])
+        names = " → ".join(named(conn, t, ref(_engine().task(conn, t))) for t in [str(later["id"]), *path])
         H.refuse(
             conn,
             actor,
             "kind",
-            f"That would make a loop ({names}): {ref(earlier)} already goes after {ref(later)}.",
+            f"That would make a loop ({names}): {said} already goes after {named(conn, later['id'], ref(later))}.",
         )
 
 
@@ -287,7 +294,7 @@ def release_one(conn: "sqlite3.Connection", later_id: str, by: str) -> int:
     closed = closed_before(conn, row)
     if closed:
         E.changed(conn, later_id, E.SYSTEM)
-        E.tell_owner(conn, later_id, closed_line(closed), f"{WAKE_CLOSED}:{closed['id']}")
+        E.tell_owner(conn, later_id, closed_line(conn, closed), f"{WAKE_CLOSED}:{closed['id']}")
         return 0
     if not GS.queue(conn, row, by):
         return 0

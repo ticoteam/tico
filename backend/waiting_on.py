@@ -128,6 +128,8 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         return replace(said, line=SUB_TASK_CLOSED, about=None)
     if said.state == R.WAITING and merge_order.is_order(said.requirement):
         return replace(said, on=None, line=merge_order.UNNAMED, about=None)
+    if said.state == R.WAITING and said.requirement.get("condition") == "pr_merged":
+        return replace(said, line=merge_order.NOT_QUEUED_UNNAMED, about=None)  # still GitHub's: held after a task
     if said.state == R.WAITING:
         return replace(said, on=None, line=SUB_TASK_OPEN, about=None)
     return replace(said, line=SUB_TASK_CLOSED, about=None)
@@ -321,11 +323,12 @@ def _bound(conn: "sqlite3.Connection", requirement_id: str) -> bool:
     return task_asks.bound(conn, requirement_id)
 
 
-def _shown(conn: "sqlite3.Connection", row: Row, viewer: str) -> Callable[[str], bool]:
-    """Whether `viewer` may open a task `row` filed (task_calls.hidden_filed), for `unnamed`."""
+def _shown(conn: "sqlite3.Connection", row: Row, viewer: str, waits: list[Wait]) -> Callable[[str], bool]:
+    """Whether `viewer` may open a task `row` filed, or another one these waits name (task_calls.hidden_named), for
+    `unnamed`."""
     from . import task_calls
 
-    hidden = set(task_calls.hidden_filed(conn, row, viewer))
+    hidden = set(task_calls.hidden_named(conn, row, viewer, [wait.about for wait in waits]))
     return lambda task_id: task_id not in hidden
 
 
@@ -1664,7 +1667,7 @@ def _lists(
                 if wait.state == PERSON and wait.who == person and not question_marks.mark_id(wait.requirement_id)
             ]
             if any(wait.about for wait in mine):  # said to them: a sub-task they may not open is not named
-                shown = _shown(conn, row, person)
+                shown = _shown(conn, row, person, mine)
                 mine = [unnamed(wait, shown) for wait in mine]
             # What is asked of them, each OK or answer its own entry. The task's own work is not: a task they have with
             # nothing asked lives in Tasks. A task that waits on someone being let in is theirs to share (`share`),

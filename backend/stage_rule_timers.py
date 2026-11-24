@@ -48,7 +48,7 @@ from collections.abc import Iterable, Sequence
 from typing import Any
 
 from . import hubdb as _hubdb
-from . import task_depends
+from . import task_calls, task_depends
 
 log = logging.getLogger(__name__)
 Row = dict[str, Any]
@@ -112,7 +112,6 @@ _BLOCKER_ACTIVE = (
     f"COALESCE((SELECT {_ACTIVE} FROM visits v WHERE v.task_id = t.id AND v.left_at IS NULL), t.updated_at) "
     "FROM tasks t LEFT JOIN pipelines p ON p.id = t.pipeline_id WHERE t.id IN (SELECT value FROM json_each(?))"
 )
-_UNNAMED = "a task you can't open"
 BLOCKED_ASK = "Chase it, take the link off, reassign or re-plan."
 # An auto dream (backend/dream_auto.py): nobody waits on it, so Quiet bot tasks never tells a manager about one; its
 # release policy and the auto pass end it (an index probe on events_action_target).
@@ -370,11 +369,9 @@ def _quiet_blockers(conn: Any, task: Row, hours: float, at: str) -> list[tuple[s
         quiet = float((now - last).total_seconds()) / 3600
         if quiet < hours:
             return []
-        # Named only where everyone who reads the task's thread may open it, as the dependency's own lines are.
-        named = task_depends.named_to_all(conn, task, blocker_id)
-        out.append(
-            (task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix}) if named else _UNNAMED, quiet)
-        )
+        # Kept in the history and the wake: named only if it is not private, as the dependency's own lines are.
+        ref = task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix})
+        out.append((task_calls.named(conn, blocker_id, ref), quiet))
     return sorted(out, key=lambda one: -one[1])
 
 

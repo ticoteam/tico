@@ -225,6 +225,16 @@ def readable_history(c, auth, who, history, visible_sql):
                 (json.dumps(named),),
             )
         }
+        # A deleted one (a blocker's id stays in the history of the task it blocked) as kept words name it: only if it
+        # was not private and is not purged. The reader's rule may name columns the trash does not keep.
+        hidden |= {
+            r[0]
+            for r in c.execute(
+                "SELECT task_id FROM task_trash WHERE task_id IN (SELECT value FROM json_each(?)) "
+                "AND (purged_at IS NOT NULL OR coalesce(private, 1) != 0)",
+                (json.dumps(named),),
+            )
+        }
         history = [e for e in history if not ({str(e.get(k)) for k in ("old", "new")} & hidden)]
     history = children_text(c, visible_sql, history)
     principals = privacy.actor(who)  # a run of the shared Assistant reads as its run (hubdb.read_as)

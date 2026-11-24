@@ -612,7 +612,7 @@ def test_a_private_blocker_the_owner_may_not_open_is_not_named(c, time_machine):
     time_machine.shift(timedelta(hours=7))
     T.sweep(c)
     ((_, body),) = _owner_told(c, blocked, "Late")
-    assert "Blocked by a task you can't open" in body
+    assert "Blocked by a private task" in body
     assert task_depends.ref(E.task(c, blocker)) not in body and "Salary" not in " ".join(_history(c, blocked))
 
 
@@ -628,8 +628,35 @@ def test_a_private_blocker_is_not_named_on_a_task_every_member_reads(c, time_mac
     time_machine.shift(timedelta(hours=7))
     T.sweep(c)
     ((_, body),) = _owner_told(c, blocked, "Late")
-    assert "Blocked by a task you can't open" in body
+    assert "Blocked by a private task" in body
     assert task_depends.ref(E.task(c, blocker)) not in " ".join([body, *_history(c, blocked)])
+
+
+def test_a_move_back_note_never_names_a_private_blocker_whoever_holds_the_task_next(c, time_machine):
+    """Every party of the blocked task opens the blocker, but the note is kept in its history for whoever holds it
+    after the move: a private blocker is "a private task" there (task_calls.may_name)."""
+    c.execute("UPDATE stage_rules SET retired_at=? WHERE id=?", (H.now(), SR.QUIET_BOT_TASKS))
+    _rule(
+        c,
+        name="Quiet in Build",
+        pipeline_id="eng",
+        stages=["eng-build"],
+        timer={"kind": "quiet", "hours": 12},
+        then="move_back",
+        then_params={"stage": "eng-on-deck"},
+    )
+    blocked = _task(c, "eng", "Build", "bot:builder", "Waits on the salaries")
+    blocker = _task(c, "ops", "Build", "bot:fixer", "Salary numbers")
+    _block(c, blocked, blocker)
+    readers = json.dumps([ANA, "bot:builder", "bot:lead"])
+    c.execute("UPDATE tasks SET private=1, readers=? WHERE id IN (?,?)", (readers, blocked, blocker))
+    X.settled(c)
+    time_machine.shift(timedelta(hours=13))
+    assert T.sweep(c)["moved"] == 1
+    assert H.task(c, blocked)["stage_id"] == "eng-on-deck"
+    said = " ".join([*_history(c, blocked), *(body for _, body in _told(c))])
+    assert "Blocked by a private task" in said
+    assert task_depends.ref(E.task(c, blocker)) not in said and blocker not in said
 
 
 def test_a_timer_never_messages_a_person(c, time_machine):
