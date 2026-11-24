@@ -928,10 +928,11 @@ def test_autoscale_parks_after_idle_window_and_wakes_only_the_selected_runner(ap
         assert [row[0] for row in hints] == [burst["runner_id"]]
         assert cloud_machines.row(c, "_burst:2")["active_at"] == clock[0] - 100
     assert get(api, PREP, burst["token"])[0]["bot"] == "ops"
-    with store.transaction() as c:
-        c.execute("UPDATE jobs SET held=1 WHERE bot_id='ops'")
-    manager.scale_burst(hq, clock[0])
+    # A preparation hint can stay outstanding when the checkout cannot take the turn.
     clock[0] += 1799
+    with store.transaction() as c:
+        cloud_machines.save(c, "_burst:1", heartbeat_at=clock[0])
+        cloud_machines.save(c, "_burst:2", heartbeat_at=clock[0])
     manager.scale_burst(hq, clock[0])
     with store.read() as c:
         assert cloud_machines.row(c, "_burst:1")["drain_started_at"] is None

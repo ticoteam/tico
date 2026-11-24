@@ -1942,8 +1942,10 @@ def claim_status(c, runner_id):
         (runner_id,),
     ).fetchone()
     key = found["bot"] if found else ""
-    if burst_key(key) and (
-        found["drain_started_at"] is not None or found["burst_managed"] and not burst_lease_supported(c, runner_id)
+    if (
+        burst_key(key)
+        and found["burst_managed"]
+        and (found["drain_started_at"] is not None or not burst_lease_supported(c, runner_id))
     ):
         return "This Burst machine is draining or has yet to confirm lease support.", key
     if (
@@ -2134,9 +2136,7 @@ class Manager:
                 and burst_lease_supported(c, worker["runner_id"])
             ]
             idle = {
-                worker["bot"]: None
-                if (slot and slot == worker["runner_id"]) or burst_work(c, worker["runner_id"])
-                else burst_idle_since(c, worker, at)
+                worker["bot"]: None if burst_work(c, worker["runner_id"]) else burst_idle_since(c, worker, at)
                 for worker in running
             }
         hint = (slot, job["id"]) if slot and job else None
@@ -2162,8 +2162,7 @@ class Manager:
                     worker = row(c, key)
                     if not worker or worker["state"] != "running" or worker["drain_started_at"] is not None:
                         continue
-                    active = (hint and hint[0] == worker["runner_id"]) or burst_work(c, worker["runner_id"])
-                    since = None if active else burst_idle_since(c, worker, at)
+                    since = None if burst_work(c, worker["runner_id"]) else burst_idle_since(c, worker, at)
                     if since is not None and since + pause_after(worker) <= at:
                         drain_burst(c, worker, at)
                     elif since != worker["active_at"]:
@@ -2589,6 +2588,7 @@ class Manager:
         """A new id gets only its own attempt's codes, runner, deadline and wake state, from create or from a list."""
         key, old_id = current["bot"], current["machine_id"]
         burst = burst_key(key)
+        managed = current["burst_managed"]
         if old_id and (
             current["state"] == "failed"
             or not current["runner_id"]
@@ -2613,7 +2613,7 @@ class Manager:
         fresh = {**current, **self.described(machine), "runner_id": fresh_runner, "deleting": False}
         woke_for = (
             current["wake_key"]
-            if burst
+            if managed
             else wake_for({**fresh, "state": "deleted"}, facts(c, self.settings, fresh, at))[0]
         )
         retry = temporary_create_retry(current, machine, at) or {
@@ -2623,7 +2623,7 @@ class Manager:
             "problem_at": None,
         }
         fields = self.described(machine)
-        if current["burst_managed"]:
+        if managed:
             fields.update(self.burst_state(c, current, machine, at, {"create_asked_at": None, "start_asked_at": None}))
         fields["ttl_s"] = None
         save(
@@ -2644,10 +2644,10 @@ class Manager:
         )
         adopted = row(c, key)
         if machine["state"] == "failed" or not fresh_runner and (dead or at >= adopted["enroll_by"]):
-            if current["burst_managed"]:
+            if managed:
                 self.finish_burst_launch(c, current, at, failed=True)
             count_enrollment_failure(c, key, machine["id"], machine["last_error"])
-            if not burst and machine["state"] == "failed":
+            if not managed and machine["state"] == "failed":
                 self.plan_failed(c, adopted, machine, at)
         elif adopted["enroll_fails"] >= ENROLL_TRIES:
             save(c, key, problem="no_enroll", problem_at=H.now())
@@ -2702,7 +2702,7 @@ class Manager:
         if burst_key(key):
             with self.store.read() as c:
                 current = row(c, key)
-                if not current or current["deleting"]:
+                if not current or current["burst_managed"] and current["deleting"]:
                     return None
                 managed = current["burst_managed"]
                 overdue = (
@@ -2743,7 +2743,7 @@ class Manager:
                 if overdue:
                     self.act(hq, live, "delete", {}, at, reserved=True)
                     return "delete"
-            if current["state"] in ON and current["drain_started_at"] is not None:
+            if managed and current["state"] in ON and current["drain_started_at"] is not None:
                 if at < max(current["stop_until"] or 0, current["next_try_at"] or 0):
                     return None
                 with self.store.read() as c:
@@ -2764,13 +2764,17 @@ class Manager:
                 return "stop"
             if (
                 current["state"] == "running"
-                and current["drain_started_at"] is None
+                and (not managed or current["drain_started_at"] is None)
                 and at >= (current["next_try_at"] or 0)
                 and (not current["ttl_s"] or at - (current["heartbeat_at"] or 0) >= HEARTBEAT)
             ):
                 with self.store.transaction() as c:
                     live = row(c, key)
-                    if not live or live["machine_id"] != current["machine_id"] or live["drain_started_at"] is not None:
+                    if (
+                        not live
+                        or live["machine_id"] != current["machine_id"]
+                        or (managed and live["drain_started_at"] is not None)
+                    ):
                         return None
                     save(c, key, next_try_at=at + WAIT)  # An unanswered renewal keeps its claim fence.
                 self.act(hq, current, "heartbeat", {}, at)
@@ -2926,7 +2930,7 @@ class Manager:
         burst = burst_key(key)
         managed = bool(burst and current["burst_managed"])
         # The stop half of an offline restart (`offline_restart_ready`), or the start that follows it.
-        offline_restart = action == "stop" and not burst and offline_restart_ready(current, found, at)
+        offline_restart = action == "stop" and not managed and offline_restart_ready(current, found, at)
         if not reserved and action in ("stop", "delete"):
             with self.store.transaction() as c:
                 current = reserve(c, self.settings, key, action, current["machine_id"])
@@ -3035,9 +3039,9 @@ class Manager:
             return
         fields = self.described(machine)
         if action == "start":
-            woke_for = current["wake_key"] if burst else wake_for(current, found)[0]
+            woke_for = current["wake_key"] if managed else wake_for(current, found)[0]
             fields.update(active_at=at, wake_key=woke_for, woke_at=at)
-            if not burst:
+            if not managed:
                 fields["heartbeat_at"] = at
             if resize and machine["size"] != resize:
                 # HQ started it at another size: keep that, or every look would drain it to ask again.
@@ -3047,9 +3051,7 @@ class Manager:
                     grow_blocked_until=at + GROW_RETRY,
                     grow_note=f"Couldn't change to {cloud_size_name(resize)}",
                 )
-        if action == "stop" and burst:
-            fields.update(ttl_s=None)
-        if action == "stop" and not burst and resizing(current):
+        if action == "stop" and not managed and resizing(current):
             # Stopped to resize: its next want is fresh, even one it was woken for before the drain held it.
             fields.update(wake_key=None, drain_started_at=None, grow_note="")
         if offline_restart:
@@ -3130,7 +3132,7 @@ class Manager:
                 "DELETE FROM cloud_machine_codes WHERE bot=? AND code_hash NOT IN (SELECT code_hash FROM enrollments)",
                 (key,),
             )
-        code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED or burst_key(key) else None)
+        code = mint(c, key, self.execution.auth.owner_id(c) if key == SHARED or current["burst_managed"] else None)
         save(c, key, start_asked_at=None, create_asked_at=at)
         return code
 
@@ -3152,6 +3154,7 @@ class Manager:
     def refused(self, current, action, refused, at, *, restarting=False):
         key = current["bot"]
         burst = burst_key(key)
+        managed = current["burst_managed"]
         fields = {}
         if refused.status == 402:
             fields = {"problem": "out_of_credit", "problem_at": H.now(), "next_try_at": at + FROZEN_RETRY}
@@ -3209,7 +3212,7 @@ class Manager:
                 grow_blocked_until=at + GROW_RETRY if refused.code in SIZE_RETRIES else None,
                 grow_note=f"Couldn't change to {cloud_size_name(current['size'])}",
             )
-        plan = plan_refusal(refused.code) if not burst and action in ("create", "start") else None
+        plan = plan_refusal(refused.code) if not managed and action in ("create", "start") else None
         if action == "stop" and resizing(current) and "failures" in fields:
             if fields["failures"] >= STOP_TRIES:
                 # HQ keeps refusing the stop: run on at the size it has, its runner takes work again, and the size
@@ -3226,11 +3229,11 @@ class Manager:
             else:
                 fields["grow_note"] = STOP_REFUSED
         with self.store.transaction() as c:
-            if burst and action == "heartbeat":
+            if managed and action == "heartbeat":
                 live = row(c, key)
                 if not live or live["machine_id"] != current["machine_id"]:
                     return
-            if burst and current["burst_managed"] and action in ("create", "start"):
+            if managed and action in ("create", "start"):
                 if fields.get(action + "_asked_at", at) is None:
                     fields["burst_launch_at"] = None  # HQ refused before a worker needed to become ready.
                 wait = FROZEN_RETRY if refused.code in ("daily_budget", "burst_budget_required") else BURST_WAIT
