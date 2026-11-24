@@ -202,6 +202,19 @@ describe('tasks', () => {
     expect(patchTaskList({ ...held, next_after: 'k' }, [event], { status: 'open', pipeline: 'p1' }).list.tasks.map((t) => t.id)).toEqual(['t1', 't2', 't9']);
   });
 
+  it('read a stage by priority again for a task new to it, created or moved in, rather than add it at the end', () => {
+    const held = { tasks: [task('t2', { stage_id: 's1' }), task('t1', { stage_id: 's1' })], cursor: '900.x' };
+    const params = { status: 'open', pipeline: 'p1', stage: 's1', sort: 'priority' };
+    for (const kind of ['create', 'move']) {
+      const event = { seq: 901, id: 't9', kind, kinds: [kind], task: task('t9', { status: 'open', pipeline_id: 'p1', stage_id: 's1' }) };
+      const out = patchTaskList(held, [event], params);
+      expect([out.unsure, out.list]).toEqual([true, held]);
+    }
+    // a row it holds moved out leaves it, the order of the rest kept
+    const out = patchTaskList(held, [{ seq: 901, id: 't2', kind: 'move', kinds: ['move'], task: task('t2', { status: 'open', pipeline_id: 'p1', stage_id: 's2' }) }], params);
+    expect([out.unsure, out.list.tasks.map((t) => t.id)]).toEqual([false, ['t1']]);
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

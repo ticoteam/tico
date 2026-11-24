@@ -218,6 +218,8 @@ export function patchTaskList<T extends TaskRow>(
   // the rows read, and moves the page's end: the list starts again from its first page (`reset`), its pages read so far
   // and a More on its way dropped
   const paged = !!list.next_after && (params?.sort === 'newest' || params?.sort === 'oldest');
+  // a stage by priority (Tico's order for the reader): a task new to it is read again in its place, never added at the end
+  const ranked = params?.sort === 'priority';
   const edit = () => {
     if (tasks === list.tasks) tasks = [...tasks];
     return tasks;
@@ -239,7 +241,8 @@ export function patchTaskList<T extends TaskRow>(
     const fits = taskMatches(e.task, params);
     if (i < 0) {
       if (fits && paged) return { list, unsure: false, reset: true };
-      if (fits) edit().push(e.task);
+      if (fits && ranked) unsure = true;
+      else if (fits) edit().push(e.task);
       else if (fits === null) unsure = true;
       continue;
     }

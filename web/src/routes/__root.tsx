@@ -12,7 +12,7 @@ import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
 import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
-import { filtersOf, flowCountQuery, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, sortOf, stageCount, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowCountQuery, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, sortOf, stageCount, stagePriorityQuery, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, useStageSort, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
@@ -776,16 +776,34 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
   const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
-  const stages = useMemo(() => (p?.stages ?? []).map((s) => ({ ...s, items: rows.filter((t) => t.stage_id === s.id) })), [p, rows]);
+  // each stage's rows as the pipeline's read has them, and its count: the server's, under the filters and past what was
+  // read (none from a read without counts)
+  const read = useMemo(
+    () =>
+      (p?.stages ?? []).map((s) => {
+        const items = rows.filter((t) => t.stage_id === s.id);
+        return { ...s, items, n: page && stageCount(page, s.id, items.length) };
+      }),
+    [p, rows, page],
+  );
   const own = stage ?? rows.find((t) => String(t.number ?? t.id) === open || t.id === open)?.stage_id ?? undefined;
   // the open task's stage as it opened (`at`), and the stage shown: that one, or the one picked since
   const [head, setHead] = useState<{ open: string; at: string; stage: string } | null>(null);
   if (own && head?.open !== open) setHead({ open, at: own, stage: own });
   const at = head?.open === open ? head.at : undefined;
   const want = head?.open === open ? head.stage : undefined;
-  const shown = stages.find((g) => g.id === want) ?? stages.find((g) => g.items.length) ?? stages[0];
-  // a stage's count is the server's, under the filters and past what was read; a read without counts has its rows
-  const countOf = (g: (typeof stages)[number]) => (page && stageCount(page, g.id, g.items.length)) ?? g.items.length;
+  const showing = (read.find((g) => g.id === want) ?? read.find((g) => g.items.length) ?? read[0])?.id;
+  // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More), and Tico sorts it
+  // when due; drawn once that read is in, never in the queue's order first
+  const ranks = !filters.sort && !!showing;
+  const { data: ranked } = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
+  useStageSort((ranks && showing) || null, ranked);
+  const stages = useMemo(
+    () => (ranks ? read.map((g) => (g.id === showing ? { ...g, items: (ranked?.tasks ?? []).filter((t) => t.stage_id === g.id) } : g)) : read),
+    [ranks, read, showing, ranked],
+  );
+  const shown = stages.find((g) => g.id === showing);
+  const countOf = (g: (typeof stages)[number]) => g.n ?? g.items.length;
   const cut = !!page?.next_after;
   const [finding, setFinding] = useState(false);
   // the rows the answer on the open task can go on to, in the order drawn, while the list shows (not folded or tucked
@@ -798,14 +816,14 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
     const out: { id: string; n: string }[] = [];
     for (const g of stages.slice(Math.max(0, stages.findIndex((x) => x.id === at)))) {
       out.push(...g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id) })));
-      if (cut && g.items.length < ((page && stageCount(page, g.id, g.items.length)) ?? 0)) break;
+      if (cut && g.items.length < (g.n ?? 0)) break;
     }
     return out;
-  }, [stages, at, cut, page]);
+  }, [stages, at, cut]);
   useEffect(() => noteList(shows ? { pipeline, open, rows: drawn } : null), [shows, pipeline, open, drawn]);
   useEffect(() => () => noteList(null), []);
   const name = p?.name ?? 'Tasks';
-  const more = cut && !!shown && shown.items.length < countOf(shown);
+  const more = !ranks && cut && !!shown && shown.items.length < countOf(shown);
   const using = finding || !!filters.q || isFiltered(filters) || !!filters.sort;
   return (
     <Sheet kind="list" label={name}>
@@ -850,7 +868,7 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
         </Suspense>
       ) : null}
       <div className="nav-scroll li-body">
-        {page && !more && !shown?.items.length ? <Empty title="No open tasks" /> : null}
+        {page && (!ranks || ranked) && !more && !shown?.items.length ? <Empty title="No open tasks" /> : null}
         {shown?.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
         {more ? (
           <button className="li li-more" type="button" onClick={() => void loadMore(pipeline, filters)}>
