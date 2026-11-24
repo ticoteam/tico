@@ -2277,7 +2277,7 @@ impl Runner {
                     &home,
                     command,
                     tx,
-                    self.agy.clone(),
+                    self.keeper.clone(),
                 )));
             }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(
@@ -2311,12 +2311,12 @@ impl Runner {
                 vec!["gemini".into()],
                 tx,
             )),
-            // Its conversation records, and the `agy` kept between the bot's turns (hosts/antigravity.rs Pool).
+            // Its conversation records, and the `agy` kept between the bot's turns (crate::keeper).
             "antigravity" => Host::Antigravity(AntigravityHost::new(
                 &self.state.directory.join("agy").join(bot),
                 vec![crate::harness_tools::executable_for("antigravity")],
                 tx,
-                self.agy.clone(),
+                self.keeper.clone(),
             )),
             "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
                 bot,
@@ -2731,6 +2731,11 @@ impl Runner {
                 drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
+            if crate::turn_limits::active() {
+                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
+                // Before base_env: a fallback hop's harness is this attempt's too.
+                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
+            }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
             vault.model_exit_environment(&self.state.directory, &mut env).map_err(Fail::runtime)?;
@@ -2953,17 +2958,13 @@ impl Runner {
             } else {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
             }
-            if crate::turn_limits::active() {
-                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
-                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
-            }
             // A relationship turn keeps its Antigravity conversation records with its execution, removed with it.
             let made = if runtime == "antigravity" && relationship {
                 Host::Antigravity(AntigravityHost::new(
                     &execution_path.join(".antigravity"),
                     vec![crate::harness_tools::executable_for("antigravity")],
                     tx,
-                    self.agy.clone(),
+                    self.keeper.clone(),
                 ))
             } else {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?

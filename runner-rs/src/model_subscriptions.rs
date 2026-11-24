@@ -13,8 +13,8 @@
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
 //! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
 //! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
-//! that subscription runs, or an Antigravity plan's process is kept after it (`KeptHome`, at most crate::warm::IDLE
-//! unused): written 0600 when that runtime starts (`start`), removed when the last turn or kept process holding that
+//! that subscription runs, or an Antigravity plan's process is kept after it (`KeptHome`, at most crate::keeper::IDLE
+//! unused, two minutes): written 0600 when that runtime starts (`start`), removed when the last turn or kept process holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
 //! leaves no copy behind. When Codex refreshed the login during the turn the new file goes back
@@ -38,8 +38,11 @@
 //! runs over SSH (else from the system keyring), so a plan turn's home is one of its own holding that file, and its
 //! `agy` alone runs there, told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from
 //! `plan_home`, so even an `agy` started again later never falls back to the keyring). That `agy` may be kept running
-//! after the turn for the thread's next turn on the same plan (hosts/antigravity.rs Pool): its home, sign-in file
-//! included, stays as long as it runs (`keep_home`), at most crate::warm::IDLE unused, and goes as a turn's does. Only `agy acp` takes its home
+//! after the turn for the thread's next turn on the same plan and sign-in (crate::keeper): its home, sign-in file
+//! included, stays as long as it runs (`keep_home`), at most crate::keeper::IDLE (two minutes) unused, and goes as a
+//! turn's does when it is released, its secrets masked. A plan taken off the computer or revoked meanwhile reaches no
+//! new turn: the next turn is named by the plan and sign-in it was handed (`turn_plan`), so it never goes on in a
+//! process kept for another; the startup `sweep` still removes every home's file. Only `agy acp` takes its home
 //! from that flag: headless `agy -p` and `agy models` read `$HOME/.gemini` whatever GEMINI_HOME says, so they never run
 //! on a plan. GEMINI_HOME is the home too, for the turn's tools. The bot's own `~/.gemini` rules, skills and
 //! conversations are linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so

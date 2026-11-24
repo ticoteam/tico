@@ -972,6 +972,9 @@ impl Pool {
 struct Proc {
     /// What it was started with (`fingerprint`): a turn that would start it differently starts a new one.
     key: String,
+    /// The scope it was started in where turns are limited (crate::turn_limits::launch_unit): the attempt that
+    /// started it names that scope, and a later attempt that takes it asks by this.
+    unit: Option<String>,
     stdin: mpsc::UnboundedSender<String>,
     stopper: super::Stopper,
     exited: watch::Receiver<bool>,
@@ -1221,8 +1224,8 @@ impl Drop for Proc {
     }
 }
 
-/// What a process for this turn would be started with, its effort aside: its command line, environment (HUB_TOKEN
-/// aside, which is the token file's), user, groups and folder, and what its agent directory holds.
+/// What a process for this turn would be started with, its effort aside: its command line, environment (the token file
+/// and scope stem aside, crate::warm::PER_ATTEMPT), user, groups and folder, and what its agent directory holds.
 fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     let mut argv = argv.to_vec();
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
@@ -1230,7 +1233,7 @@ fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     }
     let rest: Env = env
         .iter()
-        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .filter(|(k, _)| !crate::warm::PER_ATTEMPT.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
@@ -1293,6 +1296,16 @@ impl PiHost {
             pool,
             inner: Mutex::new(Inner::default()),
         }))
+    }
+
+    /// The scopes of the processes this attempt holds (crate::turn_limits::launch_unit): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner()
+            .procs
+            .values()
+            .filter_map(|p| p.unit.clone())
+            .collect()
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -1459,6 +1472,7 @@ impl PiHost {
     ) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(env, child.id());
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -1494,6 +1508,7 @@ impl PiHost {
         };
         let proc = Arc::new(Proc {
             key,
+            unit,
             stdin: lines,
             stopper,
             exited: dead,
@@ -3089,6 +3104,7 @@ mod tests {
         let leased = host.0.pool.home().unwrap();
         let proc = Proc {
             key: String::new(),
+            unit: None,
             stdin: mpsc::unbounded_channel().0,
             stopper: super::super::Stopper(mpsc::unbounded_channel().0),
             exited: watch::channel(false).1,

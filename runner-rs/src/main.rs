@@ -67,6 +67,7 @@ mod hosts;
 mod idle_load;
 mod instructions;
 mod isolation;
+mod keeper;
 mod lanes;
 mod lease;
 mod lock;

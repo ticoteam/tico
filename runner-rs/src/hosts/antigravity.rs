@@ -6,7 +6,7 @@
 //! The conversation id is saved beside the stable thread id (`<home>/<thread>.json`, supervisor-only), so the next turn
 //! resumes it on any model or effort. A failed or interrupted turn is never replayed.
 //!
-//! On the computer's own sign-in the process stays up after a turn that completed (`Pool`, as T3 Code keeps it), holding
+//! The process stays up after a turn that completed or was stopped (crate::keeper, as T3 Code keeps it), holding
 //! the thread's conversation open: the thread's next turn sets only the model and thinking level it asks for and sends
 //! its prompt there. A turn that would start agy differently (another home, environment, folder or MCP servers), a
 //! conversation the process does not hold, or a process that has exited gets a new one, which resumes the saved
@@ -22,11 +22,10 @@
 //! (`full_prompt`); the thread moves to it only once the model has worked there, its record asking that the next turn
 //! be told everything again (`needs_history`) unless this one was and succeeded.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
@@ -35,6 +34,7 @@ use tokio::sync::{oneshot, watch};
 
 use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
+use crate::keeper::{Keeper, Session};
 use crate::util::{log, py_dumps, text_of, truthy};
 
 pub const DEFAULT_MODEL: &str = "gemini-4-neon";
@@ -58,7 +58,11 @@ const STOP_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 })
 /// How long `agy` has to exit on its own once its input closes after the turn, before it is stopped.
 const EXIT_WAIT: Duration = Duration::from_secs(1);
 /// How long agy has to end a prompt as cancelled after `session/cancel` before its process is stopped (T3 Code's).
-const CANCEL_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 15 });
+const CANCEL_WAIT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    crate::keeper::INTERRUPT_WAIT
+};
 /// How long `initialize` may take: agy unpacks its runtime on every start before it answers.
 const START_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 120 });
 /// How long any other request before the prompt may take.
@@ -541,6 +545,8 @@ struct Agent {
     _plan: Option<crate::model_subscriptions::KeptHome>,
     /// The folder of the token file it reads HUB_TOKEN from (crate::warm).
     tokens: PathBuf,
+    /// The scope it was launched in where turns are limited (crate::turn_limits::launch_unit).
+    unit: Option<String>,
     /// The conversation it holds open, and that session's config options as they now stand.
     session: Option<String>,
     options: Value,
@@ -549,22 +555,41 @@ struct Agent {
 }
 
 impl Agent {
+    fn attach(&self, tx: Option<Events>) {
+        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = tx;
+    }
+}
+
+/// agy's adapter for the session keeper (crate::keeper): kept with its token blanked and its stderr going nowhere, what
+/// it says meanwhile read by `between`. It has no background work of its own to report (as T3's ACP adapter).
+impl Session for Agent {
     fn alive(&self) -> bool {
         !self.closed && self.proc.exited.borrow().is_none()
     }
 
-    fn token(&self, token: &str) {
+    fn lend(&self, token: &str) {
         crate::warm::write_token_for(&self.tokens.join("lease-token"), token, None);
     }
 
-    fn attach(&self, tx: Option<Events>) {
-        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = tx;
+    fn unit(&self) -> Option<String> {
+        self.unit.clone()
+    }
+
+    fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> crate::keeper::Parked {
+        self.attach(None);
+        Box::pin(async move { Box::new(between(*self, wanted).await) as Box<dyn Session> })
     }
 
     /// Its input closed, then reaped (Proc::reap).
-    async fn stop(&self) {
-        drop(self.io.stdin.lock().await.take());
-        self.proc.reap().await;
+    fn stop(&self) -> crate::keeper::Stopping<'_> {
+        Box::pin(async move {
+            drop(self.io.stdin.lock().await.take());
+            self.proc.reap().await;
+        })
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
     }
 }
 
@@ -577,106 +602,12 @@ impl Drop for Agent {
     }
 }
 
-/// `agy acp` processes kept between turns (Runner::agy), one per thread, each holding its conversation open, with a
-/// folder of its own under `dir` for its token file (crate::warm), blanked while it is kept. A host takes its thread's
-/// process for a turn and gives it back at `release`. One is stopped after IDLE unused, when more than `limit` are kept
-/// (oldest first), when its output ends, and when the runner stops.
-pub struct Pool {
-    dir: PathBuf,
-    limit: usize,
-    idle: Duration,
-    kept: Mutex<HashMap<String, Kept>>,
-}
-
-/// A process in the pool: a task reads what it says meanwhile (`between`) and gives it back when told.
-struct Kept {
-    used: Instant,
-    stop: oneshot::Sender<()>,
-    task: tokio::task::JoinHandle<Agent>,
-}
-
-impl Kept {
-    async fn back(self) -> Option<Agent> {
-        let _ = self.stop.send(());
-        self.task.await.ok()
-    }
-
-    async fn end(self) {
-        if let Some(agent) = self.back().await {
-            agent.stop().await;
-        }
-    }
-}
-
-impl Pool {
-    pub fn new(dir: PathBuf, limit: usize) -> Pool {
-        Pool {
-            dir,
-            limit,
-            idle: crate::warm::IDLE,
-            kept: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn kept(&self) -> std::sync::MutexGuard<'_, HashMap<String, Kept>> {
-        self.kept.lock().unwrap_or_else(|p| p.into_inner())
-    }
-
-    async fn take(&self, thread: &str) -> Option<Agent> {
-        let kept = self.kept().remove(thread)?;
-        kept.back().await
-    }
-
-    async fn keep(&self, thread: String, agent: Agent) {
-        agent.token("");
-        agent.attach(None);
-        let (stop, stopped) = oneshot::channel();
-        let task = tokio::spawn(between(agent, stopped));
-        let old = self.kept().insert(
-            thread,
-            Kept {
-                used: Instant::now(),
-                stop,
-                task,
-            },
-        );
-        if let Some(old) = old {
-            old.end().await;
-        }
-        self.prune(false).await;
-    }
-
-    /// Stop the processes past their idle time, gone, or over the limit (oldest first); every one with `close`.
-    pub async fn prune(&self, close: bool) {
-        let stopping: Vec<Kept> = {
-            let mut kept = self.kept();
-            let mut idle: Vec<(String, Instant)> =
-                kept.iter().map(|(t, k)| (t.clone(), k.used)).collect();
-            idle.sort_by_key(|(_, used)| *used);
-            let mut out = vec![];
-            for (thread, used) in idle {
-                if close
-                    || kept.len() > self.limit
-                    || used.elapsed() >= self.idle
-                    || kept[&thread].task.is_finished()
-                {
-                    out.extend(kept.remove(&thread));
-                }
-            }
-            out
-        };
-        for k in stopping {
-            k.end().await;
-        }
-    }
-}
-
 /// What a kept agy says between turns, until it is wanted back or its output ends: what it asks is answered, a tool's
 /// permission refused as no turn runs, and the rest dropped, so the next turn reads only its own.
-async fn between(mut agent: Agent, mut stop: oneshot::Receiver<()>) -> Agent {
+async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
     loop {
         let line = tokio::select! {
-            _ = &mut stop => return agent,
+            _ = &mut wanted => return agent,
             line = agent.io.stdout.next_line() => line,
         };
         let Ok(Some(line)) = line else {
@@ -709,9 +640,7 @@ async fn between(mut agent: Agent, mut stop: oneshot::Receiver<()>) -> Agent {
 fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) -> String {
     let rest: Env = env
         .iter()
-        .filter(|(k, _)| {
-            *k != "HUB_TOKEN" && *k != "GEMINI_HOME" && *k != crate::turn_limits::SCOPE_ENV
-        })
+        .filter(|(k, _)| !crate::warm::PER_ATTEMPT.contains(&k.as_str()) && *k != "GEMINI_HOME")
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     let records = records.display().to_string();
@@ -813,6 +742,8 @@ struct Inner {
     live: Option<(Stdin, String)>,
     /// The attempt's first process was a kept one already running (its timings' `warm`): set once.
     warm: Option<bool>,
+    /// The launch scopes of the processes this attempt went on in (`scopes`).
+    units: Vec<String>,
     tx: Events,
 }
 
@@ -822,7 +753,7 @@ struct Shared {
     allocation: super::Allocation,
     home: PathBuf,
     cmd: Vec<String>,
-    pool: Arc<Pool>,
+    keeper: Arc<Keeper>,
     inner: Mutex<Inner>,
 }
 
@@ -830,13 +761,13 @@ struct Shared {
 pub struct AntigravityHost(Arc<Shared>);
 
 impl AntigravityHost {
-    pub fn new(home: &Path, cmd: Vec<String>, tx: Events, pool: Arc<Pool>) -> AntigravityHost {
+    pub fn new(home: &Path, cmd: Vec<String>, tx: Events, keeper: Arc<Keeper>) -> AntigravityHost {
         AntigravityHost(Arc::new(Shared {
             gate: tokio::sync::Mutex::new(()),
             allocation: super::Allocation::default(),
             home: home.to_path_buf(),
             cmd,
-            pool,
+            keeper,
             inner: Mutex::new(Inner {
                 up: false,
                 thread: None,
@@ -852,6 +783,7 @@ impl AntigravityHost {
                 agent: None,
                 live: None,
                 warm: None,
+                units: vec![],
                 tx,
             }),
         }))
@@ -894,6 +826,12 @@ impl AntigravityHost {
     /// Whether this attempt's first process was a kept one already running.
     pub fn warm(&self) -> bool {
         self.inner().warm.unwrap_or(false)
+    }
+
+    /// The launch scopes of the processes this attempt went on in (Host::kept_scopes): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner().units.clone()
     }
 
     fn path(&self, thread: &str) -> Option<PathBuf> {
@@ -1063,7 +1001,7 @@ impl AntigravityHost {
             None => None,
         };
         let key = key.filter(|_| settings.plan_home.is_none() || plan.is_some());
-        let tokens = crate::warm::folder(&self.0.pool.dir).map_err(failed)?;
+        let tokens = self.0.keeper.folder().map_err(failed)?;
         let file = tokens.join("lease-token");
         crate::warm::write_token_for(
             &file,
@@ -1088,6 +1026,7 @@ impl AntigravityHost {
             }
         };
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(&env_of(settings), child.id());
         let sink: Sink = Arc::new(Mutex::new(Some(self.inner().tx.clone())));
         let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -1140,13 +1079,14 @@ impl AntigravityHost {
             home: home.to_string(),
             _plan: plan,
             tokens,
+            unit,
             session: None,
             options: Value::Null,
             closed: false,
         })
     }
 
-    /// The process for this turn on `thread`, and whether it was already running: the one this attempt or the pool
+    /// The process for this turn on `thread`, and whether it was already running: the one this attempt or the keeper
     /// holds when it was started as this turn would start it and holds the thread's saved conversation open, else a
     /// new one. A plan's is named by the plan and the sign-in this turn was handed, so a turn no longer handed it
     /// never goes on in its process.
@@ -1166,13 +1106,18 @@ impl AntigravityHost {
                 &self.0.home,
             )
         });
+        let token = settings.env.get("HUB_TOKEN").map_or("", String::as_str);
         let held = self.inner().agent.take();
-        let (held, pooled) = match held {
-            Some(agent) => (Some(agent), false),
-            None => {
-                let agent = self.0.pool.take(thread).await;
+        let (held, pooled) = match (held, &key) {
+            (Some(agent), _) => (Some(agent), false),
+            (None, Some(key)) => {
+                let agent = self.0.keeper.take::<Agent>(thread, key, token).await;
                 let pooled = agent.is_some();
                 (agent, pooled)
+            }
+            (None, None) => {
+                self.0.keeper.release(thread).await;
+                (None, false)
             }
         };
         if let Some(agent) = held {
@@ -1183,11 +1128,14 @@ impl AntigravityHost {
                 && agent.session.is_some()
                 && agent.session == saved
             {
-                agent.token(settings.env.get("HUB_TOKEN").map_or("", String::as_str));
+                agent.lend(token);
                 agent.attach(Some(self.inner().tx.clone()));
                 agent.stderr.clear();
                 self.0.allocation.mark();
-                self.inner().warm.get_or_insert(pooled);
+                let mut inner = self.inner();
+                inner.warm.get_or_insert(pooled);
+                inner.units.extend(agent.unit());
+                drop(inner);
                 return Ok((agent, true));
             }
             agent.stop().await;
@@ -1993,7 +1941,7 @@ impl AntigravityHost {
         self.stop().await;
     }
 
-    /// The attempt is over: with `keep`, a process holding the thread's conversation goes to the pool with its token
+    /// The attempt is over: with `keep`, a process holding the thread's conversation goes to the keeper with its token
     /// blanked, for the thread's next turn; any other is stopped.
     pub async fn release(&self, keep: bool) {
         let (agent, thread) = {
@@ -2001,9 +1949,9 @@ impl AntigravityHost {
             (inner.agent.take(), inner.thread.clone())
         };
         let Some(agent) = agent else { return };
-        match thread {
-            Some(thread) if keep && agent.key.is_some() && agent.alive() => {
-                self.0.pool.keep(thread, agent).await
+        match (thread, agent.key.clone()) {
+            (Some(thread), Some(key)) if keep && agent.alive() => {
+                self.0.keeper.put(&thread, key, agent).await
             }
             _ => agent.stop().await,
         }
@@ -2068,7 +2016,7 @@ mod tests {
             &f.root.join("agy/acme"),
             f.argv(),
             mpsc::unbounded_channel().0,
-            Arc::new(Pool::new(f.root.join("agy-warm"), 4)),
+            Arc::new(Keeper::new(f.root.join("agy-warm"), 4)),
         );
         let home = home_for(&settings).unwrap();
         let tmp = f.root.join("tmp");
@@ -2371,7 +2319,7 @@ for line in sys.stdin:
     struct Rig {
         dir: PathBuf,
         cmd: String,
-        pool: Arc<Pool>,
+        pool: Arc<Keeper>,
     }
 
     impl Rig {
@@ -2380,7 +2328,7 @@ for line in sys.stdin:
                 std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir_all(&dir).unwrap();
             let cmd = fake_agy(&dir);
-            let pool = Arc::new(Pool::new(dir.join("agy-warm"), 4));
+            let pool = Arc::new(Keeper::new(dir.join("agy-warm"), 4));
             Rig { dir, cmd, pool }
         }
 
@@ -2407,7 +2355,7 @@ for line in sys.stdin:
             self.host_on(self.pool.clone())
         }
 
-        fn host_on(&self, pool: Arc<Pool>) -> (AntigravityHost, mpsc::UnboundedReceiver<Value>) {
+        fn host_on(&self, pool: Arc<Keeper>) -> (AntigravityHost, mpsc::UnboundedReceiver<Value>) {
             let (tx, rx) = mpsc::unbounded_channel();
             let host =
                 AntigravityHost::new(&self.dir.join("agy/acme"), vec![self.cmd.clone()], tx, pool);
@@ -3079,7 +3027,10 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_threads_next_turn_goes_on_in_the_process_kept_for_it_holding_no_token_between() {
         let rig = Rig::new();
-        let mut s = rig.settings(&[("HUB_TOKEN", "attempt-one".into())]);
+        // On a computer with turn limits each attempt names its own scope (execute.rs): not a start input.
+        let scope = crate::turn_limits::SCOPE_ENV;
+        let first = crate::turn_limits::scope_key("attempt-one");
+        let mut s = rig.settings(&[("HUB_TOKEN", "attempt-one".into()), (scope, first.clone())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", Some("medium"))
@@ -3098,6 +3049,8 @@ for line in sys.stdin:
         // The next attempt's host on the thread: the same process and conversation, with no handshake again; only
         // the new effort is set, in the live session.
         s.env.insert("HUB_TOKEN".into(), "attempt-two".into());
+        s.env
+            .insert(scope.into(), crate::turn_limits::scope_key("attempt-two"));
         let (next, mut rx) = rig.host();
         next.resume_thread(&thread, &s).unwrap();
         let before = methods(&rig.read(".calls")).len();
@@ -3116,6 +3069,8 @@ for line in sys.stdin:
         assert!(rig.read(".calls").contains(r#""value": "xhigh""#));
         assert_eq!(rig.read(".prompts"), "one\ntwo\n", "each prompt once");
         assert_eq!(rig.read(".tokens"), "attempt-one\nattempt-two\n");
+        // It is still in the first attempt's scope: a memory kill now is this attempt's (turn_limits::oom_failure).
+        assert_eq!(next.scopes(), vec![format!("{first}-{pid}.scope")]);
         next.release(true).await;
         rig.pool.prune(true).await;
         assert!(gone(pid).await, "the runner stopping stops it");
@@ -3125,17 +3080,24 @@ for line in sys.stdin:
     async fn a_kept_process_goes_when_idle_and_another_home_gets_its_own() {
         let rig = Rig::new();
         let s = rig.settings(&[]);
-        // Idle past its time: stopped.
-        let idle = Arc::new(Pool {
-            idle: Duration::ZERO,
-            ..Pool::new(rig.dir.join("idle"), 4)
-        });
-        let (host, mut rx) = rig.host_on(idle);
+        // Unused for T3's two minutes: stopped (as of then: the keeper's clock is its caller's).
+        let idle = Arc::new(Keeper::new(rig.dir.join("idle"), 4));
+        let (host, mut rx) = rig.host_on(idle.clone());
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
         turn_events(&mut rx).await;
         host.release(true).await;
-        assert!(gone(rig.pid()).await, "evicted once idle");
+        let pid = rig.pid();
+        let kept = std::time::Instant::now();
+        idle.prune_at(kept + crate::keeper::IDLE - Duration::from_secs(5), false)
+            .await;
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "kept within the two minutes"
+        );
+        idle.prune_at(kept + crate::keeper::IDLE, false).await;
+        assert!(gone(pid).await, "evicted once idle");
         // Another home: a process of its own, the kept one stopped.
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
@@ -3191,9 +3153,9 @@ for line in sys.stdin:
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "hang", None).await.unwrap();
-        let by = Instant::now() + Duration::from_secs(10);
+        let by = std::time::Instant::now() + Duration::from_secs(10);
         while !rig.read(".prompts").contains("hang") {
-            assert!(Instant::now() < by, "the prompt never went");
+            assert!(std::time::Instant::now() < by, "the prompt never went");
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         host.interrupt().await;
@@ -3309,14 +3271,19 @@ for line in sys.stdin:
         next.release(true).await;
         subs::finish(&mut got);
         assert!(!second.exists() && first.join(subs::AGY_TOKEN).exists());
-        // A turn no longer handed the plan gets a process of its own; the plan's goes, its home and sign-in with it.
+        // Released after two minutes unused: its home and sign-in go with it.
+        rig.pool
+            .prune_at(std::time::Instant::now() + crate::keeper::IDLE, false)
+            .await;
+        assert!(gone(pid).await);
+        assert!(!first.exists(), "no copy left behind");
+        // A turn no longer handed the plan gets a process of its own.
         let own = rig.settings(&[]);
         let (last, mut rx) = rig.host();
         last.resume_thread(&thread, &own).unwrap();
         last.start_turn(&thread, "three", None).await.unwrap();
         turn_events(&mut rx).await;
-        assert!(!last.warm() && gone(pid).await);
-        assert!(!first.exists(), "no copy left behind");
+        assert!(!last.warm());
         assert_eq!(rig.runs().len(), 2);
         last.stop().await;
     }

@@ -48,15 +48,21 @@ Google key, nor the computer's Application Default Credentials (`AGY_ADC_AUTH`),
 during the turn, or while it is kept after it, is masked before anything it says is kept; without the file in place
 it is not started. The home is removed once `agy` has exited (a kept one, below, when it is stopped), and any left by a
 stopped runner when it starts again. The file holds the plan's refresh token, so, as for a ChatGPT plan, a bot paid by
-the plan can read it while its turn runs, and while its `agy` is kept after it: at most 15 minutes unused, which is
-also how long a removed or revoked plan's sign-in can stay on the computer (SECURITY.md).
+the plan can read it while its turn runs, and while its `agy` is kept after it: at most 2 minutes unused, which is
+also how long a removed or revoked plan's sign-in can stay on the computer (SECURITY.md). No new turn reaches it.
 
-The `agy` process stays up after a turn that completed, as T3 Code keeps it: one per
-thread, holding its conversation open (`Pool` in `hosts/antigravity.rs`, as many as the runner's capacity, at least 8).
-The thread's next turn goes straight to `session/prompt` there, setting the model and thinking level on the live session
-first when they changed. The runner stops a kept process after 15 minutes unused, when it stops, and when a turn would
-start `agy` differently (another home, environment, folder or MCP servers, or another plan or a sign-in the plan was
-handed again: a turn no longer handed the plan never goes on in its process): that turn starts a new one. While kept, its
+The `agy` process stays up after a turn that completed or was stopped, as T3 Code keeps it: one per
+thread, holding its conversation open, in the runner's session keeper (`keeper.rs`, modelled on T3 Code's
+`ProviderSessionManager`; `agy` is its first harness, Claude and Codex come next; as many as the runner's capacity, at
+least 8). The hub still claims, starts and completes each message; only the process is reused, and the turn's timings
+say `warm: true`. The thread's next turn goes straight to `session/prompt` there, setting the model and thinking level
+on the live session first when they changed. The runner releases a kept process after 2 minutes unused (T3's idle
+timeout; a session reporting background work still running is kept up to 4 hours, checked every 2 minutes, though
+`agy` reports none), when the keeper is full (oldest first), when it stops, and when a turn would start `agy`
+differently (another home, environment, folder or MCP servers, or another plan or a sign-in the plan was handed again:
+a turn no longer handed the plan never goes on in its process): that turn starts a new one. The turn's own token and
+its turn-limit scope (`TICO_TURN_SCOPE`) are not compared: on a computer with turn limits the process stays in the
+scope of the attempt that started it, and a memory kill there fails the attempt running on it then. While kept, its
 `HUB_TOKEN` file is blank (a `tico-file:` reference, rewritten with each turn's token), what it asks is refused and what
 it says is dropped. A plan turn's `agy` keeps its own home and sign-in while it is kept; the next turn on the plan,
 though handed a home of its own, goes on there. Stopping a turn sends

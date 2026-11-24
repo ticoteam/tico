@@ -1,11 +1,18 @@
-//! What a harness process kept between turns shares (hosts/pi.rs and hosts/antigravity.rs Pool): how long one may sit
+//! What a harness process kept between turns shares (hosts/pi.rs Pool and crate::keeper): how long one may sit
 //! idle, and the revocable credential it reads. The process reads `HUB_TOKEN=tico-file:<home>/lease-token`, a file rewritten with each turn's
 //! attempt token and blanked when the turn ends, so a process kept between turns holds no live token.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// How long pi's kept process may sit idle (hosts/pi.rs Pool). Claude, Codex and Antigravity are kept by
+/// crate::keeper, for T3's two minutes.
 pub const IDLE: Duration = Duration::from_secs(900);
+
+/// What each attempt's environment gives a kept process that is not compared for its reuse: the hub token (read from
+/// the token file) and the attempt's scope stem (crate::turn_limits, set for every attempt where turns are limited: the
+/// process stays in the scope it was started in, `turn_limits::launch_unit`).
+pub const PER_ATTEMPT: [&str; 2] = ["HUB_TOKEN", crate::turn_limits::SCOPE_ENV];
 
 /// A new folder under `dir` for one kept process's token file: the bot may traverse it, never write it.
 pub fn folder(dir: &Path) -> Result<PathBuf, String> {
