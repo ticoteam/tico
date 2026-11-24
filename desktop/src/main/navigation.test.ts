@@ -72,6 +72,12 @@ describe('navigation in a company view', () => {
     expect(decideNewWindow('about:blank', ctx)).toEqual({ kind: 'block' });
     expect(decideNewWindow('data:text/html,hi', ctx)).toEqual({ kind: 'block' });
   });
+
+  it("opens a page on the files origin in the browser when asked for a new window (a chat page's Open in new tab)", () => {
+    const page = 'https://files.acme.example/visuals/tok';
+    expect(decideNewWindow(page, ctx)).toEqual({ kind: 'external', url: page });
+    expect(decideNavigation(page, ctx)).toEqual({ kind: 'block' });
+  });
 });
 
 describe('the small call window', () => {

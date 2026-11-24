@@ -117,7 +117,9 @@ def test_a_page_and_an_svg_uploaded_to_tico_storage_show_inline_from_the_company
         body = copies[key]
         kind_type, how = bucket.meta[key]
         meta = bucket.metadata[key]
-        assert how == "inline" and meta["tico-visual-policy-version"] == "2" and "tico-visual-script" not in meta
+        # A page asks for the open template; an SVG keeps the closed one every deployed edge serves.
+        assert how == "inline" and "tico-visual-script" not in meta
+        assert meta["tico-visual-policy-version"] == {"page": "2", "svg": "1"}[kind]
         assert meta["sha256"] == hashlib.sha256(body).hexdigest()
         assert (
             meta["tico-visual-ancestors"].split()
@@ -328,6 +330,20 @@ def test_src_for_one_file_version_follows_the_same_rules_as_a_message(api, tico)
     notes = api.post(f"/api/v2/tasks/{tid}/files", files={"file": ("notes.txt", b"plain")}, headers=headers("ben-test"))
     with app.state.store.read() as c:
         assert V.src_for(app, settings, c, ben, notes.json()["file_id"], 1) is None
+
+
+def test_an_svgs_hosted_copy_keeps_its_name_and_closed_template_so_an_edge_not_yet_redeployed_still_serves_it():
+    """Only pages moved to the edge's open template (version 2). An SVG's copy is the one made before, by name and
+    metadata, so the deployed edge (which knows only version 1) keeps serving it and no copy is made again."""
+    digest, ancestors = "ab" * 32, ["'self'", "https://tico.acme.example"]
+    before = hashlib.sha256(
+        "\n".join(["tico-visual", "2", "svg", digest, " ".join(ancestors), ""]).encode()
+    ).hexdigest()
+    path, meta = tico_storage._visual(digest, "svg", ancestors)
+    assert path == f"/visuals/{before[:2]}/{before}"
+    assert meta == {"tico-visual-policy-version": "1", "tico-visual-ancestors": " ".join(ancestors)}
+    page, page_meta = tico_storage._visual(digest, "page", ancestors)
+    assert page != path and page_meta["tico-visual-policy-version"] == "2"
 
 
 def test_a_local_install_may_frame_pages_from_either_loopback_spelling(api):

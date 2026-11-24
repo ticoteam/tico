@@ -206,7 +206,7 @@ gets a different page.
 
 Pages show inline when the install has a visual address (`TICO_VISUAL_ORIGIN`) or Tico file hosting
 ([Visuals in replies](visuals.md#self-hosting)). Without either, a page is an **Open** card with its title and status
-line, and opens in the file viewer's sandboxed preview, where its scripts run but it has no storage of its own.
+line, and opens in the file viewer's sandboxed preview, which shows it without its scripts.
 
 ## Archiving
 

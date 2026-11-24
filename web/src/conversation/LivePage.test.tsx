@@ -1,41 +1,47 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { LivePage, MAX_HEIGHT, MIN_HEIGHT, WAIT_MS, liveSrc } from './LivePage';
 
 const VISUAL = 'http://visuals.test';
 const FILES = 'https://acme-files.example';
 
-let n = 0;
-const show = (src: string | null, config: object = { visual_origin: VISUAL, visual_files: null }) => {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(['config'], config);
-  // each case its own file version: the height cache is per version
-  const id = `f${++n}@1`;
-  return render(
-    <QueryClientProvider client={client}>
-      <LivePage src={src} title="Report" id={id} fallback={<p>plain card</p>} />
-    </QueryClientProvider>,
-  );
+const client = (config: object) => {
+  const made = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+  made.setQueryData(['config'], config);
+  return made;
 };
+const page = (src: string | null, id: string, config: object = { visual_origin: VISUAL, visual_files: null }) => (
+  <QueryClientProvider client={client(config)}>
+    <LivePage src={src} title="Report" id={id} fallback={<p>plain card</p>} />
+  </QueryClientProvider>
+);
+let n = 0;
+// each case its own file version unless it says otherwise: the height cache is per version
+const show = (src: string | null, config?: object) => render(page(src, `f${++n}@1`, config));
 const height = (c: HTMLElement) => (c.querySelector('.lpage-view') as HTMLElement).style.height;
-const report = (source: Window | null, h: unknown) =>
-  act(() => window.dispatchEvent(new MessageEvent('message', { data: { ticoVisualHeight: h }, source })));
+const report = (source: Window | null, data: object) => act(() => window.dispatchEvent(new MessageEvent('message', { data, source })));
+const tall = (source: Window | null, h: unknown) => report(source, { ticoVisualHeight: h });
 
 afterEach(() => vi.useRealTimers());
 
 describe('an agent’s page live in a chat', () => {
-  it('runs only from this install’s own visual addresses; any other address is the plain card', () => {
+  it('runs only from this install’s own visual addresses, never on the app’s own origin; anything else is the plain card', () => {
     const cfg = { visual_origin: VISUAL, visual_files: FILES };
     expect(liveSrc(`${VISUAL}/visuals/abc.def`, cfg)).toBe(`${VISUAL}/visuals/abc.def`);
     expect(liveSrc(`${FILES}/visuals/abc`, cfg)).toBe(`${FILES}/visuals/abc`);
     expect(liveSrc('https://evil.example/visuals/abc', cfg)).toBeNull();
     expect(liveSrc(`${VISUAL}/api/v2/files/1/raw`, cfg)).toBeNull();
     expect(liveSrc(`${VISUAL}/visuals/abc?x=1`, cfg)).toBeNull();
-    // Tico file hosting: the app's own route, which only ever sends the frame on to the files host
-    expect(liveSrc('/visuals/abc', cfg)).toBe(`${location.origin}/visuals/abc`);
-    expect(liveSrc('/visuals/abc', { visual_origin: VISUAL, visual_files: null })).toBeNull();
     expect(liveSrc(`${VISUAL}/visuals/abc`, undefined)).toBeNull();
+    // Tico file hosting: the app's own route, which only ever sends the frame on to the files host
+    expect(liveSrc('/visuals/abc', { visual_origin: null, visual_files: FILES })).toBe(`${location.origin}/visuals/abc`);
+    expect(liveSrc('/visuals/abc', { visual_origin: VISUAL, visual_files: null })).toBeNull();
+    // a visual address that is the app's own origin (its loopback twin, the app opened there): the page would run
+    // beside the app, so it never runs live
+    const twin = { visual_origin: location.origin, visual_files: FILES };
+    expect(liveSrc(`${location.origin}/visuals/abc`, twin)).toBeNull();
+    expect(liveSrc('/visuals/abc', twin)).toBeNull();
 
     const { container } = show('https://evil.example/visuals/abc');
     expect(container.querySelector('iframe')).toBeNull();
@@ -48,17 +54,17 @@ describe('an agent’s page live in a chat', () => {
     expect(frame.getAttribute('src')).toBe(`${VISUAL}/visuals/tok#tico-view=card&tico-size=medium`);
     expect(frame.getAttribute('sandbox')).toContain('allow-same-origin');
     // another window's report (another card, the app) never sizes it
-    report(window, 300);
+    tall(window, 300);
     expect(height(container)).toBe('240px');
-    report(frame.contentWindow, 300);
+    tall(frame.contentWindow, 300);
     expect(height(container)).toBe('300px');
-    report(frame.contentWindow, 20);
+    tall(frame.contentWindow, 20);
     expect(height(container)).toBe(`${MIN_HEIGHT}px`);
     expect(container.querySelector('.lpage-fade')).toBeNull();
-    report(frame.contentWindow, 2000);
+    tall(frame.contentWindow, 2000);
     expect(height(container)).toBe(`${MAX_HEIGHT}px`);
     expect(container.querySelector('.lpage-fade')).toBeTruthy();
-    report(frame.contentWindow, 'tall');
+    tall(frame.contentWindow, 'tall');
     expect(height(container)).toBe(`${MAX_HEIGHT}px`);
   });
 
@@ -72,20 +78,47 @@ describe('an agent’s page live in a chat', () => {
     expect(screen.getByText('plain card')).toBeTruthy();
   });
 
-  it('a height in time keeps the page', () => {
+  it('keeps a page that reports in time, a page fixed to the viewport (height 0) included', () => {
     vi.useFakeTimers();
     const { container } = show(`${VISUAL}/visuals/tok`);
-    report(container.querySelector('iframe')!.contentWindow, 200);
+    tall(container.querySelector('iframe')!.contentWindow, 0);
     act(() => vi.advanceTimersByTime(WAIT_MS * 2));
     expect(container.querySelector('iframe')).toBeTruthy();
+    expect(height(container)).toBe(`${MIN_HEIGHT}px`);
   });
 
-  it('expands to the whole page with a way out to its own tab, and a press inside never reaches the message', async () => {
+  it('drawn again, opens at its last size but still waits for its page; a past fallback does not stick', () => {
+    vi.useFakeTimers();
+    const src = `${VISUAL}/visuals/tok`;
+    const first = render(page(src, 'again@1'));
+    tall(first.container.querySelector('iframe')!.contentWindow, 300);
+    first.unmount();
+    const second = render(page(src, 'again@1'));
+    expect(height(second.container)).toBe('300px');
+    act(() => vi.advanceTimersByTime(WAIT_MS));
+    expect(second.container.querySelector('iframe')).toBeNull(); // this frame never answered: the plain card
+    second.unmount();
+    const third = render(page(src, 'again@1'));
+    expect(third.container.querySelector('iframe')).toBeTruthy();
+  });
+
+  it('a renewed address never reloads the page or its large view; a new version is a new frame', async () => {
+    const view = render(page(`${VISUAL}/visuals/one`, 'doc@1'));
+    const card = () => view.container.querySelector('.lpage iframe')!.getAttribute('src');
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Report' });
+    view.rerender(page(`${VISUAL}/visuals/two`, 'doc@1'));
+    expect(card()).toBe(`${VISUAL}/visuals/one#tico-view=card&tico-size=medium`);
+    expect(dialog.querySelector('iframe')!.getAttribute('src')).toBe(`${VISUAL}/visuals/one`);
+    expect(screen.getByRole('link', { name: 'Open in new tab' }).getAttribute('href')).toBe(`${VISUAL}/visuals/one`);
+    view.rerender(page(`${VISUAL}/visuals/three`, 'doc@2'));
+    expect(card()).toBe(`${VISUAL}/visuals/three#tico-view=card&tico-size=medium`);
+  });
+
+  it('expands to the whole page, closes on Escape inside it, and a press inside never reaches the message', async () => {
     const press = vi.fn();
-    const client = new QueryClient();
-    client.setQueryData(['config'], { visual_origin: VISUAL, visual_files: null });
     render(
-      <QueryClientProvider client={client}>
+      <QueryClientProvider client={client({ visual_origin: VISUAL, visual_files: null })}>
         <div onClick={press} onContextMenu={press}>
           <LivePage src={`${VISUAL}/visuals/tok`} title="Report" id="big@1" fallback={null} />
         </div>
@@ -94,10 +127,15 @@ describe('an agent’s page live in a chat', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand' }));
     press.mockClear();
     const dialog = await screen.findByRole('dialog', { name: 'Report' });
-    expect(dialog.querySelector('iframe')?.getAttribute('src')).toBe(`${VISUAL}/visuals/tok`);
-    expect(screen.getByRole('link', { name: 'Open in new tab' }).getAttribute('href')).toBe(`${VISUAL}/visuals/tok`);
+    const inside = dialog.querySelector('iframe')!;
+    expect(inside.getAttribute('src')).toBe(`${VISUAL}/visuals/tok`);
     fireEvent.contextMenu(dialog);
     fireEvent.click(dialog);
     expect(press).not.toHaveBeenCalled();
+    // Escape from any other window (the card's own page, another page) is not the large view's
+    report(window, { ticoVisualKey: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeTruthy();
+    report(inside.contentWindow, { ticoVisualKey: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 });

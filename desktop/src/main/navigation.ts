@@ -70,14 +70,15 @@ export function decideNavigation(raw: string, ctx: NavContext): NavDecision {
 
 /**
  * A new-window request (`window.open`, `target=_blank`). No page gets a second window: another company switches,
- * anything else the browser may open goes to the browser, and the rest is dropped.
+ * anything else the browser may open goes to the browser, and the rest is dropped. A page on the files origin (a
+ * chat page's "Open in new tab") goes to the browser too: it is never top level here, but the browser shows it apart
+ * from the app as any other site.
  */
 export function decideNewWindow(raw: string, ctx: NavContext): NavDecision {
   const url = parse(raw);
   if (!url) return { kind: 'block' };
   const other = ctx.others.find((c) => c.origin === url.origin);
   if (other) return switchTo(other, url);
-  if (ctx.filesOrigin && url.origin === ctx.filesOrigin) return { kind: 'block' };
   return externalOrBlock(url);
 }
 

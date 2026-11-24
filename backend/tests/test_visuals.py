@@ -14,6 +14,7 @@ from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.events import live  # noqa: F401  (fixture)
 from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
+PER_PAGE = 99  # statements one more page attachment may add to a timeline read (its read check)
 DOT = "data:image/png;base64," + base64.b64encode(PNG).decode()
 
 
@@ -79,6 +80,47 @@ def test_thread_history_and_the_file_info_carry_a_pages_address_for_a_reader_who
     assert api.get(f"/api/v2/files/{fid}/info", headers=headers("cara-test")).status_code == 404
     picture, _ = png(api, attempt)
     assert "visual_src" not in api.get(f"/api/v2/files/{picture}/info", headers=headers("ben-test")).json()["file"]
+
+
+def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api, monkeypatch):
+    """The timeline decorates every visual on a page of messages (up to 50): its files, versions and page audiences
+    are read one query per table, not one each per attachment (review of #5198: 50 page attachments took ~766
+    statements). What is left per attachment is its own read check, a few statements."""
+    _, attempt = turn(api)
+    seen, real = [], V.decorate
+
+    def traced(c, *args, **kwargs):
+        c.set_trace_callback(seen.append)
+        try:
+            return real(c, *args, **kwargs)
+        finally:
+            c.set_trace_callback(None)
+
+    monkeypatch.setattr(V, "decorate", traced)
+    lookups = (
+        "SELECT * FROM bot_files WHERE id=",
+        "SELECT * FROM bot_file_versions WHERE file_id=",
+        "SELECT audience FROM pages",
+    )
+    counts, conversation = [], None
+    for done, total in ((0, 2), (2, 12)):
+        for i in range(done, total):
+            made = publish(api, attempt, name=f"page{i}.html", text=f"<p>page {i}</p>")
+            assert made.status_code == 200, made.text
+            sent = bot_reply(api, attempt, attachments=[{"ref": f"{made.json()['file']['id']}@1", "title": f"P{i}"}])
+            assert sent.status_code == 200, sent.text
+            conversation = sent.json()["conversation_id"]
+        seen.clear()
+        timeline = api.get(f"/api/v2/threads/{conversation}/timeline?flat=1", headers=headers("ben-test"))
+        assert timeline.status_code == 200, timeline.text
+        shown = [a for m in timeline.json()["messages"] for a in (m.get("refs") or {}).get("attachments") or []]
+        assert len(shown) == total and all(a["kind"] == "page" and a["src"] for a in shown)
+        plain = [" ".join(sql.split()) for sql in seen]
+        counts.append((len(plain), sum(1 for sql in plain if sql.startswith(lookups))))
+    (few, few_lookups), (many, many_lookups) = counts
+    print("statements for 2 and 12 pages:", counts)
+    assert many_lookups == few_lookups, counts
+    assert (many - few) / 10 <= PER_PAGE, counts
 
 
 def test_a_chat_reply_cannot_attach_a_file_from_another_conversation(api):

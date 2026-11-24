@@ -24,7 +24,8 @@ export const WAIT_MS = 8000;
 
 export const clampHeight = (h: number) => Math.min(MAX_HEIGHT, Math.max(MIN_HEIGHT, Math.ceil(h)));
 
-/** The last height each file version reported (0: it never did), so a card drawn again opens at its size. */
+/** The last height each file version reported, so a card drawn again opens at its size. Only a size: whether this
+    frame has answered is its own (a card drawn again still waits for its page, and still falls back if none comes). */
 const heights = new Map<string, number>();
 
 interface Visuals {
@@ -44,7 +45,9 @@ const originOf = (url: string | null | undefined) => {
  * The address a page shows live from, or null for the plain card. Only one of this install's own visual addresses
  * counts, so a sender can't put another site in a chat as a Tico page: the visual address or the company's files
  * address, or, with Tico file hosting, the app's own `/visuals/<token>` route, which checks the reader and sends the
- * frame on to the files address (it never serves a page itself).
+ * frame on to the files address (it never serves a page itself). Never a page on the app's own origin otherwise: a
+ * visual address that is the app's loopback twin (127.0.0.1 and localhost), with the app opened there, would run the
+ * page beside the app's cookies and window.
  */
 export function liveSrc(src: unknown, config: Visuals | undefined): string | null {
   if (typeof src !== 'string' || !config) return null;
@@ -56,9 +59,8 @@ export function liveSrc(src: unknown, config: Visuals | undefined): string | nul
   }
   if (!/^\/visuals\/[A-Za-z0-9_.-]+$/.test(url.pathname) || url.search || url.hash || url.username || url.password) return null;
   const at = url.origin;
-  if (at === originOf(config.visual_origin) || at === originOf(config.visual_files)) return url.href;
-  if (config.visual_files && at === location.origin && src.startsWith('/visuals/')) return url.href;
-  return null;
+  if (at === location.origin) return !config.visual_origin && config.visual_files && src.startsWith('/visuals/') ? url.href : null;
+  return at === originOf(config.visual_origin) || at === originOf(config.visual_files) ? url.href : null;
 }
 
 /** The layer is a portal, but React bubbles its presses up through the message it opened from: stopped here, a long
@@ -70,40 +72,45 @@ export function LivePage({ src, title, id, fallback }: { src: string | null | un
   const config = useQuery(configQuery).data;
   const live = liveSrc(src, config);
   if (!live) return fallback;
-  return <LiveFrame src={live} title={title} id={id} fallback={fallback} />;
+  // A new file version is a new frame; a renewed address for the same version is not.
+  return <LiveFrame key={id} src={live} title={title} id={id} fallback={fallback} />;
 }
 
 function LiveFrame({ src, title, id, fallback }: { src: string; title: string; id: string; fallback: ReactNode }) {
   // The first address stays while the card is drawn: a renewed token in a later read never reloads the page.
   const [first] = useState(src);
-  const [height, setHeight] = useState(() => heights.get(id) ?? null);
-  const [open, setOpen] = useState(false);
+  const [height, setHeight] = useState<number | null>(() => heights.get(id) ?? null);
+  const [heard, setHeard] = useState(false);
+  const [failed, setFailed] = useState(false);
+  // The address the large view opened with, held while it is open for the same reason.
+  const [open, setOpen] = useState<string | null>(null);
   const frame = useRef<HTMLIFrameElement>(null);
+  const full = useRef<HTMLIFrameElement>(null);
   const box = useRef<HTMLDivElement>(null);
-  const failed = height === 0;
-  const reported = height !== null && height > 0;
 
   useEffect(() => {
     const hear = (e: MessageEvent) => {
+      const data = e.data as { ticoVisualHeight?: unknown; ticoVisualKey?: unknown } | null;
+      // Escape inside the large view's page closes it, as Escape outside it does (the reporter passes it on).
+      if (full.current && e.source === full.current.contentWindow && data?.ticoVisualKey === 'Escape') setOpen(null);
       // only this card's own frame sizes it: another page's report, or the app's own messages, are not its height
       if (!frame.current || e.source !== frame.current.contentWindow) return;
-      const h: unknown = (e.data as { ticoVisualHeight?: unknown } | null)?.ticoVisualHeight;
-      if (typeof h !== 'number' || !Number.isFinite(h) || h <= 0) return;
-      heights.set(id, h);
+      const h = data?.ticoVisualHeight;
+      // 0 is a page laid out out of the flow (fixed to the viewport): it is there, at the smallest size
+      if (typeof h !== 'number' || !Number.isFinite(h) || h < 0) return;
+      if (h > 0) heights.set(id, h);
       setHeight(h);
+      setHeard(true);
     };
     window.addEventListener('message', hear);
     return () => window.removeEventListener('message', hear);
   }, [id]);
 
   useEffect(() => {
-    if (reported || failed) return;
+    if (heard || failed) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const start = () => {
-      timer ??= setTimeout(() => {
-        heights.set(id, 0);
-        setHeight(0);
-      }, WAIT_MS);
+      timer ??= setTimeout(() => setFailed(true), WAIT_MS);
     };
     // a lazy frame below the fold has not started loading: its wait starts when it comes into view
     const seen =
@@ -118,37 +125,37 @@ function LiveFrame({ src, title, id, fallback }: { src: string; title: string; i
       seen?.disconnect();
       clearTimeout(timer);
     };
-  }, [id, reported, failed]);
+  }, [heard, failed]);
 
   if (failed) return fallback;
-  const cut = reported && height > MAX_HEIGHT;
+  const cut = height !== null && height > MAX_HEIGHT;
   return (
     <>
-      <div ref={box} className={reported ? 'pcard lpage' : 'pcard lpage is-loading'}>
-        <div className="lpage-view" style={{ height: reported ? clampHeight(height) : LOADING_HEIGHT }}>
+      <div ref={box} className={heard ? 'pcard lpage' : 'pcard lpage is-loading'}>
+        <div className="lpage-view" style={{ height: height === null ? LOADING_HEIGHT : clampHeight(height) }}>
           <iframe ref={frame} src={first + CARD} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} loading="lazy" referrerPolicy="no-referrer" />
           {cut && <span className="lpage-fade" aria-hidden="true" />}
         </div>
         <span className="pcard-foot">
           <Icon name="tobar" />
           <span>{title}</span>
-          <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setOpen(true)} />
+          <IconButton icon="expand" label="Expand" size="sm" quiet onClick={() => setOpen(src)} />
         </span>
       </div>
       {open && (
         <span className="fcard-layer" onClick={stop} onContextMenu={stop} onTouchStart={stop} onPointerDown={stop}>
           <Viewer
             open
-            onClose={() => setOpen(false)}
+            onClose={() => setOpen(null)}
             title={title}
             className="lpage-full"
             actions={
-              <a className="ib" href={src} target="_blank" rel="noreferrer" aria-label="Open in new tab" title="Open in new tab">
+              <a className="ib" href={open} target="_blank" rel="noreferrer" aria-label="Open in new tab" title="Open in new tab">
                 <Icon name="popout" />
               </a>
             }
           >
-            <iframe src={src} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} referrerPolicy="no-referrer" />
+            <iframe ref={full} src={open} title={title} sandbox={LIVE_SANDBOX} allow={ALLOW} referrerPolicy="no-referrer" />
           </Viewer>
         </span>
       )}

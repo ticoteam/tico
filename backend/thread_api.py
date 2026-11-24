@@ -891,6 +891,7 @@ def install(app, store, auth, mutate, rule_check):
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         from . import visuals
 
+        later = []
         with store.read() as c:
             out = threads.timeline(
                 c,
@@ -904,8 +905,10 @@ def install(app, store, auth, mutate, rule_check):
                 comments=comments,
             )
             # Each visual as this reader sees it now, as the live stream and a send's answer give it: history agrees.
-            visuals.for_reader(app, store.settings, c, request.state.identity, out["messages"])
-            return out
+            visuals.for_reader(app, store.settings, c, request.state.identity, out["messages"], later)
+        for settle in later:  # Tico file hosting's checks ask its bucket: never while holding a connection
+            settle()
+        return out
 
     @app.get(
         "/api/v2/threads/{thread_id}/bot-status",

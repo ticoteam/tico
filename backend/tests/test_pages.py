@@ -60,6 +60,19 @@ def test_a_published_page_is_stored_as_written_and_reads_with_its_status_fields_
     assert read(api, fid, "ben-test").json()["page"]["title"] == "Engineering weekly"  # named: its <title> never wins
 
 
+def test_a_page_stored_cleaned_before_is_stored_as_written_when_published_again_unchanged(api):
+    """Pages were once cleaned when published (their scripts removed): the version kept the original's digest as its
+    source. The same source published again now stores the page as written, so it runs; again after that is no change."""
+    _, attempt = turn(api)
+    fid = page(api, attempt).json()["page"]["file_id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_file_versions SET digest=? WHERE file_id=?", ("0" * 64, fid))  # as a cleaned copy was
+    again = page(api, attempt).json()["page"]
+    assert again["version"] == 2
+    assert api.get("/api/v2/files/" + fid, headers=headers("ben-test")).content == HTML
+    assert page(api, attempt).json()["page"]["version"] == 2
+
+
 def test_a_page_has_an_inline_address_only_with_a_visual_address(api):
     _, attempt = turn(api)
     fid = page(api, attempt).json()["page"]["file_id"]

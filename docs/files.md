@@ -351,16 +351,17 @@ The v1 edge contract is:
   Missing/unsupported type or `x-amz-meta-tico-visual-policy-version` other than exactly `1` or `2`
   returns an empty 404. HTML without a charset is accepted and normalized. Partial visual responses and
   redirects are refused. The app writes a page as written with its reporter script appended (version 2;
-  version 1 copies were cleaned first) and an SVG cleaned; the edge does not clean or inspect the body.
+  version 1 page copies were cleaned first) and an SVG cleaned (version 1); the edge does not clean or
+  inspect the body.
 - Policy source is object metadata. `x-amz-meta-tico-visual-ancestors` supplies up to eight whitespace
   separated tokens, each exactly `'self'`, an HTTPS origin matching
   `https://[a-z0-9.-]+(:[0-9]{1,5})?`, or HTTP localhost/127.0.0.1 with an optional port.
   `x-amz-meta-tico-visual-script` supplies up to four quoted SHA256 hashes matching
   `^'sha256-[A-Za-z0-9+/]{43}='$`. Invalid tokens are dropped; an empty slot becomes `'none'`.
   Metadata cannot supply a full CSP or sandbox tokens. Contract changes require a new version at
-  the edge first: the app writes version 2 from `VISUAL_COPY` 3 on, and an edge that still knows
-  only version 1 answers those copies with a 404 until it is redeployed (the chat's card then falls
-  back to its plain page card by itself).
+  the edge first: the app writes pages' copies as version 2 (`VISUAL_COPY` 3 for a page), and an edge
+  that still knows only version 1 answers those with a 404 until it is redeployed (the chat's card then
+  falls back to its plain page card by itself). SVG copies stay version 1, as they were.
 
 The fixed visual templates (only `<script>` and `<ancestors>` are substituted) are:
 

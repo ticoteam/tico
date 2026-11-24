@@ -44,9 +44,9 @@ A 404 or `not_found` from HQ means it does not offer file hosting yet: nothing c
 Pages and SVG (Dev 458, spec test 1b). A page or SVG held in Tico's bucket also gets its hosted copy there, beside it
 (`visual_link`): the bytes visuals.serve would show (a page as written with the height reporter added, an SVG
 cleaned by visuals.clean) at `/visuals/<2 hex>/<name>`, typed `text/html; charset=utf-8` or `image/svg+xml`, inline,
-with the content policy's slots in its metadata (`tico-visual-policy-version: 2` and `tico-visual-ancestors`), as
-agreed with DevOps on Dev 457 (docs/files.md, infra/files-edge). The edge builds the policy from its fixed templates
-and those slots, so nothing written there can widen the sandbox. `<name>` is a hash of the original's digest, the kind,
+with the content policy's slots in its metadata (`tico-visual-policy-version`, 2 for a page and 1 for an SVG, and
+`tico-visual-ancestors`), as agreed with DevOps on Dev 457 (docs/files.md, infra/files-edge). The edge builds the
+policy from its fixed templates and those slots, so nothing written there can widen the sandbox. `<name>` is a hash of the original's digest, the kind,
 the slots and `VISUAL_COPY`, so a new reporter or a new app address gets a new copy and an old one is never
 overwritten. The copy is made when the file is uploaded there (`Blobs._landing`), when Move existing files copies it
 there (`copy_one`), or else on its first view, and is checked like a moved file: S3's SHA-256 of what it received,
@@ -560,12 +560,12 @@ def _held(blobs, location, digest, size, mime):
 # ---------------------------------------------------------------------------------------------- pages and SVG
 # The stored type of each kind's copy; the edge sends a 404 for any other (infra/files-edge/response.js).
 VISUAL_TYPES = {"page": "text/html; charset=utf-8", "svg": "image/svg+xml"}
-# Raise when visuals.clean or visuals.with_reporter change what a copy holds: every copy is then made again.
-VISUAL_COPY = 3
-# The edge template a copy asks for (infra/files-edge/response.js): 2 runs a page as written (visuals.policy). The edge
-# answers 1 too, for copies made before; a version it does not know is a 404, and the chat card falls back to its plain
-# page card.
-POLICY_VERSION = "2"
+# Per kind, raise when visuals.clean or visuals.with_reporter change what its copy holds: each copy is then made again.
+VISUAL_COPY = {"page": 3, "svg": 2}
+# The edge template a copy asks for (infra/files-edge/response.js): 2 runs a page as written (visuals.policy); an SVG
+# keeps 1, its closed template, which every deployed edge serves, so its copies stay as they were. An edge that does not
+# know 2 yet sends a 404 for a page, and the chat card falls back to its plain page card.
+POLICY_VERSION = {"page": "2", "svg": "1"}
 # The frame-ancestors sources the edge keeps (docs/files.md): the app writes only those, at most 8.
 ANCESTOR = re.compile(
     r"^(?:'self'|https://[a-z0-9.-]+(?::[0-9]{1,5})?|http://(?:localhost|127\.0\.0\.1)(?::[0-9]{1,5})?)$"
@@ -583,17 +583,19 @@ def visual_kind(mime, size):
 def _visual(digest, kind, ancestors):
     """(path below the company's folder, metadata) of the hosted copy of `digest` for these frame ancestors."""
     meta = {
-        "tico-visual-policy-version": POLICY_VERSION,
+        "tico-visual-policy-version": POLICY_VERSION[kind],
         "tico-visual-ancestors": " ".join([a for a in dict.fromkeys(ancestors) if ANCESTOR.fullmatch(a)][:8]),
     }
     name = hashlib.sha256(
         "\n".join(
             [
                 "tico-visual",
-                str(VISUAL_COPY),
+                str(VISUAL_COPY[kind]),
                 kind,
                 digest,
                 meta["tico-visual-ancestors"],
+                # The script slot a page's copy once named, always empty for an SVG: its copies keep their names.
+                *([""] if kind == "svg" else []),
             ]
         ).encode()
     ).hexdigest()

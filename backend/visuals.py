@@ -333,6 +333,8 @@ def loading_references(data):
 # Pages are dark by default: a page that colours neither <html> nor <body> gets a dark background, and light text
 # unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
 # its look. It runs as the page's last script.
+# Escape the page itself leaves unhandled is passed on (`ticoVisualKey`), so the large view around it closes as it does
+# on Escape outside the page.
 REPORTER = Path(__file__).with_name("visual-reporter.js").read_text().strip()
 
 
@@ -518,10 +520,14 @@ def src_for(app, settings, c, who, fid, version):
         "SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, int(version))
     ).fetchone()
     kind = kind_of(v["mime"], v["size"]) if v else "file"
-    if kind not in INLINE:
-        return None
+    return view_for(app, settings, c, who, fid, version, kind).get("src") if kind in INLINE else None
+
+
+def view_for(app, settings, c, who, fid, version, kind, later=None):
+    """One version of a file of `kind` as a message's visual shows to `who` (for_reader): its `src` once `later`, if
+    given, has run."""
     message = {"refs": {"attachments": [{"file_id": fid, "version": int(version), "kind": kind}]}}
-    return for_reader(app, settings, c, who, [message])[0]["refs"]["attachments"][0].get("src")
+    return for_reader(app, settings, c, who, [message], later)[0]["refs"]["attachments"][0]
 
 
 # What the fallback serves from the app's own address: kinds that a browser only ever shows as media.
@@ -644,14 +650,15 @@ def _clean_version(c, who, files, blobs, fid, version, cleaned, mime):
 INLINE = ("image", "svg", "page", "video", "audio")
 
 
-def decorate(c, who, files, key, base, messages, full=True, hosted=None):
+def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=None):
     """Each visual on these messages, as this reader sees it now: the file's current version, whether it was removed,
     its size in pixels, and fresh addresses on the visual route (the picture and, for a video, its poster). `base` is
     the address the route is on: the visual address, or "" for the app's own (the fallback, `full` False). In the
     fallback a page or SVG gets no `src`: it is a card with `open` true, its title and, when the file has one, a still
     preview (`preview_url`, a picture), and Open shows it in the file viewer. The exception is one `hosted(version)`
     says shows from Tico file hosting's address (tico_storage.visual_ready): it gets a `src` on the app's own route,
-    which checks the reader and sends them there (`serve`)."""
+    which checks the reader and sends them there (`serve`). That check asks the files bucket, so with `later` (a list)
+    it is not made here: a step that makes it is added to `later`, for the caller to run once it has let go of `c`."""
     cache, rows, served = {}, {}, {}
     # The visual route rebuilds a bot reader without its run (serve, token_reader), so a file this run sees but that
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
@@ -662,9 +669,23 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     from .counsel import is_counsel
 
     plain = is_counsel(who)
-    from .files import prime_page_references, readable_page_refs, version_refusal
+    from .files import prime_page_references, prime_visible, readable_page_refs, restricted_page_rows, version_refusal
 
     prime_page_references(c, [message for message in messages if message])
+    # Every file and version these messages name, read together: a page of history is one query per table, not
+    # three per attachment.
+    wanted = {
+        version_of(a)
+        for message in messages
+        if message and isinstance(message.get("refs"), dict)
+        for a in (message["refs"].get("attachments") if isinstance(message["refs"].get("attachments"), list) else ())
+        if isinstance(a, dict) and a.get("file_id")
+    } - {None}
+    versions = _prime(c, wanted, rows)
+    if rows:
+        restricted_page_rows(c, sorted(rows))  # kept for this snapshot: each attachment's check below reads it
+        prime_visible(c, [row for row in rows.values() if row])
+    waiting = []
     for message in messages:
         if message:
             shown = readable_page_refs(c, files.auth, who, message)
@@ -693,7 +714,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 )
                 continue
             fid, number = named
-            if fid not in rows:
+            if fid not in rows:  # one the reader check above put in place of what was named
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
             hidden = bool(row) and not row["archived"] and not files.visible(c, who, row, cache)
@@ -701,13 +722,11 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 fresh.append(a)  # a file kind with no address here: shown as stored, when it may be seen
                 continue
             removed = not row or bool(row["archived"]) or hidden
-            v = (
-                None
-                if removed
-                else c.execute(
+            if not removed and (fid, number) not in versions:
+                versions[(fid, number)] = c.execute(
                     "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
                 ).fetchone()
-            )
+            v = None if removed else versions[(fid, number)]
             # A file this reader may not open says nothing of itself: not its name, title, type or size, whatever its
             # kind. A message can show a file from elsewhere (a review question's, backend/file_reviews.py) to a reader
             # of its task.
@@ -718,26 +737,32 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 "current_version": None if removed else row["current_version"],
             }
             # Nothing of its bytes (its size, a poster, an address) for a reader the download itself would refuse.
-            if v is not None and not version_refusal(c, files.auth, who, row, number, v):
+            if v is not None and not version_refusal(c, files.auth, who, row, number, v, cache):
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
-                page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
-                restricted = bool(page and page["audience"] is not None)
-                inline = (
-                    full or a["kind"] in MEDIA or bool(not restricted and hosted and here is not None and hosted(v))
+                inline = full or a["kind"] in MEDIA
+                # A page or SVG Tico file hosting may show: an Open card until `_settle` finds its copy there.
+                hostable = (
+                    not inline
+                    and fid not in restricted_page_rows(c, [fid])
+                    and hosted is not None
+                    and here is not None
                 )
                 delegated = getattr(who, "task_actor", "")
-                view["src"] = (
+                src = (
                     here + "/visuals/" + mint(key, actor, fid, number, task_actor=delegated)
-                    if inline and here is not None
+                    if (inline or hostable) and here is not None
                     else None
                 )
+                view["src"] = src if inline else None
                 if not inline:
                     view["open"] = True
                     if v["thumb_blob_id"] and here is not None:
                         view["preview_url"] = (
                             here + "/visuals/" + mint(key, actor, fid, number, "preview", task_actor=delegated)
                         )
+                    if hostable:
+                        waiting.append((view, {k: v[k] for k in ("digest", "size", "mime")}, src))
                 for field in ("width", "height", "duration_ms"):
                     if v[field] is not None:
                         view[field] = v[field]
@@ -747,7 +772,48 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                     )
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
+    if waiting:
+        if later is None:
+            _settle(hosted, waiting)
+        else:
+            later.append(lambda: _settle(hosted, waiting))
     return messages
+
+
+def _prime(c, wanted, rows):
+    """The bot_files rows (into `rows`, None for a missing id) and the versions, by (file id, version), of `wanted`."""
+    from .files import ANY_OF
+    from .hubdb import chunks
+
+    fids = sorted({fid for fid, _ in wanted})
+    rows.update(dict.fromkeys(fids))
+    for part in chunks(fids):
+        for row in c.execute(f"SELECT * FROM bot_files WHERE id IN {ANY_OF}", (json.dumps(part),)):
+            rows[row["id"]] = row
+    versions = {}
+    for part in chunks(sorted(wanted)):
+        # json_each first (CROSS JOIN keeps that order): one primary-key lookup per named version.
+        for v in c.execute(
+            "SELECT v.* FROM json_each(?) j CROSS JOIN bot_file_versions v "
+            "ON v.file_id=json_extract(j.value,'$[0]') AND v.version=json_extract(j.value,'$[1]')",
+            (json.dumps(part),),
+        ):
+            versions[(v["file_id"], v["version"])] = v
+    return {at: versions.get(at) for at in wanted}
+
+
+def _settle(hosted, waiting):
+    """Each page or SVG whose copy Tico file hosting holds (or can make) shows inline: its `src` on the app's route
+    instead of an Open card. One question to the bucket per version, whichever messages show it."""
+    ready = {}
+    for view, v, src in waiting:
+        known = (v["digest"], v["size"], v["mime"])
+        if known not in ready:
+            ready[known] = hosted(v)
+        if ready[known]:
+            view["src"] = src
+            view.pop("open", None)
+            view.pop("preview_url", None)
 
 
 def version_of(a):
@@ -792,9 +858,10 @@ def key_for(app, settings):
     return app.state.visual_key
 
 
-def for_reader(app, settings, c, who, messages):
+def for_reader(app, settings, c, who, messages, later=None):
     """decorate() for any path that hands messages to a reader: the conversation page and snapshot, a single message,
-    task comments, the task page, the assistant room and the live event stream all go through here."""
+    task comments, the task page, the assistant room and the live event stream all go through here. With `later`, the
+    files-bucket checks are left there to run after `c` is let go (decorate)."""
     from .tico_storage import visual_ready
 
     full, blobs, frames = mode(settings) == "full", app.state.blobs, ancestors(settings)
@@ -803,7 +870,15 @@ def for_reader(app, settings, c, who, messages):
         return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
 
     return decorate(
-        c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
+        c,
+        who,
+        app.state.files,
+        key_for(app, settings),
+        settings.visual_origin if full else "",
+        messages,
+        full,
+        hosted,
+        later,
     )
 
 

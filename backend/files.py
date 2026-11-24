@@ -612,17 +612,20 @@ def stored_version(c, fid, number):
     ).fetchone()
 
 
-def version_refusal(c, auth, who, row, number, v):
+def version_refusal(c, auth, who, row, number, v, cache=None):
     """The check that refuses `who` version `number` of the file `row` (`v`, its `stored_version`, None when there is
     none), or None when they may read its bytes: the one read check Files.serve makes, for every caller that hands
-    those bytes on. Checks run in serve's order and the first refusal is named."""
+    those bytes on. Checks run in serve's order and the first refusal is named. `cache` is file_visible's, for one
+    read by `who`: a page of messages checks many files of the same chats and tasks."""
     from . import relationship_runs
+
+    cache = {} if cache is None else cache
 
     relationship = who.actor == relationship_runs.ACTOR
     if relationship:
-        if not file_visible(c, auth, who, row, {}):
+        if not file_visible(c, auth, who, row, cache):
             return "file_fence"
-    elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, {}):  # as file_visible reads it
+    elif not page_audience_visible(c, auth, auth.run_viewer(c, who), row, cache):  # as file_visible reads it
         return "audience"
     if v and not page_blob_visible(c, auth, who, v["blob_id"]):
         return "blob_fence"
@@ -633,7 +636,7 @@ def version_refusal(c, auth, who, row, number, v):
         if not scan or not privacy.blob_readable(c, privacy.actor(who), v["blob_id"]):
             return "scan"
     else:
-        if not relationship and not file_visible(c, auth, who, row, {}):
+        if not relationship and not file_visible(c, auth, who, row, cache):
             return "file_fence"
         if asked_to_read(c, who, row["id"]) and not asked_to_read(c, who, row["id"], number):
             return "rules_read"  # the Rules Owner's read names one version of it
@@ -1660,10 +1663,13 @@ class Files:
         last = c.execute(
             "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
         ).fetchone()
+        # Bytes stored as given are compared as stored: a page published again after it was once stored cleaned
+        # (before pages ran as written) is a new version, though its source is the same.
+        as_given = source_digest is None or source_digest == digest
         changed = (
             created
             or last is None
-            or (source_digest or digest) != (last["source_digest"] or last["digest"])
+            or (digest != last["digest"] if as_given else source_digest != (last["source_digest"] or last["digest"]))
             or bool(version_actor and version_actor != last["actor"])
             or bool(version_time and version_time != last["created_at"])
         )
@@ -2913,23 +2919,24 @@ class Files:
 
     def info(self, who, fid):
         """One file as the Files rail lists it, for a view opened from a link (the review view, docs/files.md). A page
-        also has `visual_src`, the address its current version shows live from (visuals.src_for, the reader checked as
+        also has `visual_src`, the address its current version shows live from (visuals.view_for, the reader checked as
         for a message's page); null where this install can't show it inline."""
         from . import visuals
 
+        later, seen = [], None
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
             shown = self.view(c, who, row, {"task": {}, "repo": {}})
-            number = int(row["current_version"] or 0)
-            v = c.execute(
-                "SELECT mime, size FROM bot_file_versions WHERE file_id=? AND version=?", (fid, number)
-            ).fetchone()
-            if v and visuals.kind_of(v["mime"], v["size"]) == "page":
-                live = not row["archived"] and row["locator"] == "tico_blob"
-                shown["visual_src"] = (
-                    visuals.src_for(self.app, self.store.settings, c, who, fid, number) if live else None
+            page = shown["size"] is not None and visuals.kind_of(row["mime"], shown["size"]) == "page"
+            if page and not row["archived"] and row["locator"] == "tico_blob":
+                seen = visuals.view_for(
+                    self.app, self.store.settings, c, who, fid, int(row["current_version"] or 0), "page", later
                 )
-            return {"file": shown}
+        for settle in later:  # Tico file hosting's check asks its bucket: never while holding a connection
+            settle()
+        if page:
+            shown["visual_src"] = seen.get("src") if seen else None
+        return {"file": shown}
 
     def versions(self, who, fid):
         with self.store.read() as c:
