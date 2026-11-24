@@ -75,7 +75,6 @@ pub struct Unfinished {
     pub payload: String,
     #[allow(dead_code)]
     pub phase: String,
-    #[allow(dead_code)]
     pub completion: Option<String>,
 }
 
@@ -390,7 +389,12 @@ impl State {
     /// The result recovery sends for `aid`, read again now rather than from an earlier listing: the one saved,
     /// or an interrupted one saved in the same transaction when there is none. None once it is synced or
     /// historical. A turn that finished after the listing keeps its own result.
-    pub fn recovery(&self, aid: &str, text: &str) -> Result<Option<Value>, String> {
+    pub fn recovery(
+        &self,
+        aid: &str,
+        text: &str,
+        burst_unpublished: bool,
+    ) -> Result<Option<Value>, String> {
         self.with(|c| {
             let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
             let row: Option<(String, Option<String>)> = tx
@@ -410,7 +414,10 @@ impl State {
                         params![aid],
                         |r| r.get(0),
                     )?;
-                    let done = json!({"outcome": "interrupted", "text": text, "last_seq": seq});
+                    let mut done = json!({"outcome": "interrupted", "text": text, "last_seq": seq});
+                    if burst_unpublished {
+                        done["burst_checkout"] = json!("unpublished");
+                    }
                     tx.execute(
                         "UPDATE attempts SET phase='uploading',completion=? WHERE id=?",
                         params![done.to_string(), aid],
@@ -760,18 +767,18 @@ mod tests {
         state.phase("sent", "synced").unwrap();
         let why = "Runner restarted during execution";
         assert_eq!(
-            state.recovery("done", why).unwrap().unwrap()["outcome"],
+            state.recovery("done", why, false).unwrap().unwrap()["outcome"],
             "completed"
         );
         assert_eq!(
-            state.recovery("lost", why).unwrap().unwrap()["outcome"],
+            state.recovery("lost", why, false).unwrap().unwrap()["outcome"],
             "interrupted"
         );
         assert_eq!(
-            state.recovery("lost", why).unwrap().unwrap()["outcome"],
+            state.recovery("lost", why, false).unwrap().unwrap()["outcome"],
             "interrupted"
         );
-        assert!(state.recovery("sent", why).unwrap().is_none());
+        assert!(state.recovery("sent", why, false).unwrap().is_none());
     }
 
     #[test]

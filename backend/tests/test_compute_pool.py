@@ -24,7 +24,7 @@ SWITCH = "settings/burst-rehome"
 PREP = "runners/assignments?burst=true"
 
 
-def heartbeat(api, runner, entry=None, *, runtime="codex", signed_in=True, capable=True, worktrees=False):
+def heartbeat(api, runner, entry=None, *, runtime="codex", signed_in=True, capable=True, worktrees=False, bots=None):
     config = entry["config"] if entry else {}
     runtime = config.get("runtime", runtime)
     harness = config.get("harness", runtime)
@@ -51,7 +51,7 @@ def heartbeat(api, runner, entry=None, *, runtime="codex", signed_in=True, capab
             "isolated": True,
             "runtimes": runtimes,
             "harnesses": {"pi": installed, manifest: installed},
-            "bots": {"ops": bot},
+            "bots": bots if bots is not None else {entry["bot"] if entry else "ops": bot},
             "worktrees": worktrees,
         },
     }
@@ -172,6 +172,32 @@ def test_two_burst_claims_commit_only_one_assignment_and_reservation(api, fleet)
             )
         ] == [(rid, 2, winner["id"], 1)]
         assert c.execute("SELECT placement FROM cloud_machines WHERE bot='ops'").fetchone()[0] == "shared"
+
+
+def test_preparation_rotates_past_failed_checkouts(api, fleet):
+    store, base, burst = fleet
+    for bot in ("cpo", "finance"):
+        on(api, bot, "codex", providers.recommended("openai", "codex"))
+        assign(api, base, bot)
+        with store.transaction() as c:
+            c.execute("UPDATE bot_config SET repo=? WHERE bot=?", (f"acme/{bot}", bot))
+    base_check = heartbeat(api, base)["readiness"]["bots"]["ops"]
+    heartbeat(api, base, bots={bot: base_check for bot in ("ops", "cpo", "finance")})
+    # An idle worker has no assignments or preparation reports yet.
+    heartbeat(api, burst, bots={})
+    put(api, SWITCH, {"enabled": True})
+    for bot in ("ops", "cpo", "finance"):
+        post(api, f"chat/{bot}", {"text": "Take the next turn"})
+
+    for bot in ("ops", "cpo"):
+        (entry,) = get(api, PREP, token=burst["token"])
+        assert entry["bot"] == bot
+        # The checkout exists, but its origin does not match, so it has no preparation ticket.
+        heartbeat(api, burst, bots={bot: base_check})
+        assert claim(api, burst, bot) is None
+
+    assert prepare(api, burst)["bot"] == "finance"
+    assert claim(api, burst, "finance")["burst_repository"] == "acme/finance"
 
 
 def test_refused_reservation_rolls_back_the_entire_claim(api, fleet, monkeypatch):

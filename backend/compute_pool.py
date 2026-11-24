@@ -157,7 +157,14 @@ def offer(
         )
     }
     document: Row = _runner_readiness.local_sign_ins(readiness_document(runner["readiness"]))
-    if not prepare:
+    prepare_after: str | None = None
+    if prepare:
+        # An idle slot reports the bot it just tried. Its checkout may be missing or have the wrong origin.
+        reported: dict[str, Row] = document["bots"]
+        prepare_after = next(
+            (bot for bot, check in reported.items() if bot in bots and not check.get("burst_preparation")), None
+        )
+    else:
         bots = {bot: row for bot, row in bots.items() if bot_readiness(document, bot).get("burst_preparation")}
     if not bots:
         return None
@@ -187,6 +194,7 @@ def offer(
         eligible=bots,
         accept=accept,
         preparing=prepare,
+        prepare_after=prepare_after,
     )
 
 

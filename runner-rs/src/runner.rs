@@ -540,11 +540,24 @@ impl Runner {
                 continue;
             }
             let sent: Result<(), ApiError> = async {
+                let mut burst_unpublished = false;
+                if row.completion.is_none() {
+                    if let Ok(attempt) = serde_json::from_str::<Value>(&row.payload) {
+                        if let Some(repository) = attempt["burst_repository"].as_str() {
+                            burst_unpublished =
+                                !self.recover_burst_checkout(&attempt, repository).await;
+                        }
+                    }
+                }
                 // The listing is a snapshot: a turn that ended since then saved (and maybe sent) its own result,
                 // which stands. Read the row again, under the store's lock, before deciding what to send.
                 let Some(completion) = self
                     .state
-                    .recovery(&row.id, "Runner restarted during execution")
+                    .recovery(
+                        &row.id,
+                        "Runner restarted during execution",
+                        burst_unpublished,
+                    )
                     .map_err(|e| ApiError::new("state", e, 0, false))?
                 else {
                     return Ok(());

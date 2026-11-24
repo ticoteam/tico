@@ -2111,7 +2111,38 @@ impl Runner {
         self.published(bot, &repository, (state, detail))
     }
 
-    async fn publish_burst_checkout(&self, path: &Path, repository: &str, env: &Env) -> bool {
+    pub(crate) async fn recover_burst_checkout(&self, attempt: &Value, repository: &str) -> bool {
+        let bot = text_of(&attempt["bot"]);
+        let path = crate::sessions::local_path(&self.config, &bot, &attempt["config"]);
+        if crate::repo_safety::outside_installation(&path).is_err() {
+            return false;
+        }
+        let mut env = crate::env::process_environment();
+        if let Ok(granted) = self
+            .tokens
+            .get(
+                &self.client,
+                json!({"bot": bot, "repository": repository, "purpose": "git"}),
+            )
+            .await
+        {
+            let token = crate::gitcred::select_token(&granted, Some(repository));
+            if !token.is_empty() {
+                env.extend(crate::repositories::token_env(&token));
+            }
+        }
+        // A restart loses the turn's redactor. Hold local commits for review unless they are already on GitHub.
+        self.publish_burst_checkout(&path, repository, &env, false)
+            .await
+    }
+
+    async fn publish_burst_checkout(
+        &self,
+        path: &Path,
+        repository: &str,
+        env: &Env,
+        allow_push: bool,
+    ) -> bool {
         let env = git_env(env);
         if !crate::readiness::burst_checkout_matches(path, repository).await
             || !matches!(git(path, &env, &["status", "--porcelain"], 15).await, Some((true, out, _)) if out.trim().is_empty())
@@ -2134,7 +2165,7 @@ impl Runner {
         )
         .await;
         if !matches!((branch, upstream), (Some((true, branch, _)), Some((true, upstream, _))) if branch == upstream)
-            || !self.push_checkout(path, &env).await
+            || (allow_push && !self.push_checkout(path, &env).await)
             || !matches!(
                 git(path, &env, &["fetch", "origin", "HEAD"], 30).await,
                 Some((true, _, _))
@@ -4344,12 +4375,12 @@ impl Runner {
         }
         let mut burst_pushed = false;
         if let Some(repository) = &burst_repository {
-            if let Some(p) = place.as_ref().filter(|p| !p.disposable) {
+            if let Some(p) = place.as_ref().filter(|p| host.is_some() && !p.disposable) {
                 burst_pushed = !committed_secret
                     && skipped.is_empty()
                     && p.session_path.is_none()
                     && self
-                        .publish_burst_checkout(&p.main_path, repository, &env)
+                        .publish_burst_checkout(&p.main_path, repository, &env, true)
                         .await;
                 if !burst_pushed {
                     burst_checkout = Some("unpublished");
@@ -9998,16 +10029,13 @@ for line in sys.stdin:
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
-    #[tokio::test]
-    async fn burst_checkout_requires_a_clean_tree_published_to_base() {
-        let (runner, dir) = runner_at("http://127.0.0.1:1", "burst-checkout");
+    fn burst_checkout_fixture(dir: &Path, path: &Path) -> PathBuf {
         let remote = dir.join("remote.git");
         let seed = dir.join("seed");
-        let path = dir.join("checkout");
         let origin = "https://github.com/acme/bot.git";
-        repo_git(&dir, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+        repo_git(dir, &["init", "--bare", "-q", remote.to_str().unwrap()]);
         repo_git(
-            &dir,
+            dir,
             &[
                 "clone",
                 "-q",
@@ -10020,7 +10048,7 @@ for line in sys.stdin:
         repo_git(&seed, &["commit", "-qm", "seed"]);
         repo_git(&seed, &["push", "-q", "origin", "main"]);
         repo_git(
-            &dir,
+            dir,
             &[
                 "clone",
                 "-q",
@@ -10028,31 +10056,87 @@ for line in sys.stdin:
                 path.to_str().unwrap(),
             ],
         );
-        repo_git(&path, &["remote", "set-url", "origin", origin]);
+        repo_git(path, &["remote", "set-url", "origin", origin]);
         repo_git(
-            &path,
+            path,
             &[
                 "config",
                 &format!("url.{}.insteadOf", remote.display()),
                 origin,
             ],
         );
+        remote
+    }
+
+    #[tokio::test]
+    async fn burst_checkout_requires_a_clean_tree_published_to_base() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "burst-checkout");
+        let path = dir.join("checkout");
+        let remote = burst_checkout_fixture(&dir, &path);
         let env = crate::env::process_environment();
         std::fs::write(path.join("AGENT.md"), "# Published turn\n").unwrap();
-        assert!(!runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        assert!(
+            !runner
+                .publish_burst_checkout(&path, "acme/bot", &env, true)
+                .await
+        );
         repo_git(&path, &["commit", "-qam", "turn"]);
         assert!(
             !runner
-                .publish_burst_checkout(&path, "acme/other", &env)
+                .publish_burst_checkout(&path, "acme/other", &env, true)
                 .await
         );
-        assert!(runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        assert!(
+            runner
+                .publish_burst_checkout(&path, "acme/bot", &env, true)
+                .await
+        );
         assert_eq!(
             repo_git(&remote, &["show", "main:AGENT.md"]),
             "# Published turn"
         );
         std::fs::rename(&remote, dir.join("unavailable.git")).unwrap();
-        assert!(!runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        assert!(
+            !runner
+                .publish_burst_checkout(&path, "acme/bot", &env, true)
+                .await
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn burst_restart_checks_the_checkout_before_recovering_its_record() {
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "burst-restart");
+        let path = runner.config.projects_dir().join("bot-burst-restart");
+        let remote = burst_checkout_fixture(&dir, &path);
+        for (id, problem) in [
+            ("published", Value::Null),
+            ("local-commit", json!("unpublished")),
+        ] {
+            if id == "local-commit" {
+                std::fs::write(path.join("AGENT.md"), "# Interrupted turn\n").unwrap();
+                repo_git(&path, &["commit", "-qam", "interrupted turn"]);
+            }
+            let before = runner_from(&dir);
+            before
+                .state
+                .record(&json!({
+                    "id": id, "bot": "burst-restart", "burst_repository": "acme/bot",
+                }))
+                .unwrap();
+            before.state.phase(id, "running").unwrap();
+            drop(before);
+
+            runner_from(&dir).recover_output().await;
+            let posted = seen.lock().unwrap();
+            let route = format!("/attempts/{id}/complete");
+            let (_, _, completion) = posted.iter().find(|(_, p, _)| p.ends_with(&route)).unwrap();
+            assert_eq!(completion["outcome"], "interrupted");
+            assert_eq!(completion["burst_checkout"], problem);
+        }
+        assert_eq!(repo_git(&remote, &["show", "main:AGENT.md"]), "# Fixture");
+        server.abort();
         std::fs::remove_dir_all(dir).unwrap();
     }
 

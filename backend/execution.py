@@ -5170,6 +5170,7 @@ class Execution:
         eligible=None,
         accept=None,
         preparing=False,
+        prepare_after=None,
     ):
         """The queued job this runner would be given next, or None. Reads only. `people_only`: only a person's own
         message (start_places.from_person), on a computer that holds every other start. `failed`: the claim's
@@ -5318,6 +5319,9 @@ class Execution:
             ),
         )
         candidates = candidates.fetchall()
+        if prepare_after is not None:
+            # Wrap in bot order so several failed checkouts cannot keep each other ahead of a healthy one.
+            candidates.sort(key=lambda row: (row["bot_id"] <= prepare_after, row["bot_id"]))
         if loads is not None and len(candidates) > 1:
             from .worktrees import worktree_links
 
