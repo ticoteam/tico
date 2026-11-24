@@ -4,14 +4,12 @@ computer has agy, one computer turned on to install it while the page asks again
 import json
 
 from backend import agent_subscriptions as AS
-from backend import bot_settings as BS
 from backend import cloud_machines as CM
 from backend import model_login as ML
-from backend.tests.helpers.api import assign, get, post, put, runner
+from backend.tests.helpers.api import get, post, runner
 from backend.tests.helpers.cloud_machines import cloud  # noqa: F401 - fixture
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import company, pick
-from backend.tests.helpers.task_models import revision
 
 OLD = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "attempt_credentials_v1"]
 CAPS = [*OLD, "antigravity_plan_v1"]
@@ -331,55 +329,6 @@ def test_connect_signs_in_on_the_agy_tico_installed_before_a_hand_installed_one(
     assert connect(api, "ben-test")["runner_id"] == tico["runner_id"]
     # Connect tries only the first: one signing in already gives way to an idle one, hand-installed or not.
     assert connect(api)["runner_id"] == own["runner_id"]
-
-
-def test_an_owner_filing_a_task_on_antigravity_turns_agy_on_where_its_bot_runs(api):
-    setup(api)
-    company(api, enabled=("anthropic", "google"))
-    mac = computer(api, "Ana Mac")
-    assign(api, mac, "ops")
-    post(api, "tasks", {"owner": "ops", "title": "Tidy the changelog", "body": "Sort it.", "model": "gemini-4-neon"})
-    assert chosen(api) == [(mac["runner_id"], "antigravity", 1)]
-
-
-def test_an_owner_saving_an_antigravity_model_turns_agy_on_where_the_bot_runs_and_no_one_else_does(api):
-    setup(api)
-    company(api, enabled=("anthropic", "google"))
-    mac = computer(api, "Ana Mac")
-    assign(api, mac, "ops")
-    # A bot administrator's save leaves the computer as it is: the bot's readiness says agy is missing.
-    post(api, "bots/ops/model", {"model": "gemini-4-neon", "expected_revision": revision(api)}, "ben-test")
-    assert chosen(api) == []
-    # Someone turned it off there: an owner's save leaves it off.
-    with api.app.state.store.transaction() as c:
-        c.execute(
-            "INSERT INTO runner_harness_choices(runner_id,harness,enabled,updated_at,updated_by) "
-            "VALUES(?,'antigravity',0,'2026-11-01T00:00:00Z','human:ana')",
-            (mac["runner_id"],),
-        )
-    post(api, "bots/ops/model", {"model": "gemini-4-hydrogen", "expected_revision": revision(api)})
-    assert chosen(api) == [(mac["runner_id"], "antigravity", 0)]
-    with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM runner_harness_choices")
-    # The owner's task model on Antigravity turns it on, once.
-    for model in ("gemini-4-neon", "gemini-4-hydrogen"):
-        post(api, "bots/ops/task-model", {"task_model": {"model": model}, "expected_revision": revision(api)})
-    assert chosen(api) == [(mac["runner_id"], "antigravity", 1)]
-
-
-def test_an_owner_moving_the_default_to_antigravity_installs_it_where_a_bot_on_the_default_runs(api):
-    setup(api)
-    mac = computer(api, "Ana Mac")
-    computer(api, "Idle Mac")  # no bot runs there
-    with api.app.state.store.transaction() as c:
-        BS.write(c, "ops", {"name": "ops", "status": "active"})
-    assign(api, mac, "ops")
-    put(
-        api,
-        "providers",
-        {"enabled": ["google"], "runtime": "antigravity", "model": "gemini-4-neon", "expected_revision": 0},
-    )
-    assert chosen(api) == [(mac["runner_id"], "antigravity", 1)]
 
 
 def test_the_api_schema_names_every_plan_kind_and_runtime():

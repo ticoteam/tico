@@ -17,7 +17,7 @@ from .api_answers.tasks import ShotsReconciled
 from .api_contract import api_v2
 import hashlib
 import json
-from . import harness_actions, model_login
+from . import model_login
 from . import releases
 import threading
 
@@ -60,7 +60,6 @@ def register(app, auth, mutate, settings, store, telemetry, updater_only, GATEWA
         def work(c):
             before, after = Providers.save(c, who.actor, body.model_dump(), H.now(), settings)
             model_login.hold_removals(c, settings)  # bots on the company's default may now run another tool
-            harness_actions.install_where_needed(c, who, settings, after["runtime"])
             H.event(
                 c,
                 who.actor,

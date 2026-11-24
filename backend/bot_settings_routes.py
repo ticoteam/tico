@@ -8,7 +8,6 @@ from . import (
     company_billing,
     company_pause,
     gateway_connection,
-    harness_actions,
     holds,
     login_holds,
     model_login,
@@ -313,7 +312,6 @@ def register(
             c.execute("UPDATE bots SET effort=? WHERE id=?", (effort, bot))
             # Its shared copies follow it, so any bot may have moved onto another tool.
             model_login.hold_removals(c, settings)
-            harness_actions.install_where_needed(c, who, settings, runtime)
             lift_after_model_change(c, settings, who.actor, bot, was)
             reset = reset_bot_sessions(c, bot)
             settings_admin.record(c, who.actor, bot, "model", before, settings_admin.snapshot(c, bot, "model"))
