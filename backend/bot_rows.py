@@ -149,7 +149,8 @@ def task_flow(c, tasks_by_bot, who=None):
     the bot's turn with nothing running (it is woken by the never-stuck check). A task that waits on a person,
     another task or room counts in neither. Whose turn a task is comes from its open wait span (backend/wait_spans.py:
     its headline wait, kept by every engine write and checked by each never-stuck pass), one read for every task,
-    rather than working out each task's waits again on every list (TIDY, Nov 24: most of GET /api/v2/bots)."""
+    rather than working out each task's waits again on every list (TIDY, Nov 24: most of GET /api/v2/bots). A flip
+    no write made shows after the next pass, so never on a server running no scheduler (TICO_SCHEDULER=0)."""
     import json
 
     from . import waiting_on as W
