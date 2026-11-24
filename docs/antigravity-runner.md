@@ -18,15 +18,17 @@ Settings > Providers > Add > Antigravity plan. Connect runs `agy acp --login` on
 its own and told it runs over SSH, so it prints Google's link, reads the code the page shows (or the page's whole
 address) and writes its sign-in to a file there, never the keychain; it counts once `agy models` says it is signed in
 there. Only a computer on a Tico release that reports `antigravity_plan_v1` signs a plan in, installs `agy` for one,
-or runs its turns. With no online computer that has `agy`, the owner's first Connect turns Antigravity on for their
-computer (or the company's shared cloud computer) and the page waits while it installs. A plan is never pasted, and
-the API takes its sign-in from Connect only. Each turn on a plan gets a `GEMINI_HOME` of its own holding only that
-file (mode 600) and links to the bot's own `~/.gemini` rules, skills and conversations, so a move between plans resumes
-the same conversation; its conversation summaries (a SQLite file, which a link cannot share) do not carry across
-plans. That turn's `agy` alone is told it runs over SSH, and no Gemini or Google key reaches it; without the file in
-place it is not started. The home is removed once `agy` has exited, and any left by a stopped runner when it starts
-again. The file holds the plan's refresh token, so, as for a ChatGPT plan, a bot paid by
-the plan can read it while its turn runs (SECURITY.md).
+or runs its turns, and only with an `agy` at least as new as `antigravity.toml`'s minimum (an older one of the
+person's own is named, with the release to update to). With no online computer that has `agy`, the owner's first
+Connect turns Antigravity on for their computer (or the company's shared cloud computer) and the page waits while it
+installs. A plan is never pasted, and the API takes its sign-in from Connect only. Each turn on a plan gets a
+`GEMINI_HOME` of its own holding only that file (mode 600) and links to the bot's own `~/.gemini` rules, skills and
+conversations, so a move between plans resumes the same conversation; its conversation summaries (a SQLite file, which
+a link cannot share) do not carry across plans. That turn's `agy` alone is told it runs over SSH, and no Gemini or
+Google key, nor the computer's Application Default Credentials (`AGY_ADC_AUTH`), reaches it; a token it refreshes
+during the turn is masked before anything it says is kept; without the file in place it is not started. The home is
+removed once `agy` has exited, and any left by a stopped runner when it starts again. The file holds the plan's
+refresh token, so, as for a ChatGPT plan, a bot paid by the plan can read it while its turn runs (SECURITY.md).
 
 Each turn starts its own `agy` process, which ends with the turn; no process is kept between turns. The runner saves
 each thread's conversation ID locally (`state/agy/<bot>/`, readable by the runner only) and resumes it with

@@ -590,6 +590,22 @@ def in_effect(c, runner_id, runtime, loads=None):
     return sub if _runner_takes(runner, sub) else None
 
 
+def cli_current(runner: Any, runtime: str) -> bool:
+    """Whether the computer's `runtime` CLI is at least the oldest release Tico runs (its manifest's `[version]
+    minimum`): an older one, or one whose version it did not report, neither signs a plan in nor runs its turns."""
+    from clients import harness_manifests as manifests
+
+    def release(text: Any) -> tuple[int, ...]:
+        return tuple(int(n) for n in str(text or "").split("-")[0].split(".")[:3] if n.isdigit())
+
+    least = (manifests.get(runtime) or {}).get("minimum") or ""
+    if not least:
+        return True
+    tool = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(runtime) or {}
+    got = release(tool.get("version"))
+    return len(got) == 3 and got >= release(least)
+
+
 def carries(kind: str, caps: list[str]) -> bool:
     """A computer with these capabilities can carry a plan of `kind`: its sign-in, its CLI's install and its turns."""
     need = KINDS[kind].get("capability")
@@ -2803,7 +2819,7 @@ def payer_ready(c, runner_id, attempt_id, delivery):
     caps = H._json(given["capabilities"], []) or []
     if delivery == "legacy":
         return legacy_matches(c, runner_id, given["runtime"], sub, caps)
-    return CAPABILITY in caps
+    return CAPABILITY in caps and carries(sub["kind"], caps)
 
 
 def _lease_value(c, vault, given, sub):
@@ -2825,10 +2841,11 @@ def claim_credential(c, vault, runner_id, attempt_id, delivery="claim"):
     from .agent_subscriptions import CAPABILITY
 
     given = _leased_payer(c, runner_id, attempt_id, delivery)
-    if not given or CAPABILITY not in (H._json(given["capabilities"], []) or []):
+    caps = (H._json(given["capabilities"], []) or []) if given else []
+    if not given or CAPABILITY not in caps:
         return None
     sub = _lease_subscription(c, given)
-    return _lease_value(c, vault, given, sub) if sub else None
+    return _lease_value(c, vault, given, sub) if sub and carries(sub["kind"], caps) else None
 
 
 def legacy_credential(c, vault, who):
@@ -2989,7 +3006,7 @@ def _connect_computers(c, spec, who=None):
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
-        if need and need not in (H._json(runner["capabilities"], []) or []):
+        if need and (need not in (H._json(runner["capabilities"], []) or []) or not cli_current(runner, runtime)):
             continue
         if model_login._online(runner) and (report.get(runtime) or {}).get("installed"):
             found.append(runner)
@@ -3006,7 +3023,7 @@ def _shared_runner(c):
 
 
 def _install_target(c, auth, spec):
-    """(computer, its install state, active) for a Connect with no online computer that has the CLI of `spec`'s kind:
+    """(computer, its harness readiness, active) for a Connect with no online computer that has the CLI of `spec`'s kind:
     one of the company owner's online computers, or the shared cloud computer, whose runner can carry the kind, reports
     the harness and was not turned off for it. Active is one turned on for it or installing it now, which stays the target while it installs (one
     installing first); a failed one only when no other is left; ties go to the one enrolled first, never to the
@@ -3030,12 +3047,12 @@ def _install_target(c, auth, spec):
         busy = state in ("queued", "installing")
         active = choice is True or busy
         found.append(
-            ((state == "failed", not active, not busy, runner["created_at"] or "", runner["id"]), runner, state)
+            ((state == "failed", not active, not busy, runner["created_at"] or "", runner["id"]), runner, tool)
         )
     if not found:
         return None
-    key, runner, state = min(found, key=lambda f: f[0])
-    return runner, state, not key[1]
+    key, runner, tool = min(found, key=lambda f: f[0])
+    return runner, tool, not key[1]
 
 
 def connect_ready(c):
@@ -3145,8 +3162,14 @@ def connect(c, settings, auth, who, body):
         # Antigravity: no online computer has agy, so one installs it, and the page asks again until it has.
         target = _install_target(c, auth, spec) if spec["runtime"] == "antigravity" else None
         if target:
-            runner, state, active = target
-            if state == "failed":
+            runner, tool, active = target
+            if tool.get("installed") and not tool.get("managed") and not cli_current(runner, spec["runtime"]):
+                # The person's own agy, older than Tico runs: Tico does not replace it.
+                from clients import harness_manifests as manifests
+
+                least = manifests.get(spec["runtime"])["minimum"]
+                return waiting(False, f"Update Antigravity on {runner['label']} to {least} or later.")
+            if tool.get("state") == "failed":
                 return waiting(False, f"Antigravity couldn't install on {runner['label']}; Tico will retry.")
             if not active:
                 if who.role != "owner":

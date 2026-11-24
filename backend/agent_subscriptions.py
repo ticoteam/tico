@@ -448,6 +448,11 @@ def for_runner(
     sub = payment.subscription
     if not MS.carries(sub["kind"], caps):
         return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
+    if MS.KINDS[sub["kind"]].get("capability") and not MS.cli_current(runner, runtime):
+        # The CLI there is older than Tico runs a plan on.
+        return Payment(
+            None, f"Update {MS.RUNTIME_LABELS[runtime]} on {runner['label'] or 'this computer'}", update=True
+        )
     if per_turn:
         return payment
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):

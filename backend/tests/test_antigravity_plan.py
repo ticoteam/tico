@@ -28,7 +28,7 @@ ENDED = (
 START = {"kind": "antigravity_login"}
 
 
-def beat(api, m, installed=False, state="idle", harness=True, caps=CAPS):
+def beat(api, m, installed=False, state="idle", harness=True, caps=CAPS, version="1.5.15", managed=True):
     """The computer checks in: agy installed or not, and its install's state (`harness` False: a runner too old to
     know Antigravity; `caps` OLD: one that knows it but not its plans)."""
     readiness = {
@@ -42,9 +42,9 @@ def beat(api, m, installed=False, state="idle", harness=True, caps=CAPS):
                 "name": "Antigravity",
                 "runtime": "antigravity",
                 "installed": installed,
-                "version": "1.5.15" if installed else "",
-                "managed": installed,
-                "source": "tools" if installed else "",
+                "version": version if installed else "",
+                "managed": installed and managed,
+                "source": ("tools" if managed else "path") if installed else "",
                 "pinned": False,
                 "pin": "",
                 "authenticated": "missing",
@@ -287,3 +287,29 @@ def test_a_runner_that_knows_antigravity_but_not_its_plans_never_signs_in_instal
         for m in (old, gone):
             payment = AS.for_runner(c, rows[m["runner_id"]], "ops", config)
             assert payment.subscription is None and payment.update
+
+
+def test_an_agy_older_than_tico_runs_neither_signs_a_plan_in_nor_runs_its_turns(api):
+    setup(api)
+    company(api)
+    # The owner's own agy, older than the manifest's minimum: Tico does not replace it, and says so.
+    old = computer(api, "Ana Mac", installed=True, version="1.5.0", managed=False)
+    asked = connect(api)
+    assert (asked["id"], asked["waking"], asked["message"]) == (
+        "",
+        False,
+        "Update Antigravity on Ana Mac to 1.5.15 or later.",
+    )
+    assert chosen(api) == []
+    new = computer(api, "New Mac", installed=True, enrolled="2026-11-02T00:00:00Z")
+    login = connect(api)
+    assert login["runner_id"] == new["runner_id"]
+    post(api, f"runner-logins/{login['id']}/report", {"state": "waiting", "url": LINK}, new["token"])
+    post(api, f"computers/{new['runner_id']}/logins/{login['id']}/code", {"code": ENDED})
+    post(api, f"runner-logins/{login['id']}/subscription", {"value": VALUE}, new["token"])
+    pick(api, "ops", "antigravity", person="human:ana")
+    with api.app.state.store.transaction() as c:
+        row = c.execute("SELECT * FROM runners_with_state WHERE id=?", (old["runner_id"],)).fetchone()
+        payment = AS.for_runner(c, row, "ops", {"runtime": "antigravity", "model": ""})
+    assert payment.subscription is None and payment.update
+    assert payment.reason == "Update Antigravity on Ana Mac"

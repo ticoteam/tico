@@ -1220,6 +1220,8 @@ read -r _
         let mut env = rig.settings(&[]).env;
         env.insert("HOME".into(), rig.dir.join("home").display().to_string());
         env.insert("GEMINI_API_KEY".into(), "AIza-computer-key".into());
+        // The computer's Google Cloud credentials (Application Default Credentials), which no plan turn may use.
+        env.insert("AGY_ADC_AUTH".into(), "1".into());
         let mut got = subs::apply(
             &rig.dir,
             &items,
@@ -1263,10 +1265,9 @@ read -r _
             let plan = command(env, &plan_home).unwrap();
             assert_eq!(plan["SSH_CONNECTION"].as_deref(), Some(subs::OVER_SSH.1));
             assert_eq!(plan["GEMINI_HOME"], plan_home);
-            assert!(
-                plan.get("GEMINI_API_KEY").is_none_or(Option::is_none),
-                "{plan:?}"
-            );
+            for key in ["GEMINI_API_KEY", "AGY_ADC_AUTH"] {
+                assert!(plan.get(key).is_none_or(Option::is_none), "{plan:?}");
+            }
         }
         // Tico's own commands in the turn (git) get the turn's environment, which never says SSH and keeps the bot's key.
         assert!(!env.contains_key("SSH_CONNECTION") && env.contains_key("GEMINI_API_KEY"));

@@ -395,6 +395,10 @@ impl Runner {
             while let Ok(ev) = rx.try_recv() {
                 queue.push(ev);
             }
+            if !queue.is_empty() {
+                // A plan's CLI that refreshed its sign-in since may say the new token: masked before any of it is kept.
+                crate::model_subscriptions::notice_refreshes();
+            }
             let batch: Vec<Value> = std::mem::take(&mut queue);
             for mut event in batch {
                 let event_thread = text_of(&event["thread_id"]);

@@ -2968,7 +2968,7 @@ mod tests {
                 &root.join("bin/agy"),
                 r#"#!/bin/sh
 test "$SSH_CONNECTION" = "127.0.0.1 0 127.0.0.1 0" || exit 3
-test -z "$DISPLAY$WAYLAND_DISPLAY$GEMINI_API_KEY" || exit 4
+test -z "$DISPLAY$WAYLAND_DISPLAY$GEMINI_API_KEY$AGY_ADC_AUTH" || exit 4
 case "$GEMINI_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
 case "$*" in
   "acp --login --gemini-dir $GEMINI_HOME --app-data-dir antigravity-cli")
@@ -2999,6 +2999,7 @@ esac
                 .env("HOME", &root)
                 .env("DISPLAY", ":0")
                 .env("GEMINI_API_KEY", "AIza-computer-key")
+                .env("AGY_ADC_AUTH", "1") // the computer's Google Cloud credentials, which no plan may use
                 .env_remove("GEMINI_HOME")
                 .env_remove("SSH_CONNECTION")
                 .env_remove(crate::isolation::UID_ENV)

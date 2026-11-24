@@ -45,8 +45,10 @@
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::{CStr, CString, OsStr};
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -110,6 +112,8 @@ pub const TURN_HOMES: &[TurnHome] = &[TurnHome {
         "GOOGLE_GENAI_USE_VERTEXAI",
         "GCLOUD_PROJECT",
         "CLOUDSDK_CORE_PROJECT",
+        // Signs agy in with the computer's Application Default Credentials.
+        "AGY_ADC_AUTH",
     ],
     env: &[OVER_SSH],
 }];
@@ -147,26 +151,31 @@ impl TurnHome {
         }
     }
 
-    /// Link `links` of the bot's own home `own` into the turn's `home`. Best effort: a turn whose links fail still runs.
-    fn link(&self, home: &Path, own: &Path) {
+    /// Link `links` of the bot's own home `own` into the turn's `home` (under `root`), each folder on the way opened
+    /// without following a link (`Folder`). Best effort: a turn whose links fail still runs.
+    fn link(&self, root: &Path, home: &Path, own: &Path) {
         if own == home {
             return;
         }
-        for rel in self.keep {
-            let _ = crate::isolation::mkdir(&own.join(rel), 0o700);
+        if let Some(up) = own.parent() {
+            for rel in self.keep {
+                let _ = Folder::open(up, &own.join(rel), true);
+            }
         }
         for rel in self.links {
             let target = own.join(rel);
             let link = home.join(rel);
-            if std::fs::symlink_metadata(&target).is_err()
-                || std::fs::symlink_metadata(&link).is_ok()
-            {
+            let (Some(parent), Some(name)) = (link.parent(), link.file_name()) else {
+                continue;
+            };
+            if std::fs::symlink_metadata(&target).is_err() {
                 continue;
             }
-            if let Some(parent) = link.parent() {
-                let _ = crate::isolation::mkdir(parent, 0o700);
+            if let (Ok(dir), Ok(name)) = (Folder::open(root, parent, true), c_name(name)) {
+                if dir.kind(&name).is_none() {
+                    let _ = dir.symlink(&name, &target);
+                }
             }
-            let _ = std::os::unix::fs::symlink(&target, &link);
         }
     }
 }
@@ -200,7 +209,7 @@ pub struct Delivered {
     /// CLAUDE_CONFIG_DIR, while HOME stays the turn's).
     pub home_env: Option<String>,
     pub file: Option<PathBuf>,
-    /// Where `home` is made from, one folder at a time (`plain_dirs`): the runner's own state.
+    /// Where `home` is made from, one folder at a time (`Folder::open`): the runner's own state.
     root: PathBuf,
     /// As the server handed it.
     value: String,
@@ -269,6 +278,41 @@ struct Homes {
 struct Live {
     turns: usize,
     revision: i64,
+    /// A plan's sign-in file its CLI refreshes in place (TURN_HOMES), with how it looked when last read
+    /// (`notice_refreshes`).
+    watch: Option<(PathBuf, Option<Stamp>)>,
+}
+
+/// A file's inode, size and change time: what tells a rewrite of it without reading it.
+type Stamp = (u64, u64, i64, i64);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some((m.ino(), m.size(), m.mtime(), m.mtime_nsec()))
+}
+
+/// Mask, in every running turn's output from now on, the tokens a plan's CLI wrote when it refreshed its sign-in during
+/// a turn (TURN_HOMES): called before what a turn said is kept (drive.rs, capture.rs), so a refreshed token is never
+/// kept or sent unmasked. One stat per plan turn running here when nothing changed; a changed file is read bounded and
+/// never through a link.
+pub fn notice_refreshes() {
+    let mut homes = homes();
+    for live in homes.live.values_mut() {
+        let Some((file, seen)) = &mut live.watch else {
+            continue;
+        };
+        let now = stamp(file);
+        if now == *seen {
+            continue;
+        }
+        *seen = now;
+        if let Some(text) = read_codex_auth(file) {
+            for secret in secrets_in(&text) {
+                crate::redact::hide_everywhere(&secret, false);
+            }
+        }
+    }
 }
 
 fn homes() -> MutexGuard<'static, Homes> {
@@ -610,10 +654,15 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         d.held = true;
     }
     if let Some(t) = d.turn_home() {
+        if let Some(live) = homes().live.get_mut(&home) {
+            if live.watch.is_none() {
+                live.watch = Some((file.clone(), stamp(&file)));
+            }
+        }
         // What else would sign the CLI in comes off its own process only (hosts/antigravity.rs): the turn's other
         // runtimes, a fallback hop among them, keep the bot's keys.
         if let Some(own) = t.own(env) {
-            t.link(&home, &own);
+            t.link(&d.root, &home, &own);
         }
         env.insert(t.var.into(), home.display().to_string());
         return Ok(secrets);
@@ -623,7 +672,7 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
             env.remove(&other);
         }
         if let Some(own) = env.get("HOME").filter(|h| !h.is_empty()) {
-            link_config(&home, &Path::new(own).join(".claude"));
+            link_config(&d.root, &home, &Path::new(own).join(".claude"));
         }
         env.insert(var, home.display().to_string());
         return Ok(secrets);
@@ -637,11 +686,10 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
                 .ok_or("Missing provider home")?
                 .join(&d.runtime);
             let sessions = plan.join("sessions");
-            crate::isolation::mkdir(&sessions, 0o700)
-                .map_err(|_| "Cannot create provider sessions")?;
-            let link = home.join("sessions");
-            if !link.is_symlink() {
-                std::os::unix::fs::symlink(sessions, link)
+            Folder::open(&d.root, &sessions, true).map_err(|_| "Cannot create provider sessions")?;
+            let dir = Folder::open(&d.root, &home, false).map_err(|_| "Cannot link provider sessions")?;
+            if dir.kind(c"sessions") != Some(libc::S_IFLNK) {
+                dir.symlink(c"sessions", &sessions)
                     .map_err(|_| "Cannot link provider sessions")?;
             }
             for key in crate::harness_tools::api_key_env(&d.runtime) {
@@ -660,30 +708,36 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
 /// files is linked in, `projects` first made so the transcripts stay under HOME (hosts/claude.rs transcript). A link
 /// to another folder (the bot's HOME moved) is replaced; what Claude Code made in the home itself is left alone. A
 /// fresh home is marked as onboarded, as the computer's own is. Best effort: a turn whose links fail still runs.
-fn link_config(home: &Path, own: &Path) {
-    let _ = crate::isolation::mkdir(&own.join("projects"), 0o700);
+fn link_config(root: &Path, home: &Path, own: &Path) {
+    if let Some(up) = own.parent() {
+        let _ = Folder::open(up, &own.join("projects"), true);
+    }
+    let Ok(dir) = Folder::open(root, home, false) else {
+        return;
+    };
     for entry in std::fs::read_dir(own).into_iter().flatten().flatten() {
         let name = entry.file_name();
         let text = name.to_string_lossy();
         if OWN.contains(&text.as_ref()) || text.contains(".tico-") {
             continue;
         }
-        let link = home.join(&name);
-        match std::fs::symlink_metadata(&link) {
-            Ok(m) if m.file_type().is_symlink() => {
-                if std::fs::read_link(&link).is_ok_and(|t| t == entry.path()) {
+        let Ok(name) = c_name(&name) else {
+            continue;
+        };
+        match dir.kind(&name) {
+            Some(libc::S_IFLNK) => {
+                if dir.read_link(&name).is_some_and(|t| t == entry.path()) {
                     continue;
                 }
-                let _ = std::fs::remove_file(&link);
+                dir.remove(&name);
             }
-            Ok(_) => continue,
-            Err(_) => {}
+            Some(_) => continue,
+            None => {}
         }
-        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+        let _ = dir.symlink(&name, &entry.path());
     }
-    let settings = home.join(".claude.json");
-    if !settings.exists() {
-        let _ = write_private(&settings, "{\"hasCompletedOnboarding\":true}");
+    if dir.kind(c".claude.json").is_none() {
+        let _ = dir.write(c".claude.json", "{\"hasCompletedOnboarding\":true}");
     }
 }
 
@@ -802,10 +856,11 @@ fn place(
 ) -> Result<String, String> {
     let mut homes = homes();
     let path = home.join(name);
-    plain_dirs(root, path.parent().unwrap_or(home), true)?;
+    let dir = Folder::open(root, path.parent().unwrap_or(home), true)?;
+    let leaf = c_name(path.file_name().ok_or_else(refused)?)?;
     let live = homes.live.get(home).map(|l| l.revision);
     let current = match live {
-        Some(at) if revision <= at => read_codex_auth(&path),
+        Some(at) if revision <= at => dir.read(&leaf),
         _ => None,
     };
     let text = match current {
@@ -815,78 +870,247 @@ fn place(
                 Some((at, kept)) if live.is_none() && *at == revision => kept.clone(),
                 _ => value.to_string(),
             };
-            write_private(&path, &text)?;
+            dir.write(&leaf, &text)?;
             text
         }
     };
     let entry = homes
         .live
         .entry(home.to_path_buf())
-        .or_insert(Live { turns: 0, revision });
+        .or_insert(Live {
+            turns: 0,
+            revision,
+            watch: None,
+        });
     entry.turns += 1;
     entry.revision = entry.revision.max(revision);
     Ok(text)
 }
 
-/// Each folder from `root` down to `dir`, one at a time, is a plain folder (never a link, which would put a sign-in
-/// file, or a cleanup, somewhere else): a missing one is made (`make`) only once the one above it checked out.
-fn plain_dirs(root: &Path, dir: &Path, make: bool) -> Result<(), String> {
-    let refused = || "a subscription home's folder is not a plain folder".to_string();
-    let rest = dir.strip_prefix(root).map_err(|_| refused())?;
-    let mut at = root.to_path_buf();
-    for part in rest.components() {
-        let std::path::Component::Normal(part) = part else {
-            return Err(refused());
-        };
-        at.push(part);
-        match std::fs::symlink_metadata(&at) {
-            Ok(m) if m.is_dir() => {}
-            Err(e) if make && e.kind() == std::io::ErrorKind::NotFound => {
-                crate::isolation::mkdir(&at, 0o700)
-                    .map_err(|e| format!("cannot make a subscription home: {e}"))?;
-                if !std::fs::symlink_metadata(&at).is_ok_and(|m| m.is_dir()) {
-                    return Err(refused());
-                }
-            }
-            _ => return Err(refused()),
-        }
-    }
-    Ok(())
+fn refused() -> String {
+    "a subscription home's folder is not a plain folder".into()
 }
 
+fn c_name(name: &OsStr) -> Result<CString, String> {
+    CString::new(name.as_bytes()).map_err(|_| refused())
+}
+
+/// A folder held open by descriptor. Under isolation the bot user owns the runner's per-turn state (isolation.rs
+/// `bot_state`) and may swap any name in it at any moment, so every folder a subscription home is made of is opened
+/// one name at a time from the runner's state without following a link, and what is made, read, written, renamed or
+/// removed there is named relative to it: a swap after the check cannot send the supervisor's write anywhere else.
+struct Folder(OwnedFd);
+
+impl Folder {
+    /// `path`, opened without following a link anywhere on the way but root's own (isolation::open_unfollowed).
+    fn at(path: &Path) -> Result<Folder, String> {
+        crate::isolation::open_unfollowed(path, libc::O_DIRECTORY)
+            .map(|f| Folder(f.into()))
+            .map_err(|_| refused())
+    }
+
+    /// `dir`, under `root`: each folder below `root` opened without following a link, a missing one made (`make`),
+    /// 0700 and the bot user's.
+    fn open(root: &Path, dir: &Path, make: bool) -> Result<Folder, String> {
+        let rest = dir.strip_prefix(root).map_err(|_| refused())?;
+        let mut at = Folder::at(root)?;
+        for part in rest.components() {
+            let std::path::Component::Normal(part) = part else {
+                return Err(refused());
+            };
+            at = at.child(&c_name(part)?, make)?;
+        }
+        Ok(at)
+    }
+
+    fn raw(&self) -> i32 {
+        self.0.as_raw_fd()
+    }
+
+    /// The folder `name` in this one, never through a link; made when missing (`make`).
+    fn child(&self, name: &CStr, make: bool) -> Result<Folder, String> {
+        let open = || crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_DIRECTORY);
+        if let Some(fd) = open() {
+            return Ok(Folder(fd));
+        }
+        if !make || std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound {
+            return Err(refused());
+        }
+        // SAFETY: mkdirat on a descriptor this process holds and a NUL-terminated name.
+        if unsafe { libc::mkdirat(self.raw(), name.as_ptr(), 0o700) } != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(format!("cannot make a subscription home: {e}"));
+            }
+        }
+        let made = std::fs::File::from(open().ok_or_else(refused)?);
+        crate::isolation::chown_file(&made).map_err(|e| e.to_string())?;
+        Ok(Folder(made.into()))
+    }
+
+    /// The type of what `name` is here (`S_IFDIR`, `S_IFLNK`...), never following a link; None when nothing is.
+    fn kind(&self, name: &CStr) -> Option<libc::mode_t> {
+        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstatat on a held descriptor and a NUL-terminated name, into an owned buffer.
+        let found = unsafe {
+            libc::fstatat(
+                self.raw(),
+                name.as_ptr(),
+                info.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } == 0;
+        found.then(|| unsafe { info.assume_init() }.st_mode & libc::S_IFMT)
+    }
+
+    /// What the file `name` holds: a plain file, never read through a link, bounded as a subscription is.
+    fn read(&self, name: &CStr) -> Option<String> {
+        let fd = crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_NONBLOCK)?;
+        read_bounded(std::fs::File::from(fd))
+    }
+
+    /// Write `value` as the file `name` (0600, the bot user's): staged under a name of its own in this folder and
+    /// renamed over it, so the CLI never reads half a file and nothing is written through a link.
+    fn write(&self, name: &CStr, value: &str) -> Result<(), String> {
+        let staged = Path::new(OsStr::from_bytes(name.to_bytes()))
+            .with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
+        let staged = c_name(staged.as_os_str())?;
+        // SAFETY: openat on a held descriptor and a NUL-terminated name; the descriptor gets one owner below.
+        let fd = unsafe {
+            libc::openat(
+                self.raw(),
+                staged.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "cannot write a subscription file: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+        let written = crate::isolation::chown_file(&f)
+            .map_err(|e| e.to_string())
+            .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()))
+            .and_then(|_| {
+                // SAFETY: renameat within one held descriptor, NUL-terminated names.
+                if unsafe { libc::renameat(self.raw(), staged.as_ptr(), self.raw(), name.as_ptr()) } == 0 {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error().to_string())
+                }
+            });
+        drop(f);
+        if written.is_err() {
+            // SAFETY: unlinkat of the staged name in a held descriptor.
+            unsafe { libc::unlinkat(self.raw(), staged.as_ptr(), 0) };
+        }
+        written
+    }
+
+    fn symlink(&self, name: &CStr, target: &Path) -> Result<(), String> {
+        let target = c_name(target.as_os_str())?;
+        // SAFETY: symlinkat into a held descriptor with NUL-terminated names.
+        if unsafe { libc::symlinkat(target.as_ptr(), self.raw(), name.as_ptr()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().to_string())
+        }
+    }
+
+    fn read_link(&self, name: &CStr) -> Option<PathBuf> {
+        let mut target = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: readlinkat on a held descriptor and a NUL-terminated name into an owned buffer.
+        let n = unsafe {
+            libc::readlinkat(
+                self.raw(),
+                name.as_ptr(),
+                target.as_mut_ptr().cast(),
+                target.len(),
+            )
+        };
+        (n > 0 && (n as usize) < target.len())
+            .then(|| PathBuf::from(OsStr::from_bytes(&target[..n as usize])))
+    }
+
+    /// The names in this folder.
+    fn names(&self) -> Vec<CString> {
+        let mut out = vec![];
+        // SAFETY: fdopendir takes a duplicate this process owns (closed by closedir), rewound since it shares the
+        // held descriptor's position; readdir's entries are copied out before the next call.
+        unsafe {
+            let dup = libc::fcntl(self.raw(), libc::F_DUPFD_CLOEXEC, 0);
+            if dup < 0 {
+                return out;
+            }
+            let stream = libc::fdopendir(dup);
+            if stream.is_null() {
+                libc::close(dup);
+                return out;
+            }
+            libc::rewinddir(stream);
+            loop {
+                let entry = libc::readdir(stream);
+                if entry.is_null() {
+                    break;
+                }
+                let name = CStr::from_ptr((*entry).d_name.as_ptr());
+                if !matches!(name.to_bytes(), b"." | b"..") {
+                    out.push(name.to_owned());
+                }
+            }
+            libc::closedir(stream);
+        }
+        out
+    }
+
+    /// Remove `name` here: a file or link (never what a link points at), or a folder with all that is in it.
+    fn remove(&self, name: &CStr) {
+        self.remove_within(name, 32);
+    }
+
+    fn remove_within(&self, name: &CStr, depth: usize) {
+        if self.kind(name) == Some(libc::S_IFDIR) {
+            if let (Ok(dir), true) = (self.child(name, false), depth > 0) {
+                for inner in dir.names() {
+                    dir.remove_within(&inner, depth - 1);
+                }
+            }
+            // SAFETY: unlinkat on a held descriptor and a NUL-terminated name.
+            unsafe { libc::unlinkat(self.raw(), name.as_ptr(), libc::AT_REMOVEDIR) };
+        } else {
+            // SAFETY: as above.
+            unsafe { libc::unlinkat(self.raw(), name.as_ptr(), 0) };
+        }
+    }
+}
+
+/// Write `value` as `path`, its folder opened without following a link (`Folder::at`).
 pub(crate) fn write_private(path: &Path, value: &str) -> Result<(), String> {
-    let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&staged)
-        .map_err(|e| format!("cannot write a subscription file: {e}"))?;
-    let written = crate::isolation::chown_file(&f)
-        .map_err(|e| e.to_string())
-        .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()));
-    drop(f);
-    written
-        .and_then(|_| std::fs::rename(&staged, path).map_err(|e| e.to_string()))
-        .inspect_err(|_| {
-            let _ = std::fs::remove_file(&staged);
-        })
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(refused());
+    };
+    Folder::at(folder)?.write(&c_name(name)?, value)
 }
 
 /// Remove the sign-in files from one subscription home (and what a write cut short left), keeping its sessions.
-fn clear(home: &Path) {
-    let Ok(entries) = std::fs::read_dir(home) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
+fn clear(root: &Path, home: &Path) {
+    if let Ok(dir) = Folder::open(root, home, false) {
+        clear_in(&dir);
+    }
+}
+
+fn clear_in(dir: &Folder) {
+    for entry in dir.names() {
+        let name = entry.to_string_lossy();
         let staged = FILES.iter().any(|f| {
             name.strip_prefix(f.trim_end_matches(".json"))
                 .is_some_and(|rest| rest.starts_with(".tico-"))
         });
-        if FILES.contains(&name.as_str()) || staged || name == LEGACY_REVISION_FILE {
-            let _ = std::fs::remove_file(entry.path());
+        if FILES.contains(&name.as_ref()) || staged || name == LEGACY_REVISION_FILE {
+            dir.remove(&entry);
         }
     }
 }
@@ -895,23 +1119,18 @@ fn clear(home: &Path) {
 /// mid-turn, or an older runner kept it) is removed.
 pub fn sweep(state_dir: &Path) {
     let state = crate::isolation::bot_state(state_dir);
-    let root = state.join("subscriptions");
-    if plain_dirs(&state, &root, false).is_err() {
+    let Ok(root) = Folder::open(&state, &state.join("subscriptions"), false) else {
         return;
-    }
-    for sub in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-        if !sub.file_type().is_ok_and(|t| t.is_dir()) {
+    };
+    for sub in root.names() {
+        let Ok(sub) = root.child(&sub, false) else {
             continue;
-        }
-        for home in std::fs::read_dir(sub.path())
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            if home.file_name() == TURNS {
-                let _ = std::fs::remove_dir_all(home.path());
-            } else if home.file_type().is_ok_and(|t| t.is_dir()) {
-                clear(&home.path());
+        };
+        for home in sub.names() {
+            if home.as_bytes() == TURNS.as_bytes() {
+                sub.remove(&home);
+            } else if let Ok(home) = sub.child(&home, false) {
+                clear_in(&home);
             }
         }
     }
@@ -956,14 +1175,16 @@ fn release(d: &mut Delivered) -> Vec<String> {
         Some(live) if live.turns > 1 => live.turns -= 1,
         _ => {
             homes.live.remove(&home);
-            if plain_dirs(&d.root, &home, false).is_err() {
-                // Replaced by a link since: what it points at is not this runner's to clean.
-                return secrets;
-            }
-            clear(&home);
+            // Through descriptors from the runner's state (`Folder`): a link put in place of any folder on the way
+            // is removed, never followed.
+            clear(&d.root, &home);
             if let Some(turn) = turn_dir(&home) {
                 // A turn's own config directory: its links go with it (never what they point at).
-                let _ = std::fs::remove_dir_all(turn);
+                if let (Some(up), Some(name)) = (turn.parent(), turn.file_name()) {
+                    if let (Ok(dir), Ok(name)) = (Folder::open(&d.root, up, false), c_name(name)) {
+                        dir.remove(&name);
+                    }
+                }
             }
         }
     }
@@ -1003,11 +1224,11 @@ fn changed(d: &Delivered) -> Option<String> {
 
 /// The auth file is writable by the bot. Refuse special files and bound the read.
 pub fn read_codex_auth(path: &Path) -> Option<String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-        .open(path)
-        .ok()?;
+    read_bounded(crate::isolation::open_unfollowed(path, libc::O_NONBLOCK).ok()?)
+}
+
+/// A plain file's text, no larger than a subscription; None for anything else or nothing.
+fn read_bounded(file: std::fs::File) -> Option<String> {
     if !file.metadata().ok()?.is_file() {
         return None;
     }
@@ -1636,6 +1857,26 @@ mod tests {
         std::os::unix::fs::symlink(&elsewhere, &turns_dir).unwrap();
         assert!(start(&mut got, "antigravity", &mut env).is_err());
         assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+        // A turn's home swapped for a link while it ran: letting go of it removes the link, never what it points at,
+        // and reads nothing through it.
+        std::fs::remove_file(&turns_dir).unwrap();
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        start(&mut got, "antigravity", &mut env).unwrap();
+        let turn = got[0].home.clone().unwrap().parent().unwrap().to_path_buf();
+        let kept = state.join("kept/antigravity/antigravity-cli");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("antigravity-oauth-token"), "not the plan's").unwrap();
+        std::fs::remove_dir_all(&turn).unwrap();
+        std::os::unix::fs::symlink(state.join("kept"), &turn).unwrap();
+        assert!(!finish(&mut got).iter().any(|s| s == "not the plan's"));
+        assert!(kept.join("antigravity-oauth-token").exists());
+        assert!(std::fs::symlink_metadata(&turn).is_err());
         assert_eq!(
             std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
             "computer-token"

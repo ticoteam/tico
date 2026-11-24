@@ -6777,6 +6777,8 @@ mod tests {
         diagnostics: Vec<Vec<String>>,
         /// How many pi processes the turns started.
         starts: usize,
+        /// Every event the turns sent Tico, in order.
+        events: Vec<Value>,
     }
 
     /// Turns on one session through a fake `pi --mode rpc` that reads 348 input tokens a turn (runner-rs/tests/fixtures/pi), one per
@@ -6876,6 +6878,8 @@ mod tests {
                 .extend(extra.as_object().cloned().unwrap_or_default());
             let fence = config.as_object_mut().unwrap().remove("session_fence");
             let moved_history = config.as_object_mut().unwrap().remove("moved_history");
+            // Fields of the attempt itself (its run token, `credential_vault`): a turn on a plan (`on_agy_plan`).
+            let more = config.as_object_mut().unwrap().remove("attempt");
             let mut attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
                                  "lease_seconds": 120, "conversation": room, "task": task,
                                  "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
@@ -6885,6 +6889,9 @@ mod tests {
             }
             if let Some(history) = moved_history {
                 attempt["moved_history"] = history;
+            }
+            if let Some(Value::Object(more)) = more {
+                attempt.as_object_mut().unwrap().extend(more);
             }
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt))
                 .await
@@ -6948,6 +6955,11 @@ mod tests {
             })
             .collect();
         let starts = crate::hosts::pi::testing::logged(&dir, "starts.log").len();
+        let events = seen
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
+            .collect();
         runner.pi.prune(true).await;
         std::fs::remove_dir_all(&dir).ok();
         Ran {
@@ -6957,6 +6969,7 @@ mod tests {
             saved,
             diagnostics,
             starts,
+            events,
         }
     }
 
@@ -7438,14 +7451,21 @@ line = sys.stdin.readline()
 if not line:
     sys.exit(0)
 open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
+said = "Done."
+if os.path.exists(os.path.join(folder, "agy-refresh-%d" % n)):
+    # A plan turn's agy refreshes its access token in its sign-in file, then says it.
+    fresh = "ya29.synthetic-refreshed-mid-turn-0123456789"
+    token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
+    open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
+    said = "Done. " + fresh
 late = []
 if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
     conv = str(uuid.uuid4())
     late = [{"event": "step_update", "step_update": {"conversation_id": conv}}]
 for event in [
-    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Done."}},
+    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": said}},
 ] + late + [
-    {"event": "result", "result": {"status": "SUCCESS", "response": "Done.", "conversation_id": conv,
+    {"event": "result", "result": {"status": "SUCCESS", "response": said, "conversation_id": conv,
                                    "usage": {"input_tokens": 1, "output_tokens": 1}}},
 ]:
     print(json.dumps(event), flush=True)
@@ -7466,6 +7486,29 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
                 vec![fake.display().to_string(), folder.display().to_string()],
             )
         });
+    }
+
+    #[tokio::test]
+    async fn a_token_agy_refreshes_mid_turn_is_masked_before_any_event_keeps_it() {
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("agy-refresh-0"), "").unwrap();
+        fake_agy_in(&folder);
+        let token = format!("run-agy-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(token.clone(), json!({"subscriptions": [{
+            "id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
+            "file": crate::model_subscriptions::AGY_TOKEN, "revision": 1, "billing": "subscription",
+            "value": r#"{"token":{"access_token":"ya29.synthetic-handed-token-0123456789"}}"#}]}));
+        let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon",
+                         "attempt": {"token": token, "credential_vault": true}});
+        let ran = session_turns(false, true, &[("m4", json!({}), agy)]).await;
+        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(ran.completions[0]["outcome"], "completed", "{}", ran.completions[0]);
+        let said = serde_json::to_string(&ran.events).unwrap();
+        assert!(said.contains("Done."), "{said}");
+        assert!(!said.contains("synthetic-refreshed-mid-turn"), "{said}");
+        assert!(!ran.completions[0].to_string().contains("synthetic-refreshed-mid-turn"));
     }
 
     #[tokio::test]
