@@ -903,3 +903,20 @@ def test_the_file_mentions_answer_matches_its_contract(api):
     unseen = ask(said[:1], who="cara-test")
     assert unseen.status_code == 404 and unseen.json()["error"]["code"] == "not_found", "a bot cara may not see"
     assert api.get("/api/v2/bots/ops/files/mentions?m=a.docx").status_code == 401
+
+
+def test_a_sends_warnings_are_declared_as_both_shapes_it_has(api):
+    """A send's `warnings` holds a person's style-lint problems (plain words, hubdb.style_problems) beside the post's
+    objects (an @mention that reached nobody, the unsolicited cap): the message and the thread message both declare
+    both."""
+    document = api.get("/api/v2/openapi.json", headers=headers()).json()
+    warnings = [
+        "Say what you need in the first line.",
+        {"rule": "mention_no_write", "actor": "bot:finance", "detail": "You can see finance but not send it requests."},
+        {"rule": "unsolicited_cap", "actor": "human:ben"},
+    ]
+    thread_message = {"id": "m1", "seq": 1, "thread_id": "t1", "warnings": warnings}
+    assert conforms(thread_message, {"$ref": "#/components/schemas/ThreadMessage"}, document) is None
+    message = document["components"]["schemas"]["Message"]["properties"]["warnings"]
+    assert conforms(warnings, message, document) is None
+    assert conforms([{"rule": "made_up", "actor": "x"}], message, document) is not None

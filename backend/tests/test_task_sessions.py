@@ -761,3 +761,24 @@ def test_a_card_answer_to_the_asking_agent_needs_no_write(api):
         headers=headers("cara-test"),
     )
     assert r.status_code == 200, r.text
+
+
+def test_a_sub_threads_first_message_to_a_hidden_agent_is_the_same_404_as_an_unknown_one(api):
+    """Cara may not see Finance: her post `to` it under a message with no sub-thread yet is told it does not exist, as
+    a made-up name is, never the 403 that would say it does."""
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.thread_api import new_thread
+
+    thread = new_thread(api, "Totals", members=("human:cara",))["id"]
+    with api.app.state.store.transaction() as c:
+        restrict(c, "finance", people=["ana"])
+    first = api.post(f"/api/v2/threads/{thread}/messages", json={"text": "Totals."}, headers=headers("cara-test"))
+    answers = []
+    for name in ("bot:finance", "bot:no-such-agent"):
+        r = api.post(
+            f"/api/v2/threads/{thread}/messages",
+            json={"text": "Check May.", "to": name, "parent_message_id": first.json()["id"]},
+            headers=headers("cara-test"),
+        )
+        answers.append((r.status_code, r.json()["error"]["detail"]))
+    assert answers == [(404, "Unknown recipient")] * 2, answers

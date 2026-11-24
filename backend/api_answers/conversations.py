@@ -111,8 +111,9 @@ class Message(TypedDict):
     """On a send: a bot's message to a bot held for that bot's next run, and how to wake it now (backend/bot_to_bot.py)"""
     sent_as: NotRequired[SentAs]
     """On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"""
-    warnings: NotRequired[list[PostWarning]]
-    """On a send: the @mentions it reached nobody by, and anyone past the unsolicited cap"""
+    warnings: NotRequired[list[Annotated[str | PostWarning, ONE_OF]]]
+    """On a send: the @mentions it reached nobody by and anyone past the unsolicited cap (objects), and a person's
+    writing problems (rule 7's style lint, plain words)"""
     source: NotRequired[MessageSource]
 
 

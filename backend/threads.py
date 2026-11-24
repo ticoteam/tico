@@ -1618,6 +1618,18 @@ def _writable(c, author, found, refused=None):
     return kept
 
 
+def _named_recipient(c, v, thread, actor, to_actor):
+    """Whom a post names in `to`: 404 `Unknown recipient` for one that does not exist or, unless they are in `thread`
+    together, one the poster may not see (addressing is an answer about who exists, so both answer the same)."""
+    target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(DELIVERY_PREFIXES) else None)
+    if not target:
+        raise Problem("not_found", "Unknown recipient", 404)
+    together = thread is not None and _in_it_together(c, thread, actor, target)
+    if v is not None and not together and not _may_see(c, v, target):
+        raise Problem("not_found", "Unknown recipient", 404)
+    return target
+
+
 def _require_agent_write(c, v, actor, target, in_reply_to=None, asker=None):
     """A person's post `to` an agent is a request to it: Write on it, as any message to an agent needs
     (recipients.require_recipient), with the same 403. Solicited ones go: a Reply to that agent's own message (the
@@ -2978,9 +2990,11 @@ def _post(
         parent_message_id
         and not c.execute("SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
     ):
-        if to_actor and not ask:
-            # Before a hold can be made for it: a post `to` an agent its writer may not send requests to is refused.
-            _require_agent_write(c, v, actor, H.resolve_actor(c, to_actor) or "", in_reply_to)
+        if to_actor and not ask and not str(to_actor).startswith("ext:"):
+            # Before a hold can be made for it, the same checks as any post `to` someone: See (an unknown or unseen
+            # recipient is the same 404), then Write on an agent.
+            target = _named_recipient(c, v, thread_row(c, thread_id) if thread_id else None, actor, to_actor)
+            _require_agent_write(c, v, actor, target, in_reply_to)
         made = _post_making(
             c,
             principal,
@@ -3044,12 +3058,7 @@ def _post(
     if to_actor:
         if str(to_actor).startswith("ext:"):
             raise Problem("recipient", "An outside author cannot receive a thread post", 422)
-        target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(DELIVERY_PREFIXES) else None)
-        if not target:
-            raise Problem("not_found", "Unknown recipient", 404)
-        # Addressing is an answer about who exists: anyone not in the thread with the author takes the See gate.
-        if v is not None and not _in_it_together(c, thread, actor, target) and not _may_see(c, v, target):
-            raise Problem("not_found", "Unknown recipient", 404)
+        target = _named_recipient(c, v, thread, actor, to_actor)
         if not str(target).startswith(OUTSIDE_PREFIXES) and not audience_has(c, thread, target):
             raise Problem("forbidden", "That teammate cannot read this thread. Add them first.", 403)
         _require_agent_write(c, v, actor, target, in_reply_to, asker)
