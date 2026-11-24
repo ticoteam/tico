@@ -2591,10 +2591,7 @@ impl Runner {
                 self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)
             })).await?;
             if let Some(repository) = &burst_repository {
-                let revision = crate::readiness::burst_checkout_revision(&lanes.main_path, repository).await;
-                if !revision.is_some_and(|actual| {
-                    attempt["burst_revision"].as_str().is_none_or(|expected| actual == expected)
-                }) {
+                if !crate::readiness::burst_checkout_ready(&lanes.main_path, repository).await {
                     burst_checkout = Some("mismatch");
                     self.events.ask(&["heartbeat"]);
                     return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
@@ -2783,7 +2780,7 @@ impl Runner {
                     // A checkout with no upstream yet: give its history a home first (service.py prepare_history), and
                     // run no turn on a copy that shares no history with GitHub's.
                     // A personal claim publishes nothing, the shared checkout's history included.
-                    let (published, detail) = if personal_claim || burst_repository.is_some() {
+                    let (published, detail) = if personal_claim {
                         ("skipped", String::new())
                     } else {
                         self.publish_before_start(&start_attempt, &flags, &bot, &execution_path, place_env).await?
@@ -2817,24 +2814,6 @@ impl Runner {
                     self.place_turn(p, &mut attempt, place_env, &flags.lost).await.map_err(Fail::runtime)
                 }).await
             }).await?;
-            if let Some(repository) = &burst_repository {
-                // Pulling during placement can advance the checkout after the first check.
-                let valid = match crate::readiness::burst_checkout_revision(&p.main_path, repository).await {
-                    Some(actual) => match attempt["burst_revision"].as_str() {
-                        Some(expected) if actual == expected => {
-                            crate::readiness::burst_revision_reachable(&p.main_path, place_env, expected).await
-                        }
-                        Some(_) => false,
-                        None => true,
-                    },
-                    None => false,
-                };
-                if !valid {
-                    burst_checkout = Some("mismatch");
-                    self.events.ask(&["heartbeat"]);
-                    return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
-                }
-            }
             conv.push_str(placed);
             if let Some(old) = legacy_conv.as_mut() {
                 old.push_str(placed);
@@ -2860,13 +2839,11 @@ impl Runner {
             }
             // The instruction file the harness loads by itself, AGENTS.md with Tico's standing section, before the
             // turn starts (crate::instructions): an older AGENT.md and state.md are moved over in one commit.
-            if burst_repository.is_none() {
-                let app = self.names().await.app;
-                match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
-                    Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
-                    Ok(false) => {}
-                    Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
-                }
+            let app = self.names().await.app;
+            match crate::instructions::ensure(&execution_path, &env, &app, stateless).await {
+                Ok(true) => log(&format!("Tico runner: {bot}: brought its instruction file up to date ({})", crate::instructions::FILE)),
+                Ok(false) => {}
+                Err(e) => log(&format!("Tico runner: {bot}: could not bring its instruction file up to date: {e}")),
             }
             // git off the async threads: it can take a moment on a large checkout.
             memory_before = {
@@ -3524,7 +3501,7 @@ impl Runner {
         // A turn whose tools ran is never taken again by a fallback, named or the company's: it may already have
         // changed things.
         let fallback_allowed = !paid_by
-            && burst_checkout.is_none()
+            && (burst_checkout.is_none() || !self.drain.burst_managed())
             && !voice_reply
             && !native_control
             && continuing.is_empty()

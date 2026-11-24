@@ -90,7 +90,7 @@ impl Drain {
     /// Anchor the remaining time to the request's send time. A lost reply leaves the last cutoff armed.
     pub fn confirm_burst(&self, sent: Instant, lease: crate::wire::BurstLease) {
         let mut s = self.inner.lock().unwrap();
-        let cutoff = sent
+        let mut cutoff = sent
             .checked_add(Duration::from_secs(lease.run_seconds))
             .unwrap_or(sent);
         if let Some(old) = &mut s.burst {
@@ -98,10 +98,10 @@ impl Drain {
                 return;
             }
             if lease.confirmed_at_ms == old.confirmed_at_ms {
-                old.cutoff = old.cutoff.min(cutoff);
                 old.draining |= lease.draining;
                 return;
             }
+            cutoff = old.cutoff.max(cutoff);
         }
         s.burst = Some(Burst {
             confirmed_at_ms: lease.confirmed_at_ms,
@@ -241,7 +241,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn burst_deadline_survives_a_lost_or_stale_reply() {
+    fn burst_deadline_survives_a_lost_stale_or_shorter_reply() {
         let drain = Drain::new(None);
         let sent = Instant::now();
         drain.confirm_burst(
@@ -258,8 +258,16 @@ mod tests {
         drain.confirm_burst(
             fence,
             crate::wire::BurstLease {
+                confirmed_at_ms: 1,
+                run_seconds: 0,
+                draining: true,
+            },
+        );
+        drain.confirm_burst(
+            fence,
+            crate::wire::BurstLease {
                 confirmed_at_ms: 2,
-                run_seconds: 165,
+                run_seconds: 30,
                 draining: true,
             },
         );

@@ -1178,21 +1178,12 @@ pub async fn preflight(
         row.insert("tools".into(), json!(tools));
         row.insert("mail_request".into(), mail_request);
         row.insert("warnings".into(), json!(warnings));
-        let ticket = entry["burst_preparation"].as_str();
-        let expected_revision = entry["burst_revision"].as_str();
-        let report_revision =
-            crate::follow::feature("burst_revision") && entry["burst_guest"] != true;
-        if (ticket.is_some() || report_revision) && repository_present && configuration_valid {
-            let repository = text_of(&entry["repository"]);
-            if let Some(revision) = burst_checkout_revision(&path, &repository).await {
-                if report_revision {
-                    row.insert("burst_revision".into(), json!(revision));
-                }
-                if let Some(ticket) =
-                    ticket.filter(|_| expected_revision.is_none_or(|rev| rev == revision))
-                {
-                    row.insert("burst_preparation".into(), json!(ticket));
-                }
+        if let Some(ticket) = entry["burst_preparation"].as_str() {
+            if repository_present
+                && configuration_valid
+                && burst_checkout_ready(&path, &text_of(&entry["repository"])).await
+            {
+                row.insert("burst_preparation".into(), json!(ticket));
             }
         }
         rows.push(row);
@@ -1203,63 +1194,17 @@ pub async fn preflight(
 /// A checkout a Burst turn may start on: the right repository, a clean tree and no commit that origin lacks. A turn
 /// that stopped part way can leave unscanned local commits; such a checkout is never prepared or started, so the
 /// work stays on Base and the commits wait for recovery instead of riding out with a later turn's push.
-#[cfg(test)]
 pub async fn burst_checkout_ready(path: &Path, repository: &str) -> bool {
-    burst_checkout_revision(path, repository).await.is_some()
-}
-
-pub async fn burst_checkout_revision(path: &Path, repository: &str) -> Option<String> {
-    if !burst_checkout_matches(path, repository).await {
-        return None;
-    }
-    let (true, head) = git(path, &["rev-parse", "--verify", "HEAD"]).await? else {
-        return None;
-    };
-    let head = head.trim();
-    if git(path, &["status", "--porcelain"])
-        .await
-        .is_some_and(|(ok, out)| ok && out.trim().is_empty())
+    burst_checkout_matches(path, repository).await
+        && git(path, &["status", "--porcelain"])
+            .await
+            .is_some_and(|(ok, out)| ok && out.trim().is_empty())
         && git(
             path,
-            &["rev-list", "--count", head, "--not", "--remotes=origin"],
+            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
         )
         .await
         .is_some_and(|(ok, out)| ok && out.trim() == "0")
-        && git(path, &["rev-parse", "--verify", "HEAD"])
-            .await
-            .is_some_and(|(ok, current)| ok && current.trim() == head)
-    {
-        return Some(head.to_owned());
-    }
-    None
-}
-
-/// Verify reachability against the default branch that origin actually advertises.
-pub async fn burst_revision_reachable(path: &Path, env: &Env, revision: &str) -> bool {
-    let env = crate::safegit::environment(env);
-    let Ok(remote) = crate::gitrun::git_as_bot(
-        path,
-        &env,
-        &["ls-remote", "--exit-code", "origin", "HEAD"],
-        5,
-    )
-    .await
-    else {
-        return false;
-    };
-    let Some(tip) = remote
-        .stdout
-        .trim()
-        .strip_suffix("\tHEAD")
-        .filter(|tip| tip.len() == 40 && tip.bytes().all(|b| b.is_ascii_hexdigit()))
-    else {
-        return false;
-    };
-    remote.ok()
-        && (tip == revision
-            || git(path, &["merge-base", "--is-ancestor", revision, tip])
-                .await
-                .is_some_and(|(ok, _)| ok))
 }
 
 pub async fn burst_checkout_matches(path: &Path, repository: &str) -> bool {
@@ -1305,7 +1250,6 @@ pub fn document(
             "repository",
             "repository_present",
             "repository_revision",
-            "burst_revision",
             "configuration_valid",
             "problems",
             "profile",

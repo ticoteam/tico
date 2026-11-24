@@ -54,7 +54,7 @@ KEY = "_burst:"
 PREPARATION = "burst_preparation_v1"
 LEASE = "burst_lease_v1"
 REVOKING = "burst-return:"
-CHECKOUT_BLOCK = "burst-checkout:"
+MISMATCH = "burst-mismatch:"
 
 
 def enabled(c: Connection) -> bool:
@@ -86,24 +86,29 @@ def allowed_payment(c: Connection, payment: "Payment | None") -> bool:
     )
 
 
-def idle_slots(c: Connection, executor: "Execution", runner_owner: str) -> Iterable[Any]:
-    from . import execution
+def idle_slots(c: Connection, executor: "Execution", runner_owner: str, *, scaling: bool = True) -> Iterable[Any]:
+    from . import cloud_machines, execution
 
     work: Any = execution
+    machines: Any = cloud_machines
     slots = c.execute(
         "SELECT m.bot AS machine_key,r.* FROM cloud_machines m JOIN runners_with_state r ON r.id=m.runner_id "
         "WHERE m.state='running' AND r.revoked_at IS NULL AND r.owner_id=? AND r.last_seen_at>? "
         "AND EXISTS (SELECT 1 FROM json_each(r.capabilities) WHERE value=?) "
         "AND NOT EXISTS (SELECT 1 FROM attempts a WHERE a.runner_id=r.id AND a.state IN ('leased','running')) "
-        "AND NOT EXISTS (SELECT 1 FROM burst_guests g WHERE g.runner_id=r.id) "
+        "AND (? OR NOT EXISTS (SELECT 1 FROM burst_guests g WHERE g.runner_id=r.id)) "
         "ORDER BY CAST(substr(m.bot,8) AS INTEGER),m.bot",
-        (runner_owner, runner_online.cutoff(), PREPARATION),
+        (runner_owner, runner_online.cutoff(), PREPARATION, not scaling),
     )
     for runner in slots:
         if (
             burst_key(runner["machine_key"])
             and not any(work.claimed_busy(runner["id"]))
-            and slot_admission(c, executor, runner, burst=True) is not None
+            and (
+                slot_admission(c, executor, runner, burst=True) is not None
+                if scaling
+                else not machines.held(c, runner["id"])
+            )
         ):
             yield runner
 
@@ -140,7 +145,9 @@ def preparation_slot(
     machines: Any = cloud_machines
     for runner in idle_slots(c, executor, owner):
         slot = runner["id"]
-        if entry := candidate(c, executor, runner, job=job, demand=True, company_paid=machines.burst_managed(c, slot)):
+        if entry := candidate(
+            c, executor, runner, job=job, demand=True, company_paid=machines.burst_managed(c, slot), check_mismatch=True
+        ):
             return slot, entry
     return None, None
 
@@ -158,10 +165,13 @@ def offer(
 
     machines: Any = cloud_machines
     work: Any = execution
+    scaling = autoscale(c)
     if (
         (prepare and not target(c, runner))
         or PREPARATION not in _H._json(runner["capabilities"], [])  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage] - capabilities can already be decoded
-        or slot_admission(c, executor, runner, burst=True) is None
+        or not runner_online.is_online(runner["last_seen_at"])
+        or scaling
+        and slot_admission(c, executor, runner, burst=True) is None
     ):
         return None
     rid = runner["id"]
@@ -174,10 +184,10 @@ def offer(
         return None
     # Preparing on one slot avoids cloning the same checkout across idle workers.
     if prepare:
-        if autoscale(c):
+        if scaling:
             slot, entry = preparation_slot(c, executor, runner["owner_id"])
             return entry["burst"] if entry and slot == rid else None
-        if rid != next((r["id"] for r in idle_slots(c, executor, runner["owner_id"])), None):
+        if rid != next((r["id"] for r in idle_slots(c, executor, runner["owner_id"], scaling=False)), None):
             return None
     return candidate(
         c, executor, runner, only=only, skip=skip, prepare=prepare, company_paid=machines.burst_managed(c, rid)
@@ -195,6 +205,7 @@ def candidate(
     prepare: bool = True,
     demand: bool = False,
     company_paid: bool = False,
+    check_mismatch: bool = False,
 ) -> Row | None:
     from . import cloud_machines, relationship_runs
     from .models import Claim
@@ -257,6 +268,8 @@ def candidate(
         executor_store: Any = executor.store  # pyright: ignore[reportUnknownMemberType] - Execution receives the server's store
         job: Row = dict(row)
         assignment: Row = dict(bots[row["bot_id"]])
+        if company_paid and (check_mismatch or not prepare) and mismatch(c, runner, row["bot_id"]):
+            return None
         entry = _offer(c, executor_store.settings, runner, document, {**job, **assignment}, company_paid=company_paid)
         if entry and (prepare or ready(runner, entry)):
             if demand:
@@ -309,15 +322,9 @@ def _offer(
     if shares.source_of(declared) or not (repo := work.runner_repository(c, settings, bot)):
         return None
     _, report = work._reported(c, base, bot)
-    revision = report.get("burst_revision")
-    if company_paid and (
-        not revision or report.get("repository_present") is not True or report.get("configuration_valid") is not True
+    if report.get("published") is not True or (
+        company_paid and (report.get("repository_present") is not True or report.get("configuration_valid") is not True)
     ):
-        return None
-    if not revision and report.get("published") is not True:
-        return None
-    blocked = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CHECKOUT_BLOCK + bot,)).fetchone()
-    if blocked and (not revision or revision == blocked[0]):
         return None
     message = H.message(c, job["message_id"])
     room = H.conversation(c, message["conversation_id"]) if message else None
@@ -356,7 +363,7 @@ def _offer(
     if not tools_ready(document, runtime, harness) or not login_ready:
         return None
     ticket = hashlib.sha256(
-        encode([rid, base, job["generation"], bot, repo, checkout, config["runtime"], harness, revision]).encode()
+        encode([rid, base, job["generation"], bot, repo, checkout, config["runtime"], harness]).encode()
     ).hexdigest()
     return {
         "bot": bot,
@@ -369,7 +376,6 @@ def _offer(
         "computer_logins_v1": True,
         "burst_preparation": ticket,
         "base_runner": base,
-        **({"burst_revision": revision} if revision else {}),
     }
 
 
@@ -382,7 +388,6 @@ def ready(runner: Any, entry: Row, config: Row | None = None) -> bool:
     checkout = entry["config"]
     return (
         check.get("burst_preparation") == entry["burst_preparation"]
-        and (not entry.get("burst_revision") or check.get("burst_revision") == entry["burst_revision"])
         and check.get("repository_present") is True
         and check.get("configuration_valid") is True
         and (check.get("runtime"), check.get("harness")) == (checkout.get("runtime"), resolve_harness(checkout))
@@ -431,11 +436,25 @@ def borrowed(attempt: Any) -> bool:
     return wake.get("burst") is True
 
 
-def suppress_checkout(c: Connection, attempt: Any) -> None:
-    wake: Row = _H._json(attempt["wake"], {}) or {}  # pyright: ignore[reportUnknownMemberType, reportPrivateUsage] - wake can already be decoded
+def checkout_readiness(readiness: Any, bot: str) -> str:
+    check = dict(bot_readiness(readiness_document(readiness), bot))
+    # Returning to Base advances the assignment generation and changes its ticket.
+    check["burst_preparation"] = bool(check.get("burst_preparation"))
+    return hashlib.sha256(encode(check).encode()).hexdigest()
+
+
+def mismatch(c: Connection, runner: Any, bot: str) -> bool:
+    blocked = c.execute(
+        "SELECT value FROM registry_metadata WHERE key=?", (f"{MISMATCH}{runner['id']}:{bot}",)
+    ).fetchone()
+    return bool(blocked and blocked[0] == checkout_readiness(runner["readiness"], bot))
+
+
+def record_mismatch(c: Connection, attempt: Any, readiness: str) -> None:
+    rid, bot = attempt["runner_id"], attempt["bot_id"]
     c.execute(
         "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-        (CHECKOUT_BLOCK + attempt["bot_id"], wake.get("burst_revision") or ""),
+        (f"{MISMATCH}{rid}:{bot}", readiness),
     )
 
 
@@ -625,10 +644,16 @@ def install(app: FastAPI, store: Any, auth: Any, mutate: Any) -> None:
         def put_setting(request: Request, body: plan_exits.ChangeRouting) -> dict[str, bool]:
             def work(c: Connection) -> dict[str, bool]:
                 if setting == AUTOSCALE and body.enabled:
-                    if plan_exits.stored_flags(c, SETTING).get(SETTING) != "true":
+                    flags = plan_exits.stored_flags(c, SETTING, AUTOSCALE)
+                    if flags.get(SETTING) != "true":
                         raise Problem("burst_rehome_required", "Enable Burst re-home before autoscaling.", 409)
                     if not machines.burst_budget(c):
                         raise Problem("daily_budget_required", "Configure a daily Burst budget in HQ first.", 409)
+                    if flags.get(AUTOSCALE) != "true":
+                        c.execute(
+                            "DELETE FROM registry_metadata WHERE key IN (?,?)",
+                            (machines.BURST_FAILURES, machines.BURST_NEXT),
+                        )
                 c.execute(
                     "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     (setting, "true" if body.enabled else "false"),

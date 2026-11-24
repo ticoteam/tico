@@ -4168,7 +4168,7 @@ class Execution:
             # Computers that existed before these defaults keep what they had.
             c.execute(
                 "INSERT INTO runners(id,label,owner_id,token_hash,created_at,platform,device_id,accepts_member_bots,"
-                "screen_default_pending,cloud_key) VALUES(?,?,?,?,?,?,?,?,1,?)",
+                "screen_default_pending) VALUES(?,?,?,?,?,?,?,?,1)",
                 (
                     rid,
                     label,
@@ -4178,7 +4178,6 @@ class Execution:
                     body.platform,
                     body.device_id,
                     int(cloud_machines.opens(cloud_bot)) if cloud_bot else 1,
-                    cloud_bot or "",
                 ),
             )
             c.execute(
@@ -4208,7 +4207,6 @@ class Execution:
         offered_before = screen.available(row)
         stored = (row["version"], row["platform"], row["capacity"], row["readiness"], row["capabilities"])
         restart_since, checkout_before = row["restart_since"], row["checkout"]
-        cloud_key = row["cloud_key"]
         del row
         from .subscriptions import record
 
@@ -4322,14 +4320,6 @@ class Execution:
             self.readiness_reported(c, who.runner_id, readiness)
         if body.release:
             runner_versions.record(c, who.runner_id, body)
-        if (
-            reported != stored
-            and compute_pool.enabled(c)
-            and (cloud_key == cloud_machines.SHARED or compute_pool.burst_key(cloud_key))
-        ):
-            from . import events
-
-            events.tell_runners(c, "assignments", "SELECT ? AS rid", (who.runner_id,))
         if body.mail_agent_instructions:
             from .views import roster
 
@@ -6001,8 +5991,8 @@ class Execution:
         wake = wake_presets.record(c, job, msg, row["bot_id"], forked=bool(fork_thread))
         if burst:
             wake["burst"] = True
-            if revision := burst.get("burst_revision"):
-                wake["burst_revision"] = revision
+            if cloud_machines.burst_managed(c, who.runner_id):
+                wake["burst_readiness"] = compute_pool.checkout_readiness(runner["readiness"], row["bot_id"])
         c.execute(
             "UPDATE attempts SET wake=?,handed_runtime=?,handed_model=? WHERE id=?", (json.dumps(wake), *handed, aid)
         )
@@ -6453,12 +6443,7 @@ class Execution:
                     # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                     "gateway": gateway_connection.wanted(config),
                     "generation": generation,
-                    **(
-                        {"burst_repository": burst["repository"]}
-                        | ({"burst_revision": burst["burst_revision"]} if burst.get("burst_revision") else {})
-                        if burst
-                        else {}
-                    ),
+                    **({"burst_repository": burst["repository"]} if burst else {}),
                     "lease_until": until,
                     **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                     # The claim granted the turn its start place (start_places.admit): its runner keeps it without asking
@@ -7888,6 +7873,7 @@ class Execution:
         row = self.attempt(c, who, aid, final=True, voice_control=True)
         burst = compute_pool.borrowed(row)
         checkout = body.burst_checkout if burst else None
+        burst_readiness = (H._json(row["wake"], {}) or {}).get("burst_readiness") if burst else None
         stored_source = (
             (H._json(row["result"], {}) or {}).get("source_continuation")
             if burst and (checkout or body.outcome != "completed")
@@ -7953,11 +7939,12 @@ class Execution:
             and not row["writes"]
             and not row["stop_requested_at"]
             and (checkout == "mismatch" or planned)
+            and burst_readiness
         ):
             if row["last_seq"] != body.last_seq:
                 raise Problem("event_gap", "Upload all events before completing the attempt", 409)
             if checkout == "mismatch" and self.current_owner(c, who, row):
-                compute_pool.suppress_checkout(c, row)
+                compute_pool.record_mismatch(c, row, burst_readiness)
             if late:
                 # Expiry already requeued the job. A late report must not overwrite a newer attempt's state.
                 c.execute(

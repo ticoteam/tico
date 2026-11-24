@@ -17,14 +17,13 @@ from backend import (
 from backend.scheduler import Scheduler
 from backend.store import H, digest, encode
 from backend.tests.helpers.api import assign, claim, expire, get, post, put, runner, settled
-from backend.tests.helpers.cloud_machines import FakeHQ
+from backend.tests.helpers.cloud_machines import SIZES, FakeHQ
 from backend.tests.helpers.login_holds import events
 from backend.tests.helpers.model_subscriptions import add, on, pick
 
 SWITCH = "settings/burst-rehome"
 AUTOSCALE = "settings/burst-autoscale"
 PREP = "runners/assignments?burst=true"
-REVISION = "a" * 40
 
 
 def heartbeat(
@@ -56,9 +55,8 @@ def heartbeat(
     }
     if entry:
         bot["burst_preparation"] = entry["burst_preparation"]
-        revision = entry.get("burst_revision", revision)
     if revision:
-        bot["burst_revision"] = revision
+        bot["repository_revision"] = revision
     body = {
         "version": "test",
         "platform": "test",
@@ -409,13 +407,14 @@ def test_routed_plan_cannot_claim_after_preparation(api, fleet):
     assert placement(store) == (base["runner_id"], 1)
 
 
-def test_unstarted_checkout_mismatch_returns_to_base_and_waits_for_a_new_revision(api, fleet):
+def test_managed_checkout_mismatch_returns_to_base_and_waits_for_worker_readiness(api, fleet, scaler):
     store, base, burst = fleet
-    heartbeat(api, base, revision=REVISION)
-    entry = queue_prepared(api, burst)
+    enable_scaler(api, store)
+    queue(api)
+    (entry,) = get(api, PREP, token=burst["token"])
+    prepared = heartbeat(api, burst, entry, lease=True, revision="a" * 12)
     attempt = claim(api, burst, "ops")
     aid, job = attempt["id"], attempt["job_id"]
-    assert attempt["burst_revision"] == entry["burst_revision"] == REVISION
     post(
         api,
         f"attempts/{aid}/complete",
@@ -426,10 +425,11 @@ def test_unstarted_checkout_mismatch_returns_to_base_and_waits_for_a_new_revisio
     with store.read() as c:
         assert not compute_pool.recovery_hold(c, aid)
         assert execution.failed_starts(c, job) == 0
-    heartbeat(api, base, revision=REVISION)
+    heartbeat(api, base, runtime="pi", revision="b" * 12)
     assert get(api, PREP, token=burst["token"]) == []
-    heartbeat(api, base, revision="b" * 40)
-    assert get(api, PREP, token=burst["token"])[0]["burst_revision"] == "b" * 40
+    prepared["readiness"]["bots"]["ops"]["repository_revision"] = "c" * 12
+    post(api, "runners/heartbeat", prepared, token=burst["token"])
+    assert get(api, PREP, token=burst["token"])[0]["bot"] == "ops"
     assert claim(api, base, "ops")["job_id"] == job
 
 
@@ -620,6 +620,8 @@ def scaler(api, fleet, monkeypatch):
     monkeypatch.setenv("TICO_GATEWAY_KEY", "synthetic-test-key")
     store, base, burst = fleet
     hq = FakeHQ()
+    hq.caps["daily_budget_usd"] = 1.25
+    hq.sizes = [{**size, "cpu": 8} for size in SIZES if size["name"] == "large"]
     worker = hq.create("_burst:1", "large", "synthetic", "https://acme.example")
     hq._machine(worker["id"], state="running")
     hq.calls.clear()
@@ -630,7 +632,7 @@ def scaler(api, fleet, monkeypatch):
         cloud_machines.save(
             c, "_burst:1", machine_id=worker["id"], machine_size="large", size="large", active_at=clock[0]
         )
-    heartbeat(api, base, runtime="pi", revision=REVISION)
+    heartbeat(api, base, runtime="pi")
     heartbeat(api, burst, runtime="pi", lease=True)
     return api.app.state.cloud_machines, hq, clock
 
@@ -658,7 +660,7 @@ def enable_scaler(api, store):
 def saturate_base(api, store, base):
     on(api, "finance", "codex", providers.recommended("openai", "codex"))
     assign(api, base, "finance")
-    report = heartbeat(api, base, runtime="pi", revision=REVISION)["readiness"]["bots"]["ops"]
+    report = heartbeat(api, base, runtime="pi")["readiness"]["bots"]["ops"]
     heartbeat(api, base, runtime="pi", bots={"ops": report, "finance": {**report, "runtime": "codex"}})
     with store.transaction() as c:
         c.execute("UPDATE runners SET turns_at_once=1 WHERE id=?", (base["runner_id"],))
@@ -694,6 +696,8 @@ def test_autoscale_waits_for_saturation_prefers_parked_and_backs_off_for_hq_cap(
     with store.transaction() as c:
         cloud_machines.save(c, "_burst:1", state="stopped")
     hq._machine(worker, state="stopped")
+    manager.sync(hq, clock[0])
+    hq.calls.clear()
     queue(api)
     manager.scale_burst(hq, clock[0])
     clock[0] += 31
@@ -718,18 +722,21 @@ def test_autoscale_waits_for_saturation_prefers_parked_and_backs_off_for_hq_cap(
     assert not hq.calls
     hq.fail["start"] = [cloud_machines.Refused("daily_budget", 429)]
     clock[0] += 1
+    manager.sync(hq, clock[0])
     manager.scale_burst(hq, clock[0])
     assert [call for call in hq.calls if call[0] == "start"] == [("start", worker, None)]
     clock[0] += cloud_machines.FROZEN_RETRY - 1
     manager.scale_burst(hq, clock[0])
     assert hq.actions() == ["start"]
     clock[0] += 1
+    manager.sync(hq, clock[0])
     manager.scale_burst(hq, clock[0])
     clock[0] += 31
     manager.scale_burst(hq, clock[0])
     assert [call for call in hq.calls if call[0] == "start"] == [
         ("start", worker, None)
     ] * 2  # The second launch remains unresolved.
+    assert len({launch["request_id"] for launch in hq.launch_options}) == 2
 
 
 def test_autoscale_avoids_hq_keys_and_keeps_a_lost_create_intent(api, fleet, scaler):
@@ -742,6 +749,7 @@ def test_autoscale_avoids_hq_keys_and_keeps_a_lost_create_intent(api, fleet, sca
     queue(api)
     manager.scale_burst(hq, clock[0])
     clock[0] += 30
+    manager.sync(hq, clock[0])
     hq.fail["create"] = [cloud_machines.Refused("unreachable")]
     manager.scale_burst(hq, clock[0])
     assert [(call[0], call[1], call[2]) for call in hq.calls if call[0] == "create"] == [
@@ -775,7 +783,7 @@ def test_autoscale_fences_an_in_flight_resume_through_opt_out(api, fleet, scaler
     assert manager.step(hq, "_burst:1", clock[0]) == "stop"
     with store.read() as c:
         current = cloud_machines.row(c, "_burst:1")
-        assert not current["burst_managed"] and current["drain_started_at"] is None
+        assert current["burst_managed"] and current["drain_started_at"] is None
 
 
 def test_autoscale_backs_off_company_after_never_enrolled_worker(api, fleet, scaler):
@@ -784,7 +792,7 @@ def test_autoscale_backs_off_company_after_never_enrolled_worker(api, fleet, sca
     enable_scaler(api, store)
     worker = next(iter(hq.machines))
     with store.transaction() as c:
-        cloud_machines.save(c, "_burst:1", enroll_by=clock[0], runner_id=None)
+        cloud_machines.save(c, "_burst:1", enroll_by=clock[0], runner_id=None, burst_launch_at=clock[0] - 960)
     assert manager.step(hq, "_burst:1", clock[0]) == "delete"
     with store.read() as c:
         assert (
@@ -803,15 +811,90 @@ def test_autoscale_backs_off_company_after_never_enrolled_worker(api, fleet, sca
     assert hq.machines[worker]["state"] == "deleted"
 
 
+def test_launch_failures_stop_scaling_across_keys_until_reenabled(api, fleet, scaler):
+    store, base, _ = fleet
+    manager, hq, clock = scaler
+    enable_scaler(api, store)
+    saturate_base(api, store, base)
+    queue(api)
+    old = next(iter(hq.machines))
+    hq._machine(old, state="failed")
+    manager.sync(hq, clock[0])
+    manager.scale_burst(hq, clock[0])
+    clock[0] += cloud_machines.BURST_WAIT
+    for count in range(1, 4):
+        manager.sync(hq, clock[0])
+        manager.scale_burst(hq, clock[0])
+        mid = next(reversed(hq.machines))
+        assert hq.machines[mid]["key"] == f"_burst:{count + 1}"
+        hq._machine(mid, state="stopped" if count == 2 else "failed")
+        manager.sync(hq, clock[0])
+        manager.sync(hq, clock[0])
+        with store.read() as c:
+            assert cloud_machines.burst_failures(c) == count
+            assert c.execute(
+                "SELECT count(*) FROM messages WHERE kind='notice' AND json_extract(refs,'$.cloud_machine')=?",
+                (hq.machines[mid]["key"],),
+            ).fetchone()[0] == int(count == 3)
+        clock[0] += cloud_machines.BURST_FAILURE_WAIT
+    manager.sync(hq, clock[0])
+    manager.scale_burst(hq, clock[0])
+    put(api, AUTOSCALE, {"enabled": True})
+    manager.scale_burst(hq, clock[0])
+    assert hq.actions() == ["create"] * 3
+    put(api, AUTOSCALE, {"enabled": False})
+    put(api, AUTOSCALE, {"enabled": True})
+    manager.scale_burst(hq, clock[0])
+    assert hq.actions() == ["create"] * 4
+
+
+def test_ready_worker_resets_launch_failures(api, fleet, scaler):
+    store, _, _ = fleet
+    manager, hq, clock = scaler
+    enable_scaler(api, store)
+    with store.transaction() as c:
+        cloud_machines.save(c, "_burst:1", burst_launch_at=clock[0])
+        c.execute("INSERT INTO registry_metadata VALUES(?, '2')", (cloud_machines.BURST_FAILURES,))
+    manager.step(hq, "_burst:1", clock[0])
+    with store.read() as c:
+        assert cloud_machines.burst_failures(c) == 0
+        assert cloud_machines.row(c, "_burst:1")["burst_launch_at"] is None
+
+
+def test_failed_parked_disk_is_replaced_without_adopting_a_pilot(api, fleet, scaler):
+    store, base, _ = fleet
+    manager, hq, clock = scaler
+    offer_budget(store)
+    put(api, SWITCH, {"enabled": True})
+    put(api, AUTOSCALE, {"enabled": True})
+    pilot = next(iter(hq.machines))
+    hq._machine(pilot, state="stopped")
+    parked = hq.create("_burst:2", "large", "synthetic", "https://acme.example")["id"]
+    machine(api, "_burst:2")
+    with store.transaction() as c:
+        cloud_machines.save(c, "_burst:2", machine_id=parked, state="stopped", burst_managed=1)
+    hq._machine(parked, state="failed")
+    manager.sync(hq, clock[0])
+    with store.read() as c:
+        assert cloud_machines.row(c, "_burst:2")["runner_id"] is None
+        assert cloud_machines.burst_failures(c) == 0
+    hq.calls.clear()
+    saturate_base(api, store, base)
+    queue(api)
+    manager.scale_burst(hq, clock[0])
+    clock[0] += cloud_machines.BURST_WAIT
+    manager.scale_burst(hq, clock[0])
+    assert hq.actions() == ["create"]
+    assert hq.calls[-1][1] == "_burst:3"
+
+
 def test_autoscale_stops_a_worker_that_never_confirms_lease_support(api, fleet, scaler):
     store, _, burst = fleet
     manager, hq, clock = scaler
     enable_scaler(api, store)
     heartbeat(api, burst, runtime="pi")
     with store.transaction() as c:
-        cloud_machines.save(
-            c, "_burst:1", started_at=cloud_machines.stamp(clock[0] - cloud_machines.CREATE_HOLD - 1), ttl_s=None
-        )
+        cloud_machines.save(c, "_burst:1", burst_launch_at=clock[0] - cloud_machines.CREATE_HOLD - 1, ttl_s=None)
     assert manager.step(hq, "_burst:1", clock[0]) is None
     with store.read() as c:
         assert cloud_machines.row(c, "_burst:1")["drain_started_at"] == clock[0]
@@ -924,20 +1007,28 @@ def test_autoscale_lost_renewal_cannot_extend_the_reported_cutoff(api, fleet, sc
         assert cloud_machines.held(c, burst["runner_id"])
 
 
-def test_autoscale_low_confirmed_renewal_fences_the_worker(api, fleet, scaler, monkeypatch):
+@pytest.mark.parametrize("ttl", [0, 30])
+def test_shorter_renewal_preserves_cutoff_until_it_runs_low(api, fleet, scaler, monkeypatch, ttl):
     store, _, burst = fleet
     manager, hq, clock = scaler
     enable_scaler(api, store)
+    with store.transaction() as c:
+        cloud_machines.save(c, "_burst:1", ttl_s=600, heartbeat_at=clock[0])
     queue(api)
     (entry,) = get(api, PREP, burst["token"])
     prepare_body = heartbeat(api, burst, entry, lease=True)
+    original = int(clock[0] * 1000)
     clock[0] += cloud_machines.HEARTBEAT + 1
-    monkeypatch.setattr(hq, "heartbeat", lambda _: 30)
+    monkeypatch.setattr(hq, "heartbeat", lambda _: ttl)
+    assert manager.step(hq, "_burst:1", clock[0]) == "heartbeat"
+    report = post(api, "runners/heartbeat", prepare_body, burst["token"])
+    assert report["burst_lease"] == {"confirmed_at_ms": original, "run_seconds": 479, "draining": False}
+    clock[0] += 300
     assert manager.step(hq, "_burst:1", clock[0]) == "heartbeat"
     assert claim(api, burst, "ops") is None
     report = post(api, "runners/heartbeat", prepare_body, burst["token"])
     assert report["burst_lease"] == {
-        "confirmed_at_ms": int(clock[0] * 1000),
-        "run_seconds": 0,
+        "confirmed_at_ms": original,
+        "run_seconds": 179,
         "draining": True,
     }

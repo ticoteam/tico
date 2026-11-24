@@ -131,19 +131,6 @@
      "default": null,
      "title": "Burst Preparation"
     },
-    "burst_revision": {
-     "anyOf": [
-      {
-       "pattern": "^[0-9a-f]{40}$",
-       "type": "string"
-      },
-      {
-       "type": "null"
-      }
-     ],
-     "default": null,
-     "title": "Burst Revision"
-    },
     "commands": {
      "items": {
       "$ref": "#/$defs/SlashCommand"

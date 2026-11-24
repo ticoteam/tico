@@ -1488,9 +1488,6 @@ class MailSettingsUpdate(Contract):
 class BotReadiness(GoalReadiness):
     ready: bool
     burst_preparation: str | None = Field(default=None, max_length=64, exclude_if=lambda value: value is None)
-    burst_revision: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")] | None = Field(
-        default=None, exclude_if=lambda value: value is None
-    )
     runtime: str = Field(default="", max_length=100)
     harness: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)

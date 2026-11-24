@@ -34,10 +34,10 @@ first, then `burst_preparation_v1`, then `model_exit_codex_v1`, then `model_exit
 or turns: 0.6.250 to 0.6.253 report `antigravity_plan_v1` but run agy headless.
 
 Managed Burst workers receive `burst_lease` on heartbeat and claim replies. The runner anchors `run_seconds`
-to the request's monotonic send time and keeps the prior deadline if the reply is lost. The hub reserves the
+to the request's monotonic send time. It keeps the later deadline after renewal and retains it if a reply is lost. The hub reserves the
 final 60 seconds of confirmed HQ lease time for publishing and settlement. The `draining` flag closes new
 starts. When the hub's drain fence wins the race with `/started`, it answers `burst_draining` and the runner
-reports a planned hand-back. The hub includes Base’s published `burst_revision` on prepared claims when it is known. The runner checks that exact revision before acknowledging start. The hub requires `burst_lease_v1` before it assigns a managed Burst worker a turn.
+reports a planned hand-back. The hub requires `burst_lease_v1` before it assigns a managed Burst worker a turn.
 
 When the company enables plan exit routing, a routed Claude or Codex claim carries `delivery: "model_exit"`
 and `exit_generation` in its payer metadata. Both computers report `model_exit_v1` and the turn
