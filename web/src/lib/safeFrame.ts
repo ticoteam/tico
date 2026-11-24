@@ -1,4 +1,4 @@
-/* A page's HTML made safe to draw in a srcdoc frame: a chat's page card, the file viewer's page and a Word document.
+/* A page's HTML made safe to draw in a srcdoc frame: a chat's page card and the file viewer's page.
    Its own policy, first in <head>, lets it load nothing from anywhere (only pictures and fonts written into it as
    data: addresses), so an uploaded page cannot call out while it is shown. Every <meta http-equiv>, <link>, <base>
    and <script> is dropped: a refresh, a resource hint or a base could act before the policy is read, and the frame
