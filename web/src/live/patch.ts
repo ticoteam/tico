@@ -263,10 +263,11 @@ function patchTasks(batch: TaskEvent[]): void {
   }
   if (!batch.length) return;
   for (const [key, data] of queryClient.getQueriesData<TaskList>({ queryKey: ['tasks', 'list'] })) {
-    // a stage by priority is re-read, never spliced: after any read already out, as that read may be from before this
+    // A stage by priority is in the server's order, which any change to its rows may move: whatever touches it reads
+    // it again, after any read already out (that read may be from before this). The patch only shows the change meanwhile.
     const ranked = (key[2] as { sort?: unknown } | undefined)?.sort === 'priority';
     if (!data || !Array.isArray(data.tasks)) {
-      if (ranked && batch.some((e) => !statusOnly(e))) refetchSoon(key, true);
+      if (ranked) refetchSoon(key, true);
       continue;
     }
     const { list, unsure, reset } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
@@ -275,7 +276,7 @@ function patchTasks(batch: TaskEvent[]): void {
       continue;
     }
     if (list !== data) queryClient.setQueryData(key, list);
-    if (unsure) refetchSoon(key, ranked);
+    if (unsure || (ranked && list !== data)) refetchSoon(key, ranked);
   }
   // Flow needs the server's claimability and page boundaries (relationship names come from their own query).
   for (const [key, data] of queryClient.getQueriesData<{ pages: TaskList[] }>({ queryKey: ['tasks', 'flow'] })) {

@@ -236,6 +236,22 @@ describe('tasks', () => {
     }
   });
 
+  it('read a stage by priority again when a row it holds changes, as its place in the order may change', async () => {
+    const ranked = ['tasks', 'list', { status: 'open', pipeline: 'p1', stage: 's1', sort: 'priority' }];
+    queryClient.setQueryData<TaskList>(ranked, { tasks: [task('t1', { stage_id: 's1' }), task('t2', { stage_id: 's1' })], cursor: '900.x' });
+    const reads: number[] = [];
+    const seen = new QueryObserver(queryClient, { queryKey: ranked, queryFn: () => (reads.push(1), { tasks: [], cursor: '901.x' }), staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
+    try {
+      expect(reads).toHaveLength(0);
+      FakeEventSource.last.feed(taskFrame(901, task('t2', { stage_id: 's1', owner_id: 'human:me', version: 2 })));
+      flushFrame();
+      await vi.waitFor(() => expect(reads).toHaveLength(1));
+    } finally {
+      stop();
+    }
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });
