@@ -366,6 +366,14 @@ describe('read-again topics', () => {
     expect(held.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, true, true]);
   });
 
+  it("reads agents' pins again when a task's file or page changes, not their sidebars", () => {
+    const held = [['team', 'tabs', 'ops'], ['team', 'pins', 'ops']];
+    for (const key of held) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(950, 'tasks', { seq: 950, actor: 'bot:ops', at: AT, task_id: 't1', kinds: ['files'] }));
+    flushFrame();
+    expect(held.map((key) => !!queryClient.getQueryState(key)?.isInvalidated)).toEqual([false, true]);
+  });
+
   it('mark the letters list stale on a letters event', () => {
     queryClient.setQueryData(['letters'], []);
     FakeEventSource.last.feed(frame(901, 'letters', { seq: 901, actor: 'human:p1', at: AT }));

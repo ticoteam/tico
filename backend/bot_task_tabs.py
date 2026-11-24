@@ -153,7 +153,9 @@ def read(c, settings, who, bot, ctx=None):
         from . import cards
 
         # Its pages read and checked a chunk at a time (as a place's pins are), not one by one in the loop.
-        cards.prime_pins(ctx, [{"item": w["id"]} for w in widgets if w["id"].startswith("page:")])
+        pages = [{"item": w["id"]} for w in widgets if w["id"].startswith("page:")]
+        if pages:
+            cards.prime_pins(ctx, pages, views=False)
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
     return {
         "bot": bot,
@@ -164,6 +166,22 @@ def read(c, settings, who, bot, ctx=None):
         "updated_at": row["updated_at"] if row else None,
         "updated_by": row["updated_by"] if row else None,
     }
+
+
+def layout(c, auth, settings, who, bot, ctx=None):
+    """The bot's sidebar as the caller may know it, and whether they may read the bot: its saved one when they may,
+    else the defaults, none of its saved lists, pages or cards (as GET /api/v2/bots/{bot})."""
+    if auth.require_see(c, who, bot)["read"]:
+        return read(c, settings, who, bot, ctx), True
+    return {
+        "bot": bot,
+        "tabs": [legacy(t) for t in DEFAULT],
+        "widgets": [dict(w) for w in DEFAULT_WIDGETS],
+        "saved": False,
+        "personal": personal(settings, bot),
+        "updated_at": None,
+        "updated_by": None,
+    }, False
 
 
 def bad(message):
@@ -486,21 +504,8 @@ def install(app, store, auth, mutate, settings, task_views=None):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            if not auth.require_see(c, who, bot)["read"]:
-                return {
-                    "bot": bot,
-                    "tabs": [legacy(t) for t in DEFAULT],
-                    "widgets": [dict(w) for w in DEFAULT_WIDGETS],
-                    "saved": False,
-                    "personal": personal(settings, bot),
-                    "updated_at": None,
-                    "updated_by": None,
-                    "can_edit": False,
-                }
-            return {
-                **read(c, settings, who, bot, Ctx(c, auth, who, settings)),
-                "can_edit": may_edit(c, auth, settings, who, bot),
-            }
+            out, readable = layout(c, auth, settings, who, bot, Ctx(c, auth, who, settings))
+            return {**out, "can_edit": readable and may_edit(c, auth, settings, who, bot)}
 
     @app.get("/api/v2/bots/{bot}/task-tabs/tasks")
     def task_tabs_tasks(request: Request, bot: str, tab: str = "", before: str = "", match_ids: str = ""):
@@ -518,10 +523,10 @@ def install(app, store, auth, mutate, settings, task_views=None):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            auth.require_see(c, who, bot)
+            tabs = layout(c, auth, settings, who, bot)[0]["tabs"]  # one who only sees the bot: the default lists
             visible = auth.task_sql(c, who)
             out, ids = [], []
-            for at, layout_tab in enumerate(read(c, settings, who, bot)["tabs"]):
+            for at, layout_tab in enumerate(tabs):
                 key = layout_tab.get("builtin") or "c" + str(at)
                 if key == "done" or tab and tab != key:
                     continue

@@ -1,8 +1,10 @@
 // The app's boot order: every action registered before a page imports its feature's actions (a cycle otherwise).
 import '@/actions';
+import type * as Actions from '@/actions';
+import { run } from '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { agentsQuery, groupsQuery, type AgentRow, type Group, type SidebarWidget } from './queries';
@@ -10,6 +12,12 @@ import { TeamWho } from './TeamWho';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
 vi.mock('@/live/follow', () => ({ useFollow: vi.fn() }));
+// every action runs as it does in the app; the calls are kept to see which ran
+vi.mock('@/actions', async (importOriginal) => {
+  const real = await importOriginal<typeof Actions>();
+  return { ...real, run: vi.fn(real.run) };
+});
+const previews = () => vi.mocked(run).mock.calls.filter(([id]) => id === 'files.preview').map(([, input]) => input);
 
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
@@ -106,6 +114,7 @@ function seed() {
 beforeEach(() => {
   queryClient.clear();
   seed();
+  vi.mocked(run).mockClear();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -170,7 +179,7 @@ describe("An agent's own sidebar", () => {
     const page = (n: number) => ({ id: `p${n}`, item: `page:f${n}`, position: n, size: 'medium', page: { file_id: `f${n}`, title: `Page ${n}`, bot: '0190-ana', updated_at: '2026-11-20T10:00:00Z', archived: false } });
     open([1, 2, 3, 4].map((n) => w(`page:f${n}`)), pinsReply({ ...pins, pins: [1, 2, 3, 4].map(page) }));
     const fourth = await screen.findByRole('region', { name: 'Page 4' });
-    expect(within(fourth).getByRole('link').getAttribute('href')).toBe('/api/v2/files/f4');
+    expect(within(fourth).getByRole('link').getAttribute('href')).toBe('/library/files?file=f4');
     await waitFor(() => expect(reads.filter((u) => u.startsWith('/api/v2/files/')).map((u) => u.split('?')[0])).toEqual(['/api/v2/files/f1', '/api/v2/files/f2', '/api/v2/files/f3']));
   });
 
@@ -182,10 +191,32 @@ describe("An agent's own sidebar", () => {
     expect(within(card).getByText('Nightly sync')).toBeTruthy();
   });
 
-  it("opens a latest page from its row as a file, in a new tab, not through the app's router", async () => {
+  it('opens a latest page from its row in Files in a new tab, never its download', async () => {
     open([w('card:c9'), w('tasks')], pinsReply(cardPins('latest_pages', { pages: [{ file_id: 'f7', title: 'Q3 plan', updated_at: '2026-11-20T10:00:00Z' }] })));
     const link = (await screen.findByText('Q3 plan')).closest('a') as HTMLAnchorElement;
-    expect([link.getAttribute('href'), link.target, link.rel]).toEqual(['/api/v2/files/f7', '_blank', 'noreferrer']);
+    expect([link.getAttribute('href'), link.target, link.rel]).toEqual(['/library/files?file=f7', '_blank', 'noreferrer']);
+    expect(fireEvent.click(link)).toBe(true); // a plain click is the browser's: the new tab, not a preview over the page
+    expect(previews()).toEqual([]);
+  });
+
+  it('opens a pinned page full screen at the version it shows', async () => {
+    open([w('page:f1'), w('tasks')]);
+    const card = await screen.findByRole('region', { name: 'Videos by stage' });
+    fireEvent.click(within(card).getByRole('button', { name: 'Videos by stage' }));
+    expect(previews()).toEqual([{ file: 'f1', version: 2 }]);
+  });
+
+  it('draws the default sidebar and none of its lists once a read of its layout is refused', async () => {
+    let refused = false;
+    const launch = { name: 'Launch', show_count: true, conditions: [{ field: 'stage', value: ['general-todo'] }] };
+    const layout = { bot: '0190-ana', tabs: [launch], widgets: [w('page:f1'), w('tasks'), w('updates')], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    open(undefined, (u) => (u.endsWith('/bots/ana/task-tabs') ? (refused ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : { body: layout }) : undefined));
+    await screen.findByRole('region', { name: 'Launch' });
+    await screen.findByRole('region', { name: 'Videos by stage' });
+    refused = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: ['team', 'tabs'] }));
+    await waitFor(() => expect(order()).toEqual(['Latest update', 'Tasks', 'Files']));
+    expect(screen.queryByRole('region', { name: 'Launch' })).toBeNull();
   });
 
   it('leaves the age of a row without a time empty', async () => {

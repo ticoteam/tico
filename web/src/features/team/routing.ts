@@ -41,11 +41,12 @@ export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined
     if (tab === 'computer' || tab === 'screen') return qc.ensureQueryData(computersQuery);
     if (tab === 'instructions') return qc.ensureQueryData(instructionsQuery(found.actor.slug ?? found.actor.id.slice(4)));
     if (tab === 'settings' || tab === 'model') return qc.ensureQueryData(agentsQuery);
-    // its sidebar's order with its tasks, so the page draws once, as the agent arranged it (a failed read: the default)
-    // Its sidebar with its tasks, then its pins when it shows any: the page draws them in their places from the start.
+    // Its sidebar with its tasks, then its pins when a read of it shows any: the page draws them in their places from
+    // the start (a failed read: the default, and no pins).
     const slug = found.actor.slug ?? found.actor.id.slice(4);
+    const key = taskTabsQuery(slug).queryKey;
     const sidebar = qc.prefetchQuery(taskTabsQuery(slug)).then(() =>
-      showsPins(qc.getQueryData(taskTabsQuery(slug).queryKey)?.widgets) ? qc.prefetchQuery(sidebarPinsQuery(slug)) : undefined,
+      qc.getQueryState(key)?.status === 'success' && showsPins(qc.getQueryData(key)?.widgets) ? qc.prefetchQuery(sidebarPinsQuery(slug)) : undefined,
     );
     return Promise.all([qc.ensureQueryData(openTasksQuery(found.actor.id)), sidebar]);
   }

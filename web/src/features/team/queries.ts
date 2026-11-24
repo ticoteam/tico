@@ -624,6 +624,14 @@ export const sidebarPinsQuery = (slug: string) =>
     queryFn: ({ signal }) => api.get<Place>(`/api/v2/places/${at(`bot:${slug}`)}`, { signal }),
   });
 
+/** A read refused (signed out, no Read, gone): what it showed before is shown no more. */
+const REFUSED = new Set([401, 403, 404]);
+
+/** A read's data as this reader may see it now: none once a read of it is refused (the last answer is kept by the cache
+    after a failed read), else the last read's. */
+export const readable = <T>(read: { data?: T; error: unknown }): T | undefined =>
+  read.error instanceof ApiError && REFUSED.has(read.error.status) ? undefined : read.data;
+
 /** A pinned page or card, not a built-in. */
 export const isPinned = (id: string) => id.startsWith('page:') || id.startsWith('card:');
 

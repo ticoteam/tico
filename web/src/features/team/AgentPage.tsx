@@ -46,6 +46,7 @@ import {
   pauseQuery,
   rulesQuery,
   runsQuery,
+  readable,
   showsPins,
   sidebarPinsQuery,
   taskTabsQuery,
@@ -205,7 +206,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const files = useInfiniteQuery(agentFilesQuery(slug));
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
-  const widgets = sidebarOf(useQuery(taskTabsQuery(slug)).data?.widgets);
+  const widgets = sidebarOf(readable(useQuery(taskTabsQuery(slug)))?.widgets); // refused: the defaults
   const pinned = showsPins(widgets);
   const pins = useQuery({ ...sidebarPinsQuery(slug), enabled: pinned });
   const pinOf = new Map(pinsOf(pins).map((p) => [p.item, p]));

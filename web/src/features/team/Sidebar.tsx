@@ -1,15 +1,15 @@
-import type { MouseEvent, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { run } from '@/actions';
-import { ApiError } from '@/api/client';
 import type { Card, Place } from '@/api/schema';
 import { PageCard } from '@/conversation';
 import { Ago } from '@/kit/Ago';
 import { Facts, LabelValue } from '@/kit/LabelValue';
+import { Link } from '@/kit/Link';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { fmtMoney } from '@/lib';
 import { Section } from '@/pagekinds';
-import type { SidebarWidget } from './queries';
+import { readable, type SidebarWidget } from './queries';
 
 /* An agent's sidebar as it arranged it (backend/bot_task_tabs.py widgets): its built-ins, and the pages and cards it
    pinned (GET /api/v2/places/bot:<slug>), each in its stored order, hidden ones left out, a set height its most. */
@@ -22,12 +22,8 @@ export const sidebarOf = (widgets: SidebarWidget[] | undefined): SidebarWidget[]
 
 export type Pin = Place['pins'][number];
 
-/** A read of its pins refused (signed out, no Read, gone): it shows none, never the last ones it was allowed. */
-const REFUSED = new Set([401, 403, 404]);
-
 /** Its pins as this reader may see them now: none once a read of them is refused, else the last read's. */
-export const pinsOf = (read: { data?: Place; error: unknown }): Pin[] =>
-  read.error instanceof ApiError && REFUSED.has(read.error.status) ? [] : (read.data?.pins ?? []);
+export const pinsOf = (read: { data?: Place; error: unknown }): Pin[] => readable(read)?.pins ?? [];
 
 /** Whether a pin shows this reader anything: a page they may read (the place leaves the rest out), a card not hidden. */
 export const pinShows = (pin: Pin | undefined): pin is Pin => !!pin && (!!pin.page || (!!pin.card && !pin.card.hidden));
@@ -45,16 +41,11 @@ export function Sized({ height, children }: { height: number | null; children: R
   );
 }
 
-const plainClick = (e: MouseEvent) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 const fileHref = (id: string): `/api/${string}` => `/api/v2/files/${encodeURIComponent(id)}`;
-const openFile = (id: string) => (e: MouseEvent) => {
-  if (!plainClick(e)) return;
-  e.preventDefault();
-  void run('files.preview', { file: id }, { via: 'click' });
-};
+/** A file's page in Files (its viewer: a page shown, never downloaded), as Files links it. */
+const viewerHref = (id: string) => `/library/files?${new URLSearchParams({ file: id }).toString()}`;
 
-/** A row of words: its age when it has one, an empty cell when not. A file's row is a real link to the file (a new
-    tab, a copy), over the page on a plain click (Files.tsx). */
+/** A row of words: its age when it has one, an empty cell when not. A file's row opens it in Files in a new tab. */
 function CardRow({ title, href, file, at, pills }: { title: string; href?: string; file?: string; at?: string | null; pills?: ReactNode }) {
   const cells = (
     <>
@@ -67,9 +58,9 @@ function CardRow({ title, href, file, at, pills }: { title: string; href?: strin
   );
   if (file)
     return (
-      <a className="row task" title={title} href={fileHref(file)} target="_blank" rel="noreferrer" onClick={openFile(file)}>
+      <Link className="row task" title={title} href={viewerHref(file)} target="_blank" rel="noreferrer">
         {cells}
-      </a>
+      </Link>
     );
   return (
     <Row className="task" title={title} href={href}>
@@ -89,7 +80,7 @@ export function PinnedItem({ pin, live = true }: { pin: Pin | undefined; live?: 
     return (
       <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
         {live ? (
-          <PageCard src={src} title={title} onOpen={() => void run('files.preview', { file: id }, { via: 'click' })} />
+          <PageCard src={src} title={title} onOpen={() => void run('files.preview', version ? { file: id, version } : { file: id }, { via: 'click' })} />
         ) : (
           <CardRow title={title} file={id} at={updated_at} />
         )}

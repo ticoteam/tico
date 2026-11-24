@@ -259,6 +259,59 @@ def test_a_runner_reads_no_sidebar_and_one_who_only_sees_the_bot_gets_its_defaul
     assert [t["name"] for t in mine["tabs"]] == ["Launch"]
 
 
+def test_one_who_only_sees_the_bot_counts_its_default_lists_not_its_saved_ones(api):
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists})
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    seen = get(api, "bots/ops/task-tabs/tasks", "cara-test")["tabs"]
+    assert "Launch" not in [t["name"] for t in seen] and "c0" not in [t["key"] for t in seen]
+    assert [t["name"] for t in get(api, "bots/ops/task-tabs/tasks")["tabs"]] == ["Launch"]
+
+
+def test_the_sidebar_layout_reads_its_pages_rows_and_access_only(api, monkeypatch):
+    """GET /bots/{bot}/task-tabs checks its pinned pages may be read; it never reads them in full (their versions,
+    links), which only the place's own read draws."""
+    from backend import cards, pages
+
+    ops = page(api, "ops", "Ops page")
+    full, calls = pages.prime_views, []
+    monkeypatch.setattr(pages, "prime_views", lambda c, rows: calls.append(len(rows)) or full(c, rows))
+    real = cards.prime_pins
+    primed = []
+    monkeypatch.setattr(cards, "prime_pins", lambda ctx, pins, **kw: primed.append(pins) or real(ctx, pins, **kw))
+    get(api, "bots/ops/task-tabs")
+    assert primed == []  # nothing pinned, nothing to read
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists, "widgets": [{"id": "page:" + ops}]})
+    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]][0] == "page:" + ops
+    assert primed == [[{"item": "page:" + ops}]] and calls == []
+
+
+def test_a_pinned_pages_version_is_declared_but_optional():
+    """A page whose full read is not drawn (page_brief) has no version; the contract must not require one."""
+    from backend.api_schemas._base import SCHEMAS
+    import backend.api_schemas.cards_and_pins  # noqa: F401
+
+    page = SCHEMAS["Place"]["properties"]["pins"]["items"]["properties"]["page"]
+    assert "version" in page["properties"] and "version" not in page["required"]
+
+
+def test_automation_runs_count_the_whole_day_not_its_newest_500(api):
+    from backend.cards import ago
+    from backend.tests.helpers.automation_runs import FIND, make
+
+    aid = make(api, [FIND])
+    runs = [("run_early", aid, ago(hours=23), "failed")]
+    runs += [(f"run_{i}", aid, ago(minutes=i + 1), "done") for i in range(600)]
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES(?,?,1,?,?)", runs)
+    put(api, "places/dashboard", {})
+    data = post(api, "cards", {"template": "automation_runs", "place": "dashboard"})["card"]["data"]
+    assert (data["total"], data["failed"], data["running"]) == (601, 1, 0)
+    assert data["runs"][0]["id"] == "run_early" and len(data["runs"]) == 5
+
+
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):
     send(
         api, "POST", "groups", {"name": "Product", "add": {"people": ["cara"], "bots": ["cpo"]}, "lead": "person:cara"}

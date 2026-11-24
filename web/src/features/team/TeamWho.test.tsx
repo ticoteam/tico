@@ -321,6 +321,17 @@ describe('Loading a teammate', () => {
     expect(reads).toContain('/api/v2/places/bot%3Aana');
   });
 
+  it("reads no pins when a read of its sidebar fails, whatever an earlier read held", async () => {
+    queryClient.removeQueries({ queryKey: ['team', 'pins'] });
+    const sidebar = { bot: '0190-ana', tabs: [], widgets: [{ id: 'page:f1', hidden: false, height: null }], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    queryClient.setQueryData(['team', 'tabs', 'ana'], sidebar);
+    await queryClient.invalidateQueries({ queryKey: ['team', 'tabs', 'ana'], refetchType: 'none' });
+    serve((u) => (u.endsWith('/bots/ana/task-tabs') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : undefined));
+    await loadWho(queryClient, 'ana', undefined);
+    expect(reads).toContain('/api/v2/bots/ana/task-tabs');
+    expect(reads).not.toContain('/api/v2/places/bot%3Aana');
+  });
+
   it('throws a failed read to the router, which draws the fault', async () => {
     serve(() => ({ status: 500, body: { detail: 'down' } }));
     await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();

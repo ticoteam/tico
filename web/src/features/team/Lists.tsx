@@ -13,11 +13,11 @@ import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { FIELD_NAME, LIST_FIELDS, isListField, lineOf, type ListLine } from './model';
 import { OwnRows } from './parts';
-import { listKey, listTasksAfter, listTasksQuery, taskTabsQuery, type OwnTask, type TaskTab } from './queries';
+import { listKey, listTasksAfter, listTasksQuery, readable, taskTabsQuery, type OwnTask, type TaskTab } from './queries';
 
 /** Its own lists (the layout's tabs that are not a default), each with its key, and whether the viewer may change them. */
 export function useLists(slug: string) {
-  const { data } = useQuery(taskTabsQuery(slug));
+  const data = readable(useQuery(taskTabsQuery(slug))); // refused: none of its lists
   const tabs = data?.tabs ?? [];
   const lists = tabs.flatMap((tab, i) => (tab.builtin ? [] : [{ key: listKey(tabs, i), tab }]));
   return { lists, canEdit: !!data?.can_edit };
