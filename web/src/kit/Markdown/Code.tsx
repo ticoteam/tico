@@ -33,21 +33,21 @@ function copy(text: string) {
 }
 
 function useHighlight(text: string, lang: string, on: boolean) {
-  const [lines, setLines] = useState<{ text: string; lines: Piece[][] } | null>(null);
+  const [lines, setLines] = useState<{ text: string; lang: string; lines: Piece[][] } | null>(null);
   useEffect(() => {
     if (!on || !lang) return;
     let live = true;
     import('./highlight')
       .then((h) => h.highlight(text, lang))
       .then(
-        (got) => live && got && setLines({ text, lines: got }),
+        (got) => live && got && setLines({ text, lang, lines: got }),
         () => undefined, // stays plain text
       );
     return () => {
       live = false;
     };
   }, [text, lang, on]);
-  return lines?.text === text ? lines.lines : null;
+  return on && lines?.text === text && lines.lang === lang ? lines.lines : null;
 }
 
 function Pieces({ lines }: { lines: Piece[][] }) {
