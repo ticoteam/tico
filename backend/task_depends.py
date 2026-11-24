@@ -236,8 +236,10 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
                 conn,
                 actor,
                 "task_ended",
-                lambda n: f"{n(*b)} merged nothing into {where}, whose release this server runs: until released cannot "
-                "wait for it. Another product's release is not seen here: snooze to the date you will look again.",
+                lambda n: (
+                    f"{n(*b)} merged nothing into {where}, whose release this server runs: until released cannot "
+                    "wait for it. Another product's release is not seen here: snooze to the date you will look again."
+                ),
             )
         if shipped is not None:
             said = "is in production already: there is nothing to wait for"
@@ -254,8 +256,10 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
             conn,
             actor,
             "kind",
-            lambda n: f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*b)} already depends on "
-            f"{n(later['id'], ref(later))}.",
+            lambda n: (
+                f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*b)} already depends on "
+                f"{n(later['id'], ref(later))}."
+            ),
         )
 
 

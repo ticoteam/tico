@@ -244,8 +244,10 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
             conn,
             actor,
             "kind",
-            lambda n: f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*e)} already goes after "
-            f"{n(later['id'], ref(later))}.",
+            lambda n: (
+                f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*e)} already goes after "
+                f"{n(later['id'], ref(later))}."
+            ),
         )
 
 
