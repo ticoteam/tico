@@ -4804,6 +4804,10 @@
    [
     "<task>:<visit1>:owner:0",
     "bot:builder"
+   ],
+   [
+    "<task>:<visit4>:told",
+    "human:ana"
    ]
   ],
   "older_pr_pass_items": [],
@@ -4930,6 +4934,10 @@
    [
     "<task>:<visit1>:owner:0",
     "bot:builder"
+   ],
+   [
+    "<task>:<visit4>:told",
+    "human:ana"
    ]
   ],
   "older_pr_pass_items": [],
