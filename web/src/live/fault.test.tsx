@@ -114,6 +114,12 @@ describe('a read that failed', () => {
   });
 
   it('is not read again when a live stream only reconnects for new follows', async () => {
+    // "who is this" answered in microtasks only, so the test can wait for it
+    const me = { ok: true, status: 200, headers: new Headers({ 'Content-Type': 'application/json' }), json: async () => ({ actor: 'human:a', email: '', role: 'human' }) };
+    vi.stubGlobal('fetch', vi.fn(async () => me));
+    const answered = async () => {
+      for (let i = 0; i < 50; i++) await Promise.resolve();
+    };
     const retry = vi.fn();
     startLive();
     FakeEventSource.last.feed(opening(900));
@@ -123,7 +129,7 @@ describe('a read that failed', () => {
     vi.advanceTimersByTime(30);
     FakeEventSource.last.feed(opening(905, 900));
     // its "who is this" answered (the same person) and it is live, as it was
-    for (let i = 0; i < 10; i++) await new Promise((done) => setImmediate(done));
+    await answered();
     expect(retry).not.toHaveBeenCalled();
     // then a real drop and return, which does read again: once, so the reconnect before it did not
     FakeEventSource.last.fail();
