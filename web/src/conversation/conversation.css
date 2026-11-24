@@ -121,8 +121,14 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .msg.is-mine .msg-acts{right:auto;left:0}
 .msg:hover .msg-acts,.msg-acts:focus-within,.msg-acts:has([aria-expanded="true"]){opacity:1}
 @media (hover:none){.msg-acts{display:none}}
-/* a task's comments: Reply is the way to answer one, so a touch screen shows it, not only behind a long press */
-@media (hover:none){.chat-body.is-comments .msg-acts{display:flex;opacity:1}}
+/* a task's comments: Reply is the way to answer one, so a touch screen shows it, not only behind a long press. On a
+   comment it ends level with the author row, in room kept above that row for its 44px target, never over the words
+   (yours is a bubble at the right, with Reply in the room at its left) */
+@media (hover:none){
+  .chat-body.is-comments .msg-acts{display:flex;opacity:1}
+  .chat-body.is-comments .msg:not(.is-mine):has(> .msg-acts){padding-top:var(--s-6)}
+  .chat-body.is-comments .msg:not(.is-mine) > .msg-acts{top:0}
+}
 
 /* ---------- a card in the timeline (plan/threads-team.html .kcard): a team's update ---------- */
 .kcard{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-1);margin:var(--s-1) 0 var(--s-0);padding:var(--s-2h) var(--s-3);border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink)}
