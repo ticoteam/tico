@@ -50,7 +50,7 @@ FROM download AS node
 RUN fetch-tool node /opt/node
 
 FROM download AS no-previous-release
-RUN mkdir -p /opt/tico/build/web
+RUN mkdir -p /opt/tico
 FROM ${PREVIOUS_RELEASE} AS previous-release
 
 # The web app at / (web/, served by backend/web_routes.py): its own lock, built by Vite into build/web. The server image
@@ -62,11 +62,15 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY web ./
 RUN npm run build
-# A tab opened on the previous release still finds that release's page files: they are carried into this build for 7
-# days after the last release that built them.
+
+# A tab opened on the previous release still finds that release's page files: they are carried forward for
+# KEEP_DAYS after the last release that built them (scripts/carry_web_assets.py), into the server image only, as
+# their own layer. /opt/tico is mounted, not its build/web, so a previous release without one carries nothing.
+FROM download AS carried
 COPY scripts/carry_web_assets.py /src/carry_web_assets.py
-RUN --mount=type=bind,from=previous-release,source=/opt/tico/build/web,target=/previous \
-    python3 /src/carry_web_assets.py /previous /src/build/web
+COPY --from=web-build /src/build/web /src/build/web
+RUN --mount=type=bind,from=previous-release,source=/opt/tico,target=/previous \
+    python3 /src/carry_web_assets.py /previous/build/web /src/build/web --out /out
 
 # Export matching maps only for the release uploader. The image copies the original build.
 FROM web-build AS web-with-sourcemaps
@@ -259,6 +263,19 @@ RUN chmod 0755 /usr/local/bin/tico-entrypoint \
     && install -d -m 0755 -o tico -g tico /tunnel /caddy-generated
 COPY --from=venv /opt/tico/.venv /opt/tico/.venv
 COPY --from=source /opt/tico /opt/tico
+COPY --from=carried /out/ /opt/tico/build/web/
+# The carried files are served code too: the manifest's hash (backend/code_hash.py) covers them, or every server image
+# would report itself `modified` (backend/flight.py).
+RUN cd /opt/tico && python - <<'PY'
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, ".")
+from backend.code_hash import digest
+manifest = Path("release-manifest.json")
+manifest.write_text(json.dumps({**json.loads(manifest.read_text()), "code": digest(".")}) + "\n")
+PY
 ARG TICO_VERSION=dev
 # The commit is also in release-manifest.json, which the flight recorder checks against the release tag (backend/flight.py).
 ARG TICO_COMMIT

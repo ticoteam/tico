@@ -8,7 +8,7 @@ build knows when to drop it. A file's name is its content, so a carried file nev
 
 Past that, the file is the 404 it was before and the tab shows "Tico couldn't finish loading".
 
-    python3 scripts/carry_web_assets.py <previous release's build/web> <new build/web> [--now SECONDS]
+    python3 scripts/carry_web_assets.py <previous release's build/web> <new build/web> [--out DIR] [--now SECONDS]
 
 The Dockerfile runs it in the web build, with the previous release's image named by PREVIOUS_RELEASE.
 """
@@ -20,8 +20,9 @@ import shutil
 import time
 from pathlib import Path
 
-# A tab left open over a weekend keeps working.
-KEEP_DAYS = 7
+# A tab left open overnight keeps working. Each release changes about 3 MB of these files, and there can be about 20
+# releases a day on a busy company, so each kept day adds about 60 MB (uncompressed) to the server image.
+KEEP_DAYS = 2
 CARRIED = "carried-assets.json"
 
 
@@ -34,9 +35,12 @@ def _files(folder: Path) -> list[os.DirEntry[str]]:
     return [e for e in entries if not e.name.startswith(".") and e.is_file(follow_symlinks=False)]
 
 
-def carry(previous: Path, new: Path, now: float) -> dict[str, float]:
-    """Copy the previous build's files that `new` lacks into new/assets, except those last built more than KEEP_DAYS
-    before `now`, and write new/CARRIED. Returns what was carried: each name and when a release last built it."""
+def carry(previous: Path, new: Path, now: float, out: Path | None = None) -> dict[str, float]:
+    """Copy the previous build's files that `new` lacks into out/assets (default: new's own), except those last built
+    more than KEEP_DAYS before `now`, and write out/CARRIED. Returns what was carried: each name and when a release
+    last built it. The image build writes them apart (`out`), so only the server image gets them, as its own layer."""
+    out = new if out is None else out
+    (out / "assets").mkdir(parents=True, exist_ok=True)
     try:
         last_built = json.loads((previous / CARRIED).read_text()).get("carried", {})
     except (OSError, ValueError, AttributeError):
@@ -52,9 +56,9 @@ def carry(previous: Path, new: Path, now: float) -> dict[str, float]:
             when = now  # the previous release built it: it ships until this one replaces it
         if when < oldest:
             continue
-        shutil.copyfile(entry.path, new / "assets" / entry.name)
+        shutil.copyfile(entry.path, out / "assets" / entry.name)
         carried[entry.name] = float(when)
-    (new / CARRIED).write_text(
+    (out / CARRIED).write_text(
         json.dumps({"keep_days": KEEP_DAYS, "carried": carried}, indent=1, sort_keys=True) + "\n"
     )
     return carried
@@ -64,11 +68,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("previous", type=Path, help="the previous release's build/web (empty or missing: none)")
     parser.add_argument("new", type=Path, help="the new build/web, already built")
+    parser.add_argument("--out", type=Path, default=None, help="write the carried files here (default: the new build)")
     parser.add_argument("--now", type=float, default=None, help="seconds since the epoch (default: now)")
     args = parser.parse_args(argv)
     if not (args.new / "assets").is_dir():
         parser.error(f"{args.new}/assets is not a folder: build the web app first")
-    carried = carry(args.previous, args.new, time.time() if args.now is None else args.now)
+    carried = carry(args.previous, args.new, time.time() if args.now is None else args.now, args.out)
     print(f"carry_web_assets: {len(carried)} files carried from the previous release")
     return 0
 
