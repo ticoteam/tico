@@ -1586,10 +1586,14 @@ describe('Needs you’s read, from the menu', () => {
     // TanStack hands a read to the shell on the next timer (notifyManager), so a microtask is not enough on either side:
     // the shell's other reads (the page owners, who is signed in) all in (the directory, never answered here, aside) and
     // drawn before the count, else one is counted as a draw (537 for 536); and the reads below drawn before it is read
-    // again, else a redraw they cause lands after the check and it passes
+    // again, else a redraw they cause lands after the check and it passes. A read drawn in that turn can start others
+    // (the page owners and pipelines wait for who is signed in), so it is quiet only when nothing fetches after a turn
     const drawn = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
-    await waitFor(() => expect(queryClient.isFetching({ predicate: (q) => q.queryKey[0] !== 'directory' })).toBe(0));
-    await drawn();
+    const fetching = () => queryClient.isFetching({ predicate: (q) => q.queryKey[0] !== 'directory' });
+    do {
+      await waitFor(() => expect(fetching()).toBe(0));
+      await drawn();
+    } while (fetching() > 0);
     const before = shellDraws.n;
     // a new read, and the row the person is on in Needs you on Tasks
     for (let i = 1; i <= 3; i++) act(() => void queryClient.setQueryData(['flow'], { count: i, items: [], task_ids: [`t${i}`] }));
