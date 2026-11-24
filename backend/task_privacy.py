@@ -1252,13 +1252,17 @@ def private_execution(c, who):
     return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
 
 
-def copies_private(c, message_id):
-    """Whether the message a new task quotes is a private task's: a copy of private words stays private."""
-    message = H.message(c, message_id) if message_id else None
+def copies_private(c, message):
+    """Whether the words of `message`, which a new task quotes, are private: it is in a person's own chat (their
+    Assistant's), or a task it belongs to is private (a bot's run on one does not count). A copy of private words stays
+    private; a company task's comment does not make it private."""
+    from . import threads
+
     if not message:
         return False
-    tid = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
-    return bool(message.get("restricted") or tid and H.task_private(c, _task(c, tid)))
+    if threads.audience_of(threads.thread_row(c, message["conversation_id"]) or {}) == "personal":
+        return True
+    return bool(private_tasks(c, set(message_tasks(c, message, include_run=False))))
 
 
 def reach_for(c, who, person, parent):

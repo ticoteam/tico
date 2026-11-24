@@ -684,20 +684,6 @@ def private_task_write(fn):
         conn, actor = values['conn'], values['actor']
         row = task(conn, values.get('task_id')) if values.get('task_id') else None
         private = bool(row and task_private(conn, row) or values.get('private'))
-        if fn.__name__ == 'task_create':
-            target = resolve_actor(conn, values.get('owner'))
-            parent = task(conn, values.get('parent_id')) if values.get('parent_id') else None
-            bot = actor if not is_human(actor) else bool(VIA.get())
-            # The task's own rule (new_task_private); a refusal under a private parent can name that parent, so its
-            # record stays content-free too, though the task itself is not made private by it.
-            from . import task_engine
-
-            pipe = task_engine.pipeline(conn, str(values.get('pipeline') or GENERAL_PIPELINE))
-            private = bool(
-                new_task_private(conn, actor, target, values.get('private'), bot=bot, pipeline=pipe)
-                or parent
-                and task_private(conn, parent)
-            )
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
         task_token = REFUSAL_TASK.set((row or {}).get('id') or REFUSAL_TASK.get())
         from . import task_trigger_rules

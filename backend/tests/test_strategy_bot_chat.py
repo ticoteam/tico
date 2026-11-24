@@ -178,6 +178,8 @@ def test_the_assistant_hands_the_strategy_bot_and_the_librarian_cited_work(api):
         task, coo = _assistant_asks(api, r, slug, said=said)
         task = task.get("task", task)
         assert (task["owner_id"], task["requester_id"]) == ("bot:" + slug, "human:ana")
+        # It quotes her own Assistant chat: a copy of private words is private (task_privacy.copies_private).
+        assert task["private"] is True
         with api.app.state.store.read() as c:
             asked = H._json(
                 c.execute(

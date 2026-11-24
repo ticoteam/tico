@@ -155,10 +155,12 @@ def test_a_stage_handoff_from_a_private_task_is_private_whoever_files_it(api, mo
         assert row["requester_id"] == H.TICO_ACTOR and H.task_private(c, row)
 
 
-def test_agent_ops_handoff_quoting_a_private_tasks_comment_is_private(api, agent_ops):  # noqa: F811
+@pytest.mark.parametrize("private", [True, False])
+def test_agent_ops_quoting_a_comment_is_private_only_from_a_private_task(api, agent_ops, private):  # noqa: F811
+    """Every task chat message is `restricted`: the source task alone decides (task_privacy.copies_private)."""
     assign(api, agent_ops, "ops")
     ready(api, agent_ops, ["botops", "ops"])
-    secret = post(api, "tasks", {"owner": "ops", "title": "Price the Acme renewal", "body": "x", "private": True})
+    secret = post(api, "tasks", {"owner": "ops", "title": "Price the Acme renewal", "body": "x", "private": private})
     said = post(
         api,
         f"tasks/{secret['id']}/comments",
@@ -173,7 +175,7 @@ def test_agent_ops_handoff_quoting_a_private_tasks_comment_is_private(api, agent
         ).fetchone()
         detail = H._json(carried["detail"], {})
         assert detail["lends"] is True, detail  # her words are quoted on it
-    assert made["private"] is True
+    assert made["private"] is private
 
 
 # ----------------------------------------------------------------------------- reach: only a private hand-off
