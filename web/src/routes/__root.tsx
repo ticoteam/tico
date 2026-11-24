@@ -4,10 +4,21 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
+import {
+  configQuery,
+  meQuery,
+  pageOwnersQuery,
+  recordVisit,
+  useActor,
+  useDirectory,
+  useHeldCount,
+  useInitialReleaseRefresh,
+  type Actor,
+  type Directory,
+} from '@/data';
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
-import { DesktopMove, PlanLock } from '@/features/notices/exports';
+import { DesktopMove, PlanLock, UpdateNotice } from '@/features/notices/exports';
 import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
@@ -186,6 +197,7 @@ function App() {
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
+  useInitialReleaseRefresh(signedIn);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
@@ -342,7 +354,20 @@ function App() {
         <Frame
           arrangement={callChat || barShown ? 'chat' : arrangement}
           tico={<TicoSheet />}
-          menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : <DesktopMove />} />}
+          menu={
+            <AppMenu
+              note={
+                status === 'offline' ? (
+                  <OfflineBar held={held} />
+                ) : (
+                  <>
+                    <UpdateNotice />
+                    <DesktopMove />
+                  </>
+                )
+              }
+            />
+          }
           page={page}
           chat={chat}
           list={list}

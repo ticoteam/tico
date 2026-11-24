@@ -978,11 +978,9 @@ Add `slack` to `COMPOSE_PROFILES` to run the Slack service, then paste the app's
 
 ## Update
 
-Use **Update now** (in the sidebar's new-version notice, or on the Version row under Settings → General → Health → Details for the owner), or run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
+When a release is available, owners and admins see a notice in the menu. It opens the Version row in **Settings → General → Tico**, where the owner can **Check now** or choose **Update now**. The row shows progress through the restart and reports the outcome when Tico returns.
 
-![Health Version row with Update now beside Check for updates](images/settings-stage1/settings-health-version-context.png)
-
-*Synthetic Acme example. The pictured v0.4.12 is a fictional newer-release answer used to show Update now; no update was installed.*
+You can also run the target release's installer again to update both the pinned image tag and compose bundle, preserving `.env`.
 
 Pulling an unchanged pinned tag does not upgrade Tico. See [Updates](updates.md) for manual updates, self-update and rollback.
 Data lives in named volumes and survives updates. Computers follow the server's release.

@@ -7,12 +7,13 @@ export interface SignedIn {
   id: string;
   email: string;
   role: 'person' | 'owner' | 'agent' | 'other';
+  kind?: string;
   /** An agent caller's slug; null for a person. */
   slug: string | null;
 }
 
 const ROLES: Record<string, SignedIn['role']> = { human: 'person', owner: 'owner', bot: 'agent' };
 
-export function adaptMe(me: Me): SignedIn {
-  return { id: me.actor, email: me.email, role: ROLES[me.role] ?? 'other', slug: me.slug ?? null };
+export function adaptMe(me: Me & { kind?: string }): SignedIn {
+  return { id: me.actor, email: me.email, role: ROLES[me.role] ?? 'other', slug: me.slug ?? null, ...(me.kind && { kind: me.kind }) };
 }

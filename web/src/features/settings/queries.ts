@@ -70,6 +70,37 @@ export const accessQuery = queryOptions({
   queryFn: ({ signal }) => api.get<AccessView>('/api/v2/access', { signal }),
 });
 
+const UPDATE = '/api/v2/system/update';
+
+interface UpdateStatus {
+  configured: boolean;
+  state: string;
+  to?: string;
+  running?: string;
+  message?: string;
+  command?: string;
+}
+
+const UPDATE_PROGRESS: Readonly<Record<string, string | undefined>> = {
+  pulling: 'Downloading the update…',
+  snapshotting: 'Backing up your data…',
+  restarting: 'Restarting Tico…',
+  uncertain: 'Checking the update…',
+};
+
+export const updateProgress = (status?: UpdateStatus) => status && UPDATE_PROGRESS[status.state];
+
+export const updateStatusQuery = queryOptions({
+  queryKey: ['settings', 'update'],
+  queryFn: ({ signal }) => api.get<UpdateStatus>(UPDATE, { signal, once: true }),
+  refetchOnMount: 'always',
+  retry: false,
+  refetchIntervalInBackground: true,
+});
+
+export const startUpdate = (version: string) => api.post<UpdateStatus>(UPDATE, { version });
+export const checkForUpdate = () => api.post<{ checking: boolean; available: boolean; held?: string }>(`${UPDATE}/check`);
+
 const patchPerson = (pid: string, change: Partial<AccessPerson>) => (v: AccessView | undefined) =>
   v && { ...v, people: v.people.map((p) => (p.id === pid ? { ...p, ...change } : p)) };
 

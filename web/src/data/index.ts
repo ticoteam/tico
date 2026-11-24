@@ -2,7 +2,7 @@
 export { queryClient } from './query-client';
 export { keys } from './keys';
 export { meQuery } from './session';
-export { configQuery } from './config';
+export { configQuery, readConfigOnce, useInitialReleaseRefresh, type ReleaseOffer } from './config';
 export { recordVisit } from './visits';
 export { write, NeedsConnection, isNetworkError, quietRoot, isQuiet, QUIET_STALE_MS, type Write } from './optimistic';
 export { heldCount, useHeldCount, type HeldCount } from './held';

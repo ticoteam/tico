@@ -112,6 +112,8 @@ div.row{cursor:default}
 /* Add computer: a command, its note above, its copy button at the right */
 .set-cmd{display:grid;gap:var(--s-1)}
 .set-cmd-note{font-size:var(--t-sm);color:var(--ink-2)}
+.set-version{display:grid;gap:var(--s-1);padding-block:var(--s-1)}
+.set-version-actions{display:flex;flex-wrap:wrap;gap:var(--s-1)}
 .set-cmd-row{display:flex;align-items:flex-start;gap:var(--s-2)}
 .set-cmd-row .fs-code{flex:1;min-width:0}
 .set-more{display:grid;gap:var(--s-3)}

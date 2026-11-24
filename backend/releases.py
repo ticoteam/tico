@@ -311,6 +311,7 @@ class Checker:
         out = {
             "current": current,
             "latest": "",
+            "checking": False,
             "available": False,
             "url": "",
             "published_at": "",
@@ -322,6 +323,7 @@ class Checker:
         if not self.enabled() or parse(current) is None:
             return out
         self._refresh_if_stale(current)
+        out["checking"] = self.running
         release, more = self.release, self.extras
         # The check reads the newest promoted stable release, and an older one is never shown as the latest. A stable
         # server ahead of it (the canary on 0.6.79 while 0.6.78 is still latest) runs the newest release there is, so
