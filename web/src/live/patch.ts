@@ -357,7 +357,19 @@ export interface MessageRow {
   thread_id?: string;
   depth?: number;
   deleted?: boolean;
+  body?: string | null;
+  in_reply_to?: string | null;
+  /** On a task's thread: the agent whose session it is in; null for a comment. */
+  session_agent_id?: string | null;
+  recipient_id?: string | null;
+  refs?: Record<string, unknown>;
+  /** The message it answers, quoted (threads.reply_quotes). */
+  reply_to?: { id: string; excerpt?: string } | null;
 }
+
+/** One view of a task's thread (GET .../timeline `comments=true` or `session=<agent>`), a timeline key's fourth part:
+    the comments, or one agent's session (its stamped messages and those that @mention it). */
+export type TimelineView = { comments: true } | { session: string };
 export interface Timeline<M extends MessageRow = MessageRow> {
   messages: M[];
   next_cursor?: string | number | null;
@@ -455,6 +467,53 @@ export function removeMessage<M extends MessageRow>(data: TimelineData<M>, id: s
   return rebuild(data, copy);
 }
 
+const heldIn = <M extends MessageRow>(d: TimelineData<M>, id: string): M | undefined => {
+  for (const page of pagesOf(d)) {
+    const m = page.messages.find((x) => x.id === id);
+    if (m) return m;
+  }
+  return undefined;
+};
+
+/**
+ * Whether a message belongs in a view of a task's thread, as the server's filter (threads.session_sql) decides it:
+ * true or false, or null when only the server can say (an @mention of the agent, which its deliveries record; an
+ * answer to a comment that is not loaded). One the view holds stays (an edit).
+ */
+export function inView(view: TimelineView, m: MessageRow, held: TimelineData): boolean | null {
+  if (heldIn(held, m.id)) return true;
+  const agent = m.session_agent_id ?? null;
+  const mentions = (m.body ?? '').includes('@');
+  if ('session' in view) {
+    if (agent === view.session) return true;
+    // another agent's message is in it only when it @mentions this one; a comment, also when it is a person's Reply to
+    // it (an @mention of its author): the server's deliveries say which
+    if (agent) return mentions ? null : false;
+    return mentions || !!m.in_reply_to ? null : false;
+  }
+  if (!agent) return true;
+  if (!m.in_reply_to) return false;
+  const replied = heldIn(held, m.in_reply_to);
+  return replied ? !replied.session_agent_id : null;
+}
+
+/** The held rows that quote message `id`, quoting nothing of it (it was deleted). */
+function unquote(data: TimelineData, id: string): TimelineData {
+  const pages = pagesOf(data);
+  let changed = false;
+  const copy = pages.map((pg) => {
+    if (!pg.messages.some((m) => m.reply_to?.id === id && m.reply_to.excerpt)) return pg;
+    changed = true;
+    return { ...pg, messages: pg.messages.map((m) => (m.reply_to?.id === id ? { ...m, reply_to: { ...m.reply_to, excerpt: '' } } : m)) };
+  });
+  return changed ? rebuild(data, copy) : data;
+}
+
+const viewOf = (key: QueryKey): TimelineView | null => {
+  const v = key[3] as Partial<{ comments: true; session: string }> | undefined;
+  return v && typeof v === 'object' && (v.comments === true || typeof v.session === 'string') ? (v as TimelineView) : null;
+};
+
 function patchMessages(batch: MessageEvent[]): void {
   const timelines = queryClient
     .getQueriesData<TimelineData>({ queryKey: ['thread'] })
@@ -462,17 +521,29 @@ function patchMessages(batch: MessageEvent[]): void {
   if (!timelines.length) return;
   for (const [key, data] of timelines) {
     const threadId = key[1] as string;
+    const view = viewOf(key);
     let next = data as TimelineData;
+    let unsure = false;
     for (const e of batch) {
       if (!e.id || e.goal_id) continue;
       if (e.conversation_id !== threadId && e.thread_id !== threadId && e.root_id !== threadId) continue;
+      // a deleted message as a timeline read gives it (threads._message_out): no words, files, recipient or quote, and
+      // nothing it answers; a reply that quotes it quotes nothing (its body is '' on the server)
       const row: MessageRow = e.deleted
-        ? { id: e.id, deleted: true, ...(e.revision != null && { revision: e.revision }) }
+        ? { id: e.id, deleted: true, body: null, in_reply_to: null, recipient_id: null, refs: {}, reply_to: null, ...(e.revision != null && { revision: e.revision }) }
         : { ...(e.message as MessageRow), id: e.id };
+      if (e.deleted) next = unquote(next, e.id);
       if (e.deleted && !pagesOf(next).some((pg) => pg.messages.some((m) => m.id === e.id))) continue;
+      if (view && !e.deleted) {
+        const fits = inView(view, row, next);
+        if (fits === null) unsure = true;
+        if (!fits) continue;
+      }
       next = upsertMessage(next, threadId, row);
     }
     if (next !== data) queryClient.setQueryData(key, next);
+    // the server's filter decides what this view cannot: it reads again
+    if (unsure) refetchSoon(key);
   }
 }
 

@@ -25,12 +25,17 @@ export type TaskData = TaskDetail['task'] & {
   can_comment: boolean;
   /** Whether the person may message an agent's session on it (POST .../comments `to`). */
   can_direct: boolean;
+  /** One row per agent on the task, the holder first: each opens its session view (`session=` on the timeline). */
+  sessions: TaskSession[];
   mover: boolean;
   /** The agent Tico stopped that this task is the notice for, when the person may release it; else null. */
   stopped_agent: NonNullable<TaskDetail['stopped_agent']> | null;
   /** The task's note (a legal matter's case in brief): the task read carries it, the schema does not name it yet. */
   note?: string | null;
 };
+
+/** An agent on the task with its session view; `last_seq`, the newest message that view shows (null before one). */
+export type TaskSession = NonNullable<TaskDetail['sessions']>[number];
 
 /** A sub-task the reader may open (GET /api/v2/tasks/{tid} `children`); a check's `role` says a second review. */
 export type TaskChild = TaskDetailChild;
@@ -43,6 +48,7 @@ function flat(d: TaskDetail): TaskData {
     children: d.children ?? [],
     can_comment: d.can_comment ?? false,
     can_direct: d.can_direct ?? false,
+    sessions: d.sessions ?? [],
     mover: d.mover ?? false,
     stopped_agent: d.stopped_agent ?? null,
   };
@@ -78,6 +84,25 @@ export const taskDetailQuery = (id: string | undefined) =>
     queryKey: keys.tasks.detail(id ?? ''),
     queryFn: ({ signal }) => readTask(id ?? '', signal),
     enabled: !!id,
+  });
+
+/** One agent's run on the task as its session view shows it (GET /api/v2/tasks/{tid}/execution?agent=): its state and
+    its words for it ("Saved — queued", "Stopped"), or null when it has none. */
+export interface SessionRun {
+  state: string;
+  label: string;
+  bot_id: string;
+  /** Its run, while one is under way, and the reply it has written so far: all of it, and its pieces in order (a
+      tool call's label, or text; the last text piece may still be being written) (backend/turns.py reply_parts). */
+  attempt_id?: string | null;
+  text?: string;
+  parts?: { kind: string; text: string }[];
+}
+export const sessionRunQuery = (task: string, agent: string) =>
+  queryOptions({
+    queryKey: [...keys.tasks.detail(task), 'execution', agent] as const,
+    queryFn: async ({ signal }) =>
+      (await api.get<{ execution: SessionRun | null }>(`${taskPath(task)}/execution?agent=${enc(agent)}`, { signal })).execution,
   });
 
 /** The task's files, pages first (GET /api/v2/tasks/{tid}/files). */

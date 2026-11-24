@@ -20,6 +20,7 @@ export {
   listSeq,
   upsertMessage,
   removeMessage,
+  inView,
   type Channel,
   type TaskRow,
   type TaskList,
@@ -27,5 +28,6 @@ export {
   type MessageRow,
   type Timeline,
   type TimelineData,
+  type TimelineView,
   type MessageEvent,
 } from './patch';

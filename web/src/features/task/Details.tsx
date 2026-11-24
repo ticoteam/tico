@@ -21,6 +21,7 @@ import { DETAILS, failedToast, tabAddress } from './model';
 import { NewPage } from './NewPage';
 import { Face, Mark, NameOf, Go, isActor } from './parts';
 import { taskFilesQuery, type TaskData } from './queries';
+import { Sessions } from './sessions';
 
 /* Details (more.js detailsBody): named sections in a fixed order, from what it is judged by, to the work, to the
    record. A section with nothing in it is not drawn; what is finished folds into one line; the record starts folded.
@@ -432,21 +433,7 @@ export function Details({ t, adding = null, onAdding = () => undefined }: Detail
         </Section>
       )}
 
-      {t.runs.length > 0 && (
-        <Section name="Sessions" count={t.runs.length} defaultOpen={false}>
-          {t.runs.map((r) => (
-            <div key={r.run} className="row dt-ses" title={r.outcome ?? 'Running'}>
-              <span className="row-mark" />
-              <span className="row-title">{r.finished_at ? (r.outcome ?? 'Finished') : 'Running'}</span>
-              <span className="row-stage">
-                <NameOf id={r.bot.includes(':') ? r.bot : `bot:${r.bot}`} />
-              </span>
-              <Face id={r.bot.includes(':') ? r.bot : `bot:${r.bot}`} decorative />
-              {r.started_at ? <Ago at={r.started_at} className="row-age" /> : <span className="row-age" />}
-            </div>
-          ))}
-        </Section>
-      )}
+      <Sessions t={t} />
       <Meetings t={t} />
       {adding === 'page' && (
         <NewPage task={t.id} onClose={end} onSaved={(file) => void navigate({ to: details as never, search: { file } as never })} />
