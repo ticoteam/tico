@@ -727,6 +727,9 @@ fn credential_shapes() -> &'static [(regex::Regex, &'static str)] {
                 r"\b(?:gh[pousr]_[A-Za-z0-9._-]{16,}|github_pat_[A-Za-z0-9_]{16,})",
                 "••••",
             ),
+            // Google's OAuth access (`ya29.`) and refresh (`1//0`) tokens: an Antigravity plan's, should one turn up
+            // in a turn's diagnostics before its turn has registered it.
+            (r"(?:\bya29\.|\b1//0)[A-Za-z0-9._-]{20,}", "••••"),
             (
                 r"(?i)\b((?:proxy-)?authorization\s*:\s*)(?:(?:basic|bearer|token)\s+)?\S+",
                 "${1}••••",
@@ -1043,6 +1046,13 @@ mod tests {
         let scrubbed = scrub_credentials(&said, &[]);
         assert!(!scrubbed.contains("ghs_"), "{scrubbed}");
         assert!(!scrubbed.contains("S1g-n_aTuRe"), "{scrubbed}");
+        let google = format!(
+            "agy: ya29.{} and 1//0{} refused",
+            "a0B1-c2_D3".repeat(8),
+            "Zz9_Yy8-Xx".repeat(6)
+        );
+        let masked = scrub_credentials(&google, &[]);
+        assert!(!masked.contains("a0B1") && !masked.contains("Zz9_"), "{masked}");
         let failure = git_failure(&format!("fatal: {stateless} refused"), &[], 300);
         assert!(
             !failure.contains("eyJ") && !failure.contains("S1g-n"),

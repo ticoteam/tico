@@ -104,6 +104,7 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
             f"error: {STATELESS_TOKEN} was refused",
             "error: > Authorization: Basic eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
             "error: helper said password=hunter2hunter2 and token=abc123def456",
+            f"agy: ya29.{'a0B1-c2_D3' * 8} and 1//0{'Zz9_Yy8-Xx' * 6} were refused",
         ]
     )
     text = redact.git_failure(stderr, secrets=[granted], limit=1000)
@@ -117,6 +118,8 @@ def test_git_failure_masks_every_credential_shape_and_is_bounded():
         "eC1hY2Nlc3MtdG9rZW46c2VjcmV0c2VjcmV0",
         "hunter2hunter2",
         "abc123def456",
+        "a0B1-c2_D3",
+        "Zz9_Yy8-Xx",
     ):
         assert secret not in text
     first = redact.git_failure(stderr.splitlines()[0], secrets=[granted])
