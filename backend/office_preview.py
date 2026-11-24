@@ -1,3 +1,4 @@
+# pyright: strict
 """`python -I office_preview.py <docx|xlsx> <source> <target.html>`: a Word or Excel file's preview, as one small HTML
 page the chat draws on the file's card (web/src/conversation/Rich.tsx OfficeCard).
 
@@ -10,8 +11,8 @@ and entity declarations refused).
 - Excel: the standard library only. The first visible sheet's first ROWS rows and COLUMNS columns become a table, read
   as a stream, and only the shared strings those cells name are kept; the sheet names go on the page as well.
 
-The page stops at MAX_HTML, the most the chat reads of it. Run as a script it puts its own folder on sys.path (-I
-leaves it off) to import docs_import; imported as backend.office_preview, it imports it from the package.
+The page stops at MAX_HTML, the most the chat reads of it. Run as a script it puts the repository's folder on sys.path
+(-I leaves it off) so it imports backend.docs_import just as it does when imported as backend.office_preview.
 """
 
 import html
@@ -22,6 +23,7 @@ import sys
 import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from xml.etree import ElementTree
 
 MAX_HTML = 256 * 1024
@@ -44,15 +46,18 @@ DATE_FORMATS = {14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47}
 LAST_SERIAL = 2958466  # 9999-12-31
 
 
-def _guard():
-    if __package__:
-        from . import docs_import
-    else:  # run as a script: __main__ put this folder on sys.path
-        import docs_import
+# A sheet cell as read: a shared string's place, a number with whether its style shows a date, or text as it stands.
+Cell = tuple[str, int] | tuple[str, str, bool] | str
+
+
+def _docs() -> Any:
+    """backend.docs_import, untyped: its archive check and Word style map."""
+    from backend import docs_import
+
     return docs_import
 
 
-def page(body, attrs="", room=MAX_HTML):
+def page(body: str, attrs: str = "", room: int = MAX_HTML) -> str:
     """The whole page, under `room` bytes: a body past it is cut before its last tag that would not fit, and the
     browser closes what the cut left open."""
     head = f'<!doctype html><html><head><meta charset="utf-8"><style>{STYLE}</style></head><body{attrs}>'
@@ -65,44 +70,50 @@ def page(body, attrs="", room=MAX_HTML):
     return head + body + tail
 
 
-def word(data):
-    import mammoth
+def _no_picture(image: object) -> list[object]:
+    """mammoth's picture hook: nothing in a picture's place."""
+    return []
 
-    docs = _guard()
+
+def word(data: bytes) -> str:
+    import mammoth  # pyright: ignore[reportMissingTypeStubs]
+
+    docs = _docs()
     docs._check_docx(data)
-    body = mammoth.convert_to_html(
+    convert: Any = mammoth.convert_to_html  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+    body: str = convert(
         io.BytesIO(data),
         style_map=docs.WORD_STYLES,
         include_embedded_style_map=False,
-        convert_image=lambda image: [],
+        convert_image=_no_picture,
     ).value
-    body = docs.WORD_NOTE_BACK.sub("", body)
+    body = str(docs.WORD_NOTE_BACK.sub("", body))
     if not re.sub(r"<[^>]*>", "", body).strip():
         raise ValueError("The Word file has no text")
     return page(body)
 
 
-def _local(tag):
+def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
-def _rid(element):
+def _rid(element: ElementTree.Element) -> str | None:
     return next((v for k, v in element.attrib.items() if _local(k) == "id"), None)
 
 
-def _relations(archive, rels):
+def _relations(archive: zipfile.ZipFile, rels: str) -> dict[str, tuple[str, str]]:
     """{relationship id: (type, part path)} of one .rels part, paths resolved from the xl/ folder."""
-    found = {}
+    found: dict[str, tuple[str, str]] = {}
     if rels not in archive.namelist():
         return found
     for rel in ElementTree.fromstring(archive.read(rels)):
         target = rel.get("Target") or ""
         path = target.lstrip("/") if target.startswith("/") else posixpath.normpath(posixpath.join("xl", target))
-        found[rel.get("Id")] = (rel.get("Type") or "", path)
+        found[rel.get("Id") or ""] = (rel.get("Type") or "", path)
     return found
 
 
-def column_name(n):
+def column_name(n: int) -> str:
     name = ""
     n += 1
     while n:
@@ -114,7 +125,7 @@ def column_name(n):
 CELL = re.compile(r"([A-Z]{1,3})(\d+)$")
 
 
-def _cell_at(ref):
+def _cell_at(ref: str | None) -> tuple[int, int] | None:
     """(row, column), both from 1 and 0, of a cell reference such as `C12`, else None."""
     found = CELL.match(ref or "")
     if not found:
@@ -125,18 +136,18 @@ def _cell_at(ref):
     return int(found.group(2)), column - 1
 
 
-def _date_styles(archive, path):
+def _date_styles(archive: zipfile.ZipFile, path: str | None) -> set[int]:
     """The cell styles (their places in cellXfs) whose number format shows a date or a time."""
     if not path or path not in archive.namelist():
         return set()
     root = ElementTree.fromstring(archive.read(path))
-    custom = set()
+    custom: set[int] = set()
     for element in root.iter():
         if _local(element.tag) == "numFmt":
             code = re.sub(r'"[^"]*"|\[[^\]]*\]|\\.', "", element.get("formatCode") or "")
             if re.search(r"[dyhs]", code, re.I):
                 custom.add(int(element.get("numFmtId") or -1))
-    dated = set()
+    dated: set[int] = set()
     for element in root:
         if _local(element.tag) == "cellXfs":
             for i, xf in enumerate(element):
@@ -146,7 +157,7 @@ def _date_styles(archive, path):
     return dated
 
 
-def _number(text, dated, base):
+def _number(text: str, dated: bool, base: datetime) -> str:
     try:
         x = float(text)
     except ValueError:
@@ -161,11 +172,13 @@ def _number(text, dated, base):
     return f"{x:.10g}"
 
 
-def sheet(data):
-    _guard()._check_docx(data)
+def sheet(data: bytes) -> str:
+    _docs()._check_docx(data)
     archive = zipfile.ZipFile(io.BytesIO(data))
     workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-    names, first, base = [], None, datetime(1899, 12, 30, tzinfo=timezone.utc)
+    names: list[str] = []
+    first: str | None = None
+    base = datetime(1899, 12, 30, tzinfo=timezone.utc)
     for element in workbook.iter():
         tag = _local(element.tag)
         if tag == "workbookPr" and element.get("date1904") in ("1", "true"):
@@ -174,12 +187,14 @@ def sheet(data):
             names.append(element.get("name") or f"Sheet{len(names) + 1}")
             first = first or _rid(element)
     rels = _relations(archive, "xl/_rels/workbook.xml.rels")
-    if first not in rels:
+    if first is None or first not in rels:
         raise ValueError("The workbook has no sheet")
     by_type = {kind.rsplit("/", 1)[-1]: path for kind, path in rels.values()}
     dated = _date_styles(archive, by_type.get("styles"))
 
-    cells, wanted, row, column, width, height = {}, set(), 0, -1, 0, 0
+    cells: dict[tuple[int, int], Cell] = {}
+    wanted: set[int] = set()
+    row, column, width, height = 0, -1, 0, 0
     with archive.open(rels[first][1]) as stream:
         for event, element in ElementTree.iterparse(stream, events=("start", "end")):
             tag = _local(element.tag)
@@ -196,7 +211,8 @@ def sheet(data):
                 at = _cell_at(element.get("r"))
                 column = at[1] if at else column + 1
                 kind, style = element.get("t") or "n", int(element.get("s") or 0)
-                value = inline = None
+                value: str | None = None
+                inline: str | None = None
                 for child in element:
                     if _local(child.tag) == "v":
                         value = child.text or ""
@@ -205,6 +221,7 @@ def sheet(data):
                 element.clear()
                 if column >= COLUMNS or (value is None and inline is None):
                     continue
+                shown: Cell
                 if kind == "s":
                     wanted.add(int(value or 0))
                     shown = ("s", int(value or 0))
@@ -224,9 +241,9 @@ def sheet(data):
     return _sheet_page(cells, width, height, names, strings, base)
 
 
-def _shared(archive, path, wanted):
+def _shared(archive: zipfile.ZipFile, path: str | None, wanted: set[int]) -> dict[int, str]:
     """The shared strings the cells name, read up to the last one they name and no further."""
-    found = {}
+    found: dict[int, str] = {}
     if not wanted or not path or path not in archive.namelist():
         return found
     last, index = max(wanted), -1
@@ -236,7 +253,7 @@ def _shared(archive, path, wanted):
                 continue
             index += 1
             if index in wanted:
-                parts = []
+                parts: list[str] = []
                 for child in element:
                     if _local(child.tag) == "t":
                         parts.append(child.text or "")
@@ -249,7 +266,14 @@ def _shared(archive, path, wanted):
     return found
 
 
-def _sheet_page(cells, width, height, names, strings, base):
+def _sheet_page(
+    cells: dict[tuple[int, int], Cell],
+    width: int,
+    height: int,
+    names: list[str],
+    strings: dict[int, str],
+    base: datetime,
+) -> str:
     head = "<tr><th></th>" + "".join(f"<th>{column_name(i)}</th>" for i in range(width)) + "</tr>"
     tabs = '<nav class="tabs">' + "".join(
         f'<span class="{"on" if i == 0 else ""}">{html.escape(name)}</span>' for i, name in enumerate(names[:20])
@@ -257,13 +281,14 @@ def _sheet_page(cells, width, height, names, strings, base):
     tabs += f"<span>+{len(names) - 20}</span></nav>" if len(names) > 20 else "</nav>"
     attrs = f' class="sheet" data-sheet="{html.escape(names[0])}" data-sheets="{len(names)}"'
     room = MAX_HTML - len(page("", attrs).encode()) - len(tabs.encode()) - 64
-    rows, used = [], 0
+    rows: list[str] = []
+    used = 0
     for r in range(1, height + 1):
         parts = [f"<tr><th>{r}</th>"]
         for col in range(width):
             value = cells.get((r, col))
             numeric = False
-            if isinstance(value, tuple) and value[0] == "s":
+            if isinstance(value, tuple) and len(value) == 2:
                 text = strings.get(value[1], "")
             elif isinstance(value, tuple):
                 text, numeric = _number(value[1], value[2], base), True
@@ -282,7 +307,7 @@ def _sheet_page(cells, width, height, names, strings, base):
     return page(body, attrs)
 
 
-def main(argv):
+def main(argv: list[str]) -> None:
     kind, source, target = argv
     data = Path(source).read_bytes()
     out = word(data) if kind == "docx" else sheet(data) if kind == "xlsx" else None
@@ -292,5 +317,5 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.path.append(str(Path(__file__).resolve().parent))  # -I leaves this folder off sys.path; docs_import is here
+    sys.path.append(str(Path(__file__).resolve().parents[1]))  # -I leaves the repository off sys.path; backend is in it
     main(sys.argv[1:])
