@@ -75,8 +75,9 @@ def test_setup_covers_what_the_command_runs(command, setup):
         ('npm --prefix web run typecheck', True),
         ('node web/scripts/parity.ts chat', True),
         ('npx vitest run --root=web', True),
-        # One that installs them itself, or does not name web/, runs as it is.
-        ("bash -c 'cd web && npm ci && npx vitest run'", False),
+        # An `npm ci` in the command may be the root's: web/'s install still goes first.
+        ("bash -c 'npm ci && cd web && npm run typecheck'", True),
+        # One that does not name web/ runs as it is.
         ('python -m pytest -q backend/tests/test_webhooks.py backend/tests/test_web.py', False),
         ('python -m pytest -q backend/web_push.py', False),
         ('cargo test', False),
@@ -85,6 +86,34 @@ def test_setup_covers_what_the_command_runs(command, setup):
 def test_a_command_that_names_web_installs_webs_packages_first(line, installs):
     assert remote.web_ready(line) == (remote.WEB_INSTALL + line if installs else line)
     assert remote.WEB_INSTALL.startswith('if [ -f web/package-lock.json ]; then (cd web && npm ci ')
+
+
+@pytest.mark.parametrize(
+    'lock, npm_exit, code, installed, ran',
+    [
+        (True, 0, 7, True, True),  # web/'s install, then the command, whose exit code is the run's
+        (True, 3, 3, True, False),  # a failed install ends the run with npm's code; the command never runs
+        (False, 0, 7, False, True),  # no web/package-lock.json (an older commit): no install
+    ],
+)
+def test_the_web_install_runs_in_a_shell_before_the_command(tmp_path, lock, npm_exit, code, installed, ran):
+    (tmp_path / 'web').mkdir()
+    if lock:
+        (tmp_path / 'web' / 'package-lock.json').write_text('{}')
+    bin_dir, log = tmp_path / 'bin', tmp_path / 'npm.log'
+    bin_dir.mkdir()
+    (bin_dir / 'npm').write_text(f'#!/bin/sh\necho "$(pwd -P) $*" >> {log}\nexit {npm_exit}\n')
+    (bin_dir / 'npm').chmod(0o755)
+    # As run() sends it: shlex.join of the words, with a quoted argument whose spaces and quotes must survive.
+    line = remote.shlex.join(['bash', '-c', 'cd web && printf "%s\\n" \'two  spaces "q"\' > ../out; exit 7'])
+    env = {**remote.os.environ, 'PATH': f'{bin_dir}:{remote.os.environ["PATH"]}'}
+    done = subprocess.run(['bash', '-c', remote.web_ready(line)], cwd=tmp_path, env=env, check=False)
+    assert done.returncode == code
+    install = f'{(tmp_path / "web").resolve()} ci --no-audit --no-fund --prefer-offline\n'
+    assert (log.read_text() if log.exists() else '') == (install if installed else '')
+    assert (tmp_path / 'out').exists() == ran
+    if ran:
+        assert (tmp_path / 'out').read_text() == 'two  spaces "q"\n'
 
 
 def fake_gh(monkeypatch, replies):

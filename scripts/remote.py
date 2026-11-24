@@ -156,10 +156,11 @@ WEB_INSTALL = (
 
 
 def web_ready(line):
-    """The shell line the VM runs for `line`: web/'s packages first when it names web/ and does not install them itself.
-    The VM's install (scripts/ci_install.sh) covers the root packages only, so `npx tsr` or `npm run typecheck` in web/
-    failed with `tsr: not found`. An install that fails ends the run with npm's exit code."""
-    if not WEB.search(line) or 'npm ci' in line or 'npm install' in line:
+    """The shell line the VM runs for `line`: web/'s packages first when it names web/. The VM's install
+    (scripts/ci_install.sh) covers the root packages only, so `npx tsr` or `npm run typecheck` in web/ failed with
+    `tsr: not found`. A command that installs them itself installs them twice (about 6 s): an `npm ci` in the command
+    may be the root's. An install that fails ends the run with npm's exit code, before the command."""
+    if not WEB.search(line):
         return line
     return WEB_INSTALL + line
 
