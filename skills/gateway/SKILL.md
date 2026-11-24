@@ -57,11 +57,6 @@ you need and not more. Search runs as you, so a spend is on your bot.
 
 ## Make a picture: `tico_gateway_image`
 
-On Codex, make pictures with your own built-in image generation instead (GPT Image 2.6): it runs on the
-owner's ChatGPT plan, so it costs no Gateway money. It saves under `$CODEX_HOME/generated_images/`; copy the
-file into the work folder before you finish and write its `<file>.json` sidecar yourself (prompt, model, `parents`).
-Use the Gateway for a vector SVG, or when your own image tool is missing or fails. Every other agent uses the Gateway.
-
 ```
 tico gateway image "what to draw" --model low|high|svg --out shots/frame-01.png [--category C] [--quality Q] [--ref FILE]... [--size WxH] [--count N]
 ```
