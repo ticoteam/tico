@@ -1796,13 +1796,12 @@ impl PersonalCopy {
         let held = hold_copy(&path) > 0;
         let name = path.file_name().unwrap_or_default().to_owned();
         let copy = Self(path, state.join(COPIES_DIR).join(name));
-        let kept = held && std::fs::symlink_metadata(&copy.0).is_ok_and(|m| m.is_dir());
-        if kept {
-            empty_folder(&copy.0);
-        } else {
+        // Emptied only while it is still the folder made here; else made again, and the room's kept agy, started in
+        // the folder that was there, is not taken (crate::hosts::antigravity fingerprint).
+        if !(held && empty_copy(&copy.0)) {
             remove_copy(&copy.0);
             let recorded = std::fs::create_dir_all(state.join(COPIES_DIR))
-                .and_then(|_| std::fs::write(&copy.1, ""));
+                .and_then(|_| std::fs::write(&copy.1, copy.0.as_os_str().as_encoded_bytes()));
             if let Err(e) = recorded {
                 return Err(format!(
                     "cannot record this chat's copy of the checkout: {e}"
@@ -1810,6 +1809,7 @@ impl PersonalCopy {
             }
             crate::isolation::mkdir(&copy.0, 0o700)
                 .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
+            made_copy(&copy.0);
             crate::checkout_groups::prepare(copy.0.clone()).await;
         }
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
@@ -1850,13 +1850,20 @@ impl PersonalCopy {
 
     /// Remove the chats' copies this runner recorded in its `state` (`make`) that a kept session held when it stopped.
     pub(crate) fn sweep(state: &Path) {
+        use std::os::unix::ffi::OsStringExt;
         let Ok(records) = std::fs::read_dir(state.join(COPIES_DIR)) else {
             return;
         };
         for record in records.flatten() {
             let name = record.file_name();
-            let path = std::env::temp_dir().join(&name);
+            // The copy's path as it was made, whatever the temporary folder is now.
+            let path = match std::fs::read(record.path()) {
+                Ok(made) if !made.is_empty() => PathBuf::from(std::ffi::OsString::from_vec(made)),
+                _ => std::env::temp_dir().join(&name),
+            };
             if name.to_string_lossy().starts_with("tico-personal-")
+                && path.is_absolute()
+                && path.file_name() == Some(name.as_os_str())
                 && copies()
                     .as_ref()
                     .is_none_or(|held| !held.contains_key(&path))
@@ -1874,22 +1881,34 @@ impl PersonalCopy {
 /// Where a runner's state records the chats' copies it made (`PersonalCopy::sweep`).
 const COPIES_DIR: &str = "personal-copies";
 
-/// How many holders each chat's copy has: its turn, and the session kept for the room after it.
-static COPIES: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+/// How many holders each chat's copy has (its turn, and the session kept for the room after it), and the device and
+/// inode of the folder made for it.
+type Holders = HashMap<PathBuf, (usize, Option<(u64, u64)>)>;
+static COPIES: Mutex<Option<Holders>> = Mutex::new(None);
 
-fn copies() -> std::sync::MutexGuard<'static, Option<HashMap<PathBuf, usize>>> {
+fn copies() -> std::sync::MutexGuard<'static, Option<Holders>> {
     COPIES.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// One more holder of the copy at `path`: how many it had.
 fn hold_copy(path: &Path) -> usize {
     let mut held = copies();
-    let count = held
+    let entry = held
         .get_or_insert_with(HashMap::new)
         .entry(path.to_path_buf())
         .or_default();
-    *count += 1;
-    *count - 1
+    entry.0 += 1;
+    entry.0 - 1
+}
+
+/// Note the folder just made at `path` as its copy's (`empty_copy`).
+fn made_copy(path: &Path) {
+    let id = crate::model_subscriptions::Folder::at(path)
+        .ok()
+        .and_then(|f| f.id());
+    if let Some(entry) = copies().as_mut().and_then(|c| c.get_mut(path)) {
+        entry.1 = id;
+    }
 }
 
 /// Remove a copy (a link in its place is removed, never followed): whether it is gone.
@@ -1911,21 +1930,24 @@ fn remove_copy(path: &Path) -> bool {
     }
 }
 
-/// Everything in `path`, not the folder itself (links removed, never followed).
-fn empty_folder(path: &Path) {
-    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
-        let gone = if entry.file_type().is_ok_and(|t| t.is_dir()) {
-            std::fs::remove_dir_all(entry.path())
-        } else {
-            std::fs::remove_file(entry.path())
-        };
-        if let Err(e) = gone {
-            log(&format!(
-                "Tico runner: cannot clear a chat's copy of its checkout {}: {e}",
-                path.display()
-            ));
-        }
+/// Empty the copy at `path`, not the folder itself: whether it is now empty. Only the folder `made_copy` noted,
+/// opened without following a link and emptied through that descriptor, so a bot that swapped its name for a link or
+/// another folder can send none of it elsewhere.
+fn empty_copy(path: &Path) -> bool {
+    let made = copies()
+        .as_ref()
+        .and_then(|c| c.get(path))
+        .and_then(|c| c.1);
+    let Ok(folder) = crate::model_subscriptions::Folder::at(path) else {
+        return false;
+    };
+    if made.is_none() || folder.id() != made {
+        return false;
     }
+    for name in folder.names() {
+        folder.remove(&name);
+    }
+    folder.names().is_empty()
 }
 
 impl Drop for PersonalCopy {
@@ -1934,8 +1956,8 @@ impl Drop for PersonalCopy {
         let mut held = copies();
         let map = held.get_or_insert_with(HashMap::new);
         let last = match map.get_mut(&self.0) {
-            Some(n) if *n > 1 => {
-                *n -= 1;
+            Some(n) if n.0 > 1 => {
+                n.0 -= 1;
                 false
             }
             _ => {
@@ -2566,7 +2588,7 @@ mod tests {
         for recorded in [&copy, &linked] {
             std::fs::write(
                 state.join(COPIES_DIR).join(recorded.file_name().unwrap()),
-                "",
+                recorded.as_os_str().as_encoded_bytes(),
             )
             .unwrap();
         }
@@ -2581,6 +2603,39 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&other);
         let _ = std::fs::remove_dir_all(&state);
+    }
+
+    #[test]
+    fn a_kept_copy_is_emptied_only_while_it_is_the_folder_made_for_it() {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let temp = std::env::temp_dir();
+        let (copy, moved, target) = (
+            temp.join(format!("tico-personal-{}d", &id[..12])),
+            temp.join(format!("tico-moved-{id}")),
+            temp.join(format!("tico-target-{id}")),
+        );
+        std::fs::create_dir_all(&copy).unwrap();
+        hold_copy(&copy);
+        made_copy(&copy);
+        std::fs::create_dir_all(copy.join("src/deep")).unwrap();
+        std::fs::write(copy.join("src/deep/file"), "").unwrap();
+        assert!(empty_copy(&copy));
+        assert_eq!(std::fs::read_dir(&copy).unwrap().count(), 0);
+        // The bot moves its folder away and puts a link, then another folder, in its place: neither is emptied.
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("keep"), "").unwrap();
+        std::fs::rename(&copy, &moved).unwrap();
+        std::os::unix::fs::symlink(&target, &copy).unwrap();
+        assert!(!empty_copy(&copy));
+        std::fs::remove_file(&copy).unwrap();
+        std::fs::create_dir_all(&copy).unwrap();
+        std::fs::write(copy.join("keep"), "").unwrap();
+        assert!(!empty_copy(&copy));
+        assert!(target.join("keep").exists() && copy.join("keep").exists());
+        copies().as_mut().unwrap().remove(&copy);
+        for dir in [&copy, &moved, &target] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]

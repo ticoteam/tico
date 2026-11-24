@@ -655,6 +655,14 @@ fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) 
     inputs.add("argv", &json!(argv).to_string());
     inputs.env(env, &["GEMINI_HOME"]);
     inputs.add("folder", &settings.cwd);
+    // The folder itself as well as its name: a kept agy never goes on in a folder made again in its place
+    // (crate::sessions::PersonalCopy::make).
+    let folder = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(&settings.cwd)
+            .map_or(String::new(), |m| format!("{}:{}", m.dev(), m.ino()))
+    };
+    inputs.add("folder_id", &folder);
     inputs.add("records", &records.display().to_string());
     inputs.add("mcp_servers", &json!(settings.mcp_servers).to_string());
     inputs
@@ -1010,12 +1018,10 @@ impl AntigravityHost {
         };
         let key = key.filter(|_| settings.plan_home.is_none() || plan.is_some());
         let tokens = self.0.keeper.folder().map_err(failed)?;
-        let file = tokens.join("lease-token");
-        crate::warm::write_token_for(
-            &file,
+        let file = lease_file(
+            &tokens,
             settings.env.get("HUB_TOKEN").map_or("", String::as_str),
-            None,
-        );
+        )?;
         let tmp = std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         let made = crate::isolation::mkdir(&tmp, 0o700)
             .map_err(|e| failed(format!("could not make Antigravity's TMPDIR: {e}")));
@@ -1233,12 +1239,27 @@ impl AntigravityHost {
             }
             warm = false;
             agent.stop().await;
+            // A stop while the old one went owns the host now: no new process it would never reap.
+            let ours = |inner: &Inner| inner.up && inner.turn.as_deref() == Some(turn);
+            if !ours(&self.inner()) {
+                break end;
+            }
             let key = agent.key.clone();
             let respawned = home_for(&settings).and_then(|home| self.spawn(&settings, &home, key));
             match respawned {
                 Ok(new) => {
                     agent = new;
-                    self.inner().proc = Some(agent.proc.clone());
+                    let stored = {
+                        let mut inner = self.inner();
+                        ours(&inner) && {
+                            inner.proc = Some(agent.proc.clone());
+                            true
+                        }
+                    };
+                    if !stored {
+                        agent.stop().await;
+                        break end;
+                    }
                     stream = Stream::default();
                 }
                 Err(e) => break End::Failed(e.to_string()),
@@ -2030,6 +2051,17 @@ async fn write_to(stdin: &Stdin, msg: &Value) -> Result<(), Option<String>> {
     s.flush().await.map_err(|_| None)
 }
 
+/// `tokens`' lease-token file holding `token`; when it cannot be written, `tokens` goes and agy does not start, as
+/// it would have no hub credential.
+fn lease_file(tokens: &Path, token: &str) -> Result<PathBuf, HostError> {
+    let file = tokens.join("lease-token");
+    if crate::warm::write_token_for(&file, token, None) {
+        return Ok(file);
+    }
+    let _ = std::fs::remove_dir_all(tokens);
+    Err(failed("could not write Antigravity's lease token"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2222,6 +2254,23 @@ for line in sys.stdin:
             .replace("@NO_BROWSER@", NO_BROWSER),
         );
         path.display().to_string()
+    }
+
+    #[test]
+    fn agy_never_starts_when_its_lease_token_cannot_be_written() {
+        let tokens =
+            std::env::temp_dir().join(format!("tico-lease-{}", uuid::Uuid::new_v4().simple()));
+        // A folder where the token file goes: the write fails, whoever runs it.
+        std::fs::create_dir_all(tokens.join("lease-token/in-the-way")).unwrap();
+        assert!(lease_file(&tokens, "hub-token").is_err());
+        assert!(
+            !tokens.exists(),
+            "the token folder goes with the failed start"
+        );
+        std::fs::create_dir_all(&tokens).unwrap();
+        let file = lease_file(&tokens, "hub-token").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hub-token");
+        let _ = std::fs::remove_dir_all(&tokens);
     }
 
     #[test]

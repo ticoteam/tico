@@ -975,11 +975,11 @@ fn c_name(name: &OsStr) -> Result<CString, String> {
 /// `bot_state`) and may swap any name in it at any moment, so every folder a subscription home is made of is opened
 /// one name at a time from the runner's state without following a link, and what is made, read, written, renamed or
 /// removed there is named relative to it: a swap after the check cannot send the supervisor's write anywhere else.
-struct Folder(OwnedFd);
+pub(crate) struct Folder(OwnedFd);
 
 impl Folder {
     /// `path`, opened without following a link anywhere on the way but root's own (isolation::open_unfollowed).
-    fn at(path: &Path) -> Result<Folder, String> {
+    pub(crate) fn at(path: &Path) -> Result<Folder, String> {
         crate::isolation::open_unfollowed(path, libc::O_DIRECTORY)
             .map(|f| Folder(f.into()))
             .map_err(|_| refused())
@@ -1001,6 +1001,13 @@ impl Folder {
 
     fn raw(&self) -> i32 {
         self.0.as_raw_fd()
+    }
+
+    /// This folder's device and inode.
+    pub(crate) fn id(&self) -> Option<(u64, u64)> {
+        use std::os::unix::fs::MetadataExt;
+        let held = std::fs::File::from(self.0.try_clone().ok()?);
+        held.metadata().ok().map(|m| (m.dev(), m.ino()))
     }
 
     /// The folder `name` in this one, never through a link; made when missing (`make`).
@@ -1115,7 +1122,7 @@ impl Folder {
     }
 
     /// The names in this folder.
-    fn names(&self) -> Vec<CString> {
+    pub(crate) fn names(&self) -> Vec<CString> {
         let mut out = vec![];
         // SAFETY: fdopendir takes a duplicate this process owns (closed by closedir), rewound since it shares the
         // held descriptor's position; readdir's entries are copied out before the next call.
@@ -1146,7 +1153,7 @@ impl Folder {
     }
 
     /// Remove `name` here: a file or link (never what a link points at), or a folder with all that is in it.
-    fn remove(&self, name: &CStr) {
+    pub(crate) fn remove(&self, name: &CStr) {
         self.remove_within(name, 32);
     }
 

@@ -3563,6 +3563,8 @@ impl Runner {
         let mut acked = false;
         // Whether that fallback's start was refused (start_refusal) before it acknowledged the turn.
         let mut start_refused = false;
+        // Whether the last fallback's turn failed: its agy is never kept (below).
+        let mut hop_failed = false;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
@@ -3871,6 +3873,7 @@ impl Runner {
                 Ok(())
             }.await;
             start_refused = matches!(&hopped, Err(e) if !acked && start_refusal(e));
+            hop_failed = hopped.is_err();
             if let Err(e) = hopped {
                 if self.drain.returning(&aid) {
                     // The regular settlement below saves and hands the continuation back.
@@ -4074,7 +4077,8 @@ impl Runner {
                 && (drove.outcome == "completed"
                     || (drove.outcome == "interrupted"
                         && matches!(h, Host::Antigravity(_))
-                        && ran.is_ok()));
+                        && ran.is_ok()
+                        && !hop_failed));
             if !keeps || !ended {
                 self.stop_host(h, &aid).await;
             }

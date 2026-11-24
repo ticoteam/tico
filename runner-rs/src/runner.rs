@@ -1406,7 +1406,7 @@ impl Runner {
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::fetch_fresh::run_loop(self.clone()));
-        tokio::spawn(self.clone().keeper_loop());
+        let keeper_task = tokio::spawn(self.clone().keeper_loop());
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
@@ -1477,6 +1477,9 @@ impl Runner {
         if let Some(m) = maintenance {
             m.abort();
         }
+        // No periodic prune sets off a stop after the last one is joined.
+        keeper_task.abort();
+        let _ = keeper_task.await;
         self.pi.prune(true).await;
         self.keeper.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
