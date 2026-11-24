@@ -4,7 +4,7 @@ One image per shot, in one sheet the owner can read in a minute.
 
 1. From the approved script, write `projects/<slug>/storyboard/shots.md` with `skills/write-a-shot-list-from-a-script/SKILL.md`:
    one line per shot with its number, its length, what is on screen, the words spoken or shown, and the shot's source class.
-2. One image per shot, on the best image model (GPT Image 2.6): on Codex with your own image generation, otherwise
+2. One image per shot, on the best image model: on Codex with your own image generation (GPT Image 2.6), otherwise
    `tico gateway image "<shot prompt>" --model high --count 1 --size 1280x720 --out projects/<slug>/storyboard/s01.png`.
    The prompt says it is a storyboard sketch, not final art. The sidecar keeps the prompt, model and cost.
 3. When the owner wants a choice, use `--count 3` and put the review with `--pick`.

@@ -68,9 +68,9 @@ tico gateway image "what to draw" --model low|high|svg --out shots/frame-01.png 
 
 Pick the model for the job:
 
-- **low** (the default, Nano Banana 2.1): fast. Keeps people and places from `--ref` files (up to 4, PNG, JPEG or
-  WebP, 2 MiB each). Quick pictures and drafts.
-- **high** (GPT Image 2.6 Sunburst, the best there is): `--category photo` (the default), `graphic` for text and
+- **low** (the default): fast. Keeps people and places from `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
+  Quick pictures and drafts.
+- **high** (the best the Gateway has): `--category photo` (the default), `graphic` for text and
   layout, or `character` to keep a person from the references. Use it for anything a person will judge.
 - **svg**: a vector image for icons, logos and diagrams that must stay sharp at any size. `--quality standard` (the
   default) or `pro`. No `--ref`, no `--size`. Saved as `.svg`.

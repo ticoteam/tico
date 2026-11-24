@@ -301,10 +301,10 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 `tico gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
-- **low** (the default, Nano Banana 2.1): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or
-  WebP, 2 MiB each). Good for quick pictures and drafts.
-- **high** (GPT Image 2.6 Sunburst): `--category photo` (the default), `graphic` (best for text and layout) or
-  `character` (keeps a person or character from the `--ref` files).
+- **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
+  Good for frames and quick pictures.
+- **high**: `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
+  character from the `--ref` files).
 - **svg**: a vector image, scalable without loss, saved as `.svg`. `--quality standard` (the default) or `pro`. It takes no
   `--ref` and no `--size`. HQ strips scripts and event handlers from the SVG before it
   reaches the computer, and anything in the app that shows an SVG does it as a picture (`<img>`), never inline.
