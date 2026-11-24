@@ -618,6 +618,28 @@ class ShippedLayers(unittest.TestCase):
                     ]
         self.assertEqual(missing, [])
 
+    def test_every_shipped_skill_has_frontmatter_claude_code_and_the_library_can_read(self):
+        # Nov 24: write-the-spec's description held ": " (not YAML, so Claude Code could not read it) and ran past the
+        # directory's limit, so the library skipped it in every company.
+        from clients import skills
+
+        bad = []
+        for path in sorted(self.directory.glob("**/SKILL.md")):
+            text = path.read_text()
+            if not text.startswith("---\n"):
+                continue
+            try:
+                yaml.safe_load(text.split("---\n")[1])
+            except yaml.YAMLError as error:
+                bad.append(f"{path.relative_to(self.directory)}: {str(error).splitlines()[0]}")
+                continue
+            library = skills.frontmatter(text)
+            if not library.get("description") or library["description"][:1] in "|>":
+                bad.append(f"{path.relative_to(self.directory)}: the library reads no description")
+            elif len(library["description"]) > skills.MAX_DESCRIPTION:
+                bad.append(f"{path.relative_to(self.directory)}: description over {skills.MAX_DESCRIPTION} characters")
+        self.assertEqual(bad, [])
+
     def test_no_template_ships_a_permission_allow_list(self):
         # Claude Code runs every turn with bypassPermissions (runner-rs/src/hosts/claude.rs): only `deny` does anything.
         import json

@@ -58,4 +58,6 @@ shared_files:
   - .claude/skills/plan-before-coding
   - .claude/skills/qa-a-change
   - .claude/skills/review-code
+  - .claude/skills/code-review
+  - .claude/skills/build-and-ship
   - .claude/skills/test-first
