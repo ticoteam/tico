@@ -984,37 +984,32 @@ def prime_views(conn: "sqlite3.Connection", task_ids: Iterable[str], viewer: str
         _h().prime_task_delegated(conn, ids, viewer)
 
 
-def hidden_filed(
-    conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None, *, kept: bool = False
-) -> list[str]:
+def hidden_filed(conn: "sqlite3.Connection", row: Row, viewer: str | None, visible_sql: str | None = None) -> list[str]:
     """The tasks the open visit of `row` (task_engine.task's shape) filed that `viewer` may not read (`_readable`).
     Their titles and ids are not theirs to see: not in what the task waits on, not in a requirement's standing, not
-    in a refusal (waiting_on.unnamed says what they are told instead).
-
-    `kept`: the words are a wake or a note kept in the task's thread, read later by whoever reads the task, not only by
-    `viewer`. A private task filed there is hidden too unless its words may reach every reader of this one
-    (H.subtask_flows_up)."""
-    filed = _filed(conn, row)
-    if viewer is None or not filed:
-        return []
-    readable = _readable_rows(conn, viewer, filed, visible_sql)
-    H = _h()
-    return [
-        other
-        for other in filed
-        if other not in readable
-        or kept
-        and H.task_private(conn, readable[other])
-        and not H.subtask_flows_up(conn, readable[other], row)
-    ]
-
-
-def _filed(conn: "sqlite3.Connection", row: Row) -> list[str]:
-    """The tasks the open visit of `row` filed."""
+    in a refusal (waiting_on.unnamed says what they are told instead). Words kept for whoever reads them later (a wake,
+    a note) name only what is not private (`may_name`)."""
     visit: Row = row.get("visit") or {}
     if row.get("status") != "open" or not visit:
         return []
-    return [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
+    filed = [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
+    if viewer is None or not filed:
+        return []
+    readable = _readable_rows(conn, viewer, filed, visible_sql)
+    return [other for other in filed if other not in readable]
+
+
+def hidden_named(
+    conn: "sqlite3.Connection", row: Row, viewer: str | None, named: Iterable[object], visible_sql: str | None = None
+) -> list[str]:
+    """`hidden_filed`, and whichever other tasks in `named` (what a wait or a standing names: a task this one depends
+    on, one it merges after) `viewer` may not read."""
+    hidden = hidden_filed(conn, row, viewer, visible_sql)
+    rest = sorted({str(x) for x in named if x} - set(hidden))
+    if viewer is None or not rest:
+        return hidden
+    readable = _readable_rows(conn, viewer, rest, visible_sql)
+    return [*hidden, *(x for x in rest if x not in readable)]
 
 
 # What words name a task with where they may not name it (`may_name`): never its title, its number or its id.
@@ -1022,91 +1017,39 @@ PRIVATE_TASK = "a private task"
 
 
 def may_name(
-    conn: "sqlite3.Connection",
-    other_id: object,
-    *,
-    reader: str | None = None,
-    kept_in: Row | None = None,
-    visible_sql: str | None = None,
+    conn: "sqlite3.Connection", other_id: object, reader: str | None = None, visible_sql: str | None = None
 ) -> bool:
-    """Whether words may name task `other_id` (its title, its number, its id). Said to `reader`: they may read it
-    (`_readable`). Kept in the thread of task `kept_in` (a wake, a note, a line every reader of that task reads later):
-    a private one only when `kept_in` is private too and everyone who reads `kept_in` reads it, since a company task
-    is read by every member."""
-    if not other_id or not _readable(conn, reader, other_id, visible_sql):
-        return False
-    if kept_in is None:
-        return True
-    H = _h()
-    other: Row | None = H.task(conn, str(other_id))
-    if not other:
-        return False
-    if not H.task_private(conn, other):
-        return True
-    full: Row = H.task(conn, str(kept_in["id"])) or {}
-    if not H.task_private(conn, full):
-        return False
-    # Its real readers, by the read rule itself (hubdb.task_private_readable): its parties and readers, a person
-    # assignee, whoever inherits it through a bot, a meeting's participants, a call's thread.
-    everyone = {p for p in H.task_parties(full) if p} | H.reader_actors(conn, full) | _teammates(conn)
-    return all(H.task_private_readable(conn, p, other) for p in everyone if H.task_private_readable(conn, p, full))
+    """Whether words may name task `other_id` (its title, its number, its id). Words that are kept (a wake, a note, a
+    line in the history, what a refusal keeps on record) name only a task that is not private, which anyone in the
+    company may open. Words said only to `reader`, as a refusal is said to its caller, name a task they may read
+    (`_readable`)."""
+    return bool(other_id) and _readable(conn, reader or ON_RECORD, other_id, visible_sql)
 
 
-def _teammates(conn: "sqlite3.Connection") -> set[str]:
-    """Every bot that is not archived and every person on the roster."""
-    from . import views
-
-    H = _h()
-    roster: Row = cast(Any, views).roster(conn, shared=True)
-    bots = {f"bot:{b['id']}" for b in H.bots(conn) if b.get("state") != "archived"}
-    people: list[Row] = roster.get("people") or []
-    return bots | {f"human:{p['id']}" for p in people if p.get("id")}
-
-
-def named(
-    conn: "sqlite3.Connection", other_id: object, ref: str, *, reader: str | None = None, kept_in: Row | None = None
-) -> str:
+def named(conn: "sqlite3.Connection", other_id: object, ref: str, reader: str | None = None) -> str:
     """`ref`, words naming task `other_id`, or PRIVATE_TASK where they may not name it (`may_name`)."""
-    return ref if may_name(conn, other_id, reader=reader, kept_in=kept_in) else PRIVATE_TASK
+    return ref if may_name(conn, other_id, reader) else PRIVATE_TASK
 
 
-def named_line(
-    conn: "sqlite3.Connection",
-    template: str,
-    other_id: object,
-    ref: str,
-    *,
-    kept_in: Row | None = None,
-    **fields: object,
-) -> str:
-    """`template` with `{ref}` naming task `other_id` as `ref`, or as PRIVATE_TASK where it may not be named
-    (`may_name`), with a capital when it begins the line."""
-    if may_name(conn, other_id, kept_in=kept_in):
-        return template.format(ref=ref, **fields)
-    unnamed = PRIVATE_TASK.capitalize() if template.startswith("{ref}") else PRIVATE_TASK
-    return template.format(ref=unnamed, **fields)
+def capital(said: str) -> str:
+    """`said`, begun with a capital when it begins with PRIVATE_TASK (a ref such as `c998d241` stays as it is)."""
+    return PRIVATE_TASK.capitalize() + said[len(PRIVATE_TASK) :] if said.startswith(PRIVATE_TASK) else said
 
 
-def hidden_named(
-    conn: "sqlite3.Connection",
-    row: Row,
-    viewer: str | None,
-    named: Iterable[object],
-    visible_sql: str | None = None,
-    *,
-    kept: bool = False,
-) -> list[str]:
-    """`hidden_filed`, and whichever other tasks in `named` (what a wait or a standing names: a task this one depends
-    on, one it merges after) `viewer` may not be told of (`may_name`; `kept`: in this task's thread)."""
-    hidden = hidden_filed(conn, row, viewer, visible_sql, kept=kept)
-    rest = sorted({str(x) for x in named if x} - set(_filed(conn, row)))
-    if viewer is None or not rest:
-        return hidden
-    if kept:
-        unsaid = [x for x in rest if not may_name(conn, x, reader=viewer, kept_in=row, visible_sql=visible_sql)]
-        return [*hidden, *unsaid]
-    readable = _readable_rows(conn, viewer, rest, visible_sql)
-    return [*hidden, *(x for x in rest if x not in readable)]
+def named_line(conn: "sqlite3.Connection", template: str, other_id: object, ref: str, **fields: object) -> str:
+    """`template`, words that are kept, with `{ref}` naming task `other_id` as `ref` or as PRIVATE_TASK (`may_name`)."""
+    return capital(template.format(ref=named(conn, other_id, ref), **fields))
+
+
+def refuse_naming(
+    conn: "sqlite3.Connection", actor: str, rule: str, say: Callable[[Callable[[object, str], str]], str]
+) -> NoReturn:
+    """Refuse with the words `say` makes, each task in them named by the function it is given (id, ref): to `actor`,
+    each task they may open; on record, only those that are not private (`may_name`)."""
+    told = capital(say(lambda task_id, ref: named(conn, task_id, ref, actor)))
+    kept = capital(say(lambda task_id, ref: named(conn, task_id, ref)))
+    _h().refuse(conn, actor, rule, told, stored={"detail": kept} if kept != told else None)
+    raise AssertionError("refuse() always raises")  # pragma: no cover
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:

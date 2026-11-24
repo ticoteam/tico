@@ -369,9 +369,9 @@ def _quiet_blockers(conn: Any, task: Row, hours: float, at: str) -> list[tuple[s
         quiet = float((now - last).total_seconds()) / 3600
         if quiet < hours:
             return []
-        # Named only where everyone who reads the task's thread may open it, as the dependency's own lines are.
+        # Kept in the history and the wake: named only if it is not private, as the dependency's own lines are.
         ref = task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix})
-        out.append((task_calls.named(conn, blocker_id, ref, kept_in=task), quiet))
+        out.append((task_calls.named(conn, blocker_id, ref), quiet))
     return sorted(out, key=lambda one: -one[1])
 
 

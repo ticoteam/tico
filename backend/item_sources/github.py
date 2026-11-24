@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from .. import item_metadata as IM
 from .. import merge_order as MO
 from .. import source_actions as SA
+from .. import task_calls as TC
 from . import github_release as GR
 
 if TYPE_CHECKING:
@@ -1468,8 +1469,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         E._refuse(conn, by, "not-found", "No such task")
         return []
 
-    def refuse(rule: str, detail: str) -> None:
-        E._refuse(conn, by, rule, detail, task_id, row=row, then=("show",), version=row.get("version"))
+    def refuse(rule: str, detail: str, kept: str | None = None) -> None:
+        stored = (kept, ()) if kept else None  # what is kept on record, when it names less than `by` is told
+        E._refuse(conn, by, rule, detail, task_id, row=row, then=("show",), version=row.get("version"), kept=stored)
 
     if row["status"] != "open":
         refuse("task_ended", f"The task is {row['stage']['name']}. Reopen it first.")
@@ -1484,7 +1486,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
     earlier = MO.held(conn, row)
     if earlier and not E.is_human(by):
-        refuse("task_requirement", HELD_FOR.format(earlier=MO.named(conn, row, earlier, by)))
+        said = [HELD_FOR.format(earlier=TC.named(conn, earlier["id"], MO.ref(earlier), r)) for r in (by, None)]
+        refuse("task_requirement", *said)
     first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
@@ -1544,9 +1547,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
         if earlier:
-            from .. import task_calls as TC
-
-            shown = TC.may_name(conn, earlier["id"], kept_in=row)
+            shown = TC.may_name(conn, earlier["id"])
             note = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier) if shown else TC.PRIVATE_TASK)
             data = {"before_merged": earlier["id"]} if shown else {}
         else:
@@ -2466,7 +2467,7 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
             return Standing(requirement, WAITING, SOURCE, line, about=str(earlier["id"]))
         closed = MO.closed_before(conn, task)
         if closed:
-            return Standing(requirement, NOT_MET, owner, MO.closed_line(conn, task, closed))
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(conn, closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 

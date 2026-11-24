@@ -11,7 +11,7 @@ was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes o
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, cast
 
 from . import run_triggers
@@ -175,8 +175,7 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
     # What the person said with the sign-off that let the task in here: theirs, for whoever acts on it next.
     lines.extend(stage_effects.notes_on_the_way_in(conn, task))
-    standings = R.standings(conn, task)
-    shown = told(conn, task, to, [s.about for s in standings])
+    shown = told(conn, task, to)
     # The repository the work is in, so the bot never has to ask a person which one (a filed Engineering task), or
     # that there is none yet, so it never builds in its own.
     lines += stage_inputs.repository_lines(conn, str(task["id"]), shown)
@@ -189,6 +188,7 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
         if one := stage_inputs.one_pr(handed):
             lines.append(one)
         lines.append(stage_inputs.IF_MISSING)
+    standings = R.standings(conn, task)
     fresh = _unreviewed(conn, task, standings)
     if fresh:
         lines.append(f"{fresh} Say so on the page the person OKs.")
@@ -270,15 +270,12 @@ def review_new(conn: "sqlite3.Connection", task_id: str) -> str | None:
     return None
 
 
-def told(conn: "sqlite3.Connection", task: Row, to: str | None, named: Iterable[object] = ()) -> Callable[[str], bool]:
-    """Whether a wake or a note to `to` about open task `task` may name a task it filed, or another task in `named`
-    (one it merges after, waiting_on.unnamed): `to` may open it, and, since the words are kept in the task's thread
-    for whoever reads the task later, a private one only when its words may reach them all
-    (task_calls.hidden_named, `kept`)."""
+def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:
+    """Whether a wake or a note to `to` about open task `task` may name another task (waiting_on.unnamed): the words
+    are kept in the task's thread for whoever reads it later, so only one that is not private (task_calls.may_name)."""
     from . import task_calls
 
-    hidden = set(task_calls.hidden_named(conn, task, to, named, kept=True))
-    return lambda task_id: task_id not in hidden
+    return lambda task_id: task_calls.may_name(conn, task_id)
 
 
 # What a wake's refs hold that is the engine's or the run's own. A caller's refs never set one, and a folded wake never
@@ -1170,7 +1167,9 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
 def _parts(refs: Row, wake_key: object, body: object) -> list[Row]:
     """What one queued wake is made of: the wakes folded into it, or itself alone."""
     folded: list[Row] | None = refs.get("parts")
-    return list(folded) if folded else [{"key": _part_key(wake_key), "text": str(body or "")}]
+    if folded:  # one folded before keys were kept as digests keeps its key: it is kept as one now
+        return [{**part, "key": _part_key(part.get("key"))} if ":" in str(part.get("key")) else part for part in folded]
+    return [{"key": _part_key(wake_key), "text": str(body or "")}]
 
 
 def _part_key(wake_key: object) -> str:
@@ -1196,8 +1195,7 @@ def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
     for job_id, message_id, own_key, raw, body in rows:
         refs: Row = H._json(raw, {}) or {}
         parts = _parts(refs, own_key, body)
-        # A wake folded before its key was kept as a digest keeps the key itself.
-        rest = [part for part in parts if part.get("key") not in (wake_key, _part_key(wake_key))]
+        rest = [part for part in parts if part.get("key") != _part_key(wake_key)]
         if len(rest) == len(parts):
             continue
         if not rest:

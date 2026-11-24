@@ -7280,9 +7280,11 @@ def inbox_pages(conn, actor, at=None, size=100):
 
 
 def mark_answered(conn, rows):
-    """Set each message's `answered_at`, kept on the inbox shape: always None, since nothing asks in a message now."""
+    """Set each message's `answered_at`, kept on the inbox shape: always None, since nothing asks in a message now.
+    A wake's key stays the server's (it may name a task the reader may not open): the inbox serves no `wake_key`."""
     for row in rows:
         row["answered_at"] = None
+        row.pop("wake_key", None)
     return rows
 
 

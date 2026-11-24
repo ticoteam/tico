@@ -184,6 +184,10 @@ def test_a_deleted_private_blocker_stays_hidden_in_the_history_of_the_task_it_bl
     shown = task_reads.readable_history(c, None, SimpleNamespace(actor="human:ben"), history, "tasks.private = 0")
     assert not any(blocker in (e.get("old"), e.get("new")) for e in shown)
     assert any(e.get("field") == "depends_on" for e in task_reads.readable_history(c, None, ana(), history, "1"))
+    # Purged, it is hidden from everyone: no audience is left to read it by.
+    c.execute("UPDATE task_trash SET purged_at=? WHERE task_id=?", (H.now(), blocker))
+    shown = task_reads.readable_history(c, None, ana(), history, "1")
+    assert not any(blocker in (e.get("old"), e.get("new")) for e in shown)
 
 
 def test_a_blocker_whose_release_production_runs_is_not_named_when_private(c):
@@ -202,19 +206,6 @@ def test_a_blocker_whose_release_production_runs_is_not_named_when_private(c):
     assert D.on_release(c, "0.6.0-rc.9", APP) == [blocked]
     (body,) = unblocked(c, blocked)
     assert "A private task is in production: it runs 0.6.0-rc.9" in body and not told(body, blocker, "#304")
-
-
-def test_a_person_assignee_of_the_later_task_who_may_not_open_the_earlier_one_keeps_it_unnamed(c):
-    """Every party and reader of private B7 opens private B6, but B7's person assignee does not: a line kept in B7's
-    thread, which they read, does not name B6."""
-    b6, b7 = ordered(c, hide=True)
-    c.execute("UPDATE tasks SET private=1, readers=? WHERE id=?", (json.dumps([X.ANA]), b7))
-    everyone = sorted({p for b in (b6, b7) for p in H.task_parties(H.task(c, b)) if p})
-    c.execute("UPDATE tasks SET readers=? WHERE id=?", (json.dumps(everyone), b6))
-    later, earlier = E.task(c, b7), E.task(c, b6)
-    assert MO.closed_line(c, later, earlier).startswith("#40 closed")
-    c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (b7,))
-    assert MO.closed_line(c, E.task(c, b7), earlier).startswith("A private task closed")
 
 
 def side(c, title):
@@ -241,6 +232,13 @@ def test_a_loop_refusal_names_only_the_tasks_the_caller_may_open(c):
         TR.relate(c, "bot:builder", a, d, "depends_on")
     assert "a private task" in loop.value.detail and not told(loop.value.detail, b, "#2")
     assert "#1" in loop.value.detail and "#3" in loop.value.detail
+    # Ana opens the private task: she is told it, and the refusal on record still does not name it.
+    with pytest.raises(H.Refused) as hers:
+        TR.relate(c, X.ANA, a, d, "depends_on")
+    assert "#2" in hers.value.detail
+    recorded = c.execute("SELECT detail FROM refusals WHERE actor=? ORDER BY rowid DESC", (X.ANA,)).fetchone()[0]
+    kept = json.loads(recorded)
+    assert "a private task" in kept["detail"] and not told(kept["detail"], b, "#2") and "#1" in kept["detail"]
 
 
 def test_a_merge_order_loop_refusal_names_only_the_tasks_the_caller_may_open(c):
@@ -257,3 +255,17 @@ def test_a_merge_order_loop_refusal_names_only_the_tasks_the_caller_may_open(c):
         TR.relate(c, B, b6, b8, "after")
     assert "a private task" in loop.value.detail and not told(loop.value.detail, b7, "#7")
     assert "#6" in loop.value.detail and "#8" in loop.value.detail
+
+
+def test_a_wake_folded_before_keys_were_digests_keeps_only_digests_once_folded_again():
+    old = {"parts": [{"key": "t1:v1:unblocked:secret-task", "text": "One"}, {"key": "0" * 32, "text": "Two"}]}
+    parts = task_wakes._parts(old, "t1:v1:owner:0", "One\n\nTwo")
+    assert [p["key"] for p in parts] == [task_wakes._part_key("t1:v1:unblocked:secret-task"), "0" * 32]
+
+
+def test_the_inbox_serves_no_wake_key(c):
+    blocker, blocked = blocked_on(c, hide=True)
+    E.move(c, blocker, E.DONE, X.ANA, "Finished")
+    (woken,) = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (f"%:{D.WAKE}:{blocker}",)).fetchone()
+    messages = H.inbox(c, "bot:builder")["messages"]
+    assert woken in [m["id"] for m in messages] and all("wake_key" not in m for m in messages)

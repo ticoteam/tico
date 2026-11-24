@@ -217,15 +217,15 @@ def readable_history(c, auth, who, history, visible_sql):
     if named:
         from .task_delete import READABLE
 
-        # The named tasks the reader may not read, in one statement each: those that exist, and those in the trash,
-        # by the audience they had (a deleted blocker's id stays in the history of the task it blocked).
+        # The named tasks the reader may not read, in one statement each: those that exist, and those in the trash by
+        # the audience they had (a deleted blocker's id stays in the history of the task it blocked); a purged one never.
         hidden = {
             r[0]
-            for table in ("tasks", READABLE)
+            for table, gone in (("tasks", "0"), (READABLE, "purged_at IS NOT NULL"))
             for r in c.execute(
-                f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
+                f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?)) AND ({gone} OR NOT coalesce(("
                 + visible_sql
-                + "),0)",
+                + "),0))",
                 (json.dumps(named),),
             )
         }

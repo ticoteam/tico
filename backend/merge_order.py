@@ -28,7 +28,7 @@ refused (`check`).
 
 from typing import TYPE_CHECKING, Any
 
-from .task_calls import PRIVATE_TASK
+from .task_calls import PRIVATE_TASK, may_name, named_line, refuse_naming
 
 if TYPE_CHECKING:
     import sqlite3
@@ -199,18 +199,8 @@ def stops_queue(conn: "sqlite3.Connection", row: Row) -> Row | None:
     return held(conn, row) or closed_before(conn, row)
 
 
-def named(conn: "sqlite3.Connection", row: Row, earlier: Row, reader: str | None = None) -> str:
-    """How words kept in the later task `row`'s thread (and said to `reader`) name `earlier`: `ref`, or "a private
-    task" where a reader may not open it (task_calls.may_name)."""
-    from . import task_calls
-
-    return task_calls.named(conn, earlier["id"], ref(earlier), reader=reader, kept_in=row)
-
-
-def closed_line(conn: "sqlite3.Connection", row: Row, earlier: Row) -> str:
-    from . import task_calls
-
-    return task_calls.named_line(conn, CLOSED, earlier["id"], ref(earlier), kept_in=row)
+def closed_line(conn: "sqlite3.Connection", earlier: Row) -> str:
+    return named_line(conn, CLOSED, earlier["id"], ref(earlier))  # kept: named only if not private
 
 
 def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:
@@ -229,12 +219,10 @@ def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:
 def conflict_line(conn: "sqlite3.Connection", row: Row, ref_: str) -> str:
     """The send-back to QA for a PR that conflicts with its base branch (item_sources.github
     SENT_BACK_FOR_CONFLICT), naming the task it goes after that merged, for the Builder to rebase onto."""
-    from . import task_calls
-
     GS = _github()
     earlier = just_merged(conn, row)
-    # A task the reader may not open is not named: the plain send-back (the base branch has it once it merged).
-    if not earlier or not task_calls.may_name(conn, earlier["id"], kept_in=row):
+    # A private task is not named: the plain send-back (the base branch has it once it merged).
+    if not earlier or not may_name(conn, earlier["id"]):
         return GS.SENT_BACK_FOR_CONFLICT.format(ref=ref_, task=row["id"])
     return GS.SENT_BACK_AFTER.format(ref=ref_, task=row["id"], earlier=ref(earlier))
 
@@ -244,24 +232,20 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
     """Refuse an order that cannot hold: on a task that has ended, after one that has ended, or a loop (#40 already goes
     after #42, however far round). The writer's right to change the later task and read the earlier one is checked by
     the caller (task_relations.relate)."""
-    from . import hubdb
-
-    H: Any = hubdb
-    for row, what in ((later, "it"), (earlier, ref(earlier))):
-        if row["status"] != "open":
-            who = "The task" if what == "it" else what
-            H.refuse(conn, actor, "task_ended", f"{who} has ended: there is no merge to wait for")
+    e = (earlier["id"], ref(earlier))  # named to the actor only if they may open it, on record only if not private
+    if later["status"] != "open":
+        refuse_naming(conn, actor, "task_ended", lambda n: "The task has ended: there is no merge to wait for")
+    if earlier["status"] != "open":
+        refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*e)} has ended: there is no merge to wait for")
     path = _path(conn, str(earlier["id"]), str(later["id"]))
     if path:
-        from . import task_calls
-
-        hops = [str(later["id"]), *path]
-        names = " → ".join(task_calls.named(conn, t, ref(_engine().task(conn, t)), reader=actor) for t in hops)
-        H.refuse(
+        hops = [(t, ref(_engine().task(conn, t))) for t in [str(later["id"]), *path]]
+        refuse_naming(
             conn,
             actor,
             "kind",
-            f"That would make a loop ({names}): {ref(earlier)} already goes after {ref(later)}.",
+            lambda n: f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*e)} already goes after "
+            f"{n(later['id'], ref(later))}.",
         )
 
 
@@ -309,7 +293,7 @@ def release_one(conn: "sqlite3.Connection", later_id: str, by: str) -> int:
     closed = closed_before(conn, row)
     if closed:
         E.changed(conn, later_id, E.SYSTEM)
-        E.tell_owner(conn, later_id, closed_line(conn, row, closed), f"{WAKE_CLOSED}:{closed['id']}")
+        E.tell_owner(conn, later_id, closed_line(conn, closed), f"{WAKE_CLOSED}:{closed['id']}")
         return 0
     if not GS.queue(conn, row, by):
         return 0

@@ -44,7 +44,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from . import read_cache
-from .task_calls import PRIVATE_TASK
+from .task_calls import PRIVATE_TASK, named_line, refuse_naming
 
 if TYPE_CHECKING:
     import sqlite3
@@ -226,41 +226,36 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
     """Refuse a dependency that cannot hold: of a task that has ended, on one that has ended, or a loop (#304 already
     depends on #307, however far round). Until released, a Done task may be depended on while production does not run
     its release yet. The writer's rights are checked by the caller (task_relations.relate)."""
-    from . import hubdb
-
-    H: Any = hubdb
+    E = _engine()
+    b = (blocker["id"], ref(blocker))  # named to the actor only if they may open it, and on record only if not private
     if until == UNTIL and blocker["status"] == "done":
         shipped = in_production(conn, str(blocker["id"]))
         if shipped == "":
             where = running(conn)[1] or "the repository"
-            H.refuse(
+            refuse_naming(
                 conn,
                 actor,
                 "task_ended",
-                f"{ref(blocker)} merged nothing into {where}, whose release this server runs: until released cannot "
+                lambda n: f"{n(*b)} merged nothing into {where}, whose release this server runs: until released cannot "
                 "wait for it. Another product's release is not seen here: snooze to the date you will look again.",
             )
         if shipped is not None:
-            H.refuse(
-                conn, actor, "task_ended", f"{ref(blocker)} is in production already: there is nothing to wait for"
-            )
+            said = "is in production already: there is nothing to wait for"
+            refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*b)} {said}")
         blocker = {**blocker, "status": "open"}
-    for row, what in ((later, "it"), (blocker, ref(blocker))):
-        if row["status"] != "open":
-            who = "The task" if what == "it" else what
-            H.refuse(conn, actor, "task_ended", f"{who} has ended: there is nothing to wait for")
+    if later["status"] != "open":
+        refuse_naming(conn, actor, "task_ended", lambda n: "The task has ended: there is nothing to wait for")
+    if blocker["status"] != "open":
+        refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*b)} has ended: there is nothing to wait for")
     path = _path(conn, str(blocker["id"]), str(later["id"]))
     if path:
-        from . import task_calls
-
-        E = _engine()
-        hops = [str(later["id"]), *path]
-        names = " → ".join(task_calls.named(conn, t, ref(E.task(conn, t) or {"id": t}), reader=actor) for t in hops)
-        H.refuse(
+        hops = [(t, ref(E.task(conn, t) or {"id": t})) for t in [str(later["id"]), *path]]
+        refuse_naming(
             conn,
             actor,
             "kind",
-            f"That would make a loop ({names}): {ref(blocker)} already depends on {ref(later)}.",
+            lambda n: f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*b)} already depends on "
+            f"{n(later['id'], ref(later))}.",
         )
 
 
@@ -302,22 +297,9 @@ def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
     if shipped is None:  # they stay blocked until production runs its release (on_release)
         waiting = [task_id for task_id in waiting if task_id not in held]
     _off(conn, waiting, ended_id, by, "it ended")
-
-    def said(task_id: str) -> str:
-        line = IN_PRODUCTION if shipped and task_id in held else DONE if done else CLOSED
-        return _said_in(conn, task_id, line, ended_id, named, version=shipped)
-
-    return sum(release_one(conn, task_id, ended_id, said(task_id)) for task_id in waiting)
-
-
-def _said_in(conn: "sqlite3.Connection", task_id: str, line: str, other_id: str, named: str, **fields: object) -> str:
-    """`line` about task `other_id`, kept in task `task_id`'s thread: `named` only where every reader of it may open
-    it (task_calls.may_name), else "a private task"."""
-    from . import hubdb, task_calls
-
-    H: Any = hubdb
-    TC: Any = task_calls
-    return TC.named_line(conn, line, other_id, named, kept_in=H.task(conn, task_id) or {"id": task_id}, **fields)
+    said = named_line(conn, DONE if done else CLOSED, ended_id, named)  # kept: named only if not private
+    live = named_line(conn, IN_PRODUCTION, ended_id, named, version=shipped) if shipped else said
+    return sum(release_one(conn, task_id, ended_id, live if task_id in held else said) for task_id in waiting)
 
 
 def _off(conn: "sqlite3.Connection", waiting: list[str], ended_id: str, by: str, note: str) -> None:
@@ -440,11 +422,11 @@ def _ship(conn: "sqlite3.Connection", blocker: str | None, version: str) -> list
         named = ref({"id": blocker_id, "number": number})
         if shipped[blocker_id]:
             note = "its release runs in production"
-            said = _said_in(conn, str(task_id), IN_PRODUCTION, blocker_id, named, version=version)
+            said = named_line(conn, IN_PRODUCTION, blocker_id, named, version=version)
         else:
             repo = running(conn)[1] or "the repository"
             note = "it merged nothing to release here"
-            said = _said_in(conn, str(task_id), NOTHING_HERE, blocker_id, named, repo=repo)
+            said = named_line(conn, NOTHING_HERE, blocker_id, named, repo=repo)
         _off(conn, [str(task_id)], blocker_id, str(_engine().SYSTEM), note)
         if release_one(conn, str(task_id), blocker_id, said):
             out.append(str(task_id))
@@ -464,10 +446,8 @@ def deleted(conn: "sqlite3.Connection", task_id: str, number: object, by: str) -
             "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (waiter, task_id, RELATION)
         )
         H._task_event(conn, waiter, by, RELATION, task_id, None, "it was deleted")
-    named = ref({"id": task_id, "number": number})
-    return sum(
-        release_one(conn, waiter, task_id, _said_in(conn, waiter, DELETED, task_id, named)) for waiter in waiting
-    )
+    said = named_line(conn, DELETED, task_id, ref({"id": task_id, "number": number}))
+    return sum(release_one(conn, waiter, task_id, said) for waiter in waiting)
 
 
 def restores(conn: "sqlite3.Connection", row: Row, restored_id: str) -> bool:
@@ -489,8 +469,7 @@ def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str)
     if not row:
         return 0
     found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
-    named = ref({"id": blocker_id, "number": found[0] if found else None})
-    said = _said_in(conn, task_id, UNLINKED, blocker_id, named)
+    said = named_line(conn, UNLINKED, blocker_id, ref({"id": blocker_id, "number": found[0] if found else None}))
     return release_one(conn, task_id, blocker_id, said, tell=row.get("owner_id") != by)
 
 
