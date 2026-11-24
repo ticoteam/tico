@@ -18,7 +18,7 @@ type Tool = { runtime: string; name: string; value: Runtime; signIn: boolean; si
 export function SignIns({ c }: { c: Computer }) {
   const { data: models } = useQuery(modelsQuery);
   const [adding, setAdding] = useState(false);
-  const [following, setFollowing] = useState<{ id: string; name: string } | null>(null);
+  const [following, setFollowing] = useState<{ id: string; name: string; runtime: string } | null>(null);
   const [leaving, setLeaving] = useState<Tool | null>(null);
   const manage = c.may_manage !== false && c.online;
   const caps = (runtime: string) => models?.harnesses.find((h) => h.id === runtime)?.capabilities ?? {};
@@ -72,13 +72,13 @@ export function SignIns({ c }: { c: Computer }) {
         );
       })}
       <AddSignIn open={adding} onOpenChange={setAdding} c={c} tools={tools.filter((t) => t.signIn)} onStarted={setFollowing} />
-      {following && <SignInDialog c={c} login={following.id} name={following.name} onClose={() => setFollowing(null)} />}
+      {following && <SignInDialog c={c} login={following.id} name={following.name} runtime={following.runtime} onClose={() => setFollowing(null)} />}
       {leaving && <SignOutDialog c={c} tool={leaving} onClose={() => setLeaving(null)} />}
     </Section>
   );
 }
 
-type Started = (s: { id: string; name: string }) => void;
+type Started = (s: { id: string; name: string; runtime: string }) => void;
 
 function useSignIn(c: Computer, onStarted: Started) {
   const start = useAction('computers.signIn');
@@ -87,7 +87,7 @@ function useSignIn(c: Computer, onStarted: Started) {
     run: async (t: Pick<Tool, 'runtime' | 'name'>) => {
       const r = await start.run({ computer: c.id, runtime: t.runtime });
       const login = r.out as Login | undefined;
-      if (r.ok && login?.id) onStarted({ id: login.id, name: t.name });
+      if (r.ok && login?.id) onStarted({ id: login.id, name: t.name, runtime: t.runtime });
     },
   };
 }
@@ -154,7 +154,7 @@ const SAID: Record<string, string> = {
 };
 
 /** Follows a sign-in on the computer until it ends: the provider's page, a code to paste, Stop. */
-function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string; name: string; onClose: () => void }) {
+function SignInDialog({ c, login, name, runtime, onClose }: { c: Computer; login: string; name: string; runtime: string; onClose: () => void }) {
   const qc = useQueryClient();
   const q = useLogin(c.id, login);
   const send = useAction('computers.signInCode');
@@ -189,7 +189,7 @@ function SignInDialog({ c, login, name, onClose }: { c: Computer; login: string;
         <>
           {l.url && (
             <a className="once" href={l.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpened(true)} onAuxClick={() => setOpened(true)}>
-              {l.url.replace(/^https:\/\//, '')}
+              {runtime === 'antigravity' ? 'Open Google' : l.url.replace(/^https:\/\//, '')}
             </a>
           )}
           {l.code && (

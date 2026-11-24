@@ -2198,10 +2198,7 @@ class SettingsAdmin:
         ):
             raise Problem("unchanged", "That task model is already selected", 409)
         saved = task_run_models.set_choice(c, who.actor, task_id, target)
-        placed = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-        harness_actions.install_where_needed(
-            c, who, self.settings, (target or {}).get("runtime"), [placed["runner_id"]] if placed else []
-        )
+        harness_actions.install_for_task(c, who, self.settings, bot, target)
         declared = shared_bots.follow(c, bot, _json(self._config(c, bot)["config"], {}) or {})
         on_model = target if target and target["model"] else None
         readiness = task_models.readiness(c, bot, on_model) if on_model else None

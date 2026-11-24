@@ -11,7 +11,7 @@ from . import ask_ingest, delivery
 from . import org_rule_check
 from .roadmaps import exact_approval
 from . import bot_stops, holds, task_caps, reach
-from . import check_models, task_run_models, usage_limits
+from . import check_models, harness_actions, task_run_models, usage_limits
 from . import task_privacy as privacy
 from . import task_relations as TR
 from . import task_roles as TRo
@@ -851,6 +851,7 @@ def register_core(
             )
         if run_model:
             task_run_models.set_choice(c, who.actor, row["id"], run_model, note="Set when the task was filed")
+            harness_actions.install_for_task(c, who, settings, H.actor_id(owner), run_model)
         # A send, counted against the sender's cap for this owner, at the moment the task was made.
         task_caps.record(c, row["id"], who.actor, owner, at=row["created_at"])
         if gate:

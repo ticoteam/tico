@@ -328,7 +328,18 @@ def test_connect_signs_in_on_the_agy_tico_installed_before_a_hand_installed_one(
     own = computer(api, "Ana Mac", installed=True, managed=False)
     tico = computer(api, "Ana Linux", installed=True)
     beat(api, own, installed=True, managed=False)  # seen last, enrolled first
-    assert connect(api)["runner_id"] == tico["runner_id"]
+    assert connect(api, "ben-test")["runner_id"] == tico["runner_id"]
+    # Connect tries only the first: one signing in already gives way to an idle one, hand-installed or not.
+    assert connect(api)["runner_id"] == own["runner_id"]
+
+
+def test_an_owner_filing_a_task_on_antigravity_turns_agy_on_where_its_bot_runs(api):
+    setup(api)
+    company(api, enabled=("anthropic", "google"))
+    mac = computer(api, "Ana Mac")
+    assign(api, mac, "ops")
+    post(api, "tasks", {"owner": "ops", "title": "Tidy the changelog", "body": "Sort it.", "model": "gemini-4-neon"})
+    assert chosen(api) == [(mac["runner_id"], "antigravity", 1)]
 
 
 def test_an_owner_saving_an_antigravity_model_turns_agy_on_where_the_bot_runs_and_no_one_else_does(api):

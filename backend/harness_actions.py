@@ -155,6 +155,13 @@ def install_where_needed(c, who, settings, runtime, runners=()):
             choose(c, who, rid, runtime, True, settings)
 
 
+def install_for_task(c, who, settings, bot, choice):
+    """`install_where_needed` for one task's own model: the computer `bot` is on runs it."""
+    if (choice or {}).get("runtime") == "antigravity":
+        placed = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+        install_where_needed(c, who, settings, "antigravity", [placed["runner_id"]] if placed else [])
+
+
 def choices(c, rid):
     """{harness: True | False} the owner set for this computer; a harness not listed was never chosen."""
     return {

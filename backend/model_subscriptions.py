@@ -3035,9 +3035,9 @@ def assignment_fields(c, runner, config, *, bot="", inputs=None):
 # ------------------------------------------------------------------------------------------------ routes
 # ------------------------------------------------------------------------------------------------ connect
 def _connect_computers(c, spec, who=None):
-    """The computers that can run the sign-in of `spec`'s kind for a Connect: for Antigravity, those whose agy Tico
-    installed first, since Tico keeps that one at the release it runs; then the person's own, since the result passes
-    through the computer, then those with nothing signing in for that tool, then the one seen last."""
+    """The computers that can run the sign-in of `spec`'s kind for a Connect, which tries the first: those with nothing
+    signing in for that tool first; then, for Antigravity, those whose agy Tico installed, since Tico keeps that one at
+    the release it runs; then the person's own, since the result passes through the computer; then the one seen last."""
     from . import model_login
 
     runtime, need = spec["runtime"], spec.get("capability")
@@ -3064,7 +3064,7 @@ def _connect_computers(c, spec, who=None):
         tool = (readiness_document(r["readiness"]).get("harnesses") or {}).get(runtime) or {}
         return runtime == "antigravity" and not tool.get("managed")
 
-    found.sort(key=lambda r: (hand_installed(r), r["owner_id"] != me, r["id"] in busy))
+    found.sort(key=lambda r: (r["id"] in busy, hand_installed(r), r["owner_id"] != me))
     return found
 
 
