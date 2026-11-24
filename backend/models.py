@@ -2857,7 +2857,8 @@ class OnboardingDraft(Contract):
 
 
 class OnboardingCompanyFile(Contract):
-    company_yaml: str = Field(min_length=1, max_length=524288)
+    # Room for a 0.4 file with 300 drafts (about 1 MB), inside a write's 2 MB request limit (backend/app.py).
+    company_yaml: str = Field(min_length=1, max_length=1900000)
 
 
 class OnboardingCompanyImport(OnboardingCompanyFile):

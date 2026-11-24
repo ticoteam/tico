@@ -12,6 +12,14 @@ Each goal names the bet it came from. A file without the block imports exactly a
 A seat with a `team` goes in the group of that name: one group per name, made in file order, or the group that already
 has it. A seat without one goes in its template's group. A built-in is the only bot a file makes, and it stays outside
 groups whatever its team says (backend/groups.py).
+
+A format 0.4 file brings what the setup page's agents drafted and what the visitor said (`import_drafts`,
+`import_said`). Each draft not skipped is a task owned by the agent that drafted it, on its goal, with the draft as the
+agent's own message there: a waiting one asks the owner Send, Edit or Later (a ❓ with those choices, in Needs you), and
+an approved one is the agent's to do, which it starts once it can run (a plan connected; nothing runs before). A seat
+whose agent drafted something is live, so the agent is there to hold its work. Each rule the visitor said is a company
+rule every agent follows, in their words. A person with an email is kept to invite (`company_import.people`), never
+invited by the import.
 """
 
 import hashlib
@@ -42,6 +50,8 @@ from .store import H, Problem, encode
 
 PLAN_KEY = "onboarding.company_file"
 FAILED_KEY = "onboarding.company_import_failed"
+# {"drafts": {draft id: task id}, "said": {said id: rule id}}: what a 0.4 file's import made, so none is made twice.
+MADE_KEY = "onboarding.company_file_made"
 log = logging.getLogger(__name__)
 
 
@@ -122,6 +132,7 @@ def plan(onboarding, c, who, text):
             return home, holder(parent)
         raise Problem("company_file", "An employee's reporting line cannot be applied", 422)
 
+    makers = draft_makers(saved, ids, roles, held)
     selected = {}
     try:
         names = M.OnboardingNames(
@@ -170,7 +181,8 @@ def plan(onboarding, c, who, text):
                 "reports_to": reports_to,
                 "waits_on": waits,
                 "team": bot.get("team", ""),
-                "live": bool(bot.get("live")),
+                # An agent that drafted work in setup is there to hold it: its seat starts with its bot.
+                "live": bool(bot.get("live")) or makers.get(key) == ("seat", key),
             }
         # A built-in that sits in a team (the Finance Owner is the Finance Owner) keeps a seat on its line, filled by the
         # built-in bot itself: a manager hired above it later takes it along (recruiting._follow_filled).
@@ -195,7 +207,13 @@ def plan(onboarding, c, who, text):
         if bot["id"] in held:
             titles.setdefault(held[bot["id"]], []).append(bot["title"])
     people = [
-        {"id": p["id"], "name": p["name"], "title": ", ".join(titles.get(p["id"]) or []) or p["role"]}
+        {
+            "id": p["id"],
+            "name": p["name"],
+            "title": ", ".join(titles.get(p["id"]) or []) or p["role"],
+            # The email the visitor typed in setup, for the app to offer to invite them with (never sent by the import).
+            **({"email": p["email"]} if p.get("email") else {}),
+        }
         for p in draft["people"]
         if p["id"] != owner_id
     ]
@@ -244,7 +262,37 @@ def plan(onboarding, c, who, text):
     }
     if D.has_strategy(saved):
         summary["strategy"] = strategy_preview(saved["strategy"])
-    return body, saved, seats, summary
+    if saved.get("drafts"):
+        summary["drafts"] = draft_counts(saved["drafts"], makers)
+    if saved.get("said"):
+        summary["said"] = len(saved["said"])
+    return body, saved, seats, summary, makers
+
+
+def draft_makers(saved, ids, roles, held):
+    """{file bot id: ("built_in", slug) or ("seat", key)} for every agent with a draft to import (not skipped): a
+    built-in holds its drafts itself, and a role's seat goes live so its bot can (one Tico can build a bot for). A seat
+    a person holds, or one with no template yet, has no agent to hold a draft: its drafts are left out (`unowned`)."""
+    makers = {}
+    for row in saved.get("drafts", []):
+        bot = row["bot"]
+        if row["status"] == "skipped" or bot in makers or bot in held:
+            continue
+        if bot in ids:
+            makers[bot] = ("built_in", ids[bot])
+        elif bot in roles and roles[bot][1] is not None:
+            makers[bot] = ("seat", bot)
+    return makers
+
+
+def draft_counts(drafts, makers):
+    """What the drafts come to, for the preview and the setup record: waiting (asks in Needs you), approved (the agents'
+    work once a plan is connected), skipped (not imported) and unowned (no agent to hold them)."""
+    counts = {"waiting": 0, "approved": 0, "skipped": 0, "unowned": 0}
+    for row in drafts:
+        status = row["status"] if row["status"] == "skipped" or row["bot"] in makers else "unowned"
+        counts[status] += 1
+    return counts
 
 
 def goal_owner(goal, owner_id, ids, builtins):
@@ -279,9 +327,11 @@ def import_goals(c, actor, goals, bets=None):
     """Each goal under its owner, with its measure as a KPI on it, and on the bet it came from (`bets`: the file's
     bet id to the strategy's). The file holds a baseline and a target but never readings, so no history is made up.
     A target Tico would refuse (one on the wrong side of its baseline) is left off for the owner to set; the goal and
-    its measure still land."""
+    its measure still land. Returns {file goal id: goal id}."""
+    out = {}
     for goal, owner in goals:
         made = G.create(c, actor, goal_title(goal), owner, bet_id=(bets or {}).get(goal.get("bet")))
+        out[goal["id"]] = made["id"]
         if not goal["measure"]:
             continue
         kpi = G.kpi_create(
@@ -289,6 +339,127 @@ def import_goals(c, actor, goals, bets=None):
         )
         aim = target(goal)
         G.kpi_link(c, actor, made["id"], kpi["id"], {"kind": "none"} if K.validate_target(kpi, aim)[1] else aim)
+    return out
+
+
+# ----------------------------------------------------------------------------- the swarm's work (format 0.4)
+CHOICES = ("Send", "Edit", "Later")  # a waiting draft's ❓: the setup page's Flow buttons
+KIND_WORDS = {"other": "draft"}  # how a draft's kind reads in its question; every other kind is its own word
+WAITING = (
+    "You drafted this {word} in setup, before {company} was live: your message on this task is the draft, and you "
+    "asked {owner} to choose Send, Edit or Later. Wait for their answer and send nothing before it. Send: do it as "
+    "drafted. Edit: make the change they ask for (ask what to change when they don't say), then check with them again "
+    "before it goes out. Later: leave it until they bring it up."
+)
+APPROVED = (
+    "You drafted this {word} in setup, before {company} was live, and {owner} approved it: your message on this task "
+    "is the draft. Do it as drafted. The company's rules for anything that goes outside still apply."
+)
+
+
+def draft_bots(c, makers, made):
+    """{file bot id: bot actor} for the agents that hold drafts, in two reads: the built-ins by slug, and each live
+    seat's bot from the seat it filled. An agent that is not there (its seat was not filled) holds nothing."""
+    out = {}
+    slugs = {bot: slug for bot, (kind, slug) in makers.items() if kind == "built_in"}
+    if slugs:
+        # By slug or id, as H.resolve_bot finds one: Agent Ops keeps the id `botops` under its own slug.
+        marks = ",".join("?" * len(slugs))
+        found = {}
+        for row in c.execute(
+            f"SELECT id,slug FROM bots WHERE slug IN ({marks}) OR id IN ({marks})", [*slugs.values(), *slugs.values()]
+        ):
+            found[row["slug"]] = found[row["id"]] = row["id"]
+        out.update({bot: H.bot_actor(found[slug]) for bot, slug in slugs.items() if slug in found})
+    seat_ids = {made[key]: bot for bot, (kind, key) in makers.items() if kind == "seat" and key in made}
+    if seat_ids:
+        marks = ",".join("?" * len(seat_ids))
+        for row in c.execute(f"SELECT id,filled_by FROM seats WHERE id IN ({marks})", list(seat_ids)):
+            if row["filled_by"]:
+                out[seat_ids[row["id"]]] = H.bot_actor(row["filled_by"])
+    return out
+
+
+def import_drafts(c, who, saved, makers, made, goals, done=None):
+    """Each draft not skipped as a task owned by the agent that drafted it, on its goal (`goals`: file goal id to goal
+    id), with the draft as that agent's message on it. A waiting draft asks the owner Send, Edit or Later; an approved
+    one is the agent's to do once it can run. `done` ({draft id: task id}, from an earlier import of this file) is never
+    made again. One transaction, the caller's: the lookups are read once, then each draft is one task, one message and,
+    when waiting, one ❓. Returns {draft id: task id} for every draft imported, `done` included."""
+    from . import person_asks, question_marks
+
+    out = dict(done or {})
+    rows = [d for d in saved.get("drafts", []) if d["status"] != "skipped" and d["id"] not in out]
+    if not rows:
+        return out
+    bots = draft_bots(c, makers, made)
+    owner = who.actor  # the company's owner: only they import (plan)
+    names = {"company": saved["company"]["name"].strip() or "the company", "owner": H.actor_name(c, owner)}
+    for row in rows:
+        bot = bots.get(row["bot"])
+        if not bot:
+            continue
+        word = KIND_WORDS.get(row["kind"], row["kind"])
+        waiting = row["status"] == "waiting"
+        task = H.task_create(
+            c,
+            who.actor,
+            row["title"],
+            "",
+            bot,
+            allow_planned=True,
+            deduplicate=False,
+            lint=False,
+            reconcile_related=False,
+            goal_id=goals.get(row.get("goal")),
+            instructions=(WAITING if waiting else APPROVED).format(word=word, **names),
+        )
+        if waiting:
+            line, why = person_asks.shaped(
+                "Send this %s? %s" % (word, row["title"]), "I drafted it in setup. Send, edit, or leave it for later."
+            )
+            text = "\n\n".join(part for part in (line, why, row["body"].strip()) if part)
+            said = H.task_comment(c, bot, task["id"], text, wake=False, checked=False)
+            question_marks.mark(c, bot, said["id"], owner, checked=False, choices=CHOICES)
+        else:
+            text = "\n\n".join(part for part in (row["title"], row["body"].strip()) if part)
+            H.task_comment(c, bot, task["id"], text, wake=False, checked=False)
+        out[row["id"]] = task["id"]
+    return out
+
+
+def import_said(onboarding, c, who, saved, done=None):
+    """Each rule the visitor said as a company rule every agent follows, in their words, added by the owner (who said it
+    in setup) and active at once; one whose words a rule already has is that rule. `done` ({said id: rule id}, from an
+    earlier import) is never added again. Returns {said id: rule id}."""
+    from . import org_rules
+
+    out = dict(done or {})
+    rows = [s for s in saved.get("said", []) if s["id"] not in out]
+    if not rows:
+        return out
+    known = {
+        " ".join(str(row["text"]).split()).lower(): row["id"]
+        for row in c.execute("SELECT id,text FROM org_rules WHERE kind='internal' AND status<>'retired'")
+    }
+    people = {p["id"]: p["name"] for p in saved["people"]}
+    for row in rows:
+        key = " ".join(row["text"].split()).lower()
+        if key not in known:
+            by = people.get(row["by"]) or "you"
+            known[key] = org_rules.add_rule(
+                c,
+                onboarding.auth,
+                who,
+                {
+                    "kind": "internal",
+                    "text": row["text"],
+                    "description": "Said in setup by %s." % by,
+                    "who": {"all_bots": True},
+                },
+            )["id"]
+        out[row["id"]] = known[key]
+    return out
 
 
 # ----------------------------------------------------------------------------- the strategy block (format 0.3)
@@ -613,7 +784,7 @@ def preview(onboarding, c, who, text):
 
 def apply(onboarding, c, who, text, fingerprint):
     """Apply a confirmed plan once; retries never rebuild or replace a configured team."""
-    body, saved, seats, summary = plan(onboarding, c, who, text)
+    body, saved, seats, summary, makers = plan(onboarding, c, who, text)
     if fingerprint != summary["fingerprint"]:
         raise Problem("company_file_changed", "The company file changed; preview it again before importing", 409)
     record = O.load(c)
@@ -662,7 +833,18 @@ def apply(onboarding, c, who, text, fingerprint):
     made, teams = lay_out_chart(onboarding, c, who, seats)
     finish_new_company(onboarding, c, who, seats, made, teams)
     owners = {goal["id"]: goal["owner"] for goal in summary["goals"]}
-    import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
+    goals = import_goals(c, who.actor, [(goal, owners[goal["id"]]) for goal in saved["goals"]], bets)
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (MADE_KEY,)).fetchone()
+    before = (json.loads(row[0]) if row else None) or {}
+    made_now = {
+        "drafts": import_drafts(c, who, saved, makers, made, goals, before.get("drafts")),
+        "said": import_said(onboarding, c, who, saved, before.get("said")),
+    }
+    if made_now["drafts"] or made_now["said"]:
+        c.execute(
+            "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (MADE_KEY, encode(made_now)),
+        )
     record = O.load(c)
     record["selected"] = {slug: choice.model_dump() for slug, choice in body.selected.items()}
     record["seats"] = made
@@ -681,6 +863,10 @@ def apply(onboarding, c, who, text, fingerprint):
         "seats": sum(1 for key in made if not seats[key].get("fills")),
         "people": people,
         **({"strategy": strategy} if strategy else {}),
+        # What the in-app setup says of the drafts (waiting in Needs you, approved to run once a plan is connected) and
+        # of the rules said (MADE_KEY has what each became).
+        **({"drafts": summary["drafts"]} if saved.get("drafts") else {}),
+        **({"said": len(made_now["said"])} if made_now["said"] else {}),
     }
     onboarding._store(c, record, who.actor)
     c.execute(

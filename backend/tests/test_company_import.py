@@ -15,6 +15,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
+from backend.tests.helpers.company_file import tag
 from backend.tests.helpers.fresh_install import (
     OWNER_EMAIL,
     PEOPLE,
@@ -2042,3 +2043,166 @@ def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporat
     )
     assert hired.status_code == 200, hired.text
     assert stored_line(api, "finance-owner") == hired.json()["bot"]
+
+
+def swarm_text(drafts=None):
+    """A format 0.4 file: the Assistant, Agent Ops, a Content Owner seat and an Email Owner seat, a goal, Priya with the
+    email the visitor typed (she holds no seat), the agents' drafts (waiting, approved and skipped) and two rules said."""
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
+    turn = C.Turn(draft)
+    for name, args in (
+        ("company_set", {"name": "Acme Tea", "about": "We sell loose-leaf tea online."}),
+        ("person_set", {"name": "me", "role": "Founder"}),
+        ("person_set", {"name": "Priya", "role": "Marketing"}),
+        ("bot_add", {"template": "content-owner", "reason": "Writes the blog."}),
+        ("bot_add", {"template": "email-owner", "reason": "Runs the newsletter."}),
+        ("goal_add", {"title": "Grow the newsletter", "owner": "Email Owner"}),
+        ("add_said_rule", {"text": "Never offer a discount over 10%"}),
+        ("add_said_rule", {"text": "Sign off as the Acme Tea team"}),
+    ):
+        assert turn.apply(name, args)["ok"], name
+    draft = turn.finish()
+    next(p for p in draft["people"] if p["name"] == "Priya")["email"] = "priya@acme.example"
+    goal = draft["goals"][0]["id"]
+    rows = drafts or [
+        {
+            "id": "d1",
+            "bot": "email-owner",
+            "goal": goal,
+            "kind": "email",
+            "title": "Welcome email",
+            "body": "Hi there.",
+        },
+        {"id": "d2", "bot": "content-owner", "kind": "post", "title": "Spring blends", "body": "Our spring list."},
+        {"id": "d3", "bot": "assistant", "kind": "plan", "title": "Week one", "body": "Monday: read the inbox."},
+        {"id": "d5", "bot": "agent-ops", "kind": "list", "title": "Tools to connect", "body": "Mail, then docs."},
+        {"id": "d4", "bot": "content-owner", "kind": "post", "title": "Not this one", "body": "Skip me."},
+    ]
+    draft, added = C.add_drafts(draft, rows)
+    assert added["added"] == len(rows)
+    if not drafts:
+        statuses = {"d2": "approved", "d3": "approved", "d4": "skipped"}
+        for row in draft["drafts"]:
+            row["status"] = statuses.get(row["id"], "waiting")
+    return C.to_yaml(draft)
+
+
+def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules_as_company_rules(environment):
+    """Each draft not skipped is a task owned by the agent that drafted it, on its goal, with the draft as the agent's own
+    message: a waiting one asks the owner Send / Edit / Later in Needs you, an approved one asks nothing. The seats whose
+    agents drafted go live to hold them. The said rules are company rules by the owner, in their words. Priya is kept to
+    invite with her email, not invited. Importing the same file again makes nothing twice."""
+    from backend import company_import as CI
+    from backend import task_wakes
+
+    api = environment()
+    text = swarm_text()
+    assert "version: 0.4" in text
+    summary = preview_and_import(api, text)
+    assert summary["drafts"] == {"waiting": 2, "approved": 2, "skipped": 1, "unowned": 0} and summary["said"] == 2
+    assert {s["id"]: s.get("live") for s in summary["seats"]} == {"content-owner": True, "email-owner": True}
+    ids = bot_ids(api)
+    tasks = {
+        r["title"]: r
+        for r in rows(api, "SELECT id,title,owner_id,requester_id,goal_id FROM tasks WHERE title NOT LIKE 'Set up %'")
+    }
+    assert set(tasks) == {"Welcome email", "Spring blends", "Week one", "Tools to connect"}  # not the skipped one
+    assert tasks["Welcome email"]["owner_id"] == "bot:" + ids["email-owner"]
+    assert tasks["Spring blends"]["owner_id"] == "bot:" + ids["content-owner"]
+    assert tasks["Week one"]["owner_id"] == "bot:" + ids["assistant"]
+    assert tasks["Tools to connect"]["owner_id"] == "bot:" + ids["agent-ops"]
+    assert {r["requester_id"] for r in tasks.values()} == {"human:owner"}
+    goal = rows(api, "SELECT id FROM goals WHERE title='Grow the newsletter'")[0]["id"]
+    assert tasks["Welcome email"]["goal_id"] == goal and tasks["Spring blends"]["goal_id"] is None
+    said = {
+        r["task_id"]: r
+        for r in rows(
+            api,
+            "SELECT t.id AS task_id, m.sender_id, m.body FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+            "WHERE t.title IN ('Welcome email','Spring blends','Week one')",
+        )
+    }
+    assert said[tasks["Welcome email"]["id"]]["sender_id"] == "bot:" + ids["email-owner"]
+    assert "Hi there." in said[tasks["Welcome email"]["id"]]["body"]
+    assert "Our spring list." in said[tasks["Spring blends"]["id"]]["body"]
+    marks = rows(api, "SELECT task_id,person_id,choices,cleared_at FROM question_marks")
+    assert sorted((m["task_id"], m["person_id"], json.loads(m["choices"]), m["cleared_at"]) for m in marks) == sorted(
+        (tasks[title]["id"], "human:owner", ["Send", "Edit", "Later"], None)
+        for title in ("Welcome email", "Tools to connect")
+    )
+    needs = api.get("/api/v2/needs-you", headers=signed_in())
+    assert needs.status_code == 200, needs.text
+    assert tasks["Welcome email"]["id"] in needs.text and tasks["Spring blends"]["id"] not in needs.text
+    rules = rows(api, "SELECT text,status,suggested_by,who FROM org_rules WHERE description LIKE 'Said in setup%'")
+    assert sorted((r["text"], r["status"], r["suggested_by"]) for r in rules) == [
+        ("Never offer a discount over 10%", "active", "human:owner"),
+        ("Sign off as the Acme Tea team", "active", "human:owner"),
+    ]
+    assert all(json.loads(r["who"])["all_bots"] for r in rules)
+    record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
+    assert record["drafts"]["waiting"] == 2 and record["said"] == 2
+    assert [(p["name"], p.get("email"), p.get("invited_at")) for p in record["people"]] == [
+        ("Priya", "priya@acme.example", None)
+    ]
+    assert not rows(api, "SELECT id FROM humans WHERE name='Priya'")  # kept to invite, not invited
+    # Approved work waits for its agent to be able to run: nothing has run, and the agent is not ready yet.
+    with api.app.state.store.read() as c:
+        assert task_wakes.cannot_run(c, "bot:" + ids["content-owner"]) is not None
+    assert not rows(api, "SELECT id FROM attempts")
+    # The same file again changes nothing, through the route or the import itself.
+    again = api.post(
+        "/api/v2/setup/company/import",
+        json={"company_yaml": text, "fingerprint": summary["fingerprint"]},
+        headers=signed_in(),
+    )
+    assert again.status_code == 200, again.text
+    onboarding = api.app.state.onboarding
+    with api.app.state.store.transaction() as c:
+        made = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (CI.MADE_KEY,)).fetchone()[0])
+        who = onboarding.auth.owner_identity(c)
+        saved = starter.load(text)
+        assert CI.import_drafts(c, who, saved, {}, {}, {}, made["drafts"]) == made["drafts"]
+        assert CI.import_said(onboarding, c, who, saved, made["said"]) == made["said"]
+        # Without the record, a rule whose words are already a rule is that rule.
+        assert CI.import_said(onboarding, c, who, saved) == made["said"]
+    assert len(rows(api, "SELECT id FROM tasks WHERE title NOT LIKE 'Set up %'")) == 4
+    assert len(rows(api, "SELECT id FROM question_marks")) == 2
+    assert len(rows(api, "SELECT id FROM org_rules WHERE description LIKE 'Said in setup%'")) == 2
+
+
+def test_a_file_without_drafts_said_or_email_imports_as_before(environment):
+    api = environment()
+    text = company_text()
+    assert "version: 0.2" in text
+    summary = preview_and_import(api, text)
+    assert "drafts" not in summary and "said" not in summary
+    record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
+    assert "drafts" not in record and "said" not in record
+    assert not rows(api, "SELECT id FROM question_marks")
+    assert not rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file_made'")
+
+
+def test_a_file_with_300_drafts_imports_them_all_in_one_go(environment):
+    """The most a file holds: 300 drafts at full length, half waiting and half approved, land as 300 tasks and 150 asks
+    in the import's one transaction."""
+    api = environment()
+    body = "Dear reader, " + "our teas are picked by hand and shipped the same week. " * 36
+    rows_ = [
+        {
+            "id": "d%d" % i,
+            "bot": ("content-owner", "email-owner")[i % 2],
+            "kind": "post",
+            "title": "Draft %s %s" % (tag(i), "x" * 100),
+            "body": body[:2000],
+            "status": ("waiting", "approved")[i % 2],
+        }
+        for i in range(300)
+    ]
+    text = swarm_text(rows_)
+    summary = preview_and_import(api, text)
+    assert summary["drafts"] == {"waiting": 150, "approved": 150, "skipped": 0, "unowned": 0}
+    assert len(rows(api, "SELECT id FROM tasks WHERE title LIKE 'Draft %'")) == 300
+    assert len(rows(api, "SELECT id FROM question_marks")) == 150
