@@ -1780,6 +1780,7 @@ class Heartbeat(Contract):
             "plan_usage_v1",
             "browser_exit_v1",
             "model_exit_v1",
+            "model_exit_claude_v1",
             "model_subscription_activation_v1",
             "model_connect_v1",
             "claude_login_v1",  # full Claude logins: their turns, refreshes and usage reads (backend/claude_login.py)
@@ -1797,7 +1798,7 @@ class Heartbeat(Contract):
             "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
             "antigravity_plan_v1",  # Antigravity plans: Connect, install and turns (backend/model_subscriptions.py)
         ]
-    ] = Field(default_factory=list, max_length=35)
+    ] = Field(default_factory=list, max_length=36)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)

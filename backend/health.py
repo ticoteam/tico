@@ -3001,10 +3001,10 @@ def _payer_waits(c, who, auth, loads, settings):
             fixer = agent_subscriptions.wait_fixer(c, runner, picks[runtime], payment)
             fix = (
                 _fix("Open Computers", "#/settings", "devices")
-                if payment.update
+                if payment.update or payment.exit_computer
                 else _fix("Open Providers", "#/settings/providers")
             )
-            text = f"{r['display_name'] or r['slug']}: {payment.reason}. {fixer} can help."
+            text = f"{r['display_name'] or r['slug']}: {payment.wait_text(auth, who)}. {fixer} can help."
             items.append({"bot": r["id"], "text": text, "fixes": [fix]})
             if len(items) == DIAGNOSTIC_LIMIT:
                 return _check("paid_by_wait", "Waiting for Paid by", "warn", "", items=items)

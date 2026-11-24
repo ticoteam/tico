@@ -10,7 +10,11 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{io, sync::OnceLock, time::Duration};
+use std::{
+    io,
+    sync::{Arc, Mutex, OnceLock},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -20,6 +24,7 @@ use tokio::{
 use tokio_tungstenite::tungstenite::{Bytes, Error as WsError, Message};
 
 pub const CAPABILITY: &str = "model_exit_v1";
+pub const CLAUDE_CAPABILITY: &str = "model_exit_claude_v1";
 const TIME: Duration = Duration::from_secs(25);
 const BODY: usize = 32 * 1024 * 1024;
 const BUDGET_WAIT: Duration = Duration::from_millis(250);
@@ -33,6 +38,7 @@ const CODEX: &str = "chatgpt.com";
 const BAD_REQUEST: &str = "model_exit_bad_request";
 const BUSY: &str = "model_exit_busy";
 const UNAVAILABLE: &str = "model_exit_unavailable";
+const END_CHUNKS: &[u8] = b"0\r\n\r\n";
 
 async fn reserve_body(
     budget: &Semaphore,
@@ -79,26 +85,49 @@ impl Provider {
     }
 }
 
-// The next step owns this handle for the duration of the turn.
-#[allow(dead_code)] // The per-turn loopback is dark until harness activation.
 pub struct Local {
     pub url: String,
     pub token: String,
+    transport: Arc<ModelTransport>,
     shutdown: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
 
 impl Local {
-    #[allow(dead_code)] // The turn can await cleanup before returning its isolated user.
+    pub fn transport_failed(&self) -> bool {
+        self.transport.0.lock().unwrap().failed
+    }
+
     pub async fn stop(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
         let _ = (&mut self.task).await;
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_handle() -> Self {
+        let (shutdown, stopping) = oneshot::channel();
+        Self {
+            url: "http://127.0.0.1:34567".into(),
+            token: turn_token(),
+            transport: Arc::default(),
+            shutdown: Some(shutdown),
+            task: tokio::spawn(async move {
+                let _ = stopping.await;
+            }),
+        }
+    }
 }
 
-#[allow(dead_code)] // The next step starts the loopback after the hub selects a model exit.
+impl Drop for Local {
+    fn drop(&mut self) {
+        if self.shutdown.is_some() {
+            self.task.abort();
+        }
+    }
+}
+
 pub async fn start(
     client: Client,
     attempt_id: String,
@@ -110,13 +139,15 @@ pub async fn start(
     let authority = listener.local_addr()?.to_string();
     let url = format!("http://{authority}");
     let token = turn_token();
-    let turn = std::sync::Arc::new(Turn {
+    let transport = Arc::new(ModelTransport::default());
+    let turn = Arc::new(Turn {
         client,
         attempt_id,
         generation,
         provider,
         authority,
         token: token.clone(),
+        transport: transport.clone(),
     });
     let (shutdown, mut stopping) = oneshot::channel();
     let task = tokio::spawn(async move {
@@ -140,6 +171,7 @@ pub async fn start(
     Ok(Local {
         url,
         token,
+        transport,
         shutdown: Some(shutdown),
         task,
     })
@@ -152,6 +184,56 @@ struct Turn {
     provider: Provider,
     authority: String,
     token: String,
+    transport: Arc<ModelTransport>,
+}
+
+#[derive(Default)]
+struct ModelTransport(Mutex<ModelTransportState>);
+
+#[derive(Default)]
+struct ModelTransportState {
+    requested: u64,
+    settled: u64,
+    failed: bool,
+}
+
+impl ModelTransport {
+    fn request(&self, path: &str) -> Option<ModelRequest<'_>> {
+        if !matches!(path, "/v1/messages" | "/v1/messages?beta=true") {
+            return None;
+        }
+        let mut state = self.0.lock().unwrap();
+        state.requested += 1;
+        Some(ModelRequest {
+            transport: self,
+            id: state.requested,
+        })
+    }
+}
+
+struct ModelRequest<'a> {
+    transport: &'a ModelTransport,
+    id: u64,
+}
+
+impl ModelRequest<'_> {
+    fn settle(self, failed: bool) {
+        let mut state = self.transport.0.lock().unwrap();
+        // An older request can finish after a retry already has its own result.
+        if self.id > state.settled {
+            state.settled = self.id;
+            state.failed = failed;
+        }
+    }
+}
+
+fn record_refusal(request: Option<ModelRequest<'_>>, code: &str) {
+    if let Some(request) = request {
+        request.settle(matches!(
+            code,
+            "model_exit_offline" | "model_exit_stale" | UNAVAILABLE | BUSY
+        ));
+    }
 }
 
 struct Request<'a> {
@@ -250,6 +332,7 @@ impl<'a> Request<'a> {
 }
 
 async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
+    let mut model_request = None;
     let request = tokio::time::timeout(TIME, async {
         let (head, body) = read_head(&mut tcp).await.ok_or(BAD_REQUEST)?;
         let req = Request::parse(&head, turn.provider, &turn.authority).ok_or(BAD_REQUEST)?;
@@ -262,6 +345,7 @@ async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
         if !same(auth, &turn.token) || body.len() > req.length {
             return Err(BAD_REQUEST);
         }
+        model_request = turn.transport.request(req.path);
         let permit = reserve_body(&BODY_BUDGET, req.length).await?;
         let mut wire = req.canonical_head(turn.provider);
         wire.reserve_exact(req.length);
@@ -281,7 +365,10 @@ async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
     .unwrap_or(Err(BAD_REQUEST));
     let wire = match request {
         Ok(request) => request,
-        Err(BUSY) => return local_error(&mut tcp, 502, BUSY).await,
+        Err(BUSY) => {
+            record_refusal(model_request, BUSY);
+            return local_error(&mut tcp, 502, BUSY).await;
+        }
         Err(code) => return local_error(&mut tcp, 400, code).await,
     };
     let (mut read, mut write) = tcp.split();
@@ -292,7 +379,10 @@ async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
         result = async {
             let ws = match open(turn).await {
                 Ok(ws) => ws,
-                Err(code) => return local_error(&mut write, 502, code).await,
+                Err(code) => {
+                    record_refusal(model_request, code);
+                    return local_error(&mut write, 502, code).await;
+                }
             };
             let (mut send, mut receive) = ws.split();
             let upload = async move {
@@ -316,28 +406,56 @@ async fn serve_local(mut tcp: TcpStream, turn: &Turn) -> io::Result<()> {
                 }
             };
             let Some(first) = first else {
+                record_refusal(model_request, UNAVAILABLE);
                 return local_error(&mut write, 502, UNAVAILABLE).await;
             };
-            let mut replies = futures_util::stream::iter([Ok(first)]).chain(receive);
-            let mut started = false;
-            while let Some(Ok(message)) = replies.next().await {
-                match message {
-                    Message::Binary(bytes) => {
-                        started = true;
-                        write.write_all(&bytes).await?;
-                    }
-                    Message::Text(text) if !started => return local_error(&mut write, 502, refusal(&text)).await,
-                    Message::Close(Some(frame)) if !started => return local_error(&mut write, 502, error_code(&frame.reason)).await,
-                    Message::Close(_) => break,
-                    _ => {}
-                }
-            }
-            if !started {
-                return local_error(&mut write, 502, UNAVAILABLE).await;
-            }
-            write.shutdown().await
+            let replies = futures_util::stream::iter([Ok(first)]).chain(receive);
+            relay_response(write, replies, model_request).await
         } => result,
     }
+}
+
+async fn relay_response(
+    mut write: impl AsyncWrite + Unpin,
+    mut replies: impl Stream<Item = Result<Message, WsError>> + Unpin,
+    request: Option<ModelRequest<'_>>,
+) -> io::Result<()> {
+    let mut started = false;
+    let mut code = UNAVAILABLE;
+    while let Some(Ok(message)) = replies.next().await {
+        match message {
+            Message::Binary(bytes) => {
+                // The exit frames completion explicitly. A socket close can also mean a lost link
+                // or a cut-off provider stream.
+                let complete = bytes.as_ref() == END_CHUNKS
+                    || (!started && bytes.starts_with(b"HTTP/1.1 204 "));
+                started = true;
+                write.write_all(&bytes).await?;
+                if complete {
+                    if let Some(request) = request {
+                        request.settle(false);
+                    }
+                    return write.shutdown().await;
+                }
+            }
+            Message::Text(text) if !started => {
+                code = refusal(&text);
+                break;
+            }
+            Message::Close(frame) => {
+                if !started {
+                    code = frame.map_or(UNAVAILABLE, |frame| error_code(&frame.reason));
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+    record_refusal(request, code);
+    if !started {
+        return local_error(write, 502, code).await;
+    }
+    write.shutdown().await
 }
 
 fn error_code(code: &str) -> &'static str {
@@ -630,7 +748,7 @@ async fn forward(
                 .map_err(|_| UNAVAILABLE)?;
         }
     }
-    send.send(Message::Binary(b"0\r\n\r\n".to_vec().into()))
+    send.send(Message::Binary(Bytes::from_static(END_CHUNKS)))
         .await
         .map_err(|_| UNAVAILABLE)
 }

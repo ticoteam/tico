@@ -851,6 +851,8 @@ class Store:
         # In-process writers queue before BEGIN instead of competing in SQLite's busy-handler sleeps.
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
+        self.plan_exit_policy = (False, 0)
+        self.plan_exit_lock = threading.Lock()
         # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
         self.automation_bell = threading.Event()
         from .provenance_clock import Cache
@@ -1128,6 +1130,19 @@ class Store:
                 c.rollback()
                 raise
 
+    @contextmanager
+    def read_plan_upkeep(self):
+        """Upkeep needs a consistent routing snapshot when exits are in use."""
+        with self.read() as c:
+            if c.plan_exit_policy[0]:  # pyright: ignore[reportAttributeAccessIssue]
+                c.execute("BEGIN")
+            yield c
+
+    def plan_exit_current(self, c):
+        """Check a credential read against the policy at the cutover commit."""
+        with self.plan_exit_lock:
+            return c.plan_exit_policy == self.plan_exit_policy
+
     def _file(self):
         try:
             stat = os.stat(self.settings.db_path)
@@ -1142,29 +1157,44 @@ class Store:
             self.pool_age += 1
 
     def _take(self):
-        file = self._file()
-        with self.pool_lock:
-            identity = (file, self.pool_age)
-            if identity != self.pool_file:
-                # A restored or replaced database file, or retire_pool: connections opened before are not reused.
-                stale = list(self.pool)
-                self.pool.clear()  # in place: the finalizer registered in __init__ holds this list
-                self.pool_file = identity
-                from .provenance_clock import Cache
+        while True:
+            with self.pool_lock:
+                identity = (self._file(), self.pool_age)
+                if identity != self.pool_file:
+                    # A restored or replaced database file, or retire_pool: connections opened before are not reused.
+                    _close_idle(self.pool)
+                    from . import plan_exits
+                    from .provenance_clock import Cache
+                    from .row_clock import Cache as RowCache
 
-                self.provenance_cache = Cache()
-                self.roster_rows = {}
-                from .row_clock import Cache as RowCache
-
-                self.row_cache = RowCache()
-            else:
-                stale = []
-            c = self.pool.pop() if self.pool else None
-        for old in stale:
-            old.close()
-        if c is None:
-            c = self.connect(factory=self.pooled, check_same_thread=False)
-            c.pool_file = identity
+                    c = self.connect(factory=self.pooled, check_same_thread=False)
+                    if self._file() != identity[0]:
+                        c.close()
+                        continue
+                    previous_file = self.pool_file[0] if self.pool_file is not None else None
+                    try:
+                        with self.plan_exit_lock:
+                            enabled = plan_exits.stored_enabled(c)
+                            was_enabled, counter = self.plan_exit_policy
+                            if identity[0] != previous_file or enabled != was_enabled:
+                                self.plan_exit_policy = (enabled, counter + 1)
+                            self.pool_file = identity
+                    except BaseException:
+                        c.close()
+                        raise
+                    self.provenance_cache = Cache()
+                    self.roster_rows = {}
+                    self.row_cache = RowCache()
+                else:
+                    c = self.pool.pop() if self.pool else None
+                policy = self.plan_exit_policy
+            if c is None:
+                c = self.connect(factory=self.pooled, check_same_thread=False)
+                if self._file() != identity[0]:
+                    c.close()
+                    continue
+            break
+        c.pool_file = identity  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         # The server's file reader as the app has it configured now (media.install_media): work that holds only the
         # connection reads a company page's logo through it, so one saved in the company's own places is found.
         c.blobs = self.blobs
@@ -1176,6 +1206,7 @@ class Store:
         c.roster_rows = self.roster_rows
         c.row_cache = self.row_cache
         c.write_transaction = False
+        c.plan_exit_policy = policy  # pyright: ignore[reportAttributeAccessIssue]
         c.after_commit = []
         # Relays owed before this write commits (backend/assistant_relay.py).
         c.relay_pending = []  # pyright: ignore[reportAttributeAccessIssue]
@@ -1183,6 +1214,7 @@ class Store:
         c.provenance_changes = c.total_changes
         c.provenance_start = None
         c.settings = self.settings  # the server's own settings, for work that holds only the connection
+        c.screen_sessions = getattr(self, "screen_sessions", None)  # pyright: ignore[reportAttributeAccessIssue] - pooled connections carry the relay registry
         return c
 
     def _give(self, c):
@@ -1218,6 +1250,24 @@ class Store:
                 return
         c.close()
 
+    def _commit_plan_exit(self, c):
+        """Commit a write that changed plan exit routing, and publish the new policy with it."""
+        from . import plan_exits
+
+        with self.plan_exit_lock:
+            # A savepoint can roll back the policy change, and an old file can no longer publish one.
+            assert self.pool_file is not None
+            policy = None
+            if c.pool_file[0] == self.pool_file[0]:
+                enabled = plan_exits.stored_enabled(c)
+                was_enabled, counter = self.plan_exit_policy
+                # A selected exit can change while routing stays on.
+                if enabled != was_enabled or (enabled and c.plan_exit_policy[0]):
+                    policy = (enabled, counter + 1)
+            c.commit()
+            if policy is not None:
+                self.plan_exit_policy = policy
+
     @contextmanager
     def transaction(self, durable=False, *, notify=False):
         """One write transaction. `durable` makes its commit reach the disk before the call returns, for a write
@@ -1246,6 +1296,7 @@ class Store:
             done = begin(None, self.recorder, gate=self.writer, checkout=checkout)
             try:
                 c.write_transaction = True
+                initial_policy = c.plan_exit_policy  # pyright: ignore[reportAttributeAccessIssue] - checkout holds a pooled connection
                 from . import provenance_clock
 
                 c.provenance_start = provenance_clock.current(c)
@@ -1258,7 +1309,10 @@ class Store:
                 assistant_relay.flush(c)  # on each reply as it will commit (its attachments are on it by now)
                 if notify:
                     logged = events.claim(c, since, None)
-                c.commit()
+                if c.plan_exit_policy != initial_policy:  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
+                    self._commit_plan_exit(c)  # pyright: ignore[reportArgumentType] - checkout holds a connection
+                else:
+                    c.commit()  # pyright: ignore[reportOptionalMemberAccess, reportAttributeAccessIssue]
                 # Work that must see the committed rows (a delivery worker's doorbell) runs once the write is durable.
                 # A barrier (hubdb.durable_commit's WAL sync) runs first and its error is the request's: the write is
                 # not answered as done until it is on disk.

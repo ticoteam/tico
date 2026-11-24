@@ -903,6 +903,7 @@ impl Runner {
             crate::perf::set_enabled(beat.performance == Some(true));
             // This computer is a browser exit only while its owner shares its internet (crate::browser_exit).
             crate::browser_exit::set_sharing(beat.browser_exit == Some(true));
+            crate::browser_exit::set_model_exit(beat.model_exit == Some(true));
             if let Some(bots) = beat.browser_exit_bots.as_deref() {
                 crate::browser_exit::keep_proxies(bots, began);
             }
@@ -1315,6 +1316,7 @@ impl Runner {
         self.recover_output().await;
         tokio::spawn(self.clone().push_backlog());
         tokio::spawn(self.events.clone().run(self.client.clone()));
+        tokio::spawn(crate::browser_exit::model_link_loop(self.client.clone()));
         tokio::spawn(crate::perf::run_loop(self.clone()));
         tokio::spawn(crate::idle_load::run_loop(self.clone()));
         tokio::spawn(self.clone().probe_loop());

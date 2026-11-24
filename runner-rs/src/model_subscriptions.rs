@@ -273,6 +273,7 @@ impl Delivered {
 struct Homes {
     live: HashMap<PathBuf, Live>,
     kept: HashMap<PathBuf, (i64, String)>,
+    routed_claude: BTreeSet<PathBuf>,
 }
 
 struct Live {
@@ -763,15 +764,53 @@ fn plan_of(home: &Path) -> Option<String> {
     Some(up.file_name()?.to_string_lossy().to_string())
 }
 
-/// A full Claude login's config directory with a turn running on it: the one CLAUDE_CONFIG_DIR a turn keeps
-/// (hosts/claude.rs turn_env).
+/// A config directory handed to a live Claude subscription turn (hosts/claude.rs turn_env).
 pub fn is_config_home(path: &str) -> bool {
     let path = Path::new(path);
-    path.file_name().is_some_and(|n| n == "claude")
-        && homes()
-            .live
-            .get(path)
-            .is_some_and(|_| path.join(CREDENTIALS).is_file())
+    let homes = homes();
+    homes.routed_claude.contains(path)
+        || (path.file_name().is_some_and(|n| n == "claude")
+            && homes.live.contains_key(path)
+            && path.join(CREDENTIALS).is_file())
+}
+
+pub struct ClaudeConfig {
+    pub path: PathBuf,
+}
+
+impl ClaudeConfig {
+    pub fn new(state: &Path, env: &Env) -> Result<Self, String> {
+        let own = env
+            .get("HOME")
+            .filter(|home| Path::new(home).is_absolute())
+            .ok_or("Claude's home directory is unavailable")?;
+        let projects = Path::new(own).join(".claude/projects");
+        let path = crate::isolation::bot_state(state)
+            .join("model-exit")
+            .join(uuid::Uuid::new_v4().simple().to_string());
+        let config = Self { path };
+        (|| -> std::io::Result<()> {
+            crate::isolation::mkdir(&config.path, 0o700)?;
+            crate::isolation::mkdir(&projects, 0o700)?;
+            std::os::unix::fs::symlink(projects, config.path.join("projects"))?;
+            write_private(
+                &config.path.join(".claude.json"),
+                "{\"hasCompletedOnboarding\":true}",
+            )
+            .map_err(std::io::Error::other)?;
+            Ok(())
+        })()
+        .map_err(|e| format!("Cannot prepare Claude's plan exit config: {e}"))?;
+        homes().routed_claude.insert(config.path.clone());
+        Ok(config)
+    }
+}
+
+impl Drop for ClaudeConfig {
+    fn drop(&mut self) {
+        homes().routed_claude.remove(&self.path);
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
 }
 
 /// Each full Claude login a turn here runs on, with the revision its file has (claude_login.rs asks for newer ones).
@@ -1128,6 +1167,10 @@ fn clear_in(dir: &Folder) {
 /// mid-turn, or an older runner kept it) is removed.
 pub fn sweep(state_dir: &Path) {
     let state = crate::isolation::bot_state(state_dir);
+    // A plan exit turn's config homes (model_exit.rs), left by a runner that stopped mid-turn.
+    if let Ok(bot) = Folder::open(&state, &state, false) {
+        bot.remove(c"model-exit");
+    }
     let Ok(root) = Folder::open(&state, &state.join("subscriptions"), false) else {
         return;
     };
@@ -1983,7 +2026,10 @@ mod tests {
     #[test]
     fn the_runner_start_removes_sign_in_files_left_in_every_home_and_keeps_sessions() {
         let state = dir();
-        let root = crate::isolation::bot_state(&state).join("subscriptions");
+        let bot_state = crate::isolation::bot_state(&state);
+        let root = bot_state.join("subscriptions");
+        let routed = bot_state.join("model-exit");
+        std::fs::create_dir_all(routed.join("abandoned")).unwrap();
         for home in [root.join("s4/codex"), root.join("s5/codex")] {
             std::fs::create_dir_all(home.join("sessions")).unwrap();
             for name in [
@@ -1997,6 +2043,7 @@ mod tests {
             }
         }
         sweep(&state);
+        assert!(!routed.exists());
         for home in [root.join("s4/codex"), root.join("s5/codex")] {
             for name in ["auth.json", "auth.tico-0123abcd", ".tico-revision"] {
                 assert!(!home.join(name).exists(), "{name}");

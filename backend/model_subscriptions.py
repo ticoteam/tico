@@ -1095,25 +1095,35 @@ def provenance(reading):
     return {**reading, "origin": None, "subscription_id": None}
 
 
-def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
+def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, *, routing):
+    attempt_id = reading.get("attempt_id")
     binding = ""
     args = (sid, runtime, runner_id)
-    if route:
-        if route.runner_id != runner_id or not (attempt_id := reading.get("attempt_id")):
+    if routing:
+        if route and (route.runner_id != runner_id or not attempt_id):
             return False
-        binding = (
-            "AND s.attempt_id=? AND e.exit_generation=? AND s.delivery<>'model_exit' "
-            "AND julianday(a.created_at)<=julianday(?) "
-        )
-        args = (*args, attempt_id, route.generation, reading["reported_at"])
+        binding = "AND e.exit_generation IS ? AND s.delivery<>'model_exit' "
+        args = (*args, route.generation if route else None)
+        if attempt_id:
+            # The runner reports whole seconds; the attempt's time is compared at that precision.
+            binding += "AND s.attempt_id=? AND julianday(substr(a.created_at,1,19))<=julianday(?) "
+            args = (*args, attempt_id, reading["reported_at"])
+    from .subscription_refresh import PLAN_PREFIX
+
+    # After a cutover only a newer attempt vouches for a reading. Without an attempt ID the reading must also be newer.
     return (
         c.execute(
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
             "JOIN model_subscriptions m ON m.id=s.subscription_id "
-            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=s.attempt_id AND s.runtime='claude' "
+            "LEFT JOIN registry_metadata r ON r.key=? || s.subscription_id "
             "WHERE s.subscription_id=? AND s.runtime=? AND a.runner_id=? AND s.delivery<>'' "
-            "AND a.created_at>=m.credential_at " + binding + "LIMIT 1",
-            args,
+            "AND a.created_at>=m.credential_at "
+            "AND (r.value IS NULL OR NOT json_valid(r.value) OR json_extract(r.value, '$.turn_cutover_at') IS NULL "
+            "OR (julianday(a.created_at)>julianday(json_extract(r.value, '$.turn_cutover_at')) "
+            "AND CASE WHEN ? IS NULL THEN julianday(?)>julianday(json_extract(r.value, '$.turn_cutover_at')) "
+            "ELSE s.attempt_id=? END)) " + binding + "LIMIT 1",
+            (PLAN_PREFIX, *args[:3], attempt_id, reading["reported_at"], attempt_id, *args[3:]),
         ).fetchone()
         is not None
     )
@@ -1124,6 +1134,7 @@ def remember_turn_usage(c, runner_id, runtimes):
     from .repositories import metadata, save_metadata
     from .subscription_refresh import plan_key
 
+    routing = plan_exits.enabled(c)
     exits = None
     routes = {}
     for runtime, state in runtimes.items():
@@ -1131,13 +1142,16 @@ def remember_turn_usage(c, runner_id, runtimes):
             reading = provenance(state.get(window))
             if not reading or reading.get("origin") != "subscription" or not (sid := reading.get("subscription_id")):
                 continue
-            if plan_exits.UPKEEP_ROUTING and sid not in routes:
+            if routing and sid not in routes:
                 if exits is None:
                     exits = plan_exits.selections(c)
                 sub = c.execute("SELECT kind,owner_id FROM model_subscriptions WHERE id=?", (sid,)).fetchone()
-                routes[sid] = plan_exits.routed(c, sub, exits)
-            route = routes.get(sid)
-            if not _turn_usage_receipt(c, sid, runtime, runner_id, route, reading):
+                routes[sid] = (
+                    plan_exits.routed(c, sub, exits, require_ready=False),
+                    plan_exits.for_turn(c, sub, runner_id, exits),
+                )
+            upkeep, route = routes.get(sid, (None, None))
+            if not _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, routing=routing):
                 continue
             key = plan_key(sid)
             saved = metadata(c, key) or {}
@@ -1145,7 +1159,9 @@ def remember_turn_usage(c, runner_id, runtimes):
             binding = field + "_exit"
             previous = (saved.get(field) or {}).get("reported_at")
             current = list(route) if route else None
-            if saved.get(binding) != current or not previous or _at(reading["reported_at"]) > _at(previous):
+            previous_binding = saved.get(binding)
+            stale = previous_binding is not None and (not upkeep or previous_binding != list(upkeep))
+            if stale or not previous or _at(reading["reported_at"]) > _at(previous):
                 if current:
                     saved[binding] = current
                 else:
@@ -1179,7 +1195,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     runners = ctx["runners"]
     exits = ctx.get("exits")
     route = plan_exits.routed(c, sub, exits)
-    # Routed windows use the reading saved after checking its turn receipt at heartbeat ingestion.
+    binding_route = plan_exits.routed(c, sub, exits, require_ready=False) if route and not route.runner_id else route
+    # With exit routing, turn windows come from receipts checked at heartbeat ingestion.
     computers = [
         g
         for g in ctx["grants"].get(sub["id"], [])
@@ -1188,8 +1205,13 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
     turn_weekly, turn_five_hour = (
         meta.get(field)
-        if not route
-        or (route.runner_id and meta.get(field + "_exit") == list(route) and (meta.get(field) or {}).get("attempt_id"))
+        if meta.get(field + "_exit") is None
+        or (
+            binding_route
+            and binding_route.runner_id
+            and meta.get(field + "_exit") == list(binding_route)
+            and (meta.get(field) or {}).get("attempt_id")
+        )
         else None
         for field in ("turn_weekly", "turn_five_hour")
     )
@@ -1219,6 +1241,8 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
         state = _login_state(c, ctx, runner_id, profile, runtime)
         account = (state.get("account") or {}).get("email") or ""
         since = max(_at(grant["granted_at"]), _at(sub["credential_at"] or sub["created_at"]))
+        if meta.get("turn_cutover_at"):
+            since = max(since, _at(meta["turn_cutover_at"]))
         for window, label in (("weekly", "week"), ("five_hour", "5h")):
             reading = state.get(window)
             if not reading:
@@ -2163,7 +2187,7 @@ def store_refreshed(c, vault, sub, value, preview, actor, now):
         "UPDATE model_subscriptions SET credential_id=?,sealed='',preview=?,revision=revision+1,updated_at=? WHERE id=?",
         (_keep_value(c, vault, sub, value, preview, actor, now), preview, now, sub["id"]),
     )
-    if route := plan_exits.routed(c, sub):
+    if route := plan_exits.routed(c, sub, require_ready=False):
         c.execute(
             "UPDATE attempt_subscriptions AS s SET revision=? FROM plan_exit_bindings e "
             "WHERE s.subscription_id=? AND s.delivery='model_exit' AND s.revision=? "
@@ -2683,13 +2707,13 @@ def for_shell(sub):
     return spec.get("runtime") == "codex" and spec.get("billing") == "subscription" and bool(spec.get("file"))
 
 
-def hand_out(c, attempt_id, chosen):
+def hand_out(c, attempt_id, chosen, runner_id):
     """Record what the claim handed this attempt, and the attempt's metadata for the runner (no values)."""
     out = []
     for item in chosen:
         sub = item["subscription"]
         delivery = item.get("delivery", "")
-        route = plan_exits.routed(c, sub)
+        route = plan_exits.for_turn(c, sub, runner_id)
         c.execute(
             "INSERT OR REPLACE INTO attempt_subscriptions"
             "(attempt_id,runtime,subscription_id,revision,delivery,parent_grant) VALUES(?,?,?,?,?,?)",
@@ -2713,6 +2737,13 @@ def hand_out(c, attempt_id, chosen):
                 (attempt_id, item["runtime"]),
             )
         spec = KINDS[sub["kind"]]
+        if delivery == "model_exit":
+            assert route is not None
+            metadata = {"delivery": "model_exit", "exit_generation": route.generation}
+        else:
+            metadata = {"env": spec["env"]} if spec.get("env") else {"file": spec["file"]}
+            if spec.get("home_env"):
+                metadata["home_env"] = spec["home_env"]
         out.append(
             {
                 **({"activate": True} if item.get("activate") else {}),
@@ -2723,8 +2754,7 @@ def hand_out(c, attempt_id, chosen):
                 "revision": sub["revision"],
                 "billing": spec["billing"],
                 "source": "agent" if delivery and delivery != "legacy" else "computer",
-                **({"env": spec["env"]} if spec.get("env") else {"file": spec["file"]}),
-                **({"home_env": spec["home_env"]} if spec.get("home_env") else {}),
+                **metadata,
             }
         )
     return out
@@ -2751,8 +2781,9 @@ def payer_readable(c, sub):
 
 def _leased_payer(c, runner_id, attempt_id, delivery):
     return c.execute(
-        "SELECT s.runtime,s.subscription_id,s.revision,r.capabilities FROM attempt_subscriptions s "
+        "SELECT s.runtime,s.subscription_id,s.revision,r.capabilities,e.exit_generation FROM attempt_subscriptions s "
         "JOIN attempts a ON a.id=s.attempt_id JOIN runners_with_state r ON r.id=a.runner_id "
+        "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.runtime='claude' "
         "JOIN assignments x ON x.bot=a.bot_id AND x.runner_id=a.runner_id AND x.generation=a.generation "
         "LEFT JOIN credential_grants parent ON parent.id=s.parent_grant "
         "LEFT JOIN bot_config bc ON bc.bot=a.bot_id "
@@ -2775,16 +2806,20 @@ def _lease_subscription(c, given):
     return None
 
 
-def model_exit_payer(c, runner_id, attempt_id):
+def model_exit_payer(c, runner_id, attempt_id, generation=None):
     given = _leased_payer(c, runner_id, attempt_id, "model_exit")
     sub = _lease_subscription(c, given)
     if (
         sub
-        and sub["owner_id"].startswith("human:")
-        and sub["kind"] in ("claude_token", "claude_login", "codex_login")
-        and "model_exit_v1" in (H._json(given["capabilities"], []) or [])
+        and {plan_exits.MODEL_CAPABILITY, plan_exits.CLAUDE_CAPABILITY}.issubset(
+            H._json(given["capabilities"], []) or []
+        )
+        and (route := plan_exits.for_turn(c, sub, runner_id))
+        and route.runner_id not in (None, runner_id)
+        and route.generation == given["exit_generation"]
+        and (generation is None or generation == route.generation)
     ):
-        return sub
+        return sub, route
     return None
 
 
@@ -2796,30 +2831,36 @@ def model_exit_credential(c, vault, sub):
     if sub["kind"] == "claude_token":
         return {"access_token": value}
     try:
-        if sub["kind"] == "claude_login":
-            return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
-        tokens = (_codex_login(value) or {}).get("tokens") or {}
+        return {"access_token": claude_login.parse(value)["claudeAiOauth"]["accessToken"]}
     except Problem:
         return None
-    access, account = tokens.get("access_token"), tokens.get("account_id")
-    if all(isinstance(v, str) and v for v in (access, account)):
-        return {"access_token": access, "account_id": account}
-    return None
 
 
-def payer_ready(c, runner_id, attempt_id, delivery):
+def payer_refusal(c, runner_id, attempt_id, delivery):
     """Verify the same bound provider still counts before the harness starts."""
     from .agent_subscriptions import CAPABILITY
 
+    if delivery == "model_exit":
+        if bound := model_exit_payer(c, runner_id, attempt_id):
+            sub, route = bound
+            return None if plan_exits.remotely_ready(c, sub, route) else plan_exits.waiting(plan_exits.selected(c, sub))
+        return PAYER_UNAVAILABLE
     if delivery not in ("claim", "legacy"):
-        return False
+        return PAYER_UNAVAILABLE
     given = _leased_payer(c, runner_id, attempt_id, delivery)
-    if not (sub := _lease_subscription(c, given)):
-        return False
+    if not (sub := _lease_subscription(c, given)) or not _direct_payer(c, runner_id, given, sub):
+        return PAYER_UNAVAILABLE
     caps = H._json(given["capabilities"], []) or []
-    if delivery == "legacy":
-        return legacy_matches(c, runner_id, given["runtime"], sub, caps)
-    return CAPABILITY in caps and carries(sub["kind"], caps)
+    ready = (
+        legacy_matches(c, runner_id, given["runtime"], sub, caps)
+        if delivery == "legacy"
+        else CAPABILITY in caps and carries(sub["kind"], caps)
+    )
+    return None if ready else PAYER_UNAVAILABLE
+
+
+def _direct_payer(c, runner_id, given, sub):
+    return plan_exits.matches(plan_exits.for_turn(c, sub, runner_id), runner_id, given["exit_generation"])
 
 
 def _lease_value(c, vault, given, sub):
@@ -2840,19 +2881,25 @@ def claim_credential(c, vault, runner_id, attempt_id, delivery="claim"):
     """Open the lease's payer for the authenticated runner after saving the secret-free receipt."""
     from .agent_subscriptions import CAPABILITY
 
+    if delivery not in ("claim", "shell"):
+        return None
     given = _leased_payer(c, runner_id, attempt_id, delivery)
     caps = (H._json(given["capabilities"], []) or []) if given else []
     if not given or CAPABILITY not in caps:
         return None
     sub = _lease_subscription(c, given)
-    return _lease_value(c, vault, given, sub) if sub and carries(sub["kind"], caps) else None
+    if not sub or not carries(sub["kind"], caps) or not _direct_payer(c, runner_id, given, sub):
+        return None
+    return _lease_value(c, vault, given, sub)
 
 
 def legacy_credential(c, vault, who):
     """Open a legacy turn's payer through the computer's current shared binding."""
     given = _leased_payer(c, who.runner_id, who.attempt_id, "legacy")
-    if not (sub := _lease_subscription(c, given)) or not legacy_matches(
-        c, who.runner_id, given["runtime"], sub, H._json(given["capabilities"], []) or []
+    if (
+        not (sub := _lease_subscription(c, given))
+        or not _direct_payer(c, who.runner_id, given, sub)
+        or not legacy_matches(c, who.runner_id, given["runtime"], sub, H._json(given["capabilities"], []) or [])
     ):
         return None
     if credential := _lease_value(c, vault, given, sub):
@@ -2901,7 +2948,7 @@ def refreshed(c, vault, who, body):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
-    if given["delivery"] == "legacy" and not payer_ready(c, who.runner_id, body.attempt, "legacy"):
+    if given["delivery"] == "legacy" and payer_refusal(c, who.runner_id, body.attempt, "legacy"):
         raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     value, preview = checked("codex_login", body.value.get_secret_value())
     old = json.loads(value_of(c, vault.cipher, sub) or "{}")

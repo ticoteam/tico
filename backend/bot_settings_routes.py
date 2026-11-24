@@ -46,7 +46,7 @@ def _last_turn(c, settings, auth, who, bot, chosen):
             followed = shared_bots.follow(c, bot, H._json(config["config"], {}) or {})
             waits = [
                 {
-                    "reason": payment.reason,
+                    "reason": payment.wait_text(auth, who),
                     "until": payment.until.isoformat() if payment.until else None,
                     "fixer": agent_subscriptions.wait_fixer(c, runner, chosen[runtime], payment),
                 }

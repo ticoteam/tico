@@ -1,7 +1,8 @@
 # pyright: strict
 """One exit computer for a person's saved plans."""
 
-from sqlite3 import Connection
+import json
+from sqlite3 import Connection, OperationalError
 from typing import Any, NamedTuple
 
 from fastapi import Query, Request
@@ -10,7 +11,7 @@ from . import access, hubdb
 from .api_contract import api_v2, error
 from .auth import Identity
 from .models import ID, Contract
-from .read_cache import one, readiness
+from .read_cache import METADATA, one, readiness
 from .store import Problem
 
 H: Any = hubdb
@@ -33,10 +34,12 @@ EXIT_ROWS = (
     "LEFT JOIN runners r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
 PAGE_SIZE = 100
-# Upkeep stays dark until turn routing is ready and legacy maintenance jobs have drained.
-UPKEEP_ROUTING = False
+SETTING = "plan_exit_routing"
+MODEL_CAPABILITY = "model_exit_v1"
+CLAUDE_CAPABILITY = "model_exit_claude_v1"
 _SELECTIONS = (
-    "SELECT e.person_id,e.generation,r.id,r.platform,r.capabilities,r.readiness,r.last_seen_at FROM plan_exits e "
+    "SELECT e.person_id,e.generation,r.id,r.label,r.platform,r.capabilities,r.readiness,r.last_seen_at,"
+    "r.owner_id,r.accepts_member_bots FROM plan_exits e "
     "LEFT JOIN runners_with_state r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
 
@@ -46,21 +49,37 @@ class Route(NamedTuple):
     generation: int
 
 
+def enabled(c: Connection) -> bool:
+    if (policy := getattr(c, "plan_exit_policy", None)) is not None:
+        return bool(policy[0])
+    return stored_enabled(c)
+
+
+def stored_enabled(c: Connection) -> bool:
+    try:
+        found = c.execute(METADATA, (SETTING,)).fetchone()
+    except OperationalError as e:
+        if str(e) == "no such table: registry_metadata":
+            return False
+        raise
+    return bool(found and found[0] == "true")
+
+
+def _advance_policy(c: Any, on: bool) -> None:
+    if hasattr(c, "plan_exit_policy"):
+        c.plan_exit_policy = (on, c.plan_exit_policy[1] + 1)
+
+
 def selections(c: Connection) -> Row:
-    return {row["person_id"]: row for row in c.execute(_SELECTIONS)} if UPKEEP_ROUTING else {}
+    return {row["person_id"]: row for row in c.execute(_SELECTIONS)} if enabled(c) else {}
 
 
 def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
-    if (
-        not UPKEEP_ROUTING
-        or not sub
-        or sub["kind"] not in ("claude_token", "claude_login")
-        or not sub["owner_id"].startswith("human:")
-    ):
+    if not sub or sub["kind"] not in ("claude_token", "claude_login") or not sub["owner_id"].startswith("human:"):
         return None
     person = sub["owner_id"].removeprefix("human:")
     if exits is None:
-        return one(c, _SELECTIONS + " WHERE e.person_id=?", (person,))
+        return one(c, _SELECTIONS + " WHERE e.person_id=?", (person,)) if enabled(c) else None
     return exits.get(person)
 
 
@@ -99,8 +118,171 @@ def matches(route: Route | None, runner_id: str | None, generation: int | None) 
     return runner_id is not None and route == (runner_id, generation)
 
 
+def for_turn(c: Connection, sub: Any, runner_id: str, exits: Row | None = None) -> Route | None:
+    return _turn_route(c, routed(c, sub, exits, require_ready=False), runner_id)
+
+
+def _turn_route(c: Connection, route: Route | None, runner_id: str) -> Route | None:
+    if route and one(c, "SELECT 1 FROM runners r WHERE r.id=? AND " + PERSONAL_RUNNER, (runner_id,)):
+        return route
+    return None
+
+
+def remotely_ready(c: Connection, sub: Any, route: Route) -> bool:
+    if not route.runner_id:
+        return False
+    relay = getattr(c, "screen_sessions", None)
+    if relay is None or not relay.model_online(route.runner_id):
+        return False
+    exit_runner = selected(c, sub)
+    return bool(exit_runner and MODEL_CAPABILITY in (H._json(exit_runner["capabilities"], []) or []))
+
+
+def _visible(row: Any, auth: Any, who: Identity | None) -> bool:
+    return bool(
+        row["accepts_member_bots"] or (who and (who.actor == f"human:{row['owner_id']}" or auth.bot_admin(who)))
+    )
+
+
+def waiting(exit_runner: Any, auth: Any = None, who: Identity | None = None) -> str:
+    label = None
+    if exit_runner and exit_runner["id"]:
+        label = exit_runner["label"] if _visible(exit_runner, auth, who) else "Private computer"
+    return f"Waiting for {label or 'a plan exit computer'}"
+
+
+def wake_payers(c: Connection, owners: list[str]) -> None:
+    c.execute(
+        "WITH owners AS (SELECT 'human:'||value AS id FROM json_each(?)), "
+        "picks AS (SELECT p.bot FROM agent_subscriptions p JOIN owners o ON p.person=o.id "
+        "WHERE p.kind='pool' AND p.runtime='claude' "
+        "UNION SELECT p.bot FROM agent_subscriptions p JOIN model_subscriptions s ON s.id=p.subscription_id "
+        "JOIN owners o ON o.id=s.owner_id WHERE p.kind='plan' AND p.runtime='claude') "
+        "INSERT INTO changes(topic,kind,subject_id,bot,created_at) "
+        "SELECT DISTINCT 'runner','work',a.runner_id,a.bot,? FROM picks p JOIN assignments a USING(bot)",
+        (json.dumps(owners), H.now()),
+    )
+
+
+def _notify_exit(c: Connection, runner_id: str | None) -> None:
+    if runner_id:
+        c.execute(
+            "INSERT INTO changes(topic,kind,subject_id,created_at) VALUES('runner','browser_exit',?,?)",
+            (runner_id, H.now()),
+        )
+
+
+def supervised(c: Connection, runner_id: str) -> bool:
+    if not enabled(c):
+        return False
+    from .claude_login import platform_can_refresh
+
+    return any(
+        row["has_setup_token"] or platform_can_refresh(row)
+        for row in c.execute(
+            "SELECT r.platform, max(s.kind='claude_token') AS has_setup_token "
+            "FROM plan_exits e JOIN runners r ON r.id=e.runner_id "
+            "JOIN model_subscriptions s ON s.owner_id='human:'||e.person_id "
+            "WHERE e.runner_id=? AND s.kind IN ('claude_token','claude_login','codex_login') "
+            "AND s.kind<>'codex_login' GROUP BY r.platform",
+            (runner_id,),
+        )
+    )
+
+
+def _clear_turn_usage(c: Connection, owner: str | None = None) -> None:
+    """Drop cached turn readings at a cutover and mark when it happened: a reading taken before it is never used."""
+    from datetime import datetime, timezone
+
+    from .subscription_refresh import PLAN_PREFIX
+
+    c.execute(
+        "INSERT INTO registry_metadata(key,value) SELECT ? || id, json_object('turn_cutover_at', ?) "
+        "FROM model_subscriptions WHERE kind IN ('claude_token','claude_login') AND owner_id GLOB 'human:*' "
+        "AND (? IS NULL OR owner_id=?) "
+        "ON CONFLICT(key) DO UPDATE SET value=json_set(json_remove(CASE WHEN json_valid(value) THEN value ELSE '{}' END, "
+        "'$.turn_weekly', '$.turn_five_hour', '$.turn_weekly_exit', '$.turn_five_hour_exit'), "
+        "'$.turn_cutover_at', json_extract(excluded.value, '$.turn_cutover_at'))",
+        (PLAN_PREFIX, datetime.now(timezone.utc).isoformat(), owner, owner),
+    )
+
+
+def _fence(c: Connection, person_id: str, *, disabling: bool = False) -> None:
+    from . import model_login, quarantine_stops
+
+    owner = f"human:{person_id}"
+    for sub in c.execute(
+        "SELECT id,owner_id,kind,revision FROM model_subscriptions "
+        "WHERE owner_id=? AND kind IN ('claude_token','claude_login')",
+        (owner,),
+    ).fetchall():
+        route = None if disabling else routed(c, sub, require_ready=False)
+        for attempt in c.execute(
+            "SELECT a.*,s.delivery,e.exit_generation FROM attempts a JOIN attempt_subscriptions s ON s.attempt_id=a.id "
+            "JOIN runners r ON r.id=a.runner_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id "
+            "WHERE s.subscription_id=? AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL "
+            f"AND (s.delivery='model_exit' OR ({PERSONAL_RUNNER}))",
+            (sub["id"],),
+        ).fetchall():
+            turn_route = _turn_route(c, route, attempt["runner_id"])
+            remote = bool(turn_route and turn_route.runner_id != attempt["runner_id"])
+            if remote != (attempt["delivery"] == "model_exit") or (
+                (turn_route.generation if turn_route else None) != attempt["exit_generation"]
+            ):
+                quarantine_stops.restart(c, attempt, "The plan exit route changed")
+        if sub["kind"] == "claude_login":
+            # An outstanding refresh may already have spent its single-use token. Keep the issued receipt so
+            # a late success can restore the login, but require reconnect if the result never arrives.
+            c.execute(
+                "UPDATE model_subscriptions SET status='needs_reconnect',status_detail=?,status_at=? "
+                "WHERE id=? AND status<>'needs_reconnect' AND EXISTS (SELECT 1 FROM claude_logins l "
+                "LEFT JOIN plan_exit_bindings e ON e.kind='lease' AND e.ref_id=l.lease_id "
+                "WHERE l.subscription_id=? AND l.lease_id<>'' AND l.lease_revision=? "
+                "AND (e.exit_generation IS NOT NULL OR ?))",
+                (
+                    "Refresh interrupted by a plan exit change. Reconnect this plan.",
+                    H.now(),
+                    sub["id"],
+                    sub["id"],
+                    sub["revision"],
+                    route is not None,
+                ),
+            )
+    if disabling:
+        model_login.invalidate_routed_connects(c, owner)
+    else:
+        model_login.invalidate_connects(c, owner)
+    wake_payers(c, [person_id])
+
+
+def set_enabled(c: Connection, on: bool, actor: str) -> None:
+    if enabled(c) == on:
+        return
+    exits = c.execute("SELECT person_id,runner_id FROM plan_exits").fetchall()
+    # Both edges invalidate claims carried across the change, even if the selected computer stays the same.
+    c.execute("UPDATE plan_exits SET generation=generation+1")
+    _clear_turn_usage(c)
+    _advance_policy(c, on)
+    if on:
+        c.execute(
+            "INSERT INTO registry_metadata(key,value) VALUES(?, 'true') ON CONFLICT(key) DO UPDATE SET value='true'",
+            (SETTING,),
+        )
+    for person_id, runner_id in exits:
+        _fence(c, person_id, disabling=not on)
+        _notify_exit(c, runner_id)
+    if not on:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (SETTING,))
+    H.event(c, actor, "subscription.plan_exit_routing", SETTING, {"enabled": on})
+
+
 class ChangeExit(Contract):
     runner_id: ID
+
+
+class ChangeRouting(Contract):
+    enabled: bool
 
 
 def _choose(c: Connection, person_id: str) -> str | None:
@@ -114,6 +296,8 @@ def _choose(c: Connection, person_id: str) -> str | None:
 
 
 def _save(c: Connection, person_id: str, runner_id: str | None) -> bool:
+    on = enabled(c)
+    previous = one(c, "SELECT runner_id FROM plan_exits WHERE person_id=?", (person_id,)) if on else None
     changed = bool(
         c.execute(
             "INSERT INTO plan_exits(person_id,runner_id,generation) VALUES(?,?,1) "
@@ -122,11 +306,16 @@ def _save(c: Connection, person_id: str, runner_id: str | None) -> bool:
             (person_id, runner_id),
         ).rowcount
     )
-    if changed and UPKEEP_ROUTING:
-        from .model_login import invalidate_connects
-
-        invalidate_connects(c, f"human:{person_id}")
-    return changed
+    if not changed:
+        return False
+    if on:
+        # With routing off nothing is exit-bound, and enabling clears every plan's readings anyway.
+        _clear_turn_usage(c, f"human:{person_id}")
+        _advance_policy(c, on)
+        _fence(c, person_id)
+        _notify_exit(c, previous[0] if previous else None)
+        _notify_exit(c, runner_id)
+    return True
 
 
 def ensure_default(c: Connection, person_id: str) -> None:
@@ -147,14 +336,8 @@ def replace_retired(c: Connection, runner_id: str) -> None:
 
 def clear(c: Connection, person_id: str) -> None:
     """Departure: an exit that was handed out is cleared and fenced; nobody else gets a row."""
-    changed = c.execute(
-        "UPDATE plan_exits SET runner_id=NULL,generation=generation+1 WHERE person_id=? AND runner_id IS NOT NULL",
-        (person_id,),
-    ).rowcount
-    if changed and UPKEEP_ROUTING:
-        from .model_login import invalidate_connects
-
-        invalidate_connects(c, f"human:{person_id}")
+    if c.execute("SELECT 1 FROM plan_exits WHERE person_id=? AND runner_id IS NOT NULL", (person_id,)).fetchone():
+        _save(c, person_id, None)
 
 
 def replace_closed(c: Connection, runner_id: str) -> None:
@@ -187,7 +370,7 @@ def _may_change(auth: Any, who: Identity, person_id: str) -> bool:
 
 def _view(row: Any, auth: Any, who: Identity) -> Row:
     person_id = row["person_id"]
-    visible = row["accepts_member_bots"] or who.actor == f"human:{row['owner_id']}" or auth.bot_admin(who)
+    visible = _visible(row, auth, who)
     return {
         "person_id": person_id,
         "runner_id": row["runner_id"] if visible else None,
@@ -229,6 +412,60 @@ def install(app: Any, store: Any, auth: Any, mutate: Any) -> None:
 
     subs: Any = model_subscriptions
     _reader = subs._reader
+
+    routing_path = "/api/v2/settings/plan-exit-routing"
+    admin_only = {"403": error("Only a company admin may manage plan exit routing")}
+
+    @app.get(
+        routing_path,
+        **api_v2(
+            "Model subscriptions",
+            "getPlanExitRouting",
+            "Read company plan exit routing",
+            ChangeRouting,
+            responses=admin_only,
+        ),
+    )
+    def get_routing(request: Request) -> Row:
+        who = request.state.identity
+        with store.read() as c:
+            auth.sync_access(c)
+            if not subs._may_manage(auth, who):
+                raise Problem("forbidden", "Only a company admin may manage plan exit routing", 403)
+            return {"enabled": enabled(c)}
+
+    @app.put(
+        routing_path,
+        **api_v2(
+            "Model subscriptions",
+            "setPlanExitRouting",
+            "Set company plan exit routing",
+            ChangeRouting,
+            responses={**admin_only, "503": error("The screen relay is unavailable")},
+        ),
+    )
+    def put_routing(request: Request, body: ChangeRouting) -> Row:
+        who = request.state.identity
+
+        def check(c: Connection) -> None:
+            auth.sync_access(c)
+            if not subs._may_manage(auth, who):
+                raise Problem("forbidden", "Only a company admin may manage plan exit routing", 403)
+
+        def work(c: Connection) -> Row:
+            if body.enabled and not enabled(c):
+                relay = getattr(c, "screen_sessions", None)
+                if not relay or not relay.healthy:
+                    raise Problem(
+                        "screen_relay_unavailable",
+                        "Plan exit routing requires a healthy screen relay. Try again shortly.",
+                        503,
+                    )
+            set_enabled(c, body.enabled, who.actor)
+            return {"enabled": body.enabled}
+
+        answer: Row = mutate(request, body, work, check=check)
+        return answer
 
     path = "/api/v2/model-subscriptions/plan-exits/{person}"
     errors = {"404": error("Personal plan pool not found")}

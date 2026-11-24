@@ -675,6 +675,13 @@ impl Exits {
             .collect()
     }
 
+    pub(super) fn live_model_links(&self) -> HashMap<&str, u64> {
+        self.model_links
+            .iter()
+            .map(|(id, link)| (id.as_str(), link.serial))
+            .collect()
+    }
+
     pub(super) fn fence_model(&mut self, owner: &str, generation: u64) -> usize {
         let min = self.model_generations.entry(owner.to_owned()).or_default();
         if generation <= *min {
@@ -1496,6 +1503,7 @@ mod tests {
                 cancel,
             },
         );
+        assert_eq!(exits.live_model_links(), HashMap::from([("laptop", 1)]));
         let (_, _, _, canceled, usage) = exits.admit_model("model", binding()).unwrap();
         assert!(usage.is_none());
         assert_eq!(exits.live_model_owners(), HashMap::from([("owner", 1)]));

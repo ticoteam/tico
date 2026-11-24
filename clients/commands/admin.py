@@ -685,9 +685,28 @@ SEAT = (
 
 
 # `tico settings ...` (clients/cli_spec.py): each leaf's flags come from its tool's schema.
+@tool(
+    "tico_settings_plan_exit_routing",
+    "Read or change company Claude plan exit routing. Only the company owner and admins.",
+    {"mode": {"type": "string", "enum": ["on", "off"], "description": "Enable or disable routing. Omit to read."}},
+    writes=True,
+)
+def plan_exit_routing(api, args):
+    path = "settings/plan-exit-routing"
+    if (mode := args.get("mode")) is None:
+        return api.get(path)
+    return api.call("PUT", path, {"enabled": mode == "on"}, key=_key(args))
+
+
 _TARGETS = ("bot", "computer", "id", "person")  # the one thing a setting is set on, or none
 SETTINGS = (
     Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
+    Command(
+        "settings plan-exit-routing",
+        "read or change company Claude plan exit routing (admin)",
+        args=(Arg("mode", positional=True, nargs="?"),),
+        example="tico settings plan-exit-routing on",
+    ),
     Command(
         "settings find",
         "settings whose name, place or key hold these words",

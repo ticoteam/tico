@@ -32,7 +32,20 @@ A personal plan pool shows **Exit** in its header. Tico picks the owner's most r
 computer. The pool owner or an admin can choose another computer the owner can use. If the exit is removed or
 retired, Tico picks the next eligible personal computer.
 Use `tico subscription exit <person>` to read the setting and `tico subscription set-exit <person> <computer-id>`
-to change it. The setting is saved for future routing.
+to change it.
+
+Company admins can enable Claude plan routing and exit-only upkeep together with
+`tico settings plan-exit-routing on`. The company setting starts off and enabling it requires a healthy screen relay.
+A Claude turn on another personal computer then uses the selected exit's model link. If the link is down,
+the turn shows **Waiting for** followed by the exit computer's name. It can be claimed again when the link returns.
+Both computers need current runners. Turns on the exit itself, cloud and hosted computers, ChatGPT plans, and API keys use
+direct delivery. Full Claude logins also run direct when the selected exit is a Mac. Claude keeps the login in
+the Mac's keychain, where the exit runner can't refresh a separate copy from a file. Claude setup tokens can
+route through any selected exit.
+
+Changing the company setting or the selected exit restarts affected turns through normal recovery and fences
+outstanding Connects. A full login whose refresh was interrupted can recover when the original computer reports
+success. Otherwise its owner reconnects the plan.
 
 **Paid by** on an agent's settings picks a person's pool, one plan or one key for each AI tool. The **Paid by**
 column in **Settings → Agents** shows the choice for the agent's current tool. **Last turn** shows the recorded payer

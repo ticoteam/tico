@@ -216,7 +216,7 @@ def _stale_connects(c, runner_id=None, owner=None, *, require_ready=False):
     from . import plan_exits
     from .read_cache import rows
 
-    if not plan_exits.UPKEEP_ROUTING:
+    if not plan_exits.enabled(c):
         return []
     where, args = (" AND l.runner_id=?", (runner_id,)) if runner_id else ("", ())
     if owner:
@@ -256,6 +256,22 @@ def invalidate_connects(c: Connection, owner: str | None = None) -> None:
     _fail_connects(c, _stale_connects(c, owner=owner))
 
 
+def invalidate_routed_connects(c: Connection, owner: str) -> None:
+    _fail_connects(
+        c,
+        (
+            lid
+            for (lid,) in c.execute(
+                "SELECT l.id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
+                "JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=l.id "
+                "LEFT JOIN model_subscriptions m ON m.id=s.subscription_id "
+                f"WHERE l.runtime='claude' AND l.{ACTIVE_SQL} AND coalesce(m.owner_id,s.owner_id)=?",
+                (owner,),
+            ).fetchall()
+        ),
+    )
+
+
 def invalidate_plan_connects(c, subscription_id, completing_login_id):
     _fail_connects(
         c,
@@ -280,7 +296,7 @@ def sweep(c):
     )
     from . import plan_exits
 
-    if plan_exits.UPKEEP_ROUTING:
+    if plan_exits.enabled(c):
         invalidate_connects(c)
     # What a Connect that is over would have become: the job names no value, and nothing reads this once it has ended.
     if H._has_table(c, "subscription_connects"):

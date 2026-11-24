@@ -37,6 +37,7 @@ pub struct HeartbeatAnswer {
     /// The computer's owner shares its internet with bots: hold the exit link open.
     pub browser_exit: Option<bool>,
     pub browser_exit_bots: Option<Vec<String>>,
+    pub model_exit: Option<bool>,
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,
@@ -210,6 +211,14 @@ mod tests {
             ["ops"],
             "a running turn of the bot it names asks for its inputs"
         );
+    }
+
+    #[test]
+    fn heartbeat_model_exit_is_optional() {
+        let absent = decode::<HeartbeatAnswer>(serde_json::json!({})).unwrap();
+        let enabled = decode::<HeartbeatAnswer>(serde_json::json!({"model_exit": true})).unwrap();
+        assert_eq!(absent.model_exit, None);
+        assert_eq!(enabled.model_exit, Some(true));
     }
 
     #[test]

@@ -829,9 +829,55 @@ impl Open {
     }
 }
 
-#[allow(dead_code)] // Activation owns when the selected model exit holds a link.
-pub(crate) async fn run_model_link(client: &Client) -> Result<(), String> {
-    run_link(client, true).await
+fn model_selected() -> &'static tokio::sync::watch::Sender<bool> {
+    static SELECTED: OnceLock<tokio::sync::watch::Sender<bool>> = OnceLock::new();
+    SELECTED.get_or_init(|| tokio::sync::watch::channel(false).0)
+}
+
+pub(crate) fn set_model_exit(selected: bool) {
+    model_selected().send_if_modified(|current| {
+        let changed = *current != selected;
+        *current = selected;
+        changed
+    });
+}
+
+pub(crate) async fn model_link_loop(client: Client) {
+    let mut selected = model_selected().subscribe();
+    let mut backoff = Duration::from_secs(1);
+    let mut said = None;
+    loop {
+        if !*selected.borrow_and_update() {
+            backoff = Duration::from_secs(1);
+            said = None;
+            if selected.changed().await.is_err() {
+                return;
+            }
+            continue;
+        }
+        let began = Instant::now();
+        let result = tokio::select! {
+            _ = selected.changed() => continue,
+            result = run_link(&client, true) => result,
+        };
+        match result {
+            Ok(()) => said = None,
+            Err(e) if said.as_ref() != Some(&e) => {
+                log(&format!(
+                    "Tico runner: model exit link failed ({e}); will retry"
+                ));
+                said = Some(e);
+            }
+            Err(_) => {}
+        }
+        if began.elapsed() >= Duration::from_secs(30) {
+            backoff = Duration::from_secs(1);
+        }
+        tokio::select! {
+            _ = selected.changed() => {}
+            _ = tokio::time::sleep(backoff) => backoff = (backoff * 2).min(LINK_BACKOFF_MAX),
+        }
+    }
 }
 
 async fn run_link(client: &Client, model: bool) -> Result<(), String> {

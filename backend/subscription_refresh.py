@@ -298,6 +298,8 @@ def plan_pending(c, runner, exits=None):
     """This computer's reads asked and not yet answered (at most five), as its runner polls them."""
     from . import model_subscriptions as MS
 
+    if exits is None:
+        exits = plan_exits.selections(c)
     rows = c.execute(
         'SELECT key, value FROM registry_metadata WHERE key>=? AND key<?', (PLAN_PREFIX, PLAN_PREFIX[:-1] + ';')
     )
@@ -309,7 +311,7 @@ def plan_pending(c, runner, exits=None):
             continue  # a full login's read, polled with its token (backend/claude_login.py)
         if request.get('state') == 'requested' and request.get('runner_id') == runner and request['expires_at'] > now:
             sid = row['key'][len(PLAN_PREFIX) :]
-            route = plan_exits.routed(c, MS.row(c, sid), exits) if plan_exits.UPKEEP_ROUTING else None
+            route = plan_exits.routed(c, MS.row(c, sid), exits) if exits else None
             if not plan_exits.matches(route, runner, request.get('exit_generation')):
                 continue
             out.append(
@@ -338,7 +340,7 @@ def plan_with_value(c, vault, runner, item, exits=None):
     route = plan_exits.routed(c, sub, exits)
     if not sub or sub['status'] == 'needs_reconnect' or runner not in _plan_computers(c, sub, route):
         return item
-    if plan_exits.UPKEEP_ROUTING:
+    if plan_exits.enabled(c):
         request = (metadata(c, plan_key(sid)) or {}).get('request') or {}
         if (
             request.get('id') != item['id']
@@ -363,7 +365,7 @@ def plan_report(c, runner, rid, body):
     request = value.get('request') or {}
     if not request or request.get('id') != rid or request.get('runner_id') != runner:
         raise Problem('not_found', 'Usage request not found', 404)
-    route = plan_exits.routed(c, MS.row(c, body.subscription)) if plan_exits.UPKEEP_ROUTING else None
+    route = plan_exits.routed(c, MS.row(c, body.subscription)) if plan_exits.enabled(c) else None
     if not plan_exits.matches(route, runner, request.get('exit_generation')):
         raise Problem('not_found', 'Usage request not found', 404)
     now = H.now()
@@ -402,9 +404,9 @@ def install(app, store, auth, mutate):
 
     @app.get('/api/v2/runner-subscription-refreshes')
     def runner_refreshes(request: Request):
-        read = store.read_transaction if plan_exits.UPKEEP_ROUTING else store.read
-        with read() as c:
-            who = request.state.identity
+        who = request.state.identity
+
+        def refreshes(c):
             request.app.state.execution.runner(c, who)
             vault = request.app.state.vault
             exits = plan_exits.selections(c)
@@ -415,6 +417,13 @@ def install(app, store, auth, mutate):
                     for item in pending(c, who.runner_id, exits)
                 ]
             }
+
+        with store.read_plan_upkeep() as c:
+            answer = refreshes(c)
+            if store.plan_exit_current(c):
+                return answer
+        with store.transaction() as c:
+            return refreshes(c)
 
     @app.post('/api/v2/runner-subscription-refreshes/{rid}/report')
     def report_refresh(request: Request, rid: str, body: Report):
