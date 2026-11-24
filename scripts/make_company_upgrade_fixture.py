@@ -172,17 +172,26 @@ def build(out):
                 api, "POST", f"tasks/{found['id']}/move", {"to": to, "why": "Moved by hand.", "version": version}
             )
 
-        task("Dark mode for the dashboard", "creators-product-owner", "product")
-        spec = task("Export invoices as CSV", "creators-product-owner", "product")
+        # The chart's own Feature Owner (the first by slug: creators-feature-owner on today's HotMic chart) takes the
+        # feature work, and builds it too: today's chart has no Builder seat.
+        by_template = {}
+        for row in rows(
+            api,
+            "SELECT b.slug, s.template FROM bots b JOIN bot_settings s ON s.bot_id=b.id "
+            "WHERE b.state<>'archived' ORDER BY b.slug",
+        ):
+            by_template.setdefault(row["template"], row["slug"])
+        feature_owner = by_template["feature-owner"]
+        builder = by_template.get("builder", feature_owner)
+        task("Dark mode for the dashboard", feature_owner, "product")
+        spec = task("Export invoices as CSV", feature_owner, "product")
         move(spec, "next")
-        # 0.6.0 builds in Product (Pitch ... Build ... Done); 0.6.0-rc.7 had an Engineering pipeline (On deck, Build).
-        engineering = bool(rows(api, "SELECT 1 FROM pipelines WHERE id='engineering'"))
-        task("Fix the login redirect", "builder", "engineering" if engineering else "product")
-        review = task("Rate limit the public API", "builder", "engineering" if engineering else "product")
-        move(review, "next" if engineering else "product-build")
+        task("Fix the login redirect", builder, "product")
+        review = task("Rate limit the public API", builder, "product")
+        move(review, "product-build")
         snoozed = task("Look at the onboarding funnel", "growth-manager", "general")
         call(api, "POST", f"tasks/{snoozed['id']}/snooze", {"until": "2027-01-15", "why": "After the holidays."})
-        signoff = task("Ship the pricing page", "builder", "general")
+        signoff = task("Ship the pricing page", builder, "general")
         call(
             api,
             "POST",

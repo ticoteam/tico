@@ -102,3 +102,14 @@ def test_hosted_cli_carries_selected_file_through_machine_and_dns_setup(tmp_path
     assert starter.unpack(env["TICO_COMPANY_FILE_B64"])["company"]["name"] == "Acme Finance"
     assert env["TICO_COMPANY_FILE_B64"] not in out + ec2.called("run_instances")[0]["UserData"]
     assert r53.called("change_resource_record_sets")
+
+
+def test_a_refused_role_is_named_by_its_title(tmp_path):
+    """A pre-0.6 template slug is refused; the installer says which role, by the title the owner knows it by."""
+    draft = chart()
+    draft["bots"][0]["template"] = "pr-reviewer"
+    draft["bots"][0]["title"] = "Code Reviewer"
+    path = tmp_path / "tico.company.yaml"
+    path.write_text(C.to_yaml(draft))
+    with pytest.raises(MissingInput, match="^Code Reviewer names a role template .*: pr-reviewer$"):
+        wizard.gather_company_file(argparse.Namespace(company_file=str(path), company=None), settings.Settings())
