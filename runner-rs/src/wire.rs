@@ -37,6 +37,7 @@ pub struct HeartbeatAnswer {
     /// The computer's owner shares its internet with bots: hold the exit link open.
     pub browser_exit: Option<bool>,
     pub browser_exit_bots: Option<Vec<String>>,
+    pub model_exit: Option<bool>,
     /// Absent or null is automatic: the machine's own capacity is the limit.
     pub turns_at_once: Option<u64>,
     pub restart: Option<bool>,

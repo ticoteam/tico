@@ -365,7 +365,8 @@ async fn command(
             let usage = hub.exits.usage_batch();
             let answer = json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
                    "exit_usage": usage, "exit_backlog": hub.exits.backlog(),
-                   "model_exit_live": hub.exits.live_model_owners()});
+                   "model_exit_live": hub.exits.live_model_owners(),
+                   "model_exit_links": hub.exits.live_model_links()});
             if hub.stopping && usage.is_none() {
                 hub.stopping = false;
                 hub.lease = None;

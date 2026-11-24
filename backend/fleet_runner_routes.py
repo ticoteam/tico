@@ -611,11 +611,20 @@ def register(
                 from . import model_subscriptions
 
                 vault, aid = request.app.state.vault, attempt["id"]
-                with store.read_transaction() as c:
+
+                def credentials(c):
                     credential = model_subscriptions.claim_credential(c, vault, runner_id, aid) if primary else {}
                     shell_value = (
                         model_subscriptions.claim_credential(c, vault, runner_id, aid, "shell") if shell else None
                     )
+                    return credential, shell_value
+
+                with store.read_transaction() as c:
+                    credential, shell_value = credentials(c)
+                    current = store.plan_exit_current(c)
+                if not current:
+                    with store.transaction() as c:
+                        credential, shell_value = credentials(c)
                 if primary and not credential:
                     store.write(
                         request.state.identity,

@@ -8,7 +8,6 @@ from . import (
     inbox_isolation,
     model_login,
     models as M,
-    plan_exits,
     providers as Providers,
     runner_versions,
     views,
@@ -283,10 +282,11 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
     def read_login(request: Request, rid: str, lid: str):
         # A read that also expires: a sign-in nobody finished does not stay open. Polled while a sign-in runs, so the
         # write lock is taken only when something has run out.
-        read = store.read_transaction if plan_exits.UPKEEP_ROUTING else store.read
-        with read() as c:
+        with store.read_plan_upkeep() as c:
             if not model_login.sweep_due(c, rid):
-                return model_login.read(c, request.state.identity, rid, lid, auth=auth, swept=False)
+                answer = model_login.read(c, request.state.identity, rid, lid, auth=auth, swept=False)
+                if store.plan_exit_current(c):
+                    return answer
         with store.transaction() as c:
             return model_login.read(c, request.state.identity, rid, lid, auth=auth)
 
@@ -304,11 +304,12 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
     @app.get("/api/v2/runner-logins")
     def runner_logins(request: Request):
         who = request.state.identity
-        read = store.read_transaction if plan_exits.UPKEEP_ROUTING else store.read
-        with read() as c:
+        with store.read_plan_upkeep() as c:
             execution.runner(c, who)
             if not model_login.sweep_due(c, who.runner_id):
-                return {"logins": model_login.pending(c, who.runner_id, swept=False)}
+                answer = model_login.pending(c, who.runner_id, swept=False)
+                if store.plan_exit_current(c):
+                    return {"logins": answer}
         with store.transaction() as c:
             execution.runner(c, who)
             return {"logins": model_login.pending(c, who.runner_id)}

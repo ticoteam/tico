@@ -199,6 +199,8 @@ pub struct Vault {
     file_vars: BTreeMap<String, usize>,
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
+    pub model_exit: Option<crate::model_exit::Local>,
+    model_exit_home: Option<crate::model_subscriptions::ClaudeConfig>,
     pub turn_user: Option<crate::turn_users::Lease>,
     /// The company subscriptions this turn signs in with (crate::model_subscriptions).
     pub subscriptions: Vec<crate::model_subscriptions::Delivered>,
@@ -256,6 +258,38 @@ pub fn proxied_tool(item: &Value, server: &str) -> Option<ProxiedTool> {
 }
 
 impl Vault {
+    pub fn model_exit_environment(&mut self, state: &Path, env: &mut Env) -> Result<(), String> {
+        let Some(exit) = &self.model_exit else {
+            return Ok(());
+        };
+        let home = crate::model_subscriptions::ClaudeConfig::new(state, env)?;
+        env.retain(|key, _| !competing_claude_env(key));
+        env.insert("CLAUDE_CONFIG_DIR".into(), home.path.display().to_string());
+        env.insert("CLAUDE_CODE_OAUTH_TOKEN".into(), exit.token.clone());
+        env.insert("ANTHROPIC_BASE_URL".into(), exit.url.clone());
+        env.insert(
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+            "1".into(),
+        );
+        let inherited = env
+            .get("NO_PROXY")
+            .or_else(|| env.get("no_proxy"))
+            .cloned()
+            .unwrap_or_default();
+        for key in ["NO_PROXY", "no_proxy"] {
+            let bypass = env.entry(key.into()).or_insert_with(|| inherited.clone());
+            if bypass.trim() == "*" {
+                continue;
+            }
+            if !bypass.is_empty() {
+                bypass.push(',');
+            }
+            bypass.push_str("127.0.0.1,localhost,::1");
+        }
+        self.model_exit_home = Some(home);
+        Ok(())
+    }
+
     /// A subscription host never receives the Gateway token. Its file grants keep their existing bot UID;
     /// a Gateway primary or fallback gets private copies accessible only by its leased user.
     /// The identity a hop runs as and the files it reads. `isolated` is the hop harness's `isolated_user` capability:
@@ -338,6 +372,8 @@ impl Drop for Vault {
     fn drop(&mut self) {
         // Revoke the connection before a cleaned UID can be lent to another turn.
         self.relay.take();
+        self.model_exit.take();
+        self.model_exit_home.take();
         self.remove_files();
         // A turn that ended before its own `finish` (an error, a panic) still lets go of its subscription homes.
         crate::model_subscriptions::finish(&mut self.subscriptions);
@@ -382,6 +418,38 @@ pub async fn environment_with(
 
 pub const PAYER_UNAVAILABLE: &str = "The attempt’s provider credential is unavailable";
 
+pub fn model_exit_entry(attempt: &Value) -> Option<&Value> {
+    attempt["subscriptions"]
+        .as_array()?
+        .iter()
+        .find(|entry| entry["delivery"] == "model_exit")
+}
+
+/// Claude Code's provider switches (2.1.331). A routed turn pins each off in its flag settings, which outrank a
+/// repo's settings; keep this beside `competing_claude_env`, which strips the same prefix from the process env.
+pub(crate) const CLAUDE_PROVIDER_SWITCHES: [&str; 7] = [
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_MANTLE",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_GATEWAY",
+];
+
+fn competing_claude_env(key: &str) -> bool {
+    key.starts_with("ANTHROPIC_")
+        || key.starts_with("CLAUDE_CODE_USE_")
+        || matches!(
+            key,
+            "CLAUDE_CODE_OAUTH_TOKEN"
+                | "CLAUDE_CODE_API_KEY_HELPER"
+                | "CLAUDE_CODE_SKIP_BEDROCK_AUTH"
+                | "CLAUDE_CODE_SKIP_VERTEX_AUTH"
+                | "CLAUDE_CODE_SKIP_FOUNDRY_AUTH"
+        )
+}
+
 fn matching_credential(
     credential: &Value,
     expected: &Value,
@@ -422,6 +490,7 @@ async fn environment_from(
     let token = attempt["token"].as_str().unwrap_or_default();
     let mut env = process_environment();
     let mut vault_keys = BTreeSet::new();
+    let model_exit = model_exit_entry(attempt);
     let attempt_subscription = if attempt["attempt_credential_required"] == true {
         Some(attempt_subscription(attempt)?)
     } else {
@@ -443,8 +512,14 @@ async fn environment_from(
         };
         let items = granted["credentials"]
             .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|item| {
+                model_exit.is_none()
+                    || !competing_claude_env(item["env"].as_str().unwrap_or_default())
+            })
             .cloned()
-            .unwrap_or_default();
+            .collect::<Vec<_>>();
         // A tool's setting (kind "setting": a host, a region, a project id) is not a secret: it is never masked in
         // what the turn shows. Every other item is.
         vault.values = items
@@ -546,7 +621,7 @@ async fn environment_from(
         for line in problems {
             crate::util::diagnostic(&format!("Tico runner: {bot}: {line}"));
         }
-        if attempt_subscription.is_none() {
+        if attempt_subscription.is_none() && model_exit.is_none() {
             vault.subscriptions = crate::model_subscriptions::apply(
                 ctx.state_dir,
                 &granted["subscriptions"],
@@ -567,6 +642,50 @@ async fn environment_from(
         if vault.subscriptions.len() != 1 {
             return Err(PAYER_UNAVAILABLE.into());
         }
+    }
+    if let Some(entry) = model_exit {
+        let hub = hub.ok_or(PAYER_UNAVAILABLE)?;
+        let id = attempt["id"].as_str().ok_or(PAYER_UNAVAILABLE)?;
+        let generation = entry["exit_generation"]
+            .as_u64()
+            .filter(|g| *g > 0)
+            .ok_or(PAYER_UNAVAILABLE)?;
+        if attempt["config"]["runtime"] != "claude"
+            || entry["runtime"] != "claude"
+            || !matches!(
+                entry["kind"].as_str(),
+                Some("claude_token" | "claude_login")
+            )
+            || !vault.subscriptions.is_empty()
+        {
+            return Err(PAYER_UNAVAILABLE.into());
+        }
+        let uid = vault
+            .turn_user
+            .as_ref()
+            .map(|user| user.identity())
+            .or_else(crate::isolation::identity)
+            .map(|(uid, _)| uid);
+        let exit = crate::model_exit::start(
+            hub.clone(),
+            id.into(),
+            generation,
+            crate::model_exit::Provider::Claude,
+            uid,
+        )
+        .await
+        .map_err(|e| format!("Cannot start the plan exit listener: {e}"))?;
+        let mut projected = entry.clone();
+        projected["value"] = Value::String(exit.token.clone());
+        projected["env"] = Value::String("CLAUDE_CODE_OAUTH_TOKEN".into());
+        vault.subscriptions = crate::model_subscriptions::apply(
+            ctx.state_dir,
+            &Value::Array(vec![projected]),
+            &mut env,
+            &mut vault.values,
+            &mut vault_keys,
+        );
+        vault.model_exit = Some(exit);
     }
     if let Some(shell) = attempt["attempt_credential"].get("shell") {
         let expected = attempt["subscriptions"]
@@ -742,6 +861,103 @@ pub(crate) mod tests {
             attempt_subscription(&attempt).unwrap()[0]["source"],
             "attempt"
         );
+    }
+
+    #[tokio::test]
+    async fn claude_receives_only_the_placeholder_and_its_previous_transcripts() {
+        let root = std::env::temp_dir().join(format!("tico-claude-exit-{}", uuid::Uuid::new_v4()));
+        let projects = root.join(".claude/projects");
+        std::fs::create_dir_all(&projects).unwrap();
+        std::fs::write(projects.join("session.jsonl"), "previous turn").unwrap();
+        std::fs::write(root.join(".claude/.credentials.json"), "synthetic-login").unwrap();
+        let exit = crate::model_exit::Local::test_handle();
+        let (url, token) = (exit.url.clone(), exit.token.clone());
+        let mut vault = Vault::default();
+        vault.model_exit = Some(exit);
+        let mut env = Env::from([
+            ("HOME".into(), root.display().to_string()),
+            ("ANTHROPIC_API_KEY".into(), "synthetic-key".into()),
+            (
+                "CLAUDE_CODE_OAUTH_TOKEN".into(),
+                "synthetic-direct-token".into(),
+            ),
+            ("CLAUDE_CODE_USE_FOUNDRY".into(), "1".into()),
+            ("no_proxy".into(), "acme.example".into()),
+        ]);
+        vault.model_exit_environment(&root, &mut env).unwrap();
+        assert_eq!(env["ANTHROPIC_BASE_URL"], url);
+        assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
+        assert_eq!(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1");
+        assert!(env["no_proxy"].starts_with("acme.example,127.0.0.1"));
+        assert_eq!(env["NO_PROXY"], env["no_proxy"]);
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+        assert!(!env.contains_key("CLAUDE_CODE_USE_FOUNDRY"));
+        let config = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+        assert!(!config.join(".credentials.json").exists());
+        assert!(config.join("projects/session.jsonl").is_file());
+        drop(vault);
+        assert!(!config.exists());
+        assert!(projects.join("session.jsonl").is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn routed_claude_uses_only_the_loopback_and_closes_it_after_the_turn() {
+        let root = std::env::temp_dir().join(format!("tico-model-exit-{}", uuid::Uuid::new_v4()));
+        let own = root.join(".claude");
+        std::fs::create_dir_all(own.join("projects")).unwrap();
+        std::fs::write(own.join("projects/transcript.jsonl"), "previous turn").unwrap();
+        let sentinel = "sk-ant-synthetic-direct-credential";
+        std::fs::write(own.join(".credentials.json"), sentinel).unwrap();
+        let ctx = EnvContext {
+            url: "http://127.0.0.1:1",
+            projects_dir: &root,
+            state_dir: &root,
+        };
+        let runner = Client::new(ctx.url, "synthetic-runner-token", 1, 0).unwrap();
+        let attempt = serde_json::json!({
+            "id": "routed-attempt", "config": {"runtime": "claude"},
+            "subscriptions": [{
+                "id": "plan", "kind": "claude_login", "runtime": "claude", "billing": "subscription",
+                "source": "agent", "revision": 1, "delivery": "model_exit", "exit_generation": 3,
+            }]
+        });
+        let granted = serde_json::json!({"credentials": [
+            {"id": "one", "env": "ANTHROPIC_API_KEY", "value": sentinel},
+            {"id": "two", "env": "ANTHROPIC_AUTH_TOKEN", "value": sentinel},
+            {"id": "three", "env": "CLAUDE_CODE_USE_BEDROCK", "value": "1"},
+        ]});
+        let mut vault = Vault::default();
+        let mut env = environment_from(&ctx, &attempt, &mut vault, Some(granted), Some(&runner))
+            .await
+            .unwrap();
+        env.insert("HOME".into(), root.display().to_string());
+        vault.model_exit_environment(&root, &mut env).unwrap();
+        assert_eq!(vault.subscriptions[0].id, "plan");
+        assert_eq!(vault.subscriptions[0].billing, "subscription");
+        let address = env["ANTHROPIC_BASE_URL"].strip_prefix("http://").unwrap();
+        assert!(address.starts_with("127.0.0.1:"));
+        assert!(env["CLAUDE_CODE_OAUTH_TOKEN"].starts_with("tico-relay-"));
+        assert_eq!(env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"], "1");
+        assert!(env["NO_PROXY"].split(',').any(|host| host == "127.0.0.1"));
+        assert!(!env.values().any(|value| value.contains(sentinel)));
+        assert!(!vault.values.iter().any(|value| value.contains(sentinel)));
+        assert!(!env.contains_key("CLAUDE_CODE_USE_BEDROCK"));
+        let config = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
+        assert!(!config.join(".credentials.json").exists());
+        assert_eq!(
+            std::fs::read_to_string(config.join("projects/transcript.jsonl")).unwrap(),
+            "previous turn"
+        );
+
+        assert!(tokio::net::TcpStream::connect(address).await.is_ok());
+        // stop() awaits the task that owns the listener. A connect afterwards can't prove it closed: a parallel
+        // test may already have bound the freed port.
+        vault.model_exit.take().unwrap().stop().await;
+        drop(vault);
+        assert!(!config.exists());
+        assert!(own.join("projects/transcript.jsonl").is_file());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     thread_local! {

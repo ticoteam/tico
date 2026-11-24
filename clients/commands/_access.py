@@ -119,6 +119,7 @@ ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 # The email reads are everyone's: a person, the Assistant and a bot, at the mailbox level the server checks
 # (backend/mail.py), so they take the default audience.
 AUDIENCE = {
+    "tico_settings_plan_exit_routing": ("owner", "admin"),
     **{
         name: PEOPLE
         for name in (

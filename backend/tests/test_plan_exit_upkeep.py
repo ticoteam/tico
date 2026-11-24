@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from backend import agent_subscriptions
 from backend import claude_login, model_subscriptions as MS, plan_exits, runner_states, subscription_refresh as SR
 from backend.repositories import metadata, save_metadata
 from backend.store import H
@@ -43,6 +44,7 @@ def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, full_login=
                 "plan_usage_v1",
                 "attempt_credentials_v1",
                 "model_exit_v1",
+                "model_exit_claude_v1",
             ],
             "readiness": {
                 "schema_version": 1,
@@ -62,7 +64,9 @@ def computers(api, monkeypatch):
     company(api)
     non_exit = computer(api, "Non-exit")
     exit_runner = computer(api, "Exit")
-    monkeypatch.setattr(plan_exits, "UPKEEP_ROUTING", True)
+    monkeypatch.setattr(api.app.state.store.screen_sessions, "healthy", True)
+    put(api, "settings/plan-exit-routing", {"enabled": True})
+    monkeypatch.setattr(api.app.state.store.screen_sessions, "model_online", lambda _: True)
     return exit_runner, non_exit
 
 
@@ -125,7 +129,7 @@ def test_full_login_upkeep_and_token_acknowledgments_only_use_the_exit(api, comp
     assert poll(api, exit_runner, sid, 2)["tokens"] == []
     store = api.app.state.store
     with store.transaction() as c:
-        assert MS.handed(c, outside, "claude")["revision"] == 1
+        assert MS.handed(c, outside, "claude")["revision"] == 2
         assert MS.handed(c, local, "claude")["revision"] == 2
         c.execute("UPDATE attempt_subscriptions SET revision=1 WHERE attempt_id=?", (local,))
 
@@ -152,7 +156,7 @@ def test_only_a_successful_result_from_the_issued_runner_survives_the_exit_chang
     select(api, exit_runner)
     assert post(api, path, {**rejected, "state": "failed"}, exit_runner["token"]) == {"stored": False}
     with api.app.state.store.read() as c:
-        assert MS.row(c, sid)["status"] != "needs_reconnect"
+        assert MS.row(c, sid)["status"] == "needs_reconnect"
         lease = claude_login._lease(c, sid)
         assert lease["lease_id"] == job["lease"] and lease["failures"] == 0
         assert lease["lease_runner"] == exit_runner["runner_id"]
@@ -213,7 +217,7 @@ def test_claude_poll_reads_exit_selections_once_per_snapshot(api, computers, mon
     body = claude_login.Poll.model_validate({"live": [{"subscription": sid, "revision": 1} for sid in select_ids]})
     app = api.app.state
     for enabled, expected in ((True, 1), (False, 0)):
-        monkeypatch.setattr(plan_exits, "UPKEEP_ROUTING", enabled)
+        monkeypatch.setattr(plan_exits, "enabled", lambda _: enabled)
         with app.store.read_transaction() as c:
             statements = []
             c.set_trace_callback(statements.append)
@@ -231,9 +235,6 @@ def test_rotation_advances_the_tunnel_lease_atomically(api, computers):
     agent_on(api, non_exit, "ops", sid)
     attempt = turn(api, non_exit, "ops")
     store = api.app.state.store
-    with store.transaction() as c:
-        # Turn routing is dark. Stand in for a claim that chose tunnel delivery.
-        c.execute("UPDATE attempt_subscriptions SET delivery='model_exit' WHERE attempt_id=?", (attempt,))
     [job] = poll(api, exit_runner, sid)["refreshes"]
     heartbeat(api, exit_runner, installed=False)
     result = {"lease": job["lease"], "revision": job["revision"], "state": "succeeded", "value": full(n=2)}
@@ -241,7 +242,7 @@ def test_rotation_advances_the_tunnel_lease_atomically(api, computers):
     heartbeat(api, exit_runner)
     with store.read() as c:
         assert MS.handed(c, attempt, "claude")["revision"] == 2
-        sub = MS.model_exit_payer(c, non_exit["runner_id"], attempt)
+        sub, _ = MS.model_exit_payer(c, non_exit["runner_id"], attempt)
         assert sub["id"] == sid
         assert MS.model_exit_credential(c, api.app.state.vault, sub) == {"access_token": access(2)}
 
@@ -282,7 +283,7 @@ def test_setup_token_poll_and_report_fence_legacy_work_and_same_runner_reselecti
     report = {"subscription": sid, "runtime": "claude", "state": "succeeded", "plan": window()}
 
     with monkeypatch.context() as legacy:
-        legacy.setattr(plan_exits, "UPKEEP_ROUTING", False)
+        legacy.setattr(plan_exits, "enabled", lambda _: False)
         request_usage(api, sid)
         [old] = get(api, path, non_exit["token"])["refreshes"]
         assert old["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN
@@ -291,6 +292,8 @@ def test_setup_token_poll_and_report_fence_legacy_work_and_same_runner_reselecti
 
     request_usage(api, sid)
     [job] = get(api, path, exit_runner["token"])["refreshes"]
+    with api.app.state.store.read() as c:
+        assert [item["id"] for item in SR.pending(c, exit_runner["runner_id"])] == [job["id"]]
     assert job["env"]["CLAUDE_CODE_OAUTH_TOKEN"] == TOKEN
     post(api, f"{path}/{job['id']}/report", report, non_exit["token"], expected=404)
     select(api, non_exit)
@@ -325,6 +328,115 @@ def test_turn_windows_from_non_exit_computers_are_ignored(api, computers):
     assert plan["usage"]["used_pct"] == 42
 
 
+def test_enabling_routing_clears_legacy_turn_usage_and_pool_wait(api, monkeypatch):
+    setup(api)
+    company(api)
+    machine = computer(api, "Plan computer")
+    sid = add(api)["id"]
+    agent_on(api, machine, "ops", sid)
+    turn(api, machine, "ops")
+    # Legacy reports can supply usage without naming the attempt.
+    reading = {**window(100), "origin": "subscription", "subscription_id": sid, "reported_at": H.now()}
+    heartbeat(api, machine, "ops", weekly=reading)
+    pick(api, "ops", "claude", person="ana")
+
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["used_pct"] == 100
+    store = api.app.state.store
+    with store.read() as c:
+        saved = metadata(c, SR.plan_key(sid))
+        assert saved["turn_weekly"]["used_percent"] == 100 and "turn_weekly_exit" not in saved
+        payment = agent_subscriptions.resolve(c, "ops", "claude", "sonnet")
+        assert payment.subscription is None and payment.until
+
+    monkeypatch.setattr(store.screen_sessions, "healthy", True)
+    put(api, "settings/plan-exit-routing", {"enabled": True})
+    with store.read() as c:
+        assert "turn_weekly" not in metadata(c, SR.plan_key(sid))
+        payment = agent_subscriptions.resolve(c, "ops", "claude", "sonnet")
+        assert payment.subscription["id"] == sid and payment.until is None
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["used_pct"] is None
+
+
+def test_toggling_routing_clears_exit_bound_turn_windows(api, computers):
+    exit_runner, _ = computers
+    sid = add(api)["id"]
+    generation = select(api, exit_runner)
+    agent_on(api, exit_runner, "ops", sid)
+    attempt = turn(api, exit_runner, "ops")
+    taken = H.now()
+    reading = {
+        **window(42),
+        "origin": "subscription",
+        "subscription_id": sid,
+        "reported_at": taken,
+        "attempt_id": attempt,
+    }
+    heartbeat(api, exit_runner, "ops", weekly=reading, five_hour={**reading, "resets_at": H.shift(taken, hours=2)})
+    store = api.app.state.store
+    key = SR.plan_key(sid)
+    schedule = {"read_at": taken}
+    with store.transaction() as c:
+        saved = metadata(c, key)
+        for field in ("turn_weekly", "turn_five_hour"):
+            assert saved[field]["attempt_id"] == attempt
+            assert saved[field + "_exit"] == [exit_runner["runner_id"], generation]
+        save_metadata(c, key, {**saved, "schedule": schedule})
+
+    for enabled in (False, True):
+        put(api, "settings/plan-exit-routing", {"enabled": enabled})
+        with store.read() as c:
+            saved = metadata(c, key)
+        assert saved.pop("turn_cutover_at") > taken
+        assert saved == {"schedule": schedule}
+        # A runner that sends the pre-cutover reading again doesn't bring it back, even once it runs a newer turn.
+        heartbeat(api, exit_runner, "ops", weekly=reading, five_hour={**reading, "resets_at": H.shift(taken, hours=2)})
+        with store.read() as c:
+            assert "turn_weekly" not in metadata(c, key)
+        if not enabled:
+            agent_on(api, exit_runner, "cpo", sid)
+            turn(api, exit_runner, "cpo")
+            heartbeat(
+                api, exit_runner, "ops", weekly=reading, five_hour={**reading, "resets_at": H.shift(taken, hours=2)}
+            )
+            with store.read() as c:
+                assert "turn_weekly" not in metadata(c, key)
+        [plan] = get(api, "model-subscriptions")["subscriptions"]
+        assert plan["usage"]["used_pct"] is None
+
+
+def test_cloud_turn_usage_survives_a_stale_model_exit_report(api, computers):
+    exit_runner, personal = computers
+    cloud = computer(api, "Cloud")
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("INSERT INTO cloud_machines(bot,runner_id) VALUES('cpo',?)", (cloud["runner_id"],))
+    sid = add(api)["id"]
+    old_generation = select(api, exit_runner)
+    agent_on(api, personal, "ops", sid)
+    stale = turn(api, personal, "ops")
+    assert select(api, personal) != old_generation
+    agent_on(api, cloud, "cpo", sid)
+    direct = turn(api, cloud, "cpo")
+    origin = {"origin": "subscription", "subscription_id": sid}
+
+    def report(machine, bot, attempt, percent):
+        heartbeat(
+            api, machine, bot, weekly={**window(percent), **origin, "reported_at": H.now(), "attempt_id": attempt}
+        )
+
+    with store.read() as c:
+        assert MS.handed(c, direct, "claude")["delivery"] == "claim"
+        assert MS.handed(c, stale, "claude")["delivery"] == "model_exit"
+    report(cloud, "cpo", direct, 42)
+    report(personal, "ops", stale, 95)
+    with store.read() as c:
+        assert metadata(c, SR.plan_key(sid))["turn_weekly"]["attempt_id"] == direct
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["used_pct"] == 42
+
+
 def test_routed_turn_windows_require_the_reporting_attempts_current_local_receipt(api, computers):
     exit_runner, other = computers
     sid = add(api)["id"]
@@ -350,11 +462,12 @@ def test_routed_turn_windows_require_the_reporting_attempts_current_local_receip
 
     heartbeat(api, exit_runner, "ops", profile="own", weekly=reading(42, 1, attempt))
     assert usage() == 42
-    with store.transaction() as c:
+    with store.read() as c:
         assert metadata(c, key)["turn_weekly_exit"] == [exit_runner["runner_id"], old_generation]
-        save_metadata(c, key, {})
-    assert usage() is None  # Only the saved, validated reading is used.
     select(api, other)
+    assert usage() is None
+    with store.read() as c:
+        assert set(metadata(c, key)) <= {"turn_cutover_at"}
     current = select(api, exit_runner)
     agent_on(api, exit_runner, "cpo", sid)
     current_attempt = turn(api, exit_runner, "cpo")
@@ -364,13 +477,13 @@ def test_routed_turn_windows_require_the_reporting_attempts_current_local_receip
     heartbeat(api, exit_runner, "cpo", profile="own", weekly=reading(99, 3, None))
     assert usage() is None
     with store.transaction() as c:
-        assert metadata(c, key) == {}
+        assert set(metadata(c, key)) <= {"turn_cutover_at"}
         delivery = MS.handed(c, current_attempt, "claude")["delivery"]
         c.execute("UPDATE attempt_subscriptions SET delivery='model_exit' WHERE attempt_id=?", (current_attempt,))
     heartbeat(api, exit_runner, "cpo", profile="own", weekly=reading(94, 4, current_attempt))
     assert usage() is None
     with store.transaction() as c:
-        assert metadata(c, key) == {}
+        assert set(metadata(c, key)) <= {"turn_cutover_at"}
         c.execute("UPDATE attempt_subscriptions SET delivery=? WHERE attempt_id=?", (delivery, current_attempt))
         save_metadata(
             c,
@@ -407,7 +520,7 @@ def test_waiting_routes_never_send_upkeep_to_legacy_computers(api, computers, mo
     agent_on(api, other, "cpo", full_sid)
     path = "runner-subscription-refreshes"
     with monkeypatch.context() as legacy:
-        legacy.setattr(plan_exits, "UPKEEP_ROUTING", False)
+        legacy.setattr(plan_exits, "enabled", lambda _: False)
         request_usage(api, token_sid)
         [old] = get(api, path, other["token"])["refreshes"]
     store = api.app.state.store
@@ -455,7 +568,7 @@ def test_a_legacy_connect_cannot_poll_or_receive_a_code_after_routing_activates(
     heartbeat(api, other)
     request = {"subscription": sid, "confirm": True}
     with monkeypatch.context() as legacy:
-        legacy.setattr(plan_exits, "UPKEEP_ROUTING", False)
+        legacy.setattr(plan_exits, "enabled", lambda _: False)
         login = post(api, CONNECT, request)
         assert login["runner_id"] == other["runner_id"]
         post(api, f"runner-logins/{login['id']}/report", {"state": "waiting"}, other["token"])

@@ -4319,7 +4319,12 @@ class Execution:
             "runtime_credential_source": True,
             "subscription_accounts": True,
             "subscription_usage_sources": True,
-            **({"subscription_usage_attempts": True} if plan_exits.UPKEEP_ROUTING else {}),
+            **({"subscription_usage_attempts": True} if plan_exits.enabled(c) else {}),
+            **(
+                {"model_exit": True}
+                if plan_exits.MODEL_CAPABILITY in body.capabilities and plan_exits.supervised(c, who.runner_id)
+                else {}
+            ),
             "worktree_record_stamp": True,
             "worktree_actions": sendable,
             # Whether the runner samples its performance (backend/performance.py).
@@ -6143,7 +6148,7 @@ class Execution:
             # Receipts outlive the lease and must retain the person whose rights admitted this request.
             c.execute("UPDATE attempts SET acting_person=? WHERE id=?", (acting.actor, aid))
         mail_levels = {} if relationship else mailbox_access.levels_for(c, acting or ("bot:" + row["bot_id"]))
-        subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
+        subscriptions = model_subscriptions.hand_out(c, aid, subscribed, who.runner_id)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot_id"],)).fetchone()
         from .chat_goals import current
         from . import task_context
@@ -6246,7 +6251,7 @@ class Execution:
                     **({"subscriptions": subscriptions} if subscriptions else {}),
                     **(
                         {"attempt_credential_required": True}
-                        if payment is not None and agent_subscriptions.CAPABILITY in caps
+                        if payment is not None and payment.delivery == "claim"
                         else {}
                     ),
                     # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
@@ -6941,12 +6946,12 @@ class Execution:
         if (
             not row["stop_requested_at"]
             and payer
-            and not model_subscriptions.payer_ready(c, row["runner_id"], aid, payer["delivery"])
+            and (reason := model_subscriptions.payer_refusal(c, row["runner_id"], aid, payer["delivery"]))
         ):
             self.return_payer_claim(c, row["runner_id"], aid)
             return {
                 "started": False,
-                "refused": {"code": "payer_wait", "detail": model_subscriptions.PAYER_UNAVAILABLE},
+                "refused": {"code": "payer_wait", "detail": reason},
             }
         # Older workers did not negotiate a short start; their in-flight delivery lease stays valid.
         if start_refused(c, aid):

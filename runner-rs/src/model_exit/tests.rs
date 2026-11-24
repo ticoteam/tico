@@ -241,6 +241,71 @@ fn only_exit_holds_credential(captured: Vec<u8>) {
 }
 
 #[tokio::test]
+async fn model_exit_count_tokens_failure_keeps_a_complete_messages_auth_rejection() {
+    let local = Local::test_handle();
+    record_refusal(
+        local.transport.request("/v1/messages/count_tokens"),
+        UNAVAILABLE,
+    );
+    assert!(!local.transport_failed());
+
+    let older = local.transport.request("/v1/messages").unwrap();
+    record_refusal(
+        local.transport.request("/v1/messages"),
+        "model_exit_offline",
+    );
+    assert!(local.transport_failed());
+    let retry = local.transport.request("/v1/messages?beta=true");
+    let replies = [
+        b"HTTP/1.1 401 Unauthorized\r\nTransfer-Encoding: chunked\r\n\r\n".as_slice(),
+        b"1F\r\n{\"type\":\"authentication_error\"}\r\n",
+        END_CHUNKS,
+    ];
+    let mut wire = Vec::new();
+    relay_response(&mut wire, response_frames(replies), retry)
+        .await
+        .unwrap();
+    older.settle(true);
+    assert!(!local.transport_failed());
+    let response = std::str::from_utf8(&wire).unwrap();
+    assert!(response.starts_with("HTTP/1.1 401"));
+    assert!(crate::hosts::is_auth_rejected(response));
+}
+
+#[tokio::test]
+async fn model_exit_count_tokens_success_keeps_a_truncated_messages_failure() {
+    let local = Local::test_handle();
+    let head = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+    relay_response(
+        tokio::io::sink(),
+        response_frames([head.as_slice(), b"D\r\ndata: first\n\n\r\n"]),
+        local.transport.request("/v1/messages"),
+    )
+    .await
+    .unwrap();
+    relay_response(
+        tokio::io::sink(),
+        response_frames([
+            head.as_slice(),
+            b"12\r\n{\"input_tokens\":1}\r\n",
+            END_CHUNKS,
+        ]),
+        local
+            .transport
+            .request("/v1/messages/count_tokens?beta=true"),
+    )
+    .await
+    .unwrap();
+    assert!(local.transport_failed());
+}
+
+fn response_frames<const N: usize>(
+    chunks: [&'static [u8]; N],
+) -> impl Stream<Item = Result<Message, WsError>> + Unpin {
+    futures_util::stream::iter(chunks.map(|chunk| Ok(Message::Binary(Bytes::from_static(chunk)))))
+}
+
+#[tokio::test]
 async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
     tokio::time::timeout(Duration::from_secs(20), async {
         let (http, mut seen) = fake_provider().await;
@@ -268,6 +333,7 @@ async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
         assert!(request.head.contains("\r\ncontent-type: application/json"));
         request.finish.send(true).unwrap();
         assert_eq!(reply(&mut a).await, "0\r\n\r\n");
+        assert!(!local.transport_failed());
         only_exit_holds_credential(relay.await.unwrap());
 
         for cancel in [true, false] {
@@ -287,6 +353,7 @@ async fn model_exit_swaps_headers_and_streams_only_completed_responses() {
             } else {
                 request.finish.send(false).unwrap();
                 assert_eq!(reply(&mut a).await, "");
+                assert!(local.transport_failed());
             }
             only_exit_holds_credential(relay.await.unwrap());
         }

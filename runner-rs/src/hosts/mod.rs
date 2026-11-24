@@ -277,6 +277,7 @@ pub struct Settings {
     pub model: Option<String>,
     pub effort: Option<String>,
     pub env: Env,
+    pub model_exit: bool,
     #[allow(dead_code)] // the hub MCP server and Codex read the bot from the environment
     pub slug: String,
     pub compact_at: Value,

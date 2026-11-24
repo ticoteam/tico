@@ -1066,6 +1066,7 @@
        "plan_usage_v1",
        "browser_exit_v1",
        "model_exit_v1",
+       "model_exit_claude_v1",
        "model_subscription_activation_v1",
        "model_connect_v1",
        "claude_login_v1",
@@ -1085,7 +1086,7 @@
       ],
       "type": "string"
      },
-     "maxItems": 35,
+     "maxItems": 36,
      "title": "Capabilities",
      "type": "array"
     },

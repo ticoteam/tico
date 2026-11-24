@@ -84,6 +84,7 @@ class RemoteRegistry:
         # Browser exits (backend/browser_exit.py): the policy and bot-selection generations this lease's relay has
         # (pushed again after a new lease, and until a push succeeds), and the usage batch to acknowledge.
         self.exit_pushed, self.bot_pushed, self.exit_acks = {}, {}, []
+        self.model_links = ("", {})
         self.pruned = 0.0
         self.healthy, self.superseded = False, False
 
@@ -318,6 +319,42 @@ class RemoteRegistry:
                     except Problem:
                         log.warning("model exit generations not pushed to the relay; retrying")
 
+    def model_online(self, runner_id):
+        epoch, links = self.model_links
+        return self.healthy and epoch == self.lease and runner_id in links
+
+    def _model_links_changed(self, c, links, epoch):
+        from . import plan_exits, quarantine_stops
+
+        previous_epoch, previous = self.model_links
+        if not plan_exits.enabled(c):
+            return
+        # A replacement closes the old tunnels even if the exit reappears between heartbeats.
+        kept = {
+            rid for rid in previous.keys() & links.keys() if previous_epoch == epoch and previous[rid] == links[rid]
+        }
+        if arrived := links.keys() - kept:
+            owners = [
+                person
+                for (person,) in c.execute(
+                    "SELECT person_id FROM plan_exits WHERE runner_id IN (SELECT value FROM json_each(?))",
+                    (json.dumps(sorted(arrived)),),
+                )
+            ]
+            if owners:
+                plan_exits.wake_payers(c, owners)
+        if lost := previous.keys() - kept:
+            for attempt in c.execute(
+                "SELECT a.* FROM attempts a JOIN attempt_subscriptions s ON s.attempt_id=a.id "
+                "JOIN model_subscriptions p ON p.id=s.subscription_id "
+                "JOIN plan_exits e ON p.owner_id='human:'||e.person_id "
+                "JOIN plan_exit_bindings b ON b.kind='attempt' AND b.ref_id=a.id AND b.exit_generation=e.generation "
+                "WHERE s.delivery='model_exit' AND a.state='running' AND a.stop_requested_at IS NULL "
+                "AND e.runner_id IN (SELECT value FROM json_each(?))",
+                (json.dumps(sorted(lost)),),
+            ).fetchall():
+                quarantine_stops.restart(c, attempt, "The plan exit went offline")
+
     def exit_grant(self, grant, epoch):
         """The relay's answer to one tunnel ({"ticket"}), or its refusal code. `epoch` is the lease the grant was read
         under: after a new lease the relay's generations start again, so an older read is read again (exit_stale)."""
@@ -405,12 +442,18 @@ class RemoteRegistry:
                 self.acks, self.exit_acks = [], []
             # Never take the store lock while holding the control lock: admission takes them in the other order.
             prune = time.monotonic() - self.pruned > 3600
-            with self.store.transaction() as c:
+            reported_links = answer.get("model_exit_links") or {}
+            links = reported_links if isinstance(reported_links, dict) else dict.fromkeys(reported_links)
+            model_links_changed = (epoch, links) != self.model_links
+            with self.store.transaction(notify=model_links_changed) as c:
                 for report in reports:
                     self._record(c, report)
                 recorded = browser_exit.record_batch(c, boot, usage)
                 if prune:
                     browser_exit.prune(c)
+                if model_links_changed:
+                    self._model_links_changed(c, links, epoch)
+                    c.after_commit.append(lambda snapshot=(epoch, links): setattr(self, "model_links", snapshot))
             if prune:
                 self.pruned = time.monotonic()
             with self.lock:

@@ -2457,7 +2457,8 @@ impl Runner {
         let mut side_run = false;
         // The server holds the bot's own login after a usage limit and let this turn through for its fallback
         // (backend/execution.py login_refusal): when the hold ends. The held login is never tried.
-        let paid_by = attempt["attempt_credential_required"] == true;
+        let paid_by = attempt["attempt_credential_required"] == true
+            || crate::env::model_exit_entry(&attempt).is_some();
         let held = Some(text_of(&config["primary_held"])).filter(|u| !u.is_empty() && !paid_by);
         let (mut unavailable, mut prepared) = (false, false);
         let token = text_of(&attempt["token"]);
@@ -2639,6 +2640,7 @@ impl Runner {
             }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
+            vault.model_exit_environment(&self.state.directory, &mut env).map_err(Fail::runtime)?;
             if relationship {
                 // The model's normal identity can use the directory. The attempt owns its lifetime.
                 if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
@@ -2897,6 +2899,7 @@ impl Runner {
                 model: model.clone(),
                 effort: effort.clone(),
                 env: env.clone(),
+                model_exit: vault.model_exit.is_some(),
                 slug: bot.clone(),
                 compact_at: config.get("compact_at").cloned().unwrap_or(Value::Null),
                 gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
@@ -3319,7 +3322,26 @@ impl Runner {
             .err()
             .and_then(|error| error.api.as_ref())
             .is_some_and(|error| error.code == "payer_wait");
-        if let Err(e) = &ran {
+        if drove.outcome != "completed"
+            && vault
+                .model_exit
+                .as_ref()
+                .is_some_and(|exit| exit.transport_failed())
+        {
+            let reason = "The plan exit connection was interrupted";
+            self.diagnose(&aid, reason);
+            drove = Drove {
+                outcome: "interrupted".into(),
+                limited: false,
+                capacity: false,
+                continues: false,
+                retryable: false,
+                ..drove
+            };
+            goal.failure = Some(reason.into());
+            auth_rejected = None;
+            unavailable = false;
+        } else if let Err(e) = &ran {
             if payer_returned || e.text == crate::env::PAYER_UNAVAILABLE {
                 drove.yielded = true;
                 unavailable = false;
@@ -3541,6 +3563,7 @@ impl Runner {
                     model: Some(hop.model.clone()),
                     effort: hop.reasoning_effort.clone(),
                     env: hop_env.clone(),
+                    model_exit: false,
                     slug: bot.clone(),
                     compact_at: crate::fallback::compact_at(&config, &hop),
                     gateway_inputs: config.get("gateway_inputs").cloned().unwrap_or(Value::Null),
@@ -3959,6 +3982,9 @@ impl Runner {
         // and hand workspace ownership back before bot-user scrubbing, history and publication.
         if let Some(relay) = &mut vault.relay {
             relay.stop().await;
+        }
+        if let Some(mut exit) = vault.model_exit.take() {
+            exit.stop().await;
         }
         if let Some(user) = &mut vault.turn_user {
             user.permit_reuse();

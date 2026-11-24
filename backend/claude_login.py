@@ -319,8 +319,18 @@ def read_soon(c: Any, sid: str) -> None:
 def pushed(c: Any, sid: str) -> None:
     """A plan's login changed (a refresh, or a Reconnect of the same account): every computer with a turn on it is told,
     and rewrites its turns' files on its poll; a turn waiting for it goes."""
-    sub = _MS().row(c, sid)
-    _tell(c, [r["id"] for r, live in _computers(c, sub, plan_exits.routed(c, sub)) if live])
+    _tell(
+        c,
+        [
+            rid
+            for (rid,) in c.execute(
+                "SELECT DISTINCT a.runner_id FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
+                "WHERE s.subscription_id=? AND s.delivery NOT IN ('','model_exit') "
+                "AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL",
+                (sid,),
+            )
+        ],
+    )
     unpark(c, sid)
 
 
@@ -646,7 +656,7 @@ def _live_plans(
         sub = H._one(c, "SELECT * FROM model_subscriptions WHERE id=?", (item.subscription,))
         if not sub:
             continue
-        route = plan_exits.routed(c, sub, exits)
+        route = plan_exits.for_turn(c, sub, runner_id, exits)
         if route is None or route.runner_id == runner_id:
             plans.append((item, sub, route.generation if route else None))
     return plans
@@ -1003,7 +1013,7 @@ _BEHIND = (
     "ON e.kind='attempt' AND e.ref_id=s.attempt_id AND s.runtime='claude' "
     "WHERE s.subscription_id=? AND s.delivery<>'model_exit' AND e.exit_generation IS ? "
     "AND s.revision<min(?,(SELECT revision FROM model_subscriptions WHERE id=?)) AND s.attempt_id IN "
-    "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running'))"
+    "(SELECT id FROM attempts WHERE runner_id=? AND state IN ('leased','running') AND stop_requested_at IS NULL)"
 )
 
 
@@ -1064,7 +1074,10 @@ def install(app: Any, store: Any) -> None:
             with store.read_transaction() as c:
                 runner_only(c, who)
                 try:
-                    return poll(c, vault, who.runner_id, body, write=False)
+                    result = poll(c, vault, who.runner_id, body, write=False)
+                    if store.plan_exit_current(c):
+                        return result
+                    break  # cutover committed while this read was open; decide again under the writer lock
                 except _Write as why:
                     key = why.key
             # The vault's key not in memory yet (a restart): loaded here, outside the write lock (KMS), so neither the

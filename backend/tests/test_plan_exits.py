@@ -1,9 +1,13 @@
 """The exit computer for a person's saved provider plans."""
 
+import sqlite3
+from contextlib import closing
+
 import pytest
 
 from backend import cloud_machines, hosting_enrollment, plan_exits, runner_states
-from backend.store import H, digest
+from backend.config import Settings
+from backend.store import H, Store, digest
 from backend.tests.helpers.api import get, headers, post, put, runner
 from backend.tests.helpers.claude_login import full
 from backend.tests.helpers.credentials import setup
@@ -13,6 +17,65 @@ from backend.tests.helpers.model_subscriptions import TOKEN, add, codex_file
 SUBSCRIPTIONS = "model-subscriptions"
 EXITS = f"{SUBSCRIPTIONS}/plan-exits"
 API_KEY = "sk-ant-api-" + "c" * 24
+
+
+def test_policy_loads_without_migration_and_refreshes_when_the_file_is_replaced(tmp_path):
+    db = tmp_path / "hub.db"
+
+    def replace_policy(value):
+        replacement = tmp_path / "replacement.db"
+        with closing(sqlite3.connect(replacement)) as c:
+            c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            c.execute("INSERT INTO registry_metadata VALUES(?,?)", (plan_exits.SETTING, value))
+            c.commit()
+        replacement.replace(db)
+
+    replace_policy("true")
+    store = Store(Settings(db_path=db))
+    with store.read_transaction() as original:
+        assert plan_exits.stored_enabled(original)
+        assert plan_exits.enabled(original)
+        replace_policy("false")
+        with store.read() as current:
+            assert not plan_exits.enabled(current)
+        replace_policy("true")
+        with store.read() as current:
+            assert plan_exits.enabled(current)
+            assert store.plan_exit_current(current)
+        assert not store.plan_exit_current(original)
+
+
+def test_empty_pool_checkout_retries_across_replacement_without_counting_retirement(tmp_path, monkeypatch):
+    db = tmp_path / "hub.db"
+    replacement = tmp_path / "replacement.db"
+    for path, value in ((db, "false"), (replacement, "true")):
+        with closing(sqlite3.connect(path)) as c:
+            c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            c.execute("INSERT INTO registry_metadata VALUES(?,?)", (plan_exits.SETTING, value))
+            c.commit()
+
+    store = Store(Settings(db_path=db))
+    with store.read() as original:
+        assert not plan_exits.enabled(original)
+        connect = store.connect
+
+        def replace_then_open(**kwargs):
+            assert not store.pool
+            replacement.replace(db)
+            monkeypatch.setattr(store, "connect", connect)
+            return connect(**kwargs)
+
+        monkeypatch.setattr(store, "connect", replace_then_open)
+        with store.read() as current:
+            assert plan_exits.stored_enabled(current)
+            assert plan_exits.enabled(current)
+            assert store.plan_exit_current(current)
+            assert current.plan_exit_policy[1] == original.plan_exit_policy[1] + 1
+            assert not store.plan_exit_current(original)
+            store.retire_pool()
+            with store.read() as refreshed:
+                assert store.plan_exit_current(current)
+                assert refreshed.plan_exit_policy == current.plan_exit_policy
 
 
 def stored_exit(api, person="ana"):

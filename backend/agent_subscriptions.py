@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import Field, model_validator
 
-from . import claude_login, gateway_connection, holds, login_holds, providers, read_cache
+from . import claude_login, gateway_connection, holds, login_holds, plan_exits, providers, read_cache
 from . import hubdb
 from . import model_subscriptions as model_subs
 from .auth import Identity
@@ -215,7 +215,11 @@ class Payment:
     until: datetime | None = None
     update: bool = False
     held_subscription: str = ""
-    delivery: Literal["claim", "legacy"] = "claim"
+    delivery: Literal["claim", "legacy", "model_exit"] = "claim"
+    exit_computer: Any = None
+
+    def wait_text(self, auth: Any, who: Any) -> str:
+        return plan_exits.waiting(self.exit_computer, auth, who) if self.exit_computer else self.reason
 
 
 def portable(c: Connection, sub: Row) -> bool:
@@ -453,6 +457,13 @@ def for_runner(
         return Payment(
             None, f"Update {MS.RUNTIME_LABELS[runtime]} on {runner['label'] or 'this computer'}", update=True
         )
+    if (route := plan_exits.for_turn(c, sub, runner["id"])) and route.runner_id != runner["id"]:
+        if not {plan_exits.MODEL_CAPABILITY, plan_exits.CLAUDE_CAPABILITY}.issubset(caps):
+            return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
+        if not plan_exits.remotely_ready(c, sub, route):
+            exit_computer = plan_exits.selected(c, sub)
+            return Payment(None, plan_exits.waiting(exit_computer), exit_computer=exit_computer)
+        return replace(payment, delivery="model_exit")
     if per_turn:
         return payment
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):

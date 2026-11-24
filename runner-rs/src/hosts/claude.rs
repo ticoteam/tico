@@ -1042,7 +1042,12 @@ impl ClaudeHost {
         };
     }
 
-    pub fn argv(&self, thread_id: &str, t: &Thread, effort: Option<&str>) -> Vec<String> {
+    fn argv(
+        &self,
+        thread_id: &str,
+        t: &Thread,
+        effort: Option<&str>,
+    ) -> std::io::Result<Vec<String>> {
         let mut argv = self.0.cmd.clone();
         argv.push("-p".into());
         argv.extend(STREAM_ARGS.iter().map(|s| s.to_string()));
@@ -1094,7 +1099,37 @@ impl ClaudeHost {
         if let Some(style) = t.settings.output_style.as_deref() {
             flag.insert("outputStyle".into(), json!(style));
         }
-        if !flag.is_empty() {
+        if t.settings.model_exit {
+            // Flag settings outrank repo env settings. The token is the turn's loopback placeholder.
+            // Credentials from a project's apiKeyHelper go to the pinned loopback, which rejects them.
+            let mut env = json!({
+                "ANTHROPIC_BASE_URL": t.settings.env.get("ANTHROPIC_BASE_URL"),
+                "CLAUDE_CODE_OAUTH_TOKEN": t.settings.env.get("CLAUDE_CODE_OAUTH_TOKEN"),
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                "ANTHROPIC_API_KEY": "",
+                "ANTHROPIC_AUTH_TOKEN": "",
+            });
+            for key in crate::env::CLAUDE_PROVIDER_SWITCHES {
+                env[key] = json!("0");
+            }
+            // A repo proxy setting must not take the loopback request elsewhere.
+            for key in ["NO_PROXY", "no_proxy"] {
+                if let Some(value) = t.settings.env.get(key) {
+                    env[key] = json!(value);
+                }
+            }
+            flag.insert("env".into(), env);
+            let dir = t
+                .settings
+                .env
+                .get("CLAUDE_CONFIG_DIR")
+                .filter(|dir| crate::model_subscriptions::is_config_home(dir))
+                .ok_or_else(|| std::io::Error::other("Claude's plan exit config is unavailable"))?;
+            let path = std::path::Path::new(dir).join("turn-settings.json");
+            crate::model_subscriptions::write_private(&path, &py_dumps(&Value::Object(flag)))
+                .map_err(std::io::Error::other)?;
+            argv.extend(["--settings".into(), path.display().to_string()]);
+        } else if !flag.is_empty() {
             argv.extend(["--settings".into(), py_dumps(&Value::Object(flag))]);
         }
         if let Some(from) = &t.fork_from {
@@ -1113,7 +1148,7 @@ impl ClaudeHost {
         } else {
             argv.extend(["--session-id".into(), thread_id.into()]);
         }
-        argv
+        Ok(argv)
     }
 
     /// Starts Claude for one turn: the process, its stderr tail, and its reaping parent's status file if it has one.
@@ -1128,7 +1163,7 @@ impl ClaudeHost {
         crate::run_diagnostics::Stderr,
         Option<std::path::PathBuf>,
     )> {
-        let argv = self.argv(thread_id, t, effort);
+        let argv = self.argv(thread_id, t, effort)?;
         // Drain stderr independently; only the bounded, scrubbed tail is kept.
         // A turn that may end on its background wait runs under a reaping parent, which learns its shells' exit codes.
         let reaping =
@@ -2659,7 +2694,9 @@ mod tests {
         let settings = Settings::default();
         let thread = host.start_thread_forked(&settings, "old-session");
         assert_ne!(thread, "old-session");
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let argv = host
+            .argv(&thread, &host.inner().threads[&thread].clone(), None)
+            .unwrap();
         assert_eq!(
             &argv[argv.len() - 5..],
             &[
@@ -2672,7 +2709,9 @@ mod tests {
         );
         // A fresh thread is not a fork.
         let fresh = host.start_thread(&settings);
-        let argv = host.argv(&fresh, &host.inner().threads[&fresh].clone(), None);
+        let argv = host
+            .argv(&fresh, &host.inner().threads[&fresh].clone(), None)
+            .unwrap();
         assert!(!argv.contains(&"--fork-session".to_string()), "{argv:?}");
     }
 
@@ -2770,7 +2809,9 @@ mod tests {
             // The init line hands the session to Claude: the next turn resumes it.
             let sid = host.session_id(&thread);
             assert_ne!(sid, thread);
-            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            let argv = host
+                .argv(&thread, &host.inner().threads[&thread].clone(), None)
+                .unwrap();
             assert_eq!(&argv[argv.len() - 2..], &["--resume".to_string(), sid]);
         }
         std::fs::remove_dir_all(dir).unwrap();
@@ -2879,7 +2920,9 @@ mod tests {
             settings.env.insert(k.into(), v.into());
         }
         let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let argv = host
+            .argv(&thread, &host.inner().threads[&thread].clone(), None)
+            .unwrap();
         assert!(argv.contains(&"--strict-mcp-config".to_string()));
         // A bot without branches keeps out the operator's own CLAUDE.md, settings and hooks as a branch bot does.
         let at = argv
@@ -2887,6 +2930,25 @@ mod tests {
             .position(|a| a == "--setting-sources")
             .expect("--setting-sources on every turn");
         assert_eq!(argv[at + 1], "project,local");
+        let routed = crate::model_subscriptions::ClaudeConfig::new(
+            &dir,
+            &crate::hosts::Env::from([("HOME".into(), dir.display().to_string())]),
+        )
+        .unwrap();
+        settings.env.insert(
+            "CLAUDE_CONFIG_DIR".into(),
+            routed.path.display().to_string(),
+        );
+        let routed_thread = host.start_thread(&settings);
+        let routed_argv = host
+            .argv(
+                &routed_thread,
+                &host.inner().threads[&routed_thread].clone(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(routed_argv[at + 1], "project,local");
+        drop(routed);
         let config: Value =
             serde_json::from_str(&argv[argv.iter().position(|a| a == "--mcp-config").unwrap() + 1])
                 .unwrap();
@@ -2935,7 +2997,9 @@ mod tests {
         let fresh = host.start_thread(&settings);
         let forked = host.start_thread_forked(&settings, "old-session");
         for thread in [&fresh, &forked] {
-            let argv = host.argv(thread, &host.inner().threads[thread].clone(), Some("high"));
+            let argv = host
+                .argv(thread, &host.inner().threads[thread].clone(), Some("high"))
+                .unwrap();
             for arg in &argv {
                 assert!(!arg.contains(token), "run token in {arg}");
                 assert!(!arg.contains(header), "header secret in {arg}");
@@ -2961,6 +3025,86 @@ mod tests {
     }
 
     #[test]
+    fn routed_claude_pins_its_loopback_settings_without_changing_direct_argv() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("claude-routed-{}", uuid::Uuid::new_v4()));
+        let config = crate::model_subscriptions::ClaudeConfig::new(
+            &dir,
+            &crate::hosts::Env::from([("HOME".into(), dir.display().to_string())]),
+        )
+        .unwrap();
+        let token = "turn-placeholder";
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
+        let settings = Settings {
+            memory_dir: Some("/w/bot-acme/memory/claude".into()),
+            output_style: Some("Concise".into()),
+            ..Default::default()
+        };
+        let id = host.start_thread(&settings);
+        let mut thread = host.inner().threads[&id].clone();
+        let direct = host.argv(&id, &thread, None).unwrap();
+        let at = direct.iter().position(|arg| arg == "--settings").unwrap() + 1;
+        let direct_settings: Value = serde_json::from_str(&direct[at]).unwrap();
+        assert_eq!(
+            direct_settings,
+            json!({
+                "autoMemoryDirectory": "/w/bot-acme/memory/claude",
+                "outputStyle": "Concise",
+            })
+        );
+
+        thread.settings.env.extend([
+            ("ANTHROPIC_BASE_URL".into(), "http://127.0.0.1:1234".into()),
+            ("CLAUDE_CODE_OAUTH_TOKEN".into(), token.into()),
+            ("NO_PROXY".into(), "127.0.0.1,localhost".into()),
+            ("no_proxy".into(), "127.0.0.1,localhost".into()),
+            (
+                "CLAUDE_CONFIG_DIR".into(),
+                config.path.display().to_string(),
+            ),
+        ]);
+        assert_eq!(host.argv(&id, &thread, None).unwrap(), direct);
+        thread.settings.model_exit = true;
+        let mut routed = host.argv(&id, &thread, None).unwrap();
+        assert!(!routed.iter().any(|arg| arg.contains(token)));
+        let path = std::path::Path::new(&routed[at]);
+        assert_eq!(path.parent(), Some(config.path.as_path()));
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let routed_settings: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        drop(config);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+        let mut expected = direct_settings;
+        expected["env"] = json!({
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:1234",
+            "CLAUDE_CODE_OAUTH_TOKEN": token,
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+            "ANTHROPIC_API_KEY": "",
+            "ANTHROPIC_AUTH_TOKEN": "",
+            "CLAUDE_CODE_USE_BEDROCK": "0",
+            "CLAUDE_CODE_USE_VERTEX": "0",
+            "CLAUDE_CODE_USE_FOUNDRY": "0",
+            "CLAUDE_CODE_USE_MANTLE": "0",
+            "CLAUDE_CODE_USE_ANTHROPIC_AWS": "0",
+            "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "0",
+            "CLAUDE_CODE_USE_GATEWAY": "0",
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
+        });
+        assert_eq!(routed_settings, expected);
+        assert!(routed
+            .windows(2)
+            .any(|args| args == ["--setting-sources", "project,local"]));
+        routed[at] = direct[at].clone();
+        assert_eq!(routed, direct);
+    }
+
+    #[test]
     fn auto_memory_is_on_in_the_repository_and_claude_compacts_at_the_turns_compact_at() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
@@ -2975,7 +3119,9 @@ mod tests {
             .env
             .insert("CLAUDE_CODE_DISABLE_AUTO_MEMORY".into(), "1".into());
         let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let argv = host
+            .argv(&thread, &host.inner().threads[&thread].clone(), None)
+            .unwrap();
         let at = argv
             .iter()
             .position(|a| a == "--settings")
@@ -2997,7 +3143,9 @@ mod tests {
         let host = ClaudeHost::new("acme", vec!["claude".into()], tx);
         let given = |settings: &Settings| -> Vec<Value> {
             let thread = host.start_thread(settings);
-            let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+            let argv = host
+                .argv(&thread, &host.inner().threads[&thread].clone(), None)
+                .unwrap();
             argv.iter()
                 .enumerate()
                 .filter(|(_, a)| *a == "--settings")
@@ -4796,7 +4944,9 @@ cat >/dev/null"#;
             ..Default::default()
         };
         let thread = host.start_thread(&settings);
-        let argv = host.argv(&thread, &host.inner().threads[&thread].clone(), None);
+        let argv = host
+            .argv(&thread, &host.inner().threads[&thread].clone(), None)
+            .unwrap();
         let after = |flag: &str| {
             argv.iter()
                 .position(|a| a == flag)

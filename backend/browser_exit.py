@@ -24,7 +24,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from . import model_subscriptions
+from . import model_subscriptions, plan_exits
 from .store import H, Problem
 from .api_contract import api_v2
 
@@ -37,7 +37,6 @@ USAGE_PAGE, USAGE_PAGE_MAX = 200, 500
 PORTS = (80, 443)
 LINK_PATH = "/api/v2/runners/me/browser-exit/ws"
 TUNNELS_PATH = "/api/v2/runners/me/browser-exit/tunnels"
-MODEL_CAPABILITY = "model_exit_v1"
 _HOST = re.compile(r"[A-Za-z0-9._-]{1,253}|[0-9A-Fa-f:.]{2,45}")
 
 
@@ -243,10 +242,7 @@ def authorize_link(store, auth, execution, body):
         if runner and not runner["revoked_at"]:
             rid = runner["id"]
             if kind == "model":
-                if (
-                    _model_capable(runner)
-                    and c.execute("SELECT 1 FROM plan_exits WHERE runner_id=?", (rid,)).fetchone()
-                ):
+                if _model_capable(runner) and plan_exits.supervised(c, rid):
                     return {"allowed": True, "runner_id": rid}
             elif sharing(c, rid):
                 return {"allowed": True, "runner_id": rid}
@@ -257,7 +253,7 @@ def authorize_link(store, auth, execution, body):
 
 
 def _model_capable(runner):
-    return MODEL_CAPABILITY in (H._json(runner["capabilities"], []) or [])
+    return plan_exits.MODEL_CAPABILITY in (H._json(runner["capabilities"], []) or [])
 
 
 def _model_stale():
@@ -265,25 +261,22 @@ def _model_stale():
 
 
 def _model_binding(c, runner_id, attempt_id, generation):
-    sub = model_subscriptions.model_exit_payer(c, runner_id, attempt_id)
-    if not sub:
+    bound = model_subscriptions.model_exit_payer(c, runner_id, attempt_id, generation)
+    if not bound:
         raise _model_stale()
-    owner = sub["owner_id"].removeprefix("human:")
-    selected = c.execute("SELECT runner_id,generation FROM plan_exits WHERE person_id=?", (owner,)).fetchone()
-    if not selected or selected["generation"] != generation or selected["runner_id"] in (None, "", runner_id):
-        raise _model_stale()
-    exit_row = _computer(c, selected["runner_id"])
+    sub, route = bound
+    exit_row = plan_exits.selected(c, sub)
     if not exit_row or not _model_capable(exit_row):
         raise _model_stale()
     return {
         "runner_id": runner_id,
-        "exit": exit_row["id"],
+        "exit": route.runner_id,
         "attempt_id": attempt_id,
         "generation": generation,
-        "owner": owner,
+        "owner": sub["owner_id"].removeprefix("human:"),
         "plan": sub["id"],
         "revision": sub["revision"],
-        "provider": "codex" if sub["kind"] == "codex_login" else "claude",
+        "provider": "claude",
     }, sub
 
 
@@ -529,6 +522,8 @@ def install(app, store, auth, mutate, execution, sessions, vault):
             if not runner:
                 raise Problem("forbidden", "This computer is no longer registered", 403)
             binding, _ = _model_binding(c, runner["id"], body.attempt_id, body.generation)
+            if not store.plan_exit_current(c):
+                raise _model_stale()
         tunnel = H.new_id()
         result = sessions.exit_grant({"kind": "model", "id": tunnel, **binding}, epoch)
         if isinstance(result, dict):
@@ -554,8 +549,8 @@ def install(app, store, auth, mutate, execution, sessions, vault):
             if binding != grant or binding["exit"] != runner["id"] or sessions.exit_epoch() != epoch:
                 raise _model_stale()
             credential = model_subscriptions.model_exit_credential(c, vault, sub)
-        if not credential:
-            raise _model_stale()
+            if not credential or not store.plan_exit_current(c):
+                raise _model_stale()
         return JSONResponse({"provider": binding["provider"], **credential}, headers={"Cache-Control": "no-store"})
 
     @app.post(TUNNELS_PATH)
