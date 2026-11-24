@@ -6,6 +6,9 @@ import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/e
 import { chatAddress } from '@/lib';
 import { dmQuery } from './queries';
 
+/** Words an agent's empty chat offers to start with: they fill the box, never send. */
+export const AGENT_STARTERS = ['Add a widget showing…', 'What did you make this week?'] as const;
+
 /**
  * The chat with a teammate, the wide sheet of their page: the direct thread with them (made the first time). Only the
  * root route can place it (the frame's chat place), so it is exported. On my own page there is none: I do not chat with
@@ -26,7 +29,7 @@ export function TeammateChat({ who }: { who: string }) {
   if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
   if (!dm.data) return null;
   // A direct chat's @ reaches only its two members (the server refuses anyone else): the list offers just them.
-  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} mentionOnly={[actor.id]} />;
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? AGENT_STARTERS : undefined} mentionOnly={[actor.id]} />;
 }
 
 /** An agent's chat, by its slug. */

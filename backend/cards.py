@@ -58,6 +58,11 @@ PAGE_SCAN = 200  # newest pages read to find the ones a reader may see
 # template -> its name and settings: "team" ("" is the company), "kpi", or (low, high, default) for a number.
 TEMPLATES = {
     "tasks_by_status": {"name": "Tasks by status", "fields": {"team": "team"}},
+    # A pipeline's open tasks by stage: `agent` (a bot; empty is everyone's) keeps the ones it has, `count` titles each.
+    "tasks_by_stage": {
+        "name": "Tasks by stage",
+        "fields": {"pipeline": "pipeline", "agent": "agent", "count": (1, 10, 3)},
+    },
     "done_per_week": {"name": "Done per week", "fields": {"team": "team", "weeks": (4, 26, 8)}},
     "needs_you": {"name": "Needs you", "fields": {"team": "team"}},
     "spend": {"name": "Spend", "fields": {"team": "team"}},
@@ -320,6 +325,22 @@ def clean_settings(ctx, template, given):
                 raise bad("Pick a KPI")
             if not kpi_record(ctx, value):
                 raise Problem("not_found", "Unknown KPI", 404)
+        elif kind == "pipeline":
+            value = str(value or "").strip()
+            found = ctx.c.execute(
+                "SELECT id FROM pipelines WHERE (id=? OR name=?) AND retired_at IS NULL ORDER BY id<>? LIMIT 1",
+                (value, value, value),
+            ).fetchone()
+            if not found:
+                raise bad("Pick a pipeline" if not value else "Unknown pipeline: " + value)
+            value = found["id"]
+        elif kind == "agent":
+            value = str(value or "").strip()
+            if value:
+                found = H.resolve_bot(ctx.c, value)
+                if not found:
+                    raise bad("Unknown agent: " + value)
+                value = found["id"]
         elif kind == "metric":
             value = str(value or "").strip()
             if value not in METRICS:
@@ -377,6 +398,45 @@ def tasks_by_status(ctx, s):
         (*args, monday()),
     ).fetchone()[0]
     return {"counts": counts}
+
+
+def tasks_by_stage(ctx, s):
+    """A pipeline's open tasks the reader may read, by stage in the pipeline's order: each stage with any, its count and
+    its first `count` titles in the stage list's queue order; with `agent`, only the tasks that agent has. The board's
+    own read (H.tasks, its per-stage counts and its snoozed rule) over the reader's visibility, so a private task they
+    may not read is in no count and no row."""
+    c = ctx.c
+    pipeline = c.execute(
+        "SELECT id, name FROM pipelines WHERE id=? AND retired_at IS NULL", (s["pipeline"],)
+    ).fetchone()
+    if not pipeline:
+        return None
+    select = {
+        "visible": ctx.visible(),
+        "status": "open",
+        "snoozed": "hide",
+        "owner": H.bot_actor(s["agent"]) if s["agent"] else None,
+    }
+    counts = H.tasks(c, per_stage=True, match=[("pipeline_id=?", [pipeline["id"]])], **select)
+    stages = []
+    for stage in c.execute(
+        "SELECT id, name FROM stages WHERE pipeline_id=? AND retired_at IS NULL ORDER BY position", (pipeline["id"],)
+    ):
+        if not counts.get(stage["id"]):
+            continue
+        rows = H.tasks(c, limit=s["count"], match=[("stage_id=?", [stage["id"]])], **select)
+        stages.append(
+            {
+                "id": stage["id"],
+                "name": stage["name"],
+                "count": counts[stage["id"]],
+                "tasks": [
+                    {k: r[k] for k in ("id", "number", "pipeline_id", "updated_at")} | {"title": r["title"] or ""}
+                    for r in rows
+                ],
+            }
+        )
+    return {"pipeline": pipeline["name"], "count": sum(st["count"] for st in stages), "stages": stages}
 
 
 def done_per_week(ctx, s):
@@ -1190,6 +1250,7 @@ def growth_board(ctx, s):
 
 DATA = {
     "tasks_by_status": tasks_by_status,
+    "tasks_by_stage": tasks_by_stage,
     "done_per_week": done_per_week,
     "needs_you": needs_you,
     "spend": spend,

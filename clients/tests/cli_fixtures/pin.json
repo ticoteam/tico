@@ -162,7 +162,7 @@
   "tools": [],
   "http": [],
   "stdout": "",
-  "stderr": "Example: tico pin update <pin>\npin: Pin id, from `card list --place`\ntico pin update: error: the following arguments are required: pin",
+  "stderr": "Example: tico pin update <pin>\npin: Pin id, from `card list --place`; or updates, tasks or files\ntico pin update: error: the following arguments are required: pin",
   "exit": 64
  },
  {

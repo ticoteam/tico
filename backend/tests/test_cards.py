@@ -312,6 +312,69 @@ def test_automation_runs_count_the_whole_day_not_its_newest_500(api):
     assert data["runs"][0]["id"] == "run_early" and len(data["runs"]) == 5
 
 
+def test_tasks_by_stage_shows_each_reader_only_the_tasks_they_may_read(api):
+    """A pipeline's open tasks by stage, as the stage list reads them for its reader: a private task its reader is not
+    on is in no count and no row."""
+    from backend import task_engine as E
+    from backend.store import H
+    from backend.tests.helpers.engine import pipeline
+
+    stage = {"owner": "assignee"}
+    with api.app.state.store.transaction() as c:
+        pipeline(c, "videos", "Videos", stages=({"name": "Concept", **stage}, {"name": "Draft", **stage}))
+
+        def video(owner, title, to=None, private=False):
+            tid = H.task_create(
+                c, "human:ana", title, "Details.", owner, pipeline="videos", lint=False, private=private
+            )
+            if to:
+                E.move(c, tid["id"], to, "human:ana", "for the test")
+
+        video("bot:ops", "Spring promo")
+        video("bot:ops", "Beach clean", private=True)  # Ana asked for it; Cara is not on it
+        video("bot:cpo", "Host intro", to="Draft")
+        video("bot:ops", "Weekly recap", to=E.DONE)
+    post(api, "cards", {"template": "tasks_by_stage", "settings": {"pipeline": "nowhere"}}, expected=422)
+    post(
+        api,
+        "cards",
+        {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "agent": "nobody"}},
+        expected=422,
+    )
+    mine = post(
+        api,
+        "cards",
+        {"template": "tasks_by_stage", "settings": {"pipeline": "Videos", "agent": "ops"}, "place": "bot:ops"},
+    )["card"]
+    assert mine["settings"] == {"pipeline": "videos", "agent": "ops", "count": 3}
+
+    def stages(card):
+        return [(s["name"], s["count"], [t["title"] for t in s["tasks"]]) for s in card["data"]["stages"]]
+
+    assert stages(mine) == [("Concept", 2, ["Spring promo", "Beach clean"])]
+    shown = next(p["card"] for p in place(api, "bot:ops", "cara-test")["pins"] if "card" in p)
+    assert stages(shown) == [("Concept", 1, ["Spring promo"])]
+    assert "Beach clean" not in str(shown)
+    everyone = {"template": "tasks_by_stage", "settings": {"pipeline": "videos", "count": 1}}
+    everyone = post(api, "cards", everyone)["card"]
+    assert stages(everyone) == [("Concept", 2, ["Spring promo"]), ("Draft", 1, ["Host intro"])]
+
+
+def test_an_agent_hides_and_moves_its_built_in_sections_with_tico_pin_update(api):
+    from backend.tests.helpers.settings_assistant import mcp
+
+    _, _, attempt = setup_attempt(api, "ops")
+    bot = attempt["token"]
+    assert mcp(api, "tico_pin_update", {"pin": "files", "position": 0}, bot)[0] is False
+    assert mcp(api, "tico_pin_update", {"pin": "updates", "hidden": True}, bot)[0] is False
+    widgets = get(api, "bots/ops/task-tabs")["widgets"]
+    assert [(w["id"], w["hidden"]) for w in widgets] == [("files", False), ("updates", True), ("tasks", False)]
+    assert mcp(api, "tico_pin_update", {"pin": "updates", "place": "bot:ops", "hidden": False}, bot)[0] is False
+    assert not get(api, "bots/ops/task-tabs")["widgets"][1]["hidden"]
+    # Another agent's sidebar is not its to arrange.
+    assert mcp(api, "tico_pin_update", {"pin": "tasks", "place": "bot:cpo", "hidden": True}, bot)[0] is True
+
+
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):
     send(
         api, "POST", "groups", {"name": "Product", "add": {"people": ["cara"], "bots": ["cpo"]}, "lead": "person:cara"}

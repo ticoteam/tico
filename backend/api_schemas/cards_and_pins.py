@@ -10,6 +10,7 @@ SCHEMAS['Card'] = obj(
         'template': {
             'enum': [
                 'tasks_by_status',
+                'tasks_by_stage',
                 'done_per_week',
                 'needs_you',
                 'spend',

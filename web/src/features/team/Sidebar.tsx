@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { Fragment, type MouseEvent, type ReactNode } from 'react';
 import { run } from '@/actions';
 import type { Card, Place } from '@/api/schema';
 import { PageCard } from '@/conversation';
@@ -9,6 +9,7 @@ import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { fmtMoney } from '@/lib';
 import { Section } from '@/pagekinds';
+import { taskHref } from './parts';
 import { readable, type SidebarWidget } from './queries';
 
 /* An agent's sidebar as it arranged it (backend/bot_task_tabs.py widgets): its built-ins, and the pages and cards it
@@ -101,8 +102,16 @@ interface Line {
   updated_at?: string | null;
   created_at?: string;
 }
+/** A stage of Tasks by stage: its open tasks the reader may read, counted, and the first few. */
+interface StageLine {
+  id: string;
+  name: string;
+  count: number;
+  tasks: { id: string; number: number | null; pipeline_id: string | null; title: string; updated_at: string | null }[];
+}
 interface CardData {
   count?: number;
+  stages?: StageLine[];
   items?: Line[];
   tasks?: Line[];
   threads?: Line[];
@@ -166,6 +175,22 @@ export function CardSection({ card }: { card: Card }) {
         <Section name={name}>
           {(d.pages ?? []).map((p) => (
             <CardRow key={p.file_id} title={p.title ?? ''} file={p.file_id} at={p.updated_at} />
+          ))}
+        </Section>
+      );
+    case 'tasks_by_stage':
+      return (
+        <Section name={name} count={d.count || undefined}>
+          {(d.stages ?? []).map((s) => (
+            <Fragment key={s.id}>
+              <div className="stage-fold">
+                <span className="fold-label">{s.name}</span>
+                <span>{s.count}</span>
+              </div>
+              {s.tasks.map((t) => (
+                <TaskRow key={t.id} title={t.title} href={taskHref(t)} target={`task:${t.number ?? t.id}`} at={t.updated_at ?? new Date(0).toISOString()} />
+              ))}
+            </Fragment>
           ))}
         </Section>
       );

@@ -7,9 +7,9 @@ import { TeammateChat } from './TeammateChat';
 
 vi.mock('@/conversation', async () => ({
   timelineQuery: (await import('@/conversation/queries')).timelineQuery,
-  Conversation: ({ id, mentionOnly, foot }: { id: string; mentionOnly?: readonly string[]; foot?: ReactNode }) => (
+  Conversation: ({ id, mentionOnly, starters, foot }: { id: string; mentionOnly?: readonly string[]; starters?: readonly string[]; foot?: ReactNode }) => (
     <>
-      <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')}>
+      <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')} data-starters={starters?.join('|')}>
         {id}
       </div>
       {foot}
@@ -83,6 +83,15 @@ describe('TeammateChat', () => {
     expect(asked.find((u) => u.includes('/threads/dm'))).toContain('with=bot%3A0190-ana');
     // its @ list offers the teammate alone: the server refuses an @ of anyone outside a direct chat
     expect(chat.getAttribute('data-mention-only')).toBe('bot:0190-ana');
+  });
+
+  it("offers an agent's empty chat two starters", async () => {
+    show('ana');
+    await act(async () => {
+      answerMe();
+    });
+    const chat = await screen.findByTestId('conversation');
+    expect(chat.getAttribute('data-starters')).toBe('Add a widget showing…|What did you make this week?');
   });
 
   it("pins the agent's question to me over the box, with the answers it offers", async () => {

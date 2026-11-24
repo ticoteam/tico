@@ -294,6 +294,14 @@ def test_every_agent_has_the_page_skill():
     assert missing == []
 
 
+def test_every_agent_with_a_shared_sidebar_has_the_sidebar_skill():
+    # Any agent may be asked to arrange its page's sidebar; the Assistant's is each person's own, with no pins.
+    templates = sorted(p.parent.name for p in CATALOG.glob("*/card.yaml"))
+    skill = ".claude/skills/arrange-your-sidebar/SKILL.md"
+    missing = [t for t in templates if t != "assistant" and skill not in catalog.files(t)]
+    assert missing == [] and skill not in catalog.files("assistant")
+
+
 def png(path, width, height):
     import struct
     import zlib
