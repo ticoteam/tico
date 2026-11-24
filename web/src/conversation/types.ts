@@ -66,8 +66,6 @@ export interface ChatMessage {
   pending?: 'sending' | 'failed' | 'held';
   /** Local only: the files a pending send carries, kept for Retry. */
   files?: File[];
-  /** Local only: the Idempotency-Key a failed send went with, which its Retry sends again (none: a new one). */
-  sendKey?: string;
 }
 
 export interface TimelinePage {

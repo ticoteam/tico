@@ -53,21 +53,6 @@ export function withFiles(current: readonly File[], adding: readonly File[]): Fi
   return next;
 }
 
-/** The files waiting in a box, kept in memory with its draft (never stored: a reload drops them), so a box drawn again
-    (another chat and back, a failed send put back after the chat changed) still has them. */
-const trays = new Map<string, File[]>();
-
-export const readTray = (who: string, id: string): File[] => trays.get(draftKey(who, id)) ?? [];
-
-export function writeTray(who: string, id: string, files: File[]): void {
-  if (files.length) trays.set(draftKey(who, id), files);
-  else trays.delete(draftKey(who, id));
-}
-
-/** Files for a box from outside it (dropped on its chat, a failed send's put back), past the caps; the box shows them
-    once its `fill` says `tray`. */
-export const addToTray = (who: string, id: string, files: readonly File[]): void => writeTray(who, id, withFiles(readTray(who, id), files));
-
 /** Files the browser draws in the tray: pictures as themselves, a video by its first frame. */
 const PICTURE = /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/;
 const VIDEO = /^video\/(mp4|webm|quicktime|ogg)$/;
@@ -100,13 +85,14 @@ export interface ComposerProps {
   to: string;
   /** An optimistic send returns nothing. A send without a pending row resolves to whether it accepted the draft. */
   onSend: (text: string, files: File[]) => void | Promise<boolean>;
-  /** Words to put back in the box (a failed message taken back), and `tray` when files were added to it from outside
-      (addToTray); a new object each time. */
-  fill?: { text?: string; tray?: boolean } | null;
+  /** Words to put back in the box (a failed message taken back); a new object each time. */
+  fill?: { text: string } | null;
   /** The box's words in place of "Message <to>" ("Reply to Sam Lee"). */
   label?: string;
   /** false: no files (a mail reply attaches none). */
   attach?: boolean;
+  /** Files alone do not send: the box needs words too (the Assistant's upload takes no message without text). */
+  needsText?: boolean;
   /** false: the chat has not loaded enough to keep a pending message. */
   canSend?: boolean;
   /** false: no names after @ (a box whose words reach no teammate). */
@@ -122,9 +108,9 @@ const allActors = (d: { actors: Actor[] }) => d.actors;
 
 /** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. An @ opens the names of the
     people and agents the viewer may see: arrows move, Enter or Tab picks, Escape closes. */
-export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true, mentions = true, mentionFirst = NOBODY, mentionOnly }: ComposerProps) {
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true, needsText = false, canSend = true, mentions = true, mentionFirst = NOBODY, mentionOnly }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
-  const [files, setTray] = useState<File[]>(() => readTray(me, id));
+  const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
   const box = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -162,10 +148,6 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     setShut(null);
     setActive(0);
   };
-  const setFiles = (next: File[]) => {
-    setTray(next);
-    writeTray(me, id, next);
-  };
   const add = (adding: readonly File[]) => {
     if (attach && adding.length) setFiles(withFiles(files, adding));
   };
@@ -173,19 +155,18 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
   if (shownFor !== `${me}:${id}`) {
     setShownFor(`${me}:${id}`);
     setText(readDraft(me, id));
-    setTray(readTray(me, id));
+    setFiles([]);
     forget();
   }
   if (fill !== filled) {
     setFilled(fill);
-    if (fill?.text !== undefined) {
+    if (fill) {
       setText(fill.text);
       forget();
     }
-    if (fill?.tray) setTray(readTray(me, id));
   }
 
-  const ready = canSend && (text.trim().length > 0 || files.length > 0);
+  const ready = canSend && (text.trim().length > 0 || (files.length > 0 && !needsText));
 
   const send = () => {
     if (!ready || sending) return;
@@ -267,7 +248,22 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
 
   const label = own ?? `Message ${to}`;
   return (
-    <>
+    // The tray and the box take a drop together; a reply box inside a chat takes its own. `display: contents`: the two
+    // lay out as they did without it.
+    <div
+      className="composer-drop"
+      onDragOver={attach ? (e) => carriesFiles(e) && e.preventDefault() : undefined}
+      onDrop={
+        attach
+          ? (e) => {
+              if (!carriesFiles(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              add([...e.dataTransfer.files]);
+            }
+          : undefined
+      }
+    >
       {files.length > 0 && (
         <div className="composer-tray">
           {files.map((f, i) => {
@@ -282,21 +278,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           })}
         </div>
       )}
-      <div
-        className={text ? 'composer is-typing' : 'composer'}
-        // a file dropped on this box is this box's (a reply box inside a chat), not the chat's
-        onDragOver={attach ? (e) => carriesFiles(e) && e.preventDefault() : undefined}
-        onDrop={
-          attach
-            ? (e) => {
-                if (!carriesFiles(e)) return;
-                e.preventDefault();
-                e.stopPropagation();
-                add([...e.dataTransfer.files]);
-              }
-            : undefined
-        }
-      >
+      <div className={text ? 'composer is-typing' : 'composer'}>
         <textarea
           ref={box}
           className="composer-text"
@@ -368,6 +350,6 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           <Icon name="send" />
         </button>
       </div>
-    </>
+    </div>
   );
 }

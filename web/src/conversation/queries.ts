@@ -123,9 +123,8 @@ export interface Send {
       timeline. */
   onFailed?: (e: unknown) => void;
   me: string;
-  /** Retry: the failed row to send again in its place, and the Idempotency-Key it went with. */
+  /** Retry: the failed row to send again in its place. */
   retry?: string;
-  key?: string;
   /** A reply: the message it answers (`in_reply_to`), and its quote shown on the pending row. Threads only: Tico's own
       chat takes no reply. */
   replyTo?: string;
@@ -222,14 +221,6 @@ const withRows = (d: Timeline | undefined, fn: (rows: ChatMessage[]) => ChatMess
 const markRow = (tmp: string, pending: ChatMessage['pending']) => (rows: ChatMessage[]) =>
   rows.some((m) => m.id === tmp) ? rows.map((m) => (m.id === tmp ? { ...m, pending } : m)) : rows;
 
-/** "Not sent", keeping the key its Retry sends again (none: the retry takes a new one). */
-const failRow = (tmp: string, sendKey: string | undefined) => (rows: ChatMessage[]) =>
-  rows.some((m) => m.id === tmp) ? rows.map((m) => (m.id === tmp ? { ...m, pending: 'failed' as const, sendKey } : m)) : rows;
-
-/** What a pending send is matched to its echo by: its words, and its files by size (a pasted picture's name is always
-    image.png), so one message's echo never takes another's pending row, two files-only messages included. */
-const sendSig = (m: ChatMessage) => `${m.body ?? ''}\u0000${(m.refs?.attachments ?? []).map((a) => a.size ?? -1).sort((x, y) => x - y).join(',')}`;
-
 /**
  * Show the message at once, send it, and swap in the server's row. The stream's echo may land first: the pending row
  * gives way to it (installConversationLive) and the answer then adds nothing, so it never shows twice. A failure keeps
@@ -239,15 +230,6 @@ const sendSig = (m: ChatMessage) => `${m.body ?? ''}\u0000${(m.refs?.attachments
     own rights; any other chat's members may not read it, so they are told the page alone. Every send passes here. */
 const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 'tico' ? s.from : { page: s.from.page, label: s.from.label });
 
-/** A refusal the server keeps under its Idempotency-Key (store.mutate): the same key would only replay it, so a retry
-    takes a new one. Any other failure may have landed (a lost answer), so its retry keeps the key. */
-const keyKept = (e: unknown) => !(e instanceof ApiError && e.extra.idempotency_refused === true);
-
-/** The Agent bar's failed send, by its writer and agent: it keeps no row, so a send of the same words and files is that
-    message again, with its key, its page and its pending row's id. */
-const unsent = new Map<string, { text: string; files: readonly File[]; from: FromPage | null; tmp: string; key: string }>();
-const sameFiles = (a: readonly File[], b: readonly File[]) => a.length === b.length && a.every((f, i) => f === b[i]);
-
 /** The thread a `toDm` send was written to, when it is not the one the chat shows. */
 const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
 
@@ -255,13 +237,8 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
   // a file goes as a thread message, which carries no `to` (the task's comment route has no upload yet): a message to
   // an agent's session takes none, whatever its box held
   const bare = !!given.task?.to && !given.replyTo;
-  const dm = given.toDm ? `${given.me}:${given.toDm}` : null;
-  const again = dm ? unsent.get(dm) : undefined;
-  if (dm) unsent.delete(dm);
-  const same = !!again && !given.retry && again.text === given.text && sameFiles(again.files, given.files ?? []);
-  const s = { ...given, from: pageFor(same ? { ...given, from: again.from } : given), ...(bare && { files: [] }) };
-  const tmp = s.retry ?? (same ? again.tmp : `tmp:${newId()}`);
-  const key = s.key ?? (same ? again.key : newId());
+  const s = { ...given, from: pageFor(given), ...(bare && { files: [] }) };
+  const tmp = s.retry ?? `tmp:${newId()}`;
   const row: ChatMessage = {
     id: tmp,
     thread_id: s.id,
@@ -271,10 +248,9 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     created_at: new Date().toISOString(),
     refs: {
       ...(s.from && { from_page: s.from }),
-      ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type, size: f.size })) }),
+      ...(s.files?.length && { attachments: s.files.map((f, i) => ({ id: `${tmp}:${i}`, name: f.name, content_type: f.type })) }),
     },
     pending: 'sending',
-    sendKey: key,
     ...(s.files?.length && { files: s.files }),
     ...(s.replyTo && { in_reply_to: s.replyTo, reply_to: s.quote ?? { id: s.replyTo } }),
   };
@@ -282,8 +258,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     const answer = await write<Sent>({
       key: timelineKey(s.id, s.view),
       optimistic: (d: Timeline | undefined) => withRows(d, (rows) => [...rows.filter((m) => m.id !== tmp), row]),
-      idempotencyKey: key,
-      send: (idem) => post(s, idem),
+      send: (key) => post(s, key),
       settle: (d: Timeline | undefined, answer: Sent) => {
         const real = answerOf(answer);
         if (!real) return withRows(d, markRow(tmp, 'held'));
@@ -296,8 +271,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
       },
       // A failed send is not taken back: it stays, marked, so the words are not lost. The Agent bar's goes, its words
       // back in its box (`onFailed`).
-      revert: (d: Timeline | undefined, e: unknown) =>
-        withRows(d, s.toDm ? (rows) => rows.filter((m) => m.id !== tmp) : failRow(tmp, keyKept(e) ? key : undefined)),
+      revert: (d: Timeline | undefined) => withRows(d, s.toDm ? (rows) => rows.filter((m) => m.id !== tmp) : markRow(tmp, 'failed')),
       offline: 'hold',
     });
     const real = answerOf(answer);
@@ -305,10 +279,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
     return real;
   } catch (e) {
     // The Agent bar keeps no failed row (`revert`): its words go back into its box (`onFailed`), for Send again
-    if (s.toDm) {
-      if (dm && keyKept(e)) unsent.set(dm, { text: s.text, files: s.files ?? [], from: s.from, tmp, key });
-      s.onFailed?.(e);
-    }
+    if (s.toDm) s.onFailed?.(e);
     return null;
   }
 }
@@ -477,8 +448,7 @@ export function installConversationLive(): void {
           // every view of the thread that holds the pending row (a task's comments, an agent's session)
           for (const [key] of queryClient.getQueriesData<Timeline>({ queryKey: timelineKey(id) }))
             queryClient.setQueryData<Timeline>(key, (d) => withRows(d, (rows) => {
-              const sig = sendSig(m);
-              const i = rows.findIndex((x) => x.pending === 'sending' && sendSig(x) === sig);
+              const i = rows.findIndex((x) => x.pending === 'sending' && (x.body ?? '') === (m.body ?? ''));
               return i < 0 ? rows : rows.toSpliced(i, 1);
             }));
         }

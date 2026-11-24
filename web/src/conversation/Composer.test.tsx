@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor, type Directory } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { Composer, writeTray } from './Composer';
+import { Composer } from './Composer';
 
 const ME = 'human:me';
 const actors: Actor[] = [
@@ -203,7 +203,6 @@ describe('files', () => {
   const made: string[] = [];
   const freed: string[] = [];
   beforeEach(() => {
-    writeTray(ME, 'c1', []);
     made.length = 0;
     freed.length = 0;
     Object.assign(URL, {
@@ -230,6 +229,10 @@ describe('files', () => {
     paste([shot]);
     const pdf = file('brief.pdf', 'application/pdf');
     drop([pdf]);
+    // a drop on the tray is the box's too
+    const notes = file('notes.txt', 'text/plain');
+    fireEvent.drop(screen.getByRole('button', { name: 'Remove brief.pdf' }), { dataTransfer: { files: [notes], types: ['Files'] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
     expect(tray()).toEqual(['Remove image.png', 'Remove brief.pdf']);
     expect(document.querySelector('.composer-thumb img')?.getAttribute('src')).toBe('blob:0');
     // a press removes it, and frees its picture
@@ -252,13 +255,21 @@ describe('files', () => {
     expect(await screen.findByText('Up to 10 files')).toBeTruthy();
     expect(tray()).toHaveLength(10);
     cleanup();
-    writeTray(ME, 'c1', []);
     mount();
     render(<Toasts />);
     // two files of 9.9 MB pass the per-file cap but not the request's
     drop([file('a.bin', '', 9_900_000), file('b.bin', '', 9_900_000)]);
     expect(await screen.findByText('Up to 19 MB a message')).toBeTruthy();
     expect(tray()).toEqual(['Remove a.bin']);
+  });
+
+  it('sends files only with words where the box needs them (the Assistant)', () => {
+    mount({ needsText: true });
+    paste([file('image.png', 'image/png')]);
+    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    type('What is this?');
+    expect(send.disabled).toBe(false);
   });
 
   it('frees the pictures when the box goes', () => {
