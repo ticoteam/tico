@@ -1752,7 +1752,8 @@ pub const RELATIONSHIP_WORKER: &str = "relationship-worker";
 /// A personal turn's own copy of the bot's checkout (`personal` on the claim: the Assistant in a person's own room). One
 /// Assistant serves the whole company, so nothing such a turn writes may reach the checkout every other person's turn
 /// reads: it runs in a local clone with no remote, which its environment has no git credentials to push from either
-/// (crate::gitcred::without_credentials), and the clone is removed when the turn ends. Its path is the same for every
+/// (crate::gitcred::without_credentials), and the clone is removed when the turn ends, or when the session kept for
+/// the room after it is let go (crate::keeper; the next turn then refreshes it in place). Its path is the same for every
 /// turn in the room on this runner's workspace (`projects`), so the harness finds the room's session again, and another
 /// runner on this computer never shares it. The shared checkout is only read.
 pub(crate) struct PersonalCopy(pub PathBuf);
@@ -1780,28 +1781,41 @@ impl PersonalCopy {
         std::env::temp_dir().join(format!("tico-personal-{}", Self::key(projects, attempt)))
     }
 
-    /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left.
+    /// Clone `main` (already refreshed for this turn) into the room's path, replacing a copy a stopped turn left. A
+    /// copy the room's kept session still holds (`hold`, crate::keeper) is brought up to `main` in place instead: the
+    /// kept process works in that folder.
     pub(crate) async fn make(
         main: &Path,
         projects: &Path,
         attempt: &Value,
     ) -> Result<Self, String> {
-        let copy = Self(Self::path_for(projects, attempt));
-        copy.remove();
-        crate::isolation::mkdir(&copy.0, 0o700)
-            .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
-        crate::checkout_groups::prepare(copy.0.clone()).await;
+        let path = Self::path_for(projects, attempt);
+        let held = hold_copy(&path) > 0;
+        let copy = Self(path);
         let env = crate::safegit::clean_environment(&crate::env::process_environment());
         let (from, to) = (main.display().to_string(), copy.0.display().to_string());
-        // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
-        let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
-            .await
-            .map_err(|f| fault_name(&f))?;
-        if !cloned.ok() {
-            return Err(format!(
-                "cannot copy {from} for this chat: {}",
-                git_reason(&cloned)
-            ));
+        let kept = held && std::fs::symlink_metadata(&copy.0).is_ok_and(|m| m.is_dir());
+        let refreshed = kept && copy.refresh(&from, &env).await;
+        if !refreshed {
+            if kept {
+                // Same folder, so the kept process's working directory stays this one.
+                empty_folder(&copy.0);
+            } else {
+                remove_copy(&copy.0);
+                crate::isolation::mkdir(&copy.0, 0o700)
+                    .map_err(|e| format!("cannot make this chat's copy of the checkout: {e}"))?;
+                crate::checkout_groups::prepare(copy.0.clone()).await;
+            }
+            // `--no-local`: objects of its own, never hard links into the shared checkout's, and any filesystem.
+            let cloned = g(main, &env, &["clone", "-q", "--no-local", ".", &to], 120)
+                .await
+                .map_err(|f| fault_name(&f))?;
+            if !cloned.ok() {
+                return Err(format!(
+                    "cannot copy {from} for this chat: {}",
+                    git_reason(&cloned)
+                ));
+            }
         }
         let remotes = g(&copy.0, &env, &["remote"], 15)
             .await
@@ -1817,29 +1831,135 @@ impl PersonalCopy {
                 ));
             }
         }
+        // Whose copy it is, for `sweep` when a runner stopped while a kept session held it.
+        let _ = std::fs::write(
+            copy.0.join(".git").join(COPY_MARK),
+            projects.display().to_string(),
+        );
         Ok(copy)
     }
 
-    fn remove(&self) {
-        match std::fs::remove_dir_all(&self.0) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
-                "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
-                self.0.display()
-            )),
-            _ => {}
+    /// The copy at `main`'s commit again, as a new clone would be: what the last turn wrote is gone.
+    async fn refresh(&self, main: &str, env: &Env) -> bool {
+        for args in [
+            &["fetch", "-q", "--no-tags", main, "HEAD"][..],
+            &["reset", "-q", "--hard", "FETCH_HEAD"],
+            &["clean", "-qffdx"],
+        ] {
+            if !g(&self.0, env, args, 120).await.is_ok_and(|o| o.ok()) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Another holder of this copy: the session the keeper keeps for the room (crate::keeper::Held). The copy goes
+    /// when its last holder is dropped.
+    pub(crate) fn hold(&self) -> Self {
+        hold_copy(&self.0);
+        Self(self.0.clone())
+    }
+
+    /// Remove the chats' copies of this runner's workspace (`projects`) a kept session held when the runner stopped.
+    pub(crate) fn sweep(projects: &Path) {
+        let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        let ours = projects.display().to_string();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("tico-personal-")
+                && entry.file_type().is_ok_and(|t| t.is_dir())
+                && std::fs::read_to_string(path.join(".git").join(COPY_MARK))
+                    .is_ok_and(|m| m == ours)
+                && copies().get(&path).is_none()
+            {
+                remove_copy(&path);
+            }
+        }
+    }
+}
+
+/// Who wrote a chat's copy (`PersonalCopy::sweep`): the runner workspace it belongs to.
+const COPY_MARK: &str = "tico-projects";
+
+/// How many holders each chat's copy has: its turn, and the session kept for the room after it.
+static COPIES: Mutex<Option<HashMap<PathBuf, usize>>> = Mutex::new(None);
+
+fn copies() -> std::sync::MutexGuard<'static, Option<HashMap<PathBuf, usize>>> {
+    COPIES.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// One more holder of the copy at `path`: how many it had.
+fn hold_copy(path: &Path) -> usize {
+    let mut held = copies();
+    let count = held
+        .get_or_insert_with(HashMap::new)
+        .entry(path.to_path_buf())
+        .or_default();
+    *count += 1;
+    *count - 1
+}
+
+fn remove_copy(path: &Path) {
+    match std::fs::remove_dir_all(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
+            "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
+            path.display()
+        )),
+        _ => {}
+    }
+}
+
+/// Everything in `path`, not the folder itself.
+fn empty_folder(path: &Path) {
+    for entry in std::fs::read_dir(path).into_iter().flatten().flatten() {
+        let gone = if entry.file_type().is_ok_and(|t| t.is_dir()) {
+            std::fs::remove_dir_all(entry.path())
+        } else {
+            std::fs::remove_file(entry.path())
+        };
+        if let Err(e) = gone {
+            log(&format!(
+                "Tico runner: cannot clear a chat's copy of its checkout {}: {e}",
+                path.display()
+            ));
         }
     }
 }
 
 impl Drop for PersonalCopy {
     fn drop(&mut self) {
-        self.remove();
+        // Removed under the lock: a turn making the room's copy again waits until it is gone.
+        let mut held = copies();
+        let map = held.get_or_insert_with(HashMap::new);
+        let last = match map.get_mut(&self.0) {
+            Some(n) if *n > 1 => {
+                *n -= 1;
+                false
+            }
+            _ => {
+                map.remove(&self.0);
+                true
+            }
+        };
+        if last {
+            remove_copy(&self.0);
+        }
     }
 }
 
 impl Place {
     pub(crate) fn take_scratch(&mut self) -> Option<TurnScratch> {
         self._scratch.take()
+    }
+
+    /// A hold on this turn's chat copy for the session kept after it (PersonalCopy::hold).
+    pub(crate) fn hold_copy(&self) -> Option<PersonalCopy> {
+        self._copy.as_ref().map(PersonalCopy::hold)
     }
 
     /// The folders a leased turn user is given, for the primary harness and any fallback alike: the turn's own, the bot's

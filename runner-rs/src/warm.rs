@@ -37,8 +37,9 @@ pub fn folder(dir: &Path) -> Result<PathBuf, String> {
     Ok(home)
 }
 
-/// Write the token file, owned by `owner` (a leased turn user) in place of the bot user.
-pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
+/// Write the token file, owned by `owner` (a leased turn user) in place of the bot user: false when it could not be
+/// (the old one stays).
+pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) -> bool {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
     let tmp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
@@ -63,9 +64,10 @@ pub fn write_token_for(path: &Path, token: &str, owner: Option<(u32, u32)>) {
         })
         .and_then(|_| std::fs::rename(&tmp, path));
     let _ = std::fs::remove_file(&tmp);
-    if let Err(e) = written {
+    if let Err(e) = &written {
         crate::util::log(&format!(
             "Tico runner: could not write a kept process's token file ({e})"
         ));
     }
+    written.is_ok()
 }

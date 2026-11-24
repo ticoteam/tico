@@ -1365,6 +1365,15 @@ impl Clock {
 }
 
 impl Runner {
+    /// Kept harness sessions past their time are released every crate::keeper::PRUNE_EVERY, however the claim loop
+    /// backs off.
+    async fn keeper_loop(self: Arc<Self>) {
+        while !self.stopping() {
+            tokio::time::sleep(crate::keeper::PRUNE_EVERY).await;
+            self.keeper.prune(false).await;
+        }
+    }
+
     pub async fn run(self: Arc<Self>) {
         if let Err(e) = tokio::task::spawn_blocking(crate::turn_users::initialize)
             .await
@@ -1382,6 +1391,8 @@ impl Runner {
             }
             crate::checkout_groups::initialize(&state);
             crate::checkout_groups::gate_workspace(&workspace);
+            // No turn runs yet: a chat's copy a kept session held when the runner stopped goes.
+            crate::sessions::PersonalCopy::sweep(&workspace);
         })
         .await;
         let names = self.names().await;
@@ -1395,6 +1406,7 @@ impl Runner {
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::fetch_fresh::run_loop(self.clone()));
+        tokio::spawn(self.clone().keeper_loop());
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
@@ -1523,7 +1535,6 @@ impl Runner {
             clock.next_claim = None; // capacity came free: look for the next job now
         }
         self.pi.prune(false).await;
-        self.keeper.prune(false).await;
         if maintenance.as_ref().is_some_and(|m| m.is_finished()) {
             if let Ok(Err(e)) = maintenance.take().unwrap().await {
                 log(&format!(

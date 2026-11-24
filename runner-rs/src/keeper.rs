@@ -4,19 +4,21 @@
 //!
 //! A harness plugs in as a `Session` (hosts/antigravity.rs `Agent` now; Claude and Codex next). The runner keeps one
 //! `Keeper` (Runner::keeper) for all of them, one session per thread, under the start inputs it was started with
-//! (`key`: the harness's own fingerprint of its command line, home or plan, environment, folder and MCP servers,
-//! `crate::warm::PER_ATTEMPT` aside). A host `take`s its thread's session for a turn, which comes back only when the
-//! turn would start it the same way and it still runs, and `put`s it back when the turn ends well. Between turns it
-//! holds no token (`Session::lend`, blank) and no turn reads what it says (`Session::park`).
+//! (`Inputs`: its command line, home or plan, environment, folder and MCP servers, `crate::warm::PER_ATTEMPT` aside). A
+//! host `take`s its thread's session for a turn, which comes back only when the turn would start it the same way and
+//! it still runs, and `put`s it back when the turn ends well, with whatever its workspace needs while it is kept
+//! (`held`: a person's own chat's copy of the checkout, crate::sessions::PersonalCopy). Between turns it holds no token
+//! (`Session::lend`, blank; one that cannot be blanked is not kept) and no turn reads what it says (`Session::park`).
 //!
 //! A kept session is released (stopped, and whatever it held removed with it) after `IDLE` unused, unless it reports
 //! background work still running (`Session::background`): then it is pinned and rechecked each `IDLE`, up to
 //! `MAX_PIN` in all. It also goes when more than `limit` are kept (the oldest first), when its output ends, when its
-//! thread's next turn starts it differently, and when the runner stops. A released conversation comes back by the
-//! harness's native resume on the thread's next message.
+//! thread's next turn starts it differently (the inputs that changed are logged by name), and when the runner stops.
+//! The runner prunes every `PRUNE_EVERY`, and a turn never takes one past its time. A released conversation comes back
+//! by the harness's native resume on the thread's next message.
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -29,8 +31,11 @@ use tokio::sync::oneshot;
 pub const IDLE: Duration = Duration::from_secs(2 * 60);
 /// How long background work may keep an unused session past `IDLE` (T3's DEFAULT_MAX_IDLE_PIN_MS).
 pub const MAX_PIN: Duration = Duration::from_secs(4 * 60 * 60);
-/// How long a stopped turn's harness gets to end it before it is stopped itself (T3's PROVIDER_INTERRUPT_TIMEOUT_MS).
-pub const INTERRUPT_WAIT: Duration = Duration::from_secs(15);
+/// How long a stopped turn's harness gets to end it before it is stopped itself (T3's PROVIDER_INTERRUPT_TIMEOUT_MS),
+/// and how long a kept session gets to come back or stop before it is dropped (its process group killed).
+pub const INTERRUPT_WAIT: Duration = Duration::from_secs(if cfg!(test) { 2 } else { 15 });
+/// How often the runner releases what is past its time (Runner::run).
+pub const PRUNE_EVERY: Duration = Duration::from_secs(15);
 
 /// Whether a kept session's background work still runs (`Session::background`).
 pub type Probe = Arc<dyn Fn() -> bool + Send + Sync>;
@@ -38,16 +43,16 @@ pub type Probe = Arc<dyn Fn() -> bool + Send + Sync>;
 pub type Parked = Pin<Box<dyn Future<Output = Box<dyn Session>> + Send>>;
 /// A session being stopped.
 pub type Stopping<'a> = Pin<Box<dyn Future<Output = ()> + Send + 'a>>;
+/// What a kept session's workspace needs while it is kept, dropped once it has gone.
+pub type Held = Box<dyn Any + Send>;
 
-/// A harness's running session, as the keeper holds it between turns.
+/// A harness's running session, as the keeper holds it between turns. Dropped, it kills its process group.
 pub trait Session: Any + Send {
     /// Whether it can take another turn: its process runs and its output is open.
     fn alive(&self) -> bool;
-    /// The hub token for the turn it runs, or "" while kept (crate::warm::write_token_for on its token file).
-    fn lend(&self, token: &str);
-    /// The scope unit its process was launched in where turns are limited (crate::turn_limits::launch_unit): an OOM of
-    /// the process is a failure of whichever attempt runs it then (Host::kept_scopes).
-    fn unit(&self) -> Option<String>;
+    /// The hub token for the turn it runs, or "" while kept (crate::warm::write_token_for on its token file): false when
+    /// it could not be written.
+    fn lend(&self, token: &str) -> bool;
     /// Its background work (T3's hasPendingBackgroundWork), if it can have any: while that runs, it stays past `IDLE`.
     fn background(&self) -> Option<Probe> {
         None
@@ -61,28 +66,83 @@ pub trait Session: Any + Send {
     fn into_any(self: Box<Self>) -> Box<dyn Any + Send>;
 }
 
+/// What a session was started with, each input by name, as a digest of its value: a session is reused only for the same
+/// inputs, and the names of those that changed say why one was not.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Inputs(BTreeMap<String, String>);
+
+impl Inputs {
+    pub fn add(&mut self, name: &str, value: &str) {
+        let digest = ring::digest::digest(&ring::digest::SHA256, value.as_bytes());
+        let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+        self.0.insert(name.to_string(), hex);
+    }
+
+    /// Every variable of `env` but `crate::warm::PER_ATTEMPT` and `skip`, each as `env:<name>`.
+    pub fn env(&mut self, env: &crate::env::Env, skip: &[&str]) {
+        for (k, v) in env {
+            if !crate::warm::PER_ATTEMPT.contains(&k.as_str()) && !skip.contains(&k.as_str()) {
+                self.add(&format!("env:{k}"), v);
+            }
+        }
+    }
+
+    /// The names of the inputs that differ from `other`'s.
+    pub fn changed(&self, other: &Inputs) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .0
+            .iter()
+            .filter(|(k, v)| other.0.get(*k) != Some(*v))
+            .map(|(k, _)| k.clone())
+            .collect();
+        names.extend(other.0.keys().filter(|k| !self.0.contains_key(*k)).cloned());
+        names
+    }
+}
+
 /// One kept session.
 struct Kept {
-    key: String,
+    key: Inputs,
     used: Instant,
     /// Since when background work has kept it past `IDLE`.
     pinned: Option<Instant>,
     background: Option<Probe>,
     wanted: oneshot::Sender<()>,
     task: tokio::task::JoinHandle<Box<dyn Session>>,
+    _held: Option<Held>,
 }
 
 impl Kept {
-    async fn back(self) -> Option<Box<dyn Session>> {
+    /// The session, back from `park` by `by`; else its task is aborted, which drops it (its process group killed).
+    async fn back(self, by: tokio::time::Instant) -> Option<Box<dyn Session>> {
         let _ = self.wanted.send(());
-        self.task.await.ok()
-    }
-
-    async fn end(self) {
-        if let Some(session) = self.back().await {
-            session.stop().await;
+        let mut task = self.task;
+        match tokio::time::timeout_at(by, &mut task).await {
+            Ok(session) => session.ok(),
+            Err(_) => {
+                task.abort();
+                let _ = task.await;
+                None
+            }
         }
     }
+
+    /// Stopped within INTERRUPT_WAIT in all, else dropped.
+    async fn end(self) {
+        let by = tokio::time::Instant::now() + INTERRUPT_WAIT;
+        if let Some(session) = self.back(by).await {
+            let _ = tokio::time::timeout_at(by, session.stop()).await;
+        }
+    }
+}
+
+/// Stop `sessions` together.
+async fn end_all(sessions: Vec<Kept>) {
+    let mut ending = tokio::task::JoinSet::new();
+    for k in sessions {
+        ending.spawn(k.end());
+    }
+    while ending.join_next().await.is_some() {}
 }
 
 /// The sessions kept between their threads' turns (module doc).
@@ -119,26 +179,42 @@ impl Keeper {
         crate::warm::folder(&self.dir)
     }
 
-    /// The session kept for `thread`, lent `token`, when it was started with `key` and still runs; one started
-    /// differently, or gone, is stopped and None comes back.
-    pub async fn take<S: Session>(&self, thread: &str, key: &str, token: &str) -> Option<S> {
-        let kept = self.kept().remove(thread)?;
-        let same = kept.key == key;
-        let session = kept.back().await?;
-        if !same || !session.alive() {
-            session.stop().await;
+    /// The session kept for `thread`, lent `token`, when it was started with `key`, is within its time and still runs;
+    /// any other is stopped and None comes back.
+    pub async fn take<S: Session>(&self, thread: &str, key: &Inputs, token: &str) -> Option<S> {
+        let mut kept = self.kept().remove(thread)?;
+        let changed = kept.key.changed(key);
+        let due = self.due(&mut kept, Instant::now());
+        let session = kept
+            .back(tokio::time::Instant::now() + INTERRUPT_WAIT)
+            .await?;
+        if !changed.is_empty() {
+            // Names only: the values may be secrets.
+            crate::util::log(&format!(
+                "Tico runner: a kept session starts cold, its start changed: {}",
+                changed.join(", ")
+            ));
+        }
+        if !changed.is_empty() || due || !session.alive() {
+            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
             return None;
         }
         // A thread's key names its harness's own command line, so another harness's session never has it.
         let session = session.into_any().downcast::<S>().ok()?;
-        session.lend(token);
+        if !session.lend(token) {
+            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
+            return None;
+        }
         Some(*session)
     }
 
-    /// Keep `session`, started with `key`, for `thread`'s next turn: its token blanked, parked until then. One already
-    /// kept for the thread is stopped.
-    pub async fn put<S: Session>(&self, thread: &str, key: String, session: S) {
-        session.lend("");
+    /// Keep `session`, started with `key`, for `thread`'s next turn, with `held` until it goes: its token blanked,
+    /// parked until then. One already kept for the thread is stopped; one whose token cannot be blanked is not kept.
+    pub async fn put<S: Session>(&self, thread: &str, key: Inputs, session: S, held: Option<Held>) {
+        if !session.lend("") {
+            let _ = tokio::time::timeout(INTERRUPT_WAIT, session.stop()).await;
+            return;
+        }
         let background = session.background();
         let (wanted, parked) = oneshot::channel();
         let task = tokio::spawn(Box::new(session).park(parked));
@@ -151,12 +227,13 @@ impl Keeper {
                 background,
                 wanted,
                 task,
+                _held: held,
             },
         );
-        if let Some(old) = old {
-            old.end().await;
-        }
-        self.prune(false).await;
+        // Stopped off the turn's path: the turn that gave this one back does not wait on others' stops.
+        let mut stopping = self.overdue(Instant::now(), false);
+        stopping.extend(old);
+        tokio::spawn(end_all(stopping));
     }
 
     /// Stop the session kept for `thread`, if any.
@@ -167,44 +244,54 @@ impl Keeper {
         }
     }
 
+    /// Whether `k` is past its time as of `now`: unused for `idle`, unless pinned by background work (then checked
+    /// again after another idle period, up to `max_pin`).
+    fn due(&self, k: &mut Kept, now: Instant) -> bool {
+        if now.saturating_duration_since(k.used) < self.idle {
+            return false;
+        }
+        if k.background.as_ref().is_some_and(|busy| busy())
+            && now.saturating_duration_since(*k.pinned.get_or_insert(now)) < self.max_pin
+        {
+            k.used = now;
+            return false;
+        }
+        true
+    }
+
     /// Stop the sessions past their time (module doc), gone, or over the limit (oldest first); every one with `close`.
+    /// They are stopped together, and all have gone when it returns.
     pub async fn prune(&self, close: bool) {
         self.prune_at(Instant::now(), close).await
     }
 
     /// `prune` as of `now`.
     pub async fn prune_at(&self, now: Instant, close: bool) {
-        let stopping: Vec<Kept> = {
-            let mut kept = self.kept();
-            let mut order: Vec<(String, Instant)> =
-                kept.iter().map(|(t, k)| (t.clone(), k.used)).collect();
-            order.sort_by_key(|(_, used)| *used);
-            let mut out = vec![];
-            for (thread, _) in order {
-                let over = kept.len() > self.limit;
-                let k = kept.get_mut(&thread).expect("listed");
-                let release = if close || over || k.task.is_finished() {
-                    true
-                } else if now.saturating_duration_since(k.used) < self.idle {
-                    false
-                } else if k.background.as_ref().is_some_and(|busy| busy())
-                    && now.saturating_duration_since(*k.pinned.get_or_insert(now)) < self.max_pin
-                {
-                    // Pinned by its background work: checked again after another idle period.
-                    k.used = now;
-                    false
-                } else {
-                    true
-                };
-                if release {
-                    out.extend(kept.remove(&thread));
-                }
+        end_all(self.overdue(now, close)).await;
+    }
+
+    /// Those `prune` stops, taken out: the gone and past their time first, then the oldest while over the limit.
+    fn overdue(&self, now: Instant, close: bool) -> Vec<Kept> {
+        let mut kept = self.kept();
+        let mut order: Vec<(String, Instant)> =
+            kept.iter().map(|(t, k)| (t.clone(), k.used)).collect();
+        order.sort_by_key(|(_, used)| *used);
+        let mut out = vec![];
+        order.retain(|(thread, _)| {
+            let k = kept.get_mut(thread).expect("listed");
+            let ends = close || k.task.is_finished() || self.due(k, now);
+            if ends {
+                out.extend(kept.remove(thread));
             }
-            out
-        };
-        for k in stopping {
-            k.end().await;
+            !ends
+        });
+        for (thread, _) in order {
+            if kept.len() <= self.limit {
+                break;
+            }
+            out.extend(kept.remove(&thread));
         }
+        out
     }
 
     /// How many sessions are kept.
@@ -220,22 +307,32 @@ mod tests {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A session that records what the keeper does to it.
+    #[derive(Default)]
     struct Fake {
         token: Arc<Mutex<String>>,
         stops: Arc<AtomicUsize>,
         busy: Arc<AtomicBool>,
         dead: bool,
+        /// Its token file cannot be written.
+        stuck_token: bool,
+        /// Parked, it never comes back (a write agy stopped reading).
+        stuck: bool,
+        dropped: Arc<AtomicBool>,
+    }
+
+    impl Drop for Fake {
+        fn drop(&mut self) {
+            self.dropped.store(true, Ordering::SeqCst);
+        }
     }
 
     impl Session for Fake {
         fn alive(&self) -> bool {
             !self.dead
         }
-        fn lend(&self, token: &str) {
+        fn lend(&self, token: &str) -> bool {
             *self.token.lock().unwrap() = token.into();
-        }
-        fn unit(&self) -> Option<String> {
-            None
+            !self.stuck_token
         }
         fn background(&self) -> Option<Probe> {
             let busy = self.busy.clone();
@@ -243,6 +340,9 @@ mod tests {
         }
         fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> Parked {
             Box::pin(async move {
+                if self.stuck {
+                    std::future::pending::<()>().await;
+                }
                 let _ = wanted.await;
                 self as Box<dyn Session>
             })
@@ -257,48 +357,73 @@ mod tests {
         }
     }
 
-    fn fake() -> (Fake, Arc<Mutex<String>>, Arc<AtomicUsize>, Arc<AtomicBool>) {
-        let f = Fake {
-            token: Arc::new(Mutex::new("turn-token-1".into())),
-            stops: Arc::default(),
-            busy: Arc::default(),
-            dead: false,
-        };
-        let (t, s, b) = (f.token.clone(), f.stops.clone(), f.busy.clone());
-        (f, t, s, b)
+    /// Until `done` (a stop `put` set off in the background), at most a few seconds.
+    async fn settled(done: impl Fn() -> bool) -> bool {
+        for _ in 0..200 {
+            if done() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        done()
     }
 
     fn keeper() -> Keeper {
         Keeper::new(std::env::temp_dir().join("tico-keeper-unused"), 4)
     }
 
+    fn key(model: &str) -> Inputs {
+        let mut k = Inputs::default();
+        k.add("argv", "agy acp");
+        k.add("env:MODEL", model);
+        k
+    }
+
     #[tokio::test]
     async fn a_kept_session_holds_no_token_and_comes_back_only_for_the_same_start() {
         let k = keeper();
-        let (f, token, stops, _) = fake();
-        k.put("thread-1", "key-a".into(), f).await;
+        let f = Fake::default();
+        let (token, stops) = (f.token.clone(), f.stops.clone());
+        k.put("thread-1", key("a"), f, None).await;
         assert_eq!(*token.lock().unwrap(), "", "blank while kept");
-        let back: Fake = k.take("thread-1", "key-a", "turn-token-2").await.unwrap();
+        let back: Fake = k.take("thread-1", &key("a"), "turn-token-2").await.unwrap();
         assert_eq!(*token.lock().unwrap(), "turn-token-2");
         assert_eq!(stops.load(Ordering::SeqCst), 0);
-        // A changed start input: the kept one is stopped and the host starts a new one.
-        k.put("thread-1", "key-a".into(), back).await;
-        assert!(k.take::<Fake>("thread-1", "key-b", "t").await.is_none());
+        // A changed start input: the kept one is stopped and the host starts a new one; the change is named.
+        assert_eq!(key("a").changed(&key("b")), vec!["env:MODEL"]);
+        let mut more = key("a");
+        more.add("env:EXTRA", "1");
+        assert_eq!(key("a").changed(&more), vec!["env:EXTRA"]);
+        k.put("thread-1", key("a"), back, None).await;
+        assert!(k.take::<Fake>("thread-1", &key("b"), "t").await.is_none());
         assert_eq!((stops.load(Ordering::SeqCst), k.count()), (1, 0));
         // So is a dead one.
-        let (mut f, _, stops, _) = fake();
+        let mut f = Fake::default();
         f.dead = true;
-        k.put("thread-2", "key-a".into(), f).await;
-        assert!(k.take::<Fake>("thread-2", "key-a", "t").await.is_none());
+        let stops = f.stops.clone();
+        k.put("thread-2", key("a"), f, None).await;
+        assert!(k.take::<Fake>("thread-2", &key("a"), "t").await.is_none());
         assert_eq!(stops.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
-    async fn an_unused_session_goes_after_two_minutes() {
+    async fn a_session_whose_token_cannot_be_blanked_is_not_kept() {
         let k = keeper();
-        let (f, _, stops, _) = fake();
+        let mut f = Fake::default();
+        f.stuck_token = true;
+        let (stops, dropped) = (f.stops.clone(), f.dropped.clone());
+        k.put("thread-1", key("a"), f, None).await;
+        assert_eq!(k.count(), 0);
+        assert!(stops.load(Ordering::SeqCst) == 1 && dropped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn an_unused_session_goes_after_two_minutes_and_is_never_taken_after() {
+        let k = keeper();
+        let f = Fake::default();
+        let stops = f.stops.clone();
         let start = Instant::now();
-        k.put("thread-1", "key".into(), f).await;
+        k.put("thread-1", key("a"), f, None).await;
         k.prune_at(start + IDLE - Duration::from_secs(1), false)
             .await;
         assert_eq!((k.count(), stops.load(Ordering::SeqCst)), (1, 0));
@@ -306,15 +431,69 @@ mod tests {
             .await;
         assert_eq!((k.count(), stops.load(Ordering::SeqCst)), (0, 1));
         assert_eq!(IDLE, Duration::from_secs(120));
+        // Past its time but not yet pruned: a turn does not take it.
+        let k = Keeper::with_times(
+            std::env::temp_dir().join("tico-keeper-unused"),
+            4,
+            Duration::ZERO,
+            MAX_PIN,
+        );
+        let f = Fake::default();
+        let stops = f.stops.clone();
+        let (wanted, parked) = oneshot::channel();
+        k.kept().insert(
+            "thread-1".into(),
+            Kept {
+                key: key("a"),
+                used: Instant::now(),
+                pinned: None,
+                background: None,
+                wanted,
+                task: tokio::spawn(Box::new(f).park(parked)),
+                _held: None,
+            },
+        );
+        assert!(k.take::<Fake>("thread-1", &key("a"), "t").await.is_none());
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn what_a_session_holds_goes_once_it_is_released_and_a_stuck_one_is_dropped() {
+        let k = keeper();
+        let held = Arc::new(AtomicBool::new(false));
+        struct Flag(Arc<AtomicBool>);
+        impl Drop for Flag {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        k.put(
+            "thread-1",
+            key("a"),
+            Fake::default(),
+            Some(Box::new(Flag(held.clone()))),
+        )
+        .await;
+        assert!(!held.load(Ordering::SeqCst), "kept with its session");
+        k.release("thread-1").await;
+        assert!(held.load(Ordering::SeqCst));
+        // A session that never comes back from park is dropped (its process group killed) after INTERRUPT_WAIT.
+        let mut f = Fake::default();
+        f.stuck = true;
+        let dropped = f.dropped.clone();
+        k.put("thread-2", key("a"), f, None).await;
+        k.release("thread-2").await;
+        assert!(dropped.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
     async fn background_work_pins_a_session_until_it_ends_or_four_hours_pass() {
         let k = keeper();
-        let (f, _, stops, busy) = fake();
+        let f = Fake::default();
+        let (stops, busy) = (f.stops.clone(), f.busy.clone());
         let start = Instant::now();
         busy.store(true, Ordering::SeqCst);
-        k.put("thread-1", "key".into(), f).await;
+        k.put("thread-1", key("a"), f, None).await;
         // Rechecked each idle period while the work runs.
         for n in 1..=3 {
             k.prune_at(start + (IDLE + Duration::from_secs(1)) * n, false)
@@ -332,10 +511,11 @@ mod tests {
             .await;
         assert_eq!((k.count(), stops.load(Ordering::SeqCst)), (0, 1));
         // Work that never ends is cut off after MAX_PIN.
-        let (f, _, stops, busy) = fake();
+        let f = Fake::default();
+        let (stops, busy) = (f.stops.clone(), f.busy.clone());
         busy.store(true, Ordering::SeqCst);
         let start = Instant::now();
-        k.put("thread-2", "key".into(), f).await;
+        k.put("thread-2", key("a"), f, None).await;
         let mut at = start;
         while at < start + MAX_PIN {
             at += IDLE + Duration::from_secs(1);
@@ -352,21 +532,17 @@ mod tests {
     #[tokio::test]
     async fn the_oldest_goes_past_the_limit_and_every_one_when_the_runner_stops() {
         let k = Keeper::new(std::env::temp_dir().join("tico-keeper-unused"), 1);
-        let (a, _, a_stops, _) = fake();
-        let (b, _, b_stops, _) = fake();
-        k.put("thread-a", "key".into(), a).await;
-        k.put("thread-b", "key".into(), b).await;
-        assert_eq!(
-            (
-                a_stops.load(Ordering::SeqCst),
-                b_stops.load(Ordering::SeqCst)
-            ),
-            (1, 0)
-        );
+        let (a, b) = (Fake::default(), Fake::default());
+        let (a_stops, b_stops) = (a.stops.clone(), b.stops.clone());
+        k.put("thread-a", key("a"), a, None).await;
+        k.put("thread-b", key("a"), b, None).await;
+        assert!(settled(|| a_stops.load(Ordering::SeqCst) == 1).await);
+        assert_eq!((k.count(), b_stops.load(Ordering::SeqCst)), (1, 0));
         k.release("thread-b").await;
         assert_eq!((k.count(), b_stops.load(Ordering::SeqCst)), (0, 1));
-        let (c, _, c_stops, _) = fake();
-        k.put("thread-c", "key".into(), c).await;
+        let c = Fake::default();
+        let c_stops = c.stops.clone();
+        k.put("thread-c", key("a"), c, None).await;
         k.prune(true).await;
         assert_eq!((k.count(), c_stops.load(Ordering::SeqCst)), (0, 1));
     }

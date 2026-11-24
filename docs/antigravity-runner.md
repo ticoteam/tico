@@ -51,7 +51,8 @@ stopped runner when it starts again. The file holds the plan's refresh token, so
 the plan can read it while its turn runs, and while its `agy` is kept after it: at most 2 minutes unused, which is
 also how long a removed or revoked plan's sign-in can stay on the computer (SECURITY.md). No new turn reaches it.
 
-The `agy` process stays up after a turn that completed or was stopped, as T3 Code keeps it: one per
+The `agy` process stays up after a turn that completed cleanly or that a person's Stop or a drain stopped (never after
+a timeout, a lost lease or an error), as T3 Code keeps it: one per
 thread, holding its conversation open, in the runner's session keeper (`keeper.rs`, modelled on T3 Code's
 `ProviderSessionManager`; `agy` is its first harness, Claude and Codex come next; as many as the runner's capacity, at
 least 8). The hub still claims, starts and completes each message; only the process is reused, and the turn's timings
@@ -62,7 +63,14 @@ timeout; a session reporting background work still running is kept up to 4 hours
 differently (another home, environment, folder or MCP servers, or another plan or a sign-in the plan was handed again:
 a turn no longer handed the plan never goes on in its process): that turn starts a new one. The turn's own token and
 its turn-limit scope (`TICO_TURN_SCOPE`) are not compared: on a computer with turn limits the process stays in the
-scope of the attempt that started it, and a memory kill there fails the attempt running on it then. While kept, its
+scope of the attempt that started it, and a memory kill there fails the attempt running on it then. Every other input
+a turn sets anew forces a cold start, and the runner logs the names (never the values) of the inputs that changed: a
+proxied tool's grant (its token is minted for each attempt), a file credential (a new file each turn), the GitHub
+token pair once the runner's cached token is renewed (personal chats have none), and `DISPLAY` when the virtual
+screen came or went. A person's own Assistant chat keeps its `agy` too: its copy of the checkout stays while the
+process is kept, is brought up to the checkout in place for the room's next turn, and is removed when the process is
+let go (or at the runner's next start, if it stopped meanwhile). Relationship turns, fresh stateless chats and
+one-off threads keep none. While kept, its
 `HUB_TOKEN` file is blank (a `tico-file:` reference, rewritten with each turn's token), what it asks is refused and what
 it says is dropped. A plan turn's `agy` keeps its own home and sign-in while it is kept; the next turn on the plan,
 though handed a home of its own, goes on there. Stopping a turn sends

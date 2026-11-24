@@ -1285,8 +1285,7 @@ fn let_go(homes: &mut Homes, root: &Path, home: &Path) {
     }
 }
 
-/// A plan turn's home (TURN_HOMES) held past its turn by the CLI process kept running on it (hosts/antigravity.rs
-/// Pool), as one more turn holds it: the turn's own `release` leaves it in place, and its refreshes stay masked
+/// A plan turn's home (TURN_HOMES) held past its turn by the CLI process kept running on it (crate::keeper), as one more turn holds it: the turn's own `release` leaves it in place, and its refreshes stay masked
 /// (`notice_refreshes`). Dropped once that process has gone, it is let go as a turn lets go of it, a token the CLI
 /// refreshed masked everywhere first.
 pub struct KeptHome(PathBuf);
@@ -1299,21 +1298,30 @@ pub fn keep_home(home: &Path) -> Option<KeptHome> {
     Some(KeptHome(home.to_path_buf()))
 }
 
-impl Drop for KeptHome {
-    fn drop(&mut self) {
-        let mut homes = homes();
-        let Some(live) = homes.live.get(&self.0) else {
-            return;
-        };
-        if let Some(now) = live
-            .watch
-            .as_ref()
-            .and_then(|(file, _)| read_codex_auth(file))
-        {
+impl KeptHome {
+    /// Mask what its sign-in file holds now in every running turn, the one its process goes on in included: a token
+    /// the CLI refreshed turns ago may no longer be standing (crate::redact::hide_everywhere), and an unchanged file is
+    /// not read again (`notice_refreshes`).
+    pub fn hide_current(&self) {
+        let file = homes()
+            .live
+            .get(&self.0)
+            .and_then(|live| live.watch.as_ref().map(|(file, _)| file.clone()));
+        if let Some(now) = file.and_then(|file| read_codex_auth(&file)) {
             for secret in secrets_in(&now) {
                 crate::redact::hide_everywhere(&secret, false);
             }
         }
+    }
+}
+
+impl Drop for KeptHome {
+    fn drop(&mut self) {
+        self.hide_current();
+        let mut homes = homes();
+        let Some(live) = homes.live.get(&self.0) else {
+            return;
+        };
         let root = live.root.clone();
         let_go(&mut homes, &root, &self.0);
     }

@@ -34,7 +34,7 @@ use tokio::sync::{oneshot, watch};
 
 use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
-use crate::keeper::{Keeper, Session};
+use crate::keeper::{Held, Inputs, Keeper, Session};
 use crate::util::{log, py_dumps, text_of, truthy};
 
 pub const DEFAULT_MODEL: &str = "gemini-4-neon";
@@ -58,11 +58,7 @@ const STOP_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 })
 /// How long `agy` has to exit on its own once its input closes after the turn, before it is stopped.
 const EXIT_WAIT: Duration = Duration::from_secs(1);
 /// How long agy has to end a prompt as cancelled after `session/cancel` before its process is stopped (T3 Code's).
-const CANCEL_WAIT: Duration = if cfg!(test) {
-    Duration::from_secs(2)
-} else {
-    crate::keeper::INTERRUPT_WAIT
-};
+const CANCEL_WAIT: Duration = crate::keeper::INTERRUPT_WAIT;
 /// How long `initialize` may take: agy unpacks its runtime on every start before it answers.
 const START_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 120 });
 /// How long any other request before the prompt may take.
@@ -539,7 +535,7 @@ struct Agent {
     stderr: crate::run_diagnostics::Stderr,
     sink: Sink,
     /// What it was started with (`fingerprint`); None when it is not to be kept (a plan whose home it cannot hold).
-    key: Option<String>,
+    key: Option<Inputs>,
     /// Its `--gemini-dir`, and a plan's home held while it runs.
     home: String,
     _plan: Option<crate::model_subscriptions::KeptHome>,
@@ -567,12 +563,8 @@ impl Session for Agent {
         !self.closed && self.proc.exited.borrow().is_none()
     }
 
-    fn lend(&self, token: &str) {
-        crate::warm::write_token_for(&self.tokens.join("lease-token"), token, None);
-    }
-
-    fn unit(&self) -> Option<String> {
-        self.unit.clone()
+    fn lend(&self, token: &str) -> bool {
+        crate::warm::write_token_for(&self.tokens.join("lease-token"), token, None)
     }
 
     fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> crate::keeper::Parked {
@@ -602,6 +594,9 @@ impl Drop for Agent {
     }
 }
 
+/// How long a kept agy is given to read an answer to what it asked between turns.
+const REPLY_WAIT: Duration = Duration::from_secs(5);
+
 /// What a kept agy says between turns, until it is wanted back or its output ends: what it asks is answered, a tool's
 /// permission refused as no turn runs, and the rest dropped, so the next turn reads only its own.
 async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
@@ -626,7 +621,13 @@ async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
             } else {
                 json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unsupported client request"}})
             };
-            if write(&agent.io, &reply).await.is_err() {
+            // agy may have stopped reading: the write is given up when the agent is wanted back or after a while, and
+            // a stream left mid-line is not used again.
+            let sent = tokio::select! {
+                _ = &mut wanted => None,
+                sent = tokio::time::timeout(REPLY_WAIT, write(&agent.io, &reply)) => sent.ok(),
+            };
+            if !matches!(sent, Some(Ok(()))) {
                 agent.closed = true;
                 return agent;
             }
@@ -637,19 +638,14 @@ async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
 /// What a process for this turn would be started with, the turn's own token and memory scope aside: its command line
 /// (its home among it, a plan's named by the plan), environment, folder, records and MCP servers. The model and effort
 /// are set in the session.
-fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) -> String {
-    let rest: Env = env
-        .iter()
-        .filter(|(k, _)| !crate::warm::PER_ATTEMPT.contains(&k.as_str()) && *k != "GEMINI_HOME")
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let records = records.display().to_string();
-    let text = json!([argv, rest, settings.cwd, records, settings.mcp_servers]).to_string();
-    ring::digest::digest(&ring::digest::SHA256, text.as_bytes())
-        .as_ref()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
+fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) -> Inputs {
+    let mut inputs = Inputs::default();
+    inputs.add("argv", &json!(argv).to_string());
+    inputs.env(env, &["GEMINI_HOME"]);
+    inputs.add("folder", &settings.cwd);
+    inputs.add("records", &records.display().to_string());
+    inputs.add("mcp_servers", &json!(settings.mcp_servers).to_string());
+    inputs
 }
 
 /// One turn's stream as the reader sees it.
@@ -993,7 +989,7 @@ impl AntigravityHost {
         &self,
         settings: &Settings,
         home: &str,
-        key: Option<String>,
+        key: Option<Inputs>,
     ) -> Result<Agent, HostError> {
         // A plan's home stays while the process runs, or it is not kept.
         let plan = match &settings.plan_home {
@@ -1127,14 +1123,17 @@ impl AntigravityHost {
                 && agent.alive()
                 && agent.session.is_some()
                 && agent.session == saved
+                && (pooled || agent.lend(token))
             {
-                agent.lend(token);
-                agent.attach(Some(self.inner().tx.clone()));
                 agent.stderr.clear();
+                agent.attach(Some(self.inner().tx.clone()));
+                if let Some(plan) = &agent._plan {
+                    plan.hide_current();
+                }
                 self.0.allocation.mark();
                 let mut inner = self.inner();
                 inner.warm.get_or_insert(pooled);
-                inner.units.extend(agent.unit());
+                inner.units.extend(agent.unit.clone());
                 drop(inner);
                 return Ok((agent, true));
             }
@@ -1164,7 +1163,8 @@ impl AntigravityHost {
         let (agent, warm) = self.agent(thread_id, &settings).await?;
         let mut inner = self.inner();
         if !inner.up || inner.turn.is_some() {
-            // Dropped, it is stopped (Agent's Drop).
+            drop(inner);
+            agent.stop().await;
             return Err(busy());
         }
         inner.flagged = false;
@@ -1230,8 +1230,11 @@ impl AntigravityHost {
             }
         };
         self.inner().live = None;
-        // agy answered the prompt and goes on: it stays for the thread's next turn (`release`).
-        let healthy = matches!(end, End::Result(..)) && agent.alive();
+        // agy answered the prompt cleanly and goes on: it stays for the thread's next turn (`release`). A failed answer
+        // (a step error, a refusal, a cut-off) ends it like any failure, its stderr read for the turn's error.
+        let clean = matches!(&end, End::Result(result, None)
+            if stopped(result["stopReason"].as_str().unwrap_or("end_turn")).is_none());
+        let healthy = clean && agent.alive();
         let kept = healthy && {
             let mut inner = self.inner();
             inner.up && inner.turn.as_deref() == Some(turn) && {
@@ -1926,15 +1929,19 @@ impl AntigravityHost {
         }
         if let Some((stdin, session)) = live {
             let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}});
-            // Bounded: agy may have stopped reading while the reader's own write holds its input.
-            let sent = tokio::time::timeout(STOP_GRACE, write_to(&stdin, &cancel)).await;
+            // One deadline for the cancel and the prompt's end: agy may have stopped reading while the reader's own
+            // write holds its input.
+            let by = tokio::time::Instant::now() + CANCEL_WAIT;
+            let sent = tokio::time::timeout_at(by, write_to(&stdin, &cancel)).await;
             if matches!(sent, Ok(Ok(()))) {
-                let reader = self.inner().reader.take();
-                if let Some(mut reader) = reader {
-                    if tokio::time::timeout(CANCEL_WAIT, &mut reader).await.is_ok() {
+                // Lent while waited on, and given back however the wait ends (this future dropped too), so `stop`
+                // still joins it.
+                let mut lent = Lent(self, self.inner().reader.take());
+                if let Some(reader) = lent.1.as_mut() {
+                    if tokio::time::timeout_at(by, reader).await.is_ok() {
+                        lent.1 = None;
                         return;
                     }
-                    self.inner().reader = Some(reader);
                 }
             }
         }
@@ -1942,8 +1949,9 @@ impl AntigravityHost {
     }
 
     /// The attempt is over: with `keep`, a process holding the thread's conversation goes to the keeper with its token
-    /// blanked, for the thread's next turn; any other is stopped.
-    pub async fn release(&self, keep: bool) {
+    /// blanked, for the thread's next turn, with `held` (what its folder needs while it is kept, crate::keeper::Held);
+    /// any other is stopped.
+    pub async fn release(&self, keep: bool, held: Option<Held>) {
         let (agent, thread) = {
             let mut inner = self.inner();
             (inner.agent.take(), inner.thread.clone())
@@ -1951,7 +1959,7 @@ impl AntigravityHost {
         let Some(agent) = agent else { return };
         match (thread, agent.key.clone()) {
             (Some(thread), Some(key)) if keep && agent.alive() => {
-                self.0.keeper.put(&thread, key, agent).await
+                self.0.keeper.put(&thread, key, agent, held).await
             }
             _ => agent.stop().await,
         }
@@ -1977,6 +1985,17 @@ impl AntigravityHost {
         }
         if let Some(r) = reader {
             let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
+        }
+    }
+}
+
+/// The turn's reader taken from the host by `interrupt`, back in its place when dropped.
+struct Lent<'a>(&'a AntigravityHost, Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for Lent<'_> {
+    fn drop(&mut self) {
+        if let Some(reader) = self.1.take() {
+            self.0.inner().reader.get_or_insert(reader);
         }
     }
 }
@@ -3040,7 +3059,7 @@ for line in sys.stdin:
             .await
             .contains(&json!({"kind": "message", "text": "one", "final": true})));
         assert!(!host.warm());
-        host.release(true).await;
+        host.release(true, None).await;
         // Kept, its token file blank.
         let file = rig.read(".hub");
         let file = file.strip_prefix("tico-file:").unwrap();
@@ -3071,7 +3090,7 @@ for line in sys.stdin:
         assert_eq!(rig.read(".tokens"), "attempt-one\nattempt-two\n");
         // It is still in the first attempt's scope: a memory kill now is this attempt's (turn_limits::oom_failure).
         assert_eq!(next.scopes(), vec![format!("{first}-{pid}.scope")]);
-        next.release(true).await;
+        next.release(true, None).await;
         rig.pool.prune(true).await;
         assert!(gone(pid).await, "the runner stopping stops it");
     }
@@ -3086,7 +3105,7 @@ for line in sys.stdin:
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(true).await;
+        host.release(true, None).await;
         let pid = rig.pid();
         let kept = std::time::Instant::now();
         idle.prune_at(kept + crate::keeper::IDLE - Duration::from_secs(5), false)
@@ -3103,7 +3122,7 @@ for line in sys.stdin:
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(true).await;
+        host.release(true, None).await;
         let kept = rig.pid();
         let mut other = s.clone();
         other
@@ -3126,7 +3145,7 @@ for line in sys.stdin:
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(true).await;
+        host.release(true, None).await;
         let pid = rig.pid();
         unsafe { libc::kill(pid, libc::SIGKILL) };
         assert!(gone(pid).await);
@@ -3168,7 +3187,7 @@ for line in sys.stdin:
         // Nothing runs now, so a second stop leaves it.
         host.interrupt().await;
         assert!(host.alive());
-        host.release(true).await;
+        host.release(true, None).await;
         let (next, mut rx) = rig.host();
         next.resume_thread(&thread, &s).unwrap();
         next.start_turn(&thread, "two", None).await.unwrap();
@@ -3252,7 +3271,7 @@ for line in sys.stdin:
         let thread = host.start_thread(&s);
         host.start_turn(&thread, "one", None).await.unwrap();
         turn_events(&mut rx).await;
-        host.release(true).await;
+        host.release(true, None).await;
         subs::finish(&mut got);
         // The turn is over, its process kept: the home and its sign-in stay while it runs.
         assert!(first.join(subs::AGY_TOKEN).exists());
@@ -3268,7 +3287,7 @@ for line in sys.stdin:
             .contains(&json!({"kind": "message", "text": "two", "final": true})));
         assert!(next.warm());
         assert_eq!(rig.runs().len(), 1, "one process");
-        next.release(true).await;
+        next.release(true, None).await;
         subs::finish(&mut got);
         assert!(!second.exists() && first.join(subs::AGY_TOKEN).exists());
         // Released after two minutes unused: its home and sign-in go with it.
