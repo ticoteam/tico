@@ -982,10 +982,14 @@ def edit_draft(draft, args, today, notes):
     found = _draft(draft, args["id"])
     if not any(key in args for key in ("title", "body")):
         raise Refusal("Say what to change: the draft's title, its text, or both.")
+    before = (found["title"], found["body"])
     if "title" in args:
-        found["title"] = _text(args, "title", D.LIMITS["draft_title"])
+        found["title"] = D.clean(_text(args, "title", D.LIMITS["draft_title"]))
     if "body" in args:
         found["body"] = _text(args, "body", D.LIMITS["draft_body"], needed=False)
+    if found["status"] == "approved" and (found["title"], found["body"]) != before:
+        found["status"] = "waiting"  # what was approved is not what it says now: it waits for the visitor again
+        return "Updated the draft \"%s\"; it waits for your OK again." % found["title"]
     return "Updated the draft \"%s\"." % found["title"]
 
 

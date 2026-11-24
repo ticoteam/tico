@@ -641,12 +641,18 @@ class Onboarding:
         imported = record.get("company_import")
         if imported and imported.get("people"):
             sent = invites.sent(c)
+            # The email each was given in setup, to invite them with: the owner's read alone (company_import.owner_emails).
+            emails = company_import.owner_emails(c) if who.role == "owner" else {}
             record = {
                 **record,
                 "company_import": {
                     **imported,
                     "people": [
-                        {**person, "invited_at": (sent.get(person.get("person") or "") or {}).get("at")}
+                        {
+                            **person,
+                            "invited_at": (sent.get(person.get("person") or "") or {}).get("at"),
+                            **({"email": emails[person["id"]]} if person.get("id") in emails else {}),
+                        }
                         for person in imported["people"]
                     ],
                 },

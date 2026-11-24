@@ -424,6 +424,7 @@ def from_document(doc):
     """The draft a parsed company file holds (`read`). Key-shaped strings in it are removed. The draft starts on the
     chart tab with no undo, chat, removed or pending."""
     doc, _ = scrub_all(doc)
+    swarm = str(doc.get("version")) == SWARM_FORMAT  # email, drafts and said are read only under a 0.4 header
     company = doc.get("company")
     company = company if isinstance(company, dict) else {}
     draft = D.blank()
@@ -446,7 +447,7 @@ def from_document(doc):
             "role": _str(p.get("role")),
             "dept": D.dept_of(_str(p.get("role"))),
             "owner": p.get("owner") is True,
-            **({"email": _str(p["email"])} if p.get("email") is not None else {}),
+            **({"email": _str(p["email"])} if swarm and p.get("email") is not None else {}),
         }
         for p in people
     ]
@@ -552,11 +553,14 @@ def from_document(doc):
             "status": _str(d.get("status")),
             **({"goal": _str(d["goal"])} if d.get("goal") is not None else {}),
         }
-        for d in _rows(doc, "drafts")
+        for d in (_rows(doc, "drafts") if swarm else [])
     ]
     if drafts:
         draft["drafts"] = drafts
-    said = [{"id": _str(s.get("id")), "text": _str(s.get("text")), "by": _str(s.get("by"))} for s in _rows(doc, "said")]
+    said = [
+        {"id": _str(s.get("id")), "text": _str(s.get("text")), "by": _str(s.get("by"))}
+        for s in (_rows(doc, "said") if swarm else [])
+    ]
     if said:
         draft["said"] = said
     draft = D.check(draft)

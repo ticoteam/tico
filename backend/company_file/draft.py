@@ -635,7 +635,7 @@ def _draft_row(raw, at):
         "id": _id(raw["id"], field + ".id"),
         "bot": _id(raw["bot"], field + ".bot"),
         "kind": raw["kind"],
-        "title": _text(raw["title"], field + ".title", LIMITS["draft_title"], empty=False),
+        "title": clean(_text(raw["title"], field + ".title", LIMITS["draft_title"], empty=False)),  # one line
         "body": _text(raw["body"], field + ".body", LIMITS["draft_body"]),
         "status": raw["status"],
     }

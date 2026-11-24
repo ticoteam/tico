@@ -68,6 +68,7 @@ from .batch_work import isolated, report, shared_check, shared_scope, storage_er
 from .harnesses import bot_key, bot_keyed, reports_tool_calls, resolve_harness
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
 from . import holds, lifecycle
+from . import setup_drafts
 from . import run_diagnostics as RD
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
@@ -3158,6 +3159,9 @@ def job_refusal(
         # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
         # Tico's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
+    draft = setup_drafts.get(c, task_id) if task_id else None
+    if draft and draft["status"] == setup_drafts.WAITING:
+        return setup_drafts.DRAFT_WAIT  # a setup draft runs only after its person's Send, whoever wrote since
     refs = message.get("refs") or {}
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
     # it when the turn moves on (backend/task_wakes.py), so the claim does not judge a task's waits again.
@@ -3228,6 +3232,15 @@ def job_refusal(
                     return "cooling_off"
         elif login_refusal(c, settings, runner["id"], bot, config, job["id"], loads=loads):
             return "cooling_off"
+    if draft and runner is not None and settings is not None:
+        record = loads.record if loads is not None else providers.load(c, settings)
+        why = setup_drafts.refusal(
+            c,
+            task_id,
+            lambda: gateway_connection.is_tico(config.get("model")) or models_preset.waiting(record, ready, config),
+        )
+        if why:
+            return why  # a setup draft's work runs on a connected plan, never on Gateway credit
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     if wanted and not H.in_person_name(message) and check_models.dropped(c, task_id):
@@ -5895,6 +5908,8 @@ class Execution:
                 tier,
                 falls_back=models_preset.computer_falls_back(c, runner["id"]),
             )
+            if task_id and setup_drafts.get(c, task_id):
+                config = setup_drafts.no_gateway(config)
         if config.get("waiting_for_sign_in") or check and gateway_connection.is_tico(check.get("model")):
             # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
             # Gateway's one probe.

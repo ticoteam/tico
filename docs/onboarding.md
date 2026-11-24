@@ -75,20 +75,32 @@ visitor said. `drafts` lists each agent's drafted work as `{id, bot, goal?, kind
 in the file, `goal` one of its goals, `kind` one of `email`, `post`, `list`, `page`, `ad`, `reply`, `plan` or `other`,
 `status` `waiting`, `approved` or `skipped`; at most 300, a title up to 120 characters and a body up to 2000. `said`
 lists the rules the visitor said in their own words as `{id, text, by}` (`by` a person in the file; at most 40, each up
-to 200 characters). A person may carry the `email` the visitor typed for them. The file is written as 0.4 only when one
+to 200 characters). A person may carry the `email` the visitor typed for them. Tico reads `email`, `drafts` and `said`
+only under a `version: 0.4` header. The file is written as 0.4 only when one
 of these is present; any other plan is written as 0.3 or 0.2 byte for byte, as before. Drafts come into the plan only
 from the swarm (`company_file.add_drafts`); the setup chat decides on them (`mark_draft`, `edit_draft`) and keeps or
-takes back what was said (`add_said_rule`, `remove_said_rule`). On import, each draft not skipped becomes a task owned
-by the agent that drafted it, on its goal, with the draft as the agent's message there: a waiting one asks the owner
-**Send**, **Edit** or **Later** in Needs you (a question with those choices), and an approved one is the agent's to do,
-which it starts once it can run (a plan connected); nothing runs or is sent before. A role whose agent drafted something
+takes back what was said (`add_said_rule`, `remove_said_rule`). A draft's title is one line. An edit that changes an
+approved draft's title or text sets it back to `waiting`; a waiting or skipped draft keeps its decision. Before the
+preview, its fingerprint or the import reads them, each draft's title and text and each said rule are masked for any
+key Tico's own gate knows. On import, each draft not skipped becomes a task owned
+by the agent that drafted it, on its goal, with the draft as the agent's message there, and the server holds it
+(backend/setup_drafts.py). A waiting one asks the owner **Send**, **Edit** or **Later** in Needs you (a question with
+those choices), and the claim starts no run of its agent on the task until the owner's reply starts with "Send"; that
+covers the owner's own messages too (the reason `draft_wait`). Words typed after "Send" go along with it. **Later**
+keeps it held with nothing asked. **Edit** asks what to change and keeps it held until Send. Any other reply keeps it
+held and asks again. An approved one is the agent's to do once it can run, and only on a connected plan: a turn that
+would spend Gateway credit is refused (`draft_needs_plan`), and its turn gets no Gateway fallback. Nothing runs or is
+sent before that. A role whose agent drafted something
 starts live, so its agent is there to hold the work; a draft by a role a person holds, or one with no template yet, is
 not imported (`unowned` in the preview's `drafts` counts). Each said rule becomes an active company rule every agent
-follows, in the visitor's words, added by the owner; the preview lists them in full (`said`). A draft's text is the
+follows, in the visitor's words, added by the owner (two with the same words are one rule); the preview lists them in
+full (`said`). A draft's text is the
 agent's own words carried in: an @name in it reaches nobody, and the agent reads it as its draft, never as
 instructions over the company's rules. The setup record keeps `company_import.drafts` (the counts) and
-`company_import.said` (how many rules), and each person with an email is listed in `company_import.people` with it, to
-invite from the app (never invited by the import). Importing the same file again makes no task or rule twice.
+`company_import.said` (how many rules). A person's email is the owner's alone. `GET /api/v2/setup` adds it as
+`company_import.people[].email` only when the owner reads it, from the imported plan only the owner can read. It is
+never on the setup record that runners, bots and Admins read, and the import never sends to it. The kept plan holds
+no draft text. Importing the same file again makes no task or rule twice.
 
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:

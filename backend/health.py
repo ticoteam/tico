@@ -64,6 +64,8 @@ QUEUE_WAITS = (
     "cooling_off",
     "task_wait",
     "task_turn_out",
+    "draft_wait",
+    "draft_needs_plan",
     "handed_back",
     "claim_held",
     "scoped",
@@ -1179,8 +1181,9 @@ def _waiting(c, online_ids, settings=None, limits=None, loads=None, skip=frozens
                 else refused or "slow"
             )
             # A job its task's snooze holds waits on purpose: it starts when the snooze ends (Run now and Wake end it).
-            # It is Work queueing, as on a sleeping cloud machine, never a stuck bot.
-            resting = idle and reason == "task_wait"
+            # It is Work queueing, as on a sleeping cloud machine, never a stuck bot. So is one a setup draft holds
+            # until its person's Send (backend/setup_drafts.py).
+            resting = idle and reason in ("task_wait", "draft_wait")
             slow.append(
                 {**row, "reason": reason if idle else "busy", "wait_reason": "no_slot" if where[0] in full else "busy"}
                 | ({"resting": True, "runner_id": where[0], "runtime": report.get("runtime") or ""} if resting else {})
@@ -1323,6 +1326,9 @@ HELD = {
     "cloud_locked": ("Pay to continue: bots run again once the plan is paid", BILLING),
     "company_limit": ("Your company is at its limit; Tico is fixing what's stuck.", RUNS),
     "task_wait": ("Its task is snoozed: its work starts when the snooze ends", RUNS),
+    # A task made from a draft an agent wrote in setup (backend/setup_drafts.py).
+    "draft_wait": ("Its draft from setup waits for your Send", RUNS),
+    "draft_needs_plan": ("Its draft from setup runs on your connected plan, never on Gateway credit", RUNS),
     # The task was given to this bot while another bot's turn on it was out (execution.turn_moved_on).
     "task_turn_out": ("Its task was handed to it mid-turn: it starts when the earlier owner's turn ends", RUNS),
     "paused": ("Paused: its owner or Agent Ops must resume it", BOT_SETTINGS),

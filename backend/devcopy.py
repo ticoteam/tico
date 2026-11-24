@@ -693,6 +693,8 @@ KEEP = (
             # A ❓ on a bot's chat message (backend/question_marks.py): kept with its message.
             "question_marks",
             "sequences",
+            # A task made from a setup draft and whether its person said Send (backend/setup_drafts.py).
+            "setup_drafts",
             "teammate_accesses",
             "thread_followers",
             "thread_members",

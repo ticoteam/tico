@@ -1152,7 +1152,7 @@
   },
   {
    "name": "edit_draft",
-   "description": "Change one agent's draft as the visitor asked (its title, its text, or both). Its decision stays as it was; mark it too when they also said Send or Later.",
+   "description": "Change one agent's draft as the visitor asked (its title, its text, or both). A waiting or skipped draft keeps its decision; an approved one whose words change waits again. Mark it too when they also said Send or Later.",
    "input_schema": {
     "type": "object",
     "properties": {

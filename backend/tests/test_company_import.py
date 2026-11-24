@@ -2148,6 +2148,15 @@ def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules
     assert [(p["name"], p.get("email"), p.get("invited_at")) for p in record["people"]] == [
         ("Priya", "priya@acme.example", None)
     ]
+    # Her email is the owner's setup read alone: the setup record runners, bots and Admins read never holds it.
+    assert (
+        "priya@acme.example" not in rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding'")[0]["value"]
+    )
+    with api.app.state.store.read() as c:
+        admin = api.app.state.onboarding.view(c, Identity("human:owner", "admin"))
+    assert [p.get("email") for p in admin["company_import"]["people"]] == [None]
+    kept = json.loads(rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"])
+    assert kept["drafts"] and not any("body" in d for d in kept["drafts"])  # their words live on their tasks alone
     assert not rows(api, "SELECT id FROM humans WHERE name='Priya'")  # kept to invite, not invited
     # Approved work waits for its agent to be able to run: nothing has run, and the agent is not ready yet.
     with api.app.state.store.read() as c:
@@ -2160,15 +2169,18 @@ def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules
         headers=signed_in(),
     )
     assert again.status_code == 200, again.text
-    onboarding = api.app.state.onboarding
-    rules = {r["text"]: r["id"] for r in rows(api, "SELECT id,text FROM org_rules WHERE description LIKE 'Said%'")}
-    with api.app.state.store.transaction() as c:
-        # A rule whose words are already a rule is that rule.
-        made = CI.import_said(onboarding, c, onboarding.auth.owner_identity(c), starter.load(text))
-        assert made == {"s1": rules["Never offer a discount over 10%"], "s2": rules["Sign off as the Acme Tea team"]}
     assert len(rows(api, "SELECT id FROM tasks WHERE title NOT LIKE 'Set up %'")) == 4
     assert len(rows(api, "SELECT id FROM question_marks")) == 2
     assert len(rows(api, "SELECT id FROM org_rules WHERE description LIKE 'Said in setup%'")) == 2
+    # Two said rules with the same words in one file are one rule.
+    onboarding = api.app.state.onboarding
+    twice = {
+        "people": [],
+        "said": [{"id": "s1", "text": "Be kind", "by": "x"}, {"id": "s2", "text": "be KIND", "by": "x"}],
+    }
+    with api.app.state.store.transaction() as c:
+        made = CI.import_said(onboarding, c, onboarding.auth.owner_identity(c), twice)
+    assert made["s1"] == made["s2"]
 
 
 def test_a_file_without_drafts_said_or_email_imports_as_before(environment):
@@ -2237,3 +2249,83 @@ def test_drafts_that_share_a_title_all_import_and_their_words_reach_nobody(envir
     hello = next(t for t in tasks if t["title"] == "Hello")
     body = rows(api, "SELECT body FROM messages WHERE conversation_id='%s'" % hello["conversation_id"])
     assert any("[key removed]" in m["body"] for m in body) and not any("hunter2pass" in m["body"] for m in body)
+
+
+def test_a_waiting_draft_runs_only_after_its_owner_says_send(environment):
+    """The server holds a waiting draft's task (backend/setup_drafts.py): the claim starts no run of its agent on it, the
+    owner's own messages included. A plain comment holds it and asks again; Edit asks what to change and holds it; Later
+    holds it with nothing asked; Send, with words riding along, approves it and wakes the agent once, and a second Send
+    changes nothing."""
+    from backend import execution, setup_drafts
+
+    api = environment()
+    preview_and_import(api, swarm_text())
+    bot = bot_ids(api)["agent-ops"]
+    task = rows(api, "SELECT id FROM tasks WHERE title='Tools to connect'")[0]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))  # its computer brought it up
+
+    def say(text):
+        said = api.post(f"/api/v2/tasks/{task}/comments", json={"text": text}, headers=signed_in())
+        assert said.status_code in (200, 201), said.text
+
+    def refusals():
+        with api.app.state.store.read() as c:
+            conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task,)).fetchone()[0]
+            jobs = c.execute(
+                "SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
+                "AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
+                (bot, conv, task),
+            ).fetchall()
+            return [execution.job_refusal(c, dict(j), {}, {}, set()) for j in jobs]
+
+    def asked():
+        return [
+            json.loads(m["choices"] or "[]")
+            for m in rows(api, "SELECT choices FROM question_marks WHERE task_id='%s' AND cleared_at IS NULL" % task)
+        ]
+
+    def status():
+        return rows(api, "SELECT status FROM setup_drafts WHERE task_id='%s'" % task)[0]["status"]
+
+    say("Can it be shorter?")
+    assert status() == "waiting" and asked() == [["Send", "Edit", "Later"]]  # asked again
+    assert refusals() and set(refusals()) == {setup_drafts.DRAFT_WAIT}
+    say("Edit")
+    assert status() == "waiting" and asked() == [["Send", "Later"]]
+    say("Later")
+    assert status() == "waiting" and asked() == []
+    assert set(refusals()) == {setup_drafts.DRAFT_WAIT}
+    say("Send. But never offer more than 10% off")
+    assert status() == "approved" and asked() == []
+    assert setup_drafts.DRAFT_WAIT not in refusals()
+    sent = "SELECT id FROM messages WHERE body LIKE '%s%%'" % setup_drafts.SENT[:40]
+    assert len(rows(api, sent)) == 1
+    say("Send")
+    assert len(rows(api, sent)) == 1
+
+
+def test_a_setup_drafts_work_never_runs_on_gateway_credit(environment):
+    """An imported draft's turn that would run on Gateway credit is refused at the claim, and a claimed one gets no
+    Gateway fallback; a task that is not a setup draft is not touched."""
+    from backend import setup_drafts
+
+    api = environment()
+    preview_and_import(api, swarm_text())
+    approved = rows(api, "SELECT id FROM tasks WHERE title='Spring blends'")[0]["id"]
+    other = rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %' LIMIT 1")
+    with api.app.state.store.read() as c:
+        assert setup_drafts.refusal(c, approved, lambda: True) == setup_drafts.DRAFT_NEEDS_PLAN
+        assert setup_drafts.refusal(c, approved, lambda: False) is None
+        if other:
+            assert setup_drafts.refusal(c, other[0]["id"], lambda: True) is None
+    config = {"model": "claude", "gateway_fallback": {"model": "tico-a"}, "fallback": {"model": "tico-b"}}
+    assert setup_drafts.no_gateway(config) == {"model": "claude"}
+    assert setup_drafts.no_gateway({"model": "claude", "fallback": {"model": "gpt"}})["fallback"] == {"model": "gpt"}
+
+
+def test_a_0_3_file_keeps_no_drafts_said_or_email():
+    """email, drafts and said are format 0.4's: under an older header they are not read."""
+    saved = C.from_yaml(swarm_text().replace("version: 0.4", "version: 0.3"))
+    assert "drafts" not in saved and "said" not in saved
+    assert not any(p.get("email") for p in saved["people"])

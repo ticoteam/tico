@@ -1696,6 +1696,15 @@ def test_the_chat_decides_edits_and_says_rules_and_undo_takes_it_back():
     # A draft goes with its agent when the agent leaves the chart.
     gone, _ = run(out, ("bot_remove", {"bot": "content-owner"}))
     assert [d["id"] for d in gone["drafts"]] == ["d1"]
+    # What was approved is not what an edit says: an approved draft whose words change waits again, its title one line.
+    edited, results = run(
+        out, ("edit_draft", {"id": "d1", "title": "New\n  title"}), ("edit_draft", {"id": "d2", "body": "B"})
+    )
+    assert all(r["ok"] for r in results), results
+    assert [(d["id"], d["title"], d["status"]) for d in edited["drafts"]][0] == ("d1", "New title", "waiting")
+    assert edited["drafts"][1]["status"] == "skipped"
+    same, _ = run(out, ("edit_draft", {"id": "d1", "title": out["drafts"][0]["title"]}))
+    assert same["drafts"][0]["status"] == "approved"  # nothing changed: still approved
 
 
 def test_keys_are_cut_from_drafts_and_said_rules_in_a_file_read_back():
