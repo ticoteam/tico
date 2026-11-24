@@ -700,7 +700,11 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
+        # Agent Ops' hand-off quotes the person's cited message: a copy of a private task's words is private.
+        carried = carried_request(c, who, body.request_id) if handoff and owner == "bot:" + AGENT_OPS else None
+        if carried and carried["lends"] and privacy.copies_private(c, carried["message_id"]):
+            body = body.model_copy(update={"private": True})
+        private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.
@@ -785,7 +789,7 @@ def register_core(
         person = privacy.as_the_person(who) if private else None
         if private and actual_bot and not person and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        if reach_to:
+        if reach_to and private:  # a company-visible hand-off brings nobody into the private task above it
             H.task_reach(c, who.actor, parent, owner)
         # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
         # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
@@ -817,7 +821,6 @@ def register_core(
             pipeline=body.pipeline,
             number=body.number,
             mover=mover(c, who) or None,
-            public=public,
             same=same,
             follow=body.follow,
             # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
@@ -859,7 +862,6 @@ def register_core(
         elif body.check_model is None and body.check_role is None and unchecked:
             H._task_event(c, row["id"], who.actor, "check_model", None, None, unchecked)
         if handoff and owner == "bot:" + AGENT_OPS:
-            carried = carried_request(c, who, body.request_id)
             if carried:
                 H.event(c, who.actor, "botops.request_carried", row["id"], carried)
                 if carried["lends"]:

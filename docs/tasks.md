@@ -359,8 +359,8 @@ cannot. The task merged into stays. In one change (if any part is refused, nothi
 A note on the kept task lists what came in. When its owner is a bot, the bot is woken once to fold in what is relevant;
 a person is not woken. When the two owners differ, Merge asks who keeps the task; by default its own owner does, and
 choosing the other is a reassign with the usual checks. A merge or a new parent is refused, saying why, when it would
-make a loop, nest past 5 levels, join a private task with a company one, or (for a merge) lose an open pull request or
-cross pipelines.
+make a loop, nest past 5 levels, or (for a merge) join a private task with a company one, lose an open pull request
+or cross pipelines. A new parent may be private when the task is not, or the other way round: privacy does not spread.
 
 `GET /api/v2/tasks/{id}/merge?into=<other id>` returns both tasks, why each choice cannot be done (null when it can)
 and what a merge would move. `POST /api/v2/tasks/{id}/merge` takes `{"into": "<other id>", "owner": "<optional>"}`;
@@ -574,11 +574,13 @@ a private task of its own, of the inbox's approver alone.
   it or it is a sub-task of a private task; the private parent stays hidden. It is private with no choice only when
   the filer's or its owner's template keeps tasks private (a General Counsel's, the Rules Owner's), when it goes in a
   private pipeline, or when it comes from a narrower audience (a DM or a thread that isn't company-wide, a meeting
-  that isn't the team's). A bot's `--public` never publishes past its template's private default. Edits don't
-  spread either: making a task private, or giving it to a bot that keeps its tasks private, leaves the tasks under
-  it as they are, and a sub-task of a private task can be published.
-- A sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first such
-  person a reader of that task only. Anyone after that gets the sub-task alone.
+  that isn't the team's). A bot's `--public` never publishes past its template's private default. A copy of private
+  words stays private: a stage's handoff from a private task, and Agent Ops' task quoting a private task's comment,
+  are private. Edits don't spread either: making a task private, or giving it to a bot that keeps its tasks private,
+  leaves the tasks under it as they are, and a sub-task of a private task can be published.
+- A private sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first
+  such person a reader of that task only. Anyone after that gets the sub-task alone. A company-visible sub-task makes
+  nobody a reader.
 
 `POST /api/v2/tasks/dry-run` makes the same checks as a create and writes nothing.
 

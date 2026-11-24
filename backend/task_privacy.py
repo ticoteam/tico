@@ -48,12 +48,14 @@ def as_the_person(who):
 
 
 def new_task(c, who, body, owner, parent, actual_bot):
-    """(public, private) for a task about to be filed (app.task_create), by the one create rule
-    (hubdb.new_task_private): its filer's choice, else a sensitive default (the filer's, the acting bot's, which a
-    delegation keeps, or the owner's). Nothing spreads to it: a private parent stays its readers' alone
-    (task_relations shows it as "a private task"). `public` is a `private: false` that held."""
-    private = H.new_task_private(c, who.actor, owner, body.private, bot=actual_bot, parent=parent)
-    return body.private is False and not private, private
+    """Whether a task about to be filed (app.task_create) is private, by the one create rule (hubdb.new_task_private):
+    its pipeline, its filer's choice, else a sensitive default (the filer's, the acting bot's, which a delegation
+    keeps, or the owner's). Nothing spreads to it: a private parent stays its readers' alone (task_relations shows it
+    as "a private task")."""
+    from . import task_engine
+
+    pipe = task_engine.pipeline(c, str(getattr(body, "pipeline", None) or H.GENERAL_PIPELINE))
+    return bool(H.new_task_private(c, who.actor, owner, body.private, bot=actual_bot, parent=parent, pipeline=pipe))
 
 
 def actor(who):
@@ -1250,9 +1252,19 @@ def private_execution(c, who):
     return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
 
 
+def copies_private(c, message_id):
+    """Whether the message a new task quotes is a private task's: a copy of private words stays private."""
+    message = H.message(c, message_id) if message_id else None
+    if not message:
+        return False
+    tid = H.message_task_id(message, H.conversation(c, message["conversation_id"]))
+    return bool(message.get("restricted") or tid and H.task_private(c, _task(c, tid)))
+
+
 def reach_for(c, who, person, parent):
-    """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
-    the bot owns, makes them its reader (hubdb.task_reach); None otherwise.
+    """(parent id, person) when a bot's private hand-off to `person` under `parent`, a private task with no person on
+    it that the bot owns, makes them its reader (hubdb.task_reach); None otherwise. A company-visible hand-off grants
+    nothing: the caller checks the sub-task is private (app.task_create).
 
     The hand-off is a subtask for them; waiting on them is hubdb's. A hand-off the reach rules do not widen the parent
     for (hubdb.task_reach_refusal) goes on without a reader: the person gets the subtask alone."""

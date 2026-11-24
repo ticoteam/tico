@@ -690,8 +690,11 @@ def private_task_write(fn):
             bot = actor if not is_human(actor) else bool(VIA.get())
             # The task's own rule (new_task_private); a refusal under a private parent can name that parent, so its
             # record stays content-free too, though the task itself is not made private by it.
+            from . import task_engine
+
+            pipe = task_engine.pipeline(conn, str(values.get('pipeline') or GENERAL_PIPELINE))
             private = bool(
-                new_task_private(conn, actor, target, values.get('private'), bot=bot)
+                new_task_private(conn, actor, target, values.get('private'), bot=bot, pipeline=pipe)
                 or parent
                 and task_private(conn, parent)
             )
@@ -4939,7 +4942,6 @@ def task_create(
     reconcile_related=True,
     trigger=None,
     trigger_source=None,
-    public=False,
     routine=False,
     routine_for=None,
     same=None,
@@ -5023,11 +5025,9 @@ def task_create(
     pipe = task_engine.pipeline(conn, pipeline_id)
     in_private_pipeline = private_pipelines.is_private(pipe)
     # One rule (new_task_private): a private pipeline (its readers are written before it enters) or a stage-held
-    # parent, else the filer's choice, else a sensitive default; never the parent's privacy. `public`: the route
-    # already judged its filer's `private: false` (task_privacy.new_task), so it is a choice here whoever filed it.
-    bot = "" if public else actor if not is_human(actor) else bool(VIA.get())
-    chosen = False if public else private
-    private = new_task_private(conn, actor, target, chosen, bot=bot, parent=parent, pipeline=pipe)
+    # parent, else the filer's choice, else a sensitive default; never the parent's privacy.
+    bot = actor if not is_human(actor) else bool(VIA.get())
+    private = new_task_private(conn, actor, target, private, bot=bot, parent=parent, pipeline=pipe)
     sealed = stage_read_held(conn, actor, parent) if parent else None
     if sealed:
         # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
@@ -5038,8 +5038,6 @@ def task_create(
         ):
             refuse_stage_reader(conn, actor, parent)
         readers = shared
-    if private:
-        requester = actor
     from .roadmaps import settings as roadmap_settings
 
     # Bots (and Assistant/Agent Ops acting for a person) publish only through an approved publication.
@@ -5369,7 +5367,13 @@ def task_create(
             conn,
             "task.created",
             row["id"],
-            lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id),
+            # A company task under a private parent names no parent: its id is the private task's.
+            lambda: _task_facts(
+                conn,
+                row["id"],
+                actor,
+                parent_id=None if parent and not private and task_private(conn, parent) else parent_id,
+            ),
             actor,
             revision=0,
         )

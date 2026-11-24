@@ -10,7 +10,10 @@ import pytest
 from backend import bot_settings as BS, pipeline_settings as PS
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, post, ready, runner, unrelated_task_managers
+from backend.auth import Identity
+from backend.tests.helpers.api import assign, claim, get, post, ready, runner, setup_attempt, unrelated_task_managers
+from backend.tests.helpers.member_bots import agent_ops  # noqa: F401  (fixture)
+from backend.tests.helpers.task_readers import run_on, task as bot_task
 from backend.tests.helpers.thread_api import new_thread
 
 BEN = "human:ben"
@@ -130,3 +133,102 @@ def test_a_task_filed_from_a_members_thread_is_still_private(api):
     message_id = thread["message"]["id"]
     task = post(api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "ops"}, token="ben-test")
     assert task["private"] is True
+
+
+# ----------------------------------------------------------------------------- a copy of private words stays private
+def test_a_stage_handoff_from_a_private_task_is_private_whoever_files_it(api, monkeypatch):
+    """It copies the filing task's title, request and notes (stage_effects._file): from a private task it is private,
+    filed by the task's owner or, when that one is refused, by Tico itself. From a company task it is not."""
+    from backend import stage_effects, task_engine as E
+
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, BEN, "Price the Acme renewal", "Their numbers.", "bot:ops", private=True, lint=False)
+        made, _ = stage_effects._file(c, E.task(c, secret["id"]), "general", BEN)
+        assert made and H.task_private(c, H.task(c, made))
+        plain = H.task_create(c, BEN, "Plan the Acme launch", "Dates.", "bot:ops", private=False, lint=False)
+        made, _ = stage_effects._file(c, E.task(c, plain["id"]), "general", BEN)
+        assert made and not H.task_private(c, H.task(c, made))
+        monkeypatch.setattr(stage_effects, "_filer", lambda *_: "human:nobody")  # refused: Tico files it
+        secret = H.task_create(c, BEN, "Price the Acme upsell", "Their numbers.", "bot:ops", private=True, lint=False)
+        made, _ = stage_effects._file(c, E.task(c, secret["id"]), "general", BEN)
+        row = H.task(c, made)
+        assert row["requester_id"] == H.TICO_ACTOR and H.task_private(c, row)
+
+
+def test_agent_ops_handoff_quoting_a_private_tasks_comment_is_private(api, agent_ops):  # noqa: F811
+    assign(api, agent_ops, "ops")
+    ready(api, agent_ops, ["botops", "ops"])
+    secret = post(api, "tasks", {"owner": "ops", "title": "Price the Acme renewal", "body": "x", "private": True})
+    said = post(api, f"tasks/{secret['id']}/comments", {"text": "Give yourself read access to the pricing repo"})
+    ops = claim(api, agent_ops, "ops")
+    body = {"owner": "botops", "title": "Give Ops read access to the pricing repo", "body": "Ana asked on her task."}
+    made = post(api, "tasks", {**body, "request_id": said["comment"]["id"]}, token=ops["token"])
+    with api.app.state.store.read() as c:
+        carried = c.execute(
+            "SELECT detail FROM events WHERE action='botops.request_carried' AND target=?", (made["id"],)
+        ).fetchone()
+        assert H._json(carried["detail"], {})["lends"] is True  # her words are quoted on it
+    assert made["private"] is True
+
+
+# ----------------------------------------------------------------------------- reach: only a private hand-off
+def test_a_public_sub_task_for_a_person_brings_nobody_into_the_bot_only_private_parent(api):
+    row = bot_task(api, "bot:cpo", "bot:ops", "Zip triage")
+    attempt = run_on(api)
+    child = post(
+        api,
+        "tasks",
+        {"owner": "ben", "title": "Approve the zip plan", "body": "Yes or no?", "parent": row["id"]},
+        attempt["token"],
+    )
+    assert child["private"] is False
+    with api.app.state.store.read() as c:
+        assert H.task_readers(H.task(c, row["id"])) == []
+    get(api, "tasks/" + row["id"], "ben-test", expected=404)
+
+
+# ----------------------------------------------------------------------------- hooks name no private parent
+def test_a_company_task_under_a_private_parent_is_created_without_naming_it(api, monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        H,
+        "hook",
+        lambda c, type_, subject, data, *a, **k: seen.append((type_, subject, data() if callable(data) else data)),
+    )
+    parent = _private_parent(api)
+    with api.app.state.store.transaction() as c:
+        child = H.task_create(c, BEN, "Collect the totals", "x", "bot:ops", parent_id=parent["id"], lint=False)
+        hidden = H.task_create(
+            c, BEN, "Collect the payslips", "x", "bot:ops", parent_id=parent["id"], private=True, lint=False
+        )
+    facts = {subject: data for type_, subject, data in seen if type_ == "task.created"}
+    assert facts[child["id"]]["parent_id"] is None
+    assert facts[hidden["id"]]["parent_id"] == parent["id"]
+
+
+def test_the_route_knows_a_private_pipeline_makes_it_private_before_it_files(api):
+    """The participant check runs on the route's own answer (task_privacy.new_task, with the pipeline): a bot acting for
+    a person who files into a private pipeline, for an owner other than itself, is refused before anything is filed."""
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "legal-owner")
+        BS.write(
+            c, "legal-owner", {"name": "legal-owner", "runtime": "fake", "status": "active", "template": "legal-owner"}
+        )
+        PS.ensure_private(c)
+        unrelated_task_managers(c)
+    machine, _, attempt = setup_attempt(api, "finance")
+    with api.app.state.store.read() as c:
+        before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
+    api.app.state.store.settings.test_identities["acted-test"] = Identity(
+        "human:ben",
+        "human",
+        email="ben@acme.example",
+        task_actor="bot:finance",
+        runner_id=machine["runner_id"],
+        attempt_id=attempt["id"],
+    )
+    body = {"owner": "ops", "title": "Review the reseller contract", "body": "Attached.", "pipeline": "legal"}
+    refused = post(api, "tasks", body, "acted-test", expected=403)
+    assert "participant of the private task" in str(refused)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before

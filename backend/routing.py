@@ -273,7 +273,7 @@ def prepare(
     caller has resolved the entity (as the effective reader), read the parent (an unreadable one is its 404) and says
     which tasks the filer reads (`visible_sql`). Refused (422): an owner named, a meeting's task, any pipeline but
     Support (its timers own every routed wait), a Support retired, made private, or changed so its first stage is not
-    the assignee's or is moved by hand, and private work (explicitly, under a private parent, in a private pipeline or by the filer's
+    the assignee's or is moved by hand, and private work (explicitly, in a private pipeline or by the filer's
     private default): routing never decides who reads private work."""
     from . import task_privacy as _task_privacy
     from .store import Problem
@@ -297,7 +297,7 @@ def prepare(
     task_privacy: Any = _task_privacy  # untyped module
     if getattr(body, "from_private", False):  # older clients' name for `private: false` (app.task_create)
         body = body.model_copy(update={"private": False, "from_private": False})
-    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[1]:
+    if task_privacy.new_task(conn, who, body, None, parent, actual_bot):
         raise Problem("route", PRIVATE_REFUSAL, 422)
     return Work(
         pipeline_id=support,
