@@ -580,8 +580,8 @@ Media fields live on each file version: `width`, `height`, `duration_ms`, `poste
 `thumb_blob_id`, `preview_html_blob_id`, and `media_state` (`pending`, `ready`, `none`). One background worker fills them;
 existing versions default to `none` and are not automatically backfilled. New versions are `pending`.
 A picture, video, PDF, Word or Excel file posted in a thread (a plain attachment, with no file version) is queued the same way when its
-message is written (a `.docx` or `.xlsx` sent as `application/octet-stream` or with no type is known by its name, as the
-web app knows it), only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
+message is written (a `.docx` or `.xlsx` sent as `application/octet-stream`, `text/plain` (an upload part with no type of its
+own) or with no type is known by its name, as the web app knows it), only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
 preview and is never read for one. The web app draws a chat picture from its `/thumb` (which checks its reader as the
 file does, and is 404 until made), falling back to the file itself; messages carry no preview fields. A chat video
 shows its `/poster` with a play mark (a plain card when there is none) and plays in place on a tap, read from its
@@ -603,10 +603,10 @@ video or PDF without its tool) becomes `none` without being read: in Tico's buck
 video posters at the earlier of 1 second or 10% of duration, up to 640 px, on one thread and reading local files
 only. pdftoppm renders PDF page one. `backend/office_preview.py` turns a Word file into HTML with mammoth
 (no pictures) and an Excel file's first visible worksheet (200 rows by 30 columns, plus its sheet names) into a table
-with the standard library, numbers as stored and dates by Excel's 1900 or 1904 calendar where the cell's style shows a
-date, stopping at 256 KB. The archive passes docs_import's size and part caps first, and every part it parses as XML
-(for Word, all but pictures, embedded files and fonts) is refused if it declares a DOCTYPE or entity; pictures are
-never read. Each tool runs through `backend/limited.py`: 1.5 GiB of address space, 20 CPU
+with the standard library, numbers as stored and dates or times as Excel shows them where the cell's number format
+has one (its 1900 or 1904 calendar), stopping at 256 KB. The archive passes docs_import's size and part caps first.
+A part that declares a DOCTYPE or entity refuses the preview: for Excel, the parts it parses; for Word, every part,
+pictures included, since a file labels its parts as it likes (an SVG with a DOCTYPE leaves a Word file with its chip). Each tool runs through `backend/limited.py`: 1.5 GiB of address space, 20 CPU
 seconds, 10 MiB per file it writes (its output included), a bare environment and its own scratch folder, in a
 process group killed whole past the 30-second wall. A supplied poster is preserved.
 

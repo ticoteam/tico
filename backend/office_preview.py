@@ -5,14 +5,16 @@ page the chat draws on the file's card (web/src/conversation/Rich.tsx OfficeCard
 The preview worker (backend/file_metadata.py) runs it through backend/limited.py, so it parses under that process's
 memory, CPU and file-size limits: a zip bomb or a parser that never ends stops this process, never the server, and the
 file keeps its Download card. Before any part is parsed the archive passes docs_import's caps (part count, each part's
-size and the total, from the zip's own directory), and each part that is parsed as XML is scanned, as a stream, for a
-DOCTYPE or entity declaration. Pictures and parts nothing parses are never read.
+size and the total, from the zip's own directory), and parts are scanned, as streams, for a DOCTYPE or entity
+declaration (every entry of a name, when the zip holds it twice).
 
-- Word: mammoth with the import's style map, pictures left out. Every part but those only pictures point to is scanned:
-  mammoth finds its parts through the relationships, whatever their folder or name.
-- Excel: the standard library only. The first visible worksheet's first ROWS rows and COLUMNS columns become a table,
-  read as a stream, and only the shared strings those cells name are kept; the sheet names go on the page as tabs.
-  Numbers show as stored; a cell whose style is a date format shows its date (Excel's 1900 or 1904 system).
+- Word: mammoth with the import's style map, pictures left out. mammoth finds its parts through relationships a file
+  may label as it likes, so every part is scanned, pictures too: a picture holding "<!DOCTYPE" (an SVG, say) leaves the
+  file with no preview, and its card keeps the Download chip.
+- Excel: the standard library only, and only the parts it parses are scanned. The first visible worksheet's first ROWS
+  rows and COLUMNS columns become a table, read as a stream, and only the shared strings those cells name are kept; the
+  sheet names go on the page as tabs. Numbers show as stored; a cell whose format shows a date or a time shows it as
+  Excel would (its 1900 or 1904 calendar).
 
 The page stops at MAX_HTML, the most the chat reads of it. Run as a script it puts the repository's folder on sys.path
 (-I leaves it off) so it imports backend.docs_import just as it does when imported as backend.office_preview.
@@ -45,17 +47,23 @@ STYLE = (
     ".sheet td.n{text-align:right}.tabs{display:flex;gap:2px;padding:6px 8px;font-size:12px;color:#656d76}"
     ".tabs span{padding:2px 8px;border-radius:4px}.tabs .on{background:#f6f8fa;color:#1f2328;font-weight:600}"
 )
-# Excel's own number formats that show a date or a time; any other format shows the number as stored.
-DATE_FORMATS = {14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47}
-LAST_SERIAL = 2958466  # 9999-12-31
+# What a number format shows of a date: (the day, the time of day, its seconds). Excel's own formats by id; any other
+# format shows the number as stored.
+Shows = tuple[bool, bool, bool]
+DAY: Shows = (True, False, False)
+BUILT_IN: dict[int, Shows] = {
+    **dict.fromkeys((14, 15, 16, 17), DAY),
+    **dict.fromkeys((18, 20), (False, True, False)),
+    **dict.fromkeys((19, 21, 45, 46, 47), (False, True, True)),
+    22: (True, True, False),
+}
+LAST_DAY = 2958465  # 9999-12-31 in the 1900 calendar
 MARKS = [m.encode(codec) for m in ("<!DOCTYPE", "<!ENTITY") for codec in ("utf-8", "utf-16-le", "utf-16-be")]
 CHUNK = 1024 * 1024
 TAG = re.compile(r"<[^>]*>")
-# Relationship types whose parts are never XML to mammoth: pictures, embedded files and fonts.
-BINARY = {"image", "oleObject", "package", "video", "audio", "media", "font"}
 
 # A sheet cell as read: a shared string's place, a number with whether its style shows a date, or text as it stands.
-Cell = tuple[str, int] | tuple[str, str, bool] | str
+Cell = tuple[str, int] | tuple[str, str, Shows | None] | str
 
 
 def _docs() -> Any:
@@ -80,16 +88,18 @@ def _archive(data: bytes) -> zipfile.ZipFile:
 
 
 def _plain(archive: zipfile.ZipFile, name: str) -> None:
-    """Refuse a part with an XML DOCTYPE or entity declaration (UTF-8 or UTF-16), read as a stream."""
+    """Refuse a part with an XML DOCTYPE or entity declaration (UTF-8 or UTF-16), read as a stream: every entry of that
+    name, as a zip may hold a name twice and a reader may take either."""
     keep = max(len(m) for m in MARKS) - 1
-    tail = b""
     try:
-        with archive.open(name) as stream:
-            while chunk := stream.read(CHUNK):
-                window = tail + chunk
-                if any(m in window for m in MARKS):
-                    raise ValueError("The file uses XML features Tico does not read")
-                tail = window[-keep:]
+        for entry in (e for e in archive.infolist() if e.filename == name):
+            tail = b""
+            with archive.open(entry) as stream:
+                while chunk := stream.read(CHUNK):
+                    window = tail + chunk
+                    if any(m in window for m in MARKS):
+                        raise ValueError("The file uses XML features Tico does not read")
+                    tail = window[-keep:]
     except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:  # bad CRC, unknown compression, encrypted
         raise ValueError("The file could not be read") from exc
 
@@ -145,27 +155,12 @@ def _relations(archive: zipfile.ZipFile, rels: str) -> dict[str, tuple[str, str]
     return found
 
 
-def _word_parts(archive: zipfile.ZipFile) -> list[str]:
-    """Every part mammoth might parse as XML, its .rels parts first: all of them but those only pictures, embedded
-    files and fonts point to (it never parses those)."""
-    names = [p.filename for p in archive.infolist() if not p.is_dir()]
-    rels = [n for n in names if n.endswith(".rels")]
-    binary: set[str] = set()
-    other: set[str] = set()
-    for name in rels:
-        _plain(archive, name)
-        for kind, target in _relations(archive, name).values():
-            (binary if kind in BINARY else other).add(target)
-    skip = binary - other
-    return [n for n in names if n not in skip and n not in rels]
-
-
 def word(data: bytes) -> str:
     import mammoth  # pyright: ignore[reportMissingTypeStubs]
 
     docs = _docs()
     archive = _archive(data)
-    for name in _word_parts(archive):
+    for name in dict.fromkeys(e.filename for e in archive.infolist() if not e.is_dir()):
         _plain(archive, name)
     convert: Any = mammoth.convert_to_html  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     body: str = convert(
@@ -218,56 +213,75 @@ def _whole(text: str | None) -> int | None:
         return None
 
 
-def _date_styles(archive: zipfile.ZipFile, path: str | None) -> set[int]:
-    """The cell styles (their places in cellXfs) whose number format shows a date or a time."""
+def format_shows(code: str) -> Shows | None:
+    """What a number format shows of a date, or None for a number. Quoted text, escaped characters, spacing (`_x`),
+    fill (`*x`), [colors and conditions] and AM/PM go first; then y or d, or an m that is no minute (not just after h or
+    just before s), is a day, and h, s or a minute is a time of day."""
+    code = re.sub(r'"[^"]*"|\\.|_.|\*.|\[[^\]]*\]', "", code)
+    code = re.sub(r"am/pm|a/p", "", code, flags=re.I).lower()
+    months = re.sub(r"(h+[^a-z0-9]*)m+|m+([^a-z0-9]*s)", r"\1\2", code)
+    day = bool(re.search(r"[yd]", code)) or "m" in months
+    time = bool(re.search(r"[hs]", code)) or months != code
+    return (day, time, "s" in code) if day or time else None
+
+
+def _date_styles(archive: zipfile.ZipFile, path: str | None) -> dict[int, Shows]:
+    """{cell style (its place in cellXfs): what its number format shows of a date}, for the styles that show one."""
     if not path or path not in archive.namelist():
-        return set()
+        return {}
     _plain(archive, path)
     root = ElementTree.fromstring(archive.read(path))
-    custom: set[int] = set()
+    formats = dict(BUILT_IN)
     for element in root.iter():
         if _local(element.tag) == "numFmt":
-            code = re.sub(r'"[^"]*"|\[[^\]]*\]|\\.', "", element.get("formatCode") or "")
             number = _whole(element.get("numFmtId"))
-            if number is not None and re.search(r"[dyhs]", code, re.I):
-                custom.add(number)
-    dated: set[int] = set()
+            shows = format_shows(element.get("formatCode") or "")
+            if number is not None:
+                formats.pop(number, None)
+                if shows:
+                    formats[number] = shows
+    dated: dict[int, Shows] = {}
     for element in root:
         if _local(element.tag) == "cellXfs":
             for i, xf in enumerate(element):
-                number = _whole(xf.get("numFmtId")) or 0
-                if number in DATE_FORMATS or number in custom:
-                    dated.add(i)
+                shows = formats.get(_whole(xf.get("numFmtId")) or 0)
+                if shows:
+                    dated[i] = shows
     return dated
 
 
-def excel_date(serial: float, date1904: bool) -> str | None:
-    """A date-formatted cell's value as Excel shows it, or None when it is no date. The 1900 system counts 1900-01-01 as
-    1 and keeps Lotus's 1900-02-29 at 60, so serials past 60 count from 1899-12-30; the 1904 system counts from
-    1904-01-01 as 0. A value under 1 is a time of day."""
-    if not math.isfinite(serial) or not 0 <= serial < LAST_SERIAL - (1462 if date1904 else 0):
+def excel_date(serial: float, date1904: bool, shows: Shows = DAY) -> str | None:
+    """A date-formatted cell's value as Excel shows it, or None when it is no date. The 1900 calendar counts 1900-01-01
+    as 1 and keeps Lotus's 1900-02-29 at 60, so serials past 60 count from 1899-12-30; the 1904 calendar counts from
+    1904-01-01 as 0. A time of day is the fraction alone, the same in both."""
+    if not math.isfinite(serial) or serial < 0:
         return None
     days = math.floor(serial)
     seconds = round((serial - days) * 86400)
     if seconds >= 86400:
         days, seconds = days + 1, 0
-    clock = f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}"
-    if days == 0 and not date1904:
+    day, time, with_seconds = shows
+    clock = f"{seconds // 3600:02d}:{seconds // 60 % 60:02d}" + (f":{seconds % 60:02d}" if with_seconds else "")
+    if not day:
         return clock
+    if days > LAST_DAY - (1462 if date1904 else 0):
+        return None  # past 9999-12-31: the number as stored
     if date1904:
-        day = (date(1904, 1, 1) + timedelta(days=days)).isoformat()
+        text = (date(1904, 1, 1) + timedelta(days=days)).isoformat()
     elif days == 60:
-        day = "1900-02-29"
+        text = "1900-02-29"
+    elif days == 0:
+        text = "1900-01-00"  # as Excel shows it
     else:
-        day = (date(1899, 12, 31 if days < 60 else 30) + timedelta(days=days)).isoformat()
-    return f"{day} {clock}" if seconds else day
+        text = (date(1899, 12, 31 if days < 60 else 30) + timedelta(days=days)).isoformat()
+    return f"{text} {clock}" if time else text
 
 
-def _number(text: str, dated: bool, date1904: bool) -> str:
-    """A number cell as stored, or its date when its style shows one."""
-    if dated:
+def _number(text: str, shows: Shows | None, date1904: bool) -> str:
+    """A number cell as stored, or its date or time when its format shows one."""
+    if shows:
         try:
-            shown = excel_date(float(text), date1904)
+            shown = excel_date(float(text), date1904, shows)
         except ValueError:
             shown = None
         if shown:
@@ -355,7 +369,7 @@ def sheet(data: bytes) -> str:
                 elif kind in ("str", "e", "d"):
                     shown = value or ""
                 else:
-                    shown = ("n", (value or "").strip(), style in dated)
+                    shown = ("n", (value or "").strip(), dated.get(style))
                 cells[row, column] = shown
                 width, height = max(width, column + 1), max(height, row)
     if not cells:

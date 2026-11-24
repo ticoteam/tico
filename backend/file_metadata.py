@@ -97,8 +97,9 @@ OFFICE = {
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
 }
 # A type that says nothing of what the file is: a Word or Excel file sent as one is known by its name, as the chat's card
-# knows it (web/src/lib/fileKind.ts); office_preview.py still checks it is one.
-GENERIC = {"", "application/octet-stream", "binary/octet-stream"}
+# knows it (web/src/lib/fileKind.ts); office_preview.py still checks it is one. text/plain is what an upload part with no
+# Content-Type of its own arrives as (backend/media.py).
+GENERIC = {"", "application/octet-stream", "binary/octet-stream", "text/plain"}
 BY_NAME = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -382,8 +383,11 @@ class Metadata:
         if c is None:
             with self.store.transaction() as c:
                 return self.discard(prepared, c)
+        from .visuals import kind_of
+
         for _, upload in prepared:
-            queue_purge(c, upload["digest"], "", H.now())
+            # A preview page's kind names the hosted copy Tico file hosting made of it, so that copy goes too.
+            queue_purge(c, upload["digest"], kind_of(upload["content_type"], upload["size"]), H.now())
 
     def retry(self, blob):
         """Another try later, with backoff, after a pass that failed for a reason that may pass (storage, the database).

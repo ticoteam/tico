@@ -3,7 +3,11 @@ backend/limited.py: the card reads it at /api/v2/files/<id>/preview, which check
 that unpacks past the limits gets none and keeps its Download card, and the preview goes with its file. Fictional
 people only: ana and ben share a thread, cara is in none of it."""
 
+import html
+import io
 import re
+import warnings
+import zipfile
 
 import pytest
 
@@ -103,6 +107,27 @@ def test_a_word_file_sent_with_no_type_is_known_by_its_name(api):
     assert "Hello" in api.get(f["url"] + "/preview", headers=headers("ben-test")).text
 
 
+def test_a_word_file_whose_upload_part_has_no_type_gets_its_preview(api):
+    """A form part with no Content-Type of its own arrives as text/plain; the file is known by its name."""
+    drive = worker(api)
+    thread = new_thread(api, members=("human:ben",))
+    body = (
+        b'--edge\r\nContent-Disposition: form-data; name="text"\r\n\r\nThe plan\r\n'
+        b'--edge\r\nContent-Disposition: form-data; name="files"; filename="plan.docx"\r\n\r\n'
+        + docx([(None, "Hello")])
+        + b"\r\n--edge--\r\n"
+    )
+    sent = api.post(
+        f"/api/v2/uploads/threads/{thread['id']}/messages",
+        content=body,
+        headers={**headers("ana-test"), "Content-Type": "multipart/form-data; boundary=edge"},
+    )
+    assert sent.status_code == 200, sent.text
+    (f,) = sent.json()["message"]["refs"]["attachments"]
+    assert drive.batch() is True
+    assert "Hello" in api.get(f["url"] + "/preview", headers=headers("ben-test")).text
+
+
 def test_a_preview_made_for_a_document_deleted_meanwhile_leaves_no_bytes_behind(api, monkeypatch):
     """The Word file goes between the conversion and the save: the preview page already stored is queued and removed."""
     drive = worker(api)
@@ -121,7 +146,8 @@ def test_a_preview_made_for_a_document_deleted_meanwhile_leaves_no_bytes_behind(
     drive.batch()
     assert made and blobs.get(made[0])  # stored before the save found its source gone
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT 1 FROM blob_purges WHERE digest=?", (made[0],)).fetchone()
+        # queued as a page, so a hosted copy Tico file hosting made of it goes too
+        assert c.execute("SELECT kind FROM blob_purges WHERE digest=?", (made[0],)).fetchone()[0] == "page"
         assert c.execute("SELECT count(*) FROM blobs").fetchone()[0] == 0
     monkeypatch.setattr(blobs, "_fresh", {})  # past the wait for fresh writes
     file_library.drain(api.app.state.store, blobs)
@@ -152,8 +178,29 @@ def test_sheet_cells_show_as_stored_and_dates_by_excels_own_calendar():
         "1900-03-01",
         "2024-12-01",
     ]
-    assert when(0.5, False) == "12:00" and when(45627.25, False) == "2024-12-01 06:00" and when(0, True) == "1904-01-01"
+    time, stamp = (False, True, False), (True, True, False)
+    assert when(0.5, False, time) == "12:00" and when(0.5, True, time) == "12:00"
+    assert when(45627.25, False, stamp) == "2024-12-01 06:00" and when(0, True) == "1904-01-01"
     assert when(float("nan"), False) is None and when(-1, False) is None
+    assert when(2958465, False) == "9999-12-31" and when(2958465.9999999995, False, stamp) is None  # past the end
+
+
+def test_a_number_format_shows_a_date_only_when_it_has_one():
+    codes = ["0.0_d", "h:mm", "mmm", "yyyy-mm-dd hh:mm", '"day "0', "[Red]0.00", "mm:ss", "h:mm AM/PM", "*d0"]
+    fmts = "".join(f'<numFmt numFmtId="{164 + i}" formatCode="{html.escape(c)}"/>' for i, c in enumerate(codes))
+    xfs = '<xf numFmtId="0"/>' + "".join(f'<xf numFmtId="{164 + i}"/>' for i in range(len(codes)))
+    styles = f'<styleSheet xmlns="{S}"><numFmts>{fmts}</numFmts><cellXfs>{xfs}</cellXfs></styleSheet>'
+    cells = [f'<c r="{chr(65 + i)}1" s="{i + 1}"><v>{61 if i % 2 == 0 else 0.5}</v></c>' for i in range(len(codes))]
+    out = office_preview.sheet(
+        xlsx(
+            [("One", [["x"]])],
+            styles=styles,
+            extra={"xl/worksheets/sheet1.xml": sheet_xml(f'<row r="1">{"".join(cells)}</row>')},
+        )
+    )
+    shown = re.findall(r'<td class="n">([^<]*)</td>', out)
+    assert shown == ["61", "12:00", "1900-03-01", "1900-01-00 12:00", "61", "0.5", "00:00:00", "12:00", "61"]
+    assert office_preview.format_shows("yyyy-mm-dd hh:mm:ss") == (True, True, True)
 
 
 def test_the_first_worksheet_shows_past_a_chart_and_only_parsed_parts_are_checked():
@@ -179,19 +226,37 @@ def test_the_first_worksheet_shows_past_a_chart_and_only_parsed_parts_are_checke
         office_preview.sheet(xlsx([("x", [["y"]])], extra={**parts, "xl/worksheets/sheet2.xml": "<!DOCTYPE x>"}))
 
 
-def test_a_word_part_is_checked_wherever_it_lives_and_pictures_are_not_read():
-    picture = (
-        f'<Relationships xmlns="{PKG}"><Relationship Id="rId9" Type="{R}/image" Target="media/a.svg"/></Relationships>'
-    )
-    shown = docx([(None, "Hi")], extra={"word/media/a.svg": "<!DOCTYPE svg>", "word/_rels/document.xml.rels": picture})
-    assert "Hi" in office_preview.word(shown)
-    moved = (
-        f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/officeDocument" '
-        f'Target="word/media/doc.xml"/></Relationships>'
-    )
+def test_every_word_part_is_checked_whatever_the_file_calls_it():
     hidden = f'<!DOCTYPE x><w:document xmlns:w="{W}"><w:body/></w:document>'
+    # the document itself, labelled a picture (mammoth reads word/document.xml all the same)
+    labelled = (
+        f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/image" Target="word/document.xml"/>'
+        f'<Relationship Id="rId2" Type="{R}/image" Target="[Content_Types].xml"/></Relationships>'
+    )
+    # one Id twice: a picture after the document
+    twice = (
+        f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/officeDocument" Target="word/media/doc.xml"/>'
+        f'<Relationship Id="rId1" Type="{R}/image" Target="word/media/a.png"/></Relationships>'
+    )
+    # one name twice in the zip: a clean entry after the one a reader may take
+    out = io.BytesIO()
+    with warnings.catch_warnings(), zipfile.ZipFile(out, "w") as z:
+        warnings.simplefilter("ignore")  # zipfile warns of the duplicate name, which is the point
+        source = zipfile.ZipFile(io.BytesIO(docx([(None, "Hi")])))
+        for entry in source.infolist():
+            z.writestr(entry.filename, source.read(entry))
+        z.writestr("word/document.xml", hidden)
+        z.writestr("word/document.xml", source.read("word/document.xml"))
+    for case in (
+        docx([(None, "Hi")], extra={"_rels/.rels": labelled, "word/document.xml": hidden}),
+        docx([(None, "Hi")], extra={"_rels/.rels": twice, "word/media/doc.xml": hidden}),
+        out.getvalue(),
+    ):
+        with pytest.raises(ValueError, match="XML features"):
+            office_preview.word(case)
+    # a picture is scanned too: an SVG with a DOCTYPE leaves the file with no preview (its Download chip stays)
     with pytest.raises(ValueError, match="XML features"):
-        office_preview.word(docx([(None, "Hi")], extra={"_rels/.rels": moved, "word/media/doc.xml": hidden}))
+        office_preview.word(docx([(None, "Hi")], extra={"word/media/a.svg": "<!DOCTYPE svg>"}))
 
 
 def test_one_long_paragraph_is_cut_inside_its_words_not_to_nothing():
