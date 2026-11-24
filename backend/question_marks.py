@@ -803,10 +803,6 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
     return {**found, "person_id": target, "given_by_id": by, "given_at": at}
 
 
-# The ❓ a person's pinned answer settles (refs of their comment, POST /api/v2/tasks/{tid}/comments with `ask`).
-ANSWERS = "answers_ask"
-
-
 def cleared_askers(conn: sqlite3.Connection, task_id: str, message_id: str) -> list[str]:
     """The agents whose ❓ on this task this message cleared (`replied`), each once."""
     return [

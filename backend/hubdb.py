@@ -4609,7 +4609,6 @@ def is_comment(msg):
                 "can_wait",
                 "held_by",
                 "no_mentions",  # an agent's done note (task_calls.done_note)
-                "answers_ask",  # a person's pinned answer (question_marks.ANSWERS)
             }
         )
     )
