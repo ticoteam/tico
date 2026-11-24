@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import { refusal, run } from '@/actions';
+import type { ReleaseOffer } from '@/data';
 import { desktopApp, useCallWindow, type UpdateState } from '@/desktop';
 import { isCallActive, useCall } from '@/features/calls/routing';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
 import { Line, SwitchLine, Verb, useVisible } from './parts';
+import { Version } from './Version';
 
 /* General › Tico (t-settings-general): the version this company runs. Inside the desktop app (a browser has no bridge)
    also its update (restarting is refused while a call is on) and whether it opens at login: this computer's own. */
@@ -13,11 +15,11 @@ import { Line, SwitchLine, Verb, useVisible } from './parts';
 const WORD: Record<UpdateState['state'], string> = { none: 'Up to date', downloading: 'Downloading', ready: 'Ready', error: 'Update failed' };
 const AFTER_CALL = 'Restart after the call ends';
 
-export function TicoSection({ version }: { version?: string }) {
+export function TicoSection({ version, update, owner = false }: { version?: string; update?: ReleaseOffer; owner?: boolean }) {
   return (
     <Section name="Tico" target="setting:tico">
       <Facts label="Tico">
-        <LabelValue label="Version">{version}</LabelValue>
+        {update ? <Version update={update} owner={owner} /> : <LabelValue label="Version">{version}</LabelValue>}
         {desktopApp() && <Desktop />}
       </Facts>
     </Section>

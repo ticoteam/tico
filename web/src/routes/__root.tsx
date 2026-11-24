@@ -4,10 +4,10 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
+import { configQuery, meQuery, pageOwnersQuery, recordVisit, releaseConfigQuery, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
-import { DesktopMove, PlanLock } from '@/features/notices/exports';
+import { DesktopMove, PlanLock, UpdateNotice } from '@/features/notices/exports';
 import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
@@ -342,7 +342,20 @@ function App() {
         <Frame
           arrangement={callChat || barShown ? 'chat' : arrangement}
           tico={<TicoSheet />}
-          menu={<AppMenu note={status === 'offline' ? <OfflineBar held={held} /> : <DesktopMove />} />}
+          menu={
+            <AppMenu
+              note={
+                status === 'offline' ? (
+                  <OfflineBar held={held} />
+                ) : (
+                  <>
+                    <UpdateNotice />
+                    <DesktopMove />
+                  </>
+                )
+              }
+            />
+          }
           page={page}
           chat={chat}
           list={list}
@@ -461,7 +474,7 @@ const DOTTED = /^(?:\/next)?\/(?:tasks|task|roadmap|tags)(?:\/|$)/;
 
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
-  const { data: config } = useQuery(configQuery);
+  const { data: config } = useQuery(releaseConfigQuery);
   const self = useActor(me?.id);
   // Catch up and Support read whole feeds. Give the first page's loader the connection before warming those caches.
   const badgesEnabled = usePageOpened() && !!me;

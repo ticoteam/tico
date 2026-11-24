@@ -99,6 +99,7 @@ const CARD: Record<string, [SectionId, string]> = {
   'settings-company': ['general', 'setting:company'],
   'settings-team': ['general', 'setting:reports'],
   'set-repos': ['general', 'setting:repositories'],
+  'tico-version': ['general', 'setting:version'],
 };
 
 const hashOf = (card = '') => card.slice(Math.max(0, card.indexOf('#')));
@@ -135,7 +136,11 @@ function land(): boolean {
 }
 
 /** Land on the picked part when it is drawn; give up after a few seconds (it may not be shown to this reader). */
-function useLanding(section: SectionId, ready: boolean) {
+function useLanding(section: SectionId, ready: boolean, open?: string) {
+  useEffect(() => {
+    const card = open ? CARD[open] : undefined;
+    if (card?.[0] === section) landing = card[1];
+  }, [section, open]);
   useEffect(() => {
     if (!ready || land()) return;
     const watch = new MutationObserver(() => land() && watch.disconnect());
@@ -148,7 +153,7 @@ function useLanding(section: SectionId, ready: boolean) {
       watch.disconnect();
       clearTimeout(stop);
     };
-  }, [section, ready]);
+  }, [section, ready, open]);
 }
 
 type Hit = SettingHit & { href: string };
@@ -229,12 +234,7 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
       results.current?.querySelector<HTMLElement>(`[data-hit="${Math.max(0, Math.min(at, hits.length - 1))}"]`)?.click();
     }
   };
-  // A link to one of this section's cards (`?open=set-repos`, Health's fix) lands on it, as a search pick does.
-  useState(() => {
-    const card = open ? CARD[open] : undefined;
-    if (card?.[0] === section) landing = card[1];
-  });
-  useLanding(section, !searching);
+  useLanding(section, !searching, open);
   return (
     <Settings
       title="Settings"

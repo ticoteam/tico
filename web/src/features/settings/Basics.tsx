@@ -82,7 +82,7 @@ export function General() {
       )}
       {pages.length > 0 && <PageOwners pages={pages} canChange={owners.data?.canChange === true} />}
       {access.data && <Repositories admin={access.data.you === 'owner' || access.data.you === 'admin'} owner={access.data.you === 'owner'} />}
-      <TicoSection version={c?.version} />
+      <TicoSection version={c?.version} update={c?.update} owner={access.data?.you === 'owner'} />
     </>
   );
 }
