@@ -718,12 +718,17 @@ def release_blobs(c, blob_ids, now):
         mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
         digests[blob["digest"]] = visuals.kind_of(mime, blob["size"]) if mime else ""
     for digest, kind in digests.items():
-        if not still_used(c, digest):
-            c.execute(
-                "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
-                "attempts=0,error=''",
-                (digest, kind if kind in ("page", "svg") else "", now),
-            )
+        queue_purge(c, digest, kind, now)
+
+
+def queue_purge(c, digest, kind, now):
+    """Queue `digest`'s bytes for `drain` when no row needs them; `kind` names a page or SVG's hosted copy."""
+    if not still_used(c, digest):
+        c.execute(
+            "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
+            "queued_at=excluded.queued_at,attempts=0,error=''",
+            (digest, kind if kind in ("page", "svg") else "", now),
+        )
 
 
 def _kept_elsewhere(c, bid):
@@ -786,11 +791,14 @@ def drain(store, blobs, limit=50):
                 except Exception as exc:  # an unreachable place: the next pass tries again
                     error = str(exc)[:500]
                     LOG.warning("A deleted file's bytes could not be removed everywhere yet: %s", error)
+        # Only the request this pass read: one queued again meanwhile (its bytes written again) waits for the next.
+        mine = (q["digest"], q["queued_at"])
         with store.transaction() as c:
             if error:
-                c.execute("UPDATE blob_purges SET attempts=attempts+1,error=? WHERE digest=?", (error, q["digest"]))
-            else:
-                c.execute("DELETE FROM blob_purges WHERE digest=?", (q["digest"],))
+                c.execute(
+                    "UPDATE blob_purges SET attempts=attempts+1,error=? WHERE digest=? AND queued_at=?", (error, *mine)
+                )
+            elif c.execute("DELETE FROM blob_purges WHERE digest=? AND queued_at=?", mine).rowcount:
                 if not needed:
                     c.execute("DELETE FROM blob_locations WHERE digest=?", (q["digest"],))
                     removed += 1

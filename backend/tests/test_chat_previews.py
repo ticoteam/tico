@@ -85,6 +85,81 @@ def test_a_removed_message_takes_its_pictures_previews_with_it(api, monkeypatch)
         assert c.execute("SELECT count(*) FROM blob_media").fetchone()[0] == 0
 
 
+def test_a_preview_made_for_a_picture_deleted_meanwhile_leaves_no_bytes_behind(api, monkeypatch):
+    """The source goes between the worker's read and its save: the thumbnail it already stored is queued and removed."""
+    from backend import file_library
+
+    drive = worker(api)
+    blobs = api.app.state.blobs
+    thread = new_thread(api, members=("human:ben",))
+    message = upload(api, thread["id"], [("plan.png", png(), "image/png")])
+    save, made = drive.save, []
+
+    def deleted_first(blob, result, prepared):
+        with api.app.state.store.transaction() as c:
+            assert file_library.release_message_files(c, "human:ana", message["id"]) == 1
+        made.extend(upload["digest"] for _, upload in prepared)
+        save(blob, result, prepared)
+
+    monkeypatch.setattr(drive, "save", deleted_first)
+    drive.batch()
+    assert made and blobs.get(made[0])  # stored before the save found its source gone
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT digest FROM blob_purges")} >= set(made)
+    monkeypatch.setattr(blobs, "_fresh", {})  # past the wait for fresh writes
+    file_library.drain(api.app.state.store, blobs)
+    with pytest.raises(Exception):
+        blobs.get(made[0])
+
+
+def test_a_preview_stored_before_a_later_write_fails_is_queued_for_removal(api, monkeypatch):
+    """A PDF's poster is stored, then its thumbnail's write fails: the poster's bytes are queued, never left behind."""
+    drive = worker(api)
+    blobs = api.app.state.blobs
+    thread = new_thread(api, members=("human:ben",))
+    monkeypatch.setattr(file_metadata.shutil, "which", lambda name: "/usr/bin/" + name)  # no Poppler needed
+    upload(api, thread["id"], [("plan.pdf", b"%PDF-1.4\n%%EOF\n", "application/pdf")])
+
+    def first_page(args, root):
+        Image.new("RGB", (40, 30), "teal").save(args[-1] + ".jpg", format="JPEG")
+        return ""
+
+    put, stored = blobs.put_stream, []
+
+    def second_fails(data, content_type="application/octet-stream", **kw):
+        if stored:
+            raise OSError("storage unreachable")
+        stored.append(put(data, content_type, **kw))
+        return stored[-1]
+
+    monkeypatch.setattr(file_metadata, "run", first_page)
+    monkeypatch.setattr(blobs, "put_stream", second_fails)
+    drive.batch()
+    with api.app.state.store.read() as c:
+        assert stored and c.execute("SELECT 1 FROM blob_purges WHERE digest=?", (stored[0],)).fetchone()
+
+
+def test_a_purge_queued_again_while_draining_is_kept_for_the_next_pass(api, monkeypatch):
+    """Bytes written and queued again while a pass removes them stay queued, so the next pass removes them too."""
+    from backend import file_library
+
+    store, blobs = api.app.state.store, api.app.state.blobs
+    digest = "0" * 64
+    with store.transaction() as c:
+        file_library.queue_purge(c, digest, "", "2026-01-01T00:00:00.000000Z")
+
+    def requeued(d, kind=None):
+        with store.transaction() as c:
+            file_library.queue_purge(c, d, "", H.now())
+
+    monkeypatch.setattr(blobs, "_fresh", {})
+    monkeypatch.setattr(blobs, "purge", requeued)
+    assert file_library.drain(store, blobs) == 0
+    with store.read() as c:
+        row = c.execute("SELECT queued_at FROM blob_purges WHERE digest=?", (digest,)).fetchone()
+    assert row and row[0] != "2026-01-01T00:00:00.000000Z"
+
+
 def test_a_source_that_keeps_failing_is_given_up_after_its_tries(api, monkeypatch):
     drive = worker(api)
     with api.app.state.store.transaction() as c:

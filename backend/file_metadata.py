@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import IO
 
 from .blobs import register
-from .store import Problem
+from .store import H, Problem
 
 FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")
 # Starts from the few pending rows (partial indexes in hubdb.migrate), never a scan of every blob: it runs every few seconds.
@@ -288,20 +288,26 @@ class Metadata:
                 if preview:
                     derived.append(("thumb_blob_id", preview))
                 prepared = []
-                for field, path in derived:
-                    with path.open("rb") as data:
-                        digest = self.blobs.put_stream(data, "image/jpeg")
-                    prepared.append(
-                        (
-                            field,
-                            {
-                                "digest": digest,
-                                "size": path.stat().st_size,
-                                "name": path.name,
-                                "content_type": "image/jpeg",
-                            },
+                try:
+                    for field, path in derived:
+                        with path.open("rb") as data:
+                            digest = self.blobs.put_stream(data, "image/jpeg")
+                        prepared.append(
+                            (
+                                field,
+                                {
+                                    "digest": digest,
+                                    "size": path.stat().st_size,
+                                    "name": path.name,
+                                    "content_type": "image/jpeg",
+                                },
+                            )
                         )
-                    )
+                except BaseException:
+                    # Previews stored before the failure are queued for removal; a later try that stores them again
+                    # keeps them (drain checks again and waits out fresh writes).
+                    self.discard(prepared)
+                    raise
                 result["media_state"] = "ready" if result["width"] or result["poster_blob_id"] or prepared else "none"
                 self.save(blob, result, prepared)
         except (DecodeError, subprocess.SubprocessError, ValueError, KeyError, StopIteration):
@@ -315,6 +321,7 @@ class Metadata:
             if not c.execute("SELECT 1 FROM blobs WHERE id=?", (blob["id"],)).fetchone():
                 # Deleted while it was read: nothing to describe, and no preview to keep for it.
                 c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
+                self.discard(prepared, c)
                 return
             for field, upload in prepared:
                 result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]
@@ -324,6 +331,16 @@ class Metadata:
             assignment = ",".join(k + "=?" for k in FIELDS)
             c.execute("UPDATE blob_media SET " + assignment + " WHERE blob_id=?", (*values, blob["id"]))
             c.execute("UPDATE bot_file_versions SET " + assignment + " WHERE blob_id=?", (*values, blob["id"]))
+
+    def discard(self, prepared, c=None):
+        """Queue stored previews no row took for removal, as a delete queues its own bytes (file_library.drain)."""
+        from .file_library import queue_purge
+
+        if c is None:
+            with self.store.transaction() as c:
+                return self.discard(prepared, c)
+        for _, upload in prepared:
+            queue_purge(c, upload["digest"], "", H.now())
 
     def retry(self, blob):
         """Another try later, with backoff, after a pass that failed for a reason that may pass (storage, the database).
