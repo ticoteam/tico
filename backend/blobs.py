@@ -814,15 +814,11 @@ class Blobs:
                 continue
             keys = [self.s3_key(digest, place)]
             found = self.edge
-            if (
-                kind
-                and found
-                and location_of(place) == found["location"]
-                and getattr(self, "visual_ancestors", None) is not None
-            ):
+            ancestors = getattr(self, "visual_ancestors", None)  # set by tico_storage when Tico hosts the files
+            if kind and found and location_of(place) == found["location"] and ancestors is not None:
                 from .tico_storage import _visual_key, visual_paths
 
-                for path in visual_paths(digest, kind, self.visual_ancestors):
+                for path in visual_paths(digest, kind, ancestors):
                     keys.append(_visual_key(place, path))
                     self._edge_seen.pop((found["location"], path), None)
             try:
