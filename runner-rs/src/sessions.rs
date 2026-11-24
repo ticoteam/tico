@@ -1875,7 +1875,9 @@ impl PersonalCopy {
                 && entry.file_type().is_ok_and(|t| t.is_dir())
                 && std::fs::read_to_string(path.join(".git").join(COPY_MARK))
                     .is_ok_and(|m| m == ours)
-                && copies().get(&path).is_none()
+                && copies()
+                    .as_ref()
+                    .is_none_or(|held| !held.contains_key(&path))
             {
                 remove_copy(&path);
             }
