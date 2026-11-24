@@ -7683,10 +7683,10 @@ mod tests {
     /// An `agy acp` for execute's tests (argv: this script, its folder), counting turns `<n>` by the prompts it was
     /// sent. It resumes the conversation it is asked to, unless `agy-lose-<n>` is there (then it refuses, and the turn
     /// begins a new one). It keeps each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of
-    /// its conversations are gone once it answered, and it exits (as on a computer that lost them), as it does with
-    /// `agy-exit-<n>`, so the next turn starts a new one.
+    /// its conversations are gone once the runner saved them, before it answers (as on a computer that lost them). With
+    /// `agy-exit-<n>` it exits once it answered, so the next turn starts a new one.
     const FAKE_AGY: &str = r#"#!/usr/bin/env python3
-import json, os, sys, uuid
+import json, os, sys, time, uuid
 folder = sys.argv[1]
 n = 0
 def flag(name):
@@ -7726,13 +7726,19 @@ for line in sys.stdin:
                 sys.stderr.flush()
                 sys.exit(3)
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}}}})
-        send({"jsonrpc": "2.0", "id": i, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}})
         if forget:
+            # The runner saves the conversation once the model worked in it: gone once it is there.
             records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
-            for root, _, files in os.walk(records):
-                for name in files:
-                    os.remove(os.path.join(root, name))
-        if forget or leave:
+            saved = []
+            for _ in range(500):
+                saved = [os.path.join(r, f) for r, _, fs in os.walk(records) for f in fs if f.endswith(".json")]
+                if saved:
+                    break
+                time.sleep(0.02)
+            for path in saved:
+                os.remove(path)
+        send({"jsonrpc": "2.0", "id": i, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}})
+        if leave:
             sys.exit(0)
     else:
         send({"jsonrpc": "2.0", "id": i, "result": {}})
