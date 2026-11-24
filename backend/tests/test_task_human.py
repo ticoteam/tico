@@ -224,6 +224,25 @@ def test_a_held_edit_that_never_named_human_keeps_the_role_when_it_replays(api):
     assert _roles(api, t["id"]) == {"human": [BEN]}
 
 
+def test_a_held_create_naming_only_the_human_role_keeps_it_when_sent_anyway(api):
+    """A hold stores the whole create, so `human` left out is stored as null; Send anyway replays it, and that null
+    must not read as "name nobody" against the `roles.human` the agent sent."""
+    from backend import models as M
+    from backend import org_rule_check
+    from backend.auth import Identity
+
+    body = M.TaskFile.model_validate(
+        {"owner": "ops", "title": "Add CSV export", "body": "x", "roles": {"human": ["ben"]}}
+    )
+    held = body.model_dump(mode="json", by_alias=True)
+    assert held.get("human", "absent") is None  # what the hold stores
+    replay = org_rule_check.REPLAY["task_create"]
+    ana = Identity(ANA, "owner", "ana@acme.example")
+    with api.app.state.store.transaction() as c:
+        out = replay(c, ana, None, {"body": held}, None)
+    assert _roles(api, out["task"]["id"]) == {"human": [BEN]}
+
+
 def test_restoring_a_ticket_trashed_before_the_human_was_retired_moves_its_human(dev):
     """A snapshot taken before the upgrade still holds the Human: its restore moves it as the migration did, to the
     assignee of a company ticket with none (who then gets its unnamed OK), else into the `human` role."""

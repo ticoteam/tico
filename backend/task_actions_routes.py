@@ -1193,10 +1193,14 @@ def register_core(
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None, close_read=None):
         if (replay.get("body") or {}).get("route"):
             raise Problem("route", ROUTED_HELD, 422)  # routed creates are never held; one from before is not sent
+        held = dict(replay["body"])
+        if "human" in held and held["human"] is None:
+            # A hold stores the whole create, so a `human` left out is stored as null: it names nothing here.
+            del held["human"]
         return task_create(
             c,
             bot,
-            M.TaskFile.model_validate(replay["body"]),
+            M.TaskFile.model_validate(held),
             ingest=ingest,
             rule=org_rule_check.decided(gate),
             close_read=close_read,
