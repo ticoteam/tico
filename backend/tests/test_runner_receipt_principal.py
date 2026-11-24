@@ -35,6 +35,9 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
     with api.app.state.store.transaction() as c:
         BS.update(c, "assistant", {"capture_stream": "on"})
     message = post(api, f"tasks/{t['id']}/make-page", {"text": "Make the plan"}, "ben-test")["message"]
+    # The claim case asserts the first claim's header below. The header is best effort within BUDGET_SECONDS, a
+    # product cutoff and not a wait: give it the room test_run_header.py gives, so a loaded runner still builds it.
+    monkeypatch.setattr(run_header, "BUDGET_SECONDS", 30.0)
     claim_key = "receipt-claim"
     claimed = post(api, "jobs/claim", {"next_run": True}, machine["token"], claim_key)
     aid = claimed["attempt"]["id"]
@@ -66,8 +69,6 @@ def test_private_make_page_receipts_replay_after_finish_and_recheck_person_and_c
         with monkeypatch.context() as patch:
             # Polls no longer save receipts. Exercise receipts kept by older servers through the real routes.
             patch.setattr(S, "is_poll", lambda operation, result: False)
-            # The first claim's header is asserted below: give its best-effort build room, as test_run_header.py does.
-            patch.setattr(run_header, "BUDGET_SECONDS", 30.0)
             patch.setattr(api.app.state.execution, "idle_inputs", lambda *args: None)
             real_renew = api.app.state.execution.renew
             patch.setattr(
