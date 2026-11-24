@@ -1003,10 +1003,10 @@ def draft_instructions(kind):
     )
 
 
-def writer_for(c, settings, store=None, vault=None):
-    """The model a person's draft is written with: Tico Medium on the Tico AI Gateway under the two Gateway models
-    choices (backend/models_preset.py) while it is connected, else the company's own provider, or None (no drafts).
-    The gateway key is read from `store` at the call, never held by the writer."""
+def writer_for(c, settings, store=None, vault=None, gateway_model=None):
+    """The model a person's draft is written with: Tico Medium (or `gateway_model`) on the Tico AI Gateway under the two
+    Gateway models choices (backend/models_preset.py) while it is connected, else the company's own provider, or None
+    (no drafts). The gateway key is read from `store` at the call, never held by the writer."""
     if settings.rehearsal:
         return None
     from clients import gateway as G, judge as J
@@ -1026,7 +1026,7 @@ def writer_for(c, settings, store=None, vault=None):
                 secret, now_base, _ = gateway_connection.target(c, keys, settings)
             return secret if G.chat_base(now_base) == base else ""  # moved since: the key is not this address's
 
-        return J.gateway_writer(key_of, base, models_preset.pick())
+        return J.gateway_writer(key_of, base, models_preset.pick(gateway_model))
     found = own_model(record)
     return J.llm_writer(*found) if found else None
 

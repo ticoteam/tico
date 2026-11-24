@@ -148,7 +148,7 @@ it('finishes the route’s Needs you read when the shell unsubscribes', async ()
   const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {});
   stop();
   respond({ status: 200, body: { items: [] } });
-  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [] });
+  await expect(loaded).resolves.toEqual({ count: 0, items: [], requests: [], task_ids: [], approvals: [], asks: [], order: [], sorting: false, sortingUntil: null, itemIds: [] });
 });
 
 it('keeps the Reconcile summary on a Needs you row that folds several items of one task', async () => {
@@ -701,7 +701,175 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
 describe('Needs you @s5 @s112', () => {
   const item = { id: 'a1', number: 7, title: 'Approve the copy', pipeline_id: 'eng', stage_id: 's2', owner_id: null, late: false, stuck: false, since: ago(5) };
 
-  it('groups Mine by relationship across pipelines and keeps work without a relationship together', async () => {
+  it('keeps the top 5 rows on the page live while Tico sorts, applies the order when the push lands below the row you are on', async () => {
+    const tasks = [1, 2, 3, 4, 5, 6].map((n) => `t${n}`);
+    const order0 = ['r1', 't1', 't2', 't3', 't4', 't5', 't6'];
+    const need = (id: string) => id === 'r1'
+      ? { kind: 'access', id: 'r1', from_id: 'bot:tools', line: 'Tools asks for the repo', since: ago(70), access: { id: 'x1', subject: 'bot:tools', subject_name: 'Tools', resource_name: 'the repo', level: 'read' } }
+      : { kind: 'ask', id: `v:${id}`, task_id: id, requirement_id: `r${id}`, line: '', since: ago(60),
+        task: { id, number: tasks.indexOf(id) + 1, title: `Task ${tasks.indexOf(id) + 1}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null, ...(id === 't5' || id === 't1' ? { entity_id: 'organization/acme' } : {}) } };
+    let order = order0;
+    let sorting = true;
+    serve((url) => {
+      if (url.endsWith('/entities/names')) return { status: 200, body: { names: { 'organization/acme': 'Acme' } } };
+      if (!url.includes('/needs-you?limit=')) return { status: 200, body: { items: [] } };
+      return { status: 200, body: { items: order.map(need), next: null, sorting, sorting_until: sorting ? new Date(Date.now() + 60_000).toISOString() : null } };
+    });
+    show(<NeedsYouPage />, '/needs-you');
+    const item = async (n: number) => (await screen.findByTitle(`Task ${n}`)).closest('.flow-item')!;
+    const shown = () => [...document.querySelectorAll('.flow-item')].map((r) => r.querySelector('[title^="Task "]')?.getAttribute('title') ?? 'request');
+    const dimmed = () => [...document.querySelectorAll('.flow-item')].map((r) => r.classList.contains('flow-wait'));
+    const status = await screen.findByText('Tico is sorting…');
+    expect(status.closest('.flow-mine')).toBeNull(); // in the page's header line, not above the rows
+    await item(6);
+    // One list in Tico's order, the request among the rows: the first five on the page are live, whatever their kind.
+    expect(shown()).toEqual(['request', 'Task 1', 'Task 2', 'Task 3', 'Task 4', 'Task 5', 'Task 6']);
+    expect(dimmed()).toEqual([false, false, false, false, false, true, true]);
+    await waitFor(() => expect(within(screen.getByTitle('Task 5')).getByText('Acme')).toBeTruthy());
+
+    fireEvent.pointerDown((await item(2)).querySelector('a')!); // the person is on Task 2
+    order = ['t6', 't5', 't4', 't3', 'r1', 't2', 't1'];
+    sorting = false;
+    act(() => dispatch('needs', [{ seq: 2, count: 7 }]));
+    await waitFor(() => expect(screen.queryByText('Tico is sorting…')).toBeNull());
+    expect(document.querySelector('.flow-sorting')).toBeTruthy(); // still there, empty: nothing below it moves
+    // The rows down to Task 2 stay where they were; only the rows below it take the new order.
+    expect(shown()).toEqual(['request', 'Task 1', 'Task 2', 'Task 6', 'Task 5', 'Task 4', 'Task 3']);
+    expect(dimmed().some(Boolean)).toBe(false);
+  });
+
+  it('only the Needs you page asks Tico to sort: the shared list read and its refresh never do', async () => {
+    const urls: string[] = [];
+    const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    serve((url) => {
+      urls.push(url);
+      return { status: 200, body: url.includes('/needs-you?') ? { items: [1, 2].map(need), next: null, sorting: false } : { items: [] } };
+    });
+    const sorts = () => urls.filter((u) => u.endsWith('/needs-you/sort')).length;
+    const stop = new QueryObserver(queryClient, flowQuery).subscribe(() => {}); // Tools, a task's chat, the Tracker
+    await waitFor(() => expect(urls.some((u) => u.includes('/needs-you?limit='))).toBe(true));
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] })); // the five-minute refresh
+    expect(urls.filter((u) => u.includes('/needs-you?limit=200')).length).toBe(2);
+    expect(sorts()).toBe(0);
+    stop();
+    show(<NeedsYouPage />, '/needs-you');
+    expect(await screen.findByTitle('Task 2')).toBeTruthy();
+    await waitFor(() => expect(sorts()).toBe(1));
+    const reads = urls.length;
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] })); // a push or the refresh reads the list again
+    expect(urls.length).toBeGreaterThan(reads);
+    expect(sorts()).toBe(1); // the same items: no second ask
+  });
+
+  it('shows the list live again when a sort’s claim runs out with no push, and reads it again, even if that read fails', async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'performance', 'setTimeout', 'clearTimeout'] });
+    try {
+      let reads = 0;
+      const until = new Date(Date.now() + 60_000).toISOString();
+      const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+        task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+      serve((url) => {
+        if (!url.includes('/needs-you?limit=')) return { status: 200, body: { items: [] } };
+        // The read again fails, and for good: a retryable failure would be read again for a minute (api/client.ts
+        // RETRY_FOR_MS), past this test and into the next ones' mocks.
+        if (++reads > 1) return { status: 500, body: { error: { code: 'internal', detail: 'The read failed', retryable: false } } };
+        return { status: 200, body: { items: [1, 2, 3, 4, 5, 6].map(need), next: null, sorting: true, sorting_until: until } };
+      });
+      show(<NeedsYouPage />, '/needs-you');
+      await vi.waitFor(() => expect(screen.getByText('Tico is sorting…')).toBeTruthy());
+      expect(document.querySelector('.flow-wait')).toBeTruthy();
+      await act(() => vi.advanceTimersByTimeAsync(60_000)); // the claim runs out, with no push
+      await vi.waitFor(() => expect(reads).toBeGreaterThan(1));
+      expect(screen.queryByText('Tico is sorting…')).toBeNull();
+      expect(document.querySelector('.flow-wait')).toBeNull();
+    } finally {
+      cleanup();
+      vi.useRealTimers();
+    }
+  });
+
+  it('asks Tico to sort again when a task already on the list asks a second thing', async () => {
+    const urls: string[] = [];
+    const ask = (n: number, id = `v:t${n}`) => ({ kind: 'ask', id, task_id: `t${n}`, requirement_id: id, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    let items = [ask(1), ask(2)];
+    serve((url) => {
+      urls.push(url);
+      return { status: 200, body: url.includes('/needs-you?') ? { items, next: null, sorting: false } : { items: [] } };
+    });
+    const sorts = () => urls.filter((u) => u.endsWith('/needs-you/sort')).length;
+    show(<NeedsYouPage />, '/needs-you');
+    expect(await screen.findByTitle('Task 2')).toBeTruthy();
+    await waitFor(() => expect(sorts()).toBe(1));
+    items = [ask(1), ask(1, 'v:t1:second'), ask(2)]; // the same two rows, three things asked
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] }));
+    await waitFor(() => expect(sorts()).toBe(2));
+  });
+
+  it('a slow answer to the ask to sort never dims a list whose newer order is already shown', async () => {
+    let answer!: (r: Reply) => void;
+    const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    serve((url) => {
+      if (url.endsWith('/needs-you/sort')) return new Promise<Reply>((r) => (answer = r));
+      return { status: 200, body: url.includes('/needs-you?') ? { items: [1, 2, 3, 4, 5, 6].map(need), next: null, sorting: false } : { items: [] } };
+    });
+    show(<NeedsYouPage />, '/needs-you');
+    expect(await screen.findByTitle('Task 6')).toBeTruthy();
+    await waitFor(() => expect(answer).toBeTruthy());
+    // That sort ran and finished before its answer came: the list read since says it is done.
+    await act(async () => answer({ status: 200, body: { sorting: true, sorting_until: new Date(Date.now() + 60_000).toISOString() } }));
+    await waitFor(() => expect(queryClient.getQueriesData({ queryKey: ['needs-you-sort'] }).map(([, d]) => d)).toEqual([expect.objectContaining({ sorting: true })]));
+    expect(screen.queryByText('Tico is sorting…')).toBeNull();
+    expect(document.querySelector('.flow-wait')).toBeNull();
+  });
+
+  it('lets go of the row the person was on once they click or focus anything outside the list', async () => {
+    const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    let order = [1, 2, 3];
+    serve((url) => ({ status: 200, body: url.includes('/needs-you?') ? { items: order.map(need), next: null, sorting: false } : { items: [] } }));
+    show(<NeedsYouPage />, '/needs-you');
+    const shown = () => [...document.querySelectorAll('.flow-item [title^="Task "]')].map((r) => r.getAttribute('title'));
+    fireEvent.pointerDown((await screen.findByTitle('Task 3')).closest('.flow-item')!.querySelector('a')!); // the last row
+    order = [3, 2, 1];
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] }));
+    expect(shown()).toEqual(['Task 1', 'Task 2', 'Task 3']); // held: the rows down to it stay
+    fireEvent.pointerDown(document.body); // then somewhere else on the page: the new order at once, no read
+    expect(shown()).toEqual(['Task 3', 'Task 2', 'Task 1']);
+  });
+
+  it('moving up to another row keeps only the rows down to it; the rest take the latest order', async () => {
+    const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    let order = [1, 2, 3, 4, 5, 6];
+    serve((url) => ({ status: 200, body: url.includes('/needs-you?') ? { items: order.map(need), next: null, sorting: false } : { items: [] } }));
+    show(<NeedsYouPage />, '/needs-you');
+    const shown = () => [...document.querySelectorAll('.flow-item [title^="Task "]')].map((r) => r.getAttribute('title'));
+    const row = async (n: number) => (await screen.findByTitle(`Task ${n}`)).closest('.flow-item')!.querySelector('a')!;
+    fireEvent.pointerDown(await row(3));
+    order = [6, 5, 4, 3, 2, 1];
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] }));
+    await waitFor(() => expect(shown()).toEqual(['Task 1', 'Task 2', 'Task 3', 'Task 6', 'Task 5', 'Task 4']));
+    fireEvent.pointerDown(await row(1)); // up to the first row
+    expect(shown()).toEqual(['Task 1', 'Task 6', 'Task 5', 'Task 4', 'Task 3', 'Task 2']);
+  });
+
+  it('keeps the row the person is on drawn when a new item pushes the list past its cap', async () => {
+    const need = (n: number) => ({ kind: 'ask', id: `v:t${n}`, task_id: `t${n}`, requirement_id: `r${n}`, line: '', since: ago(60 - n),
+      task: { id: `t${n}`, number: n, title: `Task ${n}`, pipeline_id: 'eng', stage_id: 's2', owner_id: null } });
+    let order = Array.from({ length: 12 }, (_, i) => i + 1);
+    serve((url) => ({ status: 200, body: url.includes('/needs-you?') ? { items: order.map(need), next: null, sorting: false } : { items: [] } }));
+    show(<NeedsYouPage />, '/needs-you');
+    fireEvent.pointerDown((await screen.findByTitle('Task 12')).closest('.flow-item')!.querySelector('a')!); // the last row
+    order = [13, ...order];
+    await act(() => queryClient.refetchQueries({ queryKey: ['flow'] }));
+    await waitFor(() => expect(queryClient.getQueryData<{ count: number }>(['flow'])?.count).toBe(13));
+    expect(screen.getByTitle('Task 12')).toBeTruthy();
+  });
+
+  it('lists Mine as one list, each row with its relationship, and groups All by relationship', async () => {
     serve(() => ({ status: 200, body: { names: { 'organization/acme': 'Acme', 'organization/acme-partners': 'Acme' } } }));
     const entity = { entity_id: 'organization/acme' };
     queryClient.setQueryData(['flow'], { count: 4, items: [
@@ -714,12 +882,11 @@ describe('Needs you @s5 @s112', () => {
     const row = await screen.findByTitle('Approve the copy');
     expect(row.closest('a')?.getAttribute('href')).toBe('/task/7');
     expect(within(row).getByText('Needs your approval')).toBeTruthy();
-    const acme = await screen.findAllByRole('region', { name: 'Acme' });
-    expect(acme).toHaveLength(2);
-    expect(within(acme[0]!).getByTitle('Check the delivery')).toBeTruthy();
-    expect(within(acme[1]!).getByTitle('Sign the lease')).toBeTruthy();
+    await waitFor(() => expect(within(row).getByText('Acme')).toBeTruthy());
+    expect(within(screen.getByTitle('Sign the lease')).getByText('Acme')).toBeTruthy();
+    expect(within(screen.getByTitle('Review the agenda')).queryByText('Acme')).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Acme' })).toBeNull();
     expect(posts).toEqual([{ url: '/api/v2/entities/names', body: { ids: ['organization/acme', 'organization/acme-partners'] } }]);
-    expect(within(screen.getByRole('region', { name: 'Other' })).getByTitle('Review the agenda')).toBeTruthy();
   });
 
   it('switches to claimable work, explains a row on demand and folds and hides the archive', async () => {
@@ -730,7 +897,7 @@ describe('Needs you @s5 @s112', () => {
     const snoozed = task('a3', 9, 'Send the quote', 's1', { ...relationship, snoozed: true });
     const done = task('a4', 10, 'Send the form', 'sd', { ...relationship, status: 'done' });
     serve((url) => {
-      reads.push(url);
+      if (!url.endsWith('/needs-you/sort')) reads.push(url); // the page's ask to sort is no read of the list
       if (url.endsWith('/entities/names')) return { status: 200, body: { names: { [relationship.entity_id]: 'Acme' } } };
       if (url.includes('/origins/')) return { status: 200, body: { cause: { type: 'automation', name: 'Support intake' } } };
       if (url.includes('claimable=true')) {
@@ -861,8 +1028,8 @@ describe('Needs you @s5 @s112', () => {
     visible = false;
     await act(() => queryClient.invalidateQueries({ queryKey: ['contacts', 'names'] }));
     await waitFor(() => expect(screen.queryByText('Acme Shop')).toBeNull());
-    expect(within(screen.getAllByRole('region', { name: 'Other' })[0]!).getByTitle('Approve the copy')).toBeTruthy();
-    expect(within(screen.getAllByRole('region', { name: 'Other' })[1]!).getByTitle('Send the quote')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Needs you' })).getByTitle('Approve the copy')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Other' })).getByTitle('Send the quote')).toBeTruthy();
     expect(taskReads).toBe(2);
   });
 
@@ -1003,7 +1170,7 @@ describe('Needs you @s5 @s112', () => {
     expect(screen.getByTitle('Sign the lease')).toBeTruthy();
     expect(screen.queryByTitle('Approve the copy')).toBeNull();
     expect(queryClient.getQueryData<{ count: number }>(['flow'])?.count).toBe(2);
-    expect(asked.filter((u) => u.includes('/needs-you')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'v1.1', 'v2.1']);
+    expect(asked.filter((u) => u.includes('/needs-you?')).map((u) => new URL(u, 'http://x').searchParams.get('cursor'))).toEqual([null, 'v1.1', 'v2.1']);
   });
 
   it("an ask's row says what it is about, on a desktop and a phone, whichever of its task's items comes first", async () => {

@@ -7,7 +7,7 @@ import os
 import re
 from datetime import timezone
 from math import ceil
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from fastapi import Query, Request
@@ -2186,9 +2186,13 @@ def needs_lines(c, auth, who, items):
     return out
 
 
-def needs_shown(c, auth, who, task_view=None, **how):
-    """needs_items as the reader is served them (needs_lines): what every route and stream of Needs you gives."""
-    return needs_lines(c, auth, who, needs_items(c, auth, who, task_view, **how))
+def needs_shown(c, auth, who, task_view=None, order=..., **how):
+    """needs_items as the reader is served them (needs_lines), in Tico's saved order for them (backend/needs_order.py,
+    `order` its saved row when the caller read it already): what every route and stream of Needs you gives."""
+    from . import needs_order
+
+    items = needs_lines(c, auth, who, needs_items(c, auth, who, task_view, **how))
+    return needs_order.arrange(c, auth, who, items, order)
 
 
 def needs_still_shown(c, auth, who, items):
@@ -3605,7 +3609,7 @@ def install_views(app, store, auth, mutate, task_view):
         **api_v2(
             "Needs you",
             "getNeedsYou",
-            "What waits on the caller (kind task, ask, paused or question, oldest first), with its `version` and `count`; count=true for the counts alone (`count` for all items and `flow_count` for distinct Flow task rows plus requests), version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
+            "What waits on the caller (kind task, ask, paused or question), in Tico's order for them (`sorting` while Tico sorts it in the background; a `needs` event follows), with its `version` and `count`; count=true for the counts alone (`count` for all items and `flow_count` for distinct Flow task rows plus requests), version=<held> answers `unchanged` without items while it holds, ids=<comma list> only those items and their `positions`, limit=<n> (at most 200) a page with `next` to pass as cursor=<next> for the one after it (cut from the build that gave the first page while it is held, about 30 s; a cursor from an older version starts again from the top, with `restart`); without limit or cursor, the whole list",
             "NeedsYou",
         ),
     )
@@ -3626,13 +3630,14 @@ def install_views(app, store, auth, mutate, task_view):
         `limit` (at most NEEDS_PAGE_MAX) sends a page, with `next` to pass as `cursor` for the one after it and `bots`,
         each bot's count over the whole list. A next page is cut from the build that gave the first while that build is
         held (backend/needs_cache.py, needs_cache.TTL); a cursor from an older version starts again from the top
-        (`restart`)."""
+        (`restart`). The list is in Tico's order for the person (backend/needs_order.py); `sorting` says Tico sorts it
+        now, until `sorting_until`."""
         who = request.state.identity
         person_or_view(who)
         return await needs_lane.run(request.app, needs_answer, who, count, ids, version, limit, cursor)
 
     def needs_answer(who, count, ids, version, limit, cursor):
-        from . import ask_snoozes
+        from . import ask_snoozes, needs_order
 
         held = needs_cache.of(app)
         viewer = needs_cache.viewer(who)
@@ -3664,10 +3669,11 @@ def install_views(app, store, auth, mutate, task_view):
                     "flow_count": flow_count(items),
                     "snooze_refresh_in_ms": max(1, ceil((end - at).total_seconds() * 1000)) if end and at else None,
                 }
-            items = needs_shown(c, auth, who)
+            order = needs_order.saved(c, who)
+            items = needs_shown(c, auth, who, order=order)
             current = needs_marks(items)[1]
             # When an ask this person snoozed comes back: the page reads the list again then (backend/ask_snoozes.py).
-            woken = {"snoozed_until": ask_snoozes.next_end(c, who)}
+            woken: dict[str, Any] = {"snoozed_until": ask_snoozes.next_end(c, who), **needs_order.state(order)}
         counts = {}  # the page counts, worked out by the first page, kept for the next ones
         held.keep(viewer, current, items, woken["snoozed_until"], began, counts)
         if version and version == current and not cursor:
@@ -3683,9 +3689,10 @@ def install_views(app, store, auth, mutate, task_view):
                 "version": current,
                 "positions": positions,
                 "items": [x for x in items if str(x["id"]) in positions],
+                **woken,
             }
         if limit is not None or cursor:
-            return needs_paged(who, items, current, limit, cursor, woken["snoozed_until"], counts)
+            return {**needs_paged(who, items, current, limit, cursor, woken["snoozed_until"], counts), **woken}
         return {
             "actor": who.actor,
             "count": len(items),

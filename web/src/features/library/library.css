@@ -314,7 +314,7 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 
 /* ---------- Tools: Messages across every address (ToolMessages.tsx) ---------- */
 .lib .msg-find{display:flex;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-1) 0 var(--s-2)}
-/* Tools' requests: the Needs you cards, one under another (tasks.css .flow-requests) */
+/* Tools' requests: the Needs you cards, one under another (tasks.css .flow-request) */
 .tools .tool-requests{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-1) 0 var(--s-3)}
 /* a card never widens the list: its buttons wrap to a second line when the three do not fit (ask.css .is-whole) */
 .tools .tool-requests,.tools .tool-requests>*{min-width:0}

@@ -146,6 +146,15 @@ SCHEMAS.update(
                         "description": "When the first ask the caller snoozed for themselves comes back: read the list again "
                         "then (POST /api/v2/needs-you/snooze)",
                     },
+                    sorting={
+                        "type": "boolean",
+                        "description": "Tico is sorting the list in the background: a `needs` event follows with its order",
+                    },
+                    sorting_until={
+                        "type": ["string", "null"],
+                        "description": "While `sorting`: when the sort's claim runs out; stop showing it and read the list "
+                        "again then",
+                    },
                 ),
                 obj(
                     {"actor": "s", "count": "i"},
@@ -157,6 +166,18 @@ SCHEMAS.update(
                 ),
             ]
         },
+        "NeedsYouSort": obj(
+            {
+                "sorting": {
+                    "type": "boolean",
+                    "description": "Tico is sorting the list in the background: a `needs` event follows with its order",
+                },
+                "sorting_until": {
+                    "type": ["string", "null"],
+                    "description": "While `sorting`: when the sort's claim runs out; stop showing it then",
+                },
+            }
+        ),
         "FlowOpinions": obj(
             {
                 "opinions": items(

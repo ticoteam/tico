@@ -1,7 +1,7 @@
 import { infiniteQueryOptions, queryOptions, useQueries, useQuery, type InfiniteData, type QueryKey } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '@/api/client';
-import type { ContactsNamesResult, NeedsYouItem, TagCreate, TagResult, TagUpdate } from '@/api/schema';
+import type { ContactsNamesResult, NeedsYouItem, NeedsYouSort, TagCreate, TagResult, TagUpdate } from '@/api/schema';
 import type {
   FactoryMap,
   PipelineSettings,
@@ -20,7 +20,7 @@ import type {
   TagDetail,
   TagList,
 } from '@/api/schema';
-import { keys, needsYouItems, queryClient, quietRoot, write } from '@/data';
+import { keys, needsYouRead, queryClient, quietRoot, write } from '@/data';
 import { toast } from '@/kit/Toast';
 import { newId } from '@/lib';
 
@@ -669,7 +669,8 @@ const FLOW_PAGE = 100; // The Contacts names read accepts up to 100 IDs.
 
 const NAMES_BACKSTOP_MS = 2 * 60 * 1000;
 
-export function useFlowGroups(items: readonly FlowItem[], pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] = [items]) {
+/** Each relationship's name, by its id, read in pages of FLOW_PAGE; a name the person may not read is missing. */
+export function useContactNames(pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[]): Map<string, string> {
   const seen = new Set<string>();
   const batches: string[][] = [];
   for (const page of pages) {
@@ -692,7 +693,11 @@ export function useFlowGroups(items: readonly FlowItem[], pages: readonly (reado
     refetchInterval: NAMES_BACKSTOP_MS,
     refetchOnWindowFocus: true,
   })) });
-  const names = new Map(reads.flatMap((read) => read.isSuccess && !read.isFetching ? Object.entries(read.data.names) : []));
+  return new Map(reads.flatMap((read) => read.isSuccess && !read.isFetching ? Object.entries(read.data.names) : []));
+}
+
+export function useFlowGroups(items: readonly FlowItem[], pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] = [items]) {
+  const names = useContactNames(pages);
   const out = new Map<string, { key: string; name: string; items: FlowItem[] }>();
   for (const it of items) {
     const id = it.entity_id ?? '';
@@ -820,6 +825,48 @@ export interface Flow {
   /** Each ❓ question or ask an agent put to the person that still waits, with the pipeline of its task when it is on
       one: the Agent bar opens for its page's owner on that page (a pipeline's on that pipeline's page). */
   asks?: { id: string; kind: 'question' | 'ask'; by: string; pipeline: string | null; href: string | null }[];
+  /** Every row's id (a task row's task, a request's own), in Tico's order (backend/needs_order.py). */
+  order?: string[];
+  /** Tico is sorting the list: its top rows stay live and the rest wait for the new order. */
+  sorting?: boolean;
+  /** While `sorting`: when its claim runs out (`useNeedsYouSort` stops showing it and reads the list again then). */
+  sortingUntil?: string | null;
+  /** Every Needs-you item's id, a task's second ask and a question with no task included. */
+  itemIds?: string[];
+}
+
+/** The Needs you page's own ask for Tico to sort the list when it is due (`POST /api/v2/needs-you/sort` with the ids it
+    shows, backend/needs_order.py), once as the page opens and again when the set of what is on it changes. A sort it
+    starts is claimed before it answers, so the list read again then says `sorting`. Its own key, never under ['flow'],
+    so no other reader of the list and no refresh asks. */
+const needsYouSortQuery = (set: string) => queryOptions({
+  queryKey: ['needs-you-sort', set] as const,
+  queryFn: async ({ signal }) => {
+    const r = await api.post<NeedsYouSort>('/api/v2/needs-you/sort', { ids: set ? set.split(',') : [] }, { signal });
+    if (r.sorting) void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+    return r;
+  },
+  staleTime: Infinity,
+  gcTime: 0,
+});
+
+/** Whether Tico is sorting the list: only while the list's newest read says so and its claim has not run out
+    (`sortingUntil`). One timer at that moment shows the list live again and reads it again: a sort whose server went
+    away ends there, with no `needs` event to say so, whether or not that read comes back. */
+export function useNeedsYouSort(flow: Flow | undefined): boolean {
+  const set = flow ? [...(flow.itemIds ?? flow.order ?? [])].sort().join(',') : '';
+  useQuery({ ...needsYouSortQuery(set), enabled: set.includes(',') }); // one item has one order: nothing to ask
+  const [over, end] = useState<string | null>(null);
+  const until = flow?.sorting ? flow.sortingUntil ?? null : null;
+  useEffect(() => {
+    if (!until) return;
+    const timer = setTimeout(() => {
+      end(until);
+      void queryClient.invalidateQueries({ queryKey: flowQuery.queryKey });
+    }, Math.max(0, Date.parse(until) - Date.now()));
+    return () => clearTimeout(timer);
+  }, [until]);
+  return !!until && over !== until;
 }
 
 /** One Needs-you row on a task, as Flow lists it. */
@@ -847,14 +894,15 @@ export const flowQuery = queryOptions({
   queryKey: ['flow'] as const,
   // The Flow loader still needs this result if the shell unsubscribes.
   queryFn: async (): Promise<Flow> => {
-    // One row a task, where its oldest item is; an ask that says what it is about (`about`) names the row.
+    // One row a task, where its first item is in Tico's order; an ask that says what it is about (`about`) names the row.
     const seen = new Map<string, number>();
     const named = new Set<string>();
     const items: FlowItem[] = [];
     const approvals = new Map<string, ApprovalItem>();
     const requests: FlowRequest[] = [];
     const asks: NonNullable<Flow['asks']> = [];
-    const needs = await needsYouItems();
+    const order: string[] = [];
+    const { items: needs, sorting, sortingUntil } = await needsYouRead();
     for (const it of needs) {
       // whose it is, as the server's needs_actor reads it (backend/views.py): a ❓'s agent; an ask's asker, else, for an OK
       // the stage asks for, the task's owner, then who asked for the task, whichever is an agent
@@ -865,6 +913,7 @@ export const flowQuery = queryOptions({
       if (by?.startsWith('bot:')) asks.push({ id: it.id, kind: it.kind === 'question' ? 'question' : 'ask', by, pipeline: it.task?.pipeline_id ?? null, href });
       if (isRequest(it)) {
         requests.push(it);
+        order.push(it.id);
         continue;
       }
       // a paused item names its tasks in task_ids (backend/views.py), which the generated type leaves out
@@ -886,8 +935,9 @@ export const flowQuery = queryOptions({
       }
       seen.set(t.id, items.length);
       items.push(flowItemOf(it, t));
+      order.push(t.id);
     }
-    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()], asks };
+    return { count: items.length + requests.length, items, requests, task_ids: [...named], approvals: [...approvals.values()], asks, order, sorting, sortingUntil, itemIds: needs.map((it) => it.id) };
   },
 });
 

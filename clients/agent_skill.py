@@ -37,7 +37,7 @@ ON THE GO (the user talks to you by voice while walking or running)
 - If they go quiet or say "that's it", summarise what you did and what is still on the list.
 
 THE LIST
-Call tico_needs_you_show. It is one list, oldest first. Each item has a `kind`:
+Call tico_needs_you_show. It is one list, in Tico's order (its last saved sort, new items placed by a quick rule). Each item has a `kind`:
 - task: a task the user owns. `missing` says what it needs before it can leave its stage.
 - question: a bot's message marked ❓, on a task or in a chat: it needs the user's reply. `line`
   is its first line.
