@@ -231,7 +231,7 @@ def can_run(c, bot, runtime, runner=None, harness="", model="", *, manages=False
                 + (": " + str(tool["detail"])[:200] if tool.get("detail") else ""),
                 "Check " + label + " in Settings > Computers, or choose a model it already runs",
             )
-        # One the runner does not install (no [install] method: Antigravity) waits for the operator, not an install.
+        # One the runner does not install (no [install] method) waits for the operator, not an install.
         own = manifests.get(runtime)
         if tool and (own is None or own["installable"] or tool.get("state") in ("queued", "installing")):
             return verdict(None, (tool.get("name") or str(runtime)) + " is installing on " + label)

@@ -16,10 +16,11 @@ from .store import Problem
 
 H: Any = hubdb
 Row = dict[str, Any]
-# SQLite uses the partial index when the kind predicate matches model_subscriptions_pool.
+# Every plan kind (model_subscriptions.POOL_KINDS, which imports this module, so written out; a test keeps them equal),
+# as the model_subscriptions_plan_pool partial index names them.
 PLAN_OWNERS = (
     "SELECT DISTINCT h.id AS person_id FROM model_subscriptions s JOIN humans h ON s.owner_id='human:' || h.id "
-    "WHERE s.kind IN ('claude_token','claude_login','codex_login')"
+    "WHERE s.kind IN ('claude_token','claude_login','codex_login','antigravity_login')"
 )
 # During replacement, the new runner has consumed its code before the machine row points to it.
 PERSONAL_RUNNER = (
