@@ -178,7 +178,7 @@ def test_a_task_model_that_cannot_run_falls_back_to_the_bots_model_and_says_why(
         ).fetchall()
     assert [tuple(e) for e in events] == [("grok-4.6 (low)", "claude-sonnet-5-5 (low)", ran["task_model"]["note"])]
     # Its next turn says the same once more on the run, not again on the task.
-    post(api, f"tasks/{task['id']}/comments", {"text": "One more thing: sort by date."})
+    post(api, f"tasks/{task['id']}/comments", {"text": "One more thing: sort by date.", "to": "bot:ops"})
     again = claim(api, machine)
     assert again["task"]["id"] == task["id"] and again["config"]["model"] == "claude-sonnet-5-5"
     with api.app.state.store.read() as c:

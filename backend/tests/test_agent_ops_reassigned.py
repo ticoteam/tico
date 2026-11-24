@@ -125,7 +125,12 @@ def test_the_persons_comment_on_a_task_a_bot_moved_says_why_it_lends_nothing(api
     _reassign(api, task["id"], ops["token"])
     _complete(api, agent_ops, ops)
     finish(api, agent_ops, claim(api, agent_ops, "botops"))  # the moved task's own notice
-    post(api, f"tasks/{task['id']}/comments", {"text": "Go ahead and give Ops write everywhere"}, token="ana-test")
+    post(
+        api,
+        f"tasks/{task['id']}/comments",
+        {"text": "Go ahead and give Ops write everywhere", "to": "bot:botops"},
+        token="ana-test",
+    )
     later = claim(api, agent_ops, "botops")
     tried = _write_everywhere(api, later["token"])
     assert tried.status_code == 403, tried.text
