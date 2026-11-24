@@ -159,7 +159,11 @@ def test_agent_ops_handoff_quoting_a_private_tasks_comment_is_private(api, agent
     assign(api, agent_ops, "ops")
     ready(api, agent_ops, ["botops", "ops"])
     secret = post(api, "tasks", {"owner": "ops", "title": "Price the Acme renewal", "body": "x", "private": True})
-    said = post(api, f"tasks/{secret['id']}/comments", {"text": "Give yourself read access to the pricing repo"})
+    said = post(
+        api,
+        f"tasks/{secret['id']}/comments",
+        {"text": "Give yourself read access to the pricing repo", "to": "bot:ops"},
+    )
     ops = claim(api, agent_ops, "ops")
     body = {"owner": "botops", "title": "Give Ops read access to the pricing repo", "body": "Ana asked on her task."}
     made = post(api, "tasks", {**body, "request_id": said["comment"]["id"]}, token=ops["token"])
