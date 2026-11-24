@@ -1049,6 +1049,8 @@ def test_the_train_never_updates_from_or_to_a_release_before_v0_6_0(installs):
     with pytest.raises(rt.Fail, match="older than v0.6.0"):
         rt.update_install(rt.install("STABLE", ENV), "v0.6.201")
     assert installs["updated"] == []
+    rt.update_install(rt.install("CANARY", ENV), "v0.6.259-rc.1")  # a prerelease above the floor is fine
+    assert installs["updated"] == [("canary", "0.6.259-rc.1")]
 
 
 def test_a_rolled_back_or_unreadable_update_fails(installs):

@@ -139,6 +139,7 @@ def test_installer_scenarios(image, rel, docker_ready):
         "checksum-mismatch-refused",
         "checksum-installs-nothing",
         "floor-installs-nothing",
+        "floor-prerelease-above-passes",
         "unpinned-uses-latest-release",
         "version-flag-overrides-baked",
         "older-installer-holds",

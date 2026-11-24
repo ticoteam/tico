@@ -83,7 +83,7 @@ def run_from(box, cwd, *args, **env):
         **box["env"],
         **env,
     }
-    script = box["rel"] / "download" / "v0.2.0" / "install.sh"
+    script = box["rel"] / "download" / "v0.6.2" / "install.sh"
     return subprocess.run(
         ["sh", str(script), "--dir", str(box["dir"]), *args],
         env=variables,
@@ -111,7 +111,7 @@ def test_local_packs_the_file_in_the_server_image_and_puts_the_packed_plan_in_en
     assert company["input"].read_bytes() == COMPANY  # the file itself went to the packer's stdin
     calls = company["log"].read_text().splitlines()
     assert "docker compose pull --quiet server" in calls  # the image is here before it packs
-    assert f"packer TICO_TAG=v0.2.0" in calls  # the pinned release packs it, not latest
+    assert f"packer TICO_TAG=v0.6.2" in calls  # the pinned release packs it, not latest
     assert calls.index("docker compose pull --quiet server") < calls.index(PACK) < calls.index("docker compose up -d")
     assert "env-before-pack" not in calls  # nothing installed before the file packs
     assert f"Your team from {company['file']} is loaded." in r.stdout
@@ -223,11 +223,11 @@ def test_a_team_install_without_the_flag_passes_the_wizard_the_same_arguments_as
 
 def test_an_install_that_already_has_its_env_keeps_its_team_and_says_the_file_was_not_used(company):
     company["dir"].mkdir(parents=True)
-    (company["dir"] / ".env").write_text('TICO_TAG=v0.2.0\nTICO_TEAM_NAME="Kept"\n')
+    (company["dir"] / ".env").write_text('TICO_TAG=v0.6.2\nTICO_TEAM_NAME="Kept"\n')
     r = run(company, *LOCAL, "--company-file", str(company["file"]))
     assert r.returncode == 0, r.stdout + r.stderr
     assert "--company-file is used when Tico is first installed" in r.stderr
-    assert (company["dir"] / ".env").read_text() == 'TICO_TAG=v0.2.0\nTICO_TEAM_NAME="Kept"\n'
+    assert (company["dir"] / ".env").read_text() == 'TICO_TAG=v0.6.2\nTICO_TEAM_NAME="Kept"\n'
     assert "docker compose run" not in company["log"].read_text()
 
 

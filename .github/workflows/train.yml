@@ -71,6 +71,7 @@ jobs:
             scripts/pr_checks.py
             scripts/flake_detect.py
             templates/catalog/release-notes-writer/software/rollout.py
+            backend/release_floor.py
           sparse-checkout-cone-mode: false
       - name: Wait for the validation run to finish
         if: inputs.validation_run != ''
@@ -194,6 +195,7 @@ jobs:
             scripts/pr_checks.py
             scripts/flake_detect.py
             templates/catalog/release-notes-writer/software/rollout.py
+            backend/release_floor.py
           sparse-checkout-cone-mode: false
       # With no artifact (the shots job ended before it uploaded), the download fails and the issue says the pictures
       # could not be made, with this run's URL.

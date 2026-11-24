@@ -69,6 +69,8 @@ def test_domain_must_be_the_slug_under_the_cell_domain(ready):
         ("--issuer", "http://accounts.tico.team", "bad_args"),
         ("--client-id", "bad id", "bad_args"),
         ("--version", "latest", "bad_args"),
+        ("--version", "v0.5.216", "bad_args"),  # below the v0.6.0 floor
+        ("--version", "v0.6.0-rc.1", "bad_args"),  # a prerelease counts below its release
         ("--auth", "google", "bad_args"),
     ],
 )
@@ -553,6 +555,16 @@ def test_list_status_stop_start(ready):
     started = ready("start", "--company", "boatyard")
     assert started["ok"] and started["changed"] is True and started["port"] == 20000
     assert ready("status", "--company", "nobody")["error"] == "not_found"
+
+
+def test_update_refuses_a_release_below_v0_6_0_before_it_changes_anything(ready):
+    ready(*add_args(ready))
+    env = (ready.root / "companies" / "boatyard" / ".env").read_text()
+    for version in ("v0.5.216", "v0.6.0-rc.1"):
+        answer = ready("update", "--company", "boatyard", "--version", version)
+        assert answer["error"] == "bad_args" and "older than v0.6.0" in answer["detail"]
+    assert (ready.root / "companies" / "boatyard" / ".env").read_text() == env
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0-rc.1")["ok"]  # a prerelease above it is fine
 
 
 def test_update_snapshots_then_runs_the_new_release(ready):

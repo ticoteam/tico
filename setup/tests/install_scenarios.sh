@@ -140,10 +140,12 @@ D=/work/tampered
 out=$(inst --dir $D --version v0.6.9 --yes 2>&1); code_is checksum-mismatch-refused 4 $? "$out"; has checksum-msg "Checksum mismatch" "$out"
 if [ ! -e $D/compose.yaml ] && [ ! -e $D/.env ]; then ok checksum-installs-nothing; else bad checksum-installs-nothing "files exist"; fi
 out=$(inst --dir $D --version v0.6.8 --yes 2>&1); code_is missing-release 4 $? "$out"
-# Nothing before v0.6.0 and no prerelease: refused before anything is downloaded or changed.
+# Nothing before v0.6.0 (v0.6.0-rc.1 counts below it): refused before anything is downloaded or changed.
 for v in v0.5.216 v0.6.0-rc.1; do
   out=$(inst --dir $D --version $v --yes 2>&1); code_is "floor-refused-$v" 2 $? "$out"
 done
+# A prerelease above the floor passes it, and stops only because this test's release server does not have it.
+out=$(inst --dir $D --version v0.6.259-rc.1 --yes 2>&1); code_is floor-prerelease-above-passes 4 $? "$out"
 has floor-msg "no release before v0.6.0 is supported" "$(inst --dir $D --version v0.5.216 --yes 2>&1)"
 if [ ! -e $D/compose.yaml ] && [ ! -e $D/.env ]; then ok floor-installs-nothing; else bad floor-installs-nothing "files exist"; fi
 out=$(inst --dir /work/old-runner --runner --url http://server:8765 --code abc123 --label "Old" --version v0.5.216 2>&1)

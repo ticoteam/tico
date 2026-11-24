@@ -113,8 +113,8 @@ def test_recommended_adds_a_docker_computer_on_the_server_network_without_the_ow
         "TICO_URL": "http://server:8765",
         "TICO_CODE": CODE,
         "TICO_RUNNER_LABEL": '"Server computer"',
-        "TICO_TAG": "v0.2.0",
-        "TICO_UPDATER_TAG": "v0.2.0",
+        "TICO_TAG": "v0.6.2",
+        "TICO_UPDATER_TAG": "v0.6.2",
         "TICO_SCREEN": "1",
     }
     assert "name: tico_default" in (computer / "runner.override.yaml").read_text()
@@ -250,7 +250,7 @@ def on_a_terminal(box, answer: str, *args, stop_at: bytes = b"") -> tuple[int, s
         "TICO_INSTALL_DIR": str(box["dir"]),
         **box["env"],
     }
-    script = box["rel"] / "download" / "v0.2.0" / "install.sh"
+    script = box["rel"] / "download" / "v0.6.2" / "install.sh"
     pid, fd = pty.fork()
     if pid == 0:
         os.execve("/bin/sh", ["sh", str(script), *args], variables)
@@ -302,7 +302,7 @@ def test_with_nothing_chosen_and_no_terminal_nothing_is_asked_and_the_wizard_run
         "TICO_INSTALL_DIR": str(server["dir"]),
         **server["env"],
     }
-    script = server["rel"] / "download" / "v0.2.0" / "install.sh"
+    script = server["rel"] / "download" / "v0.6.2" / "install.sh"
     r = subprocess.run(
         ["sh", str(script)],
         env=variables,
@@ -340,7 +340,7 @@ def test_the_question_is_not_asked_with_a_mode_with_yes_or_on_an_existing_instal
     "given, shown",
     [
         (["--dir", "<dir>"], "Setting up your team"),
-        (["--version", "v0.2.0"], "Setting up your team"),
+        (["--version", "v0.6.2"], "Setting up your team"),
         (["--owner-email", "ana@example.com"], "--owner-email, --owner-name and --team-name go with --local"),
     ],
 )

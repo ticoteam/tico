@@ -26,8 +26,8 @@ def test_runner_mode_writes_the_compose_file_and_a_pinned_env_and_starts_it(box)
         "TICO_URL=https://tico.example.com",
         "TICO_CODE=code_123-abc",
         'TICO_RUNNER_LABEL="Ana\'s build box"',
-        "TICO_TAG=v0.2.0",
-        "TICO_UPDATER_TAG=v0.2.0",
+        "TICO_TAG=v0.6.2",
+        "TICO_UPDATER_TAG=v0.6.2",
         "TICO_SCREEN=1",
     ]
     assert stat.S_IMODE((box["dir"] / ".env").stat().st_mode) == 0o600
@@ -71,12 +71,12 @@ def test_the_default_memory_cap_is_the_host_less_a_reserve_and_a_setting_in_env_
     env.write_text(env.read_text() + "TICO_RUNNER_MEMORY=0\n")
     assert "memory unset" in run(33554432, "--runner")  # what .env says wins, and 0 is no limit
     assert env.read_text().endswith("TICO_RUNNER_MEMORY=0\n")
-    env.write_text("TICO_TAG=v0.2.0\nTICO_RUNNER_MEMORY = 2g\n")
+    env.write_text("TICO_TAG=v0.6.2\nTICO_RUNNER_MEMORY = 2g\n")
     assert "memory unset" in run(33554432, "--runner")  # spaces around the = still make a setting
     for line in ("TICO_RUNNER_MEMORY: 0", "export TICO_RUNNER_MEMORY=0"):  # compose's other assignment forms
-        env.write_text("TICO_TAG=v0.2.0\n" + line + "\n")
+        env.write_text("TICO_TAG=v0.6.2\n" + line + "\n")
         assert "memory unset" in run(33554432, "--runner"), line
-    env.write_text("TICO_TAG=v0.2.0\n# TICO_RUNNER_MEMORY=0\n")
+    env.write_text("TICO_TAG=v0.6.2\n# TICO_RUNNER_MEMORY=0\n")
     assert "memory 28g\n" in run(33554432, "--runner")  # a commented line is no setting
 
 
@@ -84,8 +84,8 @@ def test_a_bundle_from_before_the_memory_rule_still_installs_and_just_has_no_def
     import hashlib
     import tarfile
 
-    release = box["rel"] / "download" / "v0.2.0"
-    bundle = release / "tico-bundle-v0.2.0.tar.gz"
+    release = box["rel"] / "download" / "v0.6.2"
+    bundle = release / "tico-bundle-v0.6.2.tar.gz"
     old = box["tmp"] / "old-bundle.tar.gz"
     with tarfile.open(bundle) as src, tarfile.open(old, "w:gz") as dst:
         for member in src.getmembers():
@@ -122,17 +122,17 @@ def test_a_new_code_url_or_label_replaces_only_those_keys_of_an_existing_env(box
         "TICO_URL=https://new.example.com",
         "TICO_CODE=fresh-code_9",
         'TICO_RUNNER_LABEL="Ana\'s build box"',
-        "TICO_TAG=v0.2.0",
-        "TICO_UPDATER_TAG=v0.2.0",
+        "TICO_TAG=v0.6.2",
+        "TICO_UPDATER_TAG=v0.6.2",
         "TICO_SCREEN=1",
         "TICO_RUNNER_PINNED=1",
     ]
     assert stat.S_IMODE(env.stat().st_mode) == 0o600
     assert "up -d" in box["log"].read_text()
     # A key the file lacks is added, and a label alone leaves the join code as it was.
-    env.write_text("TICO_TAG=v0.2.0\n")
+    env.write_text("TICO_TAG=v0.6.2\n")
     assert install(box, "--runner", "--label", "Box 2").returncode == 0
-    assert env.read_text().splitlines() == ["TICO_TAG=v0.2.0", 'TICO_RUNNER_LABEL="Box 2"']
+    assert env.read_text().splitlines() == ["TICO_TAG=v0.6.2", 'TICO_RUNNER_LABEL="Box 2"']
 
 
 def test_a_new_runner_offers_its_screen_unless_told_not_to_and_an_existing_env_keeps_its_choice(box):
@@ -146,7 +146,7 @@ def test_a_new_runner_offers_its_screen_unless_told_not_to_and_an_existing_env_k
     assert on.returncode == 0 and "Screen on: TICO_SCREEN=1" in on.stdout
     assert [line for line in env.read_text().splitlines() if line.startswith("TICO_SCREEN")] == ["TICO_SCREEN=1"]
     # An install from before the default has no line, and keeps the screen off through an upgrade.
-    env.write_text("TICO_TAG=v0.2.0\n")
+    env.write_text("TICO_TAG=v0.6.2\n")
     assert install(box, "--runner").returncode == 0
     assert "TICO_SCREEN" not in env.read_text()
     bad = install(box, "--no-screen")
@@ -170,7 +170,7 @@ def test_a_named_runner_gets_its_own_project_container_volume_and_updater_next_t
     ]
     box["log"].write_text("")
     result = subprocess.run(
-        ["sh", str(box["rel"] / "download" / "v0.2.0" / "install.sh"), "--dir", str(mail), *args],
+        ["sh", str(box["rel"] / "download" / "v0.6.2" / "install.sh"), "--dir", str(mail), *args],
         env={
             "PATH": f"{box['stubs']}:/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
             "HOME": str(box["tmp"]),
@@ -190,8 +190,8 @@ def test_a_named_runner_gets_its_own_project_container_volume_and_updater_next_t
         "TICO_URL=http://server:8765",
         "TICO_CODE=code_456",
         'TICO_RUNNER_LABEL="Mail Bot"',
-        "TICO_TAG=v0.2.0",
-        "TICO_UPDATER_TAG=v0.2.0",
+        "TICO_TAG=v0.6.2",
+        "TICO_UPDATER_TAG=v0.6.2",
         "TICO_SCREEN=1",
         "TICO_RUNNER_HOME_VOLUME=tico-runner-mail-bot_runner-home",
     ]  # never the first runner's volume
@@ -209,7 +209,7 @@ def test_a_named_runner_gets_its_own_project_container_volume_and_updater_next_t
         subprocess.run(
             [
                 "sh",
-                str(box["rel"] / "download" / "v0.2.0" / "install.sh"),
+                str(box["rel"] / "download" / "v0.6.2" / "install.sh"),
                 "--dir",
                 str(mail),
                 "--runner",

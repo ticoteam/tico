@@ -41,7 +41,7 @@ def box(tmp_path):
         tool.chmod(tool.stat().st_mode | stat.S_IXUSR)
     (tmp_path / "meminfo").write_text("MemTotal:        2000000 kB\n")
     rel = tmp_path / "rel"
-    version = "v0.2.0"
+    version = "v0.6.2"
     assert build.main(["--version", version, "--output", str(rel / "download" / version), "--source", str(ROOT)]) == 0
     return {"stubs": stubs, "rel": rel, "dir": tmp_path / "runner", "log": tmp_path / "docker.log", "tmp": tmp_path}
 
@@ -55,7 +55,7 @@ def install(box, *args, **env):
         "TICO_INSTALL_MEMINFO": str(box["tmp"] / "meminfo"),
         **env,
     }
-    script = box["rel"] / "download" / "v0.2.0" / "install.sh"
+    script = box["rel"] / "download" / "v0.6.2" / "install.sh"
     return subprocess.run(
         ["sh", str(script), "--dir", str(box["dir"]), *args], env=variables, capture_output=True, text=True, timeout=120
     )

@@ -533,11 +533,13 @@ refuses an older one without changing it: "This database was made by a Tico olde
 does not carry tasks over: every company starts on a new database. Nothing was changed. Run the release that made it on
 this database, or set up a new company on 0.6."
 
-Every place that takes a release to install or update to accepts only a stable release at v0.6.0 or later, and refuses
-anything else (an older release, a release candidate, a malformed version) with the reason, before it changes anything:
-Update now and the update key (`POST /api/v2/system/update`), a target Tico support sets for a hosted server,
-`scripts/install.sh --version` (server and runner), the release train and the release journey
-(`backend/release_floor.py`). A computer below v0.6.0 gets no work, but still reads the release to update to.
+Every place that takes a release to install or update to accepts only a release at v0.6.0 or later by semver, and
+refuses anything else (an older release, a prerelease of v0.6.0 such as v0.6.0-rc.1, a malformed version) with the
+reason, before it changes anything. A prerelease above the floor (v0.6.259-rc.1, v0.7.0-rc.1) is accepted. The places:
+Update now and the update key (`POST /api/v2/system/update`), a target Tico support sets for a hosted server (stable
+releases only), `scripts/install.sh --version` (server and runner), `install-wsl.ps1 -Version`, `setup/cell.py`
+add and update, the release train and the release journey (`backend/release_floor.py`). A computer below v0.6.0 gets
+no work, but still reads the release to update to.
 
 ## For maintainers
 

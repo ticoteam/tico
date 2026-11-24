@@ -70,11 +70,12 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$LOCAL" = 1 ] && CAND="${TICO_JOURNEY_CANDIDATE:-v9.9.9}"
-supported() {  # backend/release_floor.py's check: a stable vX.Y.Z at v0.6.0 or later (no prerelease, nothing malformed)
-  [[ "$1" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 ))
+supported() {  # backend/release_floor.py's check: vX.Y.Z[-pre] at v0.6.0 or later by semver (v0.6.0-rc.1 is below it)
+  [[ "$1" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]] || return 1
+  local major=$((10#${BASH_REMATCH[1]})) minor=$((10#${BASH_REMATCH[2]})) patch=$((10#${BASH_REMATCH[3]}))
+  (( major > 0 || minor > 6 || (minor == 6 && (patch > 0 || ${#BASH_REMATCH[4]} == 0)) ))
 }
-# The candidate may be a prerelease of 0.6 or later (ci.yml's version input); the previous release is a stable one.
-if ! { [[ "$CAND" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 )); }; then
+if ! supported "$CAND"; then
   echo "journey: the candidate must be a release v0.6.0 or later (like v0.6.1), not $CAND" >&2; exit 2
 fi
 if [ -n "$PREV" ] && ! supported "$PREV"; then

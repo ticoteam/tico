@@ -76,6 +76,11 @@ if ($Name -and $Name -notmatch '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$') { Die '-Name n
 if ($Distro -notmatch '^[A-Za-z0-9._-]+$') { Die '-Distro is a WSL distribution name, such as Ubuntu.' }
 if (-not $Version) { $Version = if ($Baked -match $VersionPattern) { $Baked } else { '' } }
 if ($Version -and $Version -notmatch $VersionPattern) { Die '-Version is a release tag, such as v1.2.3.' }
+# The floor (backend/release_floor.py): v0.6.0 or later by semver, before anything is downloaded; v0.6.0-rc.1 is below it.
+if ($Version -match '^v0\.([0-9]+)\.([0-9]+)(-.*)?$' -and
+    ([int]$Matches[1] -lt 6 -or ([int]$Matches[1] -eq 6 -and [int]$Matches[2] -eq 0 -and $Matches[3]))) {
+  Die "$Version is older than v0.6.0, and no release before v0.6.0 is supported. Pass -Version v0.6.0 or later."
+}
 $Installer = if ($Version) { "https://github.com/ticoteam/tico/releases/download/$Version/install.sh" }
              else { 'https://github.com/ticoteam/tico/releases/latest/download/install.sh' }
 
