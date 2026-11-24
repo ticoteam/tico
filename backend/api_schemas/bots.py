@@ -437,7 +437,10 @@ SCHEMAS["BotSidebar"] = obj(
                     "show_count": "b",
                     "conditions": items(
                         obj(
-                            {"field": "s", "value": {"type": ["integer", "string", "array"], "items": {"type": "string"}}},
+                            {
+                                "field": "s",
+                                "value": {"type": ["integer", "string", "array"], "items": {"type": "string"}},
+                            },
                             required=["field", "value"],
                         )
                     ),
