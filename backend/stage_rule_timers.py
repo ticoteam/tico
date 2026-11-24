@@ -370,9 +370,8 @@ def _quiet_blockers(conn: Any, task: Row, hours: float, at: str) -> list[tuple[s
         if quiet < hours:
             return []
         # Named only where everyone who reads the task's thread may open it, as the dependency's own lines are.
-        named = task_calls.may_name(conn, blocker_id, kept_in=task)
         ref = task_depends.ref({"id": blocker_id, "number": number, "prefix": prefix})
-        out.append((ref if named else task_calls.PRIVATE_TASK, quiet))
+        out.append((task_calls.named(conn, blocker_id, ref, kept_in=task), quiet))
     return sorted(out, key=lambda one: -one[1])
 
 

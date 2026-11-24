@@ -13,7 +13,7 @@ queues PRs (Merge): both tasks build and are reviewed side by side.
   (`metadata_changed`) and `tico task queue` (`requeue`) all ask it, and nothing else holds a queue.
 - `standing`: while held, one more thing the task needs to leave its stage, put first (task_requirements.standings):
   waiting on the earlier task (waiting_on's `tasks` state), "After #40: waits for it to merge". Nobody's turn and
-  nobody is woken, and it is not Late (never_stuck). A reader who may not open #40 reads "After a task you can't open".
+  nobody is woken, and it is not Late (never_stuck). A reader who may not open #40 reads "After a private task".
 - `release`: when a task ends or its PR merges, every task held on it is read again. One no longer held is queued now
   (its `queue` actions owed, as on entering Merge; GitHub's `mergeable` is read when they are carried out, and a PR that
   now conflicts goes to the owner with the send-back to QA naming the task it is to be rebased on,
@@ -28,6 +28,8 @@ refused (`check`).
 
 from typing import TYPE_CHECKING, Any
 
+from .task_calls import PRIVATE_TASK
+
 if TYPE_CHECKING:
     import sqlite3
 
@@ -38,11 +40,14 @@ Row = dict[str, Any]
 KIND = "merge_order"  # the standing's requirement kind; never a stored requirement
 RELATION = "after"
 LINE = "After {ref}: waits for it to merge"
-UNNAMED = "After a task you can't open: waits for it to merge"
+UNNAMED = f"After {PRIVATE_TASK}: waits for it to merge"
 CLOSED = "{ref} closed without merging. Queue it, or send it back."
 WAKE_CLOSED = "after_closed"
 QUEUED_ANYWAY = "Queued before {ref} merged"
+# GitHub's PR merged while the task is held (item_sources.github), and as a reader who may not open the earlier task
+# reads it (waiting_on.unnamed).
 NOT_QUEUED = "Not queued until {ref} merges"
+NOT_QUEUED_UNNAMED = NOT_QUEUED.format(ref=PRIVATE_TASK)
 
 
 def _engine() -> Any:
@@ -194,12 +199,12 @@ def stops_queue(conn: "sqlite3.Connection", row: Row) -> Row | None:
     return held(conn, row) or closed_before(conn, row)
 
 
-def named(conn: "sqlite3.Connection", row: Row, earlier: Row) -> str:
-    """How words kept in the later task `row`'s thread name `earlier`: `ref`, or "a private task" where a reader of
-    `row` may not open it (task_calls.may_name)."""
+def named(conn: "sqlite3.Connection", row: Row, earlier: Row, reader: str | None = None) -> str:
+    """How words kept in the later task `row`'s thread (and said to `reader`) name `earlier`: `ref`, or "a private
+    task" where a reader may not open it (task_calls.may_name)."""
     from . import task_calls
 
-    return ref(earlier) if task_calls.may_name(conn, earlier["id"], kept_in=row) else task_calls.PRIVATE_TASK
+    return task_calls.named(conn, earlier["id"], ref(earlier), reader=reader, kept_in=row)
 
 
 def closed_line(conn: "sqlite3.Connection", row: Row, earlier: Row) -> str:
@@ -248,7 +253,10 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
             H.refuse(conn, actor, "task_ended", f"{who} has ended: there is no merge to wait for")
     path = _path(conn, str(earlier["id"]), str(later["id"]))
     if path:
-        names = " → ".join(ref(_engine().task(conn, tid)) for tid in [str(later["id"]), *path])
+        from . import task_calls
+
+        hops = [str(later["id"]), *path]
+        names = " → ".join(task_calls.named(conn, t, ref(_engine().task(conn, t)), reader=actor) for t in hops)
         H.refuse(
             conn,
             actor,

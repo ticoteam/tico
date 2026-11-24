@@ -10,7 +10,7 @@ date. It is a named wait, not a state:
   #304 Growth synced sources part 1, in Build" (and any OK or answer still asked of a person): nobody's turn, so no bot is
   woken and the never-stuck check passes it by. It holds no slot where a stage has a limit, is caught by a
   stage's timer rules only once what it waits on has gone quiet too (stage_rule_timers), does not move on by itself (task_engine.advance), and leaves its
-  owner's Needs you. A reader who may not open the blocker reads "Blocked by a task you can't open".
+  owner's Needs you. A reader who may not open the blocker reads "Blocked by a private task".
 - `release`: when a task ends, every dependency on it comes off (a dependency holds until its task first ends, so a
   reopened task blocks nothing again), and each task that depended on it and has no other open dependency is read
   again: it moves on if everything its stage asks is met (task_engine.advance), else its owner is woken once, "#304 is
@@ -44,6 +44,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from . import read_cache
+from .task_calls import PRIVATE_TASK
 
 if TYPE_CHECKING:
     import sqlite3
@@ -54,7 +55,7 @@ LOG = logging.getLogger(__name__)
 RELATION = "depends_on"
 KIND = "depends_on"  # the prefix of the wait's requirement id; never a stored requirement
 LINE = "Blocked by {task}, in {stage}"
-UNNAMED = "Blocked by a task you can't open"
+UNNAMED = f"Blocked by {PRIVATE_TASK}"
 DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
@@ -250,8 +251,11 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
             H.refuse(conn, actor, "task_ended", f"{who} has ended: there is nothing to wait for")
     path = _path(conn, str(blocker["id"]), str(later["id"]))
     if path:
+        from . import task_calls
+
         E = _engine()
-        names = " → ".join(ref(E.task(conn, tid) or {"id": tid}) for tid in [str(later["id"]), *path])
+        hops = [str(later["id"]), *path]
+        names = " → ".join(task_calls.named(conn, t, ref(E.task(conn, t) or {"id": t}), reader=actor) for t in hops)
         H.refuse(
             conn,
             actor,
@@ -435,10 +439,12 @@ def _ship(conn: "sqlite3.Connection", blocker: str | None, version: str) -> list
             continue
         named = ref({"id": blocker_id, "number": number})
         if shipped[blocker_id]:
-            note, said = "its release runs in production", IN_PRODUCTION.format(ref=named, version=version)
+            note = "its release runs in production"
+            said = _said_in(conn, str(task_id), IN_PRODUCTION, blocker_id, named, version=version)
         else:
             repo = running(conn)[1] or "the repository"
-            note, said = "it merged nothing to release here", NOTHING_HERE.format(ref=named, repo=repo)
+            note = "it merged nothing to release here"
+            said = _said_in(conn, str(task_id), NOTHING_HERE, blocker_id, named, repo=repo)
         _off(conn, [str(task_id)], blocker_id, str(_engine().SYSTEM), note)
         if release_one(conn, str(task_id), blocker_id, said):
             out.append(str(task_id))

@@ -356,14 +356,14 @@ def add(
             carried.update({name: value for name, value in was.items() if name not in ENGINE_REFS})
             parts += _parts(was, found[3], found[1])
         if parts:
-            parts.append({"key": wake_key, "text": text})
+            parts.append({"key": _part_key(wake_key), "text": text})
             text = _joined(parts)
     own: Row = {"task": task["id"], "wake": "task_turn", "visit": visit["id"], "level": level, "try": try_n}
     own["version"] = task.get("version")
     if quiet:
         own["quiet"] = True
     if parts:
-        own["parts"] = parts  # what was folded into it, each with its key and its words (`cancel`)
+        own["parts"] = parts  # what was folded into it, each with its key's digest and its words (`cancel`)
     theirs: Row = {name: value for name, value in (refs or {}).items() if name not in ENGINE_REFS}
     if not theirs.get("wake_batch"):
         carried.pop("wake_batch", None)  # a wake that is not batchable is not held for what it folded (wake_presets)
@@ -1170,7 +1170,13 @@ def drop(conn: "sqlite3.Connection", task_id: str, keep: str | Collection[str] |
 def _parts(refs: Row, wake_key: object, body: object) -> list[Row]:
     """What one queued wake is made of: the wakes folded into it, or itself alone."""
     folded: list[Row] | None = refs.get("parts")
-    return list(folded) if folded else [{"key": str(wake_key or ""), "text": str(body or "")}]
+    return list(folded) if folded else [{"key": _part_key(wake_key), "text": str(body or "")}]
+
+
+def _part_key(wake_key: object) -> str:
+    """A folded wake's key as its message's refs keep it: a digest, since the refs reach whoever reads the thread and
+    a key may name a task they may not open (`unblocked:<task id>`). `cancel` finds it by the same digest."""
+    return hashlib.sha256(str(wake_key or "").encode()).hexdigest()[:32]
 
 
 def _joined(parts: list[Row]) -> str:
@@ -1190,7 +1196,8 @@ def cancel(conn: "sqlite3.Connection", wake_key: str) -> int:
     for job_id, message_id, own_key, raw, body in rows:
         refs: Row = H._json(raw, {}) or {}
         parts = _parts(refs, own_key, body)
-        rest = [part for part in parts if part.get("key") != wake_key]
+        # A wake folded before its key was kept as a digest keeps the key itself.
+        rest = [part for part in parts if part.get("key") not in (wake_key, _part_key(wake_key))]
         if len(rest) == len(parts):
             continue
         if not rest:

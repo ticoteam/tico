@@ -128,6 +128,8 @@ def unnamed(said: Said, shown: Callable[[str], bool]) -> Said:
         return replace(said, line=SUB_TASK_CLOSED, about=None)
     if said.state == R.WAITING and merge_order.is_order(said.requirement):
         return replace(said, on=None, line=merge_order.UNNAMED, about=None)
+    if said.state == R.WAITING and said.requirement.get("condition") == "pr_merged":
+        return replace(said, line=merge_order.NOT_QUEUED_UNNAMED, about=None)  # still GitHub's: held after a task
     if said.state == R.WAITING:
         return replace(said, on=None, line=SUB_TASK_OPEN, about=None)
     return replace(said, line=SUB_TASK_CLOSED, about=None)

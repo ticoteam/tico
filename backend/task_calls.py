@@ -1031,15 +1031,14 @@ def may_name(
 ) -> bool:
     """Whether words may name task `other_id` (its title, its number, its id). Said to `reader`: they may read it
     (`_readable`). Kept in the thread of task `kept_in` (a wake, a note, a line every reader of that task reads later):
-    also its owner may read it, and a private one only when `kept_in` is private too and every party and reader of it
-    may open it, since a company task is read by every member."""
+    a private one only when `kept_in` is private too and everyone who reads `kept_in` reads it, since a company task
+    is read by every member."""
     if not other_id or not _readable(conn, reader, other_id, visible_sql):
         return False
     if kept_in is None:
         return True
     H = _h()
-    owner = kept_in.get("owner_id")
-    other = _readable_rows(conn, owner, [str(other_id)]).get(str(other_id)) if owner else None
+    other: Row | None = H.task(conn, str(other_id))
     if not other:
         return False
     if not H.task_private(conn, other):
@@ -1047,8 +1046,27 @@ def may_name(
     full: Row = H.task(conn, str(kept_in["id"])) or {}
     if not H.task_private(conn, full):
         return False
-    parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
-    return all(H.task_private_readable(conn, p, other) for p in parties)
+    # Its real readers, by the read rule itself (hubdb.task_private_readable): its parties and readers, a person
+    # assignee, whoever inherits it through a bot, a meeting's participants, a call's thread.
+    everyone = {p for p in H.task_parties(full) if p} | H.reader_actors(conn, full) | _teammates(conn)
+    return all(H.task_private_readable(conn, p, other) for p in everyone if H.task_private_readable(conn, p, full))
+
+
+def _teammates(conn: "sqlite3.Connection") -> set[str]:
+    """Every bot that is not archived and every person on the roster."""
+    from . import views
+
+    H = _h()
+    roster: Row = cast(Any, views).roster(conn, shared=True)
+    bots = {f"bot:{b['id']}" for b in H.bots(conn) if b.get("state") != "archived"}
+    return bots | {f"human:{p['id']}" for p in roster.get("people") or [] if p.get("id")}
+
+
+def named(
+    conn: "sqlite3.Connection", other_id: object, ref: str, *, reader: str | None = None, kept_in: Row | None = None
+) -> str:
+    """`ref`, words naming task `other_id`, or PRIVATE_TASK where they may not name it (`may_name`)."""
+    return ref if may_name(conn, other_id, reader=reader, kept_in=kept_in) else PRIVATE_TASK
 
 
 def named_line(
@@ -1091,7 +1109,7 @@ def hidden_named(
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
-    """How a requirement stands, said to someone who may not read the tasks in `hidden` (`hidden_filed`)."""
+    """How a requirement stands, said to someone who may not read the tasks in `hidden` (`hidden_named`)."""
     from . import waiting_on as W
 
     return W.unnamed(standing, lambda task_id: task_id not in hidden).line
@@ -1177,7 +1195,7 @@ def _leave_entry(
     works: bool,
 ) -> Row:
     """One entry of a task's `to_leave` (task_view): a requirement of its open visit, where it stands, and what `viewer`
-    may do about it. `hidden` is what `hidden_filed` keeps from them; `works` is the task's."""
+    may do about it. `hidden` is what `hidden_named` keeps from them; `works` is the task's."""
     from . import task_asks
 
     task_id = row["id"]
