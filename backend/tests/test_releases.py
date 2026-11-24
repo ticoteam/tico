@@ -156,14 +156,14 @@ def test_update_is_forwarded_to_the_updater_with_the_token(environment, monkeypa
         "restored": False,
     }
     assert got["running"] == "0.6.1"  # the server's own record, beside the updater's view
-    # Nothing before v0.6.0, no prerelease and nothing malformed reaches the updater.
+    # Nothing before v0.6.0 (v0.6.0-rc.1 counts below it) and nothing malformed reaches the updater.
     for version in ("v0.5.216", "0.6.0-rc.1", "latest"):
         r = api.post("/api/v2/system/update", json={"version": version}, headers=signed_in())
         assert r.status_code == 422 and r.json()["error"]["code"] == "invalid_version"
     assert (
         "older than v0.6.0"
         in api.post("/api/v2/system/update", json={"version": "v0.5.216"}, headers=signed_in()).json()["error"][
-            "message"
+            "detail"
         ]
     )
     assert [s[:2] for s in seen].count(("POST", "/update")) == 1
