@@ -34,7 +34,7 @@ describe('$$ math in a chat', () => {
   });
 
   it('leaves currency and an unclosed block as text', () => {
-    for (const text of ['It costs $5 and $10.', 'Pay $$5 to $$10 today', '$$5 to $$10', '$$\nE = mc^2\nno end', 'a\n$$ $$']) {
+    for (const text of ['It costs $5 and $10.', 'Pay $$5 to $$10 today', '$$5 to $$10', '$$a$$ and $$b$$', '$$\nE = mc^2\nno end', 'a\n$$ $$']) {
       const el = chat(text);
       expect(el.querySelector('.md-code, .md-math'), text).toBeNull();
       // a chat's line breaks are <br>s, so compare without the white space

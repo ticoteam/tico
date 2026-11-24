@@ -136,6 +136,8 @@ def test_the_diagram_frame_s_files_alone_pass_without_sign_in_under_their_own_po
     assert page.status_code == 200 and page.headers["content-type"].startswith("text/html")
     policy = page.headers["content-security-policy"]
     assert policy == web_routes.SANDBOX_POLICY and "default-src 'none'" in policy and "script-src 'self'" in policy
+    # Opened on its own (not framed), the page still has no origin, so its scripts never see the app's cookies.
+    assert policy.endswith("; sandbox allow-scripts")
     assert "access-control-allow-origin" not in page.headers
     for script in ("/next/assets/sandbox-1.js", "/next/assets/flow-2.js"):
         r = web.get(script)

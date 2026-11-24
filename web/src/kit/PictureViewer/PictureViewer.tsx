@@ -60,7 +60,8 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
         <>
           {many && <IconButton icon="chevron" className="flip" label="Previous" onClick={() => step(-1)} />}
           {many && <IconButton icon="chevron" label="Next" onClick={() => step(1)} />}
-          {p && (
+          {/* A diagram the app drew is an SVG of its own: opened as a page it would run on the app's origin. */}
+          {p && !local && (
             <a className="ib" href={p.download ?? p.src} download={p.name} aria-label="Download" title="Download">
               <Icon name="download" />
             </a>

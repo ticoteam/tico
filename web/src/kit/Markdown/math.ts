@@ -7,7 +7,7 @@ import type { MarkedOptions, Tokens } from 'marked';
 export const TEX_MAX = 4000;
 
 const BLOCK = new RegExp(String.raw`^ {0,3}\$\$[ \t]*\n([\s\S]{1,${TEX_MAX}}?)\n {0,3}\$\$[ \t]*(?:\n+|$)`);
-const LINE = /^ {0,3}\$\$(?!\$)([^\n]+?)\$\$[ \t]*(?:\n+|$)/;
+const LINE = /^ {0,3}\$\$(?!\$)((?:(?!\$\$)[^\n])+)\$\$[ \t]*(?:\n+|$)/;
 
 export interface MathToken extends Tokens.Generic {
   type: 'math';

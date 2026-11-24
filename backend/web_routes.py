@@ -44,7 +44,7 @@ SANDBOX_PAGE = "mermaid-sandbox.html"
 # Mermaid's own <style> runs; nothing is fetched, framed, posted or based anywhere.
 SANDBOX_POLICY = (
     "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
-    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'"
+    "base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
 )
 # First path segments the server answers itself: an address under one of them is never the app's page.
 SERVER = frozenset(
