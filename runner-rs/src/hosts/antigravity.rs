@@ -659,7 +659,7 @@ fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) 
     // (crate::sessions::PersonalCopy::make).
     let folder = {
         use std::os::unix::fs::MetadataExt;
-        std::fs::symlink_metadata(&settings.cwd)
+        std::fs::metadata(&settings.cwd)
             .map_or(String::new(), |m| format!("{}:{}", m.dev(), m.ino()))
     };
     inputs.add("folder_id", &folder);
@@ -1018,10 +1018,8 @@ impl AntigravityHost {
         };
         let key = key.filter(|_| settings.plan_home.is_none() || plan.is_some());
         let tokens = self.0.keeper.folder().map_err(failed)?;
-        let file = lease_file(
-            &tokens,
-            settings.env.get("HUB_TOKEN").map_or("", String::as_str),
-        )?;
+        let env = env_of(settings);
+        let file = lease_file(&tokens, env.get("HUB_TOKEN").map_or("", String::as_str))?;
         let tmp = std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         let made = crate::isolation::mkdir(&tmp, 0o700)
             .map_err(|e| failed(format!("could not make Antigravity's TMPDIR: {e}")));
@@ -1120,7 +1118,8 @@ impl AntigravityHost {
                 &self.0.home,
             )
         });
-        let token = settings.env.get("HUB_TOKEN").map_or("", String::as_str);
+        let env = env_of(settings);
+        let token = env.get("HUB_TOKEN").map_or("", String::as_str);
         let held = self.inner().agent.take();
         let (held, pooled) = match (held, &key) {
             (Some(agent), _) => (Some(agent), false),
