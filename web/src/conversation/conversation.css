@@ -50,9 +50,17 @@ textarea.composer-text::placeholder{color:var(--muted)}
 .composer{position:relative}
 .menu.mention-pop{position:absolute;left:0;bottom:calc(100% + var(--s-1h));z-index:var(--z-overlay);width:min(320px,100%);max-height:min(320px,40dvh);overflow-y:auto}
 .composer input[type=file]{display:none}
+/* the files waiting to go: a picture or video as its own small tile, any other file as its name; a press removes it */
+.composer-drop{display:contents}
+.composer-tray{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1h);max-width:100%}
+.composer-tray .file{margin-top:0;border:0}
 .composer-file{max-width:100%}
 .composer-file .ico{flex:none}
 .composer-file span{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.composer-thumb{position:relative;flex:none;width:56px;height:56px;padding:0;border:0;border-radius:var(--r-ctl);overflow:hidden;background:var(--well);box-shadow:inset 0 0 0 1px var(--line);cursor:pointer}
+.composer-thumb :is(img,video){display:block;width:100%;height:100%;object-fit:cover;pointer-events:none}
+.composer-thumb .ico{position:absolute;top:var(--s-1);right:var(--s-1);width:16px;height:16px;padding:var(--s-0);border-radius:var(--r-pill);background:var(--scrim);color:var(--on-scrim)}
+.composer-thumb:disabled{cursor:default;opacity:.6}
 
 /* a picture in a message opens full size over the page (kit/PictureViewer) */
 .msg .md-img{cursor:zoom-in}

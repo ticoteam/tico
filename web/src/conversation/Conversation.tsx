@@ -515,8 +515,9 @@ export function Conversation({ id, variant, title, actor, session, from, starter
           ))}
         </div>
       )}
-      {/* no files where the box writes to an agent's session (`attach`; sendMessage drops any) */}
-      {myId && canPost && <Composer key={boxId} id={boxId} me={myId} to={name} label={compose} fill={fill} canSend={canSend && !!timeline.data} attach={attach} mentions={!toDm} mentionFirst={mentionFirst} mentionOnly={mentionOnly} onSend={(text, files) => send(text, files)} />}
+      {/* no files where the box writes to an agent's session (`attach`; sendMessage drops any); Tico's upload route takes
+          files only with words (backend/models.py AssistantUpload) */}
+      {myId && canPost && <Composer key={boxId} id={boxId} me={myId} to={name} label={compose} fill={fill} canSend={canSend && !!timeline.data} attach={attach} needsText={variant === 'tico'} mentions={!toDm} mentionFirst={mentionFirst} mentionOnly={mentionOnly} onSend={(text, files) => send(text, files)} />}
     </footer>
   );
 

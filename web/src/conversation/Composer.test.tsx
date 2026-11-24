@@ -1,7 +1,8 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor, type Directory } from '@/data';
+import { Toasts } from '@/kit/Toast';
 import { Composer } from './Composer';
 
 const ME = 'human:me';
@@ -195,5 +196,95 @@ describe('names after @', () => {
     mount({ mentions: false });
     type('@sa');
     expect(screen.queryByRole('listbox')).toBeNull();
+  });
+});
+
+describe('files', () => {
+  const made: string[] = [];
+  const freed: string[] = [];
+  beforeEach(() => {
+    made.length = 0;
+    freed.length = 0;
+    Object.assign(URL, {
+      createObjectURL: () => {
+        made.push(`blob:${made.length}`);
+        return made.at(-1);
+      },
+      revokeObjectURL: (u: string) => freed.push(u),
+    });
+  });
+  const file = (name: string, type: string, size = 3) => {
+    const f = new File(['abc'], name, { type });
+    if (size !== 3) Object.defineProperty(f, 'size', { value: size });
+    return f;
+  };
+  const paste = (files: File[]) => fireEvent.paste(box(), { clipboardData: { files, types: ['Files'] } });
+  const drop = (files: File[]) => fireEvent.drop(box(), { dataTransfer: { files, types: ['Files'] } });
+  const tray = () => screen.queryAllByRole('button', { name: /^Remove / }).map((b) => b.getAttribute('aria-label'));
+
+  it('takes pasted and dropped files into the tray, a picture as itself, and sends them', () => {
+    const onSend = mount();
+    render(<Toasts />);
+    const shot = file('image.png', 'image/png');
+    paste([shot]);
+    const pdf = file('brief.pdf', 'application/pdf');
+    drop([pdf]);
+    // a drop on the tray is the box's too
+    const notes = file('notes.txt', 'text/plain');
+    fireEvent.drop(screen.getByRole('button', { name: 'Remove brief.pdf' }), { dataTransfer: { files: [notes], types: ['Files'] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove notes.txt' }));
+    expect(tray()).toEqual(['Remove image.png', 'Remove brief.pdf']);
+    expect(document.querySelector('.composer-thumb img')?.getAttribute('src')).toBe('blob:0');
+    // a press removes it, and frees its picture
+    fireEvent.click(screen.getByRole('button', { name: 'Remove image.png' }));
+    expect(freed).toEqual(['blob:0']);
+    paste([shot]);
+    fireEvent.keyDown(box(), { key: 'Enter' });
+    expect(onSend).toHaveBeenCalledWith('', [pdf, shot]);
+    expect(tray()).toEqual([]);
+    expect(freed).toEqual(['blob:0', 'blob:1']);
+  });
+
+  it('keeps to the server caps and says which one left a file out', async () => {
+    mount();
+    render(<Toasts />);
+    drop([file('huge.mov', 'video/quicktime', 10_000_001)]);
+    expect(await screen.findByText('Files up to 10 MB')).toBeTruthy();
+    expect(tray()).toEqual([]);
+    paste(Array.from({ length: 12 }, (_, i) => file(`${i}.txt`, 'text/plain')));
+    expect(await screen.findByText('Up to 10 files')).toBeTruthy();
+    expect(tray()).toHaveLength(10);
+    cleanup();
+    mount();
+    render(<Toasts />);
+    // two files of 9.9 MB pass the per-file cap but not the request's
+    drop([file('a.bin', '', 9_900_000), file('b.bin', '', 9_900_000)]);
+    expect(await screen.findByText('Up to 19 MB a message')).toBeTruthy();
+    expect(tray()).toEqual(['Remove a.bin']);
+  });
+
+  it('sends files only with words where the box needs them (the Assistant)', () => {
+    mount({ needsText: true });
+    paste([file('image.png', 'image/png')]);
+    const send = screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+    type('What is this?');
+    expect(send.disabled).toBe(false);
+  });
+
+  it('frees the pictures when the box goes', () => {
+    mount();
+    paste([file('a.png', 'image/png'), file('b.webp', 'image/webp')]);
+    cleanup();
+    expect(freed.sort()).toEqual(['blob:0', 'blob:1']);
+  });
+
+  it('takes no files where it attaches none: a paste stays the browser\'s', () => {
+    mount({ attach: false });
+    const pasted = paste([file('image.png', 'image/png')]);
+    drop([file('brief.pdf', 'application/pdf')]);
+    expect(tray()).toEqual([]);
+    // not prevented: the browser pastes what it can as words
+    expect(pasted).toBe(true);
   });
 });

@@ -1,10 +1,11 @@
-import { useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, type DragEvent, type KeyboardEvent } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { directoryQuery, type Actor } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { Icon } from '@/kit/Icon';
 import { MenuItemBody } from '@/kit/Menu';
+import { toast } from '@/kit/Toast';
 import { readPref, writePref } from '@/prefs';
 import { mentionAt, mentionMatches, mentionText } from './mentions';
 
@@ -27,6 +28,54 @@ export function writeDraft(who: string, id: string, text: string): void {
   writePref<Draft | null>(draftKey(who, id), text ? { text, at: Date.now() } : null);
 }
 
+/** The server's caps on a message's files (backend/media.py): ten, each at most 10 MB. */
+export const MAX_FILES = 10;
+export const MAX_FILE_BYTES = 10_000_000;
+/** All of a message's files: under the 20 MB a person's upload request may be (backend/app.py), less room for the form's
+    own bytes (its text, page and part headers). */
+export const MAX_SEND_BYTES = 19_000_000;
+
+/** `adding` after `current`, past the caps: what a cap leaves out is said once per cap, never dropped quietly. */
+export function withFiles(current: readonly File[], adding: readonly File[]): File[] {
+  const next = [...current];
+  let total = next.reduce((n, f) => n + f.size, 0);
+  const over = new Set<string>();
+  for (const f of adding) {
+    if (f.size > MAX_FILE_BYTES) over.add('Files up to 10 MB');
+    else if (next.length >= MAX_FILES) over.add('Up to 10 files');
+    else if (total + f.size > MAX_SEND_BYTES) over.add('Up to 19 MB a message');
+    else {
+      next.push(f);
+      total += f.size;
+    }
+  }
+  for (const text of over) toast({ text, kind: 'failed' });
+  return next;
+}
+
+/** Files the browser draws in the tray: pictures as themselves, a video by its first frame. */
+const PICTURE = /^image\/(png|jpeg|gif|webp|avif|bmp|svg\+xml)$/;
+const VIDEO = /^video\/(mp4|webm|quicktime|ogg)$/;
+
+/** A tray picture from an object URL that lives as long as its element: freed on remove, on send and on unmount. */
+function Thumb({ file }: { file: File }) {
+  const video = VIDEO.test(file.type);
+  const show = useCallback(
+    (el: HTMLImageElement | HTMLVideoElement | null) => {
+      if (!el) return;
+      const url = URL.createObjectURL(file);
+      // iPhone Safari draws no frame of a video until it is told a moment to show
+      el.src = video ? `${url}#t=0.1` : url;
+      return () => URL.revokeObjectURL(url);
+    },
+    [file, video],
+  );
+  return video ? <video ref={show} muted playsInline preload="metadata" aria-hidden="true" /> : <img ref={show} alt="" />;
+}
+
+/** Whether a drag carries files (a dragged link or text is the browser's). */
+const carriesFiles = (e: DragEvent) => e.dataTransfer.types.includes('Files');
+
 export interface ComposerProps {
   /** The conversation: its draft is kept under this id. */
   id: string;
@@ -42,6 +91,8 @@ export interface ComposerProps {
   label?: string;
   /** false: no files (a mail reply attaches none). */
   attach?: boolean;
+  /** Files alone do not send: the box needs words too (the Assistant's upload takes no message without text). */
+  needsText?: boolean;
   /** false: the chat has not loaded enough to keep a pending message. */
   canSend?: boolean;
   /** false: no names after @ (a box whose words reach no teammate). */
@@ -57,7 +108,7 @@ const allActors = (d: { actors: Actor[] }) => d.actors;
 
 /** Where you type. Enter sends, Shift+Enter breaks the line; the draft survives a reload. An @ opens the names of the
     people and agents the viewer may see: arrows move, Enter or Tab picks, Escape closes. */
-export function Composer({ id, me, to, onSend, fill, label: own, attach = true, canSend = true, mentions = true, mentionFirst = NOBODY, mentionOnly }: ComposerProps) {
+export function Composer({ id, me, to, onSend, fill, label: own, attach = true, needsText = false, canSend = true, mentions = true, mentionFirst = NOBODY, mentionOnly }: ComposerProps) {
   const [text, setText] = useState(() => readDraft(me, id));
   const [files, setFiles] = useState<File[]>([]);
   const [sending, setSending] = useState(false);
@@ -97,6 +148,10 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     setShut(null);
     setActive(0);
   };
+  const add = (adding: readonly File[]) => {
+    // nothing joins a send already on its way: it would be cleared when that send lands
+    if (attach && !sending && adding.length) setFiles(withFiles(files, adding));
+  };
   // Another conversation in the same box: its own draft.
   if (shownFor !== `${me}:${id}`) {
     setShownFor(`${me}:${id}`);
@@ -112,7 +167,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
     }
   }
 
-  const ready = canSend && (text.trim().length > 0 || files.length > 0);
+  const ready = canSend && (text.trim().length > 0 || (files.length > 0 && !needsText));
 
   const send = () => {
     if (!ready || sending) return;
@@ -194,14 +249,36 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
 
   const label = own ?? `Message ${to}`;
   return (
-    <>
-      {files.map((f, i) => (
-        <button key={`${f.name}:${i}`} type="button" className="file composer-file" aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`} disabled={sending}
-          onClick={() => setFiles(files.filter((_, j) => j !== i))}>
-          <Icon name="file" />
-          <span>{f.name}</span>
-        </button>
-      ))}
+    // The tray and the box take a drop together; a reply box inside a chat takes its own. `display: contents`: the two
+    // lay out as they did without it.
+    <div
+      className="composer-drop"
+      onDragOver={attach ? (e) => carriesFiles(e) && e.preventDefault() : undefined}
+      onDrop={
+        attach
+          ? (e) => {
+              if (!carriesFiles(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              add([...e.dataTransfer.files]);
+            }
+          : undefined
+      }
+    >
+      {files.length > 0 && (
+        <div className="composer-tray">
+          {files.map((f, i) => {
+            const thumb = PICTURE.test(f.type) || VIDEO.test(f.type);
+            return (
+              <button key={`${f.name}:${i}`} type="button" className={thumb ? 'composer-thumb' : 'file composer-file'} aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`} disabled={sending}
+                onClick={() => setFiles(files.filter((_, j) => j !== i))}>
+                {thumb ? <Thumb file={f} /> : <Icon name="file" />}
+                {thumb ? <Icon name="close" /> : <span>{f.name}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div className={text ? 'composer is-typing' : 'composer'}>
         <textarea
           ref={box}
@@ -215,6 +292,17 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
           onBlur={() => setCaret(null)}
           onKeyDown={onKey}
+          // a pasted picture or file goes in the tray, not its name in the words
+          onPaste={
+            attach
+              ? (e) => {
+                  const pasted = [...e.clipboardData.files];
+                  if (!pasted.length) return;
+                  e.preventDefault();
+                  add(pasted);
+                }
+              : undefined
+          }
           // A combobox while its names are open (as @github/combobox-nav does), a plain text box otherwise.
           role={open ? 'combobox' : undefined}
           aria-autocomplete={mentions ? 'list' : undefined}
@@ -253,7 +341,7 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
               onChange={(e) => {
                 const picked = [...(e.target.files ?? [])];
                 e.target.value = '';
-                if (picked.length) setFiles([...files, ...picked].slice(0, 10));
+                add(picked);
               }}
             />
             <IconButton icon="attach" label="Attach a file" size="sm" disabled={sending} onClick={() => picker.current?.click()} />
@@ -263,6 +351,6 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           <Icon name="send" />
         </button>
       </div>
-    </>
+    </div>
   );
 }
