@@ -697,8 +697,9 @@ describe('Settings › General @s1072', () => {
         selected: SETUP.selected,
       },
     });
-    // Config is read again once the server has taken the name; the read keeps it.
+    // Config is read again once the server has taken the name; the read, once answered, keeps it.
     await waitFor(() => expect(read).toContain('/api/v2/config'));
+    await waitFor(() => expect(queryClient.getQueryState(['config'])).toMatchObject({ fetchStatus: 'idle', status: 'success' }));
     expect(companyName()).toBe('Renamed Co');
   });
 
