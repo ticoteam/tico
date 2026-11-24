@@ -193,6 +193,6 @@ describe('a task by its number alone', () => {
 
   it('takes the address over to the task under its pipeline @s1', async () => {
     const router = show(<TaskById task="12" />, '/task/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
   });
 });
