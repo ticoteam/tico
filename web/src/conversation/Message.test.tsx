@@ -106,6 +106,17 @@ describe('A picture attached to a chat message @s218', () => {
     expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f2');
     expect(within(dialog).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/f2');
   });
+
+  it('draws a photo from its thumbnail and opens the photo itself', async () => {
+    serve();
+    const photo = { id: 'f4', name: 'site.jpg', content_type: 'image/jpeg' };
+    show([{ ...msg(1, 'bot:qa', 'The site'), refs: { attachments: [photo] } } as ChatMessage]);
+    const pic = await screen.findByRole('button', { name: 'site.jpg' });
+    expect(pic.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f4/thumb');
+    fireEvent.click(pic);
+    const dialog = await screen.findByRole('dialog', { name: 'site.jpg' });
+    expect(dialog.querySelector('img')?.getAttribute('src')).toBe('/api/v2/files/f4');
+  });
 });
 
 describe('Message actions, on a phone @s181', () => {

@@ -176,6 +176,7 @@ def shared_files(c, files, who, attachments):
     as a new blob of the poster's, which threads._post links to the message as it links an upload, so whoever reads the
     message opens it and the file keeps its own access. Only a version of a file the poster may open is shared."""
     from .blobs import register
+    from .files import stored_version, version_refusal as files_version_refusal
 
     items = []
     for attachment in attachments:
@@ -186,7 +187,9 @@ def shared_files(c, files, who, attachments):
             if row and not row["archived"] and files.visible(c, who, row, {})
             else None
         )
-        if version is None:
+        # The exact version, as its download checks it (version_refusal): a file one may open can hold a version one
+        # may not (a page's audience, a scan, a fenced blob).
+        if version is None or files_version_refusal(c, files.auth, who, row, number, stored_version(c, fid, number)):
             raise Problem("not_found", SHARE_REFUSED.format(ref=f"{fid}@{number}"), 404)
         item = register(c, who, version["digest"], version["size"], version["name"], version["mime"])
         item["title"] = title or row["title"] or version["name"]
@@ -1153,7 +1156,10 @@ def install(app, store, auth, mutate, rule_check):
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
 
-        return mutate(request, body, work)
+        sent = mutate(request, body, work)
+        if body.attachments:
+            app.state.file_metadata.wake.set()  # a shared picture, video or PDF is queued for its preview
+        return sent
 
     @app.patch(
         "/api/v2/messages/{message_id}",
@@ -1534,7 +1540,9 @@ def install(app, store, auth, mutate, rule_check):
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
             return {"thread": threads.get(c, v, message["conversation_id"]), "message": message}
 
-        return await asyncio.to_thread(write_upload, store, request, body, uploads, work)
+        sent = await asyncio.to_thread(write_upload, store, request, body, uploads, work)
+        app.state.file_metadata.wake.set()  # its pictures, videos and PDFs are queued for their previews
+        return sent
 
     # The search index (migration 0047) follows every write through its triggers. Install can run before the schema,
     # so the first call that finds the index marks search ready (at boot if it is there, else on the first search).

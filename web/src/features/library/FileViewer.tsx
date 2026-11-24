@@ -6,6 +6,7 @@ import { Link } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
 import { PictureViewer } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
+import { fileKind, type FileKind } from '@/lib';
 import { size } from './parts';
 import { PdfView } from './PdfView';
 import { fileQuery, fileTextQuery, fileUrl, fileVersionsQuery, heldFileQuery } from './queries';
@@ -17,40 +18,38 @@ import './library.css';
    a sound with the browser's own controls, a PDF as one scroll of its pages (PdfView), a web page in a sandbox,
    Markdown as reading text, other text as it is. Office files and the rest show their name and size, with Download. */
 
-const TEXT = /^(text\/|application\/(json|xml|csv|x-yaml|yaml|javascript))/;
-const MARKDOWN = /^text\/(x-)?markdown/;
-const OFFICE = /^application\/(msword|rtf|vnd\.(openxmlformats-officedocument|ms-excel|ms-powerpoint|ms-word|oasis\.opendocument))/;
-
 type View = 'image' | 'video' | 'audio' | 'pdf' | 'html' | 'markdown' | 'csv' | 'text' | 'office' | 'none';
 
-/** By its name, when the type says nothing more (`application/octet-stream`, or `text/plain` for `notes.md`). */
-const BY_NAME: [RegExp, View][] = [
-  [/\.(png|jpe?g|gif|webp|avif|svg)$/i, 'image'],
-  [/\.(mp4|webm|mov|m4v)$/i, 'video'],
-  [/\.(mp3|m4a|wav|ogg|aac)$/i, 'audio'],
-  [/\.pdf$/i, 'pdf'],
-  [/\.html?$/i, 'html'],
-  [/\.(md|markdown)$/i, 'markdown'],
-  [/\.csv$/i, 'csv'],
-  [/\.(txt|log|json|ya?ml|xml)$/i, 'text'],
-  [/\.(docx?|xlsx?|pptx?|od[tsp]|rtf)$/i, 'office'],
-];
+/** How each kind shows here. A kind with no face of its own yet shows as text when it is words, else as its name with
+    Download: nothing falls through to a frame of its own address. */
+const VIEW: Record<FileKind, View> = {
+  image: 'image',
+  video: 'video',
+  audio: 'audio',
+  pdf: 'pdf',
+  html: 'html',
+  markdown: 'markdown',
+  csv: 'csv',
+  tsv: 'text',
+  text: 'text',
+  diff: 'text',
+  ics: 'text',
+  vcf: 'text',
+  eml: 'none',
+  zip: 'none',
+  docx: 'office',
+  xlsx: 'office',
+  office: 'office',
+  none: 'none',
+};
 
-function viewOf(mime: string, kind: string | undefined, name: string): View {
-  const m = mime.toLowerCase().split(';')[0]?.trim() ?? '';
-  if (m.startsWith('image/') || kind === 'image') return 'image';
-  if (m.startsWith('video/')) return 'video';
-  if (m.startsWith('audio/')) return 'audio';
-  if (m === 'application/pdf') return 'pdf';
-  if (m === 'text/html' || kind === 'page') return 'html';
-  if (MARKDOWN.test(m)) return 'markdown';
-  if (m.includes('csv')) return 'csv';
-  if (OFFICE.test(m)) return 'office';
-  const named = BY_NAME.find(([re]) => re.test(name))?.[1];
-  return named ?? (TEXT.test(m) ? 'text' : 'none');
-}
+const viewOf = (mime: string, kind: string | undefined, name: string): View => VIEW[fileKind(mime, name, kind)];
 
 const AS_TEXT = new Set<View>(['html', 'markdown', 'csv', 'text']);
+
+/** What a chat's own file address serves inline, so these load from it as they show (a video plays as it arrives)
+    rather than being read whole first. */
+const STREAMS = new Set<View>(['image', 'video', 'audio', 'pdf']);
 
 /** The type a file is held as when its address says nothing (an attachment): its own, else what its name says. */
 const HELD_TYPE: Partial<Record<View, string>> = { pdf: 'application/pdf', html: 'text/plain', markdown: 'text/plain', csv: 'text/plain', text: 'text/plain' };
@@ -74,6 +73,8 @@ export interface PreviewProps {
   link?: string;
   /** `url` sends the bytes only as a download (an email's frozen attachment): they are read here and shown. */
   held?: boolean;
+  /** With `held`: `url` serves a picture, video, sound or PDF inline (a chat's own file), so it is shown from there. */
+  streams?: boolean;
   /** A task's PDF at its current version, shown to a person: it offers Sign (PdfSign.tsx). */
   signable?: boolean;
 }
@@ -114,12 +115,13 @@ export function FileGet({ url, link }: { url: string; link: string }) {
 }
 
 /** One file's face, by its type, else its name. */
-export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false, signable = false }: PreviewProps) {
+export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false, streams = false, signable = false }: PreviewProps) {
   const view = viewOf(mime, kind, name ?? title);
   const asText = AS_TEXT.has(view);
   const shows = view !== 'office' && view !== 'none';
+  const reads = held && !(streams && STREAMS.has(view));
   const words = useQuery({ ...fileTextQuery(id, version), enabled: !link && !held && asText });
-  const kept = useQuery({ ...heldFileQuery(url, HELD_TYPE[view] ?? mime, asText), enabled: !link && held && shows });
+  const kept = useQuery({ ...heldFileQuery(url, HELD_TYPE[view] ?? mime, asText), enabled: !link && reads && shows });
   if (link) {
     const g = googlePreview(link);
     // Google draws its own file, signed in as the viewer; Tico passes it nothing but the address.
@@ -135,27 +137,10 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
       </div>
     );
   }
-  if (!shows)
-    return (
-      <div className="fv-none">
-        <Empty title={name || title} icon="file" text={size(bytes) || undefined}>
-          <a className="btn" href={url} download={name || true}>
-            <Icon name="download" />
-            Download
-          </a>
-          {/* An Office file opens where the browser or the computer can show it; nothing here draws one. */}
-          {view === 'office' && !held && (
-            <a className="btn" href={url} target="_blank" rel="noreferrer">
-              <Icon name="popout" />
-              Open
-            </a>
-          )}
-        </Empty>
-      </div>
-    );
-  const read = held ? kept : words;
+  if (!shows) return <Unshown name={name || title} bytes={bytes} url={url} office={view === 'office' && !held} />;
+  const read = reads ? kept : words;
   if (read.isError) return <Empty title="This file did not load" icon="alert" />;
-  const src = held ? kept.data?.src : url;
+  const src = reads ? kept.data?.src : url;
   if (asText) {
     const text = held ? kept.data?.text : words.data;
     return text === undefined ? null : <TextPreview text={text} view={view} title={title} />;
@@ -183,7 +168,27 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
     const sign = signable && id && version && !held ? { file: id, version, name: name || title } : undefined;
     return <PdfView src={src} title={title} url={url} name={name} sign={sign} />;
   }
-  return <iframe className="fv-frame" src={src} title={title} />;
+  return <Unshown name={name || title} bytes={bytes} url={url} />;
+}
+
+function Unshown({ name, bytes, url, office = false }: { name: string; bytes?: number | null; url: string; office?: boolean }) {
+  return (
+    <div className="fv-none">
+      <Empty title={name} icon="file" text={size(bytes) || undefined}>
+        <a className="btn" href={url} download={name || true}>
+          <Icon name="download" />
+          Download
+        </a>
+        {/* An Office file opens where the browser or the computer can show it; nothing here draws one. */}
+        {office && (
+          <a className="btn" href={url} target="_blank" rel="noreferrer">
+            <Icon name="popout" />
+            Open
+          </a>
+        )}
+      </Empty>
+    </div>
+  );
 }
 
 /** A quoted field can hold commas, line breaks, and a literal quote written twice. */
@@ -332,7 +337,7 @@ function FullFile({ v }: { v: Viewing & { full: NonNullable<Viewing['full']> } }
       }
     >
       {full.url ? (
-        <FileFrame id={v.file} mime={full.mime} title={v.name} url={full.url} name={v.name} size={full.size} held />
+        <FileFrame id={v.file} mime={full.mime} title={v.name} url={full.url} name={v.name} size={full.size} held streams />
       ) : (
         <FilePreview file={v.file} version={v.version} />
       )}

@@ -654,7 +654,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     from .counsel import is_counsel
 
     plain = is_counsel(who)
-    from .files import prime_page_references, readable_page_refs
+    from .files import prime_page_references, readable_page_refs, version_refusal
 
     prime_page_references(c, [message for message in messages if message])
     for message in messages:
@@ -663,8 +663,12 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if shown != message:
                 message.clear()
                 message.update(shown)
-        items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if not any(isinstance(a, dict) and a.get("file_id") for a in items):
+        refs = (message or {}).get("refs")
+        items = refs.get("attachments") if isinstance(refs, dict) else None
+        if isinstance(refs, dict) and "attachments" in refs and not isinstance(items, list):
+            message["refs"] = {k: v for k, v in refs.items() if k != "attachments"}  # a malformed list shows none
+            continue
+        if not isinstance(items, list) or not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
         for a in items:
@@ -674,7 +678,13 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if plain:
                 fresh.append({k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a})
                 continue
-            fid, number = a["file_id"], int(a.get("version") or 0)
+            named = version_of(a)
+            if named is None:  # a malformed ref names nothing to read: shown as gone, never a failed read
+                fresh.append(
+                    {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} | {"removed": True}
+                )
+                continue
+            fid, number = named
             if fid not in rows:
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
@@ -699,7 +709,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 "removed": removed or v is None,
                 "current_version": None if removed else row["current_version"],
             }
-            if v is not None:
+            # Nothing of its bytes (its size, a poster, an address) for a reader the download itself would refuse.
+            if v is not None and not version_refusal(c, files.auth, who, row, number, v):
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
@@ -729,6 +740,21 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             fresh.append(view)
         message["refs"] = {**message["refs"], "attachments": fresh}
     return messages
+
+
+def version_of(a):
+    """A stored attachment's (file id, version), or None when either is malformed (not a non-empty string id, or not a
+    whole number SQLite can hold): such a ref is shown as gone."""
+    fid, number = a.get("file_id"), a.get("version")
+    if not isinstance(fid, str) or not fid:
+        return None
+    if number is None:
+        number = 0
+    elif isinstance(number, str) and number.isascii() and number.isdigit():
+        number = int(number)
+    elif not isinstance(number, int) or isinstance(number, bool):
+        return None
+    return (fid, number) if 0 <= number < 2**63 else None
 
 
 def elsewhere(base, message, task=None):

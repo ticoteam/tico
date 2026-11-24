@@ -579,19 +579,22 @@ and no sandbox, allowing the browser PDF viewer. Other types retain the sandbox 
 Media fields live on each file version: `width`, `height`, `duration_ms`, `poster_blob_id`,
 `thumb_blob_id`, and `media_state` (`pending`, `ready`, `none`). One background worker fills them;
 existing versions default to `none` and are not automatically backfilled. New versions are `pending`.
-Transient storage failures retry with bounded backoff; permanent decode failures become `none`.
+A picture, video or PDF posted in a thread (a plain attachment, with no file version) is queued the same way when its
+message is written, only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
+preview and is never read for one. The web app draws a chat picture from its `/thumb` (which checks its reader as the
+file does, and is 404 until made), falling back to the file itself; messages carry no preview fields.
+Transient storage failures retry with bounded backoff, and a source that fails five passes becomes `none`; permanent
+decode failures become `none`.
 Missing tools or unsupported media never fail an upload, and a version nothing can be derived from (an SVG, or a
 video or PDF without its tool) becomes `none` without being read: in Tico's bucket every read is delivery. Pillow decodes only PNG/JPEG/GIF/WebP in a subprocess capped at 1 GiB memory, 20 CPU seconds,
 50 MP and a 30-second timeout (macOS uses parent RSS supervision for memory), and makes thumbnails up to 480 px; without Pillow, PNG/JPEG/GIF/WebP headers still provide dimensions. ffprobe/ffmpeg make
-video posters at the earlier of 1 second or 10% of duration, up to 640 px. pdftoppm renders PDF
-page one. A supplied poster is preserved.
+video posters at the earlier of 1 second or 10% of duration, up to 640 px, on one thread and reading local files
+only. pdftoppm renders PDF page one. Each tool runs through `backend/limited.py`: 1.5 GiB of address space, 20 CPU
+seconds, 10 MiB per file it writes (its output included), a bare environment and its own scratch folder, in a
+process group killed whole past the 30-second wall. A supplied poster is preserved.
 
-The optional ffmpeg + poppler-utils install was measured in a disposable
-`python:3.12-slim-bookworm` container with the server's ca-certificates/curl baseline:
-181,808 KiB before, 557,780 KiB after (apt lists removed), **375,972 KiB / 367.2 MiB added**.
-APT reported 119 MB of download archives and 417 MB of installed packages. This exceeds the
-150 MB image budget, so these tools are omitted from the standard server image. Install them in
-a custom server image, or supply a poster. Pillow and the multipart parser ship with the server.
+The standard server image ships poppler-utils (34 MiB). ffmpeg adds 409 MiB, three times the image, so it is left
+out: add it in a custom server image for video posters, or supply a poster.
 ## Task file reviews
 
 Task attachments are versioned by name within their task, across uploaders. Reusing a name

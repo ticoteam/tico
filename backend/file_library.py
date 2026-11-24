@@ -694,12 +694,15 @@ def release_blobs(c, blob_ids, now):
     from . import visuals
 
     blob_ids = set(blob_ids)
-    for bid in list(blob_ids):
+    derived = set()
+    for bid in blob_ids:
         media = c.execute("SELECT poster_blob_id,thumb_blob_id FROM blob_media WHERE blob_id=?", (bid,)).fetchone()
         if media:
-            blob_ids |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
+            derived |= {b for b in (media["poster_blob_id"], media["thumb_blob_id"]) if b}
     digests = {}
-    for bid in sorted(blob_ids):
+    # Sources first, previews after, whichever were asked for: a preview stays while its source's blob_media row still
+    # names it, so one released before its source would be kept for good.
+    for bid in [*sorted(blob_ids - derived), *sorted(derived)]:
         shared = c.execute(
             "SELECT 1 FROM bot_file_versions WHERE blob_id=? OR poster_blob_id=? OR thumb_blob_id=? "
             "UNION ALL SELECT 1 FROM media_assets WHERE blob_id=? "

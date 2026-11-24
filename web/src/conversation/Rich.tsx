@@ -6,7 +6,7 @@ import { Icon, type IconName } from '@/kit/Icon';
 import { Link } from '@/kit/Link';
 import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
-import { besideThread } from '@/lib';
+import { besideThread, fileKind } from '@/lib';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
 import { fileFactsQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
@@ -64,8 +64,9 @@ function AppChip({ p, words }: { p: Extract<Pointer, { kind: 'app' }>; words: Re
 }
 
 const fileHrefOf = (file: string, version?: number): `/api/${string}` => `/api/v2/files/${encodeURIComponent(file)}${version ? `/versions/${version}` : ''}`;
-const isPage = (mime: string | null | undefined, kind?: string) => /^text\/html/.test(mime ?? '') || kind === 'page';
-const fileIcon = (mime: string | null | undefined, kind?: string): IconName => (isPage(mime, kind) ? 'tobar' : 'file');
+const fileIcon = (mime: string | null | undefined, kind?: string, name?: string | null): IconName => (fileKind(mime, name, kind) === 'html' ? 'tobar' : 'file');
+/** A page drawn small in the chat: only what its type or the library says is one, never its name alone. */
+const isPage = (mime: string | null | undefined, kind?: string) => fileKind(mime, undefined, kind) === 'html';
 
 /** Opens one of the app's files full screen, by its id (the library's) or as a message's own file. */
 const preview = (file: string, version?: number, held?: { url: string; mime: string; name: string; size?: number }) =>
@@ -81,7 +82,7 @@ function FileChip({ p, words }: { p: Extract<Pointer, { kind: 'file' }>; words: 
   };
   return (
     <a className="lchip" href={href} target="_blank" rel="noreferrer" onClick={open}>
-      <Icon name={fileIcon(facts?.mime, facts?.library_kind)} />
+      <Icon name={fileIcon(facts?.mime, facts?.library_kind, facts?.name)} />
       {words ?? (facts?.title || facts?.name || 'File')}
     </a>
   );
@@ -157,18 +158,22 @@ function RefCard({ p }: { p: Extract<Pointer, { kind: 'file' }> }) {
   const title = facts.title || facts.name || 'Page';
   const src = fileHrefOf(p.file, p.version);
   if (isPage(facts.mime, facts.library_kind)) return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
-  if (/^image\//.test(facts.mime ?? '')) return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
+  if (fileKind(facts.mime, facts.name, facts.library_kind) === 'image') return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
   return null;
 }
 
 interface Shown {
+  /** The picture itself: what the viewer opens. */
   src: string;
   name: string;
+  /** Its small copy (the file's /thumb), drawn in its place; the picture itself when there is none yet. */
+  thumb?: string;
 }
 
 /** One to four pictures as pictures: one at its own shape, more as tiles, past four a count on the last. */
 function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void }) {
-  // a picture that does not load (gone, or its bytes not kept) is its name as a chip, never a broken image
+  // a thumbnail that does not load (not made yet, or never) gives way to the picture itself; a picture that does not
+  // load (gone, or its bytes not kept) is its name as a chip, never a broken image
   const [lost, setLost] = useState<ReadonlySet<string>>(new Set());
   if (!list.length) return null;
   const shown = list.filter((p) => !lost.has(p.src));
@@ -177,12 +182,15 @@ function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void
     <>
       {shown.length > 0 && (
         <div className={`pics is-${Math.min(shown.length, 4)}`}>
-          {shown.slice(0, 4).map((p, i) => (
-            <button key={p.src} type="button" className="pic" onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
-              <img src={p.src} alt={p.name} loading="lazy" onError={() => setLost((was) => new Set(was).add(p.src))} />
-              {i === 3 && more > 0 && <span className="pic-more">+{more}</span>}
-            </button>
-          ))}
+          {shown.slice(0, 4).map((p, i) => {
+            const face = p.thumb && !lost.has(p.thumb) ? p.thumb : p.src;
+            return (
+              <button key={p.src} type="button" className="pic" onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
+                <img src={face} alt={p.name} loading="lazy" onError={() => setLost((was) => new Set(was).add(face))} />
+                {i === 3 && more > 0 && <span className="pic-more">+{more}</span>}
+              </button>
+            );
+          })}
         </div>
       )}
       {list
@@ -204,7 +212,13 @@ const attachmentType = (f: Attachment) => {
   const end = /\.([a-z0-9]{1,5})$/i.exec(f.name ?? '')?.[1];
   return (end ?? f.content_type?.split('/')[1] ?? '').toUpperCase();
 };
-export const isPicture = (f: Attachment) => /^image\//.test(f.content_type ?? '');
+export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) === 'image';
+/** A file's thumbnail on the server's own route (`/api/v2/files/<id>/thumb`, `?v=` kept), which checks its reader as the
+    file does and answers 404 until the picture's thumbnail is made. */
+const thumbOf = (href: string) => {
+  const m = /^(\/api\/v2\/files\/[^/?#]+)(\?v=\d+)?$/.exec(href);
+  return m ? `${m[1]}/thumb${m[2] ?? ''}` : undefined;
+};
 
 /** A message's own file that is not a picture: a page small and live, anything else its chip. */
 function AttachedFile({ f }: { f: Attachment }) {
@@ -240,7 +254,12 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
         {attachmentType(f) && <em>{attachmentType(f)}</em>}
       </span>
     ));
-  const pictures = files.filter(isPicture).map((f) => ({ src: attachmentHref(f), name: attachmentLabel(f) }));
+  const pictures = files.filter(isPicture).map((f): Shown => {
+    const src = attachmentHref(f);
+    // only a photo (JPEG) uses the thumbnail: thumbnails are JPEGs, so a PNG would lose its transparency and a GIF its motion
+    const thumb = /^image\/jpe?g$/i.test(f.content_type ?? '') ? thumbOf(src) : undefined;
+    return { src, name: attachmentLabel(f), ...(thumb && { thumb }) };
+  });
   const others = files.filter((f) => !isPicture(f));
   const refs = m.deleted ? [] : filesIn(m.body ?? '').slice(0, PAGE_REFS);
   if (!pictures.length && !others.length && !refs.length) return null;

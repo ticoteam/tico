@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import shutil
+import signal
 import struct
 import sys
 import subprocess
@@ -10,6 +12,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from typing import IO
 
 from .blobs import register
 from .store import Problem
@@ -86,6 +89,63 @@ class DecodeError(Exception):
     """An unsupported or invalid media input cannot be retried."""
 
 
+IMAGES = ("image/png", "image/jpeg", "image/gif", "image/webp")
+VIDEOS = ("video/mp4", "video/webm", "video/quicktime")
+TRIES = 5  # failed passes before a source is given up on (`Metadata.retry`)
+MAX_BYTES = 25 * 1024**2  # a larger source gets no preview: it is never copied in to be read (the file still opens)
+WALL_SECONDS = 30
+RSS_KIB = 1024 * 1024  # what a child may hold on macOS, where address-space limits are refused
+
+
+def derives(mime):
+    """Whether the worker makes anything from a file of this type on this server: a picture always (its size, and a
+    thumbnail with Pillow); a video or a PDF only with its tool installed. The chat queues only these."""
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    return (
+        mime in IMAGES
+        or mime in VIDEOS
+        and bool(shutil.which("ffprobe") and shutil.which("ffmpeg"))
+        or mime == "application/pdf"
+        and bool(shutil.which("pdftoppm"))
+    )
+
+
+def supervised(args, stdout: int | IO[bytes] = subprocess.PIPE):
+    """Run one child to its end under the wall timeout, in a process group of its own that is killed whole when it runs
+    over (or, on macOS, holds more than RSS_KIB). Returns what it wrote to a piped stdout."""
+    with subprocess.Popen(
+        args, stdin=subprocess.DEVNULL, stdout=stdout, stderr=subprocess.DEVNULL, start_new_session=True
+    ) as child:
+        deadline = time.monotonic() + WALL_SECONDS
+        try:
+            while True:
+                if time.monotonic() >= deadline:
+                    raise DecodeError("Media decoding timed out")
+                try:
+                    output, _ = child.communicate(timeout=0.1)
+                    break
+                except subprocess.TimeoutExpired:
+                    if sys.platform == "darwin":
+                        usage = subprocess.run(
+                            ["/bin/ps", "-o", "rss=", "-p", str(child.pid)],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL,
+                            timeout=1,
+                        )
+                        if usage.stdout.strip() and int(usage.stdout) > RSS_KIB:
+                            raise DecodeError("Media decoding exceeded its memory budget")
+            if child.returncode:
+                raise DecodeError("Media decoding failed")
+            return output or b""
+        finally:
+            if child.poll() is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+
+
 def image(source, target):
     with source.open("rb") as stream:
         width, height = dimensions(stream)
@@ -94,47 +154,22 @@ def image(source, target):
     except ImportError:
         return width, height, None
     try:
-        args = [sys.executable, str(Path(__file__).with_name("file_image.py")), str(source), str(target)]
-        with subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as child:
-            deadline = time.monotonic() + 30
-            try:
-                while True:
-                    if time.monotonic() >= deadline:
-                        raise DecodeError("Image decoding timed out")
-                    try:
-                        output, _ = child.communicate(timeout=0.1)
-                        break
-                    except subprocess.TimeoutExpired:
-                        if sys.platform == "darwin":
-                            usage = subprocess.run(
-                                ["/bin/ps", "-o", "rss=", "-p", str(child.pid)],
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.DEVNULL,
-                                timeout=1,
-                            )
-                            if usage.stdout.strip() and int(usage.stdout) > 1024 * 1024:
-                                raise DecodeError("Image decoding exceeded its memory budget")
-                if child.returncode:
-                    raise DecodeError("Image decoding failed")
-                width, height = json.loads(output)
-            finally:
-                if child.poll() is None:
-                    child.kill()
-                    child.wait()
+        output = supervised([sys.executable, str(Path(__file__).with_name("file_image.py")), str(source), str(target)])
+        width, height = json.loads(output)
     except (subprocess.SubprocessError, ValueError) as exc:
         raise DecodeError("Image decoding failed") from exc
     return width, height, target
 
 
-def run(args):
-    return subprocess.run(
-        args,
-        check=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        timeout=30,
-        cwd=str(Path(args[-1]).parent) if Path(args[-1]).is_absolute() else None,
-    )
+def run(args, scratch):
+    """One tool through backend.limited (its limits, a bare environment, `scratch` as its working directory). Its stdout
+    goes to a file in `scratch`, so the tool's file-size limit bounds what it prints too. Returns those bytes."""
+    out = Path(scratch) / "stdout"
+    with out.open("wb") as sink:
+        supervised([sys.executable, "-I", str(Path(__file__).with_name("limited.py")), str(scratch), *args], sink)
+    data = out.read_bytes()
+    out.unlink()
+    return data
 
 
 class Metadata:
@@ -151,18 +186,11 @@ class Metadata:
             thumb_blob_id=None,
             media_state="none",
         )
-        mime = blob["content_type"]
+        mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
         if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
             return self.save(blob, result, [])
-        if not (
-            mime in ("image/png", "image/jpeg", "image/gif", "image/webp")
-            or mime in ("video/mp4", "video/webm", "video/quicktime")
-            and shutil.which("ffprobe")
-            and shutil.which("ffmpeg")
-            or mime == "application/pdf"
-            and shutil.which("pdftoppm")
-        ):
-            # Nothing can be derived from it here (an SVG, or no tool for it), so it is never read: a file in Tico's
+        if not derives(mime) or (blob.get("size") or 0) > MAX_BYTES:
+            # Nothing is derived from it here (an SVG, no tool for it, or too big), so it is never read: a file in Tico's
             # bucket is read through the company's address, and every byte read there is charged as delivery.
             return self.save(blob, result | {"media_state": "ready" if result["poster_blob_id"] else "none"}, [])
         derived = []
@@ -179,13 +207,9 @@ class Metadata:
                 if sha.hexdigest() != blob["digest"]:
                     raise Problem("blob_integrity", "Media source failed its integrity check", 503, True)
                 preview = None
-                if mime in ("image/png", "image/jpeg", "image/gif", "image/webp"):
+                if mime in IMAGES:
                     result["width"], result["height"], preview = image(source, thumb)
-                elif (
-                    mime in ("video/mp4", "video/webm", "video/quicktime")
-                    and shutil.which("ffprobe")
-                    and shutil.which("ffmpeg")
-                ):
+                elif mime in VIDEOS:
                     container = "matroska" if mime == "video/webm" else "mov"
                     probe = json.loads(
                         run(
@@ -198,12 +222,13 @@ class Metadata:
                                 "-of",
                                 "json",
                                 "-protocol_whitelist",
-                                "file,pipe",
+                                "file",
                                 "-f",
                                 container,
                                 str(source),
-                            ]
-                        ).stdout
+                            ],
+                            root,
+                        )
                     )
                     stream = next(s for s in probe["streams"] if s["codec_type"] == "video")
                     result["width"], result["height"] = stream.get("width"), stream.get("height")
@@ -218,22 +243,29 @@ class Metadata:
                             "-ss",
                             str(min(1, seconds * 0.1)),
                             "-protocol_whitelist",
-                            "file,pipe",
+                            "file",
+                            "-threads",
+                            "1",
                             "-f",
                             container,
                             "-i",
                             str(source),
+                            "-threads",
+                            "1",
                             "-frames:v",
                             "1",
                             "-vf",
                             "scale=640:640:force_original_aspect_ratio=decrease",
                             str(poster),
-                        ]
+                        ],
+                        root,
                     )
+                    if not poster.is_file():
+                        raise DecodeError("The video gave no frame")
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     _, _, preview = image(poster, thumb)
-                elif mime == "application/pdf" and shutil.which("pdftoppm"):
+                elif mime == "application/pdf":
                     run(
                         [
                             shutil.which("pdftoppm"),
@@ -245,8 +277,11 @@ class Metadata:
                             "-jpeg",
                             str(source),
                             str(root / "poster"),
-                        ]
+                        ],
+                        root,
                     )
+                    if not poster.is_file():
+                        raise DecodeError("The PDF gave no first page")
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     result["width"], result["height"], preview = image(poster, thumb)
@@ -277,6 +312,10 @@ class Metadata:
         from types import SimpleNamespace
 
         with self.store.transaction() as c:
+            if not c.execute("SELECT 1 FROM blobs WHERE id=?", (blob["id"],)).fetchone():
+                # Deleted while it was read: nothing to describe, and no preview to keep for it.
+                c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
+                return
             for field, upload in prepared:
                 result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]
             c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
@@ -287,14 +326,28 @@ class Metadata:
             c.execute("UPDATE bot_file_versions SET " + assignment + " WHERE blob_id=?", (*values, blob["id"]))
 
     def retry(self, blob):
+        """Another try later, with backoff, after a pass that failed for a reason that may pass (storage, the database).
+        The TRIES-th failure gives the source up: its pending rows become `none` and its retry row goes, in one write,
+        so a source that always fails is never read again. A source deleted meanwhile leaves only its retry row to go."""
+        bid = blob["id"]
         with self.store.transaction() as c:
-            c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (blob["id"],))
-            c.execute("INSERT OR IGNORE INTO blob_media_retries(blob_id) VALUES(?)", (blob["id"],))
-            row = c.execute("SELECT attempts FROM blob_media_retries WHERE blob_id=?", (blob["id"],)).fetchone()
-            attempts = row["attempts"] + 1
+            if not c.execute("SELECT 1 FROM blobs WHERE id=?", (bid,)).fetchone():
+                c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (bid,))
+                return
+            row = c.execute("SELECT attempts FROM blob_media_retries WHERE blob_id=?", (bid,)).fetchone()
+            attempts = (row["attempts"] if row else 0) + 1
+            if attempts >= TRIES:
+                c.execute("UPDATE blob_media SET media_state='none' WHERE blob_id=? AND media_state='pending'", (bid,))
+                c.execute(
+                    "UPDATE bot_file_versions SET media_state='none' WHERE blob_id=? AND media_state='pending'", (bid,)
+                )
+                c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (bid,))
+                return
+            c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (bid,))
             c.execute(
-                "UPDATE blob_media_retries SET attempts=?,retry_at=? WHERE blob_id=?",
-                (attempts, time.time() + min(3600, 5 * 2 ** min(attempts - 1, 10)), blob["id"]),
+                "INSERT INTO blob_media_retries(blob_id,attempts,retry_at) VALUES(?,?,?) "
+                "ON CONFLICT(blob_id) DO UPDATE SET attempts=excluded.attempts,retry_at=excluded.retry_at",
+                (bid, attempts, time.time() + min(3600, 5 * 2 ** min(attempts - 1, 10))),
             )
 
     def batch(self):

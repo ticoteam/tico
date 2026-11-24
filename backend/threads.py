@@ -3150,8 +3150,14 @@ def _post(
     if named and not question_marks.cleared_by(c, named, (message or {}).get("id")):
         raise Problem("answered", question_marks.ANSWERED, 409)  # it did not answer that ❓: write nothing
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
+    # A picture, video or PDF the preview worker can read gets its row here too (never in blobs.register, which every
+    # stored byte goes through), so its /thumb is made for the chat to draw.
+    from .file_metadata import MAX_BYTES, derives
+
     for item in attachments or ():
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))
+        if derives(item.get("content_type")) and (item.get("size") or 0) <= MAX_BYTES:
+            c.execute("INSERT OR IGNORE INTO blob_media(blob_id) VALUES(?)", (item["id"],))
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
     return message
 

@@ -697,7 +697,9 @@ def install_media(
 
     def write(request, body, uploads, fn):
         human_only(request.state.identity)
-        return write_upload(store, request, body, uploads, fn)
+        result = write_upload(store, request, body, uploads, fn)
+        app.state.file_metadata.wake.set()  # a chat's or the Assistant's files are new versions, waiting for previews
+        return result
 
     def chat_uploads(c, who, bot, message, uploads, titles):
         """Store a person's uploads on their message to `bot`: blobs linked to it, and each one also a versioned file in
