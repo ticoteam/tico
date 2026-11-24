@@ -1,6 +1,8 @@
+import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
 import { defineAction, refusalFor, toldOf } from '@/actions';
 import { toast } from '@/kit/Toast';
+import { changeBoardSearch, listShown } from '@/lib';
 import { writePref } from '@/prefs';
 import {
   addRequester,
@@ -30,6 +32,33 @@ const where = (p: string) => `/tasks/${encodeURIComponent(p)}`;
 
 /** A pipeline's page (`/tasks/<pipeline>`) or the Roadmap is on screen, not a task or another page. */
 const onPipeline = (pathname: string) => /\/tasks\/[^/]+\/?$/.test(pathname) || /\/roadmap\/?$/.test(pathname);
+/** The pipeline whose list shows beside the task open under it (lib listShown: not Needs you's, not folded or tucked
+    away, none on a phone), when the address is that task's (`/tasks/<pipeline>/<n>`). */
+const listOf = (pathname: string): string | null => {
+  const shown = listShown();
+  const p = /\/tasks\/([^/]+)\/(?!edit(?:\/|$))[^/]+/.exec(pathname)?.[1];
+  return shown && p && decodeURIComponent(p) === shown ? shown : null;
+};
+
+/** A change to the search of what is on screen: a pipeline's address (replaced, not pushed), or, with a task open
+    under its pipeline, the list beside it (lib changeBoardSearch). Null, '' or false clears one. */
+async function changeSearch(router: AnyRouter, change: Record<string, unknown>) {
+  const beside = listOf(router.state.location.pathname);
+  if (beside) return changeBoardSearch(beside, change);
+  await router.navigate({
+    to: '.',
+    replace: true,
+    search: (prev: Record<string, unknown>) => {
+      const next: Record<string, unknown> = { ...prev };
+      for (const [k, v] of Object.entries(change)) {
+        if (v === undefined) continue;
+        if (v === null || v === '' || v === false) delete next[k];
+        else next[k] = v;
+      }
+      return next;
+    },
+  });
+}
 
 export const openTasks = defineAction({
   id: 'tasks.open',
@@ -78,7 +107,8 @@ export const setView = defineAction({
 
 const clearable = <T extends z.core.SomeType>(sch: T) => z.optional(z.nullable(sch));
 
-/** Sets or clears filters on the pipeline on screen; null clears one. Filters replace the address, they do not push. */
+/** Sets or clears filters on the pipeline on screen, or on the list beside a task open under it; null clears one.
+    Filters replace the address, they do not push. */
 export const filterTasks = defineAction({
   id: 'tasks.filter',
   title: 'Filter tasks',
@@ -92,24 +122,26 @@ export const filterTasks = defineAction({
     late: clearable(z.boolean()),
     q: clearable(z.string().check(z.maxLength(200))),
   }),
-  can: ({ router }) => onPipeline(router.state.location.pathname),
-  run: async ({ router }, change) => {
-    await router.navigate({
-      to: '.',
-      replace: true,
-      search: (prev: Record<string, unknown>) => {
-        const next: Record<string, unknown> = { ...prev };
-        for (const [k, v] of Object.entries(change)) {
-          if (v === undefined) continue;
-          if (v === null || v === '' || v === false) delete next[k];
-          else next[k] = v;
-        }
-        return next;
-      },
-    });
-  },
+  can: ({ router }) => onPipeline(router.state.location.pathname) || !!listOf(router.state.location.pathname),
+  run: ({ router }, change) => changeSearch(router, change),
   did: () => 'Filtered Tasks',
   target: () => ({ kind: 'tasks', id: 'filter' }),
+});
+
+/** Orders the list beside a task open under its pipeline: Priority (the default), Newest or Oldest. Only there: a
+    board keeps its own order. */
+export const sortTasks = defineAction({
+  id: 'tasks.sort',
+  title: 'Sort tasks',
+  kind: 'view',
+  input: z.strictObject({ sort: z.enum(['priority', 'newest', 'oldest'] as const) }),
+  can: ({ router }) => !!listOf(router.state.location.pathname),
+  run: ({ router }, { sort }) => {
+    const beside = listOf(router.state.location.pathname);
+    if (beside) changeBoardSearch(beside, { sort: sort === 'priority' ? null : sort });
+  },
+  did: ({ sort }) => `Sorted Tasks by ${sort}`,
+  target: () => ({ kind: 'tasks', id: 'sort' }),
 });
 
 /** A refusal's toast: the short words, then the server's reason when it gave a safe one. */

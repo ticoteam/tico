@@ -10,9 +10,9 @@ import { Route as landingRoute } from '@/routes/index';
 import { resetDesktopReports, type TicoDesktop } from '@/desktop';
 import { run } from '@/actions/run';
 import type * as TasksRouting from '@/features/tasks/routing';
-import { pipelineTasksQuery } from '@/features/tasks/routing';
+import { loadMore, pipelineTasksQuery } from '@/features/tasks/routing';
 import { TasksHome } from '@/features/tasks/exports';
-import { forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
+import { boardSearch, forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
@@ -24,7 +24,7 @@ import { tabTitle, useTabTitle } from './title';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, pages, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
   /** Needs you read as the app reads it (GET /needs-you), where a test serves it: else the stand-in below. */
   needsRead: { real: false },
   /** Where `/task/<n>` passes on to, as its route does once the task is read: none unless a test names one. */
@@ -36,6 +36,8 @@ const { gate, q, catchUpRead, lists, owners, asks, hops, needsRead, shellDraws }
   owners: {} as Record<string, { bot: string | null; own?: boolean }>,
   /** Each pipeline's open tasks, as its list read gives them. */
   lists: {} as Record<string, unknown[]>,
+  /** More of a pipeline's first read where a test names it: `next_after`, the counts. */
+  pages: {} as Record<string, Record<string, unknown>>,
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
@@ -117,9 +119,15 @@ vi.mock('@/features/tasks/routing', async () => {
   // the real address checks: the list beside a task reads its pipeline with the filters its board had
   filtersOf: real.filtersOf,
   validateTasksSearch: real.validateTasksSearch,
+  inOrder: real.inOrder,
+  isFiltered: real.isFiltered,
+  sortOf: real.sortOf,
+  stageCount: real.stageCount,
+  loadListTools: real.loadListTools,
+  loadMore: vi.fn(async () => {}),
   pipelineTasksQuery: vi.fn((pipeline: string, f: object) => ({
     queryKey: ['tasks', 'list', pipeline, JSON.stringify(f)],
-    queryFn: async () => ({ tasks: lists[pipeline] ?? [], cursor: '' }),
+    queryFn: async () => ({ tasks: lists[pipeline] ?? [], cursor: '', ...pages[pipeline] }),
     staleTime: Infinity,
   })),
   flowQuery: {
@@ -270,6 +278,7 @@ beforeEach(() => {
   queryClient.setQueryData(['flow', 'count'], { count: 4, wakeAt: null });
   forgetPlaces();
   for (const k of Object.keys(lists)) delete lists[k];
+  for (const k of Object.keys(pages)) delete pages[k];
   for (const k of Object.keys(owners)) delete owners[k];
   for (const k of Object.keys(hops)) delete hops[k];
   needsRead.real = false;
@@ -942,22 +951,32 @@ describe('a task opened from a board', () => {
     return router;
   };
 
-  it('opens in place: beside it the same pipeline, as its board was filtered, the task chosen, no count in its head; Back is the board again', async () => {
+  // the list's head: the pipeline › its stage and count, one picker; then Search, Filter, Sort and ×
+  const head = (list: HTMLElement) => list.querySelector('.li-head') as HTMLElement;
+  const pick = (list: HTMLElement) => within(head(list)).getByRole('button', { name: /^Engineering/ });
+  const stage = async (list: HTMLElement, name: string) => {
+    fireEvent.click(pick(list));
+    fireEvent.click(await screen.findByRole('menuitem', { name: new RegExp(`^${name}`) }));
+  };
+
+  it('opens in place: beside it the same pipeline, as its board was filtered, the open task’s stage, the task chosen; Back is the board again', async () => {
     const router = await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
     expect(await screen.findByRole('heading', { name: 'An open task' })).toBeTruthy();
     expect(router.state.location.pathname).toBe('/tasks/eng/7');
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
-    expect(within(list).getByRole('button', { name: 'Engineering' })).toBeTruthy();
     const open = await within(list).findByRole('link', { name: /Bulk edit stock/ });
     expect(open.classList.contains('is-on')).toBe(true);
     expect(open.getAttribute('href')).toBe('/tasks/eng/7');
-    expect(within(list).getByRole('link', { name: /Rate fallback/ }).classList.contains('is-on')).toBe(false);
-    expect(within(list).getAllByRole('button', { name: /^(Review|QA)/ }).map((b) => b.textContent)).toEqual(['Review1', 'QA1']);
+    // one stage at a time: the open task's (QA), so Review's row is not drawn
+    expect(within(list).queryByRole('link', { name: /Rate fallback/ })).toBeNull();
     expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ owner: 'bot:qa' }));
-    // what waits on you is the menu's Needs you, not a count over the list: the head is the crumb and ×
+    // what waits on you is the menu's Needs you, not a count over the list: the head is the pipeline › QA 1, one tools
+    // button, ×; the tools' code is not read until they are used
     expect(within(list).queryByRole('link', { name: 'Flow' })).toBeNull();
-    expect(list.querySelector('.li-head')?.textContent).toBe('TasksEngineering');
+    expect(head(list).textContent).toBe('EngineeringQA1');
+    expect([...head(list).querySelectorAll('button.ib')].map((b) => b.getAttribute('aria-label'))).toEqual(['Search, filter, sort', 'Close the list']);
+    expect(list.querySelector('.li-find, .filter-row')).toBeNull();
     expect(await screen.findByText('task chat')).toBeTruthy();
     act(() => router.history.back());
     expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
@@ -983,12 +1002,20 @@ describe('a task opened from a board', () => {
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy();
   });
 
-  it('heads its list as a crumb, Tasks › the pipeline ⌄, and × puts the menu back in the list’s place until you leave the tasks', async () => {
+  it('picks the stage in its head: each stage with its count, then the pipelines; × puts the menu back in the list’s place until you leave the tasks', async () => {
     const router = await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
-    expect(within(list).getByRole('link', { name: 'Tasks' }).getAttribute('href')).toBe('/tasks');
-    expect(within(list).getByRole('button', { name: 'Engineering' })).toBeTruthy();
+    await within(list).findByRole('link', { name: /Bulk edit stock/ });
+    fireEvent.click(pick(list));
+    const review = await screen.findByRole('menuitem', { name: /^Review/ });
+    expect(review.textContent).toBe('Review1');
+    expect(screen.getByRole('menuitem', { name: /^QA/ }).className).toContain('is-on');
+    expect(screen.getByRole('menuitem', { name: 'Pipelines' })).toBeTruthy();
+    fireEvent.click(review);
+    expect(await within(list).findByRole('link', { name: /Rate fallback/ })).toBeTruthy();
+    expect(within(list).queryByRole('link', { name: /Bulk edit stock/ })).toBeNull();
+    expect(head(list).textContent).toBe('EngineeringReview1');
     fireEvent.click(within(list).getByRole('button', { name: 'Close the list' }));
     // the company is one press away again: the menu, open, where the list was; the task stays
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeTruthy();
@@ -1002,25 +1029,86 @@ describe('a task opened from a board', () => {
     expect(await screen.findByRole('navigation', { name: 'Engineering' })).toBeTruthy();
   });
 
-  it('keeps its rows in the order drawn, a folded stage’s left out, so an answer that leaves nothing on the task opens the row below', async () => {
+  it('Back to a task shows the stage it had as it opened, not one picked on another task', async () => {
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    await within(list).findByRole('link', { name: /Bulk edit stock/ });
+    expect(head(list).textContent).toBe('EngineeringQA1');
+    await stage(list, 'Review');
+    fireEvent.click(await within(list).findByRole('link', { name: /Rate fallback/ }));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/5'));
+    expect(head(list).textContent).toBe('EngineeringReview1');
+    act(() => router.history.back());
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng/7'));
+    await waitFor(() => expect(head(list).textContent).toBe('EngineeringQA1'));
+  });
+
+  it('keeps every stage’s rows in the order drawn, so an answer that leaves nothing on the task opens the row below, past the stage’s last to the next stage’s first', async () => {
     lists.eng = [row(7, 'Bulk edit stock', 'review'), row(8, 'Postal codes', 'qa'), row(5, 'Rate fallback', 'review')];
     await board();
     fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
-    await within(list).findByRole('link', { name: /Postal codes/ });
-    // by stage, then as the list read gives them: Review's 7 and 5, then QA's 8
+    await within(list).findByRole('link', { name: /Rate fallback/ });
+    expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull();
+    // by stage, then as the list read gives them: Review's 7 and 5, then QA's 8, whichever stage the head shows
     expect(nextInList('t7')).toEqual({ pipeline: 'eng', task: '5' });
     expect(nextInList('t5')).toEqual({ pipeline: 'eng', task: '8' });
     expect(nextInList('t8')).toBeNull();
-    fireEvent.click(within(list).getByRole('button', { name: /^QA/ }));
-    await waitFor(() => expect(within(list).queryByRole('link', { name: /Postal codes/ })).toBeNull());
-    expect(nextInList('t5')).toBeNull();
+    await stage(list, 'QA');
+    await within(list).findByRole('link', { name: /Postal codes/ });
+    expect(nextInList('t5')).toEqual({ pipeline: 'eng', task: '8' });
     // with the list closed there is no row below
     fireEvent.click(within(list).getByRole('button', { name: 'Close the list' }));
     expect(await screen.findByRole('navigation', { name: 'Main' })).toBeTruthy();
     expect(nextInList('t7')).toBeNull();
   });
 
+  it('searches, filters and sorts from its one tools button, as the list’s own search: the read asks for it, the task’s address and the board’s keep their own', async () => {
+    const made = (n: number, title: string, at: string) => ({ ...row(n, title, 'qa'), created_at: at });
+    lists.eng = [made(7, 'Bulk edit stock', '2026-11-02T00:00:00Z'), made(3, 'Old one', '2026-11-01T00:00:00Z'), made(9, 'New one', '2026-11-03T00:00:00Z')];
+    const router = await board();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    await within(list).findByRole('link', { name: /New one/ });
+    const titles = () => [...list.querySelectorAll('.li-title')].map((t) => t.textContent);
+    expect(titles()).toEqual(['Bulk edit stock', 'Old one', 'New one']);
+    const tools = () => within(head(list)).getByRole('button', { name: 'Search, filter, sort' });
+    const choose = async (...names: string[]) => {
+      fireEvent.click(tools());
+      for (const name of names) fireEvent.click(await screen.findByRole('menuitem', { name }));
+    };
+    // Search opens the field under the head; the words, once settled, are the read's
+    await choose('Search');
+    fireEvent.change(await within(list).findByRole('textbox', { name: 'Search tasks' }), { target: { value: 'stock' } });
+    await waitFor(() => expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ owner: 'bot:qa', q: 'stock' })));
+    expect(tools().getAttribute('aria-pressed')).toBe('true');
+    // Filter › Late: a chip under the head
+    await choose('Filter', 'Late');
+    await waitFor(() => expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ q: 'stock', late: true })));
+    expect(await within(list).findByRole('button', { name: 'Clear Late' })).toBeTruthy();
+    // Search again, with words in it: the field goes, and its words
+    await choose('Search');
+    await waitFor(() => expect(within(list).queryByRole('textbox', { name: 'Search tasks' })).toBeNull());
+    await waitFor(() => expect(vi.mocked(pipelineTasksQuery).mock.lastCall?.[1]).toEqual(expect.objectContaining({ q: undefined, late: true })));
+    // Clear takes every filter off the list, its board's Owner too
+    fireEvent.click(within(within(list).getByRole('group', { name: 'Filters' })).getByRole('button', { name: 'Clear' }));
+    await waitFor(() => expect(within(list).queryByRole('group', { name: 'Filters' })).toBeNull());
+    expect(vi.mocked(pipelineTasksQuery).mock.lastCall?.[1]).toEqual(expect.not.objectContaining({ owner: expect.anything() }));
+    // Sort › Newest: the read asks for it, the rows are drawn newest first, and the row below follows that order
+    await choose('Sort', 'Newest');
+    await waitFor(() => expect(vi.mocked(pipelineTasksQuery)).toHaveBeenLastCalledWith('eng', expect.objectContaining({ sort: 'newest' })));
+    await waitFor(() => expect(titles()).toEqual(['New one', 'Bulk edit stock', 'Old one']));
+    expect(tools().getAttribute('aria-pressed')).toBe('true');
+    expect(nextInList('t7')).toEqual({ pipeline: 'eng', task: '3' });
+    expect(boardSearch('eng')).toEqual({ sort: 'newest' });
+    expect(router.state.location.pathname).toBe('/tasks/eng/7');
+    expect(router.state.location.search).toEqual({});
+    // the board never takes the sort: back on it, its own address and its own order
+    act(() => router.history.back());
+    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
+    expect(router.state.location.search).toEqual({ owner: 'bot:qa' });
+  });
 });
 
 describe('an answer on a task beside its pipeline’s list', () => {
@@ -1047,10 +1135,16 @@ describe('an answer on a task beside its pipeline’s list', () => {
     standing: answered ? 'done' : 'waiting',
     who: 'human:maya',
   });
+  // where each task's own read has it: where its pipeline's list read has it (Review if none), unless a test moves it
+  let moved: Record<number, { id: string; name: string }> = {};
+  const stageOf = (n: number) => {
+    const id = moved[n]?.id ?? (lists[pipeOf(n)] as { number: number; stage_id: string }[] | undefined)?.find((r) => r.number === n)?.stage_id ?? 'review';
+    return { id, name: id === 'qa' ? 'QA' : 'Review' };
+  };
   const task = (n: number, answered = false) => ({
-    ...row(n, 'review'),
+    ...row(n, stageOf(n).id),
     pipeline: pipeOf(n) === 'ops' ? { id: 'ops', name: 'Ops' } : { id: 'eng', name: 'Engineering' },
-    stage: { id: 'review', name: 'Review' },
+    stage: stageOf(n),
     next: { id: 'qa', name: 'QA' },
     conversation_id: null,
     created_at: '2026-11-01T10:00:00Z',
@@ -1076,6 +1170,7 @@ describe('an answer on a task beside its pipeline’s list', () => {
     queryClient.setQueryData(['pipelines'], [ENG, OPS]);
     lists.eng = [row(7, 'review'), row(5, 'review'), row(8, 'qa')];
     waiting = [];
+    moved = {};
     vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
       const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
       const n = Number(/\/api\/v2\/tasks\/(?:%23|t)(\d+)/.exec(url)?.[1]);
@@ -1112,8 +1207,42 @@ describe('an answer on a task beside its pipeline’s list', () => {
     await screen.findByRole('navigation', { name: 'Engineering' });
     await approve(router, 7);
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/5(\/|$)/));
+    // Review's last row: Approve opens QA's first, and the list's head moves on to QA with it
+    const list = screen.getByRole('navigation', { name: 'Engineering' });
+    expect(list.querySelector('.li-head')?.textContent).toBe('EngineeringReview2');
     await approve(router, 5);
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/8(\/|$)/));
+    await waitFor(() => expect(list.querySelector('.li-head')?.textContent).toBe('EngineeringQA1'));
+    expect(within(list).getByRole('link', { name: /Task 8/ }).classList.contains('is-on')).toBe(true);
+  });
+
+  it('at a stage’s last row read, with more of it on the server, Approve goes back to the board: never to the next stage’s first, never past rows not read', async () => {
+    lists.eng = [row(7, 'review'), row(8, 'qa')];
+    pages.eng = { next_after: 'p2', counts: { total: 3, stage: { review: 2, qa: 1 } }, counted: { review: 1, qa: 1 } };
+    const router = show('/tasks/eng?owner=bot%3Aqa', false, page);
+    fireEvent.click(await screen.findByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    expect(await within(list).findByRole('button', { name: 'More tasks' })).toBeTruthy();
+    expect(within(list).queryByText('No open tasks')).toBeNull();
+    expect(nextInList('t7')).toBeNull();
+    await approve(router, 7);
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
+    expect(vi.mocked(loadMore)).not.toHaveBeenCalled();
+  });
+
+  it('heads its list with the stage the open task had as it opened, as its read says, though the list read does not hold it; a move while it is open leaves the head; the next task opens on its own stage', async () => {
+    lists.eng = [row(5, 'qa')];
+    const router = show('/tasks/eng/7', false, page);
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    const head = () => list.querySelector('.li-head')?.textContent;
+    await waitFor(() => expect(head()).toBe('EngineeringReview0'));
+    moved[7] = { id: 'qa', name: 'QA' };
+    await act(() => queryClient.invalidateQueries({ queryKey: ['tasks', 'detail', 't7'], exact: true }));
+    await waitFor(() => expect(queryClient.getQueryData<{ stage_id: string }>(['tasks', 'detail', 't7'])?.stage_id).toBe('qa'));
+    expect(head()).toBe('EngineeringReview0');
+    await act(() => router.navigate({ href: '/tasks/eng/5' }));
+    await waitFor(() => expect(head()).toBe('EngineeringQA1'));
+    expect(within(list).getByRole('link', { name: /Task 5/ }).classList.contains('is-on')).toBe(true);
   });
 
   it('opened over its board with no press on its card (Tico’s tracker), Approve goes back to the board', async () => {
@@ -1162,6 +1291,10 @@ describe('an answer on a task beside its pipeline’s list', () => {
     // again, and a row pressed in the list: that task was opened from the list
     await act(() => router.navigate({ href: '/tasks/eng/8' }));
     const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    // 8 is in QA, the stage shown; 7 is in Review
+    await within(list).findByRole('link', { name: /Task 8/ });
+    fireEvent.click(within(list).getByRole('button', { name: /^Engineering/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Review/ }));
     fireEvent.click(await within(list).findByRole('link', { name: /Task 7/ }));
     await waitFor(() => expect(router.state.location.pathname).toMatch(/^\/tasks\/eng\/7(\/|$)/));
     await approve(router, 7);

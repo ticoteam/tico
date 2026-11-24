@@ -4,7 +4,7 @@ import { useActors } from '@/data';
 import { Avatar } from '@/kit/Avatar';
 import { IconButton } from '@/kit/IconButton';
 import { MenuItem, MenuRule, MenuSub, Menu } from '@/kit/Menu';
-import { isFiltered, tagsQuery, type Due, type Filters } from './queries';
+import { isFiltered, tagsQuery, type Due, type Filters, type Sort } from './queries';
 
 /** Due's choices, as the menu and the chip say them (backend/task_match.py DUE). */
 export const DUE_NAMES: Record<Due, string> = { overdue: 'Overdue', week: 'Due this week', any: 'Has a due date' };
@@ -64,6 +64,21 @@ export function FilterItems({ filters }: { filters: Filters }) {
       </MenuSub>
       <MenuRule />
       <MenuItem label="Late" on={!!filters.late} onSelect={() => void filter.run({ late: !filters.late })} />
+    </>
+  );
+}
+
+/** Sort's choices, as the menu says them: Priority (the default), then by when each task was made. */
+export const SORT_NAMES: Record<Sort, string> = { priority: 'Priority', newest: 'Newest', oldest: 'Oldest' };
+
+/** Sort's rows (the list beside an open task, its tools' Sort ›). Each choice is `tasks.sort`, kept in the list's search. */
+export function SortItems({ sort }: { sort: Sort | undefined }) {
+  const order = useAction('tasks.sort');
+  return (
+    <>
+      {(Object.keys(SORT_NAMES) as Sort[]).map((s) => (
+        <MenuItem key={s} label={SORT_NAMES[s]} on={(sort ?? 'priority') === s} onSelect={() => void order.run({ sort: s })} />
+      ))}
     </>
   );
 }

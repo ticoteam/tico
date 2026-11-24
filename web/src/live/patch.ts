@@ -121,6 +121,8 @@ export interface TaskRow {
 export interface TaskList<T extends TaskRow = TaskRow> {
   tasks: T[];
   cursor?: string;
+  /** More rows past this page (a keyset start). */
+  next_after?: string | null;
 }
 /** backend/api_schemas/live_events.py TaskEvent; a followed task's access loss is `{task_id, gone}` with no seq. */
 export interface TaskEvent<T extends TaskRow = TaskRow> {
@@ -207,10 +209,14 @@ export function patchTaskList<T extends TaskRow>(
   list: TaskList<T>,
   events: TaskEvent<T>[],
   params?: Record<string, unknown>,
-): { list: TaskList<T>; unsure: boolean } {
+): { list: TaskList<T>; unsure: boolean; reset?: boolean } {
   const at = listSeq(list);
   let tasks = list.tasks;
   let unsure = false;
+  // in made order (the list beside an open task's Newest, Oldest) with rows past this page, a new task may sort past
+  // the rows read, and moves the page's end: the list starts again from its first page (`reset`), its pages read so far
+  // and a More on its way dropped
+  const paged = !!list.next_after && (params?.sort === 'newest' || params?.sort === 'oldest');
   const edit = () => {
     if (tasks === list.tasks) tasks = [...tasks];
     return tasks;
@@ -231,6 +237,7 @@ export function patchTaskList<T extends TaskRow>(
     }
     const fits = taskMatches(e.task, params);
     if (i < 0) {
+      if (fits && paged) return { list, unsure: false, reset: true };
       if (fits) edit().push(e.task);
       else if (fits === null) unsure = true;
       continue;
@@ -253,7 +260,11 @@ function patchTasks(batch: TaskEvent[]): void {
   if (!batch.length) return;
   for (const [key, data] of queryClient.getQueriesData<TaskList>({ queryKey: ['tasks', 'list'] })) {
     if (!data || !Array.isArray(data.tasks)) continue;
-    const { list, unsure } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
+    const { list, unsure, reset } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
+    if (reset) {
+      void queryClient.resetQueries({ queryKey: key, exact: true });
+      continue;
+    }
     if (list !== data) queryClient.setQueryData(key, list);
     if (unsure) refetchSoon(key);
   }

@@ -11045,6 +11045,27 @@
       }
     },
     {
+      "id": "tasks.sort",
+      "title": "Sort tasks",
+      "kind": "view",
+      "input": {
+        "type": "object",
+        "properties": {
+          "sort": {
+            "enum": [
+              "priority",
+              "newest",
+              "oldest"
+            ]
+          }
+        },
+        "required": [
+          "sort"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tasks.updateRequester",
       "title": "Change a requester",
       "kind": "change",

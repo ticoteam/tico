@@ -7387,8 +7387,9 @@ def labels_in_use(conn, visible="1"):
     ]
 
 
-# A keyset page starts after the last row's sort key: queue order (rank-less last, rank, created, id) or finished order
-# (most recently finished first, id). Row values compare left to right as the ORDER BY sorts. created_at is a nullable
+# A keyset page starts after the last row's sort key: queue order (rank-less last, rank, created, id), finished order
+# (most recently finished first, id), or made order (newest or oldest first, id). Row values compare left to right as
+# the ORDER BY sorts. created_at is a nullable
 # column: a missing date is '' here, which sorts where NULL does (before every date ascending, after every date
 # descending), so a row with none is still reached and its key still round-trips as a string.
 # When a finished task finished: its first time set, or '' (never NULL), the archive's order and its index's
@@ -7399,6 +7400,16 @@ KEYSET_SQL = {
     # The second term holds no row the first does not: it is the range SQLite seeks in the index, which it does not do
     # for the pair, so a deep page starts at its place instead of walking every row before it.
     "finished": f"({FINISHED_WHEN}, id) < (?, ?) AND {FINISHED_WHEN} <= ?",
+    "newest": "(COALESCE(created_at, ''), id) < (?, ?)",
+    "oldest": "(COALESCE(created_at, ''), id) > (?, ?)",
+}
+# The ORDER BY of each list order. Made order sorts the same COALESCE KEYSET_SQL compares, so a missing created_at and
+# '' are one key (first oldest, last newest) and a page boundary between them loses no row.
+TASK_ORDERS = {
+    "queue": "(rank IS NULL), rank, created_at, id",
+    "finished": f"{FINISHED_WHEN} DESC, id DESC",  # most recently done first
+    "newest": "COALESCE(created_at, '') DESC, id DESC",
+    "oldest": "COALESCE(created_at, ''), id",
 }
 
 
@@ -7406,6 +7417,9 @@ def task_sort_key(row, order="queue"):
     """The sort key `tasks(after=...)` takes, of one raw task row, as a list that survives JSON."""
     if order == "queue":
         return [int(row.get("rank") is None), row.get("rank") or 0, row.get("created_at") or "", row["id"]]
+    if order in ("newest", "oldest"):
+        # the order's name first: a page start is only ever taken in the order that gave it
+        return [order, row.get("created_at") or "", row["id"]]
     when = next((row[k] for k in ("done_at", "closed_at", "updated_at", "created_at") if row.get(k) is not None), "")
     return [when, row["id"]]
 
@@ -7509,12 +7523,13 @@ def tasks(
                 # The same rows, in the words of tasks_finished_time's WHERE: SQLite uses a partial index only for a
                 # query that names its condition, and a bound status never does.
                 where.append("status IN ('done','closed')")
-    if order == "queue":
-        ordering = "(rank IS NULL), rank, created_at, id"
-    elif order == "finished":
-        ordering = f"{FINISHED_WHEN} DESC, id DESC"  # most recently done first
-    else:
-        raise ValueError("task order is queue or finished")
+            elif order in ("newest", "oldest") and wanted == ["open"]:
+                # The same, for the open tasks' partial covering indexes (tasks_open_pipeline, tasks_open_owner_flow):
+                # a made-order page then reads its ids without a table lookup per row.
+                where.append("status='open'")
+    ordering = TASK_ORDERS.get(order)
+    if ordering is None:
+        raise ValueError("task order is queue, finished, newest or oldest")
     if per_stage:
         # Before the keyset start: a count is of the whole selection, not of the pages after one row.
         clause = " WHERE " + " AND ".join(where) if where else ""
@@ -7524,7 +7539,11 @@ def tasks(
     if after is not None:
         # The same tuple the ORDER BY sorts on; a rank-less row's rank is never compared (its first part decides).
         where.append(KEYSET_SQL[order])
-        args += list(after) if order == "queue" else [*after, after[0]]
+        if order == "finished":
+            args += [*after, after[0]]
+        else:
+            # a made-order start leads with its order's name (task_sort_key), which the SQL does not compare
+            args += list(after[1:]) if order in ("newest", "oldest") else list(after)
     if where:
         sql += " WHERE " + " AND ".join(where)
     if keys_only:
@@ -7532,7 +7551,7 @@ def tasks(
             "SELECT id, title, number" + sql[len("SELECT *") :] + f" ORDER BY {ordering}", args
         ).fetchall()
     page = (*args, -1 if limit is None else max(1, int(limit)), max(0, int(offset)))
-    if order == "queue" and limit is not None:
+    if order != "finished" and limit is not None:
         # The page's ids first, then its full rows. Sorting `SELECT *` copied every visible task's body into the
         # sorter (26 MB of bodies at TIDY's 10.8k tasks) on each list page; tasks_queue_cover answers the ids alone.
         ids = [

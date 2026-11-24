@@ -16,7 +16,7 @@ import { ArchivedSections } from './Archived';
 import { leaveNeedsYou, needsYouWithout, useNeedsYou } from './needs';
 import { NeedsYouPage } from './NeedsYouPage';
 import { NeedsYouViews } from './NeedsYouViews';
-import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, pipelinesQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
+import { flowCountQuery, flowListParams, flowListQuery, flowQuery, listParams, loadMoreOf, pipelinesQuery, pipelineTasksQuery, refreshLoaded, STATUS_BACKSTOP_MS, useFlowCountRefresh, type Pipeline, type TaskItem } from './queries';
 import { TasksPage } from './TasksPage';
 
 vi.mock('@/tico/dot', () => ({ Dot: () => <span className="dot" />, dot: { set: vi.fn(() => () => {}), clear: vi.fn(), el: () => null } }));
@@ -1425,5 +1425,34 @@ describe('an approved email on its card @s0', () => {
     const held = queryClient.getQueryData<{ tasks: TaskItem[] }>(listKey)?.tasks ?? [];
     expect([held[0]?.title, held[0]?.status_line]).toEqual(['One', 'paused']);
     expect(held[1]?.status_line).toBe('working');
+  });
+});
+
+describe('a list in made order (the list beside an open task, Newest)', () => {
+  it('starts again from its first page for a live insert while it has more: a More on its way is dropped, so no row goes missing', async () => {
+    const filters = { sort: 'newest' as const };
+    const key = keys.tasks.list(listParams('eng', filters));
+    let page2: (r: Reply) => void = () => {};
+    serve((url) => {
+      if (url.includes('after=k8')) return new Promise<Reply>((r) => (page2 = r));
+      // the first page as it is now: the new task on top moved the page's end up a row
+      return { status: 200, body: { tasks: [task('t10', 10, 'Ten', 'todo'), task('t9', 9, 'Nine', 'todo')], cursor: '3', next_after: 'k9' } };
+    });
+    queryClient.setQueryData(key, { tasks: [task('t9', 9, 'Nine', 'todo'), task('t8', 8, 'Eight', 'todo')], cursor: '1', next_after: 'k8' });
+    const watch = new QueryObserver(queryClient, { ...pipelineTasksQuery('eng', filters), staleTime: Infinity });
+    const stop = watch.subscribe(() => {});
+    try {
+      const ids = () => queryClient.getQueryData<{ tasks: TaskItem[] }>(key)?.tasks.map((t) => t.id);
+      const more = loadMoreOf(listParams('eng', filters));
+      act(() => dispatch('tasks', [{ seq: 2, id: 't10', kind: 'create', kinds: ['create'], task: task('t10', 10, 'Ten', 'todo') }]));
+      await waitFor(() => expect(ids()).toEqual(['t10', 't9']));
+      // the More read from the old end lands after the list started again: dropped, and 8 is still to read from k9
+      page2({ status: 200, body: { tasks: [task('t7', 7, 'Seven', 'todo')], next_after: null } });
+      await more;
+      expect(ids()).toEqual(['t10', 't9']);
+      expect(queryClient.getQueryData<{ next_after: string }>(key)?.next_after).toBe('k9');
+    } finally {
+      stop();
+    }
   });
 });

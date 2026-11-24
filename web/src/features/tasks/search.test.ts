@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { registry } from '@/actions';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import type { SearchHit } from '@/search/define';
-import { pipelinesQuery, type Pipeline } from './queries';
-import { pipelinesSearch, tasksSearch, validateRoadmapSearch, validateTasksSearch } from './search';
+import { inOrder, listParams, pipelinesQuery, type Pipeline } from './queries';
+import { pipelinesSearch, sortOf, tasksSearch, validateRoadmapSearch, validateTasksSearch } from './search';
 
 // Made-up rows only.
 const sig = () => new AbortController().signal;
@@ -79,5 +79,34 @@ describe('the tasks address', () => {
     expect(validateTasksSearch({ new: '1', q: 'frost' })).toEqual({ q: 'frost', new: 1 });
     expect(validateTasksSearch({ new: 'yes' })).toEqual({});
     expect(validateRoadmapSearch({ new: '1' })).toEqual({});
+  });
+});
+
+describe('a list’s sort', () => {
+  it('is the list’s own, newest or oldest; Priority is the default and names none; a board’s address never takes one', () => {
+    expect(sortOf({ sort: 'newest' })).toBe('newest');
+    expect(sortOf({ sort: 'oldest' })).toBe('oldest');
+    expect(sortOf({ sort: 'priority' })).toBeUndefined();
+    expect(sortOf({ sort: 'sideways' })).toBeUndefined();
+    expect(validateTasksSearch({ sort: 'newest' })).not.toHaveProperty('sort');
+  });
+
+  it('asks the server for it, so its pages come in that order; Priority asks for the server’s own', () => {
+    expect(listParams('p1', { sort: 'newest' }).sort).toBe('newest');
+    expect(listParams('p1', { sort: 'oldest' }).sort).toBe('oldest');
+    expect(listParams('p1', { sort: 'priority' })).not.toHaveProperty('sort');
+    expect(listParams('p1', {})).not.toHaveProperty('sort');
+  });
+
+  it('draws rows by when they were made, a row with no date first in Oldest, as the server pages them', () => {
+    const rows = [
+      { id: 'b', created_at: '2026-11-02T00:00:00Z' },
+      { id: 'a', created_at: '2026-11-02T00:00:00Z' },
+      { id: 'c', created_at: undefined },
+      { id: 'd', created_at: '2026-11-01T00:00:00Z' },
+    ];
+    expect(inOrder(rows, 'oldest').map((r) => r.id)).toEqual(['c', 'd', 'a', 'b']);
+    expect(inOrder(rows, 'newest').map((r) => r.id)).toEqual(['b', 'a', 'd', 'c']);
+    expect(inOrder(rows, undefined)).toBe(rows);
   });
 });

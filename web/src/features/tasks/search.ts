@@ -2,7 +2,7 @@ import { directoryQuery, queryClient } from '@/data';
 import { defineSearch } from '@/search/define';
 import { faceOf, fetchFor, HITS } from '@/search/helpers';
 import { matches } from '@/search/results';
-import { pipelinesQuery, taskSearchQuery, type Due, type Filters } from './queries';
+import { pipelinesQuery, taskSearchQuery, type Due, type Filters, type Sort } from './queries';
 
 /** Board and list are a pipeline's open tasks; Archived is its snoozed, done and closed ones. */
 export type View = 'board' | 'list' | 'archived';
@@ -58,6 +58,10 @@ export function validateRoadmapSearch(raw: Record<string, unknown>): RoadmapSear
   const task = text(raw.requesters, 100);
   return task ? { ...filters, requesters: task } : filters;
 }
+
+/** The sort the list beside an open task keeps in its search (lib changeBoardSearch): Newest or Oldest; Priority, the
+    default, is none. A board's address never takes one. */
+export const sortOf = (raw: Record<string, unknown>): Sort | undefined => (raw.sort === 'newest' || raw.sort === 'oldest' ? raw.sort : undefined);
 
 export const filtersOf = ({ owner, waiting, asked, tag, due, late, q }: Filters): Filters => ({ owner, waiting, asked, tag, due, late, q });
 
