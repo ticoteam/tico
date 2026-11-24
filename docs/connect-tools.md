@@ -21,7 +21,7 @@ Tico: use a supported API credential there, or a REST skill.
 ## How a tool is connected
 
 **Tools → Add** finds a known service in the catalog and offers its ways in: **Sign in with** the vendor (its MCP
-server), **Paste a key**, or **Sign in on the website**. Anything else is added by its kind there (API, MCP server,
+server), **Paste key**, or **Use website**. Anything else is added by its kind there (API, MCP server,
 website, webhook, mail). An agent (the Tools Owner, Agent Ops, the Assistant, with a person's rights or its own) adds a
 tool or an MCP server from the catalog only and probes no other address; a key is pasted and a website login shared
 only by a person in Tools.

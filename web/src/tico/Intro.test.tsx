@@ -85,7 +85,7 @@ beforeEach(() => {
   queryClient.setDefaultOptions({ queries: { retry: false, staleTime: Infinity } });
   vi.spyOn(api, 'get').mockRejectedValue(new Error('not in this test'));
   // the server adds the page sent to those kept, as backend/preferences_routes.py seen_union does
-  vi.spyOn(api, 'post').mockImplementation(async (_path: string, body: unknown) => ({ value: { ...(body as { value: object }).value, ...queryClient.getQueryData(introsSeenQuery.queryKey) } }) as never);
+  vi.spyOn(api, 'post').mockImplementation(async (_path: string, body: unknown) => ({ value: { ...(body as { value: object }).value, ...queryClient.getQueryData<Record<string, string>>(introsSeenQuery.queryKey) } }) as never);
 });
 
 afterEach(() => {

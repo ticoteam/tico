@@ -5,7 +5,7 @@ import { NoticeSwitch } from './Notices';
 // The person's notifications switch: the browser asks permission only from the press, never on load (platforms.md 2).
 
 const { run } = vi.hoisted(() => ({ run: vi.fn(async () => ({ ok: true })) }));
-vi.mock('@/actions', () => ({ run, refusal: () => ({ text: 'No' }) }));
+vi.mock('@/actions', async (orig) => ({ ...(await orig<object>()), run, refusal: () => ({ text: 'No' }) }));
 
 function stubNotification(permission: NotificationPermission, answer: NotificationPermission = permission) {
   const requestPermission = vi.fn(async () => answer);

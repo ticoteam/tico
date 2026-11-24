@@ -803,7 +803,9 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   if (own && head?.open !== open) setHead({ open, at: own, stage: own });
   const at = head?.open === open ? head.at : undefined;
   const want = head?.open === open ? head.stage : undefined;
-  const showing = (read.find((g) => g.id === want) ?? read.find((g) => g.items.length) ?? read[0])?.id;
+  // none until it is known: the open task's stage, or the pipeline's read to fall back on, never a first guess read by
+  // priority and dropped
+  const showing = want || page ? (read.find((g) => g.id === want) ?? read.find((g) => g.items.length) ?? read[0])?.id : undefined;
   // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More), and Tico sorts it
   // when due; drawn once that read is in, never in the queue's order first
   const ranks = !filters.sort && !!showing;
