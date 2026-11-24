@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import IO
 
 from .blobs import register
-from .store import Problem
+from .store import H, Problem
 
 FIELDS = ("width", "height", "duration_ms", "poster_blob_id", "thumb_blob_id", "media_state")
 # Starts from the few pending rows (partial indexes in hubdb.migrate), never a scan of every blob: it runs every few seconds.
@@ -313,8 +313,13 @@ class Metadata:
 
         with self.store.transaction() as c:
             if not c.execute("SELECT 1 FROM blobs WHERE id=?", (blob["id"],)).fetchone():
-                # Deleted while it was read: nothing to describe, and no preview to keep for it.
+                # Deleted while it was read: nothing to describe, and no preview to keep for it. The previews' bytes
+                # are stored already, so they are queued for removal as a delete queues its own (file_library.drain).
+                from .file_library import queue_purge
+
                 c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
+                for _, upload in prepared:
+                    queue_purge(c, upload["digest"], "", H.now())
                 return
             for field, upload in prepared:
                 result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]

@@ -718,12 +718,17 @@ def release_blobs(c, blob_ids, now):
         mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
         digests[blob["digest"]] = visuals.kind_of(mime, blob["size"]) if mime else ""
     for digest, kind in digests.items():
-        if not still_used(c, digest):
-            c.execute(
-                "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
-                "attempts=0,error=''",
-                (digest, kind if kind in ("page", "svg") else "", now),
-            )
+        queue_purge(c, digest, kind, now)
+
+
+def queue_purge(c, digest, kind, now):
+    """Queue `digest`'s bytes for `drain` when no row needs them; `kind` names a page or SVG's hosted copy."""
+    if not still_used(c, digest):
+        c.execute(
+            "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
+            "attempts=0,error=''",
+            (digest, kind if kind in ("page", "svg") else "", now),
+        )
 
 
 def _kept_elsewhere(c, bid):
