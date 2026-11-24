@@ -357,6 +357,17 @@ def test_a_customer_keeps_the_channel_they_first_came_from(api):
     assert cohort(get(api, "growth/computed"), "search-ads", "2026-09")["new_customers"]["value"] == 40
 
 
+def test_a_customer_first_loaded_with_no_channel_takes_the_channel_a_later_load_knows(api):
+    channel(api)
+    rows = september()
+    rows[0]["channel"] = ""
+    load(api, rows)
+    assert cohort(get(api, "growth/computed"), "search-ads", "2026-09")["new_customers"]["value"] == 39
+    rows[0]["channel"] = "search-ads"
+    load(api, rows)
+    assert cohort(get(api, "growth/computed"), "search-ads", "2026-09")["new_customers"]["value"] == 40
+
+
 def test_a_sunday_late_evening_counts_in_its_monday_week_and_its_month(api):  # AC-19
     channel(api)
     put(api, "growth/settings", {"time_zone": "America/Los_Angeles"})

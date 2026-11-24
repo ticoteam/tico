@@ -370,6 +370,9 @@ def load(
         channel, segment, plan, attribution = first_seen.get(
             (s.customer_key, became), (s.channel, s.segment, s.plan, s.attribution)
         )
+        # A customer keeps where they first came from, but an unknown is not a place: a later load that knows it
+        # fills it in (a sign-up UTM or a platform match arriving after the customer was first loaded).
+        channel, segment, plan = channel or s.channel, segment or s.segment, plan or s.plan
         if channel == s.channel and s.attribution:  # how the kept channel was named; a new channel's rung is not
             attribution = s.attribution
         values.append(
