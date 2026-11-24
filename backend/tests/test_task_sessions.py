@@ -5,6 +5,8 @@ session; a message `to` an agent is that agent's session message. Every message 
 (`messages.session_agent_id`) in the task's one thread: the session view, the comments view and each agent's replay
 read by it. Fictional people only: ana (the owner, who files and directs), ben (a teammate who may not direct)."""
 
+import json
+
 import pytest
 
 from backend import task_privacy
@@ -314,6 +316,27 @@ def test_the_pinned_answer_settles_its_ask_and_wakes_its_asker(api):
     sent = comment(api, row["id"], "Use the Chase feed.", ask=mark)["comment"]
     assert open_asks(api, row["id"]) == {"bot:finance"}, "exactly that ask is settled"
     assert jobs(api, "ops") == [sent["id"]] and jobs(api, "finance") == []
+
+
+def test_the_mcp_tool_replies_writes_to_a_session_and_answers_an_ask_as_the_api_does(api):
+    """tico_task_comment (what `tico task comment` runs) sends `reply_to` as in_reply_to, `to` and `ask` in the one
+    comment write: each reaches its agent, and a ❓ answered by name is answered once."""
+    from backend.tests.helpers.mcp import call
+
+    row = ticket(api)
+    said = agent_says(api, "bot:finance", row["id"], "Totals checked.")
+    is_error, sent = call(api, "tico_task_comment", {"id": row["id"], "text": "Which month?", "reply_to": said["id"]})
+    assert not is_error and sent["woke"] and sent["comment"]["in_reply_to"] == said["id"], sent
+    settle(api)
+    is_error, sent = call(api, "tico_task_comment", {"id": row["id"], "text": "Use August.", "to": "ops"})
+    assert not is_error and sent["comment"]["session_agent_id"] == "bot:ops" and jobs(api, "ops"), sent
+    settle(api)
+    (mark,) = asks(api, row["id"], "bot:ops")
+    answer = {"id": row["id"], "text": "Use the main bank feed.", "ask": "qmark:" + mark}
+    is_error, sent = call(api, "tico_task_comment", answer)
+    assert not is_error and open_asks(api, row["id"]) == set() and jobs(api, "ops") == [sent["comment"]["id"]], sent
+    is_error, again = call(api, "tico_task_comment", {**answer, "text": "And again."})
+    assert is_error and "answered" in json.dumps(again), again
 
 
 def test_a_plain_comment_that_clears_two_agents_asks_reaches_both(api):

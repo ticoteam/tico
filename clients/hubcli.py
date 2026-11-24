@@ -855,6 +855,18 @@ def parser():
         help="the caption for each --visual, in the same order",
     )
     delivery_flags(s, goal=True)
+    s.add_argument(
+        "--reply-to",
+        dest="reply_to",
+        metavar="MESSAGE",
+        help="Reply: the id of the comment on this task it answers; it reaches that comment's author",
+    )
+    s.add_argument("--to", metavar="AGENT", help="an agent on the task: a message in its session, which wakes it")
+    s.add_argument(
+        "--ask",
+        metavar="ASK_ID",
+        help="your answer to an agent's ❓ to you here (qmark:<id>, from tico needs-you show): settles that ❓ alone",
+    )
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.add_argument(
         "--needs-action",

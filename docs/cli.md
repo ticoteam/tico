@@ -114,9 +114,9 @@ again (tico browser read app.example.com)." Exit codes are the ones below.
 
 ## Comments and @mentions
 
-`tico task comment <task> "..."` reaches only whom its text @mentions (and any agent whose ❓ to you it answers): a plain comment wakes and
-notifies nobody.
-It has no flag for a Reply or a session message yet; send those through `tico api`, as
+`tico task comment <task> "..."` reaches only whom its text @mentions (and any agent whose ❓ to you it answers): a
+plain comment wakes and notifies nobody. `--reply-to <comment id>` makes it a Reply, `--to <agent>` a message in that
+agent's session, and `--ask qmark:<id>` your answer to one agent's ❓, as
 [Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions) shows.
 
 ## Exit codes

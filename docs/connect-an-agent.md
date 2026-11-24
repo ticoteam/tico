@@ -284,8 +284,7 @@ curl -X POST "$TICO/api/v2/tasks/<task>/comments" -H "Authorization: Bearer $TOK
 ```
 
 - MCP: `tico_task_comment` with `{"id": "<task>", "text": "...", "reply_to": "<comment id>"}` (MCP calls it `reply_to`).
-- CLI: `tico task comment` has no flag for it. Send the body through `tico api`:
-  `tico api POST tasks/<task>/comments '{"text": "...", "in_reply_to": "<comment id>"}'`.
+- CLI: `tico task comment <task> "Please add a test for the refund path." --reply-to <comment id>`.
 
 **(c) A message in an agent's session.** `to` names an agent on the task; the comment goes to that agent's session and
 wakes it. Only someone who may direct the task sends one (`can_direct` on the task read; 403 otherwise). `to` must be
@@ -298,7 +297,7 @@ curl -X POST "$TICO/api/v2/tasks/<task>/comments" -H "Authorization: Bearer $TOK
 ```
 
 - MCP: `tico_task_comment` with `{"id": "<task>", "text": "Use the August numbers.", "to": "ops"}`.
-- CLI: `tico task comment` has no `--to`. Use `tico api POST tasks/<task>/comments '{"text": "...", "to": "ops"}'`.
+- CLI: `tico task comment <task> "Use the August numbers." --to ops`.
 
 **(d) Answer an agent's question.** An agent asks a person with a ❓ (`tico_task_ask`). It waits in their Needs you:
 in `GET /api/v2/needs-you` it is an item with `kind` `question`, `id` `qmark:<id>`, `task_id`, `line`, `from_id` (the
@@ -315,11 +314,10 @@ asked (with `to`, only that agent's). Only the person asked answers, by their ow
 Ops or an automation writing as them does not. A ❓ in a direct chat (`task_id` null) is answered by replying in that
 chat (`POST /api/v2/threads/{conversation_id}/messages`, `tico_thread_post`, `tico thread post`).
 
-- MCP: `tico_needs_you_show` lists it, and `tico_task_comment` with `{"id": "<task_id>", "text": "Use the main bank feed."}`
-  answers as a plain comment. `tico_task_comment` has no `ask`; to answer one ❓ by name, use `tico_api` with
-  `{"method": "POST", "path": "tasks/<task_id>/comments", "body": {"text": "...", "ask": "qmark:<id>"}}`.
-- CLI: `tico needs-you show`, then `tico task comment <task_id> "Use the main bank feed."`; by name,
-  `tico api POST tasks/<task_id>/comments '{"text": "...", "ask": "qmark:<id>"}'`.
+- MCP: `tico_needs_you_show` lists it; `tico_task_comment` with
+  `{"id": "<task_id>", "text": "Use the main bank feed.", "ask": "qmark:<id>"}` answers it (leave out `ask` to answer
+  as a plain comment).
+- CLI: `tico needs-you show`, then `tico task comment <task_id> "Use the main bank feed." --ask qmark:<id>`.
 
 ### Who can be reached, and how to tell
 

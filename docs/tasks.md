@@ -405,11 +405,11 @@ agent holding the task. It reaches only whom it addresses:
 
 - **@someone**: a person is notified; an agent is woken in its own session, and its answer shows as a reply under the
   comment.
-- **Reply** (`in_reply_to` in `POST /api/v2/tasks/{id}/comments`, `reply_to` in MCP `tico_task_comment`):
+- **Reply** (`in_reply_to` in `POST /api/v2/tasks/{id}/comments`, `tico task comment <id> "..." --reply-to <comment>`):
   a person's Reply reaches the comment's author as an @mention would, with nothing added to the text. Replies show
   one level deep, under the comment they answer. A bot's reply to a bot waits for that bot's next turn unless what it
   answers asked for an answer (needs-action, or a wait).
-- **A session message** (`to: <agent>`, in the API and MCP): a message in that agent's session, which wakes it. Only
+- **A session message** (`to: <agent>`, `--to <agent>`): a message in that agent's session, which wakes it. Only
   someone who may direct the task sends one (`can_direct` on the task read); `to` must be an active agent you may see
   that can read the task, and goes without `public`, `ask`, `goal` or `in_reply_to`.
 
@@ -425,16 +425,16 @@ How a comment reaches the agents it addresses says how it arrives
 
 ```sh
 tico task comment <id> "@build use the August numbers." --steer
-tico task comment <id> "@build for later." --defer 4h
+tico task comment <id> "For later." --to build --defer 4h
 ```
 
-`tico task comment` has no flag for a Reply or a session message yet; `tico api POST tasks/<id>/comments` sends either
-([Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions)).
+[Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions) shows each way in the API, MCP and CLI.
 
 When an agent finishes its stage, its done note is one comment on the task. When the task is done or closed, each
 person who asked for it and can still read it gets one line saying so, once per completion.
 
-A comment that names a bot's open ❓ on the task (`ask`, in `POST /api/v2/tasks/{id}/comments`: the pinned answer)
+A comment that names a bot's open ❓ on the task (`ask` in `POST /api/v2/tasks/{id}/comments`, `--ask` in the CLI:
+the pinned answer)
 settles exactly that ❓ and wakes the bot that asked. Any other comment of yours on the task clears your open ❓s there
 (a message in one agent's session, only that agent's), and every agent whose ❓ it clears gets it.
 
