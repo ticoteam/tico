@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { adaptMe } from '@/api/adapt';
-import { configQuery, meQuery, type ReleaseOffer } from '@/data';
+import { configQuery, meQuery, useInitialReleaseRefresh, type ReleaseOffer } from '@/data';
 import { UpdateNotice } from '@/features/notices/exports';
 import { fixHref } from './fixes';
 import { Version } from './Version';
@@ -32,7 +32,10 @@ function config(update: ReleaseOffer) {
 }
 
 function role(you: 'owner' | 'admin' | 'member') {
-  client.setQueryData(meQuery.queryKey, adaptMe({ actor: 'human:1', email: 'person@example.test', role: you === 'owner' ? 'owner' : 'human', kind: you }));
+  client.setQueryData(
+    meQuery.queryKey,
+    adaptMe({ actor: 'human:1', email: 'person@example.test', role: you === 'owner' ? 'owner' : 'human', kind: you }),
+  );
 }
 
 function SettingsRow({ owner }: { owner: boolean }) {
@@ -64,6 +67,36 @@ afterEach(() => {
 });
 
 describe('Company updates', () => {
+  it('refreshes an empty release offer at 30 seconds and two minutes', async () => {
+    vi.useFakeTimers();
+    let update = { ...offer, latest: '', available: false };
+    const request = vi.fn(async () => json(config(update)));
+    vi.stubGlobal('fetch', request);
+    function Shell() {
+      useInitialReleaseRefresh(true);
+      return <UpdateNotice />;
+    }
+    role('owner');
+    render(
+      <QueryClientProvider client={client}>
+        <Shell />
+      </QueryClientProvider>,
+    );
+    await tick();
+    await tick(29_900);
+    expect(request).toHaveBeenCalledTimes(1);
+    await tick(100);
+    expect(request).toHaveBeenCalledTimes(2);
+    update = offer;
+    await tick(89_900);
+    expect(request).toHaveBeenCalledTimes(2);
+    await tick(100);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(screen.getByText('Tico v1.2.4 is out')).toBeTruthy();
+    await tick(120_000);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
   it('shows an admin the available release and persists dismissal for that release', async () => {
     let update = offer;
     const request = vi.fn(async () => json(config(update)));
@@ -154,21 +187,37 @@ describe('Company updates', () => {
     expect(screen.getByRole('button', { name: 'Update now' })).toBeTruthy();
   });
 
-  it('keeps a pending check visible and reports a later completed check', async () => {
-    const update = { ...offer, latest: offer.current, available: false };
-    let checking = true;
+  it.each([1, 3])('clears a pending check after %i scheduled config reads', async (followUps) => {
+    vi.useFakeTimers();
+    const upToDate = { ...offer, latest: offer.current, available: false };
+    let checked = false;
+    let reads = 0;
     vi.stubGlobal('fetch', async (path: string) => {
-      if (path === CONFIG) return json(config(update));
+      if (path === CONFIG) {
+        if (!checked) return json(config(upToDate));
+        reads++;
+        return json(config(followUps === 1 ? { ...offer, checking: false } : { ...upToDate, checking: true }));
+      }
       if (path === UPDATE) return json({ state: 'idle', configured: true });
-      return json({ checking, available: false });
+      checked = true;
+      return json({ checking: true, available: false });
     });
-    show({ update });
+    show({ update: upToDate });
+    await tick();
     const button = screen.getByRole('button', { name: 'Check now' });
-    await act(async () => fireEvent.click(button));
-    expect(await screen.findByText('Still checking…')).toBeTruthy();
-    checking = false;
     fireEvent.click(button);
-    expect(await screen.findByText('Up to date.')).toBeTruthy();
+    await tick();
+    expect(screen.getByText('Still checking…')).toBeTruthy();
+    for (let i = 0; i < followUps; i++) {
+      expect(screen.getByText('Still checking…')).toBeTruthy();
+      expect(reads).toBe(i);
+      await tick(5_050);
+    }
+    expect(screen.queryByText('Still checking…')).toBeNull();
+    if (followUps === 1) expect(screen.getByText('v1.2.4 is out')).toBeTruthy();
+    expect(button.hasAttribute('disabled')).toBe(false);
+    await tick(20_000);
+    expect(reads).toBe(followUps);
   });
 
   it.each([
@@ -232,9 +281,78 @@ describe('Company updates', () => {
     expect(request.mock.calls.filter(([path]) => path === UPDATE)).toHaveLength(2);
   });
 
+  it('ends mount recovery on the first idle status', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    vi.stubGlobal('fetch', async (path: string) => {
+      if (path === CONFIG) return json(config(offer));
+      return ++reads === 1 ? json({}, 503) : json({ configured: true, state: 'idle' });
+    });
+    show();
+    await tick();
+    expect(screen.getByText('Restarting Tico…')).toBeTruthy();
+    await tick(3_050);
+    expect(screen.queryByText('Restarting Tico…')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Update now' }).hasAttribute('disabled')).toBe(false);
+    await tick(6_000);
+    expect(reads).toBe(2);
+  });
+
+  it('ends lost-start recovery on three consecutive idle statuses', async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const request = vi.fn(async (path: string, init: RequestInit) => {
+      if (path === CONFIG) return json(config(offer));
+      if (init.method === 'POST') throw new TypeError('Failed to fetch');
+      reads++;
+      return json({ configured: true, state: 'idle' });
+    });
+    vi.stubGlobal('fetch', request);
+    show();
+    await tick();
+    const button = screen.getByRole('button', { name: 'Update now' });
+    fireEvent.click(button);
+    await tick();
+    await tick(6_050);
+    expect(reads).toBe(3);
+    expect(screen.getByText('Restarting Tico…')).toBeTruthy();
+    await tick(3_050);
+    expect(reads).toBe(4);
+    expect(screen.getByText("The update didn't start. Try again.")).toBeTruthy();
+    expect(button.hasAttribute('disabled')).toBe(false);
+    await tick(6_000);
+    expect(reads).toBe(4);
+    expect(request.mock.calls.filter(([, init]) => init.method === 'POST')).toHaveLength(1);
+  });
+
+  it('reports success when an aborted start recovers directly to healthy', async () => {
+    vi.useFakeTimers();
+    let started = false;
+    vi.stubGlobal('fetch', async (path: string, init: RequestInit) => {
+      if (path === CONFIG) return json(config(offer));
+      if (init.method === 'POST') {
+        started = true;
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      return json(started ? { configured: true, state: 'healthy', to: 'v1.2.4', running: '1.2.4' } : { configured: true, state: 'idle' });
+    });
+    show();
+    await tick();
+    fireEvent.click(screen.getByRole('button', { name: 'Update now' }));
+    await tick();
+    expect(screen.getByText('Restarting Tico…')).toBeTruthy();
+    await tick(3_050);
+    expect(screen.getByText('Updated to v1.2.4.')).toBeTruthy();
+    expect(screen.queryByText('Restarting Tico…')).toBeNull();
+  });
+
   it('stops recovery reads after five minutes without a reachable status', async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async (path: string) => (path === CONFIG ? json(config(offer)) : json({}, 503)));
+    let healthy = false;
+    const request = vi.fn(async (path: string) => {
+      if (path === CONFIG) return json(config(offer));
+      return healthy ? json({ configured: true, state: 'healthy', to: 'v1.2.4', running: '1.2.4' }) : json({}, 503);
+    });
     vi.stubGlobal('fetch', request);
     show();
     await tick();
@@ -244,21 +362,32 @@ describe('Company updates', () => {
     await tick(6_000);
     expect(request.mock.calls).toHaveLength(count);
     expect(request.mock.calls.filter(([path]) => path === CONFIG)).toHaveLength(1);
+    healthy = true;
+    await act(() => client.refetchQueries({ queryKey: ['settings', 'update'] }));
+    await tick();
+    expect(screen.queryByText('Could not confirm the update.')).toBeNull();
+    expect(screen.getByText('Updated to v1.2.4.')).toBeTruthy();
   });
 
-  it('shows a refused start immediately', async () => {
+  it('shows a 502 start refusal immediately and reads status once', async () => {
+    vi.useFakeTimers();
+    const error = 'The updater did not answer. Try again, or update by hand.';
     const request = vi.fn(async (path: string, init: RequestInit) => {
       if (path === CONFIG) return json(config(offer));
-      if (init.method === 'POST') return json({ error: { code: 'fresh_start', detail: 'This company’s tasks would not carry over.' } }, 409);
+      if (init.method === 'POST') return json({ error: { code: 'updater_unreachable', detail: error } }, 502);
       return json({ configured: true, state: 'idle' });
     });
     vi.stubGlobal('fetch', request);
     show();
+    await tick();
     const button = screen.getByRole('button', { name: 'Update now' });
-    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false));
     fireEvent.click(button);
-    expect(await screen.findByText('This company’s tasks would not carry over.')).toBeTruthy();
-    expect(request.mock.calls.filter(([path]) => path === UPDATE)).toHaveLength(2);
+    await tick();
+    expect(screen.getByText(error)).toBeTruthy();
+    expect(screen.queryByText('Restarting Tico…')).toBeNull();
+    expect(button.hasAttribute('disabled')).toBe(false);
+    await tick(6_000);
+    expect(request.mock.calls.filter(([path, init]) => path === UPDATE && init.method === 'GET')).toHaveLength(2);
   });
 
   it.each([
@@ -286,7 +415,13 @@ describe('Company updates', () => {
       }
       const status = !posts ? 'idle' : ++reads === 1 ? 'restarting' : state;
       if (reads === 2) throw new TypeError('Failed to fetch');
-      return json({ state: status, to: 'v1.2.4', configured: true, running: status === state ? running : offer.current, message: 'The download timed out.' });
+      return json({
+        state: status,
+        to: 'v1.2.4',
+        configured: true,
+        running: status === state ? running : offer.current,
+        message: 'The download timed out.',
+      });
     });
 
     show();

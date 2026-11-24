@@ -211,12 +211,20 @@ export function SettingsPage({ section, open, who, list = false }: { section: Se
   const forbidden = isForbidden(useQuery(mainQuery(section) as UseQueryOptions<unknown, Error, unknown, readonly unknown[]>).error);
   const Body = BODY[section];
   const [q, setQ] = useState('');
+  const [at, setAt] = useState(-1);
+  const [previousOpen, setPreviousOpen] = useState(open);
+  if (previousOpen !== open) {
+    setPreviousOpen(open);
+    if (open === 'tico-version') {
+      setQ('');
+      setAt(-1);
+    }
+  }
   const term = q.trim();
   const asked = useSettled(term);
   const searching = !!term;
   const { hits, loaded } = useHits(asked === term ? asked : '');
   // The result the arrow keys are on; Enter opens it (the first when none is).
-  const [at, setAt] = useState(-1);
   const results = useRef<HTMLDivElement>(null);
   const pick = (h: Hit) => {
     landing = hitTarget(h.card) ?? null;

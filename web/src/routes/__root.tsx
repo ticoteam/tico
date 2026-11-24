@@ -4,7 +4,18 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalSt
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
-import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
+import {
+  configQuery,
+  meQuery,
+  pageOwnersQuery,
+  recordVisit,
+  useActor,
+  useDirectory,
+  useHeldCount,
+  useInitialReleaseRefresh,
+  type Actor,
+  type Directory,
+} from '@/data';
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
 import { DesktopMove, PlanLock, UpdateNotice } from '@/features/notices/exports';
@@ -186,6 +197,7 @@ function App() {
   const router = useRouter();
   const me = useQuery(meQuery);
   const signedIn = me.isSuccess;
+  useInitialReleaseRefresh(signedIn);
   const status = useLiveStatus();
   const held = useHeldCount();
   const panel = usePagePanelOpen();
