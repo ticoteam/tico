@@ -2458,13 +2458,32 @@ def task_private_readable(conn, actor, row):
     bot parties’ org-chart managers, meeting participants and the Rules Owner page copies' readers."""
     if not row:
         return False
+    if isinstance(actor, tuple):  # a person and whom they act as (task_privacy.actor), filed OKs included
+        from . import task_privacy
+
+        return task_privacy.principals_read(conn, actor, row)
+    if actor == bot_actor(RELATIONSHIP_WORKER) and not isinstance(actor, RunPrincipal):
+        return False  # the relationship worker reads only in a run (Auth.relationship_scope)
     row = dict(row)
-    nobody = False
+    nobody = own = False
     if isinstance(actor, RunPrincipal) and actor != assistant_actor(conn):
         if actor == bot_actor(RELATIONSHIP_WORKER):
-            from . import relationship_runs
+            from . import calls, read_cache, relationship_runs
 
-            bound = relationship_runs.scope(conn, actor.attempt)
+            # As Auth.relationship_scope reads it, from the same snapshot cache: a run whose sponsor may no longer read
+            # the relationship reads nothing.
+            auth = calls.AUTH
+            bound = auth and read_cache.value(
+                conn,
+                ("relationship_read_scope", actor.attempt),
+                lambda: (
+                    b
+                    if (b := relationship_runs.scope(conn, actor.attempt))
+                    and relationship_runs.claimable(conn, auth, b)
+                    else None
+                ),
+                shared=True,
+            )
             return bool(
                 bound
                 and relationship_runs.task_matches(conn, bound, row)
@@ -2482,8 +2501,8 @@ def task_private_readable(conn, actor, row):
             return task_private_readable(conn, value, row)
         if kind == "gone":
             return False
-        if kind == "task" and row.get("id") == value:
-            return True
+        # Its own routine turn is still a page copy's to deny (below), as Auth.task_sql denies it.
+        own = kind == "task" and row.get("id") == value
         actor, nobody = str(actor), True
     from . import counsel, teammate_access
 
@@ -2497,7 +2516,7 @@ def task_private_readable(conn, actor, row):
         finally:
             if outside and conn.in_transaction:
                 conn.rollback()
-    if not task_private(conn, row):
+    if own or not task_private(conn, row):
         return True
     if "owner_id" not in row or "requester_id" not in row:
         row = task(conn, row["id"])

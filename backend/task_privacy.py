@@ -90,6 +90,12 @@ def principals_read(c, principals, row):
         return True
     if not row or len(principals) != 2:
         return False
+    attempt = getattr(principals[1], "attempt", "")
+    if attempt:
+        from .rooms import run_scope
+
+        if run_scope(c, attempt) != ("person", principals[0]):
+            return False  # a run of the Assistant reads an OK filed for her only in her own chat (Auth.task_sql)
     from .task_asks import assistant_for, assistant_reads_own_ok
 
     return (
