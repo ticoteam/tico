@@ -1167,10 +1167,11 @@ fn release(d: &mut Delivered) -> Vec<String> {
         // is gone is masked too.
         if let Some(now) = d.file.as_deref().and_then(read_codex_auth) {
             if now != d.written {
-                for secret in secrets_in(&now) {
-                    crate::redact::hide_everywhere(&secret, false);
+                let found = secrets_in(&now);
+                for secret in &found {
+                    crate::redact::hide_everywhere(secret, false);
                 }
-                secrets.extend(secrets_in(&now));
+                secrets.extend(found);
             }
         }
     } else if let Some(now) = changed(d) {

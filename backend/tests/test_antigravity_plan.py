@@ -318,3 +318,11 @@ def test_an_agy_older_than_tico_runs_neither_signs_a_plan_in_nor_runs_its_turns(
         payment = AS.for_runner(c, row, "ops", {"runtime": "antigravity", "model": ""})
     assert payment.subscription is None and payment.update
     assert payment.reason == "Update Antigravity on Ana Mac"
+
+
+def test_the_api_schema_names_every_plan_kind_and_runtime():
+    from backend.api_schemas import model_subscriptions as schema
+    from backend.model_subscriptions import KINDS, RUNTIMES
+
+    assert schema._SUB_KIND["enum"] == list(KINDS)
+    assert schema._RUNTIME["enum"] == list(RUNTIMES)

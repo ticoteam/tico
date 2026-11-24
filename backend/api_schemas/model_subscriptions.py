@@ -2,11 +2,23 @@
 """The answers of the Model subscriptions routes (backend/openapi_v2.py gathers them)."""
 
 from ..api_contract import ref
-from ..model_subscriptions import KINDS, RUNTIMES
 from ._base import NUM_N, SCHEMAS, items, obj
 
-_SUB_KIND = {"enum": list(KINDS)}
-_RUNTIME = {"enum": list(RUNTIMES)}
+# Written out, not imported from backend.model_subscriptions: that module's imports would put every route's schema
+# behind it in the test map (scripts/pr_checks.py). test_antigravity_plan checks both match KINDS and RUNTIMES.
+_SUB_KIND = {
+    "enum": [
+        "claude_token",
+        "claude_login",
+        "codex_login",
+        "antigravity_login",
+        "anthropic_key",
+        "openai_key",
+        "cursor_key",
+        "meta_key",
+    ]
+}
+_RUNTIME = {"enum": ["claude", "codex", "antigravity", "cursor", "musecode"]}
 
 
 _SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
@@ -176,7 +188,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
         ),
         'capable': items({'type': 'string'}),
         # Each person's number of plans for each runtime they have one for.
-        'people': items(obj({'id': 's', 'name': 's', **{r: 'i' for r in RUNTIMES}}, required=['id', 'name'])),
+        'people': items(obj({'id': 's', 'name': 's', **{r: 'i' for r in _RUNTIME['enum']}}, required=['id', 'name'])),
     }
 )
 
