@@ -124,6 +124,8 @@ EMPTY = (
     "enrollments",
     "hosting_enrollments",
     "assignments",
+    "assignment_pins",
+    "burst_guests",  # an agent borrowed by a Burst worker: placement, like assignments
     "cloud_machines",
     "cloud_machine_codes",
     "agent_pairings",

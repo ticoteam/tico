@@ -2111,6 +2111,49 @@ impl Runner {
         self.published(bot, &repository, (state, detail))
     }
 
+    async fn publish_burst_checkout(&self, path: &Path, repository: &str, env: &Env) -> bool {
+        let env = git_env(env);
+        if !crate::readiness::burst_checkout_matches(path, repository).await
+            || !matches!(git(path, &env, &["status", "--porcelain"], 15).await, Some((true, out, _)) if out.trim().is_empty())
+        {
+            return false;
+        }
+        // Base refreshes the repository's default branch. A local or alternate upstream cannot hand it work.
+        let branch = git(
+            path,
+            &env,
+            &["symbolic-ref", "refs/remotes/origin/HEAD"],
+            15,
+        )
+        .await;
+        let upstream = git(
+            path,
+            &env,
+            &["rev-parse", "--symbolic-full-name", "@{u}"],
+            15,
+        )
+        .await;
+        if !matches!((branch, upstream), (Some((true, branch, _)), Some((true, upstream, _))) if branch == upstream)
+            || !self.push_checkout(path, &env).await
+            || !matches!(
+                git(path, &env, &["fetch", "origin", "HEAD"], 30).await,
+                Some((true, _, _))
+            )
+        {
+            return false;
+        }
+        matches!(
+            git(
+                path,
+                &env,
+                &["merge-base", "--is-ancestor", "HEAD", "FETCH_HEAD"],
+                15
+            )
+            .await,
+            Some((true, _, _))
+        )
+    }
+
     /// Initial history publication shares the computer's push queue, but a queued turn holds no start place.
     async fn publish_before_start(
         &self,
@@ -2431,6 +2474,8 @@ impl Runner {
             vault.relay = tests::RUN_RELAY.with(|relay| relay.borrow_mut().take());
         }
         let mut env: Env = Env::new();
+        let burst_repository = attempt["burst_repository"].as_str().map(str::to_owned);
+        let mut burst_checkout = None;
         let mut base_env: Option<Env> = None;
         let mut host: Option<Host> = None;
         let mut receivers = Vec::new();
@@ -2509,6 +2554,13 @@ impl Runner {
             let lanes = self.during_drain(&aid, self.pre_start_lock(&attempt, &flags, async {
                 self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)
             })).await?;
+            if let Some(repository) = &burst_repository {
+                if !crate::readiness::burst_checkout_matches(&lanes.main_path, repository).await {
+                    burst_checkout = Some("mismatch");
+                    self.events.ask(&["heartbeat"]);
+                    return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
+                }
+            }
             let p = place.insert(lanes);
             execution_path = p.main_path.clone();
             // Lanes taken within PRE_START_GRACE kept the place; a longer wait gave it back and asks again.
@@ -4290,6 +4342,26 @@ impl Runner {
                 }
             }
         }
+        let mut burst_pushed = false;
+        if let Some(repository) = &burst_repository {
+            if let Some(p) = place.as_ref().filter(|p| !p.disposable) {
+                burst_pushed = !committed_secret
+                    && skipped.is_empty()
+                    && p.session_path.is_none()
+                    && self
+                        .publish_burst_checkout(&p.main_path, repository, &env)
+                        .await;
+                if !burst_pushed {
+                    burst_checkout = Some("unpublished");
+                } else {
+                    crate::product_files::pushed(&bot);
+                }
+            }
+            if let Some(problem) = burst_checkout {
+                completion.insert("burst_checkout".into(), json!(problem));
+                completion.insert("outcome".into(), json!("interrupted"));
+            }
+        }
         let settled: Result<(), String> = async {
             let id = aid.clone();
             if payer_returned {
@@ -4312,7 +4384,7 @@ impl Runner {
             .await;
             match sent {
                 Ok(()) => {
-                    if drove.outcome == "completed" {
+                    if drove.outcome == "completed" && burst_checkout.is_none() {
                         // The next turn on this thread forwards only what the room said after this.
                         if let Some(th) = &thread {
                             let (th, message) = (th.clone(), text_of(&attempt["message"]["id"]));
@@ -4321,13 +4393,15 @@ impl Runner {
                     }
                     let id = aid.clone();
                     self.state.off(move |s| s.phase(&id, "synced")).await?;
-                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && !p.disposable) {
-                        if !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
+                    if let Some(p) = place.as_ref().filter(|p| drove.outcome == "completed" && host.is_some() && !p.disposable && burst_checkout.is_none()) {
+                        if burst_repository.is_none() && !committed_secret && p.session_path.is_none() && !crate::continuity::memory_pass(&attempt["config"]) {
                             self.publish(&bot, &execution_path, &env).await;
                         }
                         let closed = p.session_path.is_some() && self.task_closed(&attempt).await;
                         // A nightly memory tidy pass was discarded above and never pushes (criterion 24).
-                        let pushed = if crate::continuity::memory_pass(&attempt["config"]) {
+                        let pushed = if burst_repository.is_some() {
+                            burst_pushed
+                        } else if crate::continuity::memory_pass(&attempt["config"]) {
                             false
                         } else {
                             self.finish_place(p, &attempt, &env, &skipped, committed_secret).await
@@ -9922,6 +9996,64 @@ for line in sys.stdin:
             String::from_utf8_lossy(&out.stderr)
         );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    #[tokio::test]
+    async fn burst_checkout_requires_a_clean_tree_published_to_base() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "burst-checkout");
+        let remote = dir.join("remote.git");
+        let seed = dir.join("seed");
+        let path = dir.join("checkout");
+        let origin = "https://github.com/acme/bot.git";
+        repo_git(&dir, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+        repo_git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                seed.to_str().unwrap(),
+            ],
+        );
+        std::fs::write(seed.join("AGENT.md"), "# Fixture\n").unwrap();
+        repo_git(&seed, &["add", "AGENT.md"]);
+        repo_git(&seed, &["commit", "-qm", "seed"]);
+        repo_git(&seed, &["push", "-q", "origin", "main"]);
+        repo_git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                path.to_str().unwrap(),
+            ],
+        );
+        repo_git(&path, &["remote", "set-url", "origin", origin]);
+        repo_git(
+            &path,
+            &[
+                "config",
+                &format!("url.{}.insteadOf", remote.display()),
+                origin,
+            ],
+        );
+        let env = crate::env::process_environment();
+        std::fs::write(path.join("AGENT.md"), "# Published turn\n").unwrap();
+        assert!(!runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        repo_git(&path, &["commit", "-qam", "turn"]);
+        assert!(
+            !runner
+                .publish_burst_checkout(&path, "acme/other", &env)
+                .await
+        );
+        assert!(runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        assert_eq!(
+            repo_git(&remote, &["show", "main:AGENT.md"]),
+            "# Published turn"
+        );
+        std::fs::rename(&remote, dir.join("unavailable.git")).unwrap();
+        assert!(!runner.publish_burst_checkout(&path, "acme/bot", &env).await);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[tokio::test]

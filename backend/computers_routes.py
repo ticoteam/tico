@@ -4,6 +4,7 @@ import json
 from fastapi import Request
 from . import (
     bot_settings as BS,
+    compute_pool,
     harness_actions,
     inbox_isolation,
     model_login,
@@ -72,7 +73,7 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
     @app.get("/api/v2/runners/desired")
     def desired_runner_release(request: Request):
         with store.read() as c:
-            execution.runner(c, request.state.identity)
+            burst = compute_pool.target(c, execution.runner(c, request.state.identity))
         # `screen_v1`: this server takes the capability and `readiness.screen` (an older one refuses the heartbeat).
         # `limit_resets_at`: a run's result may say when its usage limit resets (an older one refuses the field).
         # `usage_requests`: a run's usage may carry each model request's tokens (an older one refuses the field).
@@ -116,12 +117,16 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
                 "source_continue": True,
                 "run_timings": True,
                 "run_timings_turn": True,
+                **({"burst_preparation": True} if burst else {}),
             },
         }
 
     @app.get("/api/v2/runners/assignments")
-    def assigned(request: Request):
+    def assigned(request: Request, burst: bool = False):
         with store.read_transaction() as c:
+            if burst:
+                entry = compute_pool.offer(c, execution, execution.runner(c, request.state.identity), prepare=True)
+                return [entry] if entry else []
             return execution.assigned(c, request.state.identity)
 
     @app.get("/api/v2/runners/eligible")
@@ -368,13 +373,16 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         who = request.state.identity
 
         def work(c):
-            runner = c.execute("SELECT * FROM runners_with_state WHERE id=?", (rid,)).fetchone()
+            runner = c.execute(
+                "SELECT r.*,EXISTS(SELECT 1 FROM burst_guests WHERE runner_id=r.id) AS guests "
+                "FROM runners_with_state r WHERE id=?",
+                (rid,),
+            ).fetchone()
             if not runner or not (
                 auth.bot_admin(who) or who.role == "human" and who.actor == "human:" + runner["owner_id"]
             ):
                 raise Problem("forbidden", "You cannot revoke this runner", 403)
-            computers.revoke(c, who.actor, rid)
-            return {"revoked": True}
+            return {"revoked": computers.revoke(c, who.actor, rid, execution=execution if runner["guests"] else None)}
 
         result = mutate(request, body, work)
         computers.disconnect(store, rid)

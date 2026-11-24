@@ -1,6 +1,6 @@
 """Helpers that other tests share, moved out of test_models_preset.py so they import no test file."""
 
-from backend import providers
+from backend import bot_settings as BS, providers
 from backend.tests.helpers.api import post
 from backend.tests.helpers.gateway_connection import KEY, fake_gateway, save, setup
 
@@ -23,6 +23,13 @@ def choose(api, preset, enabled=("anthropic", "openai")):
             },
             "2026-10-19T00:00:00Z",
         )
+
+
+def on_claude(api, bot):
+    with api.app.state.store.transaction() as c:
+        config = BS.read(c, bot)
+        config = {k: v for k, v in config.items() if k != "fallback"}
+        BS.write(c, bot, {**config, **CLAUDE})
 
 
 def says(readiness, isolated):

@@ -120,6 +120,7 @@ ASSISTANT_WRITES.update('tico_email_' + action for action in EMAIL_ORGANIZE)
 # (backend/mail.py), so they take the default audience.
 AUDIENCE = {
     "tico_settings_plan_exit_routing": ("owner", "admin"),
+    "tico_settings_burst_rehome": ("owner", "admin"),
     **{
         name: PEOPLE
         for name in (
@@ -257,6 +258,7 @@ AUDIENCE = {
     # A bot does not unsnooze (docs/dev/pipelines-v3-cutover.md, Bot commands): a person brings a task back.
     "tico_task_unsnooze": HUMANS_AND_ASSISTANT,
     "tico_gateway_reconcile": PEOPLE,  # a person checks Gateway usage; an agent never clears its own wait
+    "tico_run_restart": PEOPLE,
     "tico_assistant_read": PEOPLE,
     "tico_assistant_send": PEOPLE,
     "tico_needs_you_show": HUMANS_AND_ASSISTANT,  # views.human_only: a person's own list

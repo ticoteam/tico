@@ -118,6 +118,19 @@
   "BotReadiness": {
    "additionalProperties": false,
    "properties": {
+    "burst_preparation": {
+     "anyOf": [
+      {
+       "maxLength": 64,
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Burst Preparation"
+    },
     "commands": {
      "items": {
       "$ref": "#/$defs/SlashCommand"
@@ -453,6 +466,22 @@
       }
      ],
      "default": null
+    },
+    "burst_checkout": {
+     "anyOf": [
+      {
+       "enum": [
+        "mismatch",
+        "unpublished"
+       ],
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Burst Checkout"
     },
     "continues": {
      "default": false,
@@ -1063,6 +1092,7 @@
        "private_lanes_v1",
        "model_subscriptions_v1",
        "attempt_credentials_v1",
+       "burst_preparation_v1",
        "plan_usage_v1",
        "browser_exit_v1",
        "model_exit_v1",
@@ -1087,7 +1117,7 @@
       ],
       "type": "string"
      },
-     "maxItems": 37,
+     "maxItems": 38,
      "title": "Capabilities",
      "type": "array"
     },

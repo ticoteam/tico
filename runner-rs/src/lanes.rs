@@ -32,6 +32,7 @@ const PLAN_USAGE: &str = "plan_usage_v1";
 const ATTEMPT_CREDENTIALS: &str = "attempt_credentials_v1";
 /// The computer's own logins are the ones readiness reads for these bots (runner.rs `computer_logins_for`).
 const COMPUTER_LOGINS: &str = "computer_logins_v1";
+const BURST_PREPARATION: &str = "burst_preparation_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -74,10 +75,11 @@ pub const CAPABILITIES: &[&str] = &[
     crate::model_subscriptions::AGY_PLAN_CAPABILITY,
     crate::model_exit::CLAUDE_CAPABILITY,
     crate::model_exit::CODEX_CAPABILITY,
+    BURST_PREPARATION,
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
-// A 0.6.0 hub that reports only a list refusal can need sixteen capability drops before it accepts the heartbeat.
-pub const MAX_HEARTBEAT_POSTS: u32 = 17;
+// A 0.6.0 hub that reports only a list refusal can need seventeen capability drops before it accepts the heartbeat.
+pub const MAX_HEARTBEAT_POSTS: u32 = 18;
 
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -154,6 +156,7 @@ pub fn holding() -> std::sync::MutexGuard<'static, ()> {
 /// Every capability a heartbeat may carry, newest first: what a refusal that names no element drops, one by one, so
 /// an older server loses only what it does not know. A new capability goes at the top (`newest_first_lists_all`).
 const NEWEST_FIRST: &[&str] = &[
+    BURST_PREPARATION,
     crate::model_exit::CODEX_CAPABILITY,
     crate::model_exit::CLAUDE_CAPABILITY,
     crate::model_subscriptions::AGY_PLAN_CAPABILITY,
@@ -746,6 +749,7 @@ mod tests {
             .copied()
             .filter(|c| {
                 ![
+                    BURST_PREPARATION,
                     crate::model_exit::CODEX_CAPABILITY,
                     crate::model_exit::CLAUDE_CAPABILITY,
                     crate::model_subscriptions::AGY_PLAN_CAPABILITY,
@@ -789,11 +793,19 @@ mod tests {
         // A bare capabilities refusal from an older hub drops the newest offer first.
         assert_eq!(
             refused_field("body.capabilities: bad", &all).as_deref(),
-            Some(crate::model_exit::CODEX_CAPABILITY)
+            Some(BURST_PREPARATION)
         );
         let older: Vec<&str> = CAPABILITIES
             .iter()
             .copied()
+            .filter(|c| *c != BURST_PREPARATION)
+            .collect();
+        assert_eq!(
+            refused_field("body.capabilities: bad", &json!({"capabilities": older})).as_deref(),
+            Some(crate::model_exit::CODEX_CAPABILITY)
+        );
+        let older: Vec<&str> = older
+            .into_iter()
             .filter(|c| *c != crate::model_exit::CODEX_CAPABILITY)
             .collect();
         assert_eq!(

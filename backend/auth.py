@@ -258,7 +258,9 @@ def validate_identity(c, who):
         return
     # Read once a snapshot: the route's own `execution.runner` asks for the same row (a write's SAVEPOINT reads it again).
     runner = read_cache.one(c, H.RUNNER_SQL, (who.runner_id,))
-    if not runner:
+    from .compute_pool import REVOKING
+
+    if not runner or runner["token_hash"].startswith(REVOKING):
         raise Problem("revoked", "Runner credential is revoked or unknown", 401)
     if who.role == "bot":
         row = c.execute(
@@ -614,7 +616,7 @@ class Auth:
             scope=skill_devices.SCOPE,
         )
 
-    def runner_receipt_principal(self, c, who, aid):
+    def runner_receipt_principal(self, c, who, aid, *, burst_complete=False):
         """Read a runner's saved receipt as its original principal, even after the lease ends."""
         from . import task_privacy as privacy
 
@@ -623,8 +625,9 @@ class Auth:
         attempt = c.execute(
             "SELECT a.* FROM attempts a JOIN assignments x ON x.bot=a.bot_id "
             "JOIN bots b ON b.id=a.bot_id WHERE a.id=? AND a.runner_id=? "
-            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
-            (aid, who.runner_id, who.runner_id),
+            "AND ((x.runner_id=? AND x.generation=a.generation AND b.state='active') OR "
+            "(? AND a.settled_at IS NOT NULL AND b.state<>'archived' AND json_extract(a.wake,'$.burst')=1))",
+            (aid, who.runner_id, who.runner_id, burst_complete),
         ).fetchone()
         if not attempt:
             raise Problem("privacy", "This execution is no longer assigned to this computer", 403)

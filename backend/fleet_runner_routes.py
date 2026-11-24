@@ -35,7 +35,7 @@ from . import start_places
 from . import teammate_access
 from .auth import validate_identity
 from . import views
-from .api_contract import api_v2
+from .api_contract import api_v2, error
 
 
 def register(
@@ -1095,7 +1095,14 @@ def register_completion(
                 note_timings(c, aid, rule_check_ms, arrived)
             return done
 
-        result = mutate(request, body, finish)
+        def receipt(result):
+            if isinstance(result, dict) and result.get("burst_complete"):
+                with store.read() as c:
+                    return auth.runner_receipt_principal(c, request.state.identity, aid, burst_complete=True)
+            return None
+
+        result = mutate(request, body, finish, receipt=receipt)
+        result.pop("burst_complete", None)
         if result == CLOSED_COMPLETION:
             # The route already authenticated the runner for this ID. The acknowledgement carries no call data.
             return {"attempt_id": aid, **result}
@@ -1223,7 +1230,20 @@ def register_completion(
     def reconcile_job(request: Request, jid: str, body: M.ReconcileJob):
         return mutate(request, body, lambda c: execution.reconcile_job(c, request.state.identity, jid, body))
 
-    @app.post("/api/v2/jobs/{jid}/retry")
+    @app.post(
+        "/api/v2/jobs/{jid}/retry",
+        **api_v2(
+            "Bots",
+            "retryJob",
+            "Retry an interrupted job after reviewing its effects",
+            M.RetryJobResult,
+            parameters={"jid": "The job id from the stopped run"},
+            responses={
+                "403": error("Only the bot's operator may retry the job"),
+                "409": error("Recovery is unacknowledged, unavailable, or needs an explicit fresh-session request"),
+            },
+        ),
+    )
     def retry(request: Request, jid: str, body: M.Retry):
         return mutate(request, body, lambda c: execution.retry(c, request.state.identity, jid, body))
 

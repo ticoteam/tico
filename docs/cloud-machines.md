@@ -407,3 +407,25 @@ HQ makes, check:
 - `test ! -e /.dockerenv`: the runner takes a machine with that file for a container and would not update itself.
 - HQ creates the machines without the account's stored secrets (the API's equivalent of `--no-env`); otherwise every
   bot machine gets them.
+
+## Burst pilot
+
+A company owner or admin can enable Burst re-home with `tico settings burst-rehome on`.
+The company setting starts off. It applies to enrolled cloud workers with a reserved `_burst:<n>` machine key.
+An idle worker can prepare one published checkout through the connected GitHub App, then claim
+a queued turn from the shared cloud machine. The bot's cloud placement still points to the shared machine.
+Pinned bots, resident voice work, bots with live or unresolved turns or live worktree homes, and turns that
+create a local worktree or use a routed plan stay on Base.
+
+The assignment stays on Burst through the lease restore window so the runner can restore the turn or hand in its
+result. If the window expires without a report, the assignment returns to Base. Work that never started keeps its
+normal retry rules. Work that may have changed the checkout stays held for recovery.
+The runner publishes checkout changes before completing a turn. A checkout mismatch, unpublished changes, or work
+that needs a saved Burst session goes to recovery on Base. When the saved session is unavailable, the bot's operator
+can review the stopped run, recover any checkout changes, and run
+`tico run restart JOB --acknowledge-uncertain-effects`. The API equivalent is `POST /api/v2/jobs/{jid}/retry` with
+`"acknowledge_uncertain_effects": true` and `"fresh_session": true`.
+If Base is unavailable, the return stays pending until Base comes back.
+New claims need a confirmed HQ lease with at least three minutes to start and one minute to drain.
+The pilot uses manually provisioned workers. Stop new borrows with `tico settings burst-rehome off`. To pin a bot, include `"pinned": true` when setting its assignment through
+`POST /api/v2/bots/{bot}/assignment`. Send `"pinned": false` to clear the pin.

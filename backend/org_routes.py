@@ -172,6 +172,8 @@ def register(app, auth, settings, settings_admin, store):
         status = rows.statuses.get(slug)
         row["status"] = privacy.status(c, who, dict(status), **rows.status_inputs[slug]) if status else status
         row["assignment"] = dict(assignment) if assignment else None
+        if row["assignment"] and row["assignment"].pop("pinned", False):
+            row["assignment"]["pinned"] = True
         row["online"] = bool(
             assignment and not assignment["revoked_at"] and runner_online.is_online(assignment["last_seen_at"])
         )

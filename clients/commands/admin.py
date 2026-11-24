@@ -698,9 +698,34 @@ def plan_exit_routing(api, args):
     return api.call("PUT", path, {"enabled": mode == "on"}, key=_key(args))
 
 
+@tool(
+    "tico_settings_burst_rehome",
+    "Read or change company Burst re-home. Only the company owner and admins.",
+    {
+        "mode": {
+            "type": "string",
+            "enum": ["on", "off"],
+            "description": "Enable or disable Burst re-home. Omit to read.",
+        }
+    },
+    writes=True,
+)
+def burst_rehome(api, args):
+    path = "settings/burst-rehome"
+    if (mode := args.get("mode")) is None:
+        return api.get(path)
+    return api.call("PUT", path, {"enabled": mode == "on"}, key=_key(args))
+
+
 _TARGETS = ("bot", "computer", "id", "person")  # the one thing a setting is set on, or none
 SETTINGS = (
     Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
+    Command(
+        "settings burst-rehome",
+        "read or change company Burst re-home (admin)",
+        args=(Arg("mode", positional=True, nargs="?"),),
+        example="tico settings burst-rehome on",
+    ),
     Command(
         "settings plan-exit-routing",
         "read or change company Claude and ChatGPT plan exit routing (admin)",

@@ -2661,6 +2661,9 @@ def _install_features(
     from .cloud_machines import install as install_cloud_machines
 
     install_cloud_machines(app, settings, store, auth, execution, mutate)
+    from . import compute_pool
+
+    compute_pool.install(app, store, auth, mutate)
     company_server.install(app, store, settings, auth)
     from .support_access import install as install_support_access
 

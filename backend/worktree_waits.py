@@ -39,7 +39,9 @@ def _exists(c):
 
 def _computer(c, bot):
     return c.execute(
-        "SELECT r.id,r.readiness FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+        "SELECT r.id,r.readiness FROM assignments a LEFT JOIN burst_guests g ON g.bot=a.bot "
+        "LEFT JOIN cloud_machines m ON g.bot IS NOT NULL AND m.bot='_shared' "
+        "JOIN runners_with_state r ON r.id=coalesce(m.runner_id,g.base_runner,a.runner_id) "
         "WHERE a.bot=? AND r.revoked_at IS NULL",
         (bot,),
     ).fetchone()

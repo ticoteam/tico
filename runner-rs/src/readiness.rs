@@ -1178,9 +1178,25 @@ pub async fn preflight(
         row.insert("tools".into(), json!(tools));
         row.insert("mail_request".into(), mail_request);
         row.insert("warnings".into(), json!(warnings));
+        if let Some(ticket) = entry["burst_preparation"].as_str() {
+            if repository_present
+                && burst_checkout_matches(&path, &text_of(&entry["repository"])).await
+            {
+                row.insert("burst_preparation".into(), json!(ticket));
+            }
+        }
         rows.push(row);
     }
     rows
+}
+
+pub async fn burst_checkout_matches(path: &Path, repository: &str) -> bool {
+    crate::instructions::present(path)
+        && git(path, &["config", "--get", "remote.origin.url"])
+            .await
+            .is_some_and(|(ok, origin)| {
+                ok && crate::repositories::github_origin(origin.trim(), repository)
+            })
 }
 
 /// The heartbeat's `readiness` document (backend/models.py RunnerReadiness).
@@ -1230,7 +1246,10 @@ pub fn document(
         if out.get("sign_in") == Some(&json!("rejected")) {
             out.insert("sign_in".into(), json!("failed"));
         }
-        if row["bot"] == crate::sessions::RELATIONSHIP_WORKER
+        if let Some(ticket) = row.get("burst_preparation") {
+            out.insert("burst_preparation".into(), ticket.clone());
+            out.insert("harness".into(), row["harness"].clone());
+        } else if row["bot"] == crate::sessions::RELATIONSHIP_WORKER
             && crate::fallback::server_takes_relationship_lanes()
         {
             out.insert("harness".into(), row["harness"].clone());
@@ -1430,6 +1449,18 @@ pub fn changed_agent_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn burst_preparation_reaches_the_heartbeat() {
+        let row = json!({"bot": "ops", "runtime": "codex", "harness": "codex", "published": true, "burst_preparation": "ticket"});
+        let doc = document(
+            &Map::new(),
+            &[row.as_object().unwrap().clone()],
+            Path::new("."),
+        );
+        assert_eq!(doc["bots"]["ops"]["burst_preparation"], "ticket");
+        assert_eq!(doc["bots"]["ops"]["harness"], "codex");
+    }
 
     #[test]
     fn a_bot_yaml_from_before_antigravity_had_its_own_runtime_is_no_drift_but_other_changes_are() {

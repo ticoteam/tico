@@ -11,7 +11,7 @@ from . import access, hubdb
 from .api_contract import api_v2, error
 from .auth import Identity
 from .models import ID, Contract
-from .read_cache import METADATA, one, readiness
+from .read_cache import one, readiness
 from .store import Problem
 
 H: Any = hubdb
@@ -80,13 +80,21 @@ def enabled(c: Connection) -> bool:
 
 
 def stored_enabled(c: Connection) -> bool:
+    return stored_flags(c).get(SETTING) == "true"
+
+
+def stored_flags(c: Connection, *extra: str) -> dict[str, str]:
+    keys = (SETTING, *extra)
     try:
-        found = c.execute(METADATA, (SETTING,)).fetchone()
+        return dict(
+            c.execute(
+                "SELECT key,value FROM registry_metadata WHERE key IN (" + ",".join("?" for _ in keys) + ")", keys
+            )
+        )
     except OperationalError as e:
         if str(e) == "no such table: registry_metadata":
-            return False
+            return {}
         raise
-    return bool(found and found[0] == "true")
 
 
 def _advance_policy(c: Any, on: bool) -> None:
