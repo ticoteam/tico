@@ -475,7 +475,10 @@ def offered(c, settings=None):
     return cloud_company(c, settings) and bool(sizes(c))
 
 
-ROW_SQL = "SELECT * FROM cloud_machines WHERE bot=?"
+MACHINE_COLUMNS = "m.*,coalesce(l.managed,0) AS burst_managed,l.launch_at AS burst_launch_at"
+MACHINE_FROM = "FROM cloud_machines m LEFT JOIN burst_launches l ON l.bot=m.bot"
+MACHINE_SQL = f"SELECT {MACHINE_COLUMNS} {MACHINE_FROM}"
+ROW_SQL = MACHINE_SQL + " WHERE m.bot=?"
 DELETING_SQL = "SELECT 1 FROM cloud_machine_deletions WHERE machine_id=?"
 
 
@@ -497,9 +500,7 @@ def prime_rows(c, bots):
     keys = sorted({str(b) for b in bots if b} | {SHARED})
     found = {
         r["bot"]: r
-        for r in c.execute(
-            "SELECT * FROM cloud_machines WHERE bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),)
-        )
+        for r in c.execute(MACHINE_SQL + " WHERE m.bot IN (SELECT value FROM json_each(?))", (json.dumps(keys),))
     }
     read_cache.prime(c, ROW_SQL, {(k,): found.get(k) for k in keys})
     machines = sorted({r["machine_id"] for r in found.values() if r["machine_id"] is not None})
@@ -518,7 +519,7 @@ def prime_rows(c, bots):
 
 
 ROWS_SQL = (
-    "SELECT m.*,d.machine_id IS NOT NULL AS deleting FROM cloud_machines m "
+    f"SELECT {MACHINE_COLUMNS},d.machine_id IS NOT NULL AS deleting {MACHINE_FROM} "
     "LEFT JOIN cloud_machine_deletions d ON d.machine_id=m.machine_id"
 )
 
@@ -670,7 +671,23 @@ def checked_in(c, runner_id):
 SHOWN = ("state", "problem", "start_asked_at", "runner_id", "mode", "placement")
 
 
+def _save_burst_launch(c, key, **fields):
+    columns = ",".join(fields)
+    marks = ",".join("?" for _ in fields)
+    updates = ",".join(f"{column}=excluded.{column}" for column in fields)
+    c.execute(
+        f"INSERT INTO burst_launches(bot,{columns}) SELECT bot,{marks} FROM cloud_machines WHERE bot=? "
+        f"ON CONFLICT(bot) DO UPDATE SET {updates}",
+        (*fields.values(), key),
+    )
+
+
 def save(c, key, **fields):
+    burst = {
+        column: fields.pop(field)
+        for field, column in (("burst_managed", "managed"), ("burst_launch_at", "launch_at"))
+        if field in fields
+    }
     fields["updated_at"] = H.now()
     if "start_asked_at" in fields and fields["start_asked_at"] is None:
         fields["start_asked_size"] = None
@@ -681,6 +698,8 @@ def save(c, key, **fields):
     c.execute(
         "UPDATE cloud_machines SET " + ",".join(k + "=?" for k in fields) + " WHERE bot=?", (*fields.values(), key)
     )
+    if burst:
+        _save_burst_launch(c, key, **burst)
     if before is not None and any(fields[k] != before[i] for i, k in enumerate(shown)):
         _status_moved(c, key)
 
@@ -1831,7 +1850,8 @@ def held(c, runner_id):
 
 def burst_managed(c, runner_id):
     current = c.execute(
-        "SELECT bot,burst_managed FROM cloud_machines WHERE runner_id=? LIMIT 1", (runner_id,)
+        f"SELECT m.bot,coalesce(l.managed,0) AS burst_managed {MACHINE_FROM} WHERE m.runner_id=? LIMIT 1",
+        (runner_id,),
     ).fetchone()
     return bool(current and burst_key(current["bot"]) and current["burst_managed"])
 
@@ -1874,9 +1894,7 @@ def burst_lease_supported(c, runner_id):
 
 
 def burst_lease(c, runner_id):
-    current = c.execute(
-        "SELECT * FROM cloud_machines WHERE runner_id=? AND burst_managed=1 LIMIT 1", (runner_id,)
-    ).fetchone()
+    current = c.execute(MACHINE_SQL + " WHERE m.runner_id=? AND l.managed=1 LIMIT 1", (runner_id,)).fetchone()
     if not current or not burst_key(current["bot"]):
         return None
     return {
@@ -1910,7 +1928,7 @@ def drain_burst(c, machine, at):
 
 def drain_managed_burst(c):
     at = now()
-    for machine in c.execute("SELECT * FROM cloud_machines WHERE burst_managed=1").fetchall():
+    for machine in c.execute(MACHINE_SQL + " WHERE l.managed=1").fetchall():
         if machine["state"] in (*ON, "stopping") or any(
             machine[field] is not None for field in ("create_asked_at", "start_asked_at")
         ):
@@ -1942,9 +1960,8 @@ def claim_status(c, runner_id):
         (runner_id, runner_id),
     ).fetchone()
     found = c.execute(
-        "SELECT state,stop_until,machine_id,size,machine_size,bot,heartbeat_at,ttl_s,next_try_at,"
-        "burst_managed,drain_started_at "
-        "FROM cloud_machines WHERE runner_id=? LIMIT 1",
+        "SELECT m.state,m.stop_until,m.machine_id,m.size,m.machine_size,m.bot,m.heartbeat_at,m.ttl_s,m.next_try_at,"
+        f"coalesce(l.managed,0) AS burst_managed,m.drain_started_at {MACHINE_FROM} WHERE m.runner_id=? LIMIT 1",
         (runner_id,),
     ).fetchone()
     key = found["bot"] if found else ""
@@ -2118,8 +2135,9 @@ class Manager:
         return [
             dict(worker)
             for worker in c.execute(
-                "SELECT m.*,EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=m.machine_id) AS deleting "
-                "FROM cloud_machines m WHERE m.bot GLOB '_burst:[0-9]*' "
+                f"SELECT {MACHINE_COLUMNS},"
+                "EXISTS (SELECT 1 FROM cloud_machine_deletions d WHERE d.machine_id=m.machine_id) AS deleting "
+                f"{MACHINE_FROM} WHERE m.bot GLOB '_burst:[0-9]*' "
                 "ORDER BY CAST(substr(m.bot,8) AS INTEGER),m.bot"
             )
             if burst_key(worker["bot"])
@@ -2304,7 +2322,8 @@ class Manager:
                 )
             )
             action = "create"
-            c.execute("INSERT OR IGNORE INTO cloud_machines(bot,size,burst_managed) VALUES(?,?,1)", (key, BURST_SIZE))
+            if c.execute("INSERT OR IGNORE INTO cloud_machines(bot,size) VALUES(?,?)", (key, BURST_SIZE)).rowcount:
+                _save_burst_launch(c, key, managed=1)
             code = self.reserve_create(c, row(c, key), at)
             if code is None:
                 return None
@@ -2465,13 +2484,14 @@ class Manager:
                     save(c, key, **(fields | gone))
             # A readable list resolves unanswered creates before another POST is allowed.
             for worker in c.execute(
-                "SELECT * FROM cloud_machines WHERE burst_managed=1 AND create_asked_at<=?",
+                MACHINE_SQL + " WHERE l.managed=1 AND m.create_asked_at<=?",
                 (at - CREATE_HOLD,),
             ).fetchall():
                 self.finish_burst_launch(c, worker, at, failed=True)
                 save(c, worker["bot"], create_asked_at=None)
             c.execute(
-                "UPDATE cloud_machines SET create_asked_at=NULL WHERE burst_managed=0 AND create_asked_at IS NOT NULL"
+                "UPDATE cloud_machines SET create_asked_at=NULL WHERE create_asked_at IS NOT NULL "
+                "AND NOT EXISTS (SELECT 1 FROM burst_launches l WHERE l.bot=cloud_machines.bot AND l.managed=1)"
             )
             if learned and self.on_offered is not None and offered(c, self.settings):
                 c.execute("SAVEPOINT cloud_offered")

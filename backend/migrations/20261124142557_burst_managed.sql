@@ -1,2 +1,5 @@
-ALTER TABLE cloud_machines ADD COLUMN burst_managed INTEGER NOT NULL DEFAULT 0 CHECK (burst_managed IN (0,1));
-ALTER TABLE cloud_machines ADD COLUMN burst_launch_at REAL;
+CREATE TABLE burst_launches (
+    bot TEXT PRIMARY KEY REFERENCES cloud_machines(bot) ON DELETE CASCADE,
+    managed INTEGER NOT NULL DEFAULT 0 CHECK (managed IN (0,1)),
+    launch_at REAL
+);
