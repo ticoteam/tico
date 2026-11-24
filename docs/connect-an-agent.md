@@ -261,7 +261,45 @@ handle is an agent's slug and also a person's id or email prefix (`@ops` for the
 reaches both. Write an agent's slug and a person's id, and check `GET /api/v2/org` for a clash.
 
 Look handles up with `GET /api/v2/org` (each person's `id`, `name` and `email`; each agent's `slug` and
-`display_name`), MCP `tico_team_show`, or `tico team show`.
+`display_name`), MCP `tico_team_show`, or `tico team show`. To offer them as you type, use the @ picker search below.
+
+### Build an @ picker
+
+The web app's @ list is one call your own frontend or agent can make too:
+
+1. **Find candidates** with what follows the @ so far: `GET /api/v2/mentions?q=<text>&task=<task>&thread=<id>&limit=8`
+   (MCP `tico_mention_search`, CLI `tico mention <text> [--task <task>] [--thread <id>]`). It answers the teammates
+   `GET /api/v2/org` shows you, best first, never you and never an archived agent: with `task`, that task's people
+   (who asked, who it is for, who has it, then its roles) come first; then a name or handle that starts with `q`, one
+   with a word that starts with it, one that contains it; then by name. With a direct chat's `thread`, only its
+   members. `limit` is 1 to 50.
+2. **Insert `handle`** as written, followed by a space. It is the text the server reads back as that one teammate and
+   nobody else (a slug that is also someone's email prefix gets the agent's name instead).
+3. **Post** the text as a task comment (`POST /api/v2/tasks/{id}/comments`, `tico_task_comment`,
+   `tico task comment`) or a thread message (`POST /api/v2/threads/{id}/messages`, `tico_thread_post`).
+4. **Read the answer**: `woke` and `delivered` say whom it reached, and `warnings` names an @mention that reached
+   nobody ([Who can be reached](#who-can-be-reached-and-how-to-tell)).
+
+Each candidate is `{"id", "kind", "name", "handle", "on_task", "wakes"}`. `on_task` is true for the task's people.
+`wakes` is false, with a `reason`, when your @mention would not reach them: an agent you may see but have no Write on,
+or someone who cannot read the task or chat (on a private task your @mention adds them to its readers instead, so they
+count as reached). Gray those out or leave them off.
+
+```sh
+curl "$TICO/api/v2/mentions?q=fin&task=%2342" -H "Authorization: Bearer $TOKEN"
+# {"candidates": [{"id": "bot:finance", "kind": "agent", "name": "Finance", "handle": "@finance",
+#                  "on_task": true, "wakes": true}, ...]}
+curl -X POST "$TICO/api/v2/tasks/%2342/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: 9b2d4e6f-1a3c-4b5d-8e7f-0a1b2c3d4e05" \
+  -H "Content-Type: application/json" -d '{"text": "@finance can you check the May totals?"}'
+# {"comment": {...}, "woke": true, ...}
+```
+
+- MCP: `tico_mention_search` with `{"q": "fin", "task": "#42"}`, then `tico_task_comment` with
+  `{"id": "#42", "text": "@finance can you check the May totals?"}`.
+- CLI: `tico mention fin --task '#42'`, then `tico task comment '#42' "@finance can you check the May totals?"`.
+
+The web app ranks the same way on its own copy of the team chart, so its list and this answer agree.
 
 ### Examples
 

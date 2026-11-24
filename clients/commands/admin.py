@@ -620,6 +620,24 @@ def org(api, args):
     return api.get("org", person=args.get("person") or None, team=args.get("team") or None)
 
 
+@tool(
+    "tico_mention_search",
+    "Find people and agents to @mention, best match first, as the web app's @ list offers them: never you, never an "
+    "archived agent. Each has the `handle` to write in a comment or message (the server reads it back as that one "
+    "teammate), `on_task`, and `wakes` (false, with a `reason`, when your @mention would not reach them).",
+    {
+        "q": _s("What follows the @ so far; empty for everyone"),
+        "task": _s("A task id, short id or #number: its people come first, and `wakes` is for a comment there"),
+        "thread": _s("A thread id: `wakes` is for a post there; a direct chat offers only its members"),
+        "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "At most this many (default 8)"},
+    },
+)
+def mention_search(api, args):
+    return api.get(
+        "mentions", **{k: args[k] for k in ("q", "task", "thread", "limit") if args.get(k) not in (None, "")}
+    )
+
+
 # ----------------------------------------------------------------------------- sql, integrations
 @tool(
     "tico_sql",
@@ -811,6 +829,16 @@ GROUP = (
         "group access",
         "show or set who may see, read and write to a group",
         example="tico group access engineering --read everyone",
+    ),
+)
+# `tico mention <q>`: whom an @ list offers (tico_mention_search).
+MENTION = (
+    Command(
+        "mention",
+        "find people and agents to @mention, best first, with the handle to write",
+        tool="tico_mention_search",
+        args=(Arg("q", positional=True, nargs="?"),),
+        example="tico mention fin --task '#42'",
     ),
 )
 TEAM = (Group("team", "team chart and icon"),)

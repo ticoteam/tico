@@ -1083,6 +1083,7 @@ def parser():
     s.add_argument("file")
     s.set_defaults(fn="team icon")
     cli_spec.add(sub, admin_commands.TEAM_AFTER_ICON, parents={("team",): team})
+    cli_spec.add(sub, admin_commands.MENTION)  # tico mention: clients/commands/admin.py
     cli_spec.add(sub, admin_commands.SEAT)  # tico seat: clients/commands/admin.py
     cli_spec.add(sub, org_commands.ORG)  # tico org: clients/commands/org.py
     cli_spec.add(sub, computers.HEALTH)  # tico health: clients/commands/computers.py

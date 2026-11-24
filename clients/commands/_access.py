@@ -430,6 +430,7 @@ ASSISTANT_TOOLS = frozenset(
         # Looking things up.
         "tico_whoami",
         "tico_team_show",
+        "tico_mention_search",
         "tico_human_list",
         "tico_brief",
         "tico_health_check",
@@ -555,6 +556,7 @@ DEVELOPER_TOOLS = frozenset(
         "tico_bot_status_set",
         "tico_bot_setup_done",
         "tico_team_show",
+        "tico_mention_search",
         # Pages, files and docs: specs, review and QA pages, and the screenshots on them.
         "tico_page_publish",
         "tico_file_publish",
