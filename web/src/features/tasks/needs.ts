@@ -2,7 +2,6 @@ import { useQuery, type QueryKey } from '@tanstack/react-query';
 import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { queryClient } from '@/data';
 import { hearPlaces, heldRow, holdRow, keptOrder, type ListRow } from '@/lib';
-import { onTopic } from '@/live';
 import { flowCountQuery, flowQuery, type Flow } from './queries';
 
 /* One dot, one meaning: a task waits on the person when Needs you names it (GET /api/v2/needs-you), never by its turn
@@ -156,11 +155,3 @@ export function settleNeedsYou(gone?: { task: string; wait: string | null }): vo
   if (gone) queryClient.setQueryData(flowQuery.queryKey, (cur) => (cur === undefined ? cur : (needsYouWithout(gone.task, gone.wait)(cur) as Flow)));
   for (const queryKey of READS) void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: gone ? 'active' : 'all' });
 }
-
-/** Needs-you items gone (`ids`): an answer in a chat, or the live `needs` event's `removed` (answered in another tab,
-    taken back by its agent). Their asks leave the Agent bar now, before Needs you is read again. */
-export function asksGone(ids: readonly string[]): void {
-  if (!ids.length) return;
-  queryClient.setQueryData<Flow>(flowQuery.queryKey, (f) => (f?.asks?.some((a) => ids.includes(a.id)) ? { ...f, asks: f.asks.filter((a) => !ids.includes(a.id)) } : f));
-}
-onTopic<{ removed?: string[] | null }>('needs', (batch) => asksGone(batch.flatMap((e) => e.removed ?? [])));

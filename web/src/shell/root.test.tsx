@@ -14,8 +14,7 @@ import { pipelineTasksQuery } from '@/features/tasks/routing';
 import { TasksHome } from '@/features/tasks/exports';
 import { forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
-import { answerAsk } from '@/features/task/queries';
-import { dispatch } from '@/live/patch';
+import { dispatch, installPatchers } from '@/live/patch';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
@@ -113,7 +112,6 @@ vi.mock('@/features/tasks/routing', async () => {
   isNeedsYouRead: real.isNeedsYouRead,
   leaveNeedsYou: real.leaveNeedsYou,
   settleNeedsYou: real.settleNeedsYou,
-  asksGone: real.asksGone,
   needsYouRows: real.needsYouRows,
   useNeedsYouDrawn: real.useNeedsYouDrawn,
   useNeedsYouRead: real.useNeedsYouRead,
@@ -644,7 +642,7 @@ describe('the Agent bar @4857', () => {
     // the approve is on its way: no reply yet, and so no read of Needs you either
     const post = vi.spyOn(api, 'post').mockReturnValue(new Promise(() => {}));
     onTestFinished(() => post.mockRestore());
-    act(() => void answerAsk('t1', 'r1', 'ok'));
+    act(() => void run('task.approve', { task: 't1', requirement: 'r1', shown: null }, { via: 'click' }));
     await waitFor(() => expect(okLine()).toBeNull());
   });
 
@@ -657,6 +655,10 @@ describe('the Agent bar @4857', () => {
     await askRead();
     expect(await screen.findByRole('link', { name: 'An OK waits on you' })).toBeTruthy();
     asks.length = 0; // settled on the server
+    // the event alone: the read again it also asks for never goes out here
+    installPatchers();
+    const read = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue();
+    onTestFinished(() => read.mockRestore());
     act(() => dispatch('needs', [{ seq: 41, count: 3, changed: [], removed: ['n5'] }]));
     await waitFor(() => expect(okLine()).toBeNull());
   });

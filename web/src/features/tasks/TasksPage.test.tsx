@@ -161,9 +161,9 @@ it('names the agents with a ❓ question or an ask waiting on the person, not th
     },
   }));
   expect((await queryClient.fetchQuery(flowQuery)).asks).toEqual([
-    { id: 'q1', kind: 'question', by: 'bot:qa', pipeline: null, href: '/threads/home-qa' },
-    { id: 'a1', kind: 'ask', by: 'bot:fin', pipeline: 'finance', href: '/task/t9' },
-    { id: 'a2', kind: 'ask', by: 'bot:eng', pipeline: 'eng', href: '/task/t8' },
+    { id: 'q1', kind: 'question', by: 'bot:qa', pipeline: null, href: '/threads/home-qa', task: null, wait: 'q1' },
+    { id: 'a1', kind: 'ask', by: 'bot:fin', pipeline: 'finance', href: '/task/t9', task: 't9', wait: 'a1' },
+    { id: 'a2', kind: 'ask', by: 'bot:eng', pipeline: 'eng', href: '/task/t8', task: 't8', wait: 'a2' },
   ]);
 });
 
