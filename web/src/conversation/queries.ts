@@ -4,7 +4,7 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
-import { keys, queryClient, quietRoot, rangeText, write } from '@/data';
+import { keys, queryClient, quietRoot, rangeText, transient, write } from '@/data';
 import { onTopic, type TimelineView } from '@/live';
 import { newId } from '@/lib/ids';
 import { chatAddress } from '@/lib/chat';
@@ -557,5 +557,5 @@ export const pageTextQuery = (url: `/api/${string}`) =>
       return read.truncated ? null : safeFrame(read.text);
     },
     staleTime: Infinity,
-    retry: false,
+    retry: transient,
   });

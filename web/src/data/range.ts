@@ -30,6 +30,10 @@ export interface RangeOptions {
 
 const refused = (status: number, why: string) => new ApiError(status, `range_${status}`, why, status >= 500);
 
+/** A read that failed on the way (offline, a server restarting, a server error) is tried again for about a minute;
+    a range the server refused is not. */
+export const transient = (tries: number, e: unknown) => tries < 6 && (e instanceof TypeError || (e instanceof ApiError && e.retryable));
+
 /** Up to `bytes` bytes of the file at `url`. */
 export async function rangeBytes(url: string, bytes: number, { from = 0, suffix = false, signal }: RangeOptions = {}): Promise<Bytes> {
   if (!(bytes > 0) || !Number.isSafeInteger(bytes) || from < 0) throw new RangeError('bad range');
@@ -86,7 +90,7 @@ export const rangeTextQuery = (url: string, bytes: number) =>
     queryFn: ({ signal }) => rangeText(url, bytes, { signal }),
     staleTime: Infinity,
     gcTime: 5 * 60_000,
-    retry: false,
+    retry: transient,
   });
 
 export interface ZipList {
@@ -122,5 +126,5 @@ export const zipListQuery = (url: string) =>
     queryFn: ({ signal }) => zipList(url, ZIP_NAMES, signal),
     staleTime: Infinity,
     gcTime: 5 * 60_000,
-    retry: false,
+    retry: transient,
   });

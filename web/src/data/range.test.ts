@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { rangeBytes, rangeText } from './range';
+import { rangeBytes, rangeText, transient } from './range';
 
 /** A server holding `file` that answers ranges as backend/file_delivery.py does, or `bad` for one that does not. */
 function serve(file: Uint8Array<ArrayBuffer>, bad?: 'whole' | 'wrong-range') {
@@ -71,5 +71,16 @@ describe('rangeText', () => {
   it('leaves a whole file as it is, last line and all', async () => {
     serve(enc('one\ntwo'));
     expect(await rangeText('/f', 100)).toMatchObject({ text: 'one\ntwo', truncated: false, total: 7 });
+  });
+});
+
+describe('which failed reads are tried again', () => {
+  it('tries a dropped connection or a server error again for a while, never a refused range', async () => {
+    const { ApiError } = await import('@/api/client');
+    expect(transient(0, new TypeError('Failed to fetch'))).toBe(true);
+    expect(transient(0, new ApiError(503, 'range_503', 'no range', true))).toBe(true);
+    expect(transient(0, new ApiError(416, 'range_416', 'range not satisfiable', false))).toBe(false);
+    expect(transient(0, new RangeError('bad range'))).toBe(false);
+    expect(transient(6, new TypeError('Failed to fetch'))).toBe(false);
   });
 });

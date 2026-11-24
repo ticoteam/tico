@@ -153,6 +153,12 @@ describe('safeFrame links and mutations', () => {
     expect(new DOMParser().parseFromString(mutating, 'text/html').querySelector('link')).toBeNull();
     expect(safeFrame(mutating)).toBeNull();
   });
+
+  it('refuses markup that grows a link back, past the link rules, when parsed a second time', () => {
+    const mutating = '<form><math><mtext></form><form><mglyph><style></math><a href=javascript:alert(1)>x</a>';
+    expect(new DOMParser().parseFromString(mutating, 'text/html').querySelector('a[href]')).toBeNull();
+    expect(safeFrame(mutating)).toBeNull();
+  });
 });
 
 describe('calendar invites', () => {
