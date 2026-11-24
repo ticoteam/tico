@@ -263,7 +263,11 @@ function patchTasks(batch: TaskEvent[]): void {
   }
   if (!batch.length) return;
   for (const [key, data] of queryClient.getQueriesData<TaskList>({ queryKey: ['tasks', 'list'] })) {
-    if (!data || !Array.isArray(data.tasks)) continue;
+    if (!data || !Array.isArray(data.tasks)) {
+      // a stage by priority whose first read is out: read again once it is in, as that read may be from before this
+      if ((key[2] as { sort?: unknown } | undefined)?.sort === 'priority' && batch.some((e) => !statusOnly(e))) refetchSoon(key, true);
+      continue;
+    }
     const { list, unsure, reset } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
     if (reset) {
       void queryClient.resetQueries({ queryKey: key, exact: true });

@@ -15,6 +15,7 @@ import { TasksHome } from '@/features/tasks/exports';
 import { boardSearch, changeBoardSearch, forgetPlaces, heldRow, holdRow, nextInList, notePlace, pressListRow } from '@/lib';
 import { TaskPage } from '@/features/task/exports';
 import { dispatch, installPatchers } from '@/live/patch';
+import { useFollow } from '@/live/follow';
 import type * as TaskExports from '@/features/task/exports';
 import { router as appRouter } from '@/router';
 import { showPageName } from '@/tico/pageName';
@@ -25,7 +26,7 @@ import { tabTitle, useTabTitle } from './title';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists, pages, ranked, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, pages, ranked, rankFails, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
   /** Needs you read as the app reads it (GET /needs-you), where a test serves it: else the stand-in below. */
   needsRead: { real: false },
   /** Where `/task/<n>` passes on to, as its route does once the task is read: none unless a test names one. */
@@ -41,6 +42,8 @@ const { gate, q, catchUpRead, lists, pages, ranked, owners, asks, hops, needsRea
   pages: {} as Record<string, Record<string, unknown>>,
   /** A stage's open tasks in Tico's order (its read by priority), where a test names it: else its list read's rows. */
   ranked: {} as Record<string, unknown[]>,
+  /** How many of the next reads by priority fail (a 503, not tried again). */
+  rankFails: { n: 0 },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
@@ -131,7 +134,13 @@ vi.mock('@/features/tasks/routing', async () => {
   // the real key (a stage by priority), its rows served here
   stagePriorityQuery: vi.fn((pipeline: string, stage: string, f: TasksRouting.Filters) => ({
     ...real.stagePriorityQuery(pipeline, stage, f),
-    queryFn: async () => ({ tasks: ranked[stage] ?? (lists[pipeline] ?? []).filter((r) => (r as { stage_id: string }).stage_id === stage), cursor: '' }),
+    queryFn: async () => {
+      if (rankFails.n > 0) {
+        rankFails.n -= 1;
+        throw new ApiError(503, 'starting', 'Starting');
+      }
+      return { tasks: ranked[stage] ?? (lists[pipeline] ?? []).filter((r) => (r as { stage_id: string }).stage_id === stage), cursor: '' };
+    },
     staleTime: Infinity,
   })),
   useStageSort: vi.fn(() => false),
@@ -290,6 +299,7 @@ beforeEach(() => {
   for (const k of Object.keys(lists)) delete lists[k];
   for (const k of Object.keys(pages)) delete pages[k];
   for (const k of Object.keys(ranked)) delete ranked[k];
+  rankFails.n = 0;
   for (const k of Object.keys(owners)) delete owners[k];
   for (const k of Object.keys(hops)) delete hops[k];
   needsRead.real = false;
@@ -1182,6 +1192,21 @@ describe('a task opened from a board', () => {
     act(() => changeBoardSearch('eng', { sort: 'newest' }));
     await waitFor(() => expect(titles()).toEqual(['Bulk edit stock', 'Postal codes', 'More tasks']));
     expect(vi.mocked(useStageSort).mock.lastCall?.[0]).toBeNull();
+  });
+
+  it('follows every task’s change while it shows, as its board does, and a read by priority that failed says so with Try again', async () => {
+    rankFails.n = 1;
+    await board();
+    vi.mocked(useFollow).mockClear();
+    fireEvent.click(screen.getByRole('link', { name: 'Bulk edit stock' }));
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    expect(vi.mocked(useFollow)).toHaveBeenCalledWith({ allTasks: true });
+    const again = await within(list).findByRole('button', { name: 'Try again' });
+    expect(within(list).getByText('These tasks did not load')).toBeTruthy();
+    expect(within(list).queryByText('No open tasks')).toBeNull();
+    fireEvent.click(again);
+    expect(await within(list).findByRole('link', { name: /Bulk edit stock/ })).toBeTruthy();
+    expect(within(list).queryByRole('button', { name: 'Try again' })).toBeNull();
   });
 });
 

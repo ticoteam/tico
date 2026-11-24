@@ -215,6 +215,27 @@ describe('tasks', () => {
     expect([out.unsure, out.list.tasks.map((t) => t.id)]).toEqual([false, ['t1']]);
   });
 
+  it('read a stage by priority again once its first read is in, when a task moved into it while that read was out', async () => {
+    const ranked = ['tasks', 'list', { status: 'open', pipeline: 'p1', stage: 's1', sort: 'priority' }];
+    const reads: ((rows: unknown[]) => void)[] = [];
+    const read = () => new Promise((done) => reads.push((rows) => done({ tasks: rows, cursor: '900.x' })));
+    const seen = new QueryObserver(queryClient, { queryKey: ranked, queryFn: read, staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
+    try {
+      expect(reads).toHaveLength(1);
+      FakeEventSource.last.feed(taskFrame(901, task('t9', { stage_id: 's1' }), 'move'));
+      flushFrame();
+      // the first read may be from before the move: it answers, then the list is read again
+      expect(reads).toHaveLength(1);
+      await act(async () => reads[0]([task('t1')]));
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+      await act(async () => reads[1]([task('t9', { stage_id: 's1' }), task('t1')]));
+      expect(queryClient.getQueryData<TaskList>(ranked)?.tasks.map((t) => t.id)).toEqual(['t9', 't1']);
+    } finally {
+      stop();
+    }
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

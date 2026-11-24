@@ -18,6 +18,7 @@ import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports'
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
 import { Ago } from '@/kit/Ago';
 import { Avatar } from '@/kit/Avatar';
+import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
@@ -30,6 +31,7 @@ import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { startLive, useLiveStatus } from '@/live';
+import { useFollow } from '@/live/follow';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
 import { THEME_KEY, usePref, useTheme, type Theme } from '@/prefs';
@@ -772,6 +774,8 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   const needs = useNeedsYou();
   const { data: pipes } = useQuery(pipelinesQuery);
   const p = pipes?.find((x) => x.id === pipeline);
+  // every task's change, as its board follows them: a move into the stage shown lands here too
+  useFollow({ allTasks: true });
   const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
   const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
@@ -796,7 +800,9 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
   // Priority: the stage shown is read on its own, in Tico's order for the person, whole (no More), and Tico sorts it
   // when due; drawn once that read is in, never in the queue's order first
   const ranks = !filters.sort && !!showing;
-  const { data: ranked } = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
+  const byPriority = useQuery({ ...stagePriorityQuery(pipeline, showing ?? '', filters), enabled: !!p && ranks });
+  const ranked = byPriority.data;
+  const failed = ranks && byPriority.isError && !ranked;
   useStageSort((ranks && showing) || null, ranked);
   const stages = useMemo(
     () => (ranks ? read.map((g) => (g.id === showing ? { ...g, items: (ranked?.tasks ?? []).filter((t) => t.stage_id === g.id) } : g)) : read),
@@ -868,7 +874,13 @@ function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; op
         </Suspense>
       ) : null}
       <div className="nav-scroll li-body">
-        {page && (!ranks || ranked) && !more && !shown?.items.length ? <Empty title="No open tasks" /> : null}
+        {failed ? (
+          <Empty icon="alert" title="These tasks did not load">
+            <Button onClick={() => void byPriority.refetch()}>Try again</Button>
+          </Empty>
+        ) : page && (!ranks || ranked) && !more && !shown?.items.length ? (
+          <Empty title="No open tasks" />
+        ) : null}
         {shown?.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
         {more ? (
           <button className="li li-more" type="button" onClick={() => void loadMore(pipeline, filters)}>
