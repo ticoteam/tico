@@ -129,13 +129,10 @@ class Sources:
         caps it. A room past the cap is left out, so its own check reads it again and refuses as before."""
         from . import provenance_clock
 
+        cids = sorted({cid for cid in cids if cid} - set(self.primed_rooms))
+        H.prime_conversations(self.c, cids)  # every room's row: a legacy room's binding check reads it, cached or not
         # A room the shared cache holds is answered from it, as its own lookup would be: only the rest are read.
-        cids = sorted(
-            {cid for cid in cids if cid}
-            - set(self.primed_rooms)
-            - {cid for cid in cids if provenance_clock.known(self.c, ("meeting_conversation", cid))}
-        )
-        H.prime_conversations(self.c, cids)
+        cids = [cid for cid in cids if not provenance_clock.known(self.c, ("meeting_conversation", cid))]
         for part in H.chunks([cid for cid in cids if not self.bound_conversation(cid)]):
             inputs = {cid: [] for cid in part}
             # Each room's inputs by its own index seek, at most 101 of them (the cap's one past), as its lookup reads.

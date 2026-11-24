@@ -2713,6 +2713,10 @@ def capped(c, v):
         "SELECT root_id, COUNT(*) AS n, MIN(created_at) AS oldest FROM message_deliveries "
         "WHERE state='capped' GROUP BY root_id ORDER BY oldest LIMIT 200"
     ).fetchall()
+    if read_cache.cache(c) is not None:  # a snapshot's own reads: nothing here opens one
+        from .live_privacy import sources
+
+        sources(c).prime_conversations([r["root_id"] for r in rows])  # each check's provenance, for all at once
     out = []
     for r in rows:
         if r["root_id"] and thread_readable(c, v, r["root_id"]):
