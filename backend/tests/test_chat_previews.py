@@ -112,6 +112,27 @@ def test_a_preview_made_for_a_picture_deleted_meanwhile_leaves_no_bytes_behind(a
         blobs.get(made[0])
 
 
+def test_a_purge_queued_again_while_draining_is_kept_for_the_next_pass(api, monkeypatch):
+    """Bytes written and queued again while a pass removes them stay queued, so the next pass removes them too."""
+    from backend import file_library
+
+    store, blobs = api.app.state.store, api.app.state.blobs
+    digest = "0" * 64
+    with store.transaction() as c:
+        file_library.queue_purge(c, digest, "", "2026-01-01T00:00:00.000000Z")
+
+    def requeued(d, kind=None):
+        with store.transaction() as c:
+            file_library.queue_purge(c, d, "", H.now())
+
+    monkeypatch.setattr(blobs, "_fresh", {})
+    monkeypatch.setattr(blobs, "purge", requeued)
+    assert file_library.drain(store, blobs) == 0
+    with store.read() as c:
+        row = c.execute("SELECT queued_at FROM blob_purges WHERE digest=?", (digest,)).fetchone()
+    assert row and row[0] != "2026-01-01T00:00:00.000000Z"
+
+
 def test_a_source_that_keeps_failing_is_given_up_after_its_tries(api, monkeypatch):
     drive = worker(api)
     with api.app.state.store.transaction() as c:
