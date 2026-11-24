@@ -295,6 +295,39 @@ def queue_claude(api, *, kind="claude_token", secret=SENTINEL, caps=CAPS):
     return bot, exit_runner, plan
 
 
+def advertise_codex(api, computer, bot=None, *, version="0.170.0", capable=True, runtime="codex"):
+    return post(
+        api,
+        "runners/heartbeat",
+        {
+            "version": "test",
+            "platform": "test",
+            "capabilities": [*CAPS, *([plan_exits.CODEX_CAPABILITY] if capable else [])],
+            "readiness": {
+                "schema_version": 1,
+                "harnesses": {"codex": {"version": version, "installed": True}},
+                "runtimes": {"codex": {"installed": True}, "claude": {"installed": True}},
+                "bots": {bot: {"runtime": runtime, "ready": True}} if bot else {},
+            },
+        },
+        computer["token"],
+    )
+
+
+def queue_codex(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "")
+    bot = machine(api)
+    exit_runner = runner(api, label="Owner exit")
+    plan = add(api, "codex_login", codex_file(refresh="synthetic-refresh"))
+    put(api, "model-subscriptions/plan-exits/ana", {"runner_id": exit_runner["runner_id"]})
+    pick(api, "ops", "codex", sid=plan["id"])
+    post(api, "chat/ops", {"text": "Check the provider."})
+    advertise_codex(api, bot, "ops")
+    return bot, exit_runner, plan
+
+
 def claim_reply(api, computer, key=None):
     return post(api, "jobs/claim", {"next_run": True, "start_places": True}, token=computer["token"], key=key)
 
@@ -490,7 +523,7 @@ def test_enabling_plan_exit_routing_requires_admin_and_healthy_relay(api, monkey
     assert get(api, SWITCH) == {"enabled": False}
 
 
-def test_only_routed_claude_plan_owners_supervise_model_links(api, relay):
+def test_only_eligible_exit_computers_supervise_model_links(api, relay):
     setup(api)
     code = post(api, "enrollments", {"operator": "ana"})["code"]
     exit_runner = post(api, "runners/enroll", {"code": code, "label": "Owner exit", "platform": "darwin"})
@@ -498,6 +531,7 @@ def test_only_routed_claude_plan_owners_supervise_model_links(api, relay):
     put(api, f"model-subscriptions/plan-exits/{sid}", {"runner_id": exit_runner["runner_id"]})
     put(api, SWITCH, {"enabled": True})
     assert "model_exit" not in advertise(api, exit_runner)
+    assert advertise_codex(api, exit_runner)["model_exit"] is True
     add(api, "claude_login", full())
     assert "model_exit" not in advertise(api, exit_runner)
     add(api)
@@ -569,10 +603,11 @@ def test_cutover_fences_direct_receipts_and_connects_and_keeps_a_late_refresh_su
 
 
 @pytest.mark.parametrize("replacement", [False, True])
-def test_running_model_exit_is_interrupted_on_link_loss_and_old_grants_stay_fenced(api, relay, replacement):
-    bot, exit_runner, plan = queue_claude(api)
+@pytest.mark.parametrize("codex", [False, True])
+def test_running_model_exit_is_interrupted_on_link_loss_and_old_grants_stay_fenced(api, relay, replacement, codex):
+    bot, exit_runner, plan = (queue_codex if codex else queue_claude)(api)
     put(api, SWITCH, {"enabled": True})
-    advertise(api, exit_runner)
+    (advertise_codex if codex else advertise)(api, exit_runner)
     sessions = api.app.state.store.screen_sessions
     rid = exit_runner["runner_id"]
     relay.online, relay.links = True, {rid: 1}
@@ -604,3 +639,60 @@ def test_running_model_exit_is_interrupted_on_link_loss_and_old_grants_stay_fenc
     resumed = claim_reply(api, bot)["attempt"]
     assert resumed["job_id"] == attempt["job_id"]
     assert resumed["subscriptions"][0]["exit_generation"] == changed["generation"]
+
+
+def test_codex_claim_waits_for_a_current_exit_and_never_opens_the_login_on_a(api, relay):
+    bot, exit_runner, plan = queue_codex(api)
+    put(api, SWITCH, {"enabled": True})
+    rid = exit_runner["runner_id"]
+    relay.online, relay.links = True, {rid: 1}
+    api.app.state.store.screen_sessions.tick()
+    advertise_codex(api, exit_runner, version="0.169.0")
+    assert claim_reply(api, bot)["attempt"] is None
+    assert advertise_codex(api, exit_runner)["model_exit"] is True
+    advertise_codex(api, bot, "ops", capable=False)
+    assert claim_reply(api, bot)["attempt"] is None
+    advertise_codex(api, bot, "ops")
+    attempt = claim_reply(api, bot)["attempt"]
+    [payer] = attempt["subscriptions"]
+    assert payer["delivery"] == "model_exit" and payer["id"] == plan["id"]
+    assert "attempt_credential" not in attempt and not attempt.get("attempt_credential_required")
+    assert "synthetic-refresh" not in json.dumps(get(api, "credential-runtime", attempt["token"]))
+    tunnel = bot, exit_runner, attempt, plan, payer["exit_generation"], relay
+    ticket = grant(api, tunnel)
+    assert redeem(api, ticket, bot["token"], 403)["error"]["code"] == "model_exit_forbidden"
+    assert redeem(api, ticket, exit_runner["token"]) == {
+        "provider": "codex",
+        "access_token": "a-synthetic-refresh",
+        "account_id": "acct-1",
+    }
+
+
+def test_codex_keys_stay_direct_and_the_claude_shell_gets_no_routed_login(api, relay):
+    bot, _, _ = queue_codex(api)
+    put(api, SWITCH, {"enabled": True})
+    on(api, "ops", "claude", "")
+    advertise_codex(api, bot, "ops", capable=False, runtime="claude")
+    key = add(api, "anthropic_key", "sk-ant-api03-synthetic")
+    pick(api, "ops", "claude", key["id"], kind="key")
+    attempt = claim_reply(api, bot)["attempt"]
+    assert [payer["kind"] for payer in attempt["subscriptions"]] == ["anthropic_key"]
+    assert not attempt["attempt_credential"].get("shell")
+    assign(api, bot, "cpo")
+    on(api, "cpo", "codex", "")
+    advertise_codex(api, bot, "cpo", capable=False)
+    key = add(api, "openai_key", "sk-synthetic-openai-key")
+    pick(api, "cpo", "codex", key["id"], kind="key")
+    post(api, "chat/cpo", {"text": "Check the key."})
+    attempt = claim_reply(api, bot)["attempt"]
+    assert attempt["attempt_credential"]["id"] == key["id"]
+
+
+def test_upgrading_with_routing_already_on_fences_a_direct_codex_turn(api, monkeypatch):
+    bot, _, _ = queue_codex(api)
+    attempt = claim_reply(api, bot)["attempt"]
+    assert "synthetic-refresh" in attempt["attempt_credential"]["value"]
+    monkeypatch.setattr(plan_exits, "enabled", lambda _: True)
+    with api.app.state.store.transaction() as c:
+        plan_exits.initialize(c)
+        assert c.execute("SELECT stop_requested_at FROM attempts WHERE id=?", (attempt["id"],)).fetchone()[0]

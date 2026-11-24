@@ -266,7 +266,11 @@ def _model_binding(c, runner_id, attempt_id, generation):
         raise _model_stale()
     sub, route = bound
     exit_row = plan_exits.selected(c, sub)
-    if not exit_row or not _model_capable(exit_row):
+    if (
+        not exit_row
+        or not _model_capable(exit_row)
+        or (sub["kind"] == plan_exits.CODEX_KIND and plan_exits.routed(c, sub) != route)
+    ):
         raise _model_stale()
     return {
         "runner_id": runner_id,
@@ -276,7 +280,7 @@ def _model_binding(c, runner_id, attempt_id, generation):
         "owner": sub["owner_id"].removeprefix("human:"),
         "plan": sub["id"],
         "revision": sub["revision"],
-        "provider": "claude",
+        "provider": plan_exits.provider(sub),
     }, sub
 
 

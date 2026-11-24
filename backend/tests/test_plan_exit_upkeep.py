@@ -1,5 +1,6 @@
 """Plan upkeep uses the owner's exit even when it has no assigned agents."""
 
+import base64
 import json
 from datetime import datetime, timedelta, timezone
 
@@ -12,7 +13,7 @@ from backend.store import H
 from backend.tests.helpers.api import assign, claim, get, post, put
 from backend.tests.helpers.claude_login import access, full, refresh
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, company, legacy_give, on, pick
+from backend.tests.helpers.model_subscriptions import OTHER, TOKEN, add, codex_file, company, legacy_give, on, pick
 
 EMPTY = {"refreshes": [], "tokens": [], "usage": []}
 CONNECT = "model-subscriptions/connect"
@@ -26,7 +27,7 @@ def computer(api, label, platform="linux"):
     return machine
 
 
-def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, full_login=True, **runtime):
+def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, full_login=True, tool="claude", **runtime):
     claude = {"installed": True, **runtime}
     return post(
         api,
@@ -45,11 +46,13 @@ def heartbeat(api, machine, bot=None, *, legacy=False, profile=None, full_login=
                 "attempt_credentials_v1",
                 "model_exit_v1",
                 "model_exit_claude_v1",
+                "model_exit_codex_v1",
             ],
             "readiness": {
                 "schema_version": 1,
-                "runtimes": {"claude": claude},
-                "bots": {bot: {"runtime": "claude", "ready": True}} if bot else {},
+                "runtimes": {"claude": claude, "codex": {"installed": True}},
+                "harnesses": {"codex": {"installed": True, "version": "0.170.0"}},
+                "bots": {bot: {"runtime": tool, "ready": True}} if bot else {},
                 **({"computer_profile": profile} if profile else {}),
             },
             **({"profiles": [{"name": profile, "runtimes": {"claude": runtime}}]} if profile else {}),
@@ -739,3 +742,57 @@ def test_reconnect_is_pinned_and_a_mac_exit_only_routes_setup_tokens(api, comput
     assert post(api, f"runner-logins/{current['id']}/subscription", {"value": OTHER}, mac["token"])["state"] == "done"
     with api.app.state.store.read() as c:
         assert MS.row(c, sid)["kind"] == "claude_token"
+
+
+def codex_value(n, minutes):
+    auth = json.loads(codex_file(refresh=f"codex-refresh-{n}"))
+    exp = int((datetime.now(timezone.utc) + timedelta(minutes=minutes)).timestamp())
+    claims = base64.urlsafe_b64encode(json.dumps({"exp": exp, "nonce": n}).encode()).decode().rstrip("=")
+    auth["tokens"]["access_token"] = f"h.{claims}.s"
+    return json.dumps(auth)
+
+
+def test_codex_exit_owns_refresh_and_usage_even_with_a_local_turn(api, computers):
+    e, a = computers
+    sid = add(api, "codex_login", codex_value(1, 30))["id"]
+    select(api, e)
+    on(api, "ops", "codex", "")
+    assign(api, e, "ops")
+    heartbeat(api, e, "ops", tool="codex")
+    pick(api, "ops", "codex", sid)
+    post(api, "chat/ops", {"text": "Use my plan."})
+    local = claim(api, e)
+    assert local["attempt_credential_required"]
+    tokens = json.loads(local["attempt_credential"]["value"])["tokens"]
+    assert set(tokens) == {"access_token", "account_id"}
+    assert poll(api, a, sid) == EMPTY
+    [job] = poll(api, e, sid)["refreshes"]
+    lease = job["lease"]
+    assert job["provider"] == "codex" and job["revision"] == 1
+    assert json.loads(job["value"])["tokens"]["refresh_token"] == "codex-refresh-1"
+    assert poll(api, e, sid)["refreshes"] == [job]
+
+    refreshed = f"runner-claude-logins/{sid}/refreshed"
+    result = {"lease": lease, "revision": 1, "state": "succeeded", "value": codex_value(2, 360)}
+    assert post(api, refreshed, result, a["token"]) == {"stored": False}
+    assert post(api, refreshed, result, e["token"]) == {"stored": True, "revision": 2}
+    assert post(api, refreshed, result, e["token"]) == {"stored": True, "revision": 2}
+    with api.app.state.store.transaction() as c:
+        assert claude_login.gap(c, local["id"], "codex")
+    request_usage(api, sid)
+    assert poll(api, a, sid) == EMPTY
+    [usage] = poll(api, e, sid)["usage"]
+    assert usage == {
+        "provider": "codex",
+        "subscription": sid,
+        "revision": 2,
+        "id": usage["id"],
+        "token": json.loads(result["value"])["tokens"]["access_token"],
+        "account_id": "acct-1",
+    }
+    report = {"id": usage["id"], "state": "succeeded", "seven_day": window(42)}
+    endpoint = f"runner-claude-logins/{sid}/usage"
+    post(api, endpoint, report, a["token"], expected=404)
+    assert post(api, endpoint, report, e["token"])["state"] == "succeeded"
+    select(api, a)
+    post(api, endpoint, report, e["token"], expected=404)

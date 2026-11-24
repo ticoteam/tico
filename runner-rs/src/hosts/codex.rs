@@ -227,7 +227,42 @@ pub fn mcp_disable_config(codex_home: Option<&str>) -> Map<String, Value> {
 
 type Reply = Result<Value, Value>;
 
+struct PlanLogin {
+    params: Value,
+    route: Option<(PathBuf, Vec<String>)>,
+}
+
+pub(crate) fn external_login(token: &Value, account: &Value) -> Value {
+    json!({"type": "chatgptAuthTokens", "accessToken": token, "chatgptAccountId": account})
+}
+
+fn exit_config(url: &str, cwd: &std::path::Path) -> Vec<String> {
+    let checkout = json!(cwd.display().to_string());
+    let chat = json!(format!("{url}/backend-api"));
+    let api = json!(format!("{url}/backend-api/codex"));
+    vec![
+        r#"model_provider="tico_exit""#.into(),
+        format!("chatgpt_base_url={chat}"),
+        r#"cli_auth_credentials_store="ephemeral""#.into(),
+        format!(
+            r#"model_providers={{ tico_exit={{ name="Tico exit", base_url={api}, wire_api="responses", requires_openai_auth=true, supports_websockets=false, request_max_retries=0, stream_max_retries=0 }} }}"#
+        ),
+        format!(r#"projects={{ {checkout}={{ trust_level="untrusted" }} }}"#),
+        "features.plugins=false".into(),
+        "features.remote_plugin=false".into(),
+        "features.apps=false".into(),
+        "features.remote_control=false".into(),
+        "features.enable_request_compression=false".into(),
+        "features.respect_system_proxy=false".into(),
+        "features.system_proxy_fallback=false".into(),
+        "features.unbounded_connection_retries=false".into(),
+        "analytics.enabled=false".into(),
+        "check_for_update_on_startup=false".into(),
+    ]
+}
+
 struct Shared {
+    plan: Option<PlanLogin>,
     allocation: super::Allocation,
     tx: Events,
     env: Env,
@@ -268,6 +303,7 @@ impl CodexHost {
     /// A host for a subscription profile: the servers silenced are the ones in that profile's config.toml.
     pub fn on_home(env: Env, tx: Events, codex_home: Option<&str>) -> CodexHost {
         CodexHost(Arc::new(Shared {
+            plan: None,
             allocation: super::Allocation::default(),
             tx,
             env,
@@ -292,6 +328,46 @@ impl CodexHost {
             compacted: tokio::sync::Notify::new(),
             skill_roots: Mutex::new(Vec::new()),
         }))
+    }
+
+    pub(crate) fn with_plan(
+        mut self,
+        tokens: &Value,
+        url: Option<&str>,
+        cwd: &std::path::Path,
+    ) -> Result<Self, HostError> {
+        let shared =
+            Arc::get_mut(&mut self.0).ok_or_else(|| failed("Codex host already started"))?;
+        let route = if let Some(url) = url {
+            let home = shared
+                .env
+                .get("CODEX_HOME")
+                .ok_or_else(|| failed("Missing Codex turn home"))?;
+            let cwd = cwd
+                .canonicalize()
+                .map_err(|_| failed("Cannot resolve Codex checkout"))?;
+            let config = exit_config(url, &cwd);
+            crate::model_subscriptions::write_private(
+                &PathBuf::from(home).join("config.toml"),
+                &config.join("\n"),
+            )
+            .map_err(failed)?;
+            Some((cwd, config))
+        } else {
+            None
+        };
+        shared.plan = Some(PlanLogin {
+            params: external_login(&tokens["access_token"], &tokens["account_id"]),
+            route,
+        });
+        Ok(self)
+    }
+
+    fn routed(&self) -> bool {
+        self.0
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.route.is_some())
     }
 
     fn emit(&self, ev: Value) {
@@ -333,6 +409,17 @@ impl CodexHost {
             .stderr(Stdio::piped())
             .env_clear()
             .envs(&self.0.env);
+        if let Some(plan) = &self.0.plan {
+            command.args(["--listen", "stdio://"]);
+            if let Some((cwd, config)) = &plan.route {
+                command.current_dir(cwd);
+                for setting in config {
+                    command.args(["-c", setting]);
+                }
+            } else {
+                command.args(["-c", r#"cli_auth_credentials_store="ephemeral""#]);
+            }
+        }
         super::new_group(&mut command);
         let mut child = {
             let mut sweep = self.0.sweep.lock().unwrap();
@@ -441,7 +528,17 @@ impl CodexHost {
             START_TIMEOUT,
         )
         .await?;
-        self.notify("initialized", json!({})).await
+        self.notify("initialized", json!({})).await?;
+        if let Some(plan) = &self.0.plan {
+            if self
+                .request("account/login/start", plan.params.clone(), START_TIMEOUT)
+                .await?["type"]
+                != "chatgptAuthTokens"
+            {
+                return Err(failed("Codex did not accept the plan's temporary sign-in"));
+            }
+        }
+        Ok(())
     }
 
     pub async fn stop(&self) {
@@ -828,6 +925,7 @@ impl CodexHost {
                             .filter(|m| !m.is_empty())
                             .unwrap_or("the turn failed")
                             .to_string(),
+                        self.0.plan.is_some(),
                     );
                     self.emit(event(
                         "turn_failed",
@@ -857,6 +955,7 @@ impl CodexHost {
                         .filter(|m| !m.is_empty())
                         .map(String::from)
                         .unwrap_or_else(|| py_dumps(err).chars().take(500).collect()),
+                    self.0.plan.is_some(),
                 );
                 let will_retry = crate::util::truthy(p.get("willRetry"));
                 let fresh = turn
@@ -1149,6 +1248,9 @@ impl CodexHost {
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
         }
+        if self.routed() {
+            params["modelProvider"] = json!(crate::model_exit::CODEX_PROVIDER);
+        }
         params["config"] = Value::Object(cfg);
         params
     }
@@ -1196,7 +1298,58 @@ impl CodexHost {
         let mut params = self.thread_params(settings);
         params["threadId"] = json!(thread_id);
         params["excludeTurns"] = json!(true);
-        let res = self.request("thread/resume", params, START_TIMEOUT).await?;
+        let target = if self.routed() {
+            crate::model_exit::CODEX_PROVIDER
+        } else {
+            "openai"
+        };
+        let previous_provider = if self.routed() {
+            self.request(
+                "thread/read",
+                json!({"threadId": thread_id, "includeTurns": false}),
+                START_TIMEOUT,
+            )
+            .await
+            .ok()
+        } else {
+            None
+        };
+        let result = if previous_provider
+            .as_ref()
+            .and_then(|r| r["thread"]["modelProvider"].as_str())
+            .is_some_and(|provider| provider != target)
+        {
+            Err(failed(
+                "The previous Codex thread uses another model provider",
+            ))
+        } else {
+            self.request("thread/resume", params.clone(), START_TIMEOUT)
+                .await
+        };
+        let mismatch = match &result {
+            Ok(res) => res["thread"]["modelProvider"]
+                .as_str()
+                .is_some_and(|provider| {
+                    provider != target
+                        && (self.routed() || provider == crate::model_exit::CODEX_PROVIDER)
+                }),
+            Err(err) => {
+                let detail = err.to_string();
+                detail.to_ascii_lowercase().contains("model provider")
+                    && (self.routed() || detail.contains(crate::model_exit::CODEX_PROVIDER))
+            }
+        };
+        let res = if mismatch && !settings.require_existing_session {
+            params.as_object_mut().unwrap().remove("excludeTurns");
+            params["modelProvider"] = json!(target);
+            self.request("thread/fork", params, START_TIMEOUT).await?
+        } else if mismatch {
+            return Err(failed(
+                "The previous Codex thread uses another model provider",
+            ));
+        } else {
+            result?
+        };
         Ok(res["thread"]["id"]
             .as_str()
             .filter(|t| !t.is_empty())
@@ -1453,8 +1606,8 @@ const DECLINED: &str = "Tico runs this bot unattended, so no one can approve thi
 /// approval request is unexpected; one that comes is declined, which lets the turn go on without it (`cancel` or
 /// `abort` would end the turn). No one is there to answer a question, so an MCP elicitation is cancelled and a
 /// `requestUserInput` (whose answer has no cancel) gets no answers. The runner registers no dynamic tools, and
-/// manages neither ChatGPT tokens (Codex refreshes its own login) nor attestation, so those and any method this
-/// list does not know keep "method not found".
+/// declines Codex requests to refresh external tokens (managed plans refresh through the exit lease) and
+/// attestation. Methods this list does not know also get "method not found".
 fn server_request_reply(method: &str) -> (Reply, &'static str, bool) {
     let not_found = |m: &str| {
         Err(json!({"code": -32601, "message": format!("the runner does not answer {m}")}))
@@ -1492,7 +1645,7 @@ fn server_request_reply(method: &str) -> (Reply, &'static str, bool) {
 // Codex names an overload or quota refusal in the error's structure (`codexErrorInfo`, or the API's `type`), and its
 // message may say neither ("Server busy"). Name the kind in the text the limit rules read; a message that already
 // reads as a limit is kept as it is, so a genuine quota is never relabelled as capacity.
-fn with_kind(err: &Value, msg: String) -> String {
+fn with_kind(err: &Value, msg: String, managed: bool) -> String {
     let info = &err["codexErrorInfo"];
     let kind = info
         .as_str()
@@ -1506,7 +1659,13 @@ fn with_kind(err: &Value, msg: String) -> String {
         .as_object()
         .and_then(|o| o.values().next())
         .and_then(|v| v["httpStatusCode"].as_u64());
-    let tag = if kind.contains("overloaded") {
+    let tag = if managed
+        && (status == Some(401)
+            || kind == "unauthorized"
+            || msg.to_ascii_lowercase().contains("401 unauthorized"))
+    {
+        "authentication_error"
+    } else if kind.contains("overloaded") {
         "overloaded"
     } else if kind.contains("usagelimit") || kind.contains("usage_limit") {
         "usage limit"

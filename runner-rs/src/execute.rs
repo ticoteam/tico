@@ -2640,6 +2640,11 @@ impl Runner {
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
             vault.model_exit_environment(&self.state.directory, &mut env).map_err(Fail::runtime)?;
+            let codex_login = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
+                .and_then(|d| d.codex_external());
+            if codex_login.is_some() {
+                env.retain(|key, _| key == "CODEX_HOME" || !crate::env::competing_codex_env(key));
+            }
             if relationship {
                 // The model's normal identity can use the directory. The attempt owns its lifetime.
                 if let Some((uid, gid)) = turn_identity.or_else(crate::isolation::identity) {
@@ -2868,6 +2873,13 @@ impl Runner {
             } else {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
             };
+            let made = match (made, codex_login) {
+                (Host::Codex(h), Some(login)) => {
+                    let url = vault.model_exit.as_ref().map(|exit| exit.url.as_str());
+                    Host::Codex(h.with_plan(&login, url, &execution_path)?)
+                }
+                (host, _) => host,
+            };
             let h = host.insert(made);
             if voice_call && matches!(h, Host::Codex(_)) {
                 let call_id = text_of(&refs["live_meeting"]["voice_call"]);
@@ -2929,9 +2941,14 @@ impl Runner {
                 };
                 match tried {
                     Ok(t) => {
+                        session = Some(if t != *prev && matches!(h, Host::Codex(_)) {
+                            left = Some(prev.clone());
+                            crate::continuity::Session::new(crate::continuity::FORKED, None)
+                        } else {
+                            crate::continuity::Session::resumed()
+                        });
                         thread = Some(t);
                         resumed = true;
-                        session = Some(crate::continuity::Session::resumed());
                     }
                     Err((missing, error)) => {
                         let why = if missing { crate::continuity::NOT_FOUND } else { crate::continuity::RESUME_FAILED };
@@ -2995,7 +3012,7 @@ impl Runner {
             // A new thread on a host that says when its session is up is kept only then (Fresh): until it is, the
             // thread it replaces stays this conversation's, here and on the task, so a session that never comes up
             // leaves the next turn the old one.
-            fresh = (!resumed && !side_run && !one_off && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
+            fresh = ((!resumed || left.is_some()) && !side_run && !one_off && continuing.is_empty() && !fresh_chat && h.confirms_threads()).then(|| Fresh {
                 bot: bot.clone(),
                 conversation: conv.clone(),
                 runtime: runtime.clone(),

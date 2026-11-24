@@ -28,16 +28,17 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
-Heartbeats can carry 35 capabilities. If an older hub refuses the count, the runner drops
-`model_exit_claude_v1` first, then `antigravity_plan_v1`, then `model_exit_v1`, then `attempt_credentials_v1` if needed.
+Heartbeats can carry 37 capabilities. If an older hub refuses the count, the runner drops
+`model_exit_codex_v1` first, then `model_exit_claude_v1`, then `antigravity_plan_v1`, then `model_exit_v1`, then `attempt_credentials_v1` if needed.
 Only a runner with `antigravity_plan_v1` gets an Antigravity plan's Connect, install or turns.
 
-When the company enables plan exit routing, a routed Claude claim carries `delivery: "model_exit"`
+When the company enables plan exit routing, a routed Claude or Codex claim carries `delivery: "model_exit"`
 and `exit_generation` in its payer metadata. Both computers report `model_exit_v1` and the turn
-computer also reports `model_exit_claude_v1`. With routing enabled, the hub sends `model_exit: true` only
-to a runner advertising `model_exit_v1` and supervised for a selected Claude plan. Claude setup tokens
+computer also reports `model_exit_claude_v1` for Claude, or `model_exit_codex_v1` for Codex. With routing enabled, the hub sends `model_exit: true` only
+to a runner advertising `model_exit_v1` and supervising a selected plan. Claude setup tokens
 qualify on any platform. Full Claude logins qualify where they can be refreshed from a file outside the
-Mac keychain. Codex plans do not qualify. The runner holds its model link open while the flag is true.
+Mac keychain. A Codex exit also needs `model_exit_codex_v1` and Codex 0.170.0 or newer.
+The runner holds its model link open while the flag is true.
 It connects on the browser-exit WebSocket route with `X-Tico-Exit-Kind: model`.
 The turn computer requests a tunnel with `kind: "model"`, its attempt ID and the bound exit generation,
 and receives an attach ticket. The exit redeems its one-use ticket with its runner token at

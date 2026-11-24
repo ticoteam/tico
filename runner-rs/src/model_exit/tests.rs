@@ -604,3 +604,37 @@ fn model_exit_replaces_credentials_only_in_the_provider_request() {
         BAD_REQUEST
     );
 }
+
+#[test]
+fn codex_exit_tracks_inference_and_compaction_but_refuses_all_other_requests() {
+    let authority = "127.0.0.1:123";
+    let transport = ModelTransport::default();
+    for (method, path) in [
+        ("POST", "/backend-api/codex/responses"),
+        ("POST", "/backend-api/codex/responses/compact"),
+        ("POST", "/backend-api/codex/responses?other=true"),
+        ("GET", "/backend-api/codex/responses"),
+        ("GET", "/backend-api/codex/models"),
+        ("GET", "/backend-api/wham/usage"),
+        ("POST", "/oauth/token"),
+    ] {
+        let head = format!("{method} {path} HTTP/1.1\r\nHost: {authority}\r\nContent-Length: 0");
+        let checked = Request::parse(head.as_bytes(), Provider::Codex, authority);
+        let allowed =
+            method == "POST" && (path.ends_with("/responses") || path.ends_with("/compact"));
+        assert_eq!(checked.is_some(), allowed, "{method} {path}");
+        if let Some(request) = checked {
+            assert_eq!(request.upstream, format!("https://chatgpt.com{path}"));
+            record_refusal(transport.request(request.path), "model_exit_offline");
+            assert!(transport.0.lock().unwrap().failed);
+        }
+    }
+    let jwt = codex_token("relay-only-nonce");
+    assert_eq!(jwt.split('.').count(), 3);
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+    let claims = URL_SAFE_NO_PAD
+        .decode(jwt.split('.').nth(1).unwrap())
+        .unwrap();
+    let claims: serde_json::Value = serde_json::from_slice(&claims).unwrap();
+    assert_eq!(claims["nonce"], "relay-only-nonce");
+}

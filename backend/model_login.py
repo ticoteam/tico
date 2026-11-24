@@ -224,12 +224,12 @@ def _stale_connects(c, runner_id=None, owner=None, *, require_ready=False):
         args = (*args, owner)
     connects = rows(
         c,
-        "SELECT s.login_id,e.exit_generation,l.runner_id,coalesce(m.kind,s.kind) AS kind,s.kind AS connect_kind, "
+        "SELECT s.login_id,s.subscription_id,e.exit_generation,l.runner_id,coalesce(m.kind,s.kind) AS kind,s.kind AS connect_kind, "
         "coalesce(m.owner_id,s.owner_id) AS owner_id,s.subscription_id<>'' AND m.id IS NULL AS missing "
         "FROM subscription_connects s JOIN model_logins l ON l.id=s.login_id "
         "LEFT JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=s.login_id "
         "LEFT JOIN model_subscriptions m ON m.id=s.subscription_id "
-        f"WHERE l.runtime='claude' AND l.{ACTIVE_SQL}" + where,
+        f"WHERE l.runtime IN ('claude','codex') AND l.{ACTIVE_SQL}" + where,
         args,
     )
     return [
@@ -237,7 +237,9 @@ def _stale_connects(c, runner_id=None, owner=None, *, require_ready=False):
         for row in connects
         if row["missing"]
         or not plan_exits.matches(
-            plan_exits.routed(c, row, require_ready=require_ready, connect_kind=row["connect_kind"]),
+            plan_exits.for_connect(
+                c, row, row["subscription_id"], require_ready=require_ready, connect_kind=row["connect_kind"]
+            ),
             row["runner_id"],
             row["exit_generation"],
         )
@@ -265,7 +267,7 @@ def invalidate_routed_connects(c: Connection, owner: str) -> None:
                 "SELECT l.id FROM model_logins l JOIN subscription_connects s ON s.login_id=l.id "
                 "JOIN plan_exit_bindings e ON e.kind='connect' AND e.ref_id=l.id "
                 "LEFT JOIN model_subscriptions m ON m.id=s.subscription_id "
-                f"WHERE l.runtime='claude' AND l.{ACTIVE_SQL} AND coalesce(m.owner_id,s.owner_id)=?",
+                f"WHERE l.runtime IN ('claude','codex') AND l.{ACTIVE_SQL} AND coalesce(m.owner_id,s.owner_id)=?",
                 (owner,),
             ).fetchall()
         ),

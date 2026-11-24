@@ -114,7 +114,11 @@ impl Logins {
                 continue;
             }
             self.done.insert(id.clone(), Instant::now());
-            let mut result = read_usage(&text_of(&job["token"])).await;
+            let mut result = if job["provider"] == "codex" {
+                codex_usage(&dir, job).await
+            } else {
+                read_usage(&text_of(&job["token"])).await
+            };
             result["id"] = json!(id);
             if let Err(e) = runner
                 .client
@@ -287,12 +291,13 @@ async fn refresh(dir: &Path, job: &Value) {
     };
     let old = serde_json::from_str::<Value>(&text_of(&job["value"]))
         .ok()
-        .filter(|v| v["claudeAiOauth"]["refreshToken"].is_string());
-    let outcome = match old {
-        Some(old) => run_refresh(&work, job, &old).await.map(|new| (old, new)),
-        None => Err("failed"),
+        .unwrap_or_default();
+    let outcome = if job["provider"] == "codex" {
+        codex_refresh(&work, job, &old).await
+    } else {
+        run_refresh(&work, job, &old).await
     };
-    settle(&work, &pending, job, outcome.map(|(_, new)| new));
+    settle(&work, &pending, job, outcome);
 }
 
 /// Keep a refresh's outcome as `pending-<lease>.json`, and only then remove the lease's workspace (a crash in between
@@ -303,7 +308,12 @@ fn settle(work: &Path, pending: &Path, job: &Value, outcome: Result<Value, &'sta
     match &outcome {
         Ok(new) => {
             let text = new.to_string();
-            for secret in crate::model_subscriptions::claude_secrets(&text) {
+            let secrets = if job["provider"] == "codex" {
+                crate::model_subscriptions::secrets_in(&text)
+            } else {
+                crate::model_subscriptions::claude_secrets(&text)
+            };
+            for secret in secrets {
                 crate::redact::hide_everywhere(&secret, false);
             }
             body["state"] = json!("succeeded");
@@ -314,7 +324,7 @@ fn settle(work: &Path, pending: &Path, job: &Value, outcome: Result<Value, &'sta
     if let Err(e) = keep(pending, &body.to_string()) {
         // The workspace stays: the next poll finds the rotated login there (`recover`).
         crate::util::diagnostic(&format!(
-            "Tico runner: could not keep a refreshed Claude plan: {e}"
+            "Tico runner: could not keep a refreshed plan login: {e}"
         ));
         return;
     }
@@ -352,10 +362,14 @@ fn recover(dir: &Path) {
                 continue;
             }
             let old = serde_json::from_str::<Value>(&text_of(&job["value"])).unwrap_or_default();
-            let config = work.join(".claude");
-            let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
-            let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
-            let outcome = refreshed(&old, creds.as_deref(), settings.as_deref(), None);
+            let outcome = if job["provider"] == "codex" {
+                codex_refreshed(&work, &old, false)
+            } else {
+                let config = work.join(".claude");
+                let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
+                let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
+                refreshed(&old, creds.as_deref(), settings.as_deref(), None)
+            };
             settle(&work, &pending, &job, outcome);
         }
     }
@@ -365,6 +379,9 @@ async fn run_refresh(work: &Path, job: &Value, old: &Value) -> Result<Value, &'s
     use std::os::unix::fs::DirBuilderExt;
     let exe =
         crate::env::which("claude", &std::env::var("PATH").unwrap_or_default()).ok_or("failed")?;
+    if !old["claudeAiOauth"]["refreshToken"].is_string() {
+        return Err("failed");
+    }
     let mut oauth = old["claudeAiOauth"].as_object().cloned().ok_or("failed")?;
     oauth.insert("expiresAt".into(), json!(1000));
     let config = work.join(".claude");
@@ -417,6 +434,122 @@ async fn run_refresh(work: &Path, job: &Value, old: &Value) -> Result<Value, &'s
     let creds = std::fs::read_to_string(config.join(".credentials.json")).ok();
     let settings = std::fs::read_to_string(config.join(".claude.json")).ok();
     refreshed(old, creds.as_deref(), settings.as_deref(), status.as_ref())
+}
+
+fn codex_refreshed(work: &Path, old: &Value, signed_out: bool) -> Result<Value, &'static str> {
+    let file = crate::model_subscriptions::read_codex_auth(&work.join("auth.json"));
+    let Some(new) = file.and_then(|text| serde_json::from_str::<Value>(&text).ok()) else {
+        return Err(if signed_out { "rejected" } else { "failed" });
+    };
+    let (before, after) = (&old["tokens"], &new["tokens"]);
+    if !after["access_token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty())
+        || !after["refresh_token"]
+            .as_str()
+            .is_some_and(|token| !token.is_empty())
+        || (after["access_token"] == before["access_token"]
+            && after["refresh_token"] == before["refresh_token"])
+        || (before["account_id"].is_string() && after["account_id"] != before["account_id"])
+    {
+        return Err(if signed_out { "rejected" } else { "failed" });
+    }
+    Ok(new)
+}
+
+async fn codex_refresh(work: &Path, job: &Value, old: &Value) -> Result<Value, &'static str> {
+    if !old["tokens"]["refresh_token"]
+        .as_str()
+        .is_some_and(|token| !token.is_empty())
+    {
+        return Err("rejected");
+    }
+    keep(&work.join("job.json"), &job.to_string()).map_err(|_| "failed")?;
+    keep(&work.join("auth.json"), &old.to_string()).map_err(|_| "failed")?;
+    let result = codex_rpc(work, None, "account/read", json!({"refreshToken": true})).await;
+    codex_refreshed(work, old, result.is_ok_and(|v| v["account"].is_null()))
+}
+
+async fn codex_usage(dir: &Path, job: &Value) -> Value {
+    let home = dir
+        .join("usage")
+        .join(uuid::Uuid::new_v4().simple().to_string());
+    let result = if keep(&home.join("config.toml"), "").is_ok() {
+        let login = crate::hosts::codex::external_login(&job["token"], &job["account_id"]);
+        codex_rpc(&home, Some(login), "account/rateLimits/read", json!({})).await
+    } else {
+        Err(())
+    };
+    let _ = std::fs::remove_dir_all(home);
+    let Ok(reply) = result else {
+        return json!({"state": "failed"});
+    };
+    crate::subscription_refresh::codex_plan_windows(&reply)
+}
+
+async fn codex_rpc(
+    home: &Path,
+    login: Option<Value>,
+    method: &str,
+    params: Value,
+) -> Result<Value, ()> {
+    use crate::subscription_refresh::rpc;
+    use std::process::Stdio;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let exe = crate::env::which("codex", &std::env::var("PATH").unwrap_or_default()).ok_or(())?;
+    let mut child = tokio::process::Command::new(exe);
+    let env = std::env::vars().filter(|(key, _)| !crate::env::competing_codex_env(key));
+    let store = if login.is_some() {
+        r#"cli_auth_credentials_store="ephemeral""#
+    } else {
+        r#"cli_auth_credentials_store="file""#
+    };
+    let mut child = child
+        .args([
+            "app-server",
+            "--listen",
+            "stdio://",
+            "-c",
+            store,
+            "-c",
+            "features.plugins=false",
+            "-c",
+            "features.remote_plugin=false",
+            "-c",
+            "features.apps=false",
+            "-c",
+            "analytics.enabled=false",
+            "-c",
+            "check_for_update_on_startup=false",
+        ])
+        .env_clear()
+        .envs(env)
+        .env("HOME", home)
+        .env("CODEX_HOME", home)
+        .current_dir(home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .map_err(|_| ())?;
+    let mut stdin = child.stdin.take().ok_or(())?;
+    let mut lines = BufReader::new(child.stdout.take().ok_or(())?).lines();
+    let result = async {
+        rpc(&mut stdin, &mut lines, 1, "initialize", json!({
+            "clientInfo": {"name": "tico-keeper", "version": "0.1"}, "capabilities": {"experimentalApi": true}
+        })).await?;
+        stdin.write_all(b"{\"method\":\"initialized\",\"params\":{}}\n").await.map_err(|_| ())?;
+        if let Some(login) = login {
+            if rpc(&mut stdin, &mut lines, 2, "account/login/start", login).await?["type"] != "chatgptAuthTokens" {
+                return Err(());
+            }
+        }
+        rpc(&mut stdin, &mut lines, 3, method, params).await
+    }.await;
+    let _ = child.kill().await;
+    result
 }
 
 /// `claude-code/<version>`, as the CLI itself says it when it reads usage.

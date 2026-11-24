@@ -252,6 +252,14 @@ impl Delivered {
         self.env.is_some() || self.home_env.is_some()
     }
 
+    pub fn codex_external(&self) -> Option<Value> {
+        if self.kind != "codex_login" {
+            return None;
+        }
+        let auth: Value = serde_json::from_str(&self.value).ok()?;
+        (auth["auth_mode"] == "chatgptAuthTokens").then(|| auth["tokens"].clone())
+    }
+
     /// A plan login in a home made for each turn (TURN_HOMES), with its runtime's row.
     fn turn_home(&self) -> Option<&'static TurnHome> {
         turn_home(&self.runtime).filter(|_| self.home.is_some())
@@ -261,6 +269,7 @@ impl Delivered {
     /// the agent's shell payer, and older hubs send the computer's login. API keys pay only for their own runtime.
     fn for_shell(&self) -> bool {
         self.home.is_some()
+            && self.codex_external().is_none()
             && self.turn_home().is_none()
             && self.billing == "subscription"
             && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
@@ -650,7 +659,12 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
             .strip_prefix(&home)
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let written = place(&d.root, &home, &name, &d.value, d.revision)?;
+        let written = if d.codex_external().is_some() {
+            Folder::open(&d.root, &home, true).map_err(|_| "Cannot create Codex turn home")?;
+            d.value.clone()
+        } else {
+            place(&d.root, &home, &name, &d.value, d.revision)?
+        };
         if written != d.value {
             secrets.extend(if d.home_env.is_some() && d.turn_home().is_none() {
                 claude_secrets(&written)
@@ -1273,7 +1287,7 @@ pub fn plan_home(delivered: &[Delivered], runtime: &str) -> Option<String> {
 
 /// The file as Codex left it, when it refreshed a ChatGPT login since the turn began; None when it is as written.
 fn changed(d: &Delivered) -> Option<String> {
-    if d.kind != "codex_login" {
+    if d.kind != "codex_login" || d.codex_external().is_some() {
         return None;
     }
     let now = read_codex_auth(d.file.as_ref()?)?;
@@ -1512,6 +1526,26 @@ mod tests {
         );
         assert!(!live_logins().iter().any(|(p, _)| *p == id));
         std::fs::remove_dir_all(&state).unwrap();
+    }
+
+    #[test]
+    fn external_codex_persists_only_sessions_between_turns() {
+        let state = dir();
+        let item = json!([{
+            "id": "managed-codex", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+            "source": "attempt", "billing": "subscription", "revision": 1,
+            "value": r#"{"auth_mode":"chatgptAuthTokens","tokens":{"access_token":"synthetic","account_id":"dummy"}}"#,
+        }]);
+        let mut started = turn(&state, &item, "codex");
+        let home = started[0].home.clone().unwrap();
+        assert!(!home.join("auth.json").exists());
+        let sessions = std::fs::read_link(home.join("sessions")).unwrap();
+        assert!(sessions.is_dir());
+        assert!(!started[0].for_shell());
+        assert!(finish(&mut started).is_empty());
+        assert!(!home.exists());
+        assert!(sessions.is_dir());
+        std::fs::remove_dir_all(state).unwrap();
     }
 
     #[test]

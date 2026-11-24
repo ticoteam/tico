@@ -37,11 +37,34 @@ PAGE_SIZE = 100
 SETTING = "plan_exit_routing"
 MODEL_CAPABILITY = "model_exit_v1"
 CLAUDE_CAPABILITY = "model_exit_claude_v1"
+CODEX_CAPABILITY = "model_exit_codex_v1"
+CODEX_KIND = "codex_login"
+PLAN_KINDS = ("claude_token", "claude_login", CODEX_KIND)
 _SELECTIONS = (
     "SELECT e.person_id,e.generation,r.id,r.label,r.platform,r.capabilities,r.readiness,r.last_seen_at,"
     "r.owner_id,r.accepts_member_bots FROM plan_exits e "
     "LEFT JOIN runners_with_state r ON r.id=e.runner_id AND r.revoked_at IS NULL"
 )
+
+
+def provider(sub: Any) -> str:
+    return "codex" if sub["kind"] == CODEX_KIND else "claude"
+
+
+def carries(runner: Any, sub: Any) -> bool:
+    caps: list[str] = H._json(runner["capabilities"], []) or []
+    if sub["kind"] == CODEX_KIND:
+        ready: Row = H._json(runner["readiness"], {}) or {}
+        harnesses: Row = ready.get("harnesses") or {}
+        codex: Row = harnesses.get("codex") or {}
+        parts = str(codex.get("version") or "").split("-")[0].split(".")
+        return (
+            CODEX_CAPABILITY in caps
+            and len(parts) == 3
+            and all(p.isdecimal() for p in parts)
+            and tuple(int(p) for p in parts) >= (0, 170, 0)
+        )
+    return CLAUDE_CAPABILITY in caps
 
 
 class Route(NamedTuple):
@@ -75,12 +98,15 @@ def selections(c: Connection) -> Row:
 
 
 def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
-    if not sub or sub["kind"] not in ("claude_token", "claude_login") or not sub["owner_id"].startswith("human:"):
+    if not sub or sub["kind"] not in PLAN_KINDS or not sub["owner_id"].startswith("human:"):
         return None
     person = sub["owner_id"].removeprefix("human:")
-    if exits is None:
-        return one(c, _SELECTIONS + " WHERE e.person_id=?", (person,)) if enabled(c) else None
-    return exits.get(person)
+    if not enabled(c):
+        return None
+    row = one(c, _SELECTIONS + " WHERE e.person_id=?", (person,)) if exits is None else exits.get(person)
+    if row is None and sub["kind"] == CODEX_KIND:
+        return {"id": None, "generation": 0}
+    return row
 
 
 def routed(
@@ -100,6 +126,8 @@ def routed(
             return None
     if not require_ready:
         return Route(runner_id, generation)
+    if sub["kind"] == CODEX_KIND and not carries(exit_runner, sub):
+        return Route(None, generation)
     if (connect_kind or sub["kind"]) == "claude_login":
         from .claude_login import takes_turns
 
@@ -107,8 +135,16 @@ def routed(
             return Route(None, generation)
     ready = readiness(c, runner_id, exit_runner["readiness"])
     runtimes: Row = ready.get("runtimes") or {}
-    claude: Row = runtimes.get("claude") or {}
-    return Route(runner_id if claude.get("installed") else None, generation)
+    runtime: Row = runtimes.get(provider(sub)) or {}
+    return Route(runner_id if runtime.get("installed") else None, generation)
+
+
+def for_connect(
+    c: Connection, sub: Any, subscription_id: str, *, require_ready: bool = True, connect_kind: str | None = None
+) -> Route | None:
+    route = routed(c, sub, require_ready=require_ready, connect_kind=connect_kind)
+    # A person's first Connect can choose a computer before its new plan has an exit.
+    return None if not subscription_id and route == Route(None, 0) else route
 
 
 def matches(route: Route | None, runner_id: str | None, generation: int | None) -> bool:
@@ -135,7 +171,11 @@ def remotely_ready(c: Connection, sub: Any, route: Route) -> bool:
     if relay is None or not relay.model_online(route.runner_id):
         return False
     exit_runner = selected(c, sub)
-    return bool(exit_runner and MODEL_CAPABILITY in (H._json(exit_runner["capabilities"], []) or []))
+    return bool(
+        exit_runner
+        and MODEL_CAPABILITY in (H._json(exit_runner["capabilities"], []) or [])
+        and (sub["kind"] != CODEX_KIND or routed(c, sub) == route)
+    )
 
 
 def _visible(row: Any, auth: Any, who: Identity | None) -> bool:
@@ -155,9 +195,9 @@ def wake_payers(c: Connection, owners: list[str]) -> None:
     c.execute(
         "WITH owners AS (SELECT 'human:'||value AS id FROM json_each(?)), "
         "picks AS (SELECT p.bot FROM agent_subscriptions p JOIN owners o ON p.person=o.id "
-        "WHERE p.kind='pool' AND p.runtime='claude' "
+        "WHERE p.kind='pool' AND p.runtime IN ('claude','codex') "
         "UNION SELECT p.bot FROM agent_subscriptions p JOIN model_subscriptions s ON s.id=p.subscription_id "
-        "JOIN owners o ON o.id=s.owner_id WHERE p.kind='plan' AND p.runtime='claude') "
+        "JOIN owners o ON o.id=s.owner_id WHERE p.kind='plan' AND p.runtime IN ('claude','codex')) "
         "INSERT INTO changes(topic,kind,subject_id,bot,created_at) "
         "SELECT DISTINCT 'runner','work',a.runner_id,a.bot,? FROM picks p JOIN assignments a USING(bot)",
         (json.dumps(owners), H.now()),
@@ -178,14 +218,14 @@ def supervised(c: Connection, runner_id: str) -> bool:
     from .claude_login import platform_can_refresh
 
     return any(
-        row["has_setup_token"] or platform_can_refresh(row)
+        row["has_portable_plan"] or platform_can_refresh(row)
         for row in c.execute(
-            "SELECT r.platform, max(s.kind='claude_token') AS has_setup_token "
-            "FROM plan_exits e JOIN runners r ON r.id=e.runner_id "
+            "SELECT r.platform, max(s.kind IN ('claude_token','codex_login')) AS has_portable_plan "
+            "FROM plan_exits e JOIN runners_with_state r ON r.id=e.runner_id "
             "JOIN model_subscriptions s ON s.owner_id='human:'||e.person_id "
             "WHERE e.runner_id=? AND s.kind IN ('claude_token','claude_login','codex_login') "
-            "AND s.kind<>'codex_login' GROUP BY r.platform",
-            (runner_id,),
+            "AND (s.kind<>'codex_login' OR ? IN (SELECT value FROM json_each(r.capabilities))) GROUP BY r.platform",
+            (runner_id, CODEX_CAPABILITY),
         )
     )
 
@@ -198,7 +238,7 @@ def _clear_turn_usage(c: Connection, owner: str | None = None) -> None:
 
     c.execute(
         "INSERT INTO registry_metadata(key,value) SELECT ? || id, json_object('turn_cutover_at', ?) "
-        "FROM model_subscriptions WHERE kind IN ('claude_token','claude_login') AND owner_id GLOB 'human:*' "
+        "FROM model_subscriptions WHERE kind IN ('claude_token','claude_login','codex_login') AND owner_id GLOB 'human:*' "
         "AND (? IS NULL OR owner_id=?) "
         "ON CONFLICT(key) DO UPDATE SET value=json_set(json_remove(CASE WHEN json_valid(value) THEN value ELSE '{}' END, "
         "'$.turn_weekly', '$.turn_five_hour', '$.turn_weekly_exit', '$.turn_five_hour_exit'), "
@@ -213,25 +253,27 @@ def _fence(c: Connection, person_id: str, *, disabling: bool = False) -> None:
     owner = f"human:{person_id}"
     for sub in c.execute(
         "SELECT id,owner_id,kind,revision FROM model_subscriptions "
-        "WHERE owner_id=? AND kind IN ('claude_token','claude_login')",
+        "WHERE owner_id=? AND kind IN ('claude_token','claude_login','codex_login')",
         (owner,),
     ).fetchall():
         route = None if disabling else routed(c, sub, require_ready=False)
         for attempt in c.execute(
             "SELECT a.*,s.delivery,e.exit_generation FROM attempts a JOIN attempt_subscriptions s ON s.attempt_id=a.id "
             "JOIN runners r ON r.id=a.runner_id "
-            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.delivery<>'shell' "
             "WHERE s.subscription_id=? AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL "
             f"AND (s.delivery='model_exit' OR ({PERSONAL_RUNNER}))",
             (sub["id"],),
         ).fetchall():
             turn_route = _turn_route(c, route, attempt["runner_id"])
             remote = bool(turn_route and turn_route.runner_id != attempt["runner_id"])
-            if remote != (attempt["delivery"] == "model_exit") or (
-                (turn_route.generation if turn_route else None) != attempt["exit_generation"]
+            if (
+                (sub["kind"] == CODEX_KIND and attempt["delivery"] == "shell" and not disabling)
+                or remote != (attempt["delivery"] == "model_exit")
+                or ((turn_route.generation if turn_route else None) != attempt["exit_generation"])
             ):
                 quarantine_stops.restart(c, attempt, "The plan exit route changed")
-        if sub["kind"] == "claude_login":
+        if sub["kind"] in ("claude_login", CODEX_KIND):
             # An outstanding refresh may already have spent its single-use token. Keep the issued receipt so
             # a late success can restore the login, but require reconnect if the result never arrives.
             c.execute(
@@ -259,7 +301,9 @@ def _fence(c: Connection, person_id: str, *, disabling: bool = False) -> None:
 def set_enabled(c: Connection, on: bool, actor: str) -> None:
     if enabled(c) == on:
         return
-    exits = c.execute("SELECT person_id,runner_id FROM plan_exits").fetchall()
+    exits = c.execute(
+        "SELECT p.person_id,e.runner_id FROM (" + PLAN_OWNERS + ") p LEFT JOIN plan_exits e USING(person_id)"
+    ).fetchall()
     # Both edges invalidate claims carried across the change, even if the selected computer stays the same.
     c.execute("UPDATE plan_exits SET generation=generation+1")
     _clear_turn_usage(c)
@@ -362,6 +406,18 @@ def initialize(c: Connection) -> None:
     ).fetchall():
         if chosen := _choose(c, person_id):
             _save(c, person_id, chosen)
+    if enabled(c):
+        from . import quarantine_stops
+
+        # A hub upgraded with routing already on can still have a direct Codex turn from the previous release.
+        for attempt in c.execute(
+            "SELECT a.* FROM attempts a JOIN runners r ON r.id=a.runner_id "
+            "JOIN attempt_subscriptions s ON s.attempt_id=a.id JOIN model_subscriptions p ON p.id=s.subscription_id "
+            "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.delivery<>'shell' "
+            "WHERE p.kind='codex_login' AND p.owner_id GLOB 'human:*' AND e.ref_id IS NULL "
+            "AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL AND " + PERSONAL_RUNNER
+        ).fetchall():
+            quarantine_stops.restart(c, attempt, "The plan exit route changed")
 
 
 def _may_change(auth: Any, who: Identity, person_id: str) -> bool:

@@ -54,13 +54,17 @@ pub(crate) async fn rpc(
 }
 
 /// The weekly window from a `account/rateLimits/read` reply, as the report's fields.
-pub fn weekly(reply: &Value, now: f64) -> Value {
+fn codex_limit(reply: &Value) -> &Value {
     let buckets = &reply["rateLimitsByLimitId"];
-    let bucket = if buckets.is_object() {
+    if buckets.is_object() {
         &buckets["codex"]
     } else {
         &reply["rateLimits"]
-    };
+    }
+}
+
+pub fn weekly(reply: &Value, now: f64) -> Value {
+    let bucket = codex_limit(reply);
     if !bucket.is_object() || !(bucket["limitId"].is_null() || bucket["limitId"] == "codex") {
         return json!({"state": "unavailable"});
     }
@@ -92,15 +96,32 @@ pub fn weekly(reply: &Value, now: f64) -> Value {
            "status": if p >= 100.0 { json!("rejected") } else { Value::Null }}})
 }
 
+pub(crate) fn codex_plan_windows(reply: &Value) -> Value {
+    let week = weekly(reply, crate::util::epoch_s());
+    if week["state"] != "succeeded" {
+        return json!({"state": "failed"});
+    }
+    let bucket = codex_limit(reply);
+    let five = [&bucket["primary"], &bucket["secondary"]]
+        .into_iter()
+        .find(|w| w["windowDurationMins"] == 300)
+        .filter(|w| {
+            w["usedPercent"]
+                .as_f64()
+                .is_some_and(|p| (0.0..=100.0).contains(&p))
+        })
+        .map(|w| json!({"used_percent": w["usedPercent"], "resets_at": iso(&w["resetsAt"])}))
+        .filter(|w| w["resets_at"].is_string());
+    let seven = &week["weekly"];
+    json!({"state": "succeeded", "seven_day": {
+        "used_percent": seven["used_percent"], "resets_at": seven["resets_at"],
+    }, "five_hour": five})
+}
+
 /// Every window of a `account/rateLimits/read` reply, kept as a turn's would be (the 5-hour one included), with
 /// its plan.
 pub(crate) fn remember_windows(profile: &str, reply: &Value) {
-    let buckets = &reply["rateLimitsByLimitId"];
-    let bucket = if buckets.is_object() {
-        &buckets["codex"]
-    } else {
-        &reply["rateLimits"]
-    };
+    let bucket = codex_limit(reply);
     if !bucket.is_object() || !(bucket["limitId"].is_null() || bucket["limitId"] == "codex") {
         return;
     }
