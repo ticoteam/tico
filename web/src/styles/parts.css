@@ -190,7 +190,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .msg li::marker{color:var(--faint)}
 .msg.is-live p{color:var(--muted)}
 .msg.is-mine{justify-content:flex-end;align-items:flex-start}
-.msg.is-mine time{margin-top:9px}
+.msg-via{font-size:var(--t-xs);color:var(--muted);white-space:nowrap}
 .mine-col{display:flex;flex-direction:column;align-items:flex-end;max-width:84%}
 .bubble{background:var(--bubble);border-radius:14px 14px 4px 14px;padding:7px 12px}
 .msg pre{margin-top:8px;padding:10px 12px;border-radius:10px;background:var(--well);color:var(--ink-2);font-family:var(--font-code);font-size:var(--t-xs);font-weight:var(--w-text);line-height:var(--lh-code);font-feature-settings:normal;overflow:auto;scrollbar-width:none}
