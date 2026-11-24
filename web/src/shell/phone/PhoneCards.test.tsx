@@ -1,12 +1,12 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation, useRouter } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
 import { Dock } from '@/kit/Dock';
 import { useCards } from '@/kit/Popover';
-import { forgetPlaces, leaveTask, notePlace } from '@/lib';
+import { forgetPlaces } from '@/lib';
 import { arrangementFor } from '@/shell/arrangement';
 import { Frame, foldSheet } from '@/shell/Frame';
 import { Sheet } from '@/shell/Sheet';
@@ -67,23 +67,6 @@ describe('the phone’s bar', () => {
     expect(current()).toEqual(['Company']);
   });
 
-  it('on a task with its agent: all five, the task current; Agent raises the chat, Task brings the task back, Company leaves it', () => {
-    const leave = vi.fn();
-    render(cards({ page: <h1>Fix the export</h1>, chat: <p>Owner's chat</p>, tucked: true, labels: {}, onLeave: leave }));
-    expect(icons()).toEqual(['Search', 'Tico', 'Company', 'Agent', 'Task']);
-    expect(current()).toEqual(['Task']);
-    fireEvent.click(icon('Agent'));
-    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
-    expect(current()).toEqual(['Agent']);
-    fireEvent.click(icon('Task'));
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(current()).toEqual(['Task']);
-    fireEvent.click(icon('Tico'));
-    fireEvent.click(icon('Company'));
-    expect(leave).toHaveBeenCalledOnce();
-    expect(up()).toBe('none');
-  });
-
   it('Company brings the page back from Tico and from the chat; on the page it opens the menu, and again puts it away', () => {
     render(cards({ chat: <p>Owner's chat</p>, tucked: true }));
     fireEvent.click(icon('Tico'));
@@ -111,28 +94,6 @@ describe('the phone’s bar', () => {
     expect(window.history.state).toBeNull();
   });
 
-  it('with the chat up over a task, closing the task (an answer) steps back to the list it was opened from', async () => {
-    window.history.replaceState(null, '', '/tasks/eng');
-    function Shell() {
-      const onTask = useLocation({ select: (l) => l.pathname !== '/tasks/eng' });
-      return cards({ page: <h1>{onTask ? 'Fix the export' : 'Board'}</h1>, chat: onTask ? <p>Owner's chat</p> : undefined, tucked: true, labels: {}, onLeave: onTask ? () => {} : undefined });
-    }
-    const router = createRouter({ routeTree: createRootRoute({ component: Shell }) });
-    // as the shell does: each address shown is noted, with its step in the history
-    const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
-    router.subscribe('onResolved', (e) => note(e.toLocation));
-    render(<RouterProvider router={router} />);
-    await screen.findByRole('heading', { name: 'Board' });
-    note(router.state.location);
-    await act(() => router.navigate({ to: '/tasks/eng/7' as never }));
-    await screen.findByRole('heading', { name: 'Fix the export' });
-    fireEvent.click(icon('Agent'));
-    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
-    act(() => leaveTask(router, () => 'eng'));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/eng'));
-    expect(await screen.findByRole('heading', { name: 'Board' })).toBeTruthy();
-  });
-
   it('what the page docks (a task’s decision) stands above the bar, outside the page: in reach with the chat up', () => {
     render(
       cards({
@@ -147,7 +108,6 @@ describe('the phone’s bar', () => {
         chat: <p>Owner's chat</p>,
         tucked: true,
         labels: {},
-        onLeave: () => {},
       }),
     );
     fireEvent.click(icon('Agent'));
@@ -217,30 +177,14 @@ describe('the phone’s chat card', () => {
     expect(icons()).toEqual(['Search', 'Tico', 'Company']);
   });
 
-  it('a page’s own chat comes up when it waits on the person there, and stays up once that is answered', () => {
-    const { rerender } = render(cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {} }));
+  it('is set again when its key (the page owner’s address) changes; a raise holds until then', () => {
+    const at = (key: string) => cards({ chat: <p>Owner's chat</p>, tucked: true, chatKey: key });
+    const { rerender } = render(at('/company'));
     expect(up()).toBe('none');
-    rerender(cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {}, raiseChat: true }));
-    expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
-    rerender(cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {} }));
-    expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
-  });
-
-  it('is set again when its key (the open task, the chat its address names) changes; a tuck holds until then', () => {
-    const at = (key: string, raiseChat = false) => cards({ chat: <p>Owner's chat</p>, tucked: true, onLeave: () => {}, chatKey: key, raiseChat });
-    const { rerender } = render(at('7', true));
+    fireEvent.click(icon('Finance Owner'));
+    rerender(at('/company'));
     expect(up()).toBe('chat');
-    fireEvent.click(icon('Task'));
-    rerender(at('7', true));
-    expect(up()).toBe('none');
-    // another task whose chat waits on the person too
-    rerender(at('8', true));
-    expect(up()).toBe('chat');
-    // back to the first: set again from it
-    fireEvent.click(icon('Task'));
-    rerender(at('7', true));
-    expect(up()).toBe('chat');
-    rerender(at('9'));
+    rerender(at('/company/finance'));
     expect(up()).toBe('none');
   });
 
@@ -333,7 +277,7 @@ describe('the phone’s chat card', () => {
   });
 });
 
-/* The shell as the root draws it on a phone: the arrangement from the address, a task's chat with an open task. */
+/* The shell as the root draws it on a phone: the arrangement from the address, a second chat when it names one. */
 function PhoneShell() {
   const path = useLocation({ select: (l) => l.pathname });
   const search = useLocation({ select: (l) => l.search as Record<string, unknown> });
@@ -345,12 +289,11 @@ function PhoneShell() {
       menu={<nav aria-label="Main" />}
       page={
         <Sheet kind="page" label="Page">
-          <h1>{arr === 'task' ? 'Fix the export' : arr === 'call' ? 'Pricing review' : 'Tasks'}</h1>
+          <h1>{arr === 'call' ? 'Pricing review' : 'Tasks'}</h1>
         </Sheet>
       }
-      chat={arr === 'task' || arr === 'chat' ? <Sheet kind="chat" label="Chat" /> : undefined}
+      chat={arr === 'chat' ? <Sheet kind="chat" label="Chat" /> : undefined}
       trail={[{ label: 'Fernhill', to: '/' }, { label: 'Tasks' }]}
-      onLeave={() => {}}
     />
   );
 }
@@ -382,33 +325,6 @@ describe('phone: the frame', () => {
     expect(document.querySelector('.phone')).toBeTruthy();
     act(() => foldSheet('tico', false));
     expect(up()).toBe('tico');
-  });
-
-  it('a task opened by its own address shows its head, its chat behind the Agent icon; no trail over it', async () => {
-    onPhone(PhoneShell, '/tasks/eng/t1');
-    expect(await screen.findByRole('heading', { name: 'Fix the export' })).toBeTruthy();
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(icons()).toEqual(['Search', 'Tico', 'Company', 'Agent', 'Task']);
-    expect(current()).toEqual(['Task']);
-    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
-    fireEvent.click(icon('Agent'));
-    expect(screen.getByRole('dialog', { name: 'Agent' })).toBeTruthy();
-  });
-
-  it('a board has no Task icon, and opening a task from it keeps the chat down', async () => {
-    const router = onPhone(PhoneShell, '/tasks/eng');
-    expect(await screen.findByRole('heading', { name: 'Tasks' })).toBeTruthy();
-    expect(icons()).toEqual(['Search', 'Tico', 'Company']);
-    await act(() => router.navigate({ to: '/tasks/eng/t1' as never }));
-    expect(await screen.findByRole('heading', { name: 'Fix the export' })).toBeTruthy();
-    expect(screen.queryByRole('dialog')).toBeNull();
-    expect(current()).toEqual(['Task']);
-  });
-
-  it('an address that names the chat opens with it up, a task’s and a page’s alike', async () => {
-    onPhone(PhoneShell, '/tasks/eng/t1?chat=agent:builder');
-    expect(await screen.findByRole('dialog', { name: 'Agent' })).toBeTruthy();
-    expect(current()).toEqual(['Agent']);
   });
 
   it('a page with a second chat in its address still opens on the chat (A1)', async () => {

@@ -14,7 +14,6 @@ const ARRS: [string, ArrangementSpec][] = [
   ['chat + panel', { name: 'chat', panel: true }],
   ['panel only', { name: 'chat', chat: false, panel: true }],
   ['agent', 'agent'],
-  ['task', 'task'],
   ['call', 'call'],
 ];
 
@@ -25,20 +24,18 @@ const TABLE: Record<string, Record<number, string>> = {
   'chat + panel': { 2560: '300, 248, 320, 1300, 344', 1440: '300, 248, 320, 488, edge', 1280: '400, 331, 429, edge, edge', 1024: '475, 393, edge, edge, edge' },
   'panel only': { 1728: '300, 248, 796, 344', 1440: '300, 248, 508, 344', 1280: '300, 248, 656, edge', 1024: 'edge, 248, 664, edge' },
   agent: { 1920: '300, 248, 972, 360', 1440: '300, 248, 492, 360', 1360: 'edge, 248, 676, 360', 1100: 'edge, edge, 628, 360', 800: 'edge, edge, edge, 652' },
-  task: { 1920: '300, 288, 392, 900', 1728: '300, 288, 392, 708', 1440: 'edge, 288, 392, 684', 1024: 'edge, edge, 392, 520', 900: 'edge, edge, edge, 752' },
   call: { 1920: 'edge, edge, 1424, 384', 1024: 'edge, edge, 528, 384', 900: 'edge, edge, 752, edge' },
 };
 
 // the window width under which each sheet tucks, in order, at default sizes. A view a thread leads (a page with a
 // second chat): the page under the thread first, then the thread under the company, then the company under Tico. A view
-// the address opens a page, a task or an agent's page in: that sheet stays; the ones above it collapse, Tico first.
+// the address opens a page or an agent's page in: that sheet stays; the ones above it collapse, Tico first.
 const TUCKS: Record<string, [SheetId, number][]> = {
   page: [['tico', 1080], ['menu', 840]],
   chat: [['page', 1388], ['chat', 1080], ['menu', 840]],
   'chat + panel': [['panel', 1740], ['page', 1432], ['chat', 1080], ['menu', 840]],
   'panel only': [['panel', 1412], ['tico', 1104], ['menu', 840]],
   agent: [['tico', 1428], ['menu', 1164], ['chat', 952]],
-  task: [['tico', 1500], ['list', 1236], ['chat', 984]],
   call: [['side', 976]],
 };
 
@@ -64,15 +61,7 @@ describe('layout', () => {
     expect(seen).toEqual(TUCKS[name]);
   });
 
-  it('shows the task on a 1440 laptop: the task stays open, Tico collapses to its edge, the task’s chat stays', () => {
-    const L = layout(1440, 'task', {});
-    expect(sheet(L, 'page')).toMatchObject({ state: 'open' });
-    expect(sheet(L, 'page').width).toBeGreaterThanOrEqual(C.FLOOR);
-    expect(sheet(L, 'tico')).toMatchObject({ state: 'tucked', width: C.EDGE });
-    expect(sheet(L, 'list').state).toBe('open');
-    expect(sheet(L, 'chat').state).toBe('open');
-    expect(L.sheets.map(s => s.z)).toEqual([4, 3, 2, 1]); // the order and stacking stay
-    // an agent's page and settings lead the same way; a page with a second chat narrows from the right
+  it("leads with what the address opens: an agent's page and settings stay; a page with a second chat narrows from the right", () => {
     expect(sheet(layout(1280, 'agent', {}), 'widgets').state).toBe('open');
     expect(sheet(layout(1280, 'agent', {}), 'tico').state).toBe('tucked');
     expect(sheet(layout(1280, 'chat', {}), 'page').state).toBe('tucked');
@@ -97,7 +86,7 @@ describe('layout', () => {
   });
 
   it('fills the window with what shows, for the largest saved sizes', () => {
-    const big: Saved = { tico: 480, page: { w: { menu: 320 } }, chat: { fold: { menu: false, tico: false }, w: { chat: 520, panel: 480, menu: 320 } }, agent: { w: { widgets: 480, menu: 320 } }, task: { fold: { tico: false }, w: { list: 400, chat: 520 } }, call: { fold: { tico: false }, w: { side: 520 } } };
+    const big: Saved = { tico: 480, page: { w: { menu: 320 } }, chat: { fold: { menu: false, tico: false }, w: { chat: 520, panel: 480, menu: 320 } }, agent: { w: { widgets: 480, menu: 320 } }, call: { fold: { tico: false }, w: { side: 520 } } };
     for (let W = 761; W <= 2600; W += 7) {
       for (const [, arr] of ARRS) {
         const L = layout(W, arr, big);
@@ -156,7 +145,7 @@ describe('layout', () => {
   it("keeps Tico's and the menu's width and fold as one value: going deeper never opens or resizes them", () => {
     for (const n of ['page', 'chat', 'agent'] as const) expect(sheet(layout(1920, n, { tico: 340 }), 'tico').width).toBe(340);
     for (const n of ['page', 'chat', 'agent'] as const) expect(sheet(layout(1920, n, { menu: 300 }), 'menu').width).toBe(300);
-    for (const n of ['page', 'chat', 'agent', 'task'] as const) {
+    for (const n of ['page', 'chat', 'agent'] as const) {
       expect(sheet(layout(1920, n, { fold: { tico: true } }), 'tico').state).toBe('fold');
       expect(sheet(layout(1920, n, { fold: { tico: true } }), 'tico').width).toBe(C.EDGE);
     }

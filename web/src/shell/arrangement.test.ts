@@ -5,10 +5,9 @@ describe('arrangementFor', () => {
   it('reads the arrangement from the address', () => {
     expect(arrangementFor('/next/tasks')).toBe('page');
     expect(arrangementFor('/tasks/p1')).toBe('page');
-    expect(arrangementFor('/tasks/p1/12')).toBe('task');
-    expect(arrangementFor('/tasks/p1/12/details')).toBe('task');
+    // a task opens over the page (the task modal): its old addresses are pages on their way there
+    expect(arrangementFor('/tasks/p1/12')).toBe('page');
     expect(arrangementFor('/tasks/p1/edit')).toBe('page');
-    expect(arrangementFor('/task/12')).toBe('task');
     expect(arrangementFor('/call/r1')).toBe('call');
     expect(arrangementFor('/company', { chat: 'agent:qa' })).toBe('chat');
   });

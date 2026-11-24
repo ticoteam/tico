@@ -7,7 +7,7 @@ import { ActionsRoot } from '@/actions';
 import type * as conversations from '@/conversation';
 import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, notePlace } from '@/lib';
+import { forgetPlaces, notePlace, openOf, openTasksOver } from '@/lib';
 import { holdName } from './Held';
 import type { Hold } from './holds';
 import type { TaskData } from './queries';
@@ -15,8 +15,9 @@ import { TaskChat, TaskPage } from './TaskPage';
 
 /** The task, drawn only while the address is the task's: the list it was opened from is another page. */
 function OnTask() {
-  const path = useLocation({ select: (l) => l.pathname });
-  return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+  // the task over the page while the address names it, as the task modal draws it
+  const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+  return open === '12' ? <TaskPage task="12" pipeline="p1" /> : null;
 }
 
 /* A rule's review task ("Held by: <rule>"): the decision box shows what the rule held and is answered with Send anyway
@@ -129,6 +130,7 @@ function show(node: ReactNode, at: string) {
     ),
   });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  openTasksOver(router);
   const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
   note(router.state.location);
   router.subscribe('onResolved', (e) => note(e.toLocation));

@@ -5,6 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
+import { coldOf, coldPage, openTasksOver } from '@/lib';
 import { useFollow } from '@/live/follow';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask } from './routing';
@@ -34,6 +35,16 @@ function serve(reply: (url: string, method: string, body: Record<string, unknown
   });
 }
 
+/** The task over its board as a cold link opens it (lib taskAddress), with the app's router opening tasks over it. */
+function over(at: string): string {
+  const [path = '', query = ''] = at.split('?');
+  const words = Object.fromEntries(new URLSearchParams(query));
+  const cold = coldOf(path, words);
+  if (!cold) return at;
+  const to = coldPage(cold, words);
+  return `${to.to}?${new URLSearchParams(Object.entries(to.search).map(([k, v]) => [k, String(v)]))}`;
+}
+
 function show(node: ReactNode, at = '/tasks/p1/12') {
   // The shell's ActionsRoot lends the router to the action layer: a control's press runs through it.
   const root = createRootRoute({
@@ -44,7 +55,8 @@ function show(node: ReactNode, at = '/tasks/p1/12') {
       </>
     ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [over(at)] }) });
+  openTasksOver(router);
   render(
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
@@ -486,7 +498,7 @@ describe('one open task', () => {
     expect(within(await screen.findByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
     expect(calls.some((c) => c.includes('/threads/room/timeline') && c.includes('session=bot%3Ar2'))).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Back to comments' }));
-    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    await waitFor(() => expect(router.state.location.search).toEqual({ task: 12, list: 'p1', 'task.tab': 'chat' }));
     expect(await screen.findByRole('textbox', { name: 'Add a comment' })).toBeTruthy();
   });
 
@@ -777,7 +789,7 @@ describe('a page’s versions, a new page and a picture', () => {
     const changes = await screen.findByRole('button', { name: 'No changes' });
     expect(changes.getAttribute('aria-pressed')).toBe('true');
     fireEvent.click(changes);
-    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('vs'));
+    await waitFor(() => expect(Object.keys(router.state.location.search)).not.toContain('task.vs'));
   });
 
   it('writes a new page from Add and opens it @s79', async () => {
@@ -870,7 +882,7 @@ describe('the task’s More menu', () => {
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to: 'reopen', why: 'Still broken' } }));
   });
 
-  it('moves the task to another pipeline and copies its link @s58', async () => {
+  it('moves the task to another pipeline and copies its link, staying on it @s58', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     serve((url) => (url.endsWith('/move') ? { status: 200, body: { task: task({ pipeline_id: 'p2', stage_id: 'o1' }) } } : undefined));
@@ -885,7 +897,8 @@ describe('the task’s More menu', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Move to Ops' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }));
     await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1/move', body: { to_pipeline: 'p2' } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p2/12'));
+    // the task stays open where it is: its new pipeline is its own business
+    expect(router.state.location.search).toMatchObject({ task: 12 });
   });
 });
 
@@ -1147,7 +1160,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await screen.findByRole('dialog', { name: 'Upload a file' });
     fireEvent.change(screen.getByLabelText('Files to add'), { target: { files: [new File(['hi'], 'notes.txt', { type: 'text/plain' })] } });
     await waitFor(() => expect(calls).toContain('POST /api/v2/tasks/t1/files'));
-    await waitFor(() => expect((router.state.location.search as { file?: string }).file).toBe('f9'));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('f9'));
   });
 
   it('links a page from elsewhere to the task', async () => {
@@ -1181,7 +1194,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await lastMore();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove file' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/files/f9', method: 'PATCH', body: { archived: true } }));
-    await waitFor(() => expect((router.state.location.search as { file?: string }).file).toBeUndefined());
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
   });
 
   describe('archived files', () => {
@@ -1211,8 +1224,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
       expect(screen.queryByRole('link', { name: 'Letter draft' })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'Archive (1)' }));
       fireEvent.click(await screen.findByRole('menuitem', { name: 'Letter draft' }));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
-      expect((router.state.location.search as { file?: string }).file).toBe('f7');
+      await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'details', 'task.file': 'f7' }));
     });
 
     it('open and restore from their own ⋯', async () => {
@@ -1287,7 +1299,7 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await lastMore();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/pages/f2', method: 'PATCH', body: { archived: true } }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ task: 12, 'task.tab': 'details' }));
   });
 
   it('a page’s ⋯ deletes the page for good only after asking', async () => {

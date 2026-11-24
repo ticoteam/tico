@@ -10,7 +10,7 @@ import { sendMessage } from '@/conversation';
 import { keys, queryClient } from '@/data';
 import { matterWhen } from '@/features/company/exports';
 import { Toasts } from '@/kit/Toast';
-import { forgetPlaces, noteList, notePlace, pressListRow, type ListRow } from '@/lib';
+import { coldOf, coldPage, forgetPlaces, hearListClicks, noteList, notePlace, openOf, openTasksOver, pageSearch, type ListRow } from '@/lib';
 import { useFollow } from '@/live/follow';
 // eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
 import { dispatch, installPatchers } from '@/live/patch';
@@ -118,6 +118,45 @@ afterEach(() => {
   vi.mocked(sendMessage).mockClear();
 });
 
+/** A task's old address as a cold link opens it: over its board (lib taskAddress). */
+function over(at: string): string {
+  const [path = '', query = ''] = at.split('?');
+  const words = Object.fromEntries(new URLSearchParams(query));
+  const cold = coldOf(path, words);
+  if (!cold) return at;
+  const to = coldPage(cold, words);
+  return `${to.to}?${new URLSearchParams(Object.entries(to.search).map(([k, v]) => [k, String(v)]))}`;
+}
+
+/** Where the person is, read as the task's own address would name it (`/tasks/<pipeline>/<n>/<tab>` and its words, the
+    page's beside them) while a task is open over a page; the page's address once none is. */
+function was(r: { state: { location: { pathname: string; search: unknown; searchStr: string; href: string } } }) {
+  const l = r.state.location;
+  const open = openOf(l.search as Record<string, unknown>);
+  if (!open) return l;
+  const { tab, ...words } = open.words;
+  const pipeline = /^\/tasks\/([^/]+)/.exec(l.pathname)?.[1] ?? shown.pipeline_id;
+  const pathname = `/tasks/${pipeline}/${open.task}${tab ? `/${tab}` : ''}`;
+  const search: Record<string, unknown> = { ...pageSearch(l.search as Record<string, unknown>), ...words };
+  const query = new URLSearchParams(Object.entries(search).map(([k, v]) => [k, String(v)])).toString();
+  const searchStr = query ? `?${query}` : '';
+  return { pathname, search, searchStr, href: pathname + searchStr };
+}
+
+/** A press on a task's card on its board (in the board's `data-list`), as the board draws it. */
+function pressCard(router: { navigate: (o: { href: string }) => Promise<void> }, href: string, list: string): Promise<void> {
+  const board = document.createElement('div');
+  board.dataset.list = list;
+  const card = document.createElement('a');
+  let went: Promise<void> = Promise.resolve();
+  card.addEventListener('click', () => (went = router.navigate({ href })));
+  board.append(card);
+  document.body.append(board);
+  card.click();
+  board.remove();
+  return went;
+}
+
 function show(node: ReactNode, at: string) {
   const root = createRootRoute({
     component: () => (
@@ -128,8 +167,10 @@ function show(node: ReactNode, at: string) {
       </>
     ),
   });
-  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [at] }) });
-  // as the shell does: each address shown is noted, so closing a task goes back to where it was opened from
+  const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: [over(at)] }) });
+  // as the app does: a task opens over the page it was opened on, and each address shown is noted (a board's words)
+  openTasksOver(router);
+  hearListClicks(document);
   const note = (l: typeof router.state.location) => notePlace(l.pathname, l.searchStr, l.search as Record<string, unknown>, l.state);
   note(router.state.location);
   router.subscribe('onResolved', (e) => note(e.toLocation));
@@ -164,7 +205,7 @@ describe('the thing is the first tab', () => {
     shown = task({ documents: [{ file_id: 'd1', name: 'Notes', kind: 'markdown', version: 1 }] as never, to_leave: [req({ shows: ['file:f9@1'], line: 'OK the brief?' })] });
     reply = (url) => (url.endsWith('/files?all=1') ? { body: { files: [brief] } } : url.endsWith('/oks/r1') ? { body: { subject: 'file:f9@1', shown_hash: 'h1', content: {} } } : null);
     const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/brief'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/brief'));
     const tabs = screen.getByRole('navigation', { name: 'Reply to the late-delivery claim pages' });
     const first = tabs.querySelector('.doc-tab') as HTMLElement;
     expect(first.textContent).toBe('Brief');
@@ -202,7 +243,7 @@ describe('the thing is the first tab', () => {
       </>,
       '/tasks/p1/12',
     );
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/declaration-pdf'));
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     expect(within(box).getByText('Review running')).toBeTruthy();
@@ -223,7 +264,7 @@ describe('the thing is the first tab', () => {
       </>,
       '/tasks/p1/12',
     );
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/declaration-pdf'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/declaration-pdf'));
     expect(await screen.findByRole('region', { name: 'declaration.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f9?v=1');
     // an older version is read, not signed
@@ -247,7 +288,7 @@ describe('the thing is the first tab', () => {
       '/tasks/p1/12',
     );
     // the email's OK came first: its tab opens first, and the file's tab waits on the person too
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
     const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
     expect((await within(tabs).findByRole('link', { name: /declaration/ })).querySelector('.dot')).toBeTruthy();
     cleanup();
@@ -297,15 +338,15 @@ describe('the thing is the first tab', () => {
     const own = tabs.querySelector('[data-target="task-tab:b-pdf"]') as HTMLElement;
     expect(new URL(own.getAttribute('href') ?? '', 'http://x').searchParams.get('ask')).toBe('r3');
     fireEvent.click(own);
-    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r3'));
+    await waitFor(() => expect((was(router).search as { ask?: string }).ask).toBe('r3'));
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     fireEvent.click(await ready(box));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/asks/r3/ok', body: { shown_hash: 'h-b2' } }));
     // then the next ask waiting (r1) opens for itself, its tab, the thread beside it kept
-    await waitFor(() => expect((router.state.location.search as { ask?: string }).ask).toBe('r1'));
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/a-pdf');
-    expect(router.state.location.searchStr).toContain('chat=agent');
-    expect(router.state.location.searchStr).not.toContain('vs='); // the next page at its own pinned version
+    await waitFor(() => expect((was(router).search as { ask?: string }).ask).toBe('r1'));
+    expect(was(router).pathname).toBe('/tasks/p1/12/a-pdf');
+    expect(was(router).searchStr).toContain('chat=agent');
+    expect(was(router).searchStr).not.toContain('vs='); // the next page at its own pinned version
   });
 
   it('when the next ask after a file’s is an email’s, its Email tab opens, the thread kept and the answered ask gone @approvals', async () => {
@@ -331,8 +372,8 @@ describe('the thing is the first tab', () => {
     expect(await screen.findByRole('region', { name: 'b.pdf' })).toBeTruthy();
     const box = within(screen.getByRole('region', { name: 'Chat with Legal Owner' })).getByRole('region', { name: 'The decision' });
     fireEvent.click(await ready(box));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/email'));
-    const params = new URLSearchParams(router.state.location.searchStr);
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/email'));
+    const params = new URLSearchParams(was(router).searchStr);
     expect([params.get('chat'), params.get('via'), params.get('ask'), params.get('vs')]).toEqual(['agent:lo', 'thread', null, null]);
   });
 
@@ -359,7 +400,7 @@ describe('the thing is the first tab', () => {
     expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy();
     expect(screen.getByRole('region', { name: 'b.pdf' })).toBeTruthy();
     expect(pdfRead.at(-1)).toBe('/api/v2/files/f8?v=2');
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/b-pdf');
+    expect(was(router).pathname).toBe('/tasks/p1/12/b-pdf');
   });
 
   it('on a computer, opened beside the thread it came from (`?chat=`), the page holds its own Approve @approvals', async () => {
@@ -410,7 +451,7 @@ describe('the thing is the first tab', () => {
           ? { body: { versions: [{ version: 1, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }, { version: 2, current: true, mime: 'application/pdf', name: 'declaration.pdf', size: 10 }] } }
           : null;
     const router = show(<TaskPage task="12" pipeline="p1" />, '/tasks/p1/12');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/file'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/file'));
     const tabs = screen.getByRole('navigation', { name: 'Search warrant pages' });
     await waitFor(() => expect((tabs.querySelector('.doc-tab') as HTMLElement).textContent).toBe('Declaration'));
     await waitFor(() => expect(pdfRead.at(-1)).toBe('/api/v2/files/x9/versions/1'));
@@ -714,8 +755,9 @@ describe('the decision', () => {
 
   /** The task, drawn only while the address is the task's: the list it was opened from is another page. */
   function OnTask() {
-    const path = useLocation({ select: (l) => l.pathname });
-    return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+    // the task over the page while the address names it, as the task modal draws it
+    const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
+    return open === '12' ? <TaskPage task="12" pipeline="p1" /> : null;
   }
   const approved = (more: Partial<TaskData> = {}) => {
     reply = (url, method) => (method === 'POST' && url.endsWith('/asks/r1/ok') ? { body: { task: task({ to_leave: [req({ met: true, may: [] })], ...more }), answer_id: 'a9' } } : null);
@@ -727,8 +769,8 @@ describe('the decision', () => {
     const router = show(<OnTask />, '/needs-you?view=all');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
-    expect(router.state.location.search).toEqual({ view: 'all' });
+    await waitFor(() => expect(was(router).pathname).toBe('/needs-you'));
+    expect(was(router).search).toEqual({ view: 'all' });
     // stepped back, not pushed: the list is where it was in the history
     expect(router.history.canGoBack()).toBe(false);
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
@@ -741,7 +783,7 @@ describe('the decision', () => {
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
   });
 
   it('Approve stays on the task while Needs you still names it for something else (a paid render to reconcile) @approvals', async () => {
@@ -753,7 +795,7 @@ describe('the decision', () => {
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
     expect((queryClient.getQueryData(['flow']) as { task_ids: string[] }).task_ids).toEqual(['t1']);
   });
 
@@ -827,7 +869,7 @@ describe('the decision', () => {
     };
     const taken = async (router: { state: { location: { pathname: string } } }) => {
       take();
-      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await act(async () => {});
     };
     const readAgain = (key: string[]) => act(() => void queryClient.refetchQueries({ queryKey: key, exact: true }));
@@ -847,7 +889,7 @@ describe('the decision', () => {
       told = 4; // more came in meanwhile: the badge says what the server counts now
       reads.list = reads.count = 0;
       take();
-      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await waitFor(() => expect(count()).toBe(4));
       expect(reads).toEqual({ list: 0, count: 1 });
     });
@@ -887,14 +929,14 @@ describe('the decision', () => {
     const router = show(<OnTask />, '/needs-you');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+    await waitFor(() => expect(was(router).pathname).toBe('/needs-you'));
   });
 
   it('Back closes the task: to the list it was opened from, else its board @approvals', async () => {
     const router = show(<OnTask />, '/needs-you?view=all');
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(router.state.location.href).toBe('/needs-you?view=all'));
+    await waitFor(() => expect(was(router).href).toBe('/needs-you?view=all'));
     expect(router.history.canGoBack()).toBe(false);
     cleanup();
     forgetPlaces();
@@ -902,7 +944,7 @@ describe('the decision', () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p1', name: 'Legal', stages: [] }] as never);
     const direct = show(<OnTask />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(direct.state.location.pathname).toBe('/tasks/p1'));
+    await waitFor(() => expect(was(direct).pathname).toBe('/tasks/p1'));
   });
 
   it('Back from a link before the pipelines are read waits for them to pick the board @approvals', async () => {
@@ -912,16 +954,16 @@ describe('the decision', () => {
     const router = show(<OnTask />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
     await act(async () => {});
-    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect(was(router).pathname).toMatch(/^\/tasks\/p1\/12/);
     give();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1'));
   });
 
   it('Back from a link to a task whose pipeline is retired goes to Tasks, not a board that is gone @approvals', async () => {
     queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
     const router = show(<OnTask />, '/tasks/p1/12');
     fireEvent.click(await screen.findByRole('button', { name: 'Back' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks'));
   });
 
   it('opened from a thread, ✕ closes the task back to that thread, even after another tab was opened @approvals', async () => {
@@ -931,7 +973,7 @@ describe('the decision', () => {
     await act(() => router.navigate({ href: '/tasks/p1/12/details?chat=agent%3Alo&via=thread' }));
     await waitFor(() => expect(document.querySelector('.pk-head .pk-close')).toBeTruthy());
     fireEvent.click(document.querySelector('.pk-head .pk-close') as HTMLElement);
-    await waitFor(() => expect(router.state.location.pathname).toBe('/team/lo'));
+    await waitFor(() => expect(was(router).pathname).toBe('/team/lo'));
     expect(router.history.canGoBack()).toBe(false);
   });
 
@@ -942,7 +984,7 @@ describe('the decision', () => {
     await act(() => router.navigate({ href: '/tasks/p1/12' }));
     fireEvent.click(await ready(await decision()));
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/details'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/details'));
     // a page to approve arrives with the stream
     const page = req({ requirement_id: 'r2', kind: 'page', line: 'Review page', shows: [], approval: { document: 'Review page', file_id: 'd1', version: 1, visit_id: 'v1', unchecked: false } } as Partial<TaskRequirement>);
     act(() =>
@@ -952,7 +994,7 @@ describe('the decision', () => {
     );
     expect(await screen.findByRole('link', { name: /Review page/ })).toBeTruthy();
     await act(async () => {});
-    expect(router.state.location.pathname).toBe('/tasks/p1/12/details');
+    expect(was(router).pathname).toBe('/tasks/p1/12/details');
   });
 
   it('Request changes is a message to the agent in its chat, and marks the request Changes asked @approvals', async () => {
@@ -1146,7 +1188,7 @@ describe('an email waiting to send', () => {
     await act(async () => refuse());
     expect(await within(box).findByText('This OK is no longer asked.')).toBeTruthy(); // held on its email, to say why
     await act(() => router.navigate({ to: '/tasks/p1/12/notes' as never }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1/12/notes'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p1/12/notes'));
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
   });
 
@@ -1344,7 +1386,7 @@ describe('on a phone, the decision holds the bottom', () => {
       // the page opens on what waits (the email), its decision docked; the address stays the chat's, for a reload
       await waitFor(() => expect(within(docked() as HTMLElement).getByRole('region', { name: 'The decision' })).toBeTruthy());
       expect(await screen.findByText('Dear Ms. Ruiz, our response is attached.')).toBeTruthy();
-      expect(router.state.location.pathname).toBe('/tasks/p1/12/chat');
+      expect(was(router).pathname).toBe('/tasks/p1/12/chat');
       expect(screen.queryByRole('link', { name: 'Chat' })).toBeNull();
       expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
     } finally {
@@ -1369,7 +1411,7 @@ describe('the matter shows the email that waits on the person', () => {
   it('opens on the email: its brief, then the decision of its "Send:" sub-task, then the email, Approve bound to what was shown @approvals', async () => {
     serve(matter({ note: 'Dana Ruiz wants a refund for a late delivery.' } as Partial<TaskData>), [{ id: 't1', title: sub.title, status: 'open', owner_id: 'bot:lo' }]);
     const router = show(<TaskPage task="40" pipeline="p9" />, '/tasks/p9/40');
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p9/40/email'));
     const brief = await screen.findByRole('region', { name: 'Brief' });
     const box = await decision();
     const env = await screen.findByText('Dear Ms. Ruiz, our response is attached.');
@@ -1412,7 +1454,7 @@ describe('the matter shows the email that waits on the person', () => {
     expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull();
     fireEvent.click(within(pointer).getByRole('button', { name: 'Open' }));
     // the Email tab, where the decision sits over the email (the test above)
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p9/40/email'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/p9/40/email'));
     expect(sent).toEqual([]);
   });
 
@@ -1487,7 +1529,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy();
     // nothing else on it waits on the person: the task closes (opened from nowhere here, so to its board)
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
   });
 
   it('opened from a board, Approve closes the task once nothing on it waits: back to the board as it was, Undo offered @approvals', async () => {
@@ -1496,8 +1538,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
     await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
     fireEvent.click(await ready(await decision()));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
-    expect(router.state.location.search).toEqual({ owner: 'bot:lo' });
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
+    expect(was(router).search).toEqual({ owner: 'bot:lo' });
     // stepped back, not pushed: the board is where it was in the history
     expect(router.history.canGoBack()).toBe(false);
     // the email's own toast follows it through its undo window
@@ -1521,7 +1563,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       return found as HTMLElement;
     });
     fireEvent.click(await ready(box));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36461/review-page'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36461/review-page'));
     // the email's own toast follows it through its undo window
     await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
   });
@@ -1534,8 +1576,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     const approveBeside = async (rows: ListRow[], then?: ListRow[], earlier?: ListRow[]) => {
       serve((url) => (url.endsWith(`/asks/${rid}/ok`) ? (then && noteList({ pipeline: 'legal-responses', open: '36461', rows: then }), { body: { task: answered() } }) : null));
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses?owner=bot%3Alo');
-      pressListRow('legal-responses', '36461'); // its card on the board
-      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      await act(() => pressCard(router, '/tasks/legal-responses/36461/email', 'legal-responses'));
       if (earlier) noteList({ pipeline: 'legal-responses', open: '36461', rows: earlier });
       noteList({ pipeline: 'legal-responses', open: '36461', rows });
       fireEvent.click(await ready(await decision()));
@@ -1547,8 +1588,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
         [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
         [row('a1', 36450), row('a2', 36470), row('a3', 36480), row('19ca7418', 36461)],
       );
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
-      expect(router.state.location.search).toEqual({});
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36470'));
+      expect(was(router).search).toEqual({ owner: 'bot:lo' });
       await waitFor(() => expect(document.querySelector('.toasts')?.textContent).toContain('Sending to dana@example.test'));
     });
 
@@ -1558,12 +1599,12 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
         [row('a1', 36450), row('a2', 36470), row('a3', 36480)],
         [row('a1', 36450), row('19ca7418', 36461), row('a2', 36470), row('a3', 36480)],
       );
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36480'));
     });
 
     it('at the last row of its stage goes on into the next stage; at the list’s last row, back to the board @approvals', async () => {
       const on = await approveBeside([row('19ca7418', 36461), row('a3', 36480)]);
-      await waitFor(() => expect(on.state.location.pathname).toBe('/tasks/legal-responses/36480'));
+      await waitFor(() => expect(was(on).pathname).toBe('/tasks/legal-responses/36480'));
       cleanup();
       const people = [queryClient.getQueryData(['me']), queryClient.getQueryData(['directory'])];
       queryClient.clear();
@@ -1572,8 +1613,8 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       queryClient.setQueryData(['directory'], people[1]);
       // the row below it left the list before the answer was heard: nothing is below it now
       const back = await approveBeside([row('a1', 36450), row('19ca7418', 36461), row('a2', 36470)], [row('a1', 36450), row('19ca7418', 36461)]);
-      await waitFor(() => expect(back.state.location.pathname).toBe('/tasks/legal-responses'));
-      expect(back.state.location.search).toEqual({ owner: 'bot:lo' });
+      await waitFor(() => expect(was(back).pathname).toBe('/tasks/legal-responses'));
+      expect(was(back).search).toEqual({ owner: 'bot:lo' });
     });
 
     it('stays on the task while another ask on it waits, and its last answer goes on to the task below @approvals', async () => {
@@ -1589,8 +1630,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
             ? { status: 404, body: {} }
             : own(url, method);
       const router = show(<TaskPage task="36461" pipeline="legal-responses" tab="email" />, '/tasks/legal-responses');
-      pressListRow('legal-responses', '36461'); // its card on the board
-      await act(() => router.navigate({ href: '/tasks/legal-responses/36461/email' }));
+      await act(() => pressCard(router, '/tasks/legal-responses/36461/email', 'legal-responses'));
       noteList({ pipeline: 'legal-responses', open: '36461', rows: [row('19ca7418', 36461), row('a2', 36470)] });
       const box = (named: string) =>
         waitFor(() => {
@@ -1604,9 +1644,9 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
       // Ship it? still waits on the person: the task stays open
       const last = await box('Ship it?');
       await act(async () => {});
-      expect(router.state.location.pathname).toMatch(/^\/tasks\/legal-responses\/36461(\/|$)/);
+      expect(was(router).pathname).toMatch(/^\/tasks\/legal-responses\/36461(\/|$)/);
       fireEvent.click(await ready(last));
-      await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses/36470'));
+      await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses/36470'));
     });
   });
 
@@ -1637,7 +1677,7 @@ describe('a matter that waits on its "Send:" sub-task’s ask answers the sub-ta
     await waitFor(() => expect(sent).toEqual([{ url: `/api/v2/tasks/b78be168/asks/${rid}/answer`, body: { value: 'no', note: 'Shorter' } }]));
     expect(await screen.findByText(/^Changes asked/)).toBeTruthy();
     // nothing else on it waits on the person: the task closes too, to its board
-    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/legal-responses'));
+    await waitFor(() => expect(was(router).pathname).toBe('/tasks/legal-responses'));
   });
 });
 
