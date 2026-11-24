@@ -511,8 +511,9 @@ class Voice:
             write(c)
 
     def _side(self, fn: Callable[..., Any], *args: Any) -> None:
-        future = self.makers.submit(fn, *args)
+        # Submitted and recorded under one lock, so settle never sees the job running before it is in the list.
         with self.side_lock:
+            future = self.makers.submit(fn, *args)
             self.side = [f for f in self.side if not f.done()] + [future]
 
     def warm(self) -> None:
