@@ -100,7 +100,7 @@ def strategy_bets(c, who=None):
 
     if who is not None and not goal_routes.company_editor(who):
         return [b for b in (S.current(c) or {}).get("bets") or [] if b.get("status") != "retired"]
-    return [b for b in S.bets(c) if b["status"] != "retired"]
+    return [b for b in S.bets(c) if b and b["status"] != "retired"]
 
 
 def bets_text(bets):

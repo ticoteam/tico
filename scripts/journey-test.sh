@@ -74,8 +74,9 @@ supported() {  # backend/release_floor.py's check: a stable vX.Y.Z at v0.6.0 or 
   [[ "$1" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 ))
 }
 # The candidate may be a prerelease of 0.6 or later (ci.yml's version input); the previous release is a stable one.
-[[ "$CAND" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 )) \
-  || { echo "journey: the candidate must be a release v0.6.0 or later (like v0.6.1), not $CAND" >&2; exit 2; }
+if ! { [[ "$CAND" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 )); }; then
+  echo "journey: the candidate must be a release v0.6.0 or later (like v0.6.1), not $CAND" >&2; exit 2
+fi
 if [ -n "$PREV" ] && ! supported "$PREV"; then
   echo "journey: the previous release must be a release v0.6.0 or later (like v0.6.1), not $PREV" >&2; exit 2
 fi
