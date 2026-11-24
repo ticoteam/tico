@@ -13,7 +13,7 @@
 //! CLI's threads resume there; that process's CODEX_HOME points at it and its conversation key names it, so no thread
 //! begun on another login is resumed on it. A Claude plan's threads stay in the turn's own home, so every Claude plan
 //! shares one conversation key (`Delivered::binding`) and a move between plans resumes the thread. The sign-in file itself is there only while a process of a turn handed
-//! that subscription runs, or an Antigravity plan's process is kept after it (`KeptHome`, at most crate::keeper::IDLE
+//! that subscription runs, or an Antigravity plan's process or a Codex app-server is kept after it (`KeptHome`, at most crate::keeper::IDLE
 //! unused, two minutes): written 0600 when that runtime starts (`start`), removed when the last turn or kept process holding that
 //! home lets go of it (the turn moves to another runtime, `finish`, the vault's drop for a turn that ends early), and
 //! swept from every home when the runner starts (`sweep`), so taking a subscription off a computer, or deleting it,
@@ -1297,10 +1297,11 @@ fn let_go(homes: &mut Homes, root: &Path, home: &Path) {
 /// refreshed masked everywhere first.
 pub struct KeptHome(PathBuf);
 
-/// Hold `home` while a kept process runs on it: None unless a turn holds it now, its sign-in in place.
+/// Hold `home` while a kept process runs on it: None unless a turn holds it now, its sign-in in place. A plan's own
+/// home (Codex's sign-in file) is held the same way, its file removed once the last holder goes.
 pub fn keep_home(home: &Path) -> Option<KeptHome> {
     let mut homes = homes();
-    let live = homes.live.get_mut(home).filter(|l| l.watch.is_some())?;
+    let live = homes.live.get_mut(home)?;
     live.turns += 1;
     Some(KeptHome(home.to_path_buf()))
 }
@@ -1344,6 +1345,12 @@ pub fn turn_plan(home: &Path) -> Option<String> {
     let digest = ring::digest::digest(&ring::digest::SHA256, signed.as_bytes());
     let digest: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
     Some(format!("{}:{digest}", plan_of(home)?))
+}
+
+/// Whether `home` was made for one turn alone (`subscriptions/<id>/turns/<turn>/<runtime>`): a process kept on it
+/// goes on there, while the next turn is given a home of its own (hosts/codex.rs `fingerprint`).
+pub fn turn_only(home: &Path) -> bool {
+    turn_dir(home).is_some()
 }
 
 /// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.

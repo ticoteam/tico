@@ -256,9 +256,12 @@ def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, comp
         assert all(call["env"]["XDG_DATA_HOME"] == str(data) for call in calls)
         assert (data / "muse" / "sessions").is_dir()
     else:
-        starts = [c for c in calls if c.get("method") in ("thread/start", "thread/resume")]
-        assert starts[1] == {"harness": "codex", "method": "thread/resume", "thread": starts[0]["thread"]}
-        assert starts[2]["method"] == "thread/start" and starts[2]["thread"] != starts[0]["thread"]
+        # The follow-up is the next turn in the app-server kept for the thread (no resume); another thread starts its own.
+        starts = [c["method"] for c in calls if c.get("method") in ("thread/start", "thread/resume")]
+        turns = [c for c in calls if c.get("method") == "turn/start"]
+        assert starts == ["thread/start", "thread/start"]
+        assert turns[1]["thread"] == turns[0]["thread"] != turns[2]["thread"]
+        assert turns[1]["pid"] == turns[0]["pid"] != turns[2]["pid"]
     assert "Please answer locally" not in computer.prompts()[1]["prompt"]
     assert "Please answer locally" not in computer.prompts()[-1]["prompt"]
 
@@ -444,7 +447,8 @@ def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one
             for c in computer.calls()
             if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")
         ]
-        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start"]
+        # The second turn goes on in the thread's kept app-server; the new epoch's is a new thread.
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start"]
     elif computer.harness == "antigravity":
         # A new epoch is a new thread: its turn begins a conversation of its own, not a resume of the old.
         assert calls[1]["conversation"] == calls[0]["conversation"] != calls[-1]["conversation"]
@@ -509,7 +513,7 @@ def test_one_persons_clear_starts_their_chat_anew_and_leaves_another_persons_cha
             for c in computer.calls()
             if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")
         ]
-        assert [c["method"] for c in starts] == ["thread/start", "thread/start", "thread/resume", "thread/start"]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start", "thread/start"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])

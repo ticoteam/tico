@@ -43,8 +43,10 @@ def bodies(api, thread_id, token="ana-test"):
 def provider_turns(computer):
     """Each provider turn the fake harness saw, in order, as (started, thread): `new` with the thread it made, or
     `resume` with the thread it continued. Claude names its session on the command line; Codex's thread is in the
-    thread/start or thread/resume call."""
+    thread/start or thread/resume call before the turn, or in the turn alone when the turn goes on in the app-server
+    kept for the thread (a `resume` too)."""
     turns = []
+    begun = None
     for call_ in computer.calls():
         if computer.harness == "claude" and "prompt" in call_:
             argv = call_["argv"]
@@ -52,12 +54,12 @@ def provider_turns(computer):
                 turns.append(("resume", argv[argv.index("--resume") + 1]))
             else:
                 turns.append(("new", argv[argv.index("--session-id") + 1]))
-        elif (
-            computer.harness == "codex"
-            and call_.get("harness") == "codex"
-            and call_.get("method") in ("thread/start", "thread/resume")
-        ):
-            turns.append(("new" if call_["method"] == "thread/start" else "resume", call_["thread"]))
+        elif computer.harness == "codex" and call_.get("harness") == "codex":
+            if call_.get("method") in ("thread/start", "thread/resume"):
+                begun = ("new" if call_["method"] == "thread/start" else "resume", call_["thread"])
+            elif call_.get("method") == "turn/start":
+                turns.append(begun or ("resume", call_["thread"]))
+                begun = None
     return turns
 
 

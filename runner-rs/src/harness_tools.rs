@@ -2595,6 +2595,7 @@ mod tests {
         assert!(
             all["codex"].capabilities.resume_after_interrupt
                 && all["codex"].capabilities.goal_runs_across_turns
+                && all["codex"].capabilities.persistent_session
         );
         // Steering is declared, never inferred from a name: only Claude Code, Codex and pi take input mid-turn.
         let steers: Vec<&str> = all
