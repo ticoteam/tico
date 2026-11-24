@@ -1994,14 +1994,14 @@ class GitHubApp:
         try:
             self.mint([repository], {"metadata": "read"}, diagnose=False)
             installation_access = "available"
-            note = "Created as a private empty repository. Tico will refresh its repository inventory; no bot access was granted."
+            note = "Created as a private empty repository. Tico will refresh its repository inventory and put it In use if it can, so bots on All repos in use reach it."
             try:
                 from .repositories import queue_sync
 
                 queue_sync(self, refresh=True)
             except Exception:
                 log.warning("Product repository was created; repository inventory refresh could not be queued")
-                note = "Created as a private empty repository. Refresh repository inventory in Settings; no bot access was granted."
+                note = "Created as a private empty repository. Refresh repository inventory in Settings; Tico puts it In use if it can."
         except (Problem, ValueError) as problem:
             if isinstance(problem, Problem) and problem.code == "github_repo_not_accessible":
                 installation_access = "owner_action_required"

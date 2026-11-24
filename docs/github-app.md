@@ -130,17 +130,17 @@ GitHub line (**Choose a repository**, linked to Settings > General › Repositor
    example when the name is taken). Confirm it. GitHub returns to Tico, which stores the app's
    credentials and sends you to install the app on the account or organization.
 3. On the install page, choose **All repositories** (recommended). Bots then get new repositories
-   automatically, with nothing to add each time a bot is created. This does not widen what a bot can
-   touch: each bot's token names its own repository plus its repository access (below), and
-   nothing else. Then put the repositories the team works on In use in Settings > General › Repositories.
+   automatically, with nothing to add each time a bot is created. Each bot's token names its own repository
+   plus its repository access (below), and nothing else. Then put the repositories the team works on In use in
+   Settings > General › Repositories; a product repository created after connecting starts In use.
    Choosing selected repositories works too, and the product repositories you pick there are put In use for
    you. Tico then makes no bot repositories (GitHub would not let the App reach them): bots work from their
    computers as usual, their history is not backed up to GitHub, and Health says so in one line. Settings
    then shows the app as installed.
 
 Back in Tico, the GitHub card asks at once **Which repository does your team work on?**, with a **Use** button on each
-product repository the organization has (a lone one is the main button). One tap puts it In use; nothing is ticked for
-you. While Tico makes the bots' own repositories the card says how many are made, and why the rest wait when GitHub
+product repository the organization has (a lone one is the main button). One tap puts it In use; nothing made before
+connecting is ticked for you. While Tico makes the bots' own repositories the card says how many are made, and why the rest wait when GitHub
 said why.
 
 A second return from GitHub (Back to its Create page and Create again, the same return loaded twice, or one more
@@ -474,8 +474,9 @@ The command prints the same preview and requires the exact `org/name` before it 
 or given as `--confirm`, which must match the preview exactly. Both flows
 create with `private: true` and `auto_init: false`, so GitHub receives no initial commit and existing local
 history can be published separately. The write is audited as `github.product_repo_created` and retries with
-the same request key replay the saved receipt. It does not alter the bot-prefixed creator. When the Owner
-creates one, no bot gets access to it.
+the same request key replay the saved receipt. It does not alter the bot-prefixed creator. A new one is put In use
+when Tico next reads GitHub, so bots on All repos in use reach it, unless 400 are already In use or, with the App
+installed on selected repositories, until the Owner adds it to the App on GitHub.
 
 The MCP tool `tico_repo_product_create` (the Owner, or a bot with Create product repositories) follows the same
 review step. Call it with `name` and a
