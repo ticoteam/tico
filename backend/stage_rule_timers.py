@@ -165,10 +165,14 @@ def sweep(conn: Any, at: str | None = None) -> dict[str, int]:
             answered = last_answers(conn, [(str(t["visit_id"]), str(t["id"]), str(t["entered_at"])) for t in tasks])
             for task in tasks:
                 task["answered_at"] = answered.get(str(task["visit_id"]))
+        moved: set[str] = set()  # moved by a rule this pass: its new visit's clock starts now, not on this pass's read
         for rule in found:
             for task in tasks:
-                if _in_scope(rule, task):
+                if task["id"] not in moved and _in_scope(rule, task):
+                    before = done["moved"]
                     manager = _judge(conn, rule, task, at, done)
+                    if done["moved"] != before:
+                        moved.add(task["id"])
                     if manager and _urgent_rule(rule):
                         now.add(manager)
     for manager in sorted(now):
@@ -266,7 +270,8 @@ def _judge(conn: Any, rule: Row, task: Row, at: str, done: dict[str, int]) -> st
     # A rule that did not match is judged again once the task has another owner or anything happens on it (a person's
     # answer ends their turn, a reassign, a message): a person's task handed to a bot in the same visit is still caught.
     # A match, told or not, stays once per visit (or quiet period) whoever owns it next.
-    unmatched = f"{mark}~{task['owner_id'] or ''}~{task['active_at']}"
+    # An edit of the rule (its revision) judges it again too.
+    unmatched = f"{mark}~{task['owner_id'] or ''}~{task['active_at']}~r{rule.get('revision') or 1}"
     if conn.execute(
         "SELECT 1 FROM stage_rule_marks WHERE rule_id=? AND task_id=? AND mark IN (?,?)",
         (rule["id"], task["id"], mark, unmatched),

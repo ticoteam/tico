@@ -247,6 +247,49 @@ def test_move_back_puts_the_task_in_on_deck_with_no_owner_tells_the_manager_and_
     assert c.execute("SELECT count(*) FROM events WHERE action='stage_rule.moved_back'").fetchone()[0] == 1
 
 
+def test_a_task_a_rule_moved_is_not_judged_again_in_the_same_pass_on_its_old_clock(c, time_machine):
+    c.execute("UPDATE stage_rules SET retired_at=? WHERE id=?", (H.now(), SR.QUIET_BOT_TASKS))
+    _rule(
+        c,
+        id="quiet-build",
+        name="Quiet in Build",
+        pipeline_id="eng",
+        stages=["eng-build"],
+        timer={"kind": "quiet", "hours": 12},
+        then="move_back",
+        then_params={"stage": "eng-on-deck"},
+    )
+    _rule(
+        c,
+        id="quiet-deck",
+        name="Quiet on deck",
+        pipeline_id="eng",
+        stages=["eng-on-deck"],
+        timer={"kind": "quiet", "hours": 1},
+        then="tell_manager",
+    )
+    task_id = _task(c, "eng", "Build", "bot:builder", "Stalled build")
+    time_machine.shift(timedelta(hours=12))
+    done = T.sweep(c)
+    assert done["moved"] == 1 and H.task(c, task_id)["stage_id"] == "eng-on-deck"
+    # 0 h on deck, not the 12 h it spent in Build: the on-deck rule has not judged it.
+    assert c.execute("SELECT count(*) FROM stage_rule_marks WHERE rule_id='quiet-deck'").fetchone()[0] == 0
+
+
+def test_an_edited_rule_judges_again_a_task_it_passed_over(c, time_machine):
+    rule_id = _late(c, minutes=6 * 60)
+    SR.edit(c, ANA, rule_id, {"cond": {"owner_kind": "person"}})  # it passes the bot's task over
+    task_id = _task(c, "eng", "Build", "bot:builder", "Quiet build")
+    X.settled(c)
+    time_machine.shift(timedelta(hours=7))
+    T.sweep(c)
+    assert _owner_told(c, task_id, "Late") == []
+    SR.edit(c, ANA, rule_id, {"cond": {"owner_kind": "bot", "turn": "bot"}})
+    time_machine.shift(timedelta(minutes=5))
+    T.sweep(c)
+    assert len(_owner_told(c, task_id, "Late")) == 1
+
+
 def test_a_snooze_is_not_quiet_time_the_timer_starts_when_it_ends(c, time_machine):
     task_id = _task(c, "eng", "Build", "bot:builder", "Snoozed one")
     X.settled(c)
