@@ -1587,13 +1587,16 @@ describe('Needs you’s read, from the menu', () => {
     // the shell's other reads (the page owners, who is signed in) all in (the directory, never answered here, aside) and
     // drawn before the count, else one is counted as a draw (537 for 536); and the reads below drawn before it is read
     // again, else a redraw they cause lands after the check and it passes. A read drawn in that turn can start others
-    // (the page owners and pipelines wait for who is signed in), so it is quiet only when nothing fetches after a turn
+    // (the page owners and pipelines wait for who is signed in), and one that starts and ends inside a turn is never seen
+    // fetching but still draws on the next, so it is quiet only after a whole turn that fetches nothing and draws nothing
     const drawn = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
     const fetching = () => queryClient.isFetching({ predicate: (q) => q.queryKey[0] !== 'directory' });
+    let seen: number;
     do {
       await waitFor(() => expect(fetching()).toBe(0));
+      seen = shellDraws.n;
       await drawn();
-    } while (fetching() > 0);
+    } while (fetching() > 0 || shellDraws.n !== seen);
     const before = shellDraws.n;
     // a new read, and the row the person is on in Needs you on Tasks
     for (let i = 1; i <= 3; i++) act(() => void queryClient.setQueryData(['flow'], { count: i, items: [], task_ids: [`t${i}`] }));
