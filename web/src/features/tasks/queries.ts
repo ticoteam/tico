@@ -140,10 +140,20 @@ export interface Filters {
   /** Who asked for it: an actor id. */
   asked?: string;
   due?: Due;
+  /** The order drawn, only in the list beside an open task (search sortOf); none is Priority. Not a filter: it narrows
+      nothing. */
+  sort?: Sort;
 }
 
 /** Overdue, due within a week (overdue too), or has a date (backend/task_match.py DUE). */
 export type Due = 'overdue' | 'week' | 'any';
+
+/** A list's order: Priority (the default), or by when each task was made. */
+export type Sort = 'priority' | 'newest' | 'oldest';
+
+/** Each sort as the server's `sort` names it (backend/hubdb.py TASK_ORDERS). Priority sends none, so it is the server's
+    queue order, until the server ranks a stage for the person (`sort=priority`). */
+const SERVER_SORT: Partial<Record<Sort, string>> = { newest: 'newest', oldest: 'oldest' };
 
 /** The server's most, one page at a time (backend/task_list_routes.py). */
 const PAGE = 500;
@@ -161,7 +171,18 @@ export function listParams(pipeline: string, f: Filters): Record<string, string 
   if (f.waiting) p.turn = f.waiting;
   if (f.asked) p.requester = f.asked;
   if (f.due) p.due = f.due;
+  const sort = f.sort && SERVER_SORT[f.sort];
+  if (sort) p.sort = sort;
   return p;
+}
+
+/** The rows in the order `sort` draws them: as read for Priority (the server's), else by when each was made, as the
+    server pages them (a missing date first in Oldest), so a row the stream adds lands in its place, not at the end. */
+export function inOrder<T extends Pick<TaskItem, 'id' | 'created_at'>>(rows: readonly T[], sort: Sort | undefined): readonly T[] {
+  if (sort !== 'newest' && sort !== 'oldest') return rows;
+  const key = (t: T) => t.created_at ?? '';
+  const up = [...rows].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  return sort === 'newest' ? up.reverse() : up;
 }
 
 /** Any filter narrows the list: its rows are not the stage's whole count. */
@@ -235,7 +256,9 @@ export async function loadMoreOf(params: Record<string, string | number>): Promi
   try {
     const page = await api.get<TaskPage>(`/api/v2/tasks?${query({ ...params, after: have.next_after })}`);
     queryClient.setQueryData<TaskPage>(key, (cur) => {
-      if (!cur) return cur;
+      // read again from its first page meanwhile (a live insert resets a list in made order): this page no longer
+      // starts where the list ends, so it is dropped rather than leave a hole
+      if (!cur || cur.next_after !== have.next_after) return cur;
       const seen = new Set(cur.tasks.map((t) => t.id));
       const fresh = page.tasks.filter((t) => !seen.has(t.id));
       // the server counted these already: they are not a change

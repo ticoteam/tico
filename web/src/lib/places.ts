@@ -38,8 +38,25 @@ export function notePlace(path: string, searchStr: string, search: Record<string
   noteFromList(path, search, entryOf(state));
 }
 
-/** The search a pipeline's board was last shown with (its view and filters), or none. */
-export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? {};
+const NONE: Record<string, unknown> = Object.freeze({});
+
+/** The search a pipeline's board was last shown with (its view, filters and sort), or none; the same object until it
+    changes, so a reader can hear it (`hearPlaces`). */
+export const boardSearch = (pipeline: string): Record<string, unknown> => boards.get(pipeline) ?? NONE;
+
+/** The list beside one of the pipeline's open tasks changes its search, filters or sort (`tasks.filter`, `tasks.sort`
+    there): kept as the board's, which that list draws, until the board is shown again with its own. A null, '' or false
+    clears one. */
+export function changeBoardSearch(pipeline: string, change: Record<string, unknown>): void {
+  const next: Record<string, unknown> = { ...boardSearch(pipeline) };
+  for (const [k, v] of Object.entries(change)) {
+    if (v === undefined) continue;
+    if (v === null || v === '' || v === false) delete next[k];
+    else next[k] = v;
+  }
+  boards.set(pipeline, next);
+  heard.forEach((on) => on());
+}
 
 /** Closing an open task: back to the board, list or page it was opened from, the history stepping back to it while it
     is behind. Opened from a link or reloaded, nothing is behind: the board `board` names (its pipeline, read only then,
@@ -156,6 +173,9 @@ export function noteList(list: { pipeline: string; open: string; rows: ListRow[]
 
 /** An answer is being given on the open task: the row below it is the one below it now, wherever the answer moves it. */
 export const holdList = (): void => void (listed && (listed.held = listed.rows));
+
+/** The pipeline whose list shows beside the open task, or null (none, or Needs you's). */
+export const listShown = (): string | null => (listed && listed.pipeline !== NEEDS_YOU ? listed.pipeline : null);
 
 /** The task below `id` in the list beside it as an answer found it (past rows that have left the list since), opened as
     a press on its row would: its pipeline and number, and the list when it is not that pipeline's (Needs you). Null at

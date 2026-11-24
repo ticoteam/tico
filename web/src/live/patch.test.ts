@@ -187,6 +187,21 @@ describe('tasks', () => {
     }
   });
 
+  it('start a list in made order again from its first page for a new task while it has rows past its page, rather than add it past them', () => {
+    const event = { seq: 901, id: 't9', kind: 'create', kinds: ['create'], task: task('t9', { status: 'open', pipeline_id: 'p1' }) };
+    const held = { tasks: [task('t1'), task('t2')], cursor: '900.x' };
+    for (const sort of ['newest', 'oldest']) {
+      const paged = patchTaskList({ ...held, next_after: 'k' }, [event], { status: 'open', pipeline: 'p1', sort });
+      expect([paged.reset, paged.unsure]).toEqual([true, false]);
+      expect(paged.list.tasks.map((t) => t.id)).toEqual(['t1', 't2']);
+      // every row read: it lands (the list draws it in its place)
+      const whole = patchTaskList({ ...held, next_after: null }, [event], { status: 'open', pipeline: 'p1', sort });
+      expect([whole.reset, whole.unsure, whole.list.tasks.map((t) => t.id)]).toEqual([undefined, false, ['t1', 't2', 't9']]);
+    }
+    // the queue's order adds it as before
+    expect(patchTaskList({ ...held, next_after: 'k' }, [event], { status: 'open', pipeline: 'p1' }).list.tasks.map((t) => t.id)).toEqual(['t1', 't2', 't9']);
+  });
+
   it('patch a row in place, keeping every row that did not change', () => {
     const [a, b, c] = [task('t1'), task('t2'), task('t3')];
     queryClient.setQueryData<TaskList>(open, { tasks: [a, b, c], cursor: '900.x' });

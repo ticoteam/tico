@@ -137,13 +137,14 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "into): only the tasks for it. One you cannot see is refused (422 entity)",
                 "assignee": "Who the tasks are for (a person or a bot; `me` is the caller), which a stage move does not "
                 "change, where owner is who has it now. Empty, or one that names nobody, answers 422",
-                "sort": "queue (the default: each owner's queue), finished (most recently finished first), or "
-                "priority, with stage: the stage's tasks in the reader's order from Tico (POST "
+                "sort": "queue (the default: each owner's queue place, then oldest made), newest or oldest (by when "
+                "the task was made), finished (most recently finished first), or priority, with stage: the stage's "
+                "tasks in the reader's order from Tico (POST "
                 "/api/v2/stages/{stage_id}/sort), each task that order does not hold placed by a quick rule: the "
                 "reader's own (they have it) first, then due within two days, above it; the rest below it, newest "
                 "first. A priority read is whole, one answer of up to `limit` (500) rows with `truncated: true` past "
                 "them, never paged (not with after, offset or changed_after: 422), and adds `sorting` and "
-                "`sorting_until`",
+                "`sorting_until`. `after` pages in the same sort",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
                 "Use a full read because team membership and availability can change independently of tasks",
             },
@@ -210,8 +211,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("limit", "limit is between 1 and 500", 422)
             if offset < 0:
                 raise Problem("offset", "offset is zero or greater", 422)
-            if sort not in ("queue", "finished", "priority"):
-                raise Problem("sort", "sort is queue, finished or priority", 422)
+            if sort not in ("queue", "finished", "priority", "newest", "oldest"):
+                raise Problem("sort", "sort is queue, finished, priority, newest or oldest", 422)
             if sort == "priority" and stage is None:
                 raise Problem("sort", "sort=priority is a stage's order: pass stage", 422)
             if sort == "priority" and (changed_after is not None or after is not None or offset):
@@ -457,7 +458,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
         return base64.urlsafe_b64encode(json.dumps(key, separators=(",", ":")).encode()).decode().rstrip("=")
 
     def keyset_start(token, sort):
-        """The sort key a page's `next_after` carries, checked: four parts in queue order, two in finished order."""
+        """The sort key a page's `next_after` carries, checked: four parts in queue order, two in finished order, and
+        in made order its order's name, then two (so a page start from another order is refused, not misread)."""
         try:
             key = (
                 json.loads(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)).decode())
@@ -466,11 +468,12 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             )
         except (ValueError, UnicodeDecodeError):
             key = None
-        shapes = {"queue": (int, (int, float), str, str), "finished": (str, str)}[sort]
+        shapes = {"queue": (int, (int, float), str, str), "finished": (str, str)}.get(sort, (str, str, str))
         if (
             not isinstance(key, list)
             or len(key) != len(shapes)
             or any(isinstance(v, bool) or not isinstance(v, kind) for v, kind in zip(key, shapes, strict=True))
+            or (sort in ("newest", "oldest") and key[0] != sort)
         ):
             raise Problem("after", "after is a page's next_after, in the same sort", 422)
         return key

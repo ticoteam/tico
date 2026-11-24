@@ -270,6 +270,17 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-sep{color:var(--faint);flex:none}
 .li-up~.li-pick{padding-left:4px;min-width:0}
 .li-pick:hover{background:var(--well-2)}
+/* a pipeline's list (__root PipelineList): the pipeline, quiet, › its stage shown and that stage's count, one picker;
+   short of room the pipeline's name gives way first */
+.li-head>.li-pick{min-width:0;flex:0 1 auto;padding-left:8px}
+.li-pick>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.li-pick>.li-pipe{color:var(--muted);font-weight:var(--w-text);flex:0 100 auto}
+.li-pick>.li-stage-name{flex:0 1 auto}
+.li-pick>.li-n{flex:none;color:var(--muted);font-weight:var(--w-text);font-variant-numeric:tabular-nums;margin-left:2px}
+.li-pick>.ico{flex:none}
+.li-find{flex:none;padding:0 10px 8px}
+.li-head~.filter-row{padding:0 10px 8px}
+.li-more{width:100%;border:0;background:none;text-align:left;color:var(--muted)}
 
 .li-run{flex:none;display:flex;align-items:center;gap:2px;height:30px;padding:0 10px 4px 16px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .li-run b{color:var(--ink)}

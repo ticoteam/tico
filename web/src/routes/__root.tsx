@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
-import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
@@ -12,7 +12,7 @@ import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
 import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
-import { filtersOf, flowCountQuery, flowQuery, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowCountQuery, flowQuery, inOrder, isFiltered, loadListTools, loadMore, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, sortOf, stageCount, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
@@ -22,11 +22,10 @@ import { Empty } from '@/kit/Empty';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
-import { Menu as DropMenu, MenuItem } from '@/kit/Menu';
+import { Menu as DropMenu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { OfflineBar } from '@/kit/OfflineBar';
 import { LatePill } from '@/kit/Pill';
 import { Placeholder } from '@/kit/placeholder/Placeholder';
-import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
 import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
@@ -119,6 +118,8 @@ const TeammateChat = lazy(() => import('@/features/team/exports').then((m) => ({
 const AddTeammate = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.AddTeammate })));
 const TeamAccess = lazy(() => import('@/features/team/exports').then((m) => ({ default: m.TeamAccess })));
 const StartCall = lazy(() => import('@/features/calls/exports').then((m) => ({ default: m.StartCall })));
+const ListToolItems = lazy(() => loadListTools().then((m) => ({ default: m.ListToolItems })));
+const ListFind = lazy(() => loadListTools().then((m) => ({ default: m.ListFind })));
 
 /** Mounted from the first time `on` holds, and kept after: its code loads only once it is needed, and what it shows
     can still close in its own way (a dialog's last step stays drawn while it closes). */
@@ -267,7 +268,7 @@ function App() {
        them. The task chosen. A task with no pipeline of its own (`all`) not from Needs you, or its list closed: the
        menu stays in its place. */
     if (task && fromNeeds && !listShut) list = <NeedsYouSide key={NEEDS_YOU} open={decodeURIComponent(task)} onClose={closeList} />;
-    else if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
+    else if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} stage={open.task?.stage_id ?? undefined} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -760,57 +761,103 @@ function ListFace({ id }: { id: string | null }) {
   return id ? <Avatar decorative kind={who?.kind ?? (id.startsWith('bot:') ? 'agent' : 'person')} name={who?.name ?? (id.startsWith('bot:') ? 'Agent' : 'Person')} hue={who?.hue} live={who?.working} size={22} /> : null;
 }
 
-/* Beside a task opened under a pipeline, in the menu's place: that pipeline's open tasks by stage, with the filters
-   its board was last shown with, the open task chosen. The pick goes to another pipeline's board, and Close folds the
-   list to the menu's icons. */
-function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: string; onClose: () => void }) {
+/* Beside a task opened under a pipeline, in the menu's place: one stage of that pipeline's open tasks at a time, with
+   the filters its board was last shown with, and the search, filters and sort the list was given since (lib
+   changeBoardSearch), the open task chosen. The head is the pipeline › the stage and its count: its menu picks another
+   stage (each with its count) or another pipeline's board; one tools button opens Search, Filter and Sort. The stage
+   shown is the one the open task was in as it opened (its own read, `stage`, else its row), or the one picked since;
+   it changes only when another task opens or the person picks, never as the open task moves. Close folds the list to
+   the menu's icons. */
+function PipelineList({ pipeline, open, stage, onClose }: { pipeline: string; open: string; stage?: string; onClose: () => void }) {
   const needs = useNeedsYou();
   const { data: pipes } = useQuery(pipelinesQuery);
   const p = pipes?.find((x) => x.id === pipeline);
-  const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
-  const [shut, setShut] = useState<ReadonlySet<string>>(new Set());
-  const flip = (key: string) => setShut((was) => (was.has(key) ? new Set([...was].filter((k) => k !== key)) : new Set(was).add(key)));
-  const stages = useMemo(() => (p?.stages ?? []).map((s) => ({ ...s, items: (page?.tasks ?? []).filter((t) => t.stage_id === s.id) })).filter((s) => s.items.length), [p, page]);
-  // the rows in the order drawn, folded stages left out, while the list shows (not folded or tucked away): an answer
-  // that leaves the open task with nothing on it for the person goes on to the row below it (TaskPage)
+  const search = useSyncExternalStore(hearPlaces, () => boardSearch(pipeline));
+  const filters = useMemo(() => ({ ...filtersOf(validateTasksSearch(search)), sort: sortOf(search) }), [search]);
+  const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filters), enabled: !!p });
+  const rows = useMemo(() => inOrder(page?.tasks ?? [], filters.sort), [page, filters.sort]);
+  const stages = useMemo(() => (p?.stages ?? []).map((s) => ({ ...s, items: rows.filter((t) => t.stage_id === s.id) })), [p, rows]);
+  const own = stage ?? rows.find((t) => String(t.number ?? t.id) === open || t.id === open)?.stage_id ?? undefined;
+  // the open task's stage as it opened (`at`), and the stage shown: that one, or the one picked since
+  const [head, setHead] = useState<{ open: string; at: string; stage: string } | null>(null);
+  if (own && head?.open !== open) setHead({ open, at: own, stage: own });
+  const at = head?.open === open ? head.at : undefined;
+  const want = head?.open === open ? head.stage : undefined;
+  const shown = stages.find((g) => g.id === want) ?? stages.find((g) => g.items.length) ?? stages[0];
+  // a stage's count is the server's, under the filters and past what was read; a read without counts has its rows
+  const countOf = (g: (typeof stages)[number]) => (page && stageCount(page, g.id, g.items.length)) ?? g.items.length;
+  const cut = !!page?.next_after;
+  const [finding, setFinding] = useState(false);
+  // the rows the answer on the open task can go on to, in the order drawn, while the list shows (not folded or tucked
+  // away): from the stage it opened in on, past each stage's last row to the next stage's first (TaskPage; the head then shows that
+  // stage), ending with the first stage the list has not read all of, so an answer at its last row read goes back
+  // rather than past rows it has not read
   const sheet = useSheet();
   const shows = sheet.state === 'open' || sheet.peek;
-  const drawn = useMemo(() => stages.flatMap((g) => (shut.has(g.id) ? [] : g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id) })))), [stages, shut]);
+  const drawn = useMemo(() => {
+    const out: { id: string; n: string }[] = [];
+    for (const g of stages.slice(Math.max(0, stages.findIndex((x) => x.id === at)))) {
+      out.push(...g.items.map((t) => ({ id: t.id, n: String(t.number ?? t.id) })));
+      if (cut && g.items.length < ((page && stageCount(page, g.id, g.items.length)) ?? 0)) break;
+    }
+    return out;
+  }, [stages, at, cut, page]);
   useEffect(() => noteList(shows ? { pipeline, open, rows: drawn } : null), [shows, pipeline, open, drawn]);
   useEffect(() => () => noteList(null), []);
   const name = p?.name ?? 'Tasks';
+  const more = cut && !!shown && shown.items.length < countOf(shown);
+  const using = finding || !!filters.q || isFiltered(filters) || !!filters.sort;
   return (
     <Sheet kind="list" label={name}>
       <header className="li-head">
-        <ListUp />
         <DropMenu
           align="start"
           trigger={
-            <button className="li-pick" type="button">
-              {name}
+            <button className="li-pick" type="button" data-target="list:stage">
+              <span className="li-pipe">{name}</span>
+              {shown ? (
+                <>
+                  <Icon name="chevron" className="li-sep" />
+                  <span className="li-stage-name">{shown.name}</span>
+                  <span className="li-n">{countOf(shown)}</span>
+                </>
+              ) : null}
               <Icon name="chevdown" />
             </button>
           }
         >
-          {(pipes ?? []).map((x) => (
-            <MenuItem key={x.id} label={x.name} on={x.id === pipeline} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(x.id)}` })} />
+          {stages.map((g) => (
+            <MenuItem key={g.id} label={g.name} meta={String(countOf(g))} on={g.id === shown?.id} onSelect={() => setHead({ open, at: at ?? g.id, stage: g.id })} />
           ))}
+          {stages.length ? <MenuRule /> : null}
+          <MenuSub label="Pipelines">
+            {(pipes ?? []).map((x) => (
+              <MenuItem key={x.id} label={x.name} on={x.id === pipeline} onSelect={press('shell.goTo', { to: `/tasks/${encodeURIComponent(x.id)}` })} />
+            ))}
+          </MenuSub>
         </DropMenu>
         <span className="grow" />
+        <DropMenu trigger={<IconButton icon="sliders" label="Search, filter, sort" quiet on={using} data-target="list:tools" />}>
+          <Suspense fallback={null}>
+            <ListToolItems search={filters} finding={finding} onFind={setFinding} />
+          </Suspense>
+        </DropMenu>
         <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
       </header>
+      {finding || filters.q || isFiltered(filters) ? (
+        <Suspense fallback={null}>
+          <ListFind search={filters} finding={finding} />
+        </Suspense>
+      ) : null}
       <div className="nav-scroll li-body">
-        {page && !stages.length ? <Empty title="No open tasks" /> : null}
-        {stages.map((g) => (
-          <Fragment key={g.id}>
-            <div className="li-sec">
-              <h2 className="sec-name">
-                <FoldButton name={g.name} count={g.items.length} open={!shut.has(g.id)} onToggle={() => flip(g.id)} />
-              </h2>
-            </div>
-            {shut.has(g.id) ? null : g.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
-          </Fragment>
-        ))}
+        {page && !more && !shown?.items.length ? <Empty title="No open tasks" /> : null}
+        {shown?.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
+        {more ? (
+          <button className="li li-more" type="button" onClick={() => void loadMore(pipeline, filters)}>
+            <span className="li-mark" />
+            <span className="li-title">More tasks</span>
+          </button>
+        ) : null}
       </div>
     </Sheet>
   );

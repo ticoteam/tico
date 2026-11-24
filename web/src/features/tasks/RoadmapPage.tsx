@@ -23,7 +23,7 @@ import { isFiltered, loadMore, loadMoreOf, pipelinesQuery, pipelineTasksQuery, s
 import { RequestersDialog } from './Requesters';
 import { byHorizon, HORIZONS, roadmapPipeline, stageName, trackOf, type Horizon } from './roadmap';
 import { filtersOf, type RoadmapSearch } from './search';
-import { Chips } from './TasksPage';
+import { Chips } from './TaskFind';
 import './tasks.css';
 
 const FOLD_PREF = 'roadmap.fold.v1';

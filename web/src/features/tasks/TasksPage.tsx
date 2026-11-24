@@ -2,7 +2,7 @@ import { useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActor } from '@/data';
+import { meQuery } from '@/data';
 import { CardFix, lineFor, StatusLine, TaskSend } from '@/features/task/exports';
 import { useFollow } from '@/live/follow';
 import { pressListRow } from '@/lib';
@@ -10,7 +10,6 @@ import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
 import { announce, useDrag } from '@/kit/Drag';
 import { Empty } from '@/kit/Empty';
-import { SettledSearch } from '@/kit/Field';
 import { FlowMark } from '@/kit/FlowMark';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
@@ -20,12 +19,12 @@ import { LatePill, Pill } from '@/kit/Pill';
 import { TaskRow } from '@/kit/Row';
 import { Segmented } from '@/kit/Segmented';
 import { ValueButton } from '@/kit/ValueButton';
-import { Board, BoardColumn, FilterRow, List, PageMore, Section, type FilterChip } from '@/pagekinds';
+import { Board, BoardColumn, List, PageMore, Section } from '@/pagekinds';
 import { usePref, writePref } from '@/prefs';
 import { ArchivedSections, useShelves } from './Archived';
 import { BoardFit } from './BoardFit';
 import { Capped, CARD_H, COL_CAP, COL_SHOW, LIST_CAP, LIST_SHOW, moreText, PHONE_ROW_H, RowMore, ROW_H } from './capped';
-import { DUE_NAMES, FilterItems, FilterMenu } from './FilterMenu';
+import { FilterItems, FilterMenu } from './FilterMenu';
 import { SelectBar, StageMenu } from './many';
 import { useNeedsYou } from './needs';
 import { NewTask } from './NewTask';
@@ -45,6 +44,7 @@ import {
   type TaskItem,
 } from './queries';
 import { filtersOf, LAST_PREF, VIEW_PREF, type TasksSearch, type View } from './search';
+import { Chips, TaskFind } from './TaskFind';
 import './tasks.css';
 
 const FOLD_PREF = 'tasks.fold.v1';
@@ -253,22 +253,6 @@ function MoreMenu({ p, pipes, onSelect, phone }: { p: Pipeline; pipes: readonly 
   );
 }
 
-/** The head's search (the page kind's `search` slot): the field, as the kit draws it; on a phone it has its own line
-    under the head, opened from "⋯". Typing narrows the board after a short pause, not on every key. */
-function TaskFind({ search }: { search: TasksSearch }) {
-  const filter = useAction('tasks.filter');
-  const cards = useCards();
-  return (
-    <SettledSearch
-      label="Search tasks"
-      placeholder="Search"
-      value={search.q ?? ''}
-      onSettle={(q) => void filter.run({ q: q || null })}
-      autoFocus={cards && !search.q}
-    />
-  );
-}
-
 /** Filter, the view switch, New task (list.js head; the pipeline's agent is in the Agent bar). A phone has them under
     "⋯". Archived keeps the filter. */
 function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view: View; search: TasksSearch; onNew?: () => void }) {
@@ -291,27 +275,6 @@ function HeadActions({ pipeline, view, search, onNew }: { pipeline: string; view
       )}
       {onNew && <IconButton icon="plus" label="New task" onClick={onNew} data-target="tasks:new" />}
     </>
-  );
-}
-
-/** The filters that are set, one chip each, then Clear. */
-export function Chips({ search }: { search: Filters }) {
-  const filter = useAction('tasks.filter');
-  const owner = useActor(search.owner)?.name;
-  const waiting = useActor(search.waiting)?.name;
-  const asked = useActor(search.asked)?.name;
-  const chips: FilterChip[] = [];
-  if (search.owner) chips.push({ label: owner ?? 'Owner', onClear: () => void filter.run({ owner: null }) });
-  if (search.waiting) chips.push({ label: `Waiting on ${waiting ?? 'someone'}`, onClear: () => void filter.run({ waiting: null }) });
-  if (search.asked) chips.push({ label: `Asked by ${asked ?? 'someone'}`, onClear: () => void filter.run({ asked: null }) });
-  if (search.tag) chips.push({ label: search.tag, onClear: () => void filter.run({ tag: null }) });
-  if (search.due) chips.push({ label: DUE_NAMES[search.due], onClear: () => void filter.run({ due: null }) });
-  if (search.late) chips.push({ label: 'Late', onClear: () => void filter.run({ late: null }) });
-  return (
-    <FilterRow
-      filters={chips}
-      onClearAll={() => void filter.run({ owner: null, waiting: null, asked: null, tag: null, due: null, late: null, q: null })}
-    />
   );
 }
 

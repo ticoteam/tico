@@ -132,9 +132,92 @@ def test_a_catch_up_takes_the_same_search_and_filters(api):
     assert [t["id"] for t in got["tasks"]] == [other["id"]] and got["gone"] == [keep["id"]]
 
 
+def test_newest_and_oldest_page_by_when_each_task_was_made(api):
+    """The side list's Newest and Oldest sorts: by created_at (a tie by id, a missing date first in Oldest, last in
+    Newest), whatever each owner's queue rank says, the same order page by page as in one read."""
+    product(api)
+    made = [
+        post(
+            api, "tasks", {"title": f"Report {i}", "body": "x", "owner": ["ben", "cara"][i % 2], "pipeline": "product"}
+        )
+        for i in range(6)
+    ]
+    ids = [t["id"] for t in made]
+    with api.app.state.store.transaction() as c:
+        # made out of order, two at the same moment, one with no date; ranks that say otherwise
+        for tid, when, rank in zip(
+            ids,
+            [
+                "2026-11-03T00:00:00Z",
+                "2026-11-01T00:00:00Z",
+                "2026-11-05T00:00:00Z",
+                None,
+                "2026-11-03T00:00:00Z",
+                "2026-11-04T00:00:00Z",
+            ],
+            [6, 5, 4, 3, 2, 1],
+            strict=True,
+        ):
+            c.execute("UPDATE tasks SET created_at=?, rank=? WHERE id=?", (when, rank, tid))
+    tie = sorted([ids[0], ids[4]])
+    oldest = [ids[3], ids[1], *tie, ids[5], ids[2]]
+    for sort, want in (("oldest", oldest), ("newest", oldest[::-1])):
+        query = f"pipeline=product&status=open&sort={sort}&search=report"
+        whole = read(api, query + "&limit=500")["tasks"]
+        assert [t["id"] for t in whole] == want
+        got, pages = every_page(api, query, limit=4)
+        assert [t["id"] for t in got] == want and pages == [4, 2]
+        got, _ = every_page(api, f"pipeline=product&status=open&sort={sort}", limit=1)
+        assert [t["id"] for t in got] == want
+    # the default stays the queue's: by rank
+    queue = read(api, "pipeline=product&status=open&limit=500")["tasks"]
+    assert [t["id"] for t in queue] == ids[::-1]
+
+
+def test_a_missing_and_an_empty_created_at_page_as_one_key(api):
+    """NULL and '' sort as the same key the page cursor carries: a page of one between them skips no row."""
+    product(api)
+    made = [
+        post(api, "tasks", {"title": f"Note {i}", "body": "x", "owner": "ben", "pipeline": "product"}) for i in range(3)
+    ]
+    ids = sorted(t["id"] for t in made)
+    with api.app.state.store.transaction() as c:
+        # the lower id has no date, the higher an empty one: an order that tells NULL from '' puts the higher one first
+        c.execute("UPDATE tasks SET created_at='' WHERE id=?", (ids[0],))
+        c.execute("UPDATE tasks SET created_at=NULL WHERE id=?", (ids[1],))
+    for sort, want in (("oldest", ids[:2]), ("newest", ids[:2][::-1])):
+        got, pages = every_page(api, f"pipeline=product&status=open&sort={sort}", limit=1)
+        dated = [t["id"] for t in got if t["id"] != ids[2]]
+        assert dated == want and len(got) == 3 and pages == [1, 1, 1]
+
+
+def test_a_page_start_is_taken_only_in_the_order_that_gave_it(api):
+    """A made-order page start names its order: Newest's next_after is refused by Oldest and Finished, and theirs by
+    Newest, rather than read as a place on the other side of the list."""
+    product(api)
+    for i in range(3):
+        post(api, "tasks", {"title": f"Report {i}", "body": "x", "owner": "ben", "pipeline": "product"})
+    starts = {}
+    for sort in ("newest", "oldest", "queue"):
+        starts[sort] = read(api, f"pipeline=product&status=open&sort={sort}&limit=1")["next_after"]
+        assert starts[sort]
+    done = post(api, "tasks", {"title": "Audit", "body": "x", "owner": "ben", "pipeline": "product"})
+    post(api, f"tasks/{done['id']}/move", {"to": "done", "why": "Finished."})
+    post(api, "tasks", {"title": "Audit 2", "body": "x", "owner": "ben", "pipeline": "product"})
+    starts["finished"] = read(api, "pipeline=product&status=open,done&sort=finished&limit=1")["next_after"]
+    assert starts["finished"]
+    for sort, start in starts.items():
+        for other in ("newest", "oldest", "finished", "queue"):
+            if other != sort:
+                get(api, f"tasks?pipeline=product&status=open&sort={other}&after={start}", expected=422)
+        assert read(api, f"pipeline=product&status=open,done&sort={sort}&after={start}")["tasks"] is not None
+
+
 @pytest.mark.parametrize(
     "bad",
     [
+        "sort=priority-later",
+        "sort=newest&after=WzAsMSwiYSIsImIiXQ",
         "after=nonsense",
         "after=WzEsMl0",
         "sort=finished&after=WzAsMSwiYSIsImIiXQ",
