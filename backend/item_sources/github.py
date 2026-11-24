@@ -1484,7 +1484,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
     earlier = MO.held(conn, row)
     if earlier and not E.is_human(by):
-        refuse("task_requirement", HELD_FOR.format(earlier=MO.ref(earlier)))
+        refuse("task_requirement", HELD_FOR.format(earlier=MO.named(conn, row, earlier)))
     first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []
@@ -1544,7 +1544,9 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         key = pr_key(str(link["repo"]), int(link["number"]))
         owed.append(SA.owe_again(conn, visit_id, SOURCE, QUEUE, PR, key, head))
         if earlier:
-            note, data = MO.QUEUED_ANYWAY.format(ref=MO.ref(earlier)), {"before_merged": earlier["id"]}
+            said = MO.named(conn, row, earlier)
+            note = MO.QUEUED_ANYWAY.format(ref=said)
+            data = {"before_merged": earlier["id"]} if said == MO.ref(earlier) else {}
         else:
             note, data = "Queue again", {}
         E._event(conn, task_id, by, "pr_queued", None, ref, note, {"ref": ref, "head": head, "again": True, **data})
@@ -2457,10 +2459,10 @@ def _merged_one(conn: "sqlite3.Connection", task: Row, requirement: Row, link: R
         earlier = MO.held(conn, task)
         if earlier:
             # It goes after a task that has not merged: merge_order's own standing is its turn; this says why.
-            return Standing(requirement, WAITING, SOURCE, f"Not queued until {MO.ref(earlier)} merges")
+            return Standing(requirement, WAITING, SOURCE, MO.NOT_QUEUED.format(ref=MO.named(conn, task, earlier)))
         closed = MO.closed_before(conn, task)
         if closed:
-            return Standing(requirement, NOT_MET, owner, MO.closed_line(closed))
+            return Standing(requirement, NOT_MET, owner, MO.closed_line(conn, task, closed))
         return Standing(requirement, WAITING, SOURCE, "Queuing the PR")  # owed as soon as its head is known
     return Standing(requirement, NOT_MET, owner, "Not merged yet")
 

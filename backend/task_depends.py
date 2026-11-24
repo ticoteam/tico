@@ -59,7 +59,6 @@ DONE = "{ref} is done"
 CLOSED = "{ref} was closed without doing it"
 DELETED = "{ref} was deleted"
 UNLINKED = "{ref} no longer blocks this task"
-UNLINKED_UNNAMED = "A task that blocked this one no longer blocks it"
 WAKE = "unblocked"
 UNTIL = "released"  # task_relations.until: held past the other task's end, until production runs its release
 RELEASED_LINE = "Blocked by {task}, done, until production runs its release"
@@ -293,15 +292,28 @@ def release(conn: "sqlite3.Connection", ended_id: str, by: str) -> int:
     found: Any = conn.execute("SELECT number, status FROM tasks WHERE id=?", (ended_id,)).fetchone()
     done = bool(found and found[1] == "done")
     named = ref({"id": ended_id, "number": found[0] if found else None})
-    said = (DONE if done else CLOSED).format(ref=named)
     waiting = dependents(conn, ended_id)
     held: set[str] = set(_until_released(conn, ended_id)) if done else set()
     shipped = in_production(conn, ended_id) if held else None
     if shipped is None:  # they stay blocked until production runs its release (on_release)
         waiting = [task_id for task_id in waiting if task_id not in held]
     _off(conn, waiting, ended_id, by, "it ended")
-    live = IN_PRODUCTION.format(ref=named, version=shipped) if shipped else said
-    return sum(release_one(conn, task_id, ended_id, live if task_id in held else said) for task_id in waiting)
+
+    def said(task_id: str) -> str:
+        line = IN_PRODUCTION if shipped and task_id in held else DONE if done else CLOSED
+        return _said_in(conn, task_id, line, ended_id, named, version=shipped)
+
+    return sum(release_one(conn, task_id, ended_id, said(task_id)) for task_id in waiting)
+
+
+def _said_in(conn: "sqlite3.Connection", task_id: str, line: str, other_id: str, named: str, **fields: object) -> str:
+    """`line` about task `other_id`, kept in task `task_id`'s thread: `named` only where every reader of it may open
+    it (task_calls.may_name), else "a private task"."""
+    from . import hubdb, task_calls
+
+    H: Any = hubdb
+    TC: Any = task_calls
+    return TC.named_line(conn, line, other_id, named, kept_in=H.task(conn, task_id) or {"id": task_id}, **fields)
 
 
 def _off(conn: "sqlite3.Connection", waiting: list[str], ended_id: str, by: str, note: str) -> None:
@@ -446,8 +458,10 @@ def deleted(conn: "sqlite3.Connection", task_id: str, number: object, by: str) -
             "DELETE FROM task_relations WHERE from_task=? AND to_task=? AND kind=?", (waiter, task_id, RELATION)
         )
         H._task_event(conn, waiter, by, RELATION, task_id, None, "it was deleted")
-    said = DELETED.format(ref=ref({"id": task_id, "number": number}))
-    return sum(release_one(conn, waiter, task_id, said) for waiter in waiting)
+    named = ref({"id": task_id, "number": number})
+    return sum(
+        release_one(conn, waiter, task_id, _said_in(conn, waiter, DELETED, task_id, named)) for waiter in waiting
+    )
 
 
 def restores(conn: "sqlite3.Connection", row: Row, restored_id: str) -> bool:
@@ -469,30 +483,9 @@ def unlinked(conn: "sqlite3.Connection", task_id: str, blocker_id: str, by: str)
     if not row:
         return 0
     found: Any = conn.execute("SELECT number FROM tasks WHERE id=?", (blocker_id,)).fetchone()
-    named = UNLINKED.format(ref=ref({"id": blocker_id, "number": found[0] if found else None}))
-    said = named if named_to_all(conn, row, blocker_id) else UNLINKED_UNNAMED
+    named = ref({"id": blocker_id, "number": found[0] if found else None})
+    said = _said_in(conn, task_id, UNLINKED, blocker_id, named)
     return release_one(conn, task_id, blocker_id, said, tell=row.get("owner_id") != by)
-
-
-def named_to_all(conn: "sqlite3.Connection", row: Row, blocker_id: str) -> bool:
-    """Whether a note kept in `row`'s thread may name `blocker_id`: its owner may open it, and, when the blocker is
-    private, `row` is private too and every party and reader of it may open the blocker, since they read the thread
-    later (as task_wakes.told does for a filed task). A company task is read by every member: never a private name."""
-    from . import hubdb, task_calls
-
-    H: Any = hubdb
-    TC: Any = task_calls
-    owner = row.get("owner_id")
-    blocker: Row | None = TC._readable_rows(conn, owner, [blocker_id]).get(blocker_id) if owner else None
-    if not blocker:
-        return False
-    if not H.task_private(conn, blocker):
-        return True
-    full: Row = H.task(conn, str(row["id"])) or {}
-    if not H.task_private(conn, full):
-        return False  # a company task is read by every member, and a private blocker is not opened by all of them
-    parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
-    return all(H.task_private_readable(conn, p, blocker) for p in parties)
 
 
 def release_one(conn: "sqlite3.Connection", task_id: str, ended_id: str, said: str, *, tell: bool = True) -> int:

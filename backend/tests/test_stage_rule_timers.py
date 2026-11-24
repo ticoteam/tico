@@ -612,7 +612,7 @@ def test_a_private_blocker_the_owner_may_not_open_is_not_named(c, time_machine):
     time_machine.shift(timedelta(hours=7))
     T.sweep(c)
     ((_, body),) = _owner_told(c, blocked, "Late")
-    assert "Blocked by a task you can't open" in body
+    assert "Blocked by a private task" in body
     assert task_depends.ref(E.task(c, blocker)) not in body and "Salary" not in " ".join(_history(c, blocked))
 
 
@@ -628,7 +628,7 @@ def test_a_private_blocker_is_not_named_on_a_task_every_member_reads(c, time_mac
     time_machine.shift(timedelta(hours=7))
     T.sweep(c)
     ((_, body),) = _owner_told(c, blocked, "Late")
-    assert "Blocked by a task you can't open" in body
+    assert "Blocked by a private task" in body
     assert task_depends.ref(E.task(c, blocker)) not in " ".join([body, *_history(c, blocked)])
 
 

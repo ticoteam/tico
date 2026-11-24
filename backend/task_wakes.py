@@ -11,7 +11,7 @@ was folded into it (`refs.parts`), so taking one of them back (`cancel`) takes o
 import hashlib
 import json
 import logging
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from . import run_triggers
@@ -175,7 +175,8 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
     lines.append(f"{task.get('title') or 'A task'} is in {stage.get('name', '?')} ({pipeline.get('name', '?')}).")
     # What the person said with the sign-off that let the task in here: theirs, for whoever acts on it next.
     lines.extend(stage_effects.notes_on_the_way_in(conn, task))
-    shown = told(conn, task, to)
+    standings = R.standings(conn, task)
+    shown = told(conn, task, to, [s.about for s in standings])
     # The repository the work is in, so the bot never has to ask a person which one (a filed Engineering task), or
     # that there is none yet, so it never builds in its own.
     lines += stage_inputs.repository_lines(conn, str(task["id"]), shown)
@@ -188,7 +189,6 @@ def body(conn: "sqlite3.Connection", task: Row, lead: str = "", *, to: str | Non
         if one := stage_inputs.one_pr(handed):
             lines.append(one)
         lines.append(stage_inputs.IF_MISSING)
-    standings = R.standings(conn, task)
     fresh = _unreviewed(conn, task, standings)
     if fresh:
         lines.append(f"{fresh} Say so on the page the person OKs.")
@@ -270,13 +270,14 @@ def review_new(conn: "sqlite3.Connection", task_id: str) -> str | None:
     return None
 
 
-def told(conn: "sqlite3.Connection", task: Row, to: str | None) -> Callable[[str], bool]:
-    """Whether a wake or a note to `to` about open task `task` may name a task it filed (waiting_on.unnamed): `to` may
-    open it, and, since the words are kept in the task's thread for whoever reads the task later, a private one only
-    when its words may reach them all (task_calls.hidden_filed, `kept`)."""
+def told(conn: "sqlite3.Connection", task: Row, to: str | None, named: Iterable[object] = ()) -> Callable[[str], bool]:
+    """Whether a wake or a note to `to` about open task `task` may name a task it filed, or another task in `named`
+    (one it merges after, waiting_on.unnamed): `to` may open it, and, since the words are kept in the task's thread
+    for whoever reads the task later, a private one only when its words may reach them all
+    (task_calls.hidden_named, `kept`)."""
     from . import task_calls
 
-    hidden = set(task_calls.hidden_filed(conn, task, to, kept=True))
+    hidden = set(task_calls.hidden_named(conn, task, to, named, kept=True))
     return lambda task_id: task_id not in hidden
 
 

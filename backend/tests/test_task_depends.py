@@ -274,7 +274,7 @@ def test_the_note_for_a_dependency_taken_off_names_a_private_blocker_only_if_eve
     X.settled(c)
     TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
     (body,) = bodies(c, blocked)
-    assert D.UNLINKED_UNNAMED in body and ref(c, blocker) not in body
+    assert "A private task no longer blocks this task" in body and ref(c, blocker) not in body
 
 
 def test_taking_one_of_two_dependencies_off_wakes_nobody(c):

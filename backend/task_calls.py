@@ -994,10 +994,7 @@ def hidden_filed(
     `kept`: the words are a wake or a note kept in the task's thread, read later by whoever reads the task, not only by
     `viewer`. A private task filed there is hidden too unless its words may reach every reader of this one
     (H.subtask_flows_up)."""
-    visit: Row = row.get("visit") or {}
-    if row.get("status") != "open" or not visit:
-        return []
-    filed = [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
+    filed = _filed(conn, row)
     if viewer is None or not filed:
         return []
     readable = _readable_rows(conn, viewer, filed, visible_sql)
@@ -1010,6 +1007,86 @@ def hidden_filed(
         and H.task_private(conn, readable[other])
         and not H.subtask_flows_up(conn, readable[other], row)
     ]
+
+
+def _filed(conn: "sqlite3.Connection", row: Row) -> list[str]:
+    """The tasks the open visit of `row` filed."""
+    visit: Row = row.get("visit") or {}
+    if row.get("status") != "open" or not visit:
+        return []
+    return [str(found[0]) for found in _cached(conn, _FILED_ON_VISIT, str(visit["id"]))]
+
+
+# What words name a task with where they may not name it (`may_name`): never its title, its number or its id.
+PRIVATE_TASK = "a private task"
+
+
+def may_name(
+    conn: "sqlite3.Connection",
+    other_id: object,
+    *,
+    reader: str | None = None,
+    kept_in: Row | None = None,
+    visible_sql: str | None = None,
+) -> bool:
+    """Whether words may name task `other_id` (its title, its number, its id). Said to `reader`: they may read it
+    (`_readable`). Kept in the thread of task `kept_in` (a wake, a note, a line every reader of that task reads later):
+    also its owner may read it, and a private one only when `kept_in` is private too and every party and reader of it
+    may open it, since a company task is read by every member."""
+    if not other_id or not _readable(conn, reader, other_id, visible_sql):
+        return False
+    if kept_in is None:
+        return True
+    H = _h()
+    owner = kept_in.get("owner_id")
+    other = _readable_rows(conn, owner, [str(other_id)]).get(str(other_id)) if owner else None
+    if not other:
+        return False
+    if not H.task_private(conn, other):
+        return True
+    full: Row = H.task(conn, str(kept_in["id"])) or {}
+    if not H.task_private(conn, full):
+        return False
+    parties = [p for p in (full.get("requester_id"), full.get("owner_id")) if p] + sorted(H.reader_actors(conn, full))
+    return all(H.task_private_readable(conn, p, other) for p in parties)
+
+
+def named_line(
+    conn: "sqlite3.Connection",
+    template: str,
+    other_id: object,
+    ref: str,
+    *,
+    kept_in: Row | None = None,
+    **fields: object,
+) -> str:
+    """`template` with `{ref}` naming task `other_id` as `ref`, or as PRIVATE_TASK where it may not be named
+    (`may_name`), begun with a capital."""
+    shown = may_name(conn, other_id, kept_in=kept_in)
+    said = template.format(ref=ref if shown else PRIVATE_TASK, **fields)
+    return said[:1].upper() + said[1:]
+
+
+def hidden_named(
+    conn: "sqlite3.Connection",
+    row: Row,
+    viewer: str | None,
+    named: Iterable[object],
+    visible_sql: str | None = None,
+    *,
+    kept: bool = False,
+) -> list[str]:
+    """`hidden_filed`, and whichever other tasks in `named` (what a wait or a standing names: a task this one depends
+    on, one it merges after) `viewer` may not be told of (`may_name`; `kept`: in this task's thread)."""
+    hidden = hidden_filed(conn, row, viewer, visible_sql, kept=kept)
+    rest = sorted({str(x) for x in named if x} - set(_filed(conn, row)))
+    if viewer is None or not rest:
+        return hidden
+    if kept:
+        unsaid = [x for x in rest if not may_name(conn, x, reader=viewer, kept_in=row, visible_sql=visible_sql)]
+        return [*hidden, *unsaid]
+    readable = _readable_rows(conn, viewer, rest, visible_sql)
+    return [*hidden, *(x for x in rest if x not in readable)]
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:
@@ -1184,7 +1261,7 @@ def ask_entry(conn: "sqlite3.Connection", task_id: str, requirement_id: str, vie
         return next(
             (r for r in _decided(conn, task_id, visit["id"], viewer) if r["requirement_id"] == requirement_id), None
         )
-    hidden = hidden_filed(conn, row, viewer, None)
+    hidden = hidden_named(conn, row, viewer, [found.about])
     answers = R.newest_answers(conn, visit["id"])
     return _leave_entry(conn, row, found, answers, viewer, hidden, can_work(conn, viewer, row))
 
@@ -1218,12 +1295,9 @@ def task_view(
     standings = R.standings(conn, row) if live else []
     # A task this one filed may be private to people who can read this one: its title is not theirs to see, here or
     # in the line that says what this task waits on, nor its id, nor why it was closed (waiting_on.unnamed).
-    hidden = hidden_filed(conn, row, viewer, visible_sql)
-    raw_waits = W.of(conn, row, standings=standings) if live else []
     # So may any other task a wait or a standing names (one it depends on, one it merges after), as task_reads.brief.
-    named = {x.about for x in (*raw_waits, *standings) if x.about and x.about not in hidden}
-    if named:
-        hidden = [*hidden, *(named - set(_readable_rows(conn, viewer, named, visible_sql)))]
+    raw_waits = W.of(conn, row, standings=standings) if live else []
+    hidden = hidden_named(conn, row, viewer, [x.about for x in (*raw_waits, *standings)], visible_sql)
     shown: Callable[[str], bool] = lambda task_id: task_id not in hidden
     said_waits = W.with_shots(conn, task_id, raw_waits)  # with paid shots to reconcile, keys and names: Details
     waits = [W.view(wait, shown) for wait in said_waits]
