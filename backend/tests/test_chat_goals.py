@@ -172,7 +172,7 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
     post(api, f"attempts/{first['id']}/complete", {'outcome': 'completed', 'last_seq': 1}, machine['token'])
     with api.app.state.store.transaction() as c:
         BS.write(c, 'ops', {'runtime': 'codex'})
-        H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
+        H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.', to='bot:ops')
     second = claim(api, machine)
     assert second['chat_goal']['status'] == 'cleared' and 'goal' not in second['task']
     with api.app.state.store.read() as c:
@@ -285,7 +285,7 @@ def test_a_persons_edit_of_a_task_goal_survives_task_goals_turning_off(api):
     finish(api, machine, claim(api, machine))  # the edit's control
     with api.app.state.store.transaction() as c:
         BS.write(c, 'ops', {'runtime': 'codex'})
-        H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
+        H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.', to='bot:ops')
     claim(api, machine)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']
     assert goal['status'] == 'active' and goal['objective'] == 'Publish it and tell the board'
