@@ -647,7 +647,7 @@ def test_codex_claim_waits_for_a_current_exit_and_never_opens_the_login_on_a(api
     rid = exit_runner["runner_id"]
     relay.online, relay.links = True, {rid: 1}
     api.app.state.store.screen_sessions.tick()
-    advertise_codex(api, exit_runner, version="0.169.0")
+    assert "model_exit" not in advertise_codex(api, exit_runner, version="0.169.0")
     assert claim_reply(api, bot)["attempt"] is None
     assert advertise_codex(api, exit_runner)["model_exit"] is True
     advertise_codex(api, bot, "ops", capable=False)
