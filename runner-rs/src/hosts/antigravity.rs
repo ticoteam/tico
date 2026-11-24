@@ -1161,12 +1161,15 @@ impl AntigravityHost {
         };
         let (model, effort) = model_effort(&settings, effort)?;
         let (agent, warm) = self.agent(thread_id, &settings).await?;
-        let mut inner = self.inner();
-        if !inner.up || inner.turn.is_some() {
-            drop(inner);
+        let taken = {
+            let inner = self.inner();
+            !inner.up || inner.turn.is_some()
+        };
+        if taken {
             agent.stop().await;
             return Err(busy());
         }
+        let mut inner = self.inner();
         inner.flagged = false;
         inner.proc = Some(agent.proc.clone());
         inner.turn = Some(turn.clone());
