@@ -174,7 +174,8 @@ def test_two_burst_claims_commit_only_one_assignment_and_reservation(api, fleet)
         assert c.execute("SELECT placement FROM cloud_machines WHERE bot='ops'").fetchone()[0] == "shared"
 
 
-def test_preparation_rotates_past_failed_checkouts(api, fleet):
+@pytest.mark.parametrize("invalid", ["configuration_valid", "repository_present"])
+def test_preparation_rotates_past_failed_checkouts(api, fleet, invalid):
     store, base, burst = fleet
     for bot in ("cpo", "finance"):
         on(api, bot, "codex", providers.recommended("openai", "codex"))
@@ -192,8 +193,13 @@ def test_preparation_rotates_past_failed_checkouts(api, fleet):
     for bot in ("ops", "cpo"):
         (entry,) = get(api, PREP, token=burst["token"])
         assert entry["bot"] == bot
-        # The checkout exists, but its origin does not match, so it has no preparation ticket.
-        heartbeat(api, burst, bots={bot: base_check})
+        # Older runners can stamp a ticket on an invalid checkout. An origin mismatch has no ticket.
+        report = (
+            {**base_check, "burst_preparation": entry["burst_preparation"], invalid: False}
+            if bot == "ops"
+            else base_check
+        )
+        heartbeat(api, burst, bots={bot: report})
         assert claim(api, burst, bot) is None
 
     assert prepare(api, burst)["bot"] == "finance"
@@ -390,6 +396,8 @@ def test_burst_holds_checkout_and_session_recovery_on_base(api, fleet, issue):
     queue_prepared(api, burst)
     attempt = claim(api, burst, "ops")
     aid, job = attempt["id"], attempt["job_id"]
+    [assignment] = get(api, "runners/assignments", burst["token"])
+    assert assignment["bot"] == "ops" and assignment["burst_guest"] is True
     body = {"outcome": "interrupted", "last_seq": 0}
     if issue != "mismatch":
         post(api, f"attempts/{aid}/started", {"thread_id": "primary"}, burst["token"])
@@ -400,7 +408,17 @@ def test_burst_holds_checkout_and_session_recovery_on_base(api, fleet, issue):
             body.update(fallback="codex", source_continuation=saved)
     else:
         body["burst_checkout"] = issue
+    if issue == "unpublished":
+        with store.transaction() as c:
+            c.execute("UPDATE runners SET revoked_at=? WHERE id=?", (H.now(), base["runner_id"]))
     post(api, f"attempts/{aid}/complete", body, burst["token"])
+    if issue == "unpublished":
+        [assignment] = get(api, "runners/assignments", burst["token"])
+        assert assignment["burst_guest"] is True
+        with store.transaction() as c:
+            assert compute_pool.recovery_hold(c, aid)
+            c.execute("UPDATE runners SET revoked_at=NULL WHERE id=?", (base["runner_id"],))
+            assert compute_pool.return_guests(c, burst["runner_id"])
     assert placement(store) == (base["runner_id"], 3)
     with store.transaction() as c:
         c.execute("UPDATE attempts SET finished_at=? WHERE id=?", (H.shift(H.now(), hours=-5), aid))

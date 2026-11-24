@@ -1180,6 +1180,7 @@ pub async fn preflight(
         row.insert("warnings".into(), json!(warnings));
         if let Some(ticket) = entry["burst_preparation"].as_str() {
             if repository_present
+                && configuration_valid
                 && burst_checkout_matches(&path, &text_of(&entry["repository"])).await
             {
                 row.insert("burst_preparation".into(), json!(ticket));

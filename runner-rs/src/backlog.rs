@@ -44,6 +44,10 @@ impl Runner {
             if self.stopping() {
                 return;
             }
+            // Only the Burst turn may publish its checkout. Recovery can leave unscanned commits held for review.
+            if row["burst_guest"] == true {
+                continue;
+            }
             let bot = text_of(&row["bot"]);
             let path = crate::sessions::local_path(&self.config, &bot, &row["config"]);
             if pushed.contains(&path) || !path.join(".git").exists() {

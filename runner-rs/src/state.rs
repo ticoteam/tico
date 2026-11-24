@@ -73,9 +73,23 @@ pub struct State {
 pub struct Unfinished {
     pub id: String,
     pub payload: String,
-    #[allow(dead_code)]
-    pub phase: String,
+    phase: String,
     pub completion: Option<String>,
+}
+
+impl Unfinished {
+    fn read(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            id: row.get(0)?,
+            payload: row.get(1)?,
+            phase: row.get(2)?,
+            completion: row.get(3)?,
+        })
+    }
+
+    pub fn start_confirmed(&self) -> bool {
+        self.phase != "claimed"
+    }
 }
 
 /// The first 100 events of `aid` past both its stored ack and `acked`.
@@ -373,19 +387,6 @@ impl State {
         })
     }
 
-    /// An interrupted completion for an attempt that has none yet; a result already saved stands.
-    pub fn interrupted(&self, aid: &str, text: &str) -> Result<(), String> {
-        self.with(|c| {
-            let seq: i64 = c.query_row("SELECT coalesce(max(seq),0) FROM events WHERE attempt_id=?", params![aid], |r| r.get(0))?;
-            let done = json!({"outcome": "interrupted", "text": text, "last_seq": seq});
-            c.execute(
-                "UPDATE attempts SET phase='uploading',completion=? WHERE id=? AND completion IS NULL AND phase NOT IN ('synced','historical')",
-                params![done.to_string(), aid],
-            )
-            .map(|_| ())
-        })
-    }
-
     /// The result recovery sends for `aid`, read again now rather than from an earlier listing: the one saved,
     /// or an interrupted one saved in the same transaction when there is none. None once it is synced or
     /// historical. A turn that finished after the listing keeps its own result.
@@ -433,8 +434,18 @@ impl State {
     pub fn unfinished(&self) -> Result<Vec<Unfinished>, String> {
         self.with(|c| {
             let mut stmt = c.prepare("SELECT id, payload, phase, completion FROM attempts WHERE phase NOT IN ('synced','historical')")?;
-            let rows = stmt.query_map([], |r| Ok(Unfinished { id: r.get(0)?, payload: r.get(1)?, phase: r.get(2)?, completion: r.get(3)? }))?;
+            let rows = stmt.query_map([], Unfinished::read)?;
             rows.collect()
+        })
+    }
+
+    pub fn unfinished_attempt(&self, aid: &str) -> Result<Option<Unfinished>, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT id, payload, phase, completion FROM attempts WHERE id=? AND phase NOT IN ('synced','historical')",
+                [aid],
+                Unfinished::read,
+            ).optional()
         })
     }
 
@@ -913,7 +924,7 @@ mod tests {
             .save_session("ops", "bot", "claude", "thread-1")
             .unwrap();
         state
-            .interrupted("a2", "Runner restarted during execution")
+            .recovery("a2", "Runner restarted during execution", false)
             .unwrap();
         drop(state);
         let script = "import sqlite3,sys,json\nc=sqlite3.connect(sys.argv[1])\nprint(c.execute('pragma journal_mode').fetchone()[0])\nprint(json.loads(c.execute('select completion from attempts').fetchone()[0])['outcome'])\nprint(c.execute('select thread from sessions').fetchone()[0])\nprint(','.join(r[0] for r in c.execute(\"select name from sqlite_master where type='table' order by name\")))";

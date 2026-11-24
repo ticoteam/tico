@@ -159,11 +159,19 @@ def offer(
     document: Row = _runner_readiness.local_sign_ins(readiness_document(runner["readiness"]))
     prepare_after: str | None = None
     if prepare:
-        # An idle slot reports the bot it just tried. Its checkout may be missing or have the wrong origin.
-        reported: dict[str, Row] = document["bots"]
-        prepare_after = next(
-            (bot for bot, check in reported.items() if bot in bots and not check.get("burst_preparation")), None
-        )
+        # An idle slot reports the bot it just tried. Move past a checkout that cannot be claimed.
+        reported: Row = document["bots"]
+        for bot in reported:
+            if bot not in bots:
+                continue
+            check = bot_readiness(document, bot)
+            if (
+                not check.get("burst_preparation")
+                or check.get("configuration_valid") is not True
+                or check.get("repository_present") is not True
+            ):
+                prepare_after = bot
+                break
     else:
         bots = {bot: row for bot, row in bots.items() if bot_readiness(document, bot).get("burst_preparation")}
     if not bots:

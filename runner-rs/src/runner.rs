@@ -15,7 +15,7 @@ use crate::config::{machine_capacity, Config};
 use crate::events::{Events, BACKUP_POLL_S, HEARTBEAT_LIVE_S};
 use crate::gitcred::{CredentialSocket, TokenCache};
 use crate::readiness;
-use crate::state::State;
+use crate::state::{State, Unfinished};
 use crate::util::{log, mark, text_of};
 use crate::wire::{decode, ClaimAnswer, EventsAnswer, HeartbeatAnswer};
 
@@ -523,6 +523,19 @@ impl Runner {
         result
     }
 
+    async fn save_recovery(&self, row: &Unfinished, reason: &str) -> Result<Option<Value>, String> {
+        let mut burst_unpublished = false;
+        if row.completion.is_none() && row.start_confirmed() {
+            if let Ok(attempt) = serde_json::from_str::<Value>(&row.payload) {
+                if let Some(repository) = attempt["burst_repository"].as_str() {
+                    burst_unpublished = !self.recover_burst_checkout(&attempt, repository).await;
+                }
+            }
+        }
+        // A turn that finished since the listing may have saved its own result. Read the row again under the lock.
+        self.state.recovery(&row.id, reason, burst_unpublished)
+    }
+
     /// Results a restart or an outage left on this computer, sent before anything new.
     pub async fn recover_output(&self) {
         self.upload_stderr(None).await;
@@ -540,24 +553,9 @@ impl Runner {
                 continue;
             }
             let sent: Result<(), ApiError> = async {
-                let mut burst_unpublished = false;
-                if row.completion.is_none() {
-                    if let Ok(attempt) = serde_json::from_str::<Value>(&row.payload) {
-                        if let Some(repository) = attempt["burst_repository"].as_str() {
-                            burst_unpublished =
-                                !self.recover_burst_checkout(&attempt, repository).await;
-                        }
-                    }
-                }
-                // The listing is a snapshot: a turn that ended since then saved (and maybe sent) its own result,
-                // which stands. Read the row again, under the store's lock, before deciding what to send.
                 let Some(completion) = self
-                    .state
-                    .recovery(
-                        &row.id,
-                        "Runner restarted during execution",
-                        burst_unpublished,
-                    )
+                    .save_recovery(&row, "Runner restarted during execution")
+                    .await
                     .map_err(|e| ApiError::new("state", e, 0, false))?
                 else {
                     return Ok(());
@@ -1486,7 +1484,10 @@ impl Runner {
                 log(&format!(
                     "Tico runner: worker {aid} failed ({why}); recovering saved attempt"
                 ));
-                let _ = self.state.interrupted(&aid, &format!("The runner stopped this turn on an error ({why}); see this computer's runner log"));
+                if let Ok(Some(row)) = self.state.unfinished_attempt(&aid) {
+                    let reason = format!("The runner stopped this turn on an error ({why}); see this computer's runner log");
+                    let _ = self.save_recovery(&row, &reason).await;
+                }
             }
             self.drain.finish(&aid);
             self.active.lock().unwrap().remove(&aid);

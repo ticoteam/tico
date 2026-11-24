@@ -4406,8 +4406,10 @@ class Execution:
         # The environment owner hosts any bot; every other operator hosts only their own.
         owner = self.auth.owner_id(c)
         rows = c.execute(
-            f"SELECT a.*,b.state,b.slug,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state FROM assignments a "
+            f"SELECT a.*,b.state,b.slug,{BS.CONFIG} AS config,bc.owner_id,bc.onboarding_state,"
+            "g.bot IS NOT NULL AS burst_guest FROM assignments a "
             f"JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot {BS.JOIN} "
+            "LEFT JOIN burst_guests g ON g.bot=a.bot AND g.runner_id=a.runner_id "
             "WHERE a.runner_id=? ORDER BY a.bot",
             (who.runner_id,),
         ).fetchall()
@@ -4464,10 +4466,13 @@ class Execution:
             sent = runner_versions.wire_template(stored)
             if stored is not original or sent is not stored:
                 wired["config_json"] = json.dumps(sent)
+            assignment = dict(row)
+            burst_guest = assignment.pop("burst_guest")
             result.append(
                 {
-                    **dict(row),
+                    **assignment,
                     **wired,
+                    **({"burst_guest": True} if burst_guest else {}),
                     'computer_label': runner['label'],
                     'computer_logins_v1': True,
                     'config': config,

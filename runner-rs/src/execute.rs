@@ -1415,6 +1415,7 @@ impl Runner {
             Ok(_) => {
                 self.drain.acknowledged(aid);
                 flags.start_acknowledged.store(true, Ordering::SeqCst);
+                self.state.phase(aid, "running")?;
                 mark("acknowledged", aid);
                 crate::company_skills::receipt_landed(aid).await;
                 Ok(true)
@@ -3140,7 +3141,6 @@ impl Runner {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
                 }
             }
-            self.state.phase(&aid, "running")?;
             if !continuing.is_empty() && (!resumed || (th != continuing && previous.as_deref() != Some(continuing.as_str()))) {
                 // Started, so the server holds it for review rather than queueing it again; no prompt was sent.
                 return Err(Fail::runtime(CONTINUE_LOST));
@@ -3733,7 +3733,6 @@ impl Runner {
                     // acknowledges the turn instead, before it acts.
                     unstopped(&flags)?;
                     self.start_fallback(&attempt, &flags, &th).await?;
-                    self.state.phase(&aid, "running")?;
                     acked = true;
                 }
                 let names = self.names().await;
@@ -4375,7 +4374,10 @@ impl Runner {
         }
         let mut burst_pushed = false;
         if let Some(repository) = &burst_repository {
-            if let Some(p) = place.as_ref().filter(|p| host.is_some() && !p.disposable) {
+            if let Some(p) = place
+                .as_ref()
+                .filter(|p| flags.start_acknowledged.load(Ordering::SeqCst) && !p.disposable)
+            {
                 burst_pushed = !committed_secret
                     && skipped.is_empty()
                     && p.session_path.is_none()
@@ -10110,13 +10112,18 @@ for line in sys.stdin:
         let (runner, dir) = runner_at(&url, "burst-restart");
         let path = runner.config.projects_dir().join("bot-burst-restart");
         let remote = burst_checkout_fixture(&dir, &path);
-        for (id, problem) in [
-            ("published", Value::Null),
-            ("local-commit", json!("unpublished")),
+        for (id, started, problem) in [
+            ("published", true, None),
+            ("local-commit", true, Some("unpublished")),
+            ("claimed", false, None),
         ] {
             if id == "local-commit" {
                 std::fs::write(path.join("AGENT.md"), "# Interrupted turn\n").unwrap();
                 repo_git(&path, &["commit", "-qam", "interrupted turn"]);
+            }
+            if !started {
+                assert_eq!(repo_git(&remote, &["show", "main:AGENT.md"]), "# Fixture");
+                std::fs::rename(&remote, dir.join("unavailable.git")).unwrap();
             }
             let before = runner_from(&dir);
             before
@@ -10125,7 +10132,9 @@ for line in sys.stdin:
                     "id": id, "bot": "burst-restart", "burst_repository": "acme/bot",
                 }))
                 .unwrap();
-            before.state.phase(id, "running").unwrap();
+            if started {
+                before.state.phase(id, "running").unwrap();
+            }
             drop(before);
 
             runner_from(&dir).recover_output().await;
@@ -10133,9 +10142,11 @@ for line in sys.stdin:
             let route = format!("/attempts/{id}/complete");
             let (_, _, completion) = posted.iter().find(|(_, p, _)| p.ends_with(&route)).unwrap();
             assert_eq!(completion["outcome"], "interrupted");
-            assert_eq!(completion["burst_checkout"], problem);
+            assert_eq!(
+                completion.get("burst_checkout"),
+                problem.map(|value| json!(value)).as_ref()
+            );
         }
-        assert_eq!(repo_git(&remote, &["show", "main:AGENT.md"]), "# Fixture");
         server.abort();
         std::fs::remove_dir_all(dir).unwrap();
     }
