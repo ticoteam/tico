@@ -446,6 +446,8 @@ describe('One matter @n:re:matter', () => {
 });
 
 describe('Risk as Disputes @n:re:disputes', () => {
+  afterEach(() => vi.useRealTimers());
+
   it('reads every page of disputes, and the Open total counts them all', async () => {
     const offsets: (string | null)[] = [];
     serve((url) => {
@@ -462,12 +464,16 @@ describe('Risk as Disputes @n:re:disputes', () => {
   });
 
   it('tables every dispute, open ones first with what is claimed, each one’s next date and New on a new one, each opening its matter', async () => {
+    // Pinned a few days before the due date, so Nov 24 reads as a day and not as Today or Tomorrow on the real calendar.
+    const now = new Date(2026, 10, 20, 10);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
     serve(nothing);
     queryClient.setQueryData(waitingTasksQuery.queryKey, []);
     queryClient.setQueryData(mattersQuery('disputes').queryKey, {
       matters: [
         matter('t1', 'Refund dispute A', { due: '2026-11-24T17:00:00Z' }),
-        matter('t2', 'Refund dispute B', { amount: 12900, created: recent }),
+        matter('t2', 'Refund dispute B', { amount: 12900, created: new Date(now.getTime() - 3_600_000).toISOString() }),
         matter('t3', 'Refund dispute C', { status: 'done', forum: 'PayPal' }),
       ],
       next_offset: null,
