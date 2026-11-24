@@ -6,6 +6,7 @@ import { run } from '@/actions';
 import { liveQuery, timelineQuery } from '@/conversation';
 import { catchUpQuery } from '@/features/threads/routing';
 import { chipsFor, TicoChips } from './Chips';
+import { replayCount, setHere } from './intros';
 
 vi.mock('@/actions', async (orig) => ({ ...(await orig<object>()), run: vi.fn() }));
 afterEach(() => vi.clearAllMocks());
@@ -61,6 +62,17 @@ describe("Tico's chips", () => {
     expect(screen.getAllByRole('button').map((b) => b.textContent)).toEqual(['Catch up', 'What needs me?']);
     act(() => void client.setQueryData(liveQuery(ROOM).queryKey, [{ run: 'r1', ended: false } as never]));
     await waitFor(() => expect(screen.queryAllByRole('button')).toHaveLength(0));
+  });
+
+  it('play the open page’s intro again from "Show me how this works", sending nothing', async () => {
+    act(() => setHere('rules'));
+    await mount('/company/rules');
+    const was = replayCount();
+    fireEvent.click(screen.getByRole('button', { name: 'Show me how this works' }));
+    expect(replayCount()).toBe(was + 1);
+    expect(vi.mocked(run)).not.toHaveBeenCalled();
+    act(() => setHere(null));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Show me how this works' })).toBeNull());
   });
 
   it('fade away while the chat is scrolled up (the foot is data-up), and come back with a fade', () => {

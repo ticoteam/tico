@@ -32,7 +32,7 @@ export function TicoSheet() {
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   // On a phone the bar draws Tico's one Dot: the head has none of its own.
   const phone = usePhoneCards();
-  const intro = useIntroMessage(power?.bot);
+  const intro = useIntroMessage(power?.bot, room.data);
   return (
     <Sheet kind="tico" label="Tico">
       <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
@@ -52,7 +52,7 @@ export function TicoSheet() {
             below={okCard}
             extra={intro}
             card={introCard}
-            onLocal={(text) => isShowMe(text) && askReplay(path)}
+            onLocal={(text) => isShowMe(text) && askReplay()}
           />
         </>
       ) : room.isError ? (

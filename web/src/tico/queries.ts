@@ -143,15 +143,15 @@ export const introsSeenQuery = queryOptions({
   },
 });
 
-/** The page's intro has played for this person: it does not play there again on its own. */
+/** The page's intro has played for this person: it does not play there again on its own. Only this page is sent:
+    the server adds it to the pages kept (a page seen first in another tab keeps its own time). */
 export function markIntroSeen(page: string): Promise<unknown> {
-  // the whole map is written back: never before it was read, or the pages seen before would be lost
-  const was = queryClient.getQueryData(introsSeenQuery.queryKey);
-  if (!was || was[page]) return Promise.resolve();
-  const next = { ...was, [page]: new Date().toISOString() };
+  if (queryClient.getQueryData(introsSeenQuery.queryKey)?.[page]) return Promise.resolve();
+  const at = { [page]: new Date().toISOString() };
   return write({
     key: introsSeenQuery.queryKey,
-    optimistic: () => next,
-    send: (idempotencyKey) => api.post(`/api/v2/preferences/${INTROS_KEY}`, { value: next }, { idempotencyKey }),
+    optimistic: (was: IntrosSeen | undefined) => ({ ...at, ...was }),
+    send: (idempotencyKey) => api.post<GetPreferenceResponse>(`/api/v2/preferences/${INTROS_KEY}`, { value: at }, { idempotencyKey }),
+    settle: (_was: IntrosSeen | undefined, answer) => answer.value,
   });
 }
