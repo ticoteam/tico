@@ -607,7 +607,7 @@ describe('Settings › Providers', () => {
     });
     show(<SettingsPage section="providers" />, '/settings/providers');
     fireEvent.click(await screen.findByRole('button', { name: 'More for Company key' }));
-    expect(screen.queryByRole('menuitem', { name: 'Check use' })).toBeNull();
+    expect(screen.queryByRole('menuitem', { name: 'Refresh usage' })).toBeNull();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Replace key' }));
     const dialog = await screen.findByRole('dialog', { name: 'Replace key for Company key' });
     fireEvent.change(within(dialog).getByLabelText('API key'), { target: { value: 'made-up-api-key' } });
@@ -637,20 +637,85 @@ describe('Settings › Providers', () => {
     const company = screen.getByRole('region', { name: 'Company keys' });
     expect(within(mine).getByText('2 plans')).toBeTruthy();
     expect(within(mine).getByText('Picked by 1 agent', { selector: '.provider-pool-count' })).toBeTruthy();
-    expect(within(mine).getAllByText('Picked by 1 agent', { selector: '.provider-agents' })).toHaveLength(2);
+    expect(within(mine).queryByText('Picked by 1 agent', { selector: '.provider-agents' })).toBeNull();
+    expect(within(mine).getByRole('heading', { level: 4, name: 'Claude' })).toBeTruthy();
+    expect(within(mine).queryByText('Claude plan')).toBeNull();
     const fold = within(other).getByRole('button', { name: "Ben Sample's pool" });
     expect(fold.getAttribute('aria-expanded')).toBe('false');
     expect(within(other).queryByText('Other plan')).toBeNull();
     fireEvent.click(fold);
     const otherPlan = within(other).getByText('Other plan');
     expect(otherPlan.closest('a')).toBeNull();
+    expect(within(other).queryByText('Ben Sample')).toBeNull();
     fireEvent.click(fold);
     expect(within(other).queryByText('Other plan')).toBeNull();
     expect(within(legacy).getByText('Added by Ana Test')).toBeTruthy();
     expect(within(company).getByText('Company key')).toBeTruthy();
+    expect(within(company).getByText('Picked by 0 agents', { selector: '.provider-agents' })).toBeTruthy();
     expect(mine.compareDocumentPosition(other)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(other.compareDocumentPosition(legacy)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(legacy.compareDocumentPosition(company)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('groups pool plans by provider without counts, uses account email as primary title, and offers inline Refresh for missing Claude usage', async () => {
+    const rows: Subscription[] = [
+      {
+        ...plan,
+        id: 'c1',
+        name: "Ana's Claude plan",
+        preview: 'ana@acme.example',
+        status: 'working',
+        order: 1,
+        usage: { used_pct: null, window: null, cost_usd_month: null, reason: 'Waiting for a computer to report' },
+      },
+      {
+        ...plan,
+        id: 'c2',
+        name: 'Primary work',
+        preview: 'ana+2@acme.example',
+        status: 'working',
+        order: 2,
+        usage: { used_pct: 45, window: 'week', cost_usd_month: null, resets_at: null },
+      },
+      {
+        ...plan,
+        id: 'g1',
+        kind: 'codex_login',
+        runtime: 'codex',
+        label: 'ChatGPT plan',
+        name: "Ana's ChatGPT plan",
+        preview: 'ana@openai.example',
+        status: 'working',
+        order: 1,
+        usage: { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z' },
+      },
+    ];
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: rows });
+    serve((url, method) => {
+      if (url === '/api/v2/model-subscriptions') return ok({ kinds: [], subscriptions: rows });
+      if (method === 'POST' && url.endsWith('/usage-refresh')) return ok({ queued: true });
+    });
+    show(<SettingsPage section="providers" />, '/settings/providers');
+    const mine = within(await screen.findByRole('region', { name: 'Your pool' }));
+    expect(mine.getAllByRole('heading', { level: 4 }).map((h) => h.textContent)).toEqual(['Claude', 'ChatGPT']);
+    expect(mine.getByText('ana@acme.example')).toBeTruthy();
+    expect(mine.queryByText("Ana's Claude plan")).toBeNull();
+    expect(mine.getByText('ana+2@acme.example')).toBeTruthy();
+    expect(mine.getByText('Primary work')).toBeTruthy();
+    expect(mine.getByText('ana@openai.example')).toBeTruthy();
+    expect(mine.queryByText("Ana's ChatGPT plan")).toBeNull();
+    expect(mine.queryByText('Ana Test')).toBeNull();
+    expect(mine.queryByText('Claude plan')).toBeNull();
+    expect(mine.queryByText('ChatGPT plan')).toBeNull();
+    expect(mine.getByTitle('ana@openai.example').querySelector('.pill')?.textContent).toBe('At limit');
+    expect(mine.getByTitle('ana@openai.example').querySelector('.meter')?.classList.contains('is-over')).toBe(true);
+
+    const refresh = within(mine.getByTitle('ana@acme.example')).getByRole('button', { name: 'Refresh' });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(sent).toContainEqual({ url: '/api/v2/model-subscriptions/c1/usage-refresh', method: 'POST', body: {} }));
+
+    fireEvent.click(mine.getByRole('button', { name: 'More for ana@acme.example' }));
+    expect(await screen.findByRole('menuitem', { name: 'Refresh usage' })).toBeTruthy();
   });
 
   it('shows each pool’s exit and lets an eligible viewer change it', async () => {
@@ -695,7 +760,7 @@ describe('Settings › Providers', () => {
     expect(sent).toEqual([{ url: exitPath, method: 'PUT', body: { runner_id: studio.id } }]);
   });
 
-  it('lets members edit their own plan limit and read other plans’ limits', async () => {
+  it('lets members edit their own plan limit from the menu and read other plans’ limits', async () => {
     queryClient.setQueryData(['me'], { id: 'human:p1', role: 'member' });
     let mine = { ...plan, max_live_turns: 20 };
     const other = { ...mine, id: 'other', name: 'Other plan', owner_id: 'human:p2', owner_name: 'Ben Sample' };
@@ -709,20 +774,35 @@ describe('Settings › Providers', () => {
         return ok(mine);
       }
     });
-    show(<SettingsPage section="providers" />, '/settings/providers');
-    const input = await screen.findByRole<HTMLInputElement>('spinbutton', { name: 'Max live turns' });
+    function Page() {
+      const { open } = useSearch({ strict: false }) as { open?: string };
+      return <SettingsPage section="providers" open={open} />;
+    }
+    show(<Page />, '/settings/providers');
+    expect(await screen.findByTitle('Work plan')).toBeTruthy();
+    expect(screen.queryByRole('spinbutton', { name: 'Max live turns' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'More for Work plan' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^Max live turns/ }));
+    const dialog = within(await screen.findByRole('dialog', { name: 'Max live turns' }));
+    const input = dialog.getByRole<HTMLInputElement>('spinbutton', { name: 'Max live turns' });
+    const save = dialog.getByRole<HTMLButtonElement>('button', { name: 'Save' });
     expect(input.valueAsNumber).toBe(20);
+    expect(save.disabled).toBe(true);
     fireEvent.change(input, { target: { value: '201' } });
-    fireEvent.blur(input);
+    expect(save.disabled).toBe(true);
     expect(sent).toEqual([]);
     fireEvent.change(input, { target: { value: '12' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    await waitFor(() => expect(input.disabled).toBe(false));
+    expect(save.disabled).toBe(false);
+    fireEvent.click(save);
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(sent).toEqual([{ url: `/api/v2/model-subscriptions/${plan.id}`, method: 'POST', body: { max_live_turns: 12 } }]);
-    expect(input.valueAsNumber).toBe(12);
+
     fireEvent.click(screen.getByRole('button', { name: "Ben Sample's pool" }));
-    expect(screen.getByText('Max live turns 20')).toBeTruthy();
-    expect(screen.getAllByRole('spinbutton')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'More for Other plan' })).toBeNull();
+    fireEvent.click(screen.getByRole('link', { name: 'Other plan' }));
+    expect(await screen.findByText('Max live turns')).toBeTruthy();
+    expect(screen.getByText('20')).toBeTruthy();
   });
 
   it('identifies fallback agents in the expanded provider row and counts them', async () => {
@@ -734,36 +814,51 @@ describe('Settings › Providers', () => {
     serve((url) => url === '/api/v2/model-subscriptions' ? ok(catalog) : undefined);
     show(<SettingsPage section="providers" open={plan.id} />, '/settings/providers?open=plan-1');
     const pool = within(await screen.findByRole('region', { name: 'Your pool' }));
-    expect(pool.getByText('Picked by 2 agents', { selector: '.provider-agents' })).toBeTruthy();
+    expect(pool.getByText('Picked by 2 agents', { selector: '.provider-pool-count' })).toBeTruthy();
+    expect(pool.queryByText('Picked by 2 agents', { selector: '.provider-agents' })).toBeNull();
     const [fallback] = pool.getAllByText('Fallback');
     expect(fallback?.parentElement?.textContent).toContain('Beta Agent');
   });
 
   it('selects one badge per row by severity before rotation', async () => {
     const usage: NonNullable<Subscription['usage']> = { used_pct: 100, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z' };
+    const lowUsage: NonNullable<Subscription['usage']> = { used_pct: 42, window: 'week', cost_usd_month: null, resets_at: '2099-07-01T00:00:00Z' };
     const base = { ...plan, status: 'working' as const };
     const rows = [
       { ...base, name: 'Payment', problem: 'Payment past due', expired: true, usage },
       { ...base, id: 'expired', name: 'Expired', expired: true, usage },
       { ...base, id: 'limited', name: 'Limited', available: false, usage: { ...usage, quota_hold_until: usage.resets_at! } },
-      { ...base, id: 'busy', name: 'Busy plan', available: false, usage: { ...usage, capacity_until: usage.resets_at! } },
+      { ...base, id: 'full-claude', name: 'Full Claude', usage: { ...usage, used_pct: 100, near: true } },
+      { ...base, id: 'full-chatgpt', kind: 'codex_login' as const, runtime: 'codex' as const, label: 'ChatGPT plan', name: 'Full ChatGPT', usage: { ...usage, used_pct: 100.4, resets_at: null } },
+      { ...base, id: 'busy', name: 'Busy plan', available: false, usage: { ...lowUsage, capacity_until: usage.resets_at! } },
       { ...base, id: 'near', name: 'Near', usage: { ...usage, used_pct: 96, near: true }, in_use_on: ['r1'] },
-      { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'], available: true, usage },
-      { ...base, id: 'ready', name: 'Ready plan', order: 2, usage: { ...usage, used_pct: 100.4, resets_at: null } },
+      { ...base, id: 'live', name: 'Live', order: 1, in_use_on: ['r1'], available: true, usage: lowUsage },
+      { ...base, id: 'ready', name: 'Ready plan', order: 2, usage: { ...lowUsage, resets_at: null } },
       { ...base, id: 'next', name: 'Spare', order: 3, next_in_rotation: true },
     ];
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: rows });
     serve((url) => url === '/api/v2/model-subscriptions' ? ok({ kinds: [], subscriptions: rows }) : undefined);
     show(<SettingsPage section="providers" />, '/settings/providers');
     await screen.findByRole('region', { name: 'Your pool' });
-    for (const [row, words] of [['Payment', 'Problem'], ['Expired', 'Reconnect needed'], ['Limited', 'At limit until'], ['Busy plan', 'Busy until'], ['Near', 'Near limit'], ['Live', 'In use'], ['Spare', 'Next'], ['Ready plan', 'Ready']] as const) {
+    for (const [row, words] of [
+      ['Payment', 'Problem'],
+      ['Expired', 'Reconnect needed'],
+      ['Limited', 'At limit until'],
+      ['Full Claude', 'At limit'],
+      ['Full ChatGPT', 'At limit'],
+      ['Busy plan', 'Busy until'],
+      ['Near', 'Near limit'],
+      ['Live', 'In use'],
+      ['Spare', 'Next'],
+      ['Ready plan', 'Ready'],
+    ] as const) {
       const badges = screen.getByTitle(row).querySelectorAll('.pill');
       expect(badges).toHaveLength(1);
       expect(badges[0]?.textContent).toContain(words);
     }
     expect(screen.getByText('Problem').getAttribute('title')).toBe('Payment past due');
     expect(within(screen.getByTitle('Busy plan')).getByText(/Busy until/).classList.contains('pill-flag')).toBe(false);
-    expect(within(screen.getByTitle('Live')).getByText(/100%/)).toBeTruthy();
+    expect(within(screen.getByTitle('Full Claude')).getByText(/100%/)).toBeTruthy();
     expect(within(screen.getByTitle('Expired')).queryByText(/100%/)).toBeNull();
   });
 
