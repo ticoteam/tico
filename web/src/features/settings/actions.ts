@@ -438,7 +438,7 @@ const sub = (id: string) => ({ kind: 'subscription', id });
 
 export const connect = defineAction({
   id: 'settings.connect',
-  title: 'Connect a Claude or ChatGPT plan',
+  title: 'Connect a plan',
   kind: 'change',
   input: z.union([
     z.strictObject({ kind: z.enum(SIGN_IN_KINDS), owner_id: z.optional(id('a person id')) }),

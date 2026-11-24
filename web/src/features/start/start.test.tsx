@@ -332,7 +332,9 @@ describe('Setup dialog, three steps @s1171', () => {
     let saved = false;
     const usage = { used_pct: 100, resets_at: '2099-07-01T00:00:00Z' };
     const existing = { id: 'old', name: 'Held plan', runtime: 'claude', status: 'working', available: false, usage: { ...usage, quota_hold_until: usage.resets_at } };
-    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [], subscriptions: [existing] } as never);
+    // A Claude plan's kind, which offers Paste instead when no computer can sign in.
+    const claude = { kind: 'claude_token', label: 'Claude plan', runtime: 'claude', secret_label: 'Setup token', help: '', owned: true, connect: true, paste: true };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [claude], subscriptions: [existing] } as never);
     const codePage = 'https://auth.example/claude';
     otherwise = (method, url) => {
       if (url.endsWith('/connect')) {
@@ -347,7 +349,7 @@ describe('Setup dialog, three steps @s1171', () => {
           saved = true;
           return { body: { id: 'new', name: 'New plan' } };
         }
-        return { body: { kinds: [], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working', available: true, usage }] : [existing] } };
+        return { body: { kinds: [claude], subscriptions: saved ? [existing, { id: 'new', name: 'New plan', runtime: 'claude', status: 'working', available: true, usage }] : [existing] } };
       }
       return { body: RECORD };
     };

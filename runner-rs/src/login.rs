@@ -655,13 +655,26 @@ fn signed_in(runtime: &str, exe: &str, env: &Env, headless: bool) -> (bool, Stri
 /// The status check's own answer: Some(signed in, detail), or None when it gave none (it could not run, timed
 /// out or said something unreadable, or this runtime has no check).
 fn sign_in_status(runtime: &str, exe: &str, env: &Env) -> Option<(bool, String)> {
+    sign_in_status_within(runtime, exe, env, Duration::MAX)
+}
+
+/// `sign_in_status`, given no longer than `most` (what is left of a sign-in's own time): None when that is too short.
+fn sign_in_status_within(
+    runtime: &str,
+    exe: &str,
+    env: &Env,
+    most: Duration,
+) -> Option<(bool, String)> {
     let run = |args: &[&str], secs: u64| -> Option<(bool, String)> {
+        if most.is_zero() {
+            return None;
+        }
         let mut c = model_command(exe, args, env);
         c.stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = c.spawn().ok()?;
-        let deadline = Instant::now() + Duration::from_secs(secs);
+        let deadline = Instant::now() + Duration::from_secs(secs).min(most);
         loop {
             if let Ok(Some(_)) = child.try_wait() {
                 let out = child.wait_with_output().ok()?;
@@ -998,8 +1011,12 @@ fn full_login(side: &std::path::Path, env: &Env) -> Option<String> {
     Some(value)
 }
 
-/// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default.
+/// The folder `runtime`'s login lives in with `env`: its home variable (CODEX_HOME, HOME), or Codex's own default, or
+/// for a runtime whose plans sign in per turn (model_subscriptions.rs TURN_HOMES) its own (GEMINI_HOME, ~/.gemini).
 fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
+    if let Some(t) = crate::model_subscriptions::turn_home(runtime) {
+        return t.own(env);
+    }
     let var = crate::harness_tools::caps(runtime).profile_home;
     if var.is_empty() {
         return None;
@@ -1014,12 +1031,30 @@ fn login_home(runtime: &str, env: &Env) -> Option<std::path::PathBuf> {
     }
 }
 
-/// A Switch account's own home: a new folder inside the login's home, made as the CLI's user, with the manifest's
-/// `seed` files copied in. The login command signs in there; the old login is untouched until `adopt_files`.
+/// Where a Connect of a plan that signs in per turn (model_subscriptions.rs TURN_HOMES) makes its side home: in this
+/// runner's own state, so another runner of the same OS user never sees it, nor sweeps it away.
+fn plan_sides(state_dir: &std::path::Path) -> std::path::PathBuf {
+    crate::isolation::bot_state(state_dir).join("plan-sides")
+}
+
+/// At the runner's start, under its lock and before any sign-in: the side homes its Connects of such plans left (it
+/// stopped mid sign-in) go, removed as the CLI's user. They hold nothing else: the computer's own login is never in one.
+pub fn sweep_plan_sides(state_dir: &std::path::Path) {
+    let dir = plan_sides(state_dir).display().to_string();
+    let process: Env = std::env::vars().collect();
+    if let Err(e) = file_command(&["rm", "-rf", &dir], &process) {
+        log(&format!("Tico runner: could not remove {dir}: {e}"));
+    }
+}
+
+/// A Switch account's own home: a new folder inside the login's home (or `under`, for a plan's Connect), made as the
+/// CLI's user, with the manifest's `seed` files copied in. The login command signs in there; the old login is
+/// untouched until `adopt_files`.
 fn begin_switch(
     runtime: &str,
     id: &str,
     env: &Env,
+    under: Option<&std::path::Path>,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), String> {
     let login = crate::harness_tools::login_command(runtime)
         .ok_or("Switching accounts is not available")?;
@@ -1033,14 +1068,15 @@ fn begin_switch(
     }
     let home =
         login_home(runtime, env).ok_or("Switching accounts is not available for this runtime")?;
-    let side = home.join(format!(
+    let parent = under.unwrap_or(&home);
+    let side = parent.join(format!(
         ".tico-switch-{}",
         id.chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .take(32)
             .collect::<String>()
     ));
-    let (home_s, side_s) = (home.display().to_string(), side.display().to_string());
+    let (home_s, side_s) = (parent.display().to_string(), side.display().to_string());
     file_command(&["mkdir", "-p", "-m", "700", &home_s], env)?;
     file_command(&["mkdir", "-m", "700", &side_s], env)?;
     let seed = || -> Result<(), String> {
@@ -1273,9 +1309,15 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
         || full
         || (connect && !login.connect_file.is_empty())
     {
-        match begin_switch(&s.runtime, &s.id, &env) {
+        let sides = crate::model_subscriptions::turn_home(&s.runtime)
+            .filter(|_| connect)
+            .map(|_| plan_sides(&config.state_dir()));
+        match begin_switch(&s.runtime, &s.id, &env, sides.as_deref()) {
             Ok((home, side)) => {
-                let var = crate::harness_tools::caps(&s.runtime).profile_home;
+                let var = match crate::model_subscriptions::turn_home(&s.runtime) {
+                    Some(t) => t.var.to_string(),
+                    None => crate::harness_tools::caps(&s.runtime).profile_home,
+                };
                 env.insert(var, side.display().to_string());
                 if full {
                     // The seeded settings name the computer's own account: the plan's must come from its sign-in.
@@ -1298,8 +1340,26 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             ));
         }
     };
+    let plan_home = crate::model_subscriptions::turn_home(&s.runtime).filter(|_| connect);
+    if let Some(t) = plan_home {
+        // Signed in as a turn on the plan runs (hosts/antigravity.rs): told it runs over SSH, so the sign-in is the file
+        // in its side home and never the computer's keyring, and with no display, so it prints its link.
+        for key in t.strip.iter().chain(&["DISPLAY", "WAYLAND_DISPLAY"]) {
+            env.remove(*key);
+        }
+        env.extend(t.env.iter().map(|(k, v)| (k.to_string(), v.to_string())));
+    }
+    let side_home = switch
+        .as_ref()
+        .map(|(_, side)| side.display().to_string())
+        .unwrap_or_default();
+    let connect_argv: Vec<String> = login
+        .connect
+        .iter()
+        .map(|a| a.replace("{home}", &side_home))
+        .collect();
     let command = if connect && !full {
-        &login.connect
+        &connect_argv
     } else {
         &login.command
     };
@@ -1476,7 +1536,26 @@ fn run_session(s: Arc<Session>, runner: Arc<Runner>, config: Config, lifetime: D
             let value = match &switch {
                 _ if !finished && !stopped_after_token => None,
                 Some((_, side)) if full => full_login(side, &real_env),
-                Some((_, side)) => file_text(&side.join(&login.connect_file), &real_env),
+                // A sign-in a turn reads from its own home only counts once the CLI says it is signed in there,
+                // asked within what is left of the sign-in's time.
+                Some(_)
+                    if plan_home.is_some()
+                        && !matches!(
+                            sign_in_status_within(
+                                &s.runtime,
+                                &exe,
+                                &env,
+                                deadline.saturating_duration_since(Instant::now())
+                            ),
+                            Some((true, _))
+                        ) =>
+                {
+                    None
+                }
+                // A plain file, read bounded and never through a link (a pipe or link there stalls nothing).
+                Some((_, side)) => {
+                    crate::model_subscriptions::read_codex_auth(&side.join(&login.connect_file))
+                }
                 None => printed_token(&s.inner.lock().unwrap().raw, &token_prefix, true),
             };
             match value {
@@ -1925,7 +2004,7 @@ fn run_use_key(
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
-        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env) {
+        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env, None) {
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
@@ -1955,7 +2034,7 @@ fn run_use_key(
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
-        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env) {
+        let (home, dir) = match begin_switch(&s.runtime, &s.id, &env, None) {
             Ok(found) => found,
             Err(e) => return finish("failed", &format!("{e}; {}", left())),
         };
@@ -2901,6 +2980,139 @@ mod tests {
         );
     }
 
+    /// An Antigravity Connect signs in as a plan turn runs: in a side home of its own, told it runs over SSH, with no
+    /// display and no other Google sign-in; the code goes to its input, and its file counts only once `agy models`
+    /// says it is signed in there. The computer's own sign-in, and its keyring, are never touched.
+    #[test]
+    fn an_antigravity_connect_signs_in_on_the_side_and_counts_only_what_agy_accepts() {
+        const CHILD: &str = "TICO_TEST_AGY_CONNECT";
+        let Some(root) = std::env::var_os(CHILD).map(std::path::PathBuf::from) else {
+            let root = std::env::temp_dir().join(format!(
+                "tico-agy-connect-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(root.join("bin")).unwrap();
+            crate::util::write_script(
+                &root.join("bin/agy"),
+                r#"#!/bin/sh
+test "$SSH_CONNECTION" = "127.0.0.1 0 127.0.0.1 0" || exit 3
+test -z "$DISPLAY$WAYLAND_DISPLAY$GEMINI_API_KEY$AGY_ADC_AUTH" || exit 4
+case "$GEMINI_HOME" in *.tico-switch-*) ;; *) exit 5 ;; esac
+case "$*" in
+  "acp --login --gemini-dir $GEMINI_HOME --app-data-dir antigravity-cli")
+    echo 'Open this link: https://accounts.acme.example/o/oauth2/auth?redirect_uri=https%3A%2F%2Fsignin.acme.example%2Foauth-callback&state=s&response_type=code'
+    echo 'Then paste the authorization code, or the full URL:'
+    read code
+    test "$code" = "4/pasted-code" || exit 6
+    mkdir -p "$GEMINI_HOME/antigravity-cli"
+    echo '{"token":{"access_token":"ya29.synthetic-new-access-token"}}' > "$GEMINI_HOME/antigravity-cli/antigravity-oauth-token" ;;
+  models)
+    if test -e "$HOME/refuses" || ! test -s "$GEMINI_HOME/antigravity-cli/antigravity-oauth-token"; then
+      echo 'Please sign in to view available models'
+    else
+      echo 'gemini-4-neon'
+    fi ;;
+  *) exit 2 ;;
+esac
+"#,
+            );
+            let out = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "login::tests::an_antigravity_connect_signs_in_on_the_side_and_counts_only_what_agy_accepts",
+                    "--nocapture",
+                ])
+                .env(CHILD, &root)
+                .env("PATH", format!("{}:/usr/bin:/bin", root.join("bin").display()))
+                .env("HOME", &root)
+                .env("DISPLAY", ":0")
+                .env("GEMINI_API_KEY", "AIza-computer-key")
+                .env("AGY_ADC_AUTH", "1") // the computer's Google Cloud credentials, which no plan may use
+                .env_remove("GEMINI_HOME")
+                .env_remove("SSH_CONNECTION")
+                .env_remove(crate::isolation::UID_ENV)
+                .env_remove(crate::isolation::GID_ENV)
+                .output()
+                .unwrap();
+            std::fs::remove_dir_all(&root).ok();
+            assert!(
+                out.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            return;
+        };
+        let own = root.join(".gemini");
+        std::fs::create_dir_all(own.join("antigravity-cli")).unwrap();
+        std::fs::write(
+            own.join("antigravity-cli/antigravity-oauth-token"),
+            "computer",
+        )
+        .unwrap();
+        std::fs::create_dir_all(root.join("projects")).unwrap();
+        let path = root.join("runner.json");
+        std::fs::write(&path, json!({"url": "http://127.0.0.1:9", "token": "synthetic", "runner_id": "r1", "projects_dir": root.join("projects")}).to_string()).unwrap();
+        let config = Config::load(&path).unwrap();
+        // One a Connect cut off by a stop left: it goes when the runner starts. Another runner's are not its to sweep.
+        let sides = plan_sides(&config.state_dir());
+        std::fs::create_dir_all(sides.join(".tico-switch-old/antigravity-cli")).unwrap();
+        let other = root.join("other-state/plan-sides/.tico-switch-live");
+        std::fs::create_dir_all(&other).unwrap();
+        sweep_plan_sides(&config.state_dir());
+        assert!(!sides.exists() && other.exists());
+        let client = crate::client::Client::new(&config.url(), &config.token(), 1, 0).unwrap();
+        let runner = Arc::new(Runner::new(
+            config.clone(),
+            client,
+            crate::state::State::open(&root.join("state")).unwrap(),
+        ));
+        for (id, refuses) in [("g1", false), ("g2", true)] {
+            if refuses {
+                std::fs::write(root.join("refuses"), "").unwrap();
+            }
+            let login =
+                Session::new(&json!({"id": id, "runtime": "antigravity", "kind": "connect"}));
+            let (s2, r2, c2) = (login.clone(), runner.clone(), config.clone());
+            let running =
+                std::thread::spawn(move || run_session(s2, r2, c2, Duration::from_secs(20)));
+            wait_for(|| {
+                login
+                    .inner
+                    .lock()
+                    .unwrap()
+                    .url
+                    .starts_with("https://accounts.acme.example/o/oauth2/auth")
+            });
+            login.submit("4/pasted-code");
+            running.join().unwrap();
+            let i = login.inner.lock().unwrap();
+            if refuses {
+                assert!(i.captured.is_none() && i.state == "failed", "{:?}", i.state);
+            } else {
+                assert_eq!(
+                    i.captured.as_deref().map(str::trim),
+                    Some("{\"token\":{\"access_token\":\"ya29.synthetic-new-access-token\"}}")
+                );
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(own.join("antigravity-cli/antigravity-oauth-token")).unwrap(),
+            "computer"
+        );
+        let left: Vec<_> = std::fs::read_dir(&own)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name())
+            .collect();
+        assert_eq!(left, vec![std::ffi::OsString::from("antigravity-cli")]);
+        assert_eq!(
+            std::fs::read_dir(&sides).map_or(0, |d| d.count()),
+            0,
+            "no side home stays"
+        );
+    }
+
     /// A Connect relays the link, leaves the login it does not need alone, and holds its one result for the server.
     #[test]
     fn connect_captures_the_result_and_leaves_the_computers_own_login() {
@@ -3254,7 +3466,7 @@ esac
             ("PATH".to_string(), std::env::var("PATH").unwrap()),
         ]
         .into();
-        let err = begin_switch("claude", "setup1", &env).unwrap_err();
+        let err = begin_switch("claude", "setup1", &env, None).unwrap_err();
         assert!(err.starts_with("cp failed"), "{err}");
         assert!(
             !home.join(".tico-switch-setup1").exists(),
@@ -5627,7 +5839,7 @@ esac
                 for key in crate::harness_tools::caps(runtime).profile_home_overrides {
                     custom.insert(key, root.join("outside").display().to_string());
                 }
-                assert!(begin_switch(runtime, "custom", &custom)
+                assert!(begin_switch(runtime, "custom", &custom, None)
                     .unwrap_err()
                     .contains("custom login folder"));
                 assert_eq!(std::fs::read_to_string(&auth).unwrap(), old);

@@ -13,6 +13,7 @@ Provider usage holds follow the provider across computers.
 import base64
 import json
 from datetime import datetime, timezone
+from typing import Any
 
 from pydantic import Field, SecretStr
 
@@ -30,8 +31,9 @@ MAX_VALUE = 64 * 1024
 
 # What each kind is, the name a new one gets when the person gives none (`default_name`), the runtime it signs in, and
 # how a turn receives it: `env` in the turn's environment, or `file` in
-# the CLI's own home (set by the runner). `billing` is what the run records (backend/usage.py). Listed in the page's order.
-KINDS = {
+# the CLI's own home (set by the runner). `billing` is what the run records (backend/usage.py). `paste: False`: only
+# Connect makes one, never a pasted value from the page. Listed in the page's order.
+KINDS: dict[str, dict[str, Any]] = {
     "claude_token": {
         "name": "Claude",
         "runtime": "claude",
@@ -65,6 +67,21 @@ KINDS = {
         "secret_label": "auth.json",
         "help": "Run `codex login` on any computer, then paste the whole ~/.codex/auth.json.",
         "connect": True,
+    },
+    # `agy acp --login` on a computer, in a home of its own (runner-rs/src/login.rs): a turn gets the file it wrote in a
+    # GEMINI_HOME of the turn's own (runner-rs/src/model_subscriptions.rs TURN_HOMES).
+    "antigravity_login": {
+        "name": "Antigravity",
+        "runtime": "antigravity",
+        "label": "Antigravity plan",
+        "file": "antigravity-cli/antigravity-oauth-token",
+        "billing": "subscription",
+        "secret_label": "Sign-in",
+        "help": "Connect signs the plan in on one of your computers.",
+        "connect": True,
+        "paste": False,
+        # Only a computer that reports this signs it in, installs agy for it, or runs its turns (`carries`).
+        "capability": "antigravity_plan_v1",
     },
     "anthropic_key": {
         "name": "Anthropic API",
@@ -103,8 +120,16 @@ KINDS = {
         "help": "A Meta API key.",
     },
 }
-RUNTIMES = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
-RUNTIME_LABELS = {"claude": "Claude Code", "codex": "Codex", "cursor": "Cursor", "musecode": "Muse Code"}
+RUNTIMES: tuple[str, ...] = tuple(dict.fromkeys(k["runtime"] for k in KINDS.values()))
+RUNTIME_LABELS = {
+    "claude": "Claude Code",
+    "codex": "Codex",
+    "antigravity": "Antigravity",
+    "cursor": "Cursor",
+    "musecode": "Muse Code",
+}
+# The plans a person's pool takes turns from (agent_subscriptions.read, the model_subscriptions_plan_pool index).
+POOL_KINDS = tuple(kind for kind, spec in KINDS.items() if spec["billing"] == "subscription")
 API_KINDS = tuple(kind for kind, spec in KINDS.items() if spec.get("billing") == "api")
 DEFAULT_MAX_LIVE_TURNS = 20
 
@@ -154,7 +179,7 @@ class ComputerSubscription(Contract):
     computer's live runs on that runtime stop and start again."""
 
     runner_id: ID
-    runtime: str = Field(pattern="^(claude|codex|cursor|musecode)$")
+    runtime: str = Field(pattern=f"^({'|'.join(RUNTIMES)})$")
     subscription: ID | None = None
     person: str | None = Field(default=None, max_length=120)
     confirm: bool = False
@@ -231,6 +256,18 @@ def _codex_login(text):
     return value
 
 
+def _antigravity_login(text):
+    """The sign-in `agy acp --login` wrote ({"token": {"access_token", "refresh_token", "expiry"}}), compact, or a Problem."""
+    try:
+        value = json.loads(text)
+    except ValueError:
+        value = None
+    token = value.get("token") if isinstance(value, dict) else None
+    if not isinstance(token, dict) or not isinstance(token.get("access_token"), str) or not token["access_token"]:
+        raise Problem("secret", "Connect the plan from Settings > Providers", 422)
+    return json.dumps(value, separators=(",", ":"))
+
+
 def checked(kind, secret):
     """(value to seal, preview) for `kind`, or a Problem naming what is wrong. Whitespace around a token or key goes."""
     if kind not in KINDS:
@@ -244,6 +281,8 @@ def checked(kind, secret):
         value = _codex_login(text.strip())
         email = _jwt_email((value.get("tokens") or {}).get("id_token"))
         return json.dumps(value, separators=(",", ":")), email or "ChatGPT login"
+    if kind == "antigravity_login":
+        return _antigravity_login(text.strip()), "Google sign-in"
     text = text.strip()
     if not text or any(ch.isspace() for ch in text) or len(text) > 4096:
         raise Problem("secret", "Paste the token or key on its own", 422)
@@ -551,7 +590,31 @@ def in_effect(c, runner_id, runtime, loads=None):
     return sub if _runner_takes(runner, sub) else None
 
 
+def cli_current(runner: Any, runtime: str) -> bool:
+    """Whether the computer's `runtime` CLI is at least the oldest release Tico runs (its manifest's `[version]
+    minimum`): an older one, or one whose version it did not report, neither signs a plan in nor runs its turns."""
+    from clients import harness_manifests as manifests
+
+    def release(text: Any) -> tuple[int, ...]:
+        return tuple(int(n) for n in str(text or "").split("-")[0].split(".")[:3] if n.isdigit())
+
+    least = (manifests.get(runtime) or {}).get("minimum") or ""
+    if not least:
+        return True
+    tool = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(runtime) or {}
+    got = release(tool.get("version"))
+    return len(got) == 3 and got >= release(least)
+
+
+def carries(kind: str, caps: list[str]) -> bool:
+    """A computer with these capabilities can carry a plan of `kind`: its sign-in, its CLI's install and its turns."""
+    need = KINDS[kind].get("capability")
+    return not need or need in caps
+
+
 def _runner_takes(runner, sub):
+    if runner and not carries(sub["kind"], H._json(runner["capabilities"], []) or []):
+        return False
     if runner and sub["kind"] == "claude_login":
         from . import claude_login
 
@@ -575,6 +638,7 @@ def legacy_current(c, runner_id, runtime, caps, loads=None):
         current
         and available(c, current, runtime, loads)
         and (current["kind"] != "claude_login" or claude_login.CAPABILITY in caps)
+        and carries(current["kind"], caps)
     ):
         return current
     return None
@@ -1489,6 +1553,7 @@ def kinds():
             "secret_label": v["secret_label"],
             "help": v["help"],
             "connect": bool(v.get("connect")),
+            "paste": v.get("paste", True),
             "owned": owned(k),
         }
         for k, v in KINDS.items()
@@ -1842,7 +1907,10 @@ def _effect_changed(c, settings, sid):
 def keeps_sessions(c, runner_id, runtime):
     """Whether an automatic move between plans for `runtime` on this computer keeps its sessions: Claude, whose
     transcripts stay in the bot's own home whichever plan signs a turn in, on a runner that resumes a Claude thread on
-    the plan it moved to (`RESUME_CAPABILITY`). Codex keeps its threads in each plan's own home."""
+    the plan it moved to (`RESUME_CAPABILITY`), and Antigravity, whose turns link the bot's own conversations into each
+    plan's home (runner-rs/src/model_subscriptions.rs TURN_HOMES). Codex keeps its threads in each plan's own home."""
+    if runtime == "antigravity":
+        return True
     if runtime != "claude":
         return False
     found = c.execute(RUNNER_CAPABILITIES_SQL, (runner_id,)).fetchone()
@@ -1926,7 +1994,9 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
     with the same account is a refresh: the plan's turns keep running (they get the new access token) and its readings
     stay. A setup-token plan reconnected with a full login becomes one, the same plan (`kind` given as `claude_login`):
     its owner, computers and history stay; its old readings go, since the login may be another account. The emergency
-    path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way."""
+    path goes back: a full login's plan given a pasted setup-token becomes a setup-token plan the same way.
+
+    A kind that is never pasted (`paste` False) takes a secret only from its Connect (`completing_login_id`)."""
     from . import claude_login, model_login, quarantine_stops
 
     sub = _manage_provider(c, auth, who, sid) if sid else None
@@ -1939,6 +2009,8 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
         if not body.secret.get_secret_value().lstrip().startswith("{"):
             body = body.model_copy(update={"kind": "claude_token"})
     kind = body.kind or sub["kind"] if sub else body.kind
+    if body.secret is not None and completing_login_id is None and not KINDS.get(kind, {}).get("paste", True):
+        raise Problem("secret", "Use Connect for this plan", 422)
     if body.max_live_turns is not None and not owned(kind):
         raise Problem("max_live_turns", "Only plans have a live-turn limit", 422)
     login = None
@@ -2747,7 +2819,7 @@ def payer_ready(c, runner_id, attempt_id, delivery):
     caps = H._json(given["capabilities"], []) or []
     if delivery == "legacy":
         return legacy_matches(c, runner_id, given["runtime"], sub, caps)
-    return CAPABILITY in caps
+    return CAPABILITY in caps and carries(sub["kind"], caps)
 
 
 def _lease_value(c, vault, given, sub):
@@ -2769,10 +2841,11 @@ def claim_credential(c, vault, runner_id, attempt_id, delivery="claim"):
     from .agent_subscriptions import CAPABILITY
 
     given = _leased_payer(c, runner_id, attempt_id, delivery)
-    if not given or CAPABILITY not in (H._json(given["capabilities"], []) or []):
+    caps = (H._json(given["capabilities"], []) or []) if given else []
+    if not given or CAPABILITY not in caps:
         return None
     sub = _lease_subscription(c, given)
-    return _lease_value(c, vault, given, sub) if sub else None
+    return _lease_value(c, vault, given, sub) if sub and carries(sub["kind"], caps) else None
 
 
 def legacy_credential(c, vault, who):
@@ -2914,11 +2987,12 @@ def assignment_fields(c, runner, config, *, bot="", inputs=None):
 
 # ------------------------------------------------------------------------------------------------ routes
 # ------------------------------------------------------------------------------------------------ connect
-def _connect_computers(c, runtime, who=None):
-    """The computers that can run `runtime`'s sign-in for a Connect: the person's own first, since the result passes
-    through the computer, then those with nothing signing in for that tool, then the one seen last."""
+def _connect_computers(c, spec, who=None):
+    """The computers that can run the sign-in of `spec`'s kind for a Connect: the person's own first, since the result
+    passes through the computer, then those with nothing signing in for that tool, then the one seen last."""
     from . import model_login
 
+    runtime, need = spec["runtime"], spec.get("capability")
     if runtime not in model_login.CONNECT_RUNTIMES:
         return []
     busy = {
@@ -2932,6 +3006,8 @@ def _connect_computers(c, runtime, who=None):
     found = []
     for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
         report = readiness_document(runner["readiness"]).get("runtimes") or {}
+        if need and (need not in (H._json(runner["capabilities"], []) or []) or not cli_current(runner, runtime)):
+            continue
         if model_login._online(runner) and (report.get(runtime) or {}).get("installed"):
             found.append(runner)
     found.sort(key=lambda r: r["last_seen_at"] or "", reverse=True)
@@ -2939,12 +3015,53 @@ def _connect_computers(c, runtime, who=None):
     return found
 
 
+def _shared_runner(c):
+    from . import cloud_machines
+
+    shared = cloud_machines.row(c, cloud_machines.SHARED)
+    return (shared["runner_id"] if shared else "") or ""
+
+
+def _install_target(c, auth, spec):
+    """(computer, its harness readiness, active) for a Connect with no online computer that has the CLI of `spec`'s kind:
+    one of the company owner's online computers, or the shared cloud computer, whose runner can carry the kind, reports
+    the harness and was not turned off for it. Active is one turned on for it or installing it now, which stays the target while it installs (one
+    installing first); a failed one only when no other is left; ties go to the one enrolled first, never to the
+    heartbeat order. None when there is none."""
+    from . import harness_actions, model_login
+
+    runtime, need = spec["runtime"], spec.get("capability")
+    owner, shared = auth.owner_id(c), _shared_runner(c)
+    chosen = harness_actions.choices_by_runner(c)
+    found = []
+    for runner in c.execute("SELECT * FROM runners_with_state WHERE revoked_at IS NULL").fetchall():
+        if not model_login._online(runner) or (runner["id"] != shared and runner["owner_id"] != owner):
+            continue
+        if need and need not in (H._json(runner["capabilities"], []) or []):
+            continue
+        tool = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(runtime)
+        choice = chosen.get(runner["id"], {}).get(runtime)
+        if not isinstance(tool, dict) or choice is False:
+            continue
+        state = tool.get("state") or ""
+        busy = state in ("queued", "installing")
+        active = choice is True or busy
+        # The person's own agy, older than Tico runs, which Tico does not replace: only when no other is left.
+        blocked = bool(tool.get("installed") and not tool.get("managed") and not cli_current(runner, runtime))
+        key = (blocked, state == "failed", not active, not busy, runner["created_at"] or "", runner["id"])
+        found.append((key, runner, tool))
+    if not found:
+        return None
+    key, runner, tool = min(found, key=lambda f: f[0])
+    return runner, tool, not key[2]
+
+
 def connect_ready(c):
     """The kinds a person can Connect right now: their tool's sign-in has a computer to run on."""
     return [
         kind
         for kind, spec in KINDS.items()
-        if spec.get("connect") and not spec.get("hidden") and _connect_computers(c, spec["runtime"])
+        if spec.get("connect") and not spec.get("hidden") and _connect_computers(c, spec)
     ]
 
 
@@ -2965,7 +3082,7 @@ def connect(c, settings, auth, who, body):
     kind = sub["kind"] if sub else body.kind or ""
     spec = KINDS.get(kind)
     if not spec or not spec.get("connect"):
-        raise Problem("kind", "Connect works for a Claude plan or a ChatGPT plan; paste an API key instead", 422)
+        raise Problem("kind", "Connect works for a plan; paste an API key instead", 422)
     if sid:
         if not body.confirm:
             _confirm_reconnect(c, settings, [], _agent_attempts(c, sid))
@@ -3009,7 +3126,7 @@ def connect(c, settings, auth, who, body):
         going = c.execute("SELECT * FROM model_logins WHERE id=?", (target["id"],)).fetchone()
         plan_name = sub["name"] if sub else target["name"] or default_name(c, target["kind"], target["owner_id"])
         return answer(going, model_login._runner(c, going["runner_id"]), plan_name)
-    computers = _connect_computers(c, spec["runtime"], who)
+    computers = _connect_computers(c, spec, who)
     if exit_id:
         computers = [r for r in computers if r["id"] == exit_id]
     if kind in claude:
@@ -3026,11 +3143,10 @@ def connect(c, settings, auth, who, body):
             409,
         )
     if not computers:
-        # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
-        # the page asks again until it is up (`waking`, no sign-in yet).
         from . import cloud_machines
 
-        if cloud_machines.signin_wake(c, settings):
+        def waiting(waking, message=""):
+            # No sign-in yet: the page asks again while `waking`, and shows `message`.
             return {
                 "id": "",
                 "kind": "connect",
@@ -3040,12 +3156,40 @@ def connect(c, settings, auth, who, body):
                 "computer": "",
                 "not_yours": False,
                 "name": plan_name,
-                "waking": True,
+                "waking": waking,
+                **({"message": message} if message else {}),
             }
+
+        # Antigravity: no online computer has agy, so one installs it, and the page asks again until it has.
+        target = _install_target(c, auth, spec) if spec["runtime"] == "antigravity" else None
+        if target:
+            runner, tool, active = target
+            if tool.get("installed") and not tool.get("managed") and not cli_current(runner, spec["runtime"]):
+                # The person's own agy, older than Tico runs, on the only computer left: Tico does not replace it.
+                from clients import harness_manifests as manifests
+
+                least = (manifests.get(spec["runtime"]) or {}).get("minimum") or ""
+                return waiting(False, f"Update Antigravity on {runner['label']} to {least} or later.")
+            if tool.get("state") == "failed":
+                return waiting(False, f"Antigravity couldn't install on {runner['label']}; Tico will retry.")
+            if not active:
+                if who.role != "owner":
+                    return waiting(False, "Ask the owner to press Connect for Antigravity once, to install it.")
+                from . import harness_actions
+
+                harness_actions.choose(c, who, runner["id"], spec["runtime"], True, settings)
+            if runner["id"] == _shared_runner(c):
+                cloud_machines.keep_signin_asked(c, settings)
+            return waiting(True, f"Installing Antigravity on {runner['label']}.")
+        # No computer is online to run it, and the company has a cloud computer: it is started for the sign-in, and
+        # the page asks again until it is up (`waking`, no sign-in yet).
+        if cloud_machines.signin_wake(c, settings):
+            return waiting(True)
         raise Problem(
             "offline",
             "Connect needs a computer online, on the latest Tico, with "
-            f"{RUNTIME_LABELS[spec['runtime']]} installed. Paste instead, or start one",
+            f"{RUNTIME_LABELS[spec['runtime']]} installed"
+            + (". Paste instead, or start one" if spec.get("paste", True) else ""),
             409,
         )
     runner = computers[0]

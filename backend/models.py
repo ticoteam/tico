@@ -1785,8 +1785,9 @@ class Heartbeat(Contract):
             "plan_switch_resume_v1",  # a Claude thread resumes on the plan a set moves to (backend/model_subscriptions.py)
             "push_hints_v1",  # a push to a bot's repository is told to its computer at once (backend/github.py tell_pushed)
             "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
+            "antigravity_plan_v1",  # Antigravity plans: Connect, install and turns (backend/model_subscriptions.py)
         ]
-    ] = Field(default_factory=list, max_length=34)
+    ] = Field(default_factory=list, max_length=35)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -3441,7 +3442,7 @@ class SharedKeyUse(Contract):
 
 
 class LoginCode(Contract):
-    code: Annotated[str, Field(min_length=1, max_length=700)]
+    code: Annotated[str, Field(min_length=1, max_length=2000)]  # a Google sign-in's whole callback address
 
 
 class LoginPhase(Contract):

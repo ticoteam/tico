@@ -87,7 +87,9 @@ impl Capture {
         if line.is_empty() {
             return;
         }
-        // Scrubbed as written and again inside each string once parsed, where JSON escaping can hide a value.
+        // Scrubbed as written and again inside each string once parsed, where JSON escaping can hide a value; a plan
+        // token its CLI refreshed since is masked first.
+        crate::model_subscriptions::notice_refreshes();
         let raw = crate::redact::scrub_log(line);
         let frame = serde_json::from_str::<Value>(&raw)
             .map(|v| scrub_strings(&v))

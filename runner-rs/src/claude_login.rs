@@ -633,7 +633,7 @@ mod tests {
             &mut vec![],
             &mut Default::default(),
         );
-        crate::model_subscriptions::start(&mut got, "claude", &mut env);
+        crate::model_subscriptions::start(&mut got, "claude", &mut env).unwrap();
         let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
         (got, home)
     }

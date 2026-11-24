@@ -2579,7 +2579,8 @@ impl Runner {
             // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
             // when it will run: a held login's turn goes to its fallback, which is signed in when it starts.
             if held.is_none() {
-                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env)
+                    .map_err(Fail::runtime)?;
                 vault.values.extend(placed);
             }
             if paid_by && crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).is_none() {
@@ -2907,6 +2908,7 @@ impl Runner {
                 memory_dir: crate::instructions::memory_dir(&execution_path, stateless || p.disposable),
                 output_style: hosts::output_style(&config),
                 verbosity: hosts::verbosity(&config),
+                plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &runtime),
             };
             let mut resumed = false;
             let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
@@ -3465,7 +3467,8 @@ impl Runner {
                         }
                     }
                 }
-                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env)
+                    .map_err(Fail::runtime)?;
                 mask(&aid, &mut redactor, &mut vault, placed);
                 let delivered = crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime);
                 segments.push(Segment {
@@ -3549,6 +3552,7 @@ impl Runner {
                     memory_dir: crate::instructions::memory_dir(&execution_path, stateless || place.as_ref().is_none_or(|p| p.disposable)),
                     output_style: hosts::output_style(&config),
                     verbosity: hosts::verbosity(&config),
+                    plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &hop.runtime),
                 };
                 if !flags.harness_allocated.load(Ordering::SeqCst) {
                     self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
@@ -3879,6 +3883,8 @@ impl Runner {
                     segments.last_mut().unwrap().meter.add(&ev);
                 }
                 if ev["process_exit"] == true {
+                    // What the CLI said as it exited may hold a plan token it refreshed: masked before it is kept.
+                    crate::model_subscriptions::notice_refreshes();
                     let clean = redactor
                         .as_ref()
                         .map(|r| r.scrub_json(&ev).into_owned())
@@ -6773,6 +6779,10 @@ mod tests {
         diagnostics: Vec<Vec<String>>,
         /// How many pi processes the turns started.
         starts: usize,
+        /// Every event the turns sent Tico, in order.
+        events: Vec<Value>,
+        /// The stderr tail kept for each turn that had one.
+        stderr: Vec<String>,
     }
 
     /// Turns on one session through a fake `pi --mode rpc` that reads 348 input tokens a turn (runner-rs/tests/fixtures/pi), one per
@@ -6872,6 +6882,8 @@ mod tests {
                 .extend(extra.as_object().cloned().unwrap_or_default());
             let fence = config.as_object_mut().unwrap().remove("session_fence");
             let moved_history = config.as_object_mut().unwrap().remove("moved_history");
+            // Fields of the attempt itself (its run token, `credential_vault`): a turn on a plan (`on_agy_plan`).
+            let more = config.as_object_mut().unwrap().remove("attempt");
             let mut attempt = json!({"id": format!("a-session-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn",
                                  "lease_seconds": 120, "conversation": room, "task": task,
                                  "message": {"id": message, "from_actor": "human:ana@acme.example", "body": body, "refs": refs},
@@ -6881,6 +6893,9 @@ mod tests {
             }
             if let Some(history) = moved_history {
                 attempt["moved_history"] = history;
+            }
+            if let Some(Value::Object(more)) = more {
+                attempt.as_object_mut().unwrap().extend(more);
             }
             tokio::time::timeout(Duration::from_secs(60), runner.clone().execute(attempt))
                 .await
@@ -6944,6 +6959,19 @@ mod tests {
             })
             .collect();
         let starts = crate::hosts::pi::testing::logged(&dir, "starts.log").len();
+        let events = seen
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("/events"))
+            .flat_map(|(_, _, b)| b["events"].as_array().cloned().unwrap_or_default())
+            .collect();
+        let stderr = runner
+            .state
+            .with(|c| {
+                let mut q = c.prepare("SELECT tail FROM attempt_stderr ORDER BY attempt_id")?;
+                let rows = q.query_map([], |r| r.get::<_, String>(0))?;
+                rows.collect::<Result<Vec<_>, _>>()
+            })
+            .unwrap_or_default();
         runner.pi.prune(true).await;
         std::fs::remove_dir_all(&dir).ok();
         Ran {
@@ -6953,6 +6981,8 @@ mod tests {
             saved,
             diagnostics,
             starts,
+            events,
+            stderr,
         }
     }
 
@@ -7434,14 +7464,26 @@ line = sys.stdin.readline()
 if not line:
     sys.exit(0)
 open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(json.loads(line)["message"]["content"])
+said = "Done."
+if os.path.exists(os.path.join(folder, "agy-refresh-%d" % n)):
+    # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on its
+    # stderr as it fails).
+    fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
+    token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
+    open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
+    said = "Done. " + fresh
+    if os.path.exists(os.path.join(folder, "agy-crash-%d" % n)):
+        sys.stderr.write("refresh went wrong with " + fresh + "\n")
+        sys.stderr.flush()
+        sys.exit(3)
 late = []
 if os.path.exists(os.path.join(folder, "agy-late-%d" % n)):
     conv = str(uuid.uuid4())
     late = [{"event": "step_update", "step_update": {"conversation_id": conv}}]
 for event in [
-    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "Done."}},
+    {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": said}},
 ] + late + [
-    {"event": "result", "result": {"status": "SUCCESS", "response": "Done.", "conversation_id": conv,
+    {"event": "result", "result": {"status": "SUCCESS", "response": said, "conversation_id": conv,
                                    "usage": {"input_tokens": 1, "output_tokens": 1}}},
 ]:
     print(json.dumps(event), flush=True)
@@ -7462,6 +7504,70 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
                 vec![fake.display().to_string(), folder.display().to_string()],
             )
         });
+    }
+
+    #[tokio::test]
+    async fn a_token_agy_refreshes_mid_turn_is_masked_before_any_event_keeps_it() {
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        // Turn 0 says the refreshed token; turn 1 writes it to its stderr as it fails.
+        for name in ["agy-refresh-0", "agy-refresh-1", "agy-crash-1"] {
+            std::fs::write(folder.join(name), "").unwrap();
+        }
+        fake_agy_in(&folder);
+        let token = format!("run-agy-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
+            "id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
+            "file": crate::model_subscriptions::AGY_TOKEN, "revision": 1, "billing": "subscription",
+            "value": r#"{"token":{"access_token":"ya29.synthetic-handed-token-0123456789"}}"#}]}),
+        );
+        let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon",
+                         "attempt": {"token": token, "credential_vault": true}});
+        let ran = session_turns(
+            false,
+            true,
+            &[("m4", json!({}), agy.clone()), ("m4", json!({}), agy)],
+        )
+        .await;
+        let _ = std::fs::remove_dir_all(&folder);
+        assert_eq!(
+            ran.completions[0]["outcome"], "completed",
+            "{}",
+            ran.completions[0]
+        );
+        assert_ne!(ran.completions[1]["outcome"], "completed");
+        let said = serde_json::to_string(&ran.events).unwrap();
+        assert!(said.contains("Done."), "{said}");
+        assert!(said.contains("refresh went wrong with"), "{said}");
+        assert!(
+            ran.stderr
+                .iter()
+                .any(|t| t.contains("refresh went wrong with")),
+            "{:?}",
+            ran.stderr
+        );
+        for (what, kept) in [
+            ("events", said),
+            ("stderr", ran.stderr.join("\n")),
+            (
+                "completions",
+                serde_json::to_string(&ran.completions).unwrap(),
+            ),
+        ] {
+            let at = kept.find("synthetic-refreshed-mid-turn");
+            assert!(
+                at.is_none(),
+                "{what}: ...{}",
+                kept.get(at.unwrap_or(0).saturating_sub(300)..)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(500)
+                    .collect::<String>()
+            );
+        }
     }
 
     #[tokio::test]

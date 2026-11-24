@@ -2604,25 +2604,34 @@ mod tests {
             .collect();
         assert_eq!(steers, vec!["claude-code", "codex", "pi"]);
         assert!(all["pi"].capabilities.persistent_session && all["pi"].capabilities.compaction);
-        // Antigravity is a runtime of its own, run cold, which the runner never installs.
+        // Antigravity is a runtime of its own, run cold, installed by its script from Google's updater.
         let agy = &all["antigravity"];
         assert_eq!(
             (
                 agy.runtime.as_str(),
                 agy.host.as_str(),
                 agy.executable.as_str(),
-                agy.method()
+                agy.method(),
+                agy.bin_relative().as_str()
             ),
-            ("antigravity", "antigravity", "agy", "")
+            ("antigravity", "antigravity", "agy", "script", "bin/agy")
+        );
+        // The script is fetched from the main branch: it runs only at the checksum this manifest pins.
+        assert_eq!(
+            agy.get("sha256"),
+            sha256_hex(include_bytes!("../harnesses/antigravity-install-v1.sh"))
         );
         assert!(
             !agy.capabilities.persistent_session
                 && agy.capabilities.readiness
-                // No profile homes until Connect can sign one in (the login plan kind).
+                // A plan signs in per turn (model_subscriptions.rs TURN_HOMES); no profile has a home of its own.
                 && !agy.capabilities.subscription_profiles
                 && agy.capabilities.profile_home.is_empty()
                 && agy.capabilities.mcp_transports.is_empty()
         );
+        let login = agy.login.as_ref().unwrap();
+        assert!(login.terminal && login.connect.contains(&"{home}".to_string()));
+        assert_eq!(login.connect_file, crate::model_subscriptions::AGY_TOKEN);
         assert_eq!(
             env_for("antigravity"),
             [("AGY_CLI_DISABLE_AUTO_UPDATE".to_string(), "1".to_string())]

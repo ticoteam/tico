@@ -4,9 +4,21 @@
 from ..api_contract import ref
 from ._base import NUM_N, SCHEMAS, items, obj
 
+# Written out, not imported from backend.model_subscriptions: that module's imports would put every route's schema
+# behind it in the test map (scripts/pr_checks.py). test_antigravity_plan checks both match KINDS and RUNTIMES.
 _SUB_KIND = {
-    "enum": ["claude_token", "claude_login", "codex_login", "anthropic_key", "openai_key", "cursor_key", "meta_key"]
+    "enum": [
+        "claude_token",
+        "claude_login",
+        "codex_login",
+        "antigravity_login",
+        "anthropic_key",
+        "openai_key",
+        "cursor_key",
+        "meta_key",
+    ]
 }
+_RUNTIME = {"enum": ["claude", "codex", "antigravity", "cursor", "musecode"]}
 
 
 _SET_WHY = obj({'kind': {'enum': ['soonest', 'held', 'reconnect', 'all_held', 'none']}, 'plan': 'n', 'until': 'n'})
@@ -26,7 +38,7 @@ SCHEMAS['ModelSubscription'] = obj(
             'maximum': 200,
             'description': 'Maximum live turns across all computers. Present for plans, which default to 20.',
         },
-        'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+        'runtime': _RUNTIME,
         'label': 's',
         'status': {'enum': ['new', 'working', 'needs_reconnect']},
         'status_detail': 's',
@@ -143,10 +155,11 @@ SCHEMAS['ModelSubscriptionList'] = obj(
                 {
                     'kind': _SUB_KIND,
                     'label': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'secret_label': 's',
                     'help': 's',
                     'connect': 'b',
+                    'paste': 'b',
                     'owned': 'b',
                 }
             )
@@ -165,7 +178,7 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
             obj(
                 {
                     'runner_id': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'subscription_id': 's',
                     'person': 's',
                     'set': {'anyOf': [_PERSON_SET, {'type': 'null'}]},
@@ -174,7 +187,8 @@ SCHEMAS['ComputerSubscriptionList'] = obj(
             )
         ),
         'capable': items({'type': 'string'}),
-        'people': items(obj({'id': 's', 'name': 's', 'claude': 'i', 'codex': 'i'}, required=['id', 'name'])),
+        # Each person's number of plans for each runtime they have one for.
+        'people': items(obj({'id': 's', 'name': 's', **{r: 'i' for r in _RUNTIME['enum']}}, required=['id', 'name'])),
     }
 )
 
@@ -201,7 +215,7 @@ SCHEMAS['AgentSubscriptionList'] = obj(
             'additionalProperties': obj(
                 {
                     'bot': 's',
-                    'runtime': {'enum': ['claude', 'codex', 'cursor', 'musecode']},
+                    'runtime': _RUNTIME,
                     'kind': {'enum': ['pool', 'plan', 'key']},
                     'person': 's',
                     'subscription_id': 's',

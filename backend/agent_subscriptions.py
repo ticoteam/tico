@@ -25,6 +25,8 @@ Row = dict[str, Any]
 Window = tuple[str, str, float, datetime, datetime]
 HOLD: Any = login_holds
 CAPABILITY = "attempt_credentials_v1"
+# Written as the model_subscriptions_plan_pool index's own condition is, so the pool read can use it (INDEXED BY).
+POOL_KINDS_SQL = ",".join(f"'{kind}'" for kind in MS.POOL_KINDS)
 
 
 class Pick(Contract):
@@ -43,7 +45,7 @@ class Pick(Contract):
 
 
 class ChangePicks(Contract):
-    subscriptions: dict[str, Pick | None] = Field(max_length=4)
+    subscriptions: dict[str, Pick | None] = Field(max_length=len(MS.RUNTIMES))
 
 
 def can_edit(c: Connection, auth: Any, who: Identity, bot: str) -> bool:
@@ -269,8 +271,8 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             "SELECT p.bot,p.runtime,p.parent_grant,p.subscription_id AS provider_id FROM agent_subscriptions p "
             f"WHERE p.bot IN ({marks}) AND p.kind<>'pool' UNION ALL "
             "SELECT p.bot,p.runtime,p.parent_grant,s.id FROM agent_subscriptions p "
-            "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_pool ON s.owner_id=p.person "
-            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ('claude_token','claude_login','codex_login')), "
+            "CROSS JOIN model_subscriptions s INDEXED BY model_subscriptions_plan_pool ON s.owner_id=p.person "
+            f"WHERE p.bot IN ({marks}) AND p.kind='pool' AND s.kind IN ({POOL_KINDS_SQL})), "
             # Drive the count from live attempts across the team, including legacy delivery and excluding shell sign-ins.
             "live AS MATERIALIZED (SELECT s.subscription_id,count(*) AS turns "
             "FROM attempts a INDEXED BY attempts_live_lease CROSS JOIN attempt_subscriptions s ON s.attempt_id=a.id "
@@ -443,9 +445,16 @@ def for_runner(
     )
     if payment is None or payment.subscription is None:
         return payment
+    sub = payment.subscription
+    if not MS.carries(sub["kind"], caps):
+        return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
+    if MS.KINDS[sub["kind"]].get("capability") and not MS.cli_current(runner, runtime):
+        # The CLI there is older than Tico runs a plan on.
+        return Payment(
+            None, f"Update {MS.RUNTIME_LABELS[runtime]} on {runner['label'] or 'this computer'}", update=True
+        )
     if per_turn:
         return payment
-    sub = payment.subscription
     if current and (current["id"], current["revision"]) == (sub["id"], sub["revision"]):
         return replace(payment, delivery="legacy")
     return Payment(None, f"Update {runner['label'] or 'this computer'}", update=True)
@@ -482,6 +491,8 @@ def provider_runners(c: Connection, sub: Row) -> set[str]:
     allowed: set[str] = set()
     for r in rows:
         caps: list[str] = H._json(r["capabilities"], []) or []
+        if not MS.carries(sub["kind"], caps):
+            continue
         if CAPABILITY in caps or (
             "model_subscriptions_v1" in caps
             and (sub["kind"] != "claude_login" or claude_login.CAPABILITY in caps)

@@ -32,12 +32,23 @@
 //! this computer or another, claude_login.rs) the file in every home running on it is rewritten (`rewrite`) before the
 //! old token is revoked or, at worst, before the turn's next call.
 //!
+//! An Antigravity plan (`antigravity_login`) is a home subscription made for each turn too (`TURN_HOMES`): `agy` reads its
+//! sign-in from `<GEMINI_HOME>/antigravity-cli/antigravity-oauth-token` only when it believes it runs over SSH (else
+//! from the system keyring), so a plan turn's GEMINI_HOME is a home of its own holding that file, and its `agy` alone
+//! is told it runs over SSH, without any other Google sign-in (hosts/antigravity.rs, from `plan_home`, so even an `agy`
+//! started again later never falls back to the keyring). The bot's own `~/.gemini` rules, skills and conversations are
+//! linked in (`TurnHome::links`), never its settings or the folder of the computer's own sign-in, so a move between
+//! plans resumes the same conversation. Its conversation summaries (`conversation_summaries.db`) are not: a SQLite
+//! file cannot be shared through a link, so they do not carry across plans.
+//!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
 //! could read a subscription's home while a turn runs on it, or a running turn's environment.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::ffi::{CStr, CString, OsStr};
 use std::io::{Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
@@ -49,6 +60,125 @@ use crate::util::text_of;
 const MAX_VALUE: usize = 64 * 1024;
 /// The sign-in files a home subscription may hold; nothing else in its home is removed.
 const FILES: &[&str] = &["auth.json", CREDENTIALS];
+/// Where `agy` keeps a sign-in in its home when it believes it runs over SSH.
+pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
+/// What `agy` is told so it reads and writes AGY_TOKEN, never the system keyring.
+pub const OVER_SSH: (&str, &str) = ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0");
+/// This runner can sign in, install and run Antigravity plans; the hub gives such work to no other runner.
+pub const AGY_PLAN_CAPABILITY: &str = "antigravity_plan_v1";
+
+/// A runtime whose plan login lives in a home made for each turn, which its CLI finds through `var`.
+pub struct TurnHome {
+    pub runtime: &'static str,
+    pub var: &'static str,
+    /// The CLI's own home under HOME when `var` is unset (the bot's own, whose `links` the turn's home gets).
+    pub default: &'static str,
+    /// The sign-in file, relative to the home.
+    pub file: &'static str,
+    /// Linked from the bot's own home when there, `keep` made there first so what the CLI writes in them stays.
+    links: &'static [&'static str],
+    keep: &'static [&'static str],
+    /// Variables that would sign the CLI in some other way than the file: taken off its own process only.
+    pub strip: &'static [&'static str],
+    /// Set on the CLI's own process only (the bot's tools inside it inherit it), never in the turn's environment.
+    pub env: &'static [(&'static str, &'static str)],
+}
+
+pub const TURN_HOMES: &[TurnHome] = &[TurnHome {
+    runtime: "antigravity",
+    var: "GEMINI_HOME",
+    default: ".gemini",
+    file: AGY_TOKEN,
+    links: &[
+        "AGENTS.md",
+        "GEMINI.md",
+        "config/skills.json",
+        "config/skills",
+        "antigravity-cli/skills",
+        "antigravity-cli/conversations",
+        "antigravity-cli/brain",
+        "antigravity-cli/annotations",
+        "antigravity-cli/implicit",
+        "antigravity-cli/knowledge",
+    ],
+    keep: &["antigravity-cli/conversations", "antigravity-cli/brain"],
+    strip: &[
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
+        "GOOGLE_CLOUD_QUOTA_PROJECT",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GCLOUD_PROJECT",
+        "CLOUDSDK_CORE_PROJECT",
+        // Signs agy in with the computer's Application Default Credentials.
+        "AGY_ADC_AUTH",
+    ],
+    env: &[OVER_SSH],
+}];
+
+pub fn turn_home(runtime: &str) -> Option<&'static TurnHome> {
+    TURN_HOMES.iter().find(|t| t.runtime == runtime)
+}
+
+impl TurnHome {
+    /// The CLI's own home in `env`: `var`, else `default` under HOME.
+    pub fn own(&self, env: &Env) -> Option<PathBuf> {
+        match env.get(self.var).filter(|v| !v.is_empty()) {
+            Some(v) => Some(v.into()),
+            None => env
+                .get("HOME")
+                .filter(|h| !h.is_empty())
+                .map(|h| Path::new(h).join(self.default)),
+        }
+    }
+
+    /// The sign-in a plan turn's CLI is about to run on in `home`: a plain file (never through a link), no larger than
+    /// a subscription, holding agy's `{"token": {...}}` with a token in it. Err says why there is none.
+    pub fn sign_in(&self, home: &str) -> Result<String, String> {
+        let text = read_codex_auth(&Path::new(home).join(self.file))
+            .ok_or("the plan's sign-in is not in place")?;
+        let v: Value =
+            serde_json::from_str(&text).map_err(|_| "the plan's sign-in is unreadable")?;
+        if ["access_token", "refresh_token"]
+            .iter()
+            .any(|k| v["token"][k].as_str().is_some_and(|t| !t.is_empty()))
+        {
+            Ok(text)
+        } else {
+            Err("the plan's sign-in holds no token".into())
+        }
+    }
+
+    /// Link `links` of the bot's own home `own` into the turn's `home` (under `root`), each folder on the way opened
+    /// without following a link (`Folder`). Best effort: a turn whose links fail still runs.
+    fn link(&self, root: &Path, home: &Path, own: &Path) {
+        if own == home {
+            return;
+        }
+        if let Some(up) = own.parent() {
+            for rel in self.keep {
+                let _ = Folder::open(up, &own.join(rel), true);
+            }
+        }
+        for rel in self.links {
+            let target = own.join(rel);
+            let link = home.join(rel);
+            let (Some(parent), Some(name)) = (link.parent(), link.file_name()) else {
+                continue;
+            };
+            if std::fs::symlink_metadata(&target).is_err() {
+                continue;
+            }
+            if let (Ok(dir), Ok(name)) = (Folder::open(root, parent, true), c_name(name)) {
+                if dir.kind(&name).is_none() {
+                    let _ = dir.symlink(&name, &target);
+                }
+            }
+        }
+    }
+}
 /// Claude Code's sign-in file in its config directory.
 pub const CREDENTIALS: &str = ".credentials.json";
 /// What stays the subscription home's own in a full Claude login's config directory: everything else is linked to the
@@ -79,6 +209,8 @@ pub struct Delivered {
     /// CLAUDE_CONFIG_DIR, while HOME stays the turn's).
     pub home_env: Option<String>,
     pub file: Option<PathBuf>,
+    /// Where `home` is made from, one folder at a time (`Folder::open`): the runner's own state.
+    root: PathBuf,
     /// As the server handed it.
     value: String,
     /// What the file held when this turn put it in place (`start`).
@@ -120,10 +252,16 @@ impl Delivered {
         self.env.is_some() || self.home_env.is_some()
     }
 
+    /// A plan login in a home made for each turn (TURN_HOMES), with its runtime's row.
+    fn turn_home(&self) -> Option<&'static TurnHome> {
+        turn_home(&self.runtime).filter(|_| self.home.is_some())
+    }
+
     /// A plan login in its own CLI home can sign in shell commands during another runtime's turn. Current hubs send
     /// the agent's shell payer, and older hubs send the computer's login. API keys pay only for their own runtime.
     fn for_shell(&self) -> bool {
         self.home.is_some()
+            && self.turn_home().is_none()
             && self.billing == "subscription"
             && crate::profiles::home_var(&self.runtime).is_some_and(|v| v != "HOME")
     }
@@ -140,6 +278,46 @@ struct Homes {
 struct Live {
     turns: usize,
     revision: i64,
+    /// A plan's sign-in file its CLI refreshes in place (TURN_HOMES), with how it looked when last read
+    /// (`notice_refreshes`).
+    watch: Option<(PathBuf, Option<Stamp>)>,
+}
+
+/// A file's inode, size and status-change time (which no rewrite can set back): what tells a rewrite of it without
+/// reading it.
+type Stamp = (u64, u64, i64, i64);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    use std::os::unix::fs::MetadataExt;
+    let m = std::fs::symlink_metadata(path).ok()?;
+    Some((m.ino(), m.size(), m.ctime(), m.ctime_nsec()))
+}
+
+/// Mask, in every running turn's output from now on, the tokens a plan's CLI wrote when it refreshed its sign-in during
+/// a turn (TURN_HOMES): called before what a turn said is kept (drive.rs, capture.rs), so a refreshed token is never
+/// kept or sent unmasked. One stat per plan turn running here when nothing changed; a changed file is read bounded and
+/// never through a link.
+pub fn notice_refreshes() {
+    let mut homes = homes();
+    for live in homes.live.values_mut() {
+        let Some((file, seen)) = &mut live.watch else {
+            continue;
+        };
+        let now = stamp(file);
+        if now == *seen {
+            continue;
+        }
+        // Seen only once read whole: a file caught mid-write is read again next time.
+        let Some(text) = read_codex_auth(file)
+            .filter(|t| serde_json::from_str::<Value>(t).is_ok_and(|v| v.is_object()))
+        else {
+            continue;
+        };
+        for secret in secrets_in(&text) {
+            crate::redact::hide_everywhere(&secret, false);
+        }
+        *seen = now;
+    }
 }
 
 fn homes() -> MutexGuard<'static, Homes> {
@@ -244,6 +422,7 @@ pub fn apply(
             home: None,
             home_env: None,
             file: None,
+            root: crate::isolation::bot_state(state_dir),
             value: value.clone(),
             written: value.clone(),
             refreshed: None,
@@ -265,16 +444,25 @@ pub fn apply(
             let name = text_of(&item["file"]);
             let home_env = text_of(&item["home_env"]);
             let overrides = crate::harness_tools::caps(&runtime).profile_home_overrides;
-            if !FILES.contains(&name.as_str())
-                || (name == CREDENTIALS) == home_env.is_empty()
-                || (!home_env.is_empty() && !overrides.contains(&home_env))
-            {
+            let per_turn = turn_home(&runtime);
+            let known = match per_turn {
+                Some(t) => name == t.file && home_env.is_empty(),
+                None => {
+                    FILES.contains(&name.as_str())
+                        && (name == CREDENTIALS) != home_env.is_empty()
+                        && (home_env.is_empty() || overrides.contains(&home_env))
+                }
+            };
+            if !known {
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {id} names no known file"
                 ));
                 continue;
             }
-            if !home_env.is_empty() {
+            if let Some(t) = per_turn {
+                // Its home's variable, which a later runtime's start takes out of the environment again.
+                delivered.home_env = Some(t.var.into());
+            } else if !home_env.is_empty() {
                 // The CLI ranks a token in its environment above the file.
                 for other in crate::harness_tools::api_key_env(&runtime) {
                     env.remove(&other);
@@ -282,10 +470,8 @@ pub fn apply(
                 }
                 delivered.home_env = Some(home_env);
             }
-            let plan = crate::isolation::bot_state(state_dir)
-                .join("subscriptions")
-                .join(&id);
-            let home = if name == CREDENTIALS || delivered.attempt_only {
+            let plan = delivered.root.join("subscriptions").join(&id);
+            let home = if name == CREDENTIALS || per_turn.is_some() || delivered.attempt_only {
                 plan.join(TURNS)
                     .join(uuid::Uuid::new_v4().simple().to_string())
                     .join(&runtime)
@@ -379,8 +565,13 @@ pub async fn activate(
 /// it has stopped, except a plan login kept in a home (`Delivered::for_shell`), which stays in place with its CLI's
 /// home variable set so the turn's own commands can run that CLI signed in. A home subscription's file is put in
 /// place now. Returns what joins the turn's redaction list: the file as found in place, and what Codex refreshed in a
-/// home let go. A home that cannot be made leaves its subscription out of the turn, said in the runner's log.
-pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Vec<String> {
+/// home let go. A home kept for another runtime's commands that cannot be made leaves its subscription out of the turn,
+/// said in the runner's log; this runtime's own fails the turn before it starts, rather than run it on another login.
+pub fn start(
+    delivered: &mut Vec<Delivered>,
+    runtime: &str,
+    env: &mut Env,
+) -> Result<Vec<String>, String> {
     let mut secrets = vec![];
     for d in delivered
         .iter_mut()
@@ -418,12 +609,14 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
                 crate::util::diagnostic(&format!(
                     "Tico runner: left a subscription out of this turn: {e}"
                 ));
+                // A file `hold` put in place before it failed goes with it.
+                secrets.extend(release(&mut delivered[at]));
                 delivered.remove(at);
             }
         }
     }
     let Some(at) = delivered.iter().position(|d| d.runtime == runtime) else {
-        return secrets;
+        return Ok(secrets);
     };
     let d = &mut delivered[at];
     if let Some(name) = d.env.clone() {
@@ -431,21 +624,15 @@ pub fn start(delivered: &mut Vec<Delivered>, runtime: &str, env: &mut Env) -> Ve
             env.remove(&other);
         }
         env.insert(name, d.value.clone());
-        return secrets;
+        return Ok(secrets);
     }
     if d.home.is_none() || d.file.is_none() {
-        return secrets;
+        return Ok(secrets);
     }
-    match hold(d, env) {
-        Ok(found) => secrets.extend(found),
-        Err(e) => {
-            crate::util::diagnostic(&format!(
-                "Tico runner: left a subscription out of this turn: {e}"
-            ));
-            delivered.remove(at);
-        }
-    }
-    secrets
+    secrets.extend(
+        hold(d, env).map_err(|e| format!("The plan's sign-in could not be put in place: {e}"))?,
+    );
+    Ok(secrets)
 }
 
 /// Put a home subscription's file in place for this turn (once: a held home keeps what is there) and point its CLI's
@@ -457,13 +644,14 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         return Ok(secrets);
     };
     if !d.held {
+        // A path inside the home, checked against TURN_HOMES or FILES when it was handed (`apply`).
         let name = file
-            .file_name()
+            .strip_prefix(&home)
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        let written = place(&home, &name, &d.value, d.revision)?;
+        let written = place(&d.root, &home, &name, &d.value, d.revision)?;
         if written != d.value {
-            secrets.extend(if d.home_env.is_some() {
+            secrets.extend(if d.home_env.is_some() && d.turn_home().is_none() {
                 claude_secrets(&written)
             } else {
                 secrets_in(&written)
@@ -472,12 +660,26 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
         d.written = written;
         d.held = true;
     }
+    if let Some(t) = d.turn_home() {
+        if let Some(live) = homes().live.get_mut(&home) {
+            if live.watch.is_none() {
+                live.watch = Some((file.clone(), stamp(&file)));
+            }
+        }
+        // What else would sign the CLI in comes off its own process only (hosts/antigravity.rs): the turn's other
+        // runtimes, a fallback hop among them, keep the bot's keys.
+        if let Some(own) = t.own(env) {
+            t.link(&d.root, &home, &own);
+        }
+        env.insert(t.var.into(), home.display().to_string());
+        return Ok(secrets);
+    }
     if let Some(var) = d.home_env.clone() {
         for other in crate::harness_tools::api_key_env(&d.runtime) {
             env.remove(&other);
         }
         if let Some(own) = env.get("HOME").filter(|h| !h.is_empty()) {
-            link_config(&home, &Path::new(own).join(".claude"));
+            link_config(&d.root, &home, &Path::new(own).join(".claude"));
         }
         env.insert(var, home.display().to_string());
         return Ok(secrets);
@@ -491,11 +693,12 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
                 .ok_or("Missing provider home")?
                 .join(&d.runtime);
             let sessions = plan.join("sessions");
-            crate::isolation::mkdir(&sessions, 0o700)
+            Folder::open(&d.root, &sessions, true)
                 .map_err(|_| "Cannot create provider sessions")?;
-            let link = home.join("sessions");
-            if !link.is_symlink() {
-                std::os::unix::fs::symlink(sessions, link)
+            let dir =
+                Folder::open(&d.root, &home, false).map_err(|_| "Cannot link provider sessions")?;
+            if dir.kind(c"sessions") != Some(libc::S_IFLNK) {
+                dir.symlink(c"sessions", &sessions)
                     .map_err(|_| "Cannot link provider sessions")?;
             }
             for key in crate::harness_tools::api_key_env(&d.runtime) {
@@ -514,30 +717,36 @@ fn hold(d: &mut Delivered, env: &mut Env) -> Result<Vec<String>, String> {
 /// files is linked in, `projects` first made so the transcripts stay under HOME (hosts/claude.rs transcript). A link
 /// to another folder (the bot's HOME moved) is replaced; what Claude Code made in the home itself is left alone. A
 /// fresh home is marked as onboarded, as the computer's own is. Best effort: a turn whose links fail still runs.
-fn link_config(home: &Path, own: &Path) {
-    let _ = crate::isolation::mkdir(&own.join("projects"), 0o700);
+fn link_config(root: &Path, home: &Path, own: &Path) {
+    if let Some(up) = own.parent() {
+        let _ = Folder::open(up, &own.join("projects"), true);
+    }
+    let Ok(dir) = Folder::open(root, home, false) else {
+        return;
+    };
     for entry in std::fs::read_dir(own).into_iter().flatten().flatten() {
         let name = entry.file_name();
         let text = name.to_string_lossy();
         if OWN.contains(&text.as_ref()) || text.contains(".tico-") {
             continue;
         }
-        let link = home.join(&name);
-        match std::fs::symlink_metadata(&link) {
-            Ok(m) if m.file_type().is_symlink() => {
-                if std::fs::read_link(&link).is_ok_and(|t| t == entry.path()) {
+        let Ok(name) = c_name(&name) else {
+            continue;
+        };
+        match dir.kind(&name) {
+            Some(libc::S_IFLNK) => {
+                if dir.read_link(&name).is_some_and(|t| t == entry.path()) {
                     continue;
                 }
-                let _ = std::fs::remove_file(&link);
+                dir.remove(&name);
             }
-            Ok(_) => continue,
-            Err(_) => {}
+            Some(_) => continue,
+            None => {}
         }
-        let _ = std::os::unix::fs::symlink(entry.path(), &link);
+        let _ = dir.symlink(&name, &entry.path());
     }
-    let settings = home.join(".claude.json");
-    if !settings.exists() {
-        let _ = write_private(&settings, "{\"hasCompletedOnboarding\":true}");
+    if dir.kind(c".claude.json").is_none() {
+        let _ = dir.write(c".claude.json", "{\"hasCompletedOnboarding\":true}");
     }
 }
 
@@ -647,16 +856,20 @@ fn write_logins(id: &str, value: &str, revision: Option<i64>) -> usize {
 /// Hold `home/name` for one turn. The first turn on a home writes the file: the login Codex refreshed here at this
 /// revision, else `value`. A turn joining one already running keeps the file in place (Codex may have refreshed it)
 /// unless it brings a newer revision (someone reconnected it). Returns what the file holds now.
-fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, String> {
+fn place(
+    root: &Path,
+    home: &Path,
+    name: &str,
+    value: &str,
+    revision: i64,
+) -> Result<String, String> {
     let mut homes = homes();
-    crate::isolation::mkdir(home, 0o700)
-        .map_err(|e| format!("cannot make a subscription home: {e}"))?;
     let path = home.join(name);
+    let dir = Folder::open(root, path.parent().unwrap_or(home), true)?;
+    let leaf = c_name(path.file_name().ok_or_else(refused)?)?;
     let live = homes.live.get(home).map(|l| l.revision);
     let current = match live {
-        Some(at) if revision <= at => std::fs::read_to_string(&path)
-            .ok()
-            .filter(|t| !t.trim().is_empty()),
+        Some(at) if revision <= at => dir.read(&leaf),
         _ => None,
     };
     let text = match current {
@@ -666,51 +879,247 @@ fn place(home: &Path, name: &str, value: &str, revision: i64) -> Result<String, 
                 Some((at, kept)) if live.is_none() && *at == revision => kept.clone(),
                 _ => value.to_string(),
             };
-            write_private(&path, &text)?;
+            dir.write(&leaf, &text)?;
             text
         }
     };
-    let entry = homes
-        .live
-        .entry(home.to_path_buf())
-        .or_insert(Live { turns: 0, revision });
+    let entry = homes.live.entry(home.to_path_buf()).or_insert(Live {
+        turns: 0,
+        revision,
+        watch: None,
+    });
     entry.turns += 1;
     entry.revision = entry.revision.max(revision);
     Ok(text)
 }
 
+fn refused() -> String {
+    "a subscription home's folder is not a plain folder".into()
+}
+
+fn c_name(name: &OsStr) -> Result<CString, String> {
+    CString::new(name.as_bytes()).map_err(|_| refused())
+}
+
+/// A folder held open by descriptor. Under isolation the bot user owns the runner's per-turn state (isolation.rs
+/// `bot_state`) and may swap any name in it at any moment, so every folder a subscription home is made of is opened
+/// one name at a time from the runner's state without following a link, and what is made, read, written, renamed or
+/// removed there is named relative to it: a swap after the check cannot send the supervisor's write anywhere else.
+struct Folder(OwnedFd);
+
+impl Folder {
+    /// `path`, opened without following a link anywhere on the way but root's own (isolation::open_unfollowed).
+    fn at(path: &Path) -> Result<Folder, String> {
+        crate::isolation::open_unfollowed(path, libc::O_DIRECTORY)
+            .map(|f| Folder(f.into()))
+            .map_err(|_| refused())
+    }
+
+    /// `dir`, under `root`: each folder below `root` opened without following a link, a missing one made (`make`),
+    /// 0700 and the bot user's.
+    fn open(root: &Path, dir: &Path, make: bool) -> Result<Folder, String> {
+        let rest = dir.strip_prefix(root).map_err(|_| refused())?;
+        let mut at = Folder::at(root)?;
+        for part in rest.components() {
+            let std::path::Component::Normal(part) = part else {
+                return Err(refused());
+            };
+            at = at.child(&c_name(part)?, make)?;
+        }
+        Ok(at)
+    }
+
+    fn raw(&self) -> i32 {
+        self.0.as_raw_fd()
+    }
+
+    /// The folder `name` in this one, never through a link; made when missing (`make`).
+    fn child(&self, name: &CStr, make: bool) -> Result<Folder, String> {
+        let open =
+            || crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_DIRECTORY);
+        if let Some(fd) = open() {
+            return Ok(Folder(fd));
+        }
+        if !make || std::io::Error::last_os_error().kind() != std::io::ErrorKind::NotFound {
+            return Err(refused());
+        }
+        // SAFETY: mkdirat on a descriptor this process holds and a NUL-terminated name.
+        if unsafe { libc::mkdirat(self.raw(), name.as_ptr(), 0o700) } != 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(format!("cannot make a subscription home: {e}"));
+            }
+        }
+        let made = std::fs::File::from(open().ok_or_else(refused)?);
+        crate::isolation::chown_file(&made).map_err(|e| e.to_string())?;
+        Ok(Folder(made.into()))
+    }
+
+    /// The type of what `name` is here (`S_IFDIR`, `S_IFLNK`...), never following a link; None when nothing is.
+    fn kind(&self, name: &CStr) -> Option<libc::mode_t> {
+        let mut info = std::mem::MaybeUninit::<libc::stat>::uninit();
+        // SAFETY: fstatat on a held descriptor and a NUL-terminated name, into an owned buffer.
+        let found = unsafe {
+            libc::fstatat(
+                self.raw(),
+                name.as_ptr(),
+                info.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } == 0;
+        found.then(|| unsafe { info.assume_init() }.st_mode & libc::S_IFMT)
+    }
+
+    /// What the file `name` holds: a plain file, never read through a link, bounded as a subscription is.
+    fn read(&self, name: &CStr) -> Option<String> {
+        let fd = crate::isolation::open_at(self.raw(), name, libc::O_RDONLY | libc::O_NONBLOCK)?;
+        read_bounded(std::fs::File::from(fd))
+    }
+
+    /// Write `value` as the file `name` (0600, the bot user's): staged under a name of its own in this folder and
+    /// renamed over it, so the CLI never reads half a file and nothing is written through a link.
+    fn write(&self, name: &CStr, value: &str) -> Result<(), String> {
+        let staged = Path::new(OsStr::from_bytes(name.to_bytes()))
+            .with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
+        let staged = c_name(staged.as_os_str())?;
+        // SAFETY: openat on a held descriptor and a NUL-terminated name; the descriptor gets one owner below.
+        let fd = unsafe {
+            libc::openat(
+                self.raw(),
+                staged.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "cannot write a subscription file: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+        let written = crate::isolation::chown_file(&f)
+            .map_err(|e| e.to_string())
+            .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()))
+            .and_then(|_| {
+                // SAFETY: renameat within one held descriptor, NUL-terminated names.
+                if unsafe { libc::renameat(self.raw(), staged.as_ptr(), self.raw(), name.as_ptr()) }
+                    == 0
+                {
+                    Ok(())
+                } else {
+                    Err(std::io::Error::last_os_error().to_string())
+                }
+            });
+        drop(f);
+        if written.is_err() {
+            // SAFETY: unlinkat of the staged name in a held descriptor.
+            unsafe { libc::unlinkat(self.raw(), staged.as_ptr(), 0) };
+        }
+        written
+    }
+
+    fn symlink(&self, name: &CStr, target: &Path) -> Result<(), String> {
+        let target = c_name(target.as_os_str())?;
+        // SAFETY: symlinkat into a held descriptor with NUL-terminated names.
+        if unsafe { libc::symlinkat(target.as_ptr(), self.raw(), name.as_ptr()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error().to_string())
+        }
+    }
+
+    fn read_link(&self, name: &CStr) -> Option<PathBuf> {
+        let mut target = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: readlinkat on a held descriptor and a NUL-terminated name into an owned buffer.
+        let n = unsafe {
+            libc::readlinkat(
+                self.raw(),
+                name.as_ptr(),
+                target.as_mut_ptr().cast(),
+                target.len(),
+            )
+        };
+        (n > 0 && (n as usize) < target.len())
+            .then(|| PathBuf::from(OsStr::from_bytes(&target[..n as usize])))
+    }
+
+    /// The names in this folder.
+    fn names(&self) -> Vec<CString> {
+        let mut out = vec![];
+        // SAFETY: fdopendir takes a duplicate this process owns (closed by closedir), rewound since it shares the
+        // held descriptor's position; readdir's entries are copied out before the next call.
+        unsafe {
+            let dup = libc::fcntl(self.raw(), libc::F_DUPFD_CLOEXEC, 0);
+            if dup < 0 {
+                return out;
+            }
+            let stream = libc::fdopendir(dup);
+            if stream.is_null() {
+                libc::close(dup);
+                return out;
+            }
+            libc::rewinddir(stream);
+            loop {
+                let entry = libc::readdir(stream);
+                if entry.is_null() {
+                    break;
+                }
+                let name = CStr::from_ptr((*entry).d_name.as_ptr());
+                if !matches!(name.to_bytes(), b"." | b"..") {
+                    out.push(name.to_owned());
+                }
+            }
+            libc::closedir(stream);
+        }
+        out
+    }
+
+    /// Remove `name` here: a file or link (never what a link points at), or a folder with all that is in it.
+    fn remove(&self, name: &CStr) {
+        self.remove_within(name, 32);
+    }
+
+    fn remove_within(&self, name: &CStr, depth: usize) {
+        if self.kind(name) == Some(libc::S_IFDIR) {
+            if let (Ok(dir), true) = (self.child(name, false), depth > 0) {
+                for inner in dir.names() {
+                    dir.remove_within(&inner, depth - 1);
+                }
+            }
+            // SAFETY: unlinkat on a held descriptor and a NUL-terminated name.
+            unsafe { libc::unlinkat(self.raw(), name.as_ptr(), libc::AT_REMOVEDIR) };
+        } else {
+            // SAFETY: as above.
+            unsafe { libc::unlinkat(self.raw(), name.as_ptr(), 0) };
+        }
+    }
+}
+
+/// Write `value` as `path`, its folder opened without following a link (`Folder::at`).
 pub(crate) fn write_private(path: &Path, value: &str) -> Result<(), String> {
-    let staged = path.with_extension(format!("tico-{}", uuid::Uuid::new_v4().simple()));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&staged)
-        .map_err(|e| format!("cannot write a subscription file: {e}"))?;
-    let written = crate::isolation::chown_file(&f)
-        .map_err(|e| e.to_string())
-        .and_then(|_| f.write_all(value.as_bytes()).map_err(|e| e.to_string()));
-    drop(f);
-    written
-        .and_then(|_| std::fs::rename(&staged, path).map_err(|e| e.to_string()))
-        .inspect_err(|_| {
-            let _ = std::fs::remove_file(&staged);
-        })
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(refused());
+    };
+    Folder::at(folder)?.write(&c_name(name)?, value)
 }
 
 /// Remove the sign-in files from one subscription home (and what a write cut short left), keeping its sessions.
-fn clear(home: &Path) {
-    let Ok(entries) = std::fs::read_dir(home) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
+fn clear(root: &Path, home: &Path) {
+    if let Ok(dir) = Folder::open(root, home, false) {
+        clear_in(&dir);
+    }
+}
+
+fn clear_in(dir: &Folder) {
+    for entry in dir.names() {
+        let name = entry.to_string_lossy();
         let staged = FILES.iter().any(|f| {
             name.strip_prefix(f.trim_end_matches(".json"))
                 .is_some_and(|rest| rest.starts_with(".tico-"))
         });
-        if FILES.contains(&name.as_str()) || staged || name == LEGACY_REVISION_FILE {
-            let _ = std::fs::remove_file(entry.path());
+        if FILES.contains(&name.as_ref()) || staged || name == LEGACY_REVISION_FILE {
+            dir.remove(&entry);
         }
     }
 }
@@ -718,17 +1127,19 @@ fn clear(home: &Path) {
 /// At the runner's start, before any turn: no turn holds a home, so a sign-in file left in one (the runner stopped
 /// mid-turn, or an older runner kept it) is removed.
 pub fn sweep(state_dir: &Path) {
-    let root = crate::isolation::bot_state(state_dir).join("subscriptions");
-    for sub in std::fs::read_dir(&root).into_iter().flatten().flatten() {
-        for home in std::fs::read_dir(sub.path())
-            .into_iter()
-            .flatten()
-            .flatten()
-        {
-            if home.file_name() == TURNS {
-                let _ = std::fs::remove_dir_all(home.path());
-            } else if home.file_type().is_ok_and(|t| t.is_dir()) {
-                clear(&home.path());
+    let state = crate::isolation::bot_state(state_dir);
+    let Ok(root) = Folder::open(&state, &state.join("subscriptions"), false) else {
+        return;
+    };
+    for sub in root.names() {
+        let Ok(sub) = root.child(&sub, false) else {
+            continue;
+        };
+        for home in sub.names() {
+            if home.as_bytes() == TURNS.as_bytes() {
+                sub.remove(&home);
+            } else if let Ok(home) = sub.child(&home, false) {
+                clear_in(&home);
             }
         }
     }
@@ -750,7 +1161,20 @@ fn release(d: &mut Delivered) -> Vec<String> {
     };
     d.held = false;
     let mut homes = homes();
-    if let Some(now) = changed(d) {
+    if d.turn_home().is_some() {
+        // A plan turn's CLI refreshes its access token in the file: masked for the turn, never kept or sent back.
+        // Masked everywhere now, as `notice_refreshes` does, so what the turn's diagnostics still bring after its home
+        // is gone is masked too.
+        if let Some(now) = d.file.as_deref().and_then(read_codex_auth) {
+            if now != d.written {
+                let found = secrets_in(&now);
+                for secret in &found {
+                    crate::redact::hide_everywhere(secret, false);
+                }
+                secrets.extend(found);
+            }
+        }
+    } else if let Some(now) = changed(d) {
         secrets.extend(secrets_in(&now));
         if !d.attempt_only
             && homes
@@ -766,10 +1190,16 @@ fn release(d: &mut Delivered) -> Vec<String> {
         Some(live) if live.turns > 1 => live.turns -= 1,
         _ => {
             homes.live.remove(&home);
-            clear(&home);
+            // Through descriptors from the runner's state (`Folder`): a link put in place of any folder on the way
+            // is removed, never followed.
+            clear(&d.root, &home);
             if let Some(turn) = turn_dir(&home) {
                 // A turn's own config directory: its links go with it (never what they point at).
-                let _ = std::fs::remove_dir_all(turn);
+                if let (Some(up), Some(name)) = (turn.parent(), turn.file_name()) {
+                    if let (Ok(dir), Ok(name)) = (Folder::open(&d.root, up, false), c_name(name)) {
+                        dir.remove(&name);
+                    }
+                }
             }
         }
     }
@@ -789,6 +1219,15 @@ pub fn for_runtime<'a>(delivered: &'a [Delivered], runtime: &str) -> Option<&'a 
     delivered.iter().find(|d| d.runtime == runtime)
 }
 
+/// The home of `runtime`'s plan in this turn when its sign-in lives in a home made for the turn (TURN_HOMES): the
+/// host runs that CLI on nothing but the sign-in there (hosts::Settings::plan_home), every time it starts it.
+pub fn plan_home(delivered: &[Delivered], runtime: &str) -> Option<String> {
+    for_runtime(delivered, runtime)
+        .filter(|d| d.turn_home().is_some())
+        .and_then(|d| d.home.as_ref())
+        .map(|h| h.display().to_string())
+}
+
 /// The file as Codex left it, when it refreshed a ChatGPT login since the turn began; None when it is as written.
 fn changed(d: &Delivered) -> Option<String> {
     if d.kind != "codex_login" {
@@ -800,11 +1239,11 @@ fn changed(d: &Delivered) -> Option<String> {
 
 /// The auth file is writable by the bot. Refuse special files and bound the read.
 pub fn read_codex_auth(path: &Path) -> Option<String> {
-    let file = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_NOFOLLOW)
-        .open(path)
-        .ok()?;
+    read_bounded(crate::isolation::open_unfollowed(path, libc::O_NONBLOCK).ok()?)
+}
+
+/// A plain file's text, no larger than a subscription; None for anything else or nothing.
+fn read_bounded(file: std::fs::File) -> Option<String> {
     if !file.metadata().ok()?.is_file() {
         return None;
     }
@@ -899,6 +1338,20 @@ mod tests {
         assert!(!homes().kept.contains_key(first[0].home.as_ref().unwrap()));
         finish(&mut second);
         assert!(!two.exists());
+        // A Claude turn's Codex shell login whose sessions folder cannot be made is left out, its file with it.
+        std::fs::remove_dir_all(state.join("subscriptions/plan/codex")).unwrap();
+        std::fs::write(state.join("subscriptions/plan/codex"), "not a folder").unwrap();
+        let mut got = apply(
+            &state,
+            &items("{\"tokens\":\"attempt three\"}"),
+            &mut Env::new(),
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        let three = got[0].file.clone().unwrap();
+        start(&mut got, "claude", &mut Env::new()).unwrap();
+        assert!(got.is_empty());
+        assert!(!three.exists());
         std::fs::remove_dir_all(state).unwrap();
     }
 
@@ -911,7 +1364,7 @@ mod tests {
             &mut vec![],
             &mut BTreeSet::new(),
         );
-        start(&mut got, runtime, &mut Env::new());
+        start(&mut got, runtime, &mut Env::new()).unwrap();
         got
     }
 
@@ -935,7 +1388,7 @@ mod tests {
         assert!(!keys.contains("ANTHROPIC_API_KEY"));
         assert_eq!(values, vec!["sk-ant-oat01-synthetic".to_string()]);
         // Set when Claude starts.
-        assert!(start(&mut got, "claude", &mut env).is_empty());
+        assert!(start(&mut got, "claude", &mut env).unwrap().is_empty());
         assert_eq!(
             env.get("CLAUDE_CODE_OAUTH_TOKEN").map(String::as_str),
             Some("sk-ant-oat01-synthetic")
@@ -968,7 +1421,7 @@ mod tests {
             std::fs::create_dir_all(own.join(bot)).unwrap();
             let mut env: Env = [("HOME".into(), state.join(bot).display().to_string())].into();
             let mut got = apply(&state, &item, &mut env, &mut vec![], &mut BTreeSet::new());
-            start(&mut got, "claude", &mut env);
+            start(&mut got, "claude", &mut env).unwrap();
             let home = PathBuf::from(&env["CLAUDE_CONFIG_DIR"]);
             assert!(is_config_home(&env["CLAUDE_CONFIG_DIR"]));
             // Its transcripts are the turn's own, so a move to or from another Claude plan resumes the thread.
@@ -1037,7 +1490,7 @@ mod tests {
         assert!(home.starts_with(&state) && home.ends_with("subscriptions/s3/codex"));
         let file = home.join("auth.json");
         assert!(!file.exists(), "written before Codex starts");
-        start(&mut got, "codex", &mut env);
+        start(&mut got, "codex", &mut env).unwrap();
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"tokens\":1}");
         use std::os::unix::fs::PermissionsExt;
         assert_eq!(
@@ -1119,7 +1572,7 @@ mod tests {
         for leaked in [token, "rt_synthetic_fallback_cccccccc"] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
-        start(&mut got, "claude", &mut env);
+        start(&mut got, "claude", &mut env).unwrap();
         assert_eq!(env["CLAUDE_CODE_OAUTH_TOKEN"], token);
         // The ChatGPT login signs `codex` in for Claude's own commands (`codex exec` in its shell), in its own home.
         assert_eq!(env["CODEX_HOME"], home.display().to_string());
@@ -1138,7 +1591,7 @@ mod tests {
         assert!(crate::fallback::default_choice(&config, &choices, &env, |_| false).is_none());
         // The hop: its environment is copied from the turn's; it gets the Codex home and loses Claude's token.
         let mut hop = env.clone();
-        start(&mut got, "codex", &mut hop);
+        start(&mut got, "codex", &mut hop).unwrap();
         assert_eq!(hop["CODEX_HOME"], home.display().to_string());
         assert_eq!(std::fs::read_to_string(&file).unwrap(), login);
         assert!(!hop.contains_key("CLAUDE_CODE_OAUTH_TOKEN"), "{hop:?}");
@@ -1149,7 +1602,7 @@ mod tests {
         // refreshed goes back when the turn ends.
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
-        start(&mut got, "codex", &mut env);
+        start(&mut got, "codex", &mut env).unwrap();
         assert!(file.exists() && !env.contains_key("CLAUDE_CODE_OAUTH_TOKEN"));
         std::fs::write(
             &file,
@@ -1157,7 +1610,7 @@ mod tests {
         )
         .unwrap();
         let mut hop = env.clone();
-        start(&mut got, "claude", &mut hop);
+        start(&mut got, "claude", &mut hop).unwrap();
         assert!(got[1].held && file.exists());
         assert_eq!(hop["CODEX_HOME"], home.display().to_string());
         assert_eq!(hop["CLAUDE_CODE_OAUTH_TOKEN"], token);
@@ -1185,7 +1638,7 @@ mod tests {
         let mut env = Env::new();
         let mut got = apply(&state, &items, &mut env, &mut vec![], &mut BTreeSet::new());
         let file = got[0].file.clone().unwrap();
-        start(&mut got, "claude", &mut env);
+        start(&mut got, "claude", &mut env).unwrap();
         assert!(!file.exists() && !env.contains_key("CODEX_HOME"), "{env:?}");
         std::fs::remove_dir_all(&state).unwrap();
     }
@@ -1241,7 +1694,7 @@ mod tests {
             "fetching never places the file"
         );
         assert!(seen.lock().unwrap()[0].contains("credential-runtime?subscription_runtime=codex"));
-        start(&mut given, "codex", &mut env);
+        start(&mut given, "codex", &mut env).unwrap();
         assert!(given[0].file.as_ref().unwrap().exists());
         finish(&mut given);
         let (url, _) = crate::client::tests::serve(vec![(200, "{\"credentials\":[]}")]).await;
@@ -1271,6 +1724,191 @@ mod tests {
         assert!(
             available(&given, &old_server, "codex"),
             "old server up-front values stay usable"
+        );
+        std::fs::remove_dir_all(state).unwrap();
+    }
+
+    #[test]
+    fn an_antigravity_plan_gets_a_private_home_per_turn_with_the_bots_conversations_and_nothing_else(
+    ) {
+        use std::os::unix::fs::PermissionsExt;
+        let state = dir();
+        let own = state.join("bot/.gemini");
+        for rel in [
+            "antigravity-cli/conversations/c1.pb",
+            "settings.json",
+            "antigravity-cli/settings.json",
+            "GEMINI.md",
+        ] {
+            std::fs::create_dir_all(own.join(rel).parent().unwrap()).unwrap();
+            std::fs::write(own.join(rel), "x").unwrap();
+        }
+        // The computer's own sign-in, which no plan turn may see.
+        std::fs::write(own.join(AGY_TOKEN), "computer-token").unwrap();
+        let item = |value: &str| {
+            json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login", "file": AGY_TOKEN,
+                    "value": value, "revision": 1, "billing": "subscription"}])
+        };
+        let value = r#"{"token":{"access_token":"ya29.synthetic-access-token-0123456789"}}"#;
+        let mut turns = vec![];
+        for _ in 0..2 {
+            let mut env: Env = [
+                ("HOME".into(), state.join("bot").display().to_string()),
+                ("GOOGLE_API_KEY".into(), "AIza-computer".into()),
+            ]
+            .into();
+            let mut values = vec![];
+            let mut got = apply(
+                &state,
+                &item(value),
+                &mut env,
+                &mut values,
+                &mut BTreeSet::new(),
+            );
+            assert!(values
+                .iter()
+                .any(|v| v == "ya29.synthetic-access-token-0123456789"));
+            start(&mut got, "antigravity", &mut env).unwrap();
+            // The bot's other Google sign-ins stay in the turn's environment for its other runtimes: only agy's own
+            // process goes without them, and over SSH (hosts/antigravity.rs).
+            assert!(env.contains_key("GOOGLE_API_KEY") && !env.contains_key("SSH_CONNECTION"));
+            let home = PathBuf::from(&env["GEMINI_HOME"]);
+            assert_eq!(
+                plan_home(&got, "antigravity"),
+                Some(env["GEMINI_HOME"].clone())
+            );
+            let t = turn_home("antigravity").unwrap();
+            assert_eq!(t.sign_in(&env["GEMINI_HOME"]).unwrap(), value);
+            let token = home.join(AGY_TOKEN);
+            assert_eq!(std::fs::read_to_string(&token).unwrap(), value);
+            assert_eq!(
+                token.metadata().unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+            assert!(!std::fs::symlink_metadata(token.parent().unwrap())
+                .unwrap()
+                .is_symlink());
+            assert_eq!(
+                std::fs::read_link(home.join("antigravity-cli/conversations")).unwrap(),
+                own.join("antigravity-cli/conversations")
+            );
+            assert_eq!(
+                std::fs::read_link(home.join("GEMINI.md")).unwrap(),
+                own.join("GEMINI.md")
+            );
+            assert!(
+                !home.join("settings.json").exists()
+                    && !home.join("antigravity-cli/settings.json").exists()
+            );
+            // Two plans, or a plan and the computer, resume one conversation; a shell of another runtime never runs on it.
+            assert_eq!(got[0].binding().as_deref(), Some(SHARED_BINDING));
+            assert!(!got[0].for_shell());
+            turns.push((got, home));
+        }
+        assert_ne!(turns[0].1, turns[1].1);
+        // The first turn's agy refreshed its access token: masked for that turn, never kept or sent back.
+        let refreshed = r#"{"token":{"access_token":"ya29.synthetic-refreshed-token-9876543210"}}"#;
+        std::fs::write(turns[0].1.join(AGY_TOKEN), refreshed).unwrap();
+        for (i, (mut got, home)) in turns.into_iter().enumerate() {
+            let masked = finish(&mut got);
+            assert_eq!(
+                masked
+                    .iter()
+                    .any(|m| m == "ya29.synthetic-refreshed-token-9876543210"),
+                i == 0
+            );
+            assert!(got[0].refreshed.is_none());
+            assert!(!home.exists());
+        }
+        // A sign-in file that is gone, a link, or no token is no sign-in: agy is never started on it.
+        let t = turn_home("antigravity").unwrap();
+        let fake = state.join("fake");
+        std::fs::create_dir_all(fake.join("antigravity-cli")).unwrap();
+        let fake_s = fake.display().to_string();
+        assert!(t.sign_in(&fake_s).is_err());
+        std::fs::write(fake.join(AGY_TOKEN), r#"{"token":{}}"#).unwrap();
+        assert!(t.sign_in(&fake_s).is_err());
+        std::fs::remove_file(fake.join(AGY_TOKEN)).unwrap();
+        std::os::unix::fs::symlink(own.join(AGY_TOKEN), fake.join(AGY_TOKEN)).unwrap();
+        assert!(t.sign_in(&fake_s).is_err());
+        assert_eq!(
+            std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
+            "computer-token"
+        );
+        assert!(own.join("antigravity-cli/conversations/c1.pb").exists());
+        // A file the runner does not know, or a home it cannot make, never runs the turn on another login.
+        let mut env: Env = [("HOME".into(), state.join("bot").display().to_string())].into();
+        let bad = json!([{"id": "agyplan", "runtime": "antigravity", "file": "../token", "value": value, "revision": 1}]);
+        assert!(apply(&state, &bad, &mut env, &mut vec![], &mut BTreeSet::new()).is_empty());
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        let home = got[0].home.clone().unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(own.join("antigravity-cli"), home.join("antigravity-cli"))
+            .unwrap();
+        assert!(start(&mut got, "antigravity", &mut env).is_err());
+        assert!(!env.contains_key("GEMINI_HOME"));
+        // So for a ChatGPT plan's home: no silent fall back to the computer's own sign-in.
+        let codex = json!([{"id": "cxplan", "runtime": "codex", "kind": "codex_login", "file": "auth.json",
+                            "value": "{\"tokens\":{\"refresh_token\":\"synthetic-refresh-0123456789\"}}",
+                            "revision": 1, "billing": "subscription"}]);
+        let mut got = apply(&state, &codex, &mut env, &mut vec![], &mut BTreeSet::new());
+        let home = got[0].home.clone().unwrap();
+        std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&own, &home).unwrap();
+        assert!(start(&mut got, "codex", &mut env).is_err());
+        assert!(!own.join("auth.json").exists());
+        // A link anywhere above the home (here the plan's `turns`) is refused before anything is made through it.
+        let elsewhere = state.join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        let turns_dir = got[0]
+            .home
+            .clone()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let _ = std::fs::remove_dir_all(&turns_dir);
+        std::os::unix::fs::symlink(&elsewhere, &turns_dir).unwrap();
+        assert!(start(&mut got, "antigravity", &mut env).is_err());
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
+        // A turn's home swapped for a link while it ran: letting go of it removes the link, never what it points at,
+        // and reads nothing through it.
+        std::fs::remove_file(&turns_dir).unwrap();
+        let mut got = apply(
+            &state,
+            &item(value),
+            &mut env,
+            &mut vec![],
+            &mut BTreeSet::new(),
+        );
+        start(&mut got, "antigravity", &mut env).unwrap();
+        let turn = got[0].home.clone().unwrap().parent().unwrap().to_path_buf();
+        let kept = state.join("kept/antigravity/antigravity-cli");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("antigravity-oauth-token"), "not the plan's").unwrap();
+        std::fs::remove_dir_all(&turn).unwrap();
+        std::os::unix::fs::symlink(state.join("kept"), &turn).unwrap();
+        assert!(!finish(&mut got).iter().any(|s| s == "not the plan's"));
+        assert!(kept.join("antigravity-oauth-token").exists());
+        assert!(std::fs::symlink_metadata(&turn).is_err());
+        assert_eq!(
+            std::fs::read_to_string(own.join(AGY_TOKEN)).unwrap(),
+            "computer-token"
         );
         std::fs::remove_dir_all(state).unwrap();
     }
@@ -1389,7 +2027,7 @@ mod tests {
             &mut values,
             &mut BTreeSet::new(),
         );
-        values.extend(start(&mut got, "codex", &mut Env::new()));
+        values.extend(start(&mut got, "codex", &mut Env::new()).unwrap());
         let r = crate::redact::Redactor::new(&values);
         for leaked in [
             "sk-proj-synthetic-key-1-aaaaaaaaaaaa",
@@ -1433,7 +2071,7 @@ mod tests {
         ] {
             assert!(!r.scrub_text(leaked).contains(leaked), "{leaked}");
         }
-        start(&mut next, "codex", &mut Env::new());
+        start(&mut next, "codex", &mut Env::new()).unwrap();
         assert_eq!(next[0].written, login(2));
         finish(&mut next);
         std::fs::remove_dir_all(&state).unwrap();

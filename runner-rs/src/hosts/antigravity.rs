@@ -446,6 +446,23 @@ impl AntigravityHost {
             command.env_clear().envs(&settings.env);
         }
         command.envs(crate::harness_tools::env_for("antigravity"));
+        // A plan's turn (model_subscriptions.rs TURN_HOMES): its sign-in is the file in its own GEMINI_HOME, which agy
+        // reads only when it believes it runs over SSH, and nothing else may sign it in. Without that file in place
+        // agy is not started at all, so it never runs on the computer's own sign-in instead.
+        if let Some(home) = &settings.plan_home {
+            let t = crate::model_subscriptions::turn_home("antigravity")
+                .ok_or_else(|| failed("Antigravity plans are not supported here"))?;
+            t.sign_in(home).map_err(failed)?;
+            for key in t
+                .strip
+                .iter()
+                .map(|k| k.to_string())
+                .chain(crate::harness_tools::api_key_env("antigravity"))
+            {
+                command.env_remove(key);
+            }
+            command.env(t.var, home).envs(t.env.iter().copied());
+        }
         // Its own process group, so a stop reaches the tools it started too.
         super::new_group(&mut command);
         Ok(command)
@@ -1191,6 +1208,82 @@ read -r _
             ),
         );
         path.display().to_string()
+    }
+
+    #[test]
+    fn only_a_plan_turns_agy_runs_over_ssh_and_on_nothing_but_the_plan() {
+        use crate::model_subscriptions as subs;
+        let rig = Rig::new();
+        let value = r#"{"token":{"access_token":"ya29.synthetic-access-token-0123456789"}}"#;
+        let items = json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
+                            "file": subs::AGY_TOKEN, "value": value, "revision": 1, "billing": "subscription"}]);
+        let mut env = rig.settings(&[]).env;
+        env.insert("HOME".into(), rig.dir.join("home").display().to_string());
+        env.insert("GEMINI_API_KEY".into(), "AIza-computer-key".into());
+        // The computer's Google Cloud credentials (Application Default Credentials), which no plan turn may use.
+        env.insert("AGY_ADC_AUTH".into(), "1".into());
+        let mut got = subs::apply(
+            &rig.dir,
+            &items,
+            &mut env,
+            &mut vec![],
+            &mut Default::default(),
+        );
+        subs::start(&mut got, "antigravity", &mut env).unwrap();
+        let plan_home = subs::plan_home(&got, "antigravity");
+        let home = PathBuf::from(plan_home.clone().unwrap());
+        assert_eq!(env["GEMINI_HOME"], home.display().to_string());
+        assert_eq!(
+            std::fs::read_to_string(home.join(subs::AGY_TOKEN)).unwrap(),
+            value
+        );
+        let command = |env: &crate::env::Env, plan_home: &Option<String>| {
+            let settings = Settings {
+                env: env.clone(),
+                plan_home: plan_home.clone(),
+                ..rig.settings(&[])
+            };
+            let (host, _rx) = rig.host();
+            host.command(&settings, None, None).map(|command| {
+                command
+                    .as_std()
+                    .get_envs()
+                    .map(|(k, v)| {
+                        (
+                            k.to_string_lossy().to_string(),
+                            v.map(|v| v.to_string_lossy().to_string()),
+                        )
+                    })
+                    .collect::<BTreeMap<String, Option<String>>>()
+            })
+        };
+        // A plan turn's agy, and one started again on the same turn whatever its environment says, runs over SSH on
+        // the plan's home and nothing else.
+        let mut lost = env.clone();
+        lost.remove("GEMINI_HOME");
+        for env in [&env, &lost] {
+            let plan = command(env, &plan_home).unwrap();
+            assert_eq!(plan["SSH_CONNECTION"].as_deref(), Some(subs::OVER_SSH.1));
+            assert_eq!(plan["GEMINI_HOME"], plan_home);
+            for key in ["GEMINI_API_KEY", "AGY_ADC_AUTH"] {
+                assert!(plan.get(key).is_none_or(Option::is_none), "{plan:?}");
+            }
+        }
+        // Tico's own commands in the turn (git) get the turn's environment, which never says SSH and keeps the bot's key.
+        assert!(!env.contains_key("SSH_CONNECTION") && env.contains_key("GEMINI_API_KEY"));
+        // On the computer's own sign-in (a Mac's keychain) agy is never told it runs over SSH.
+        let mut own = env.clone();
+        own.remove("GEMINI_HOME");
+        let computer = command(&own, &None).unwrap();
+        assert!(!computer.contains_key("SSH_CONNECTION"));
+        assert_eq!(
+            computer["GEMINI_API_KEY"].as_deref(),
+            Some("AIza-computer-key")
+        );
+        // Its sign-in gone (a home let go), a plan turn's agy is not started at all.
+        subs::finish(&mut got);
+        assert!(!home.exists());
+        assert!(command(&env, &plan_home).is_err());
     }
 
     async fn turn_events(rx: &mut mpsc::UnboundedReceiver<Value>) -> Vec<Value> {

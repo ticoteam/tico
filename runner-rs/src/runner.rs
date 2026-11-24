@@ -302,6 +302,12 @@ impl Runner {
         let aid = aid.to_string();
         tokio::spawn(async move {
             while let Some(ev) = rx.recv().await {
+                if ev["kind"] == "diagnostic"
+                    && (ev.get("stderr_tail").is_some() || ev["failed_tool"].is_object())
+                {
+                    // A plan token its CLI refreshed since may be in what it said: masked before it is kept.
+                    crate::model_subscriptions::notice_refreshes();
+                }
                 if ev["kind"] == "diagnostic" && ev.get("stderr_tail").is_some() {
                     let text = crate::util::text_of(&ev["stderr_tail"]);
                     let text = redactor

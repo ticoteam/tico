@@ -1080,11 +1080,12 @@
        "browser_v1",
        "plan_switch_resume_v1",
        "push_hints_v1",
-       "relay_hints_v1"
+       "relay_hints_v1",
+       "antigravity_plan_v1"
       ],
       "type": "string"
      },
-     "maxItems": 34,
+     "maxItems": 35,
      "title": "Capabilities",
      "type": "array"
     },

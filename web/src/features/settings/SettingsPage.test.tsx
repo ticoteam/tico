@@ -260,7 +260,7 @@ describe('A model sign-in @s746', () => {
           ? { status: 200, body: { id: 'l1', runner_id: 'r1', state: 'waiting', url: PAGE, code: CODE, lines: [`Enter ${CODE}`] } }
           : { status: 404, body: { detail: 'not_found' } },
     );
-    const kind = { connect: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
+    const kind = { connect: true, paste: true, help: '', kind: 'codex_login' as const, label: 'ChatGPT plan', owned: true, runtime: 'codex' as const, secret_label: 'auth.json' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     queryClient.setQueryData(computersQuery.queryKey, []);
     show(<Providers />, '/settings/providers');
@@ -281,7 +281,7 @@ describe('A model sign-in @s746', () => {
       if (url.endsWith('/logins/l1/code')) return pending;
       if (url.endsWith('/logins/l1')) return ok({ ...waiting, code_sent: codeSent });
     });
-    const kind = { connect: true, help: '', kind: 'claude_token' as const, label: 'Claude plan', owned: true, runtime: 'claude' as const, secret_label: 'Setup token' };
+    const kind = { connect: true, paste: true, help: '', kind: 'claude_token' as const, label: 'Claude plan', owned: true, runtime: 'claude' as const, secret_label: 'Setup token' };
     queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
     show(<Providers />, '/settings/providers');
     fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
@@ -297,6 +297,21 @@ describe('A model sign-in @s746', () => {
     codeSent = true;
     finish(ok({ ...waiting, code_sent: true }));
     await waitFor(() => expect(screen.queryByLabelText('Code from the page')).toBeNull());
+  });
+
+  it.each([
+    [ok({ id: '', kind: 'connect', runner_id: '', state: 'requested', waking: true, message: 'Installing Antigravity on Ana Mac.' }), 'Installing Antigravity on Ana Mac.'],
+    [{ status: 409, body: { error: { code: 'offline', detail: 'Connect needs a computer online, on the latest Tico, with Antigravity installed' } } }, 'Connect needs a computer online, on the latest Tico, with Antigravity installed'],
+  ] as const)('an Antigravity plan says why it waits and never offers Paste', async (reply, said) => {
+    serve((url, method) => (method === 'POST' && url.endsWith('/connect') ? reply : undefined));
+    const kind = { connect: true, paste: false, help: '', kind: 'antigravity_login' as const, label: 'Antigravity plan', owned: true, runtime: 'antigravity' as const, secret_label: 'Sign-in' };
+    queryClient.setQueryData(subscriptionsQuery.queryKey, { kinds: [kind], subscriptions: [] });
+    show(<Providers />, '/settings/providers');
+    fireEvent.click(await screen.findByRole('button', { name: 'Add' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Antigravity plan/ }));
+    const dialog = await screen.findByRole('dialog', { name: 'Connect Antigravity plan' });
+    expect(await within(dialog).findByText(said)).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Paste instead' })).toBeNull();
   });
 });
 
