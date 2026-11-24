@@ -2328,6 +2328,10 @@ def _write_message(
         # Their reply clears each ❓ for them in this chat, and resumes each task one of those was on.
         for cleared_task in question_marks.replied(conn, row, room, row["refs"]):
             question_marks.after_reply(conn, cleared_task, actor)
+        if room.get("task_id"):
+            from . import setup_drafts
+
+            setup_drafts.answered(conn, room["task_id"], actor, row)  # a setup draft's Send, Edit or Later
     if is_human(actor) and is_bot(target) and row["body"].lstrip().startswith("/"):
         from . import skill_runtime
 
@@ -5090,8 +5094,8 @@ def task_create(
             )
         )
         dup = twins[0] if twins else None
-    elif occurrence:
-        dup = None
+    elif occurrence or (not deduplicate and actor == TICO_ACTOR):
+        dup = None  # an occurrence is its own key, and Tico filing without dedupe never refuses a twin: no title scan
     else:
         dup = _same_title(
             conn,

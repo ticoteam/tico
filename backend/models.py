@@ -2870,7 +2870,8 @@ class SetupComplete(Contract):
 
 
 class OnboardingCompanyFile(Contract):
-    company_yaml: str = Field(min_length=1, max_length=524288)
+    # Any file the reader takes (company_file/yamlfile.py FILE_CHARS); backend/app.py lets its request through.
+    company_yaml: str = Field(min_length=1, max_length=4000000)
 
 
 class OnboardingCompanyImport(OnboardingCompanyFile):

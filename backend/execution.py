@@ -69,6 +69,7 @@ from .batch_work import isolated, report, shared_check, shared_scope, storage_er
 from .harnesses import bot_key, bot_keyed, reports_tool_calls, resolve_harness
 from .run_diagnostics import HANDED_BACK, LAPSED, RESTART_TEXT, UNSTARTED_CATEGORIES, clean_stop_reported
 from . import holds, lifecycle
+from . import setup_drafts
 from . import run_diagnostics as RD
 from .store import H, P, Problem, bot_readiness, digest, encode, readiness_document
 from .config import Settings
@@ -3195,6 +3196,8 @@ def job_refusal(
         # Tico wakes no bot about a snoozed task (docs/dev/pipelines-v3.md, rule 7); a person still can, through the
         # Tico's carrier of their own message too (task_wakes.may_start).
         return "task_wait"
+    if setup_drafts.status(c, task_id, loads) == setup_drafts.WAITING:
+        return setup_drafts.DRAFT_WAIT  # a setup draft runs only after its person's Send, whoever wrote since
     refs = message.get("refs") or {}
     # Whose turn a task is the engine's to say: it writes a task's wake only for the bot whose turn it is and cancels
     # it when the turn moves on (backend/task_wakes.py), so the claim does not judge a task's waits again.
@@ -6052,6 +6055,12 @@ class Execution:
                 tier,
                 falls_back=models_preset.computer_falls_back(c, runner["id"]),
             )
+        if setup_drafts.status(c, task_id):
+            # A setup draft's work runs on a connected plan or API key, never on Gateway credit: the turn as it would be
+            # handed out, with no Gateway fallback; one still on the Gateway is not handed out and stays queued.
+            config = setup_drafts.no_gateway(config)
+            if setup_drafts.on_gateway(config, check):
+                return {"attempt": None, "payer_wait": setup_drafts.DRAFT_NEEDS_PLAN}
         if config.get("waiting_for_sign_in") or check and gateway_connection.is_tico(check.get("model")):
             # Moved to the Gateway for this turn, or a check on a Tico model: after a hold on it ends, this is the
             # Gateway's one probe.

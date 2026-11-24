@@ -31,6 +31,7 @@ class Loads:
         self.continuations = {}  # {job id: its exact continuation, None when none}
         self.worktree_links = {}  # {task id: {owner: computers that still own its linked trees}}
         self.queued_bots = set()  # bots whose whole queue Health has primed in this snapshot
+        self.setup_drafts = None  # {task id: status} of every setup draft (backend/setup_drafts.py), read on first ask
 
     def runner_of(self, c, runner_id, live=False):
         """The runners row, or None; `live` leaves out a revoked computer (as the capability reads do)."""
@@ -41,6 +42,12 @@ class Loads:
 
             row = one(c, "SELECT * FROM runners_with_state WHERE id=?", (runner_id,))
         return None if live and row is not None and row["revoked_at"] is not None else row
+
+    def setup_draft(self, c, task_id):
+        """A task's setup draft status, or None: every setup draft is read in one statement, the first time one is asked."""
+        if self.setup_drafts is None:
+            self.setup_drafts = {r[0]: r[1] for r in c.execute("SELECT task_id,status FROM setup_drafts")}
+        return self.setup_drafts.get(task_id)
 
     def plain_record(self, c):
         if self.plain is None:

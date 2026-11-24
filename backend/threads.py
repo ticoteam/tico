@@ -3070,7 +3070,9 @@ def _post(
         refs["origin"] = {k: origin.get(k) for k in ("origin_id", "revision", "install", "actor") if origin.get(k)}
     if attachments:
         refs["attachments"] = list(attachments)
-    found = with_reply_mention(c, thread, actor, in_reply_to, mentions(c, thread, text, author=actor))
+    # Text Tico carries in for a bot (a draft imported from setup, refs.no_mentions) names nobody: its @words reach no one.
+    mentioned = [] if refs.get("no_mentions") else mentions(c, thread, text, author=actor)
+    found = with_reply_mention(c, thread, actor, in_reply_to, mentioned)
     target = None
     if to_actor:
         if str(to_actor).startswith("ext:"):

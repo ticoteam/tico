@@ -12,13 +12,16 @@ import zlib
 
 from . import draft as D
 from .keys import scrub_all
-from .yamlfile import from_yaml, to_yaml
+from .yamlfile import FILE_CHARS, from_document, read, to_yaml
 
-MAX_BYTES = (
-    524288  # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 329 goals, every text at full length)
-)
-# A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES is about 700 KB.
-MAX_PACKED = 1048576
+# A normalized plan: never larger than its draft's JSON (D.check holds that to LIMITS["draft_bytes"]: about 320 KB at 300
+# bots and 329 goals, every text at full length, and about 700 KB more for 300 drafts), with room for the model choices.
+MAX_BYTES = D.LIMITS["draft_bytes"] + 65536
+# A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES, with room for
+# text that compresses badly.
+MAX_PACKED = 3145728
+# The most a company file can take on disk: FILE_CHARS characters of up to four UTF-8 bytes each.
+FILE_BYTES = 4 * FILE_CHARS
 # A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB
 # with the install settings, and far below Linux's 128 KB limit on one environment string.
 ENV_PACKED = 7168
@@ -31,10 +34,8 @@ IMPORT_IN_APP = (
 
 def load(source):
     if isinstance(source, str):
-        import yaml
-
-        draft = from_yaml(source)
-        document = yaml.safe_load(source)
+        document = read(source)  # parsed once
+        draft = from_document(document)
     elif isinstance(source, dict):
         document = source
         draft = D.check(scrub_all({k: v for k, v in source.items() if k != "models"})[0])
@@ -42,9 +43,10 @@ def load(source):
         raise D.DraftError("the starter plan must be a company file")
     if any(b["existing"] for b in draft["bots"]):
         raise D.DraftError("Connect existing agents in Tico after importing the starter team")
-    # A coworker comes along only as the person who holds a seat; they join the team in Tico, never by import.
+    # A coworker comes along as the person who holds a seat, or one the visitor typed an email for (to invite): either
+    # joins the team in Tico when the owner invites them, never by import.
     holders = {b.get("person") for b in draft["bots"]}
-    if any(not p["owner"] and p["id"] not in holders for p in draft["people"]):
+    if any(not p["owner"] and p["id"] not in holders and not p.get("email") for p in draft["people"]):
         raise D.DraftError(
             "This import supports the owner, AI employees and the people who hold seats; add other coworkers in Tico first"
         )

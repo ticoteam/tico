@@ -163,6 +163,11 @@ def answering(mid: str) -> Generator[None]:
         _ANSWERING.reset(token)
 
 
+def answering_now() -> str:
+    """The ❓ the write now answers by its card (`answering`), or "": set by the server, never by what the client sent."""
+    return _ANSWERING.get()
+
+
 def by_hand() -> bool:
     """Whether the write now is the person's own (`REPLY_VIA`, as hubdb stamps refs.via): only that answers a ❓."""
     return (H.VIA.get() or ("token" if H.BY_TOKEN.get() else "")) in REPLY_VIA
@@ -669,9 +674,11 @@ def mark(
     *,
     checked: bool = True,
     choices: Iterable[object] | None = None,
+    recount: bool = True,
 ) -> Row:
     """Mark the bot's own message ❓ for `person`, replacing the bot's open ❓ in that chat. Returns the mark, with
     `replaced` the open ❓ it cleared ({id, line, created_at}) or None. `choices`: up to three suggested answers.
+    `recount` False: the caller marks many for one bot and recounts its status once after them (H._recount).
     `checked` False: a question Tico's own feature words and addresses for the bot (`ask`), so neither the bot's reach
     nor the words' shape is the bot's to answer for; the person must still be able to read the chat."""
     if not H.is_bot(bot) or bot == H.TICO_ACTOR:
@@ -724,7 +731,8 @@ def mark(
     )
     _mirror_choices(conn, row)
     H.event(conn, bot, "question.marked", row["id"], {"message": message["id"], "to": target, "task": task_id})
-    H._recount(conn, bot)  # its status's "waits on a person" (hubdb.status_counts)
+    if recount:
+        H._recount(conn, bot)  # its status's "waits on a person" (hubdb.status_counts)
     return {**row, "cleared_at": None, "replaced": replaced}
 
 

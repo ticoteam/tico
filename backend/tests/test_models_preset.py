@@ -868,3 +868,32 @@ def test_the_one_fallback_line_names_its_bots_when_a_healthy_bot_also_ran(api, m
     with api.app.state.store.read() as c:
         text = health._fallback_lines(c, settings, many, {row["bot"] for row in many})
     assert "bot-4" in text and "bot-5" not in text and "2 more" in text
+
+
+def test_a_setup_drafts_work_is_never_handed_out_on_the_gateway(api, monkeypatch):
+    """A task made from a setup draft (backend/setup_drafts.py), approved, for a bot on the company default under the
+    recommended choice: before its computer is signed in the claim hands nothing out (the Gateway turn it would hand any
+    other job) and the job stays queued; signed in, the turn runs on the plan with no Gateway fallback."""
+    from backend import setup_drafts
+    from backend.gateway_connection import is_tico
+    from backend.store import H
+
+    connected(api, monkeypatch)
+    choose(api, models_preset.RECOMMENDED)
+    with api.app.state.store.transaction() as c:
+        own = BS.read(c, "ops")
+        BS.write(c, "ops", {k: v for k, v in own.items() if k not in ("runtime", "harness", "model", "fallback")})
+    machine = runner(api)
+    assign(api, machine, "ops")
+    heartbeat(api, machine, "ops", signed_in=False, isolated=True)
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Send the welcome email", "", "bot:ops", lint=False)
+        setup_drafts.hold(c, task["id"], "ops", "human:ana", "email", setup_drafts.APPROVED)
+    assert post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None
+    with api.app.state.store.read() as c:
+        assert {r[0] for r in c.execute("SELECT state FROM jobs WHERE bot_id='ops'")} == {"queued"}
+    heartbeat(api, machine, "ops", signed_in=True, isolated=True)
+    got = post(api, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+    assert got and got["config"]["model"] == CLAUDE["model"] and not got.get("gateway")
+    assert "gateway_fallback" not in got["config"]
+    assert not is_tico((got["config"].get("fallback") or {}).get("model"))

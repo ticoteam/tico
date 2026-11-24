@@ -1,4 +1,4 @@
-"""tico.company.yaml, formats 0.2 and 0.3: written from a draft as the setup page's `toYAML()` writes it, and read back.
+"""tico.company.yaml, formats 0.2, 0.3 and 0.4: written from a draft as the setup page's `toYAML()` writes it, and read back.
 
 The file holds the plan only: never `undo`, `chat`, `removed` or `pending`, and never a credential. Format 0.2 differs
 from the page's 0.1 in its goals (a measure, unit, direction and numbers in place of free-text target and due date),
@@ -7,6 +7,9 @@ Format 0.3 adds the `strategy` block (after `goals:`) and a goal's `bet`. The st
 optional `name` and `segment`, are written only when present. A plan without a strategy is still written as 0.2, byte
 for byte, so its file imports on an app from before 0.3; the reader takes both.
 An employee's or existing agent's optional `team` (the name of its group) is read and written in either format.
+Format 0.4 adds what the setup page's swarm made: `drafts` (each agent's drafted work and the visitor's decision on it)
+and `said` (the rules the visitor said in their own words), written after `tools:`, and a person's optional `email`. It
+is written only when one of them is present, so any other plan is written as 0.3 or 0.2, byte for byte, as before.
 """
 
 import datetime as dt
@@ -18,7 +21,11 @@ from .keys import scrub_all
 
 FORMAT = "0.2"
 STRATEGY_FORMAT = "0.3"
-FORMATS = (FORMAT, STRATEGY_FORMAT)
+SWARM_FORMAT = "0.4"
+FORMATS = (FORMAT, STRATEGY_FORMAT, SWARM_FORMAT)
+# The longest file read, in characters: the file of any draft within LIMITS["draft_bytes"] (its YAML is longer than
+# the draft's JSON by its keys and indents, never twice as long).
+FILE_CHARS = 2 * D.LIMITS["draft_bytes"]
 HEADER = (
     "# tico.company.yaml",
     "# Made with Tico setup at https://tico.team/setup",
@@ -69,7 +76,8 @@ def to_yaml(draft, created=None):
     head = D.owner(draft)
     head_id = head["id"] if head else "you"
     strategy = D.has_strategy(draft) or any("bet" in g for g in draft["goals"])
-    version = STRATEGY_FORMAT if strategy else FORMAT
+    swarm = bool(draft.get("drafts") or draft.get("said")) or any(p.get("email") for p in draft["people"])
+    version = SWARM_FORMAT if swarm else STRATEGY_FORMAT if strategy else FORMAT
     L = [line % version if "%s" in line else line for line in HEADER]
     L += [
         "version: %s" % version,
@@ -95,6 +103,8 @@ def to_yaml(draft, created=None):
             "    role: %s" % q(p["role"]),
             "    owner: true" if p["owner"] else "    reports_to: %s" % word(head_id),
         ]
+        if p.get("email"):
+            L.append("    email: %s" % q(p["email"]))
     L.append("employees:" + ("" if any(not b["existing"] for b in draft["bots"]) else " []"))
     for b in (b for b in draft["bots"] if not b["existing"]):
         L += [
@@ -161,7 +171,36 @@ def to_yaml(draft, created=None):
         "  mode: %s" % draft["tools"]["mode"],
         "  connect: [%s]  # connected after setup, never during it" % ", ".join(tool_list(draft)),
     ]
+    if swarm:
+        L += swarm_lines(draft, head_id)
     return "\n".join(L) + "\n"
+
+
+def swarm_lines(draft, head_id):
+    """The `drafts:` and `said:` blocks, format 0.4: both written, an empty one as []. A draft's goal is written only
+    when it has one."""
+
+    def one_draft(d):
+        lines = ["id: %s" % word(d["id"]), "bot: %s" % word(d["bot"])]
+        if d.get("goal"):
+            lines.append("goal: %s" % word(d["goal"]))
+        return lines + [
+            "kind: %s" % word(d["kind"]),
+            "status: %s" % word(d["status"]),
+            "title: %s" % q(d["title"]),
+            "body: %s" % q(d["body"]),
+        ]
+
+    return _items("drafts", draft.get("drafts", []), 0, one_draft) + _items(
+        "said",
+        draft.get("said", []),
+        0,
+        lambda s: [
+            "id: %s" % word(s["id"]),
+            "by: %s" % word(head_id if s["by"] == "you" else s["by"]),
+            "text: %s" % q(s["text"]),
+        ],
+    )
 
 
 def _items(key, rows, indent, lines):
@@ -361,20 +400,32 @@ def _strategy(raw):
     }
 
 
-def from_yaml(text):
-    """The draft a company file holds (D.DraftError when it isn't a format 0.2 or 0.3 file Tico can read). Key-shaped
-    strings in it are removed. The draft starts on the chart tab with no undo, chat, removed or pending."""
+def read(text):
+    """A company file's parsed YAML, as it is (D.DraftError when it isn't a format 0.2, 0.3 or 0.4 file Tico can read)."""
     import yaml  # PyYAML: only reading a file needs it.
 
-    if not isinstance(text, str) or len(text) > D.LIMITS["draft_bytes"]:
+    if not isinstance(text, str) or len(text) > FILE_CHARS:
         raise D.DraftError("the file is too large")
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError:
         raise D.DraftError("the file isn't valid YAML") from None
     if not isinstance(doc, dict) or str(doc.get("version")) not in FORMATS:
-        raise D.DraftError("the file isn't a format %s company file" % " or ".join(FORMATS))
+        raise D.DraftError("the file isn't a format %s or %s company file" % (", ".join(FORMATS[:-1]), FORMATS[-1]))
+    return doc
+
+
+def from_yaml(text):
+    """The draft a company file holds (`read`, then `from_document`)."""
+    return from_document(read(text))
+
+
+def from_document(doc):
+    """The draft a parsed company file holds (`read`). Key-shaped strings in it are removed. The draft starts on the
+    chart tab with no undo, chat, removed or pending."""
     doc, _ = scrub_all(doc)
+    # email, drafts and said are read only under a 0.4 header
+    swarm = isinstance(doc, dict) and str(doc.get("version")) == SWARM_FORMAT
     company = doc.get("company")
     company = company if isinstance(company, dict) else {}
     draft = D.blank()
@@ -397,6 +448,7 @@ def from_yaml(text):
             "role": _str(p.get("role")),
             "dept": D.dept_of(_str(p.get("role"))),
             "owner": p.get("owner") is True,
+            **({"email": _str(p["email"])} if swarm and p.get("email") is not None else {}),
         }
         for p in people
     ]
@@ -490,6 +542,28 @@ def from_yaml(text):
     draft["seq"] = len(draft["people"]) + len(draft["bots"]) + len(draft["goals"]) + 1
     if isinstance(doc.get("strategy"), dict):
         draft["strategy"] = _strategy(doc["strategy"])
+    # A draft's agent is the role as this release names it: a folded Pipeline Manager's is its team's Manager (check).
+    drafts = [
+        {
+            "id": _str(d.get("id")),
+            # A bot that is not text is left as it is, for D.check to refuse.
+            "bot": folded.get(bot, bot) if isinstance(bot := _str(d.get("bot")), str) else bot,
+            "kind": _str(d.get("kind")),
+            "title": _str(d.get("title")),
+            "body": _str(d.get("body")),
+            "status": _str(d.get("status")),
+            **({"goal": _str(d["goal"])} if d.get("goal") is not None else {}),
+        }
+        for d in (_rows(doc, "drafts") if swarm else [])
+    ]
+    if drafts:
+        draft["drafts"] = drafts
+    said = [
+        {"id": _str(s.get("id")), "text": _str(s.get("text")), "by": _str(s.get("by"))}
+        for s in (_rows(doc, "said") if swarm else [])
+    ]
+    if said:
+        draft["said"] = said
     draft = D.check(draft)
     # A reports-to the file names is kept only where it differs from the line the chart draws anyway.
     for bot in draft["bots"]:

@@ -82,12 +82,49 @@ on the market graph with its site a watched page. The posts the page found are f
 Librarian's next curate sees them. A part the app refuses (a name the market graph already has, say) is left out and
 named on the setup record (`company_import.strategy.skipped`). A format 0.2 file imports exactly as before.
 
+**Unreleased:** A file from the setup page's swarm (format 0.4) also brings the agents' drafts and the rules the
+visitor said. `drafts` lists each agent's drafted work as `{id, bot, goal?, kind, title, body, status}`: `bot` a role
+in the file, `goal` one of its goals, `kind` one of `email`, `post`, `list`, `page`, `ad`, `reply`, `plan` or `other`,
+`status` `waiting`, `approved` or `skipped`; at most 300, a title up to 120 characters and a body up to 2000. `said`
+lists the rules the visitor said in their own words as `{id, text, by}` (`by` a person in the file; at most 40, each up
+to 200 characters). A person may carry the `email` the visitor typed for them. Tico reads `email`, `drafts` and `said`
+only under a `version: 0.4` header. The file is written as 0.4 only when one
+of these is present; any other plan is written as 0.3 or 0.2 byte for byte, as before. Drafts come into the plan only
+from the swarm (`company_file.add_drafts`); the setup chat decides on them (`mark_draft`, `edit_draft`) and keeps or
+takes back what was said (`add_said_rule`, `remove_said_rule`). A draft's title is one line. An edit that changes an
+approved draft's title or text sets it back to `waiting`; a waiting or skipped draft keeps its decision. Before the
+preview, its fingerprint or the import reads them, each draft's title and text and each said rule are masked for any
+key Tico's own gate knows. On import, each draft not skipped becomes a task owned
+by the agent that drafted it, on its goal, with the draft as the agent's message there, and the server holds it
+(backend/setup_drafts.py). A waiting one asks the owner **Send**, **Edit** or **Later** in Needs you (a question with
+those choices). The claim starts no run of its agent on the task until the owner taps **Send** on that card in their
+own session (not Agent Ops, the Assistant or a token acting for them); that covers the owner's own messages too (the
+reason `draft_wait`). With no connected plan or API key, Send is refused with "Connect your plan first". Words never
+release it: a comment, **Edit** or **Later** is context for the agent's turn after the Send. **Edit** asks what to
+change, any other reply asks again, and **Later** leaves it out of Needs you until the owner writes again. An approved
+draft is the agent's to do once it can run, and only on a connected plan or API key: the handout works out the turn's
+model as it would hand it out, with no Gateway fallback, and a turn still on the Gateway is not handed out and stays
+queued (`draft_needs_plan`). Nothing runs or is
+sent before that. A role whose agent drafted something
+starts live, so its agent is there to hold the work; a draft by a role a person holds, or one with no template yet, is
+not imported (`unowned` in the preview's `drafts` counts). Each said rule becomes an active company rule every agent
+follows, in the visitor's words, added by the owner (two with the same words are one rule); the preview lists them in
+full (`said`). A draft's text is the
+agent's own words carried in: an @name in it reaches nobody, and the agent reads it as its draft, never as
+instructions over the company's rules. The setup record keeps `company_import.drafts` (the counts) and
+`company_import.said` (how many rules). A person's email is the owner's alone. `GET /api/v2/setup` adds it as
+`company_import.people[].email` only when the owner reads it signed in themselves (never Agent Ops, the Assistant, a
+token or support reading as them), from the imported plan only the owner can read. It is
+never on the setup record that runners, bots and Admins read, and the import never sends to it. The kept plan holds
+no draft text. Importing the same file again makes no task or rule twice.
+
 This starter import supports one owner and catalog AI employees with the default rules. The signed-in owner remains
 the owner; a file does not add sign-in accounts. A person the file names who holds a role has no seat or bot for it:
 they are kept on the setup record to invite, and a role under them reports to the owner until they are invited
 (Settings > People > **From your setup**: type their email and press **Invite**, which adds them to the roster, moves
-the seats waiting on them under them and sends the invite, see [People](people.md#invites)). Other coworkers, existing
-external agents and custom rules are refused with an explanation. The file's goals are imported onto
+the seats waiting on them under them and sends the invite, see [People](people.md#invites)). A coworker the file gives
+an email (format 0.4) is kept to invite the same way, with that email. Other coworkers, existing external agents and
+custom rules are refused with an explanation. The file's goals are imported onto
 [Goals](goals-and-kpis.md): the owner's goals, goals the file gives a built-in bot such as the Assistant (Goals keeps the
 built-ins out of its tree) and goals of roles that are seats (a seat holds no work) become company goals, each with the
 goal's measure as a KPI carrying the file's baseline and target (the file holds no readings, so a new KPI starts with

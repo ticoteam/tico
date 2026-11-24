@@ -15,6 +15,7 @@ from backend.app import create_app
 from backend.auth import Identity
 from backend.company_file import starter
 from backend.store import H, Problem, encode
+from backend.tests.helpers.company_file import tag
 from backend.tests.helpers.fresh_install import (
     OWNER_EMAIL,
     PEOPLE,
@@ -2042,3 +2043,295 @@ def test_the_finance_owner_keeps_its_corporate_seat_and_moves_under_the_corporat
     )
     assert hired.status_code == 200, hired.text
     assert stored_line(api, "finance-owner") == hired.json()["bot"]
+
+
+def swarm_text(drafts=None):
+    """A format 0.4 file: the Assistant, Agent Ops, a Content Owner seat and an Email Owner seat, a goal, Priya with the
+    email the visitor typed (she holds no seat), the agents' drafts (waiting, approved and skipped) and two rules said."""
+    draft = C.blank()
+    draft["company"]["signals"] = ["sells_services"]
+    draft = C.Turn(draft).finish()
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("assistant", "agent-ops")]
+    turn = C.Turn(draft)
+    for name, args in (
+        ("company_set", {"name": "Acme Tea", "about": "We sell loose-leaf tea online."}),
+        ("person_set", {"name": "me", "role": "Founder"}),
+        ("person_set", {"name": "Priya", "role": "Marketing"}),
+        ("bot_add", {"template": "content-owner", "reason": "Writes the blog."}),
+        ("bot_add", {"template": "email-owner", "reason": "Runs the newsletter."}),
+        ("goal_add", {"title": "Grow the newsletter", "owner": "Email Owner"}),
+        ("add_said_rule", {"text": "Never offer a discount over 10%"}),
+        ("add_said_rule", {"text": "Sign off as the Acme Tea team"}),
+    ):
+        assert turn.apply(name, args)["ok"], name
+    draft = turn.finish()
+    next(p for p in draft["people"] if p["name"] == "Priya")["email"] = "priya@acme.example"
+    goal = draft["goals"][0]["id"]
+    rows = drafts or [
+        {
+            "id": "d1",
+            "bot": "email-owner",
+            "goal": goal,
+            "kind": "email",
+            "title": "Welcome email",
+            "body": "Hi there.",
+        },
+        {"id": "d2", "bot": "content-owner", "kind": "post", "title": "Spring blends", "body": "Our spring list."},
+        {"id": "d3", "bot": "assistant", "kind": "plan", "title": "Week one", "body": "Monday: read the inbox."},
+        {"id": "d5", "bot": "agent-ops", "kind": "list", "title": "Tools to connect", "body": "Mail, then docs."},
+        {"id": "d4", "bot": "content-owner", "kind": "post", "title": "Not this one", "body": "Skip me."},
+    ]
+    draft, added = C.add_drafts(draft, rows)
+    assert added["added"] == len(rows)
+    if not drafts:
+        statuses = {"d2": "approved", "d3": "approved", "d4": "skipped"}
+        for row in draft["drafts"]:
+            row["status"] = statuses.get(row["id"], "waiting")
+    return C.to_yaml(draft)
+
+
+def test_a_0_4_file_imports_its_drafts_as_tasks_its_asks_once_and_its_said_rules_as_company_rules(environment):
+    """Each draft not skipped is a task owned by the agent that drafted it, on its goal, with the draft as the agent's own
+    message: a waiting one asks the owner Send / Edit / Later in Needs you, an approved one asks nothing. The seats whose
+    agents drafted go live to hold them. The said rules are company rules by the owner, in their words. Priya is kept to
+    invite with her email, not invited. Importing the same file again makes nothing twice."""
+    from backend import company_import as CI
+    from backend import task_wakes
+
+    api = environment()
+    text = swarm_text()
+    assert "version: 0.4" in text
+    summary = preview_and_import(api, text)
+    assert summary["drafts"] == {"waiting": 2, "approved": 2, "skipped": 1, "unowned": 0}
+    assert summary["said"] == ["Never offer a discount over 10%", "Sign off as the Acme Tea team"]
+    assert {s["id"]: s.get("live") for s in summary["seats"]} == {"content-owner": True, "email-owner": True}
+    ids = bot_ids(api)
+    tasks = {
+        r["title"]: r
+        for r in rows(api, "SELECT id,title,owner_id,requester_id,goal_id FROM tasks WHERE title NOT LIKE 'Set up %'")
+    }
+    assert set(tasks) == {"Welcome email", "Spring blends", "Week one", "Tools to connect"}  # not the skipped one
+    assert tasks["Welcome email"]["owner_id"] == "bot:" + ids["email-owner"]
+    assert tasks["Spring blends"]["owner_id"] == "bot:" + ids["content-owner"]
+    assert tasks["Week one"]["owner_id"] == "bot:" + ids["assistant"]
+    assert tasks["Tools to connect"]["owner_id"] == "bot:" + ids["agent-ops"]
+    assert {r["requester_id"] for r in tasks.values()} == {"human:owner"}
+    goal = rows(api, "SELECT id FROM goals WHERE title='Grow the newsletter'")[0]["id"]
+    assert tasks["Welcome email"]["goal_id"] == goal and tasks["Spring blends"]["goal_id"] is None
+    said = {
+        r["task_id"]: r
+        for r in rows(
+            api,
+            "SELECT t.id AS task_id, m.sender_id, m.body FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+            "WHERE t.title IN ('Welcome email','Spring blends','Week one')",
+        )
+    }
+    assert said[tasks["Welcome email"]["id"]]["sender_id"] == "bot:" + ids["email-owner"]
+    assert "Hi there." in said[tasks["Welcome email"]["id"]]["body"]
+    assert "Our spring list." in said[tasks["Spring blends"]["id"]]["body"]
+    marks = rows(api, "SELECT task_id,person_id,choices,cleared_at FROM question_marks")
+    assert sorted((m["task_id"], m["person_id"], json.loads(m["choices"]), m["cleared_at"]) for m in marks) == sorted(
+        (tasks[title]["id"], "human:owner", ["Send", "Edit", "Later"], None)
+        for title in ("Welcome email", "Tools to connect")
+    )
+    needs = api.get("/api/v2/needs-you", headers=signed_in())
+    assert needs.status_code == 200, needs.text
+    assert tasks["Welcome email"]["id"] in needs.text and tasks["Spring blends"]["id"] not in needs.text
+    rules = rows(api, "SELECT text,status,suggested_by,who FROM org_rules WHERE description LIKE 'Said in setup%'")
+    assert sorted((r["text"], r["status"], r["suggested_by"]) for r in rules) == [
+        ("Never offer a discount over 10%", "active", "human:owner"),
+        ("Sign off as the Acme Tea team", "active", "human:owner"),
+    ]
+    assert all(json.loads(r["who"])["all_bots"] for r in rules)
+    record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
+    assert record["drafts"]["waiting"] == 2 and record["said"] == 2
+    assert [(p["name"], p.get("email"), p.get("invited_at")) for p in record["people"]] == [
+        ("Priya", "priya@acme.example", None)
+    ]
+    # Her email is the owner's setup read alone: the setup record runners, bots and Admins read never holds it.
+    assert (
+        "priya@acme.example" not in rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding'")[0]["value"]
+    )
+    with api.app.state.store.read() as c:
+        admin = api.app.state.onboarding.view(c, Identity("human:owner", "admin"))
+    assert [p.get("email") for p in admin["company_import"]["people"]] == [None]
+    token = H.VIA.set("botops")  # Agent Ops reading setup in the owner's name
+    try:
+        with api.app.state.store.read() as c:
+            delegated = api.app.state.onboarding.view(c, Identity("human:owner", "owner"))
+    finally:
+        H.VIA.reset(token)
+    assert [p.get("email") for p in delegated["company_import"]["people"]] == [None]
+    kept = json.loads(rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"])
+    assert kept["drafts"] and not any("body" in d for d in kept["drafts"])  # their words live on their tasks alone
+    assert not rows(api, "SELECT id FROM humans WHERE name='Priya'")  # kept to invite, not invited
+    # Approved work waits for its agent to be able to run: nothing has run, and the agent is not ready yet.
+    with api.app.state.store.read() as c:
+        assert task_wakes.cannot_run(c, "bot:" + ids["content-owner"]) is not None
+    assert not rows(api, "SELECT id FROM attempts")
+    # The same file again changes nothing, through the route or the import itself.
+    again = api.post(
+        "/api/v2/setup/company/import",
+        json={"company_yaml": text, "fingerprint": summary["fingerprint"]},
+        headers=signed_in(),
+    )
+    assert again.status_code == 200, again.text
+    assert len(rows(api, "SELECT id FROM tasks WHERE title NOT LIKE 'Set up %'")) == 4
+    assert len(rows(api, "SELECT id FROM question_marks")) == 2
+    assert len(rows(api, "SELECT id FROM org_rules WHERE description LIKE 'Said in setup%'")) == 2
+    # Two said rules with the same words in one file are one rule.
+    onboarding = api.app.state.onboarding
+    twice = {
+        "people": [],
+        "said": [{"id": "s1", "text": "Be kind", "by": "x"}, {"id": "s2", "text": "be KIND", "by": "x"}],
+    }
+    with api.app.state.store.transaction() as c:
+        made = CI.import_said(onboarding, c, onboarding.auth.owner_identity(c), twice)
+    assert made["s1"] == made["s2"]
+
+
+def test_a_file_without_drafts_said_or_email_imports_as_before(environment):
+    api = environment()
+    text = company_text()
+    assert "version: 0.2" in text
+    summary = preview_and_import(api, text)
+    assert "drafts" not in summary and "said" not in summary
+    record = api.get("/api/v2/setup", headers=signed_in()).json()["company_import"]
+    assert "drafts" not in record and "said" not in record
+    assert not rows(api, "SELECT id FROM question_marks")
+
+
+def test_a_file_with_300_drafts_imports_them_all_in_one_go(environment):
+    """The most a file holds: 300 drafts at full length, half waiting and half approved, land as 300 tasks and 150 asks
+    in the import's one transaction."""
+    api = environment()
+    body = "Dear reader, " + "our teas are picked by hand and shipped the same week. " * 36
+    rows_ = [
+        {
+            "id": "d%d" % i,
+            "bot": ("content-owner", "email-owner")[i % 2],
+            "kind": "post",
+            "title": "Draft %s %s" % (tag(i), "x" * 100),
+            "body": body[:2000],
+            "status": ("waiting", "approved")[i % 2],
+        }
+        for i in range(300)
+    ]
+    text = swarm_text(rows_)
+    summary = preview_and_import(api, text)
+    assert summary["drafts"] == {"waiting": 150, "approved": 150, "skipped": 0, "unowned": 0}
+    assert len(rows(api, "SELECT id FROM tasks WHERE title LIKE 'Draft %'")) == 300
+    assert len(rows(api, "SELECT id FROM question_marks")) == 150
+
+
+def test_drafts_that_share_a_title_all_import_and_their_words_reach_nobody(environment):
+    """Two drafts may share a title (each is its own piece of work), and a draft's text is the agent's own words carried
+    in: an @name in it wakes no agent, and a waiting draft's queued wake goes (the agent's turn
+    comes with the owner's answer). A key Tico's own gate knows is masked in what lands."""
+    api = environment()
+    rows_ = [
+        {"id": "d1", "bot": "content-owner", "kind": "post", "title": "Spring", "body": "@assistant @owner look"},
+        {"id": "d2", "bot": "content-owner", "kind": "post", "title": "spring ", "body": "Second take."},
+        {
+            "id": "d3",
+            "bot": "email-owner",
+            "kind": "email",
+            "title": "Hello",
+            "body": "Use https://ana:hunter2pass@db.example.com",
+        },
+    ]
+    text = swarm_text(rows_)
+    preview_and_import(api, text)
+    ids = bot_ids(api)
+    tasks = rows(api, "SELECT id,title,conversation_id FROM tasks WHERE title IN ('Spring','spring','Hello')")
+    assert sorted(t["title"] for t in tasks) == ["Hello", "Spring", "spring"]
+    task_ids = [t["id"] for t in tasks]
+    queued = rows(
+        api,
+        "SELECT j.bot_id, json_extract(m.refs,'$.task') AS task FROM jobs j JOIN messages m ON m.id=j.message_id "
+        "WHERE j.state='queued'",
+    )
+    assert not [q for q in queued if q["bot_id"] == ids["assistant"]]  # the @mention woke nobody
+    assert not [q for q in queued if q["task"] in task_ids]  # the waiting drafts' wakes went
+    hello = next(t for t in tasks if t["title"] == "Hello")
+    body = rows(api, "SELECT body FROM messages WHERE conversation_id='%s'" % hello["conversation_id"])
+    assert any("[key removed]" in m["body"] for m in body) and not any("hunter2pass" in m["body"] for m in body)
+
+
+def test_only_the_owners_send_on_its_card_releases_a_waiting_draft(environment, monkeypatch):
+    """The server holds a waiting draft's task (backend/setup_drafts.py): the claim starts no run of its agent on it, the
+    owner's own messages included. Words never release it: "Send me a preview first", a typed "Send" and Agent Ops
+    tapping Send in the owner's name all leave it waiting, with no wake, and the card is asked again. The owner's own
+    tap of Send on the card does, once a plan is connected ("Connect your plan first" before), and wakes the agent once."""
+    from backend import execution, question_marks, setup_drafts
+
+    api = environment()
+    preview_and_import(api, swarm_text())
+    bot = bot_ids(api)["agent-ops"]
+    task = rows(api, "SELECT id FROM tasks WHERE title='Tools to connect'")[0]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))  # its computer brought it up
+
+    def say(text, ask=None, code=200):
+        said = api.post(
+            f"/api/v2/tasks/{task}/comments", json={"text": text, **({"ask": ask} if ask else {})}, headers=signed_in()
+        )
+        assert said.status_code in ((200, 201) if code == 200 else (code,)), said.text
+        return said
+
+    def card():
+        found = rows(api, "SELECT id FROM question_marks WHERE task_id='%s' AND cleared_at IS NULL" % task)
+        assert len(found) == 1
+        return "qmark:" + found[0]["id"]
+
+    def refusals():
+        with api.app.state.store.read() as c:
+            conv = c.execute("SELECT conversation_id FROM tasks WHERE id=?", (task,)).fetchone()[0]
+            jobs = c.execute(
+                "SELECT j.* FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot_id=? AND j.state='queued' "
+                "AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
+                (bot, conv, task),
+            ).fetchall()
+            return [execution.job_refusal(c, dict(j), {}, {}, set()) for j in jobs]
+
+    def status():
+        return rows(api, "SELECT status FROM setup_drafts WHERE task_id='%s'" % task)[0]["status"]
+
+    sent = "SELECT id FROM messages WHERE body LIKE '%s%%'" % setup_drafts.SENT[:40]
+    say("Send me a preview first", ask=card())
+    assert status() == "waiting" and not rows(api, sent)
+    assert refusals() and set(refusals()) == {setup_drafts.DRAFT_WAIT}
+    say("Send")  # typed, not the card's
+    assert status() == "waiting" and not rows(api, sent)
+    with api.app.state.store.transaction() as c:  # Agent Ops tapping Send in the owner's name
+        token = H.VIA.set("botops")
+        try:
+            with question_marks.answering(card()[len("qmark:") :]):
+                H.task_comment(c, "human:owner", task, "Send")
+        finally:
+            H.VIA.reset(token)
+    assert status() == "waiting" and not rows(api, sent)
+    refused = say("Send", ask=card(), code=409)
+    assert refused.json()["error"]["detail"] == setup_drafts.NO_PLAN and status() == "waiting"
+    monkeypatch.setattr(setup_drafts, "plan_connected", lambda c: True)
+    say("Send", ask=card())
+    assert status() == "approved" and len(rows(api, sent)) == 1
+    assert setup_drafts.DRAFT_WAIT not in refusals()
+    say("Send")
+    assert len(rows(api, sent)) == 1
+
+
+def test_a_setup_drafts_turn_gets_no_gateway_fallback():
+    from backend import setup_drafts
+
+    config = {"model": "claude", "gateway_fallback": {"model": "tico-a"}, "fallback": {"model": "tico-b"}}
+    assert setup_drafts.no_gateway(config) == {"model": "claude", "fallback": {"off": True}}
+    assert setup_drafts.no_gateway({"model": "claude", "fallback": {"model": "gpt"}})["fallback"] == {"model": "gpt"}
+    assert setup_drafts.on_gateway({"model": "tico-medium-1.0"}) and not setup_drafts.on_gateway({"model": "claude"})
+
+
+def test_a_0_3_file_keeps_no_drafts_said_or_email():
+    """email, drafts and said are format 0.4's: under an older header they are not read."""
+    saved = C.from_yaml(swarm_text().replace("version: 0.4", "version: 0.3"))
+    assert "drafts" not in saved and "said" not in saved
+    assert not any(p.get("email") for p in saved["people"])
