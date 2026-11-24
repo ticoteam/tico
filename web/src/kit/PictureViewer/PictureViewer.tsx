@@ -89,7 +89,12 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
         if (sizes.has(e.target) && sizes.get(e.target) !== size) changed = true;
         sizes.set(e.target, size);
       }
-      if (changed) setHeld((h) => (h.of === shown ? { ...h, z: FIT } : h));
+      if (!changed) return;
+      // a gesture under way was measured against the old size: it ends here rather than restoring its zoom
+      points.current.clear();
+      gesture.current = null;
+      lastTap.current = null;
+      setHeld((h) => (h.of === shown ? { ...h, z: FIT, moving: false } : h));
     });
     seen.observe(area);
     if (img.current) seen.observe(img.current);

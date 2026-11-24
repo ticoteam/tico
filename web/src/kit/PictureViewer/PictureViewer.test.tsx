@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { PictureViewer, type Picture } from './PictureViewer';
 
 const PICS: Picture[] = [
@@ -87,6 +88,39 @@ describe('PictureViewer', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
     expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toBe('');
+  });
+
+  it('ends a pinch under way when the picture area changes size, and stays at fit', async () => {
+    let fire: (sizes: [number, number]) => void = () => {};
+    const seen: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: (entries: { target: Element; contentRect: { width: number; height: number } }[]) => void) {
+          fire = ([width, height]) => cb(seen.map((target) => ({ target, contentRect: { width, height } })));
+        }
+        observe(el: Element) {
+          seen.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      render(<Harness />);
+      const front = await screen.findByRole('img', { name: 'Front.png' });
+      const stage = front.parentElement!;
+      act(() => fire([800, 600]));
+      fireEvent.pointerDown(stage, { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100 });
+      fireEvent.pointerDown(stage, { pointerId: 2, pointerType: 'touch', clientX: 200, clientY: 100 });
+      fireEvent.pointerMove(stage, { pointerId: 2, pointerType: 'touch', clientX: 400, clientY: 100 });
+      expect(front.style.transform).toContain('scale(');
+      act(() => fire([390, 844]));
+      expect(front.style.transform).toBe('');
+      fireEvent.pointerMove(stage, { pointerId: 2, pointerType: 'touch', clientX: 500, clientY: 100 });
+      expect(front.style.transform).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('draws nothing while closed', () => {
