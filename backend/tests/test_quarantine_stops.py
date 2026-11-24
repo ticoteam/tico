@@ -432,7 +432,7 @@ def test_all_running_turns_stop_each_judged_on_its_own_with_folded_inputs_follow
         },
         machine['token'],
     )
-    folded = post(api, f"tasks/{task['id']}/comments", {'text': 'Include the archive.'})['comment']
+    folded = post(api, f"tasks/{task['id']}/comments", {'text': 'Include the archive.', 'to': 'bot:ops'})['comment']
     inputs = post(api, f"attempts/{first['id']}/inputs", {}, machine['token'])['messages']
     assert [m['id'] for m in inputs] == [folded['id']]
     post(api, f"attempts/{first['id']}/inputs/{folded['id']}/ack", {}, machine['token'])

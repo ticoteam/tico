@@ -345,7 +345,8 @@ def test_a_task_still_in_a_chat_room_never_shows_that_chats_run(api):
 def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     """The task's "Working" line is the owning bot's run, or the run for a person's message in the task's room,
     whichever bot that went to: on a person's task the bot that asked it answers, and the page shows it working.
-    Another bot's run for a bot's message is not the line. `comment_to` says before sending who will get a comment."""
+    Another bot's run for a bot's message is not the line. `comment_to` says before sending who a plain comment goes to:
+    nobody."""
     machine = runner(api, "ana")
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
@@ -384,15 +385,11 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
     assert (working["run_id"], working["state"], working["bot_id"]) == (turn["id"], "running", "ops")
-    # The next plain comment steers the following bot (D13); nothing is guessed from roles, so no @name is offered.
-    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": True, "mention": []}
-    # Someone who neither owns, asked nor may move it defers with no deadline; an @mention still reaches the bot (D6).
-    assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": "ops", "wakes": False, "mention": []}
+    # A plain comment is the task's log: it goes to no bot, whoever writes it; an @mention or a message to an agent's
+    # session is how one is reached.
+    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}
+    assert get(api, f"tasks/{tid}", token="cara-test")["comment_to"] == {"bot": None, "wakes": False, "mention": []}
     assert post(api, f"tasks/{tid}/comments", {"text": "Is it billing?"}, token="cara-test")["woke"] is False
-    # With the bot no longer following, no bot gets a plain comment.
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE thread_followers SET following=0 WHERE thread_id=? AND actor='bot:ops'", (cid,))
-    assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": None, "wakes": False, "mention": []}, "no bot gets it"
 
 
 def test_a_persons_message_carried_to_another_bot_in_a_task_reads_as_the_person(api, monkeypatch):
