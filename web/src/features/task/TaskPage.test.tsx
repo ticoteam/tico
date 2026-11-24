@@ -204,6 +204,18 @@ describe('task route loading', () => {
     }
   });
 
+  it('warms only the comments of a task’s own thread, the view its chat opens on', async () => {
+    serve((url) => {
+      if (url.endsWith('/tasks/%2312')) return { status: 200, body: detail(task({ conversation_id: 'room', documents: [] })) };
+      if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
+      return base(url);
+    });
+    await loadTask(queryClient, '12', 'details', true);
+    // the warm read is not waited for: it goes once the thread is read
+    await waitFor(() => expect(calls.filter((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toHaveLength(1));
+    expect(calls.find((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toContain('comments=true');
+  });
+
   it.each([['spec', 'f1'], [undefined, 'f2']] as const)('starts the selected page read while files are pending for tab %s', async (tab, file) => {
     const manifest = holdReply();
     serve((url) => (url.endsWith('/tasks/t1/files?all=1') ? manifest.promise : base(url)));
@@ -462,6 +474,38 @@ describe('one open task', () => {
       expect(back?.to_leave?.find((r) => r.requirement_id === 'r1')?.met).toBe(false);
     });
     expect(within(screen.getByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('warms the agent’s session a link opens on, not the comments', async () => {
+    serve((url) => {
+      if (url.endsWith('/tasks/%2312')) return { status: 200, body: detail(task({ conversation_id: 'room', documents: [] })) };
+      if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
+      return base(url);
+    });
+    await loadTask(queryClient, '12', 'details', true, 'bot:r2');
+    await waitFor(() => expect(calls.filter((c) => c.startsWith('GET /api/v2/threads/room/timeline'))).toHaveLength(1));
+    const read = calls.find((c) => c.startsWith('GET /api/v2/threads/room/timeline'))!;
+    expect(read).toContain('session=bot%3Ar2');
+    expect(read).not.toContain('comments=true');
+  });
+
+  it('heads an agent’s session on the chat page with its name and a way back, and keeps the decision over its box', async () => {
+    people([{ id: 'bot:r2', kind: 'agent', name: 'Rowan Reviewer' }]);
+    serve((url) => {
+      if (url.includes('/api/v2/tasks/%2312') || url.endsWith('/api/v2/tasks/t1'))
+        return { status: 200, body: { ...detail(task({ conversation_id: 'room' } as Partial<TaskData>)), can_direct: true, sessions: [{ agent: 'bot:r2', last_seq: 3 }] } };
+      if (url.endsWith('/api/v2/threads/room')) return { status: 200, body: { id: 'room', task_id: 't1' } };
+      if (url.includes('/threads/room/timeline')) return { status: 200, body: { messages: [], next_cursor: null, read_marks: {} } };
+      return base(url);
+    });
+    const router = show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat?session=bot%3Ar2');
+    expect(await screen.findByRole('link', { name: 'Rowan Reviewer' })).toBeTruthy();
+    expect(await screen.findByRole('textbox', { name: 'Message Rowan Reviewer' })).toBeTruthy();
+    expect(within(await screen.findByRole('region', { name: 'The decision' })).getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(calls.some((c) => c.includes('/threads/room/timeline') && c.includes('session=bot%3Ar2'))).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to comments' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    expect(await screen.findByRole('textbox', { name: 'Add a comment' })).toBeTruthy();
   });
 
   it('moves past what is missing only with a reason the person gives', async () => {

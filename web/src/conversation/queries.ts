@@ -5,7 +5,7 @@ import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack
 import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
-import { onTopic } from '@/live';
+import { onTopic, type TimelineView } from '@/live';
 import { newId } from '@/lib/ids';
 import { chatAddress } from '@/lib/chat';
 import type { FromPage } from '@/shell/pageOwner';
@@ -14,7 +14,9 @@ import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './
 const PAGE = 50;
 const enc = encodeURIComponent;
 
-export const timelineKey = (id: string) => ['thread', id, 'timeline'] as const;
+/** A thread's timeline, or one view of a task's thread (`view`): each view is its own cache entry, which the stream
+    patches by that view's rule (live/patch.ts inView). */
+export const timelineKey = (id: string, view?: TimelineView | null) => (view ? (['thread', id, 'timeline', view] as const) : (['thread', id, 'timeline'] as const));
 export const liveKey = (id: string) => ['thread', id, 'live'] as const;
 export const proposalKey = (aid: string) => ['assistant', 'action', aid] as const;
 
@@ -45,16 +47,19 @@ export const ticoRoomQuery = queryOptions({
 
 export type Timeline = InfiniteData<TimelinePage, unknown>;
 
+/** A view's words on the timeline's address: `comments=true`, or `session=<agent>`. */
+const viewParam = (view: TimelineView | null | undefined) => (!view ? '' : 'session' in view ? `&session=${enc(view.session)}` : '&comments=true');
+
 /**
- * The flat timeline. pages[0] is the newest page and each next page is older, so a refetch (a `reset`) reads the
- * newest first and walks back as far as the person had scrolled.
+ * The flat timeline, or one view of a task's thread (`view`). pages[0] is the newest page and each next page is
+ * older, so a refetch (a `reset`) reads the newest first and walks back as far as the person had scrolled.
  */
-export const timelineQuery = (id: string) =>
+export const timelineQuery = (id: string, view?: TimelineView | null) =>
   infiniteQueryOptions({
-    queryKey: timelineKey(id),
+    queryKey: timelineKey(id, view) as readonly unknown[],
     queryFn: ({ pageParam, signal }) =>
       api.get<TimelinePage>(
-        `/api/v2/threads/${enc(id)}/timeline?flat=1&limit=${PAGE}${pageParam == null ? '' : `&cursor=${enc(String(pageParam))}`}`,
+        `/api/v2/threads/${enc(id)}/timeline?flat=1&limit=${PAGE}${viewParam(view)}${pageParam == null ? '' : `&cursor=${enc(String(pageParam))}`}`,
         { signal },
       ),
     initialPageParam: null as string | number | null,
@@ -126,8 +131,17 @@ export interface Send {
   quote?: ReplyQuote | null;
   /** A task's chat: the person's words are a task comment (POST /api/v2/tasks/{task}/comments), which reaches only whom
       it addresses; with `to`, the agent whose session it is written to, which wakes it. A reply goes to its author
-      instead, as a Reply does. Files still go as a thread message: a comment, which wakes nobody. */
-  task?: { id: string; to?: string };
+      instead, as a Reply does. Files go as a thread message (a comment, which wakes nobody): with `to` it takes none.
+      A ❓ is answered on its own card (QuestionCard), not here. */
+  task?: TaskSend;
+  /** The view of the task's thread the chat shows: the pending row goes there. */
+  view?: TimelineView | null;
+}
+
+/** Where a task's chat sends: the task, and the agent whose session it is (`to`). */
+export interface TaskSend {
+  id: string;
+  to?: string;
 }
 
 type Sent = ChatMessage | { message?: ChatMessage } | { comment?: ChatMessage } | { hold?: unknown };
@@ -161,7 +175,8 @@ function post(s: Send, idempotencyKey: string): Promise<Sent> {
   const reply = s.replyTo ? { in_reply_to: s.replyTo } : {};
   // a session message goes to its agent; a reply goes to whom it answers, never both (the server refuses both)
   const to = s.task?.to && !s.replyTo ? s.task.to : undefined;
-  if (s.task && !files.length) return api.post<Sent>(`/api/v2/tasks/${enc(s.task.id)}/comments`, { text: s.text, ...(to && { to }), ...reply }, opts);
+  if (s.task && !files.length)
+    return api.post<Sent>(`/api/v2/tasks/${enc(s.task.id)}/comments`, { text: s.text, ...(to && { to }), ...reply }, opts);
   const where = s.toDm ? DM_ADDRESS : enc(s.id);
   if (!files.length) return api.post<Sent>(`/api/v2/threads/${where}/messages`, { ...messageBody(s.text, s.from, s.toDm), ...reply }, opts);
   const f = new FormData();
@@ -219,7 +234,10 @@ const pageFor = (s: Send): FromPage | null => (!s.from ? null : s.variant === 't
 const movedTo = (s: Send, real: ChatMessage) => !!s.toDm && !!(real.conversation_id || real.thread_id) && (real.conversation_id || real.thread_id) !== s.id;
 
 export async function sendMessage(given: Send): Promise<ChatMessage | null> {
-  const s = { ...given, from: pageFor(given) };
+  // a file goes as a thread message, which carries no `to` (the task's comment route has no upload yet): a message to
+  // an agent's session takes none, whatever its box held
+  const bare = !!given.task?.to && !given.replyTo;
+  const s = { ...given, from: pageFor(given), ...(bare && { files: [] }) };
   const tmp = s.retry ?? `tmp:${newId()}`;
   const row: ChatMessage = {
     id: tmp,
@@ -238,7 +256,7 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
   };
   try {
     const answer = await write<Sent>({
-      key: timelineKey(s.id),
+      key: timelineKey(s.id, s.view),
       optimistic: (d: Timeline | undefined) => withRows(d, (rows) => [...rows.filter((m) => m.id !== tmp), row]),
       send: (key) => post(s, key),
       settle: (d: Timeline | undefined, answer: Sent) => {
@@ -271,16 +289,43 @@ export async function sendMessage(given: Send): Promise<ChatMessage | null> {
 
 const marked = new Map<string, number>();
 
-/** Read up to `seq`. The highest mark wins on the server too, so only a higher one is sent. */
+/** Read up to `seq`. The highest mark wins on the server too, so only a higher one is sent. The timelines held for the
+    thread take the new mark too, so a page opened again from them does not count what was read as new. */
 export function markRead(id: string, seq: number): void {
   if ((marked.get(id) ?? 0) >= seq) return;
   marked.set(id, seq);
+  for (const [key, d] of queryClient.getQueriesData<Timeline>({ queryKey: timelineKey(id) })) {
+    const first = d?.pages[0];
+    if (!first || (first.read_marks?.[id] ?? 0) >= seq) continue;
+    queryClient.setQueryData<Timeline>(key, { ...d, pages: d.pages.with(0, { ...first, read_marks: { ...first.read_marks, [id]: seq } }) });
+  }
   api.post(`/api/v2/threads/${enc(id)}/read`, { seq }).catch(() => {
     if (marked.get(id) === seq) marked.delete(id);
   });
 }
 
 /* ---------------------------------------------------------------- live */
+
+/** What happened on a thread since its page opened, as the stream says it: a count of its messages, and of each agent's
+    job and run changes (queued, started, ended), by `bot:<id>`. A page that reads more than the timeline (a task's
+    sessions, an agent's run) reads again when these move. Kept only while something reads it. */
+export interface ThreadActivity {
+  messages: number;
+  runs: Record<string, number>;
+}
+export const activityKey = (id: string) => ['thread', id, 'activity'] as const;
+export const activityQuery = (id: string) =>
+  queryOptions({
+    queryKey: activityKey(id),
+    queryFn: () => queryClient.getQueryData<ThreadActivity>(activityKey(id)) ?? { messages: 0, runs: {} },
+    initialData: { messages: 0, runs: {} } as ThreadActivity,
+    staleTime: Infinity,
+  });
+
+function stir(cid: string, fn: (a: ThreadActivity) => ThreadActivity): void {
+  if (!queryClient.getQueryCache().find({ queryKey: activityKey(cid), exact: true })) return;
+  queryClient.setQueryData<ThreadActivity>(activityKey(cid), (a) => fn(a ?? { messages: 0, runs: {} }));
+}
 
 interface RunEvent {
   run_id?: string;
@@ -304,6 +349,18 @@ function setRuns(cid: string, fn: (runs: LiveRun[]) => LiveRun[]): void {
   const was = queryClient.getQueryData<LiveRun[]>(liveKey(cid)) ?? [];
   const next = fn(was);
   if (next !== was) queryClient.setQueryData(liveKey(cid), next);
+}
+
+/** A run already under way when its view opened (its snapshot, GET .../execution): drawn as the stream would have drawn
+    it, so the stream's next pieces carry on from there. Nothing when the stream already has it. */
+export function seedRun(cid: string, r: LiveRun): void {
+  late.delete(r.run);
+  setRuns(cid, (runs) => (runs.some((x) => x.run === r.run) ? runs : [...runs, r]));
+}
+
+/** A run its view drew from a snapshot that has since ended without the stream saying so: its row goes. */
+export function dropRun(cid: string, run: string): void {
+  setRuns(cid, (runs) => (runs.some((x) => x.run === run && !x.ended) ? runs.filter((x) => x.run !== run) : runs));
 }
 
 /** One run's state change or piece of output, as the server's live reply joins them (backend/turns.py reply_parts). */
@@ -361,6 +418,10 @@ export function installConversationLive(): void {
     for (const d of batch) {
       const cid = d.conversation_id;
       const run = d.run_id;
+      if (cid && d.bot_id && !d.output) {
+        const bot = `bot:${d.bot_id}`;
+        stir(cid, (a) => ({ ...a, runs: { ...a.runs, [bot]: (a.runs[bot] ?? 0) + 1 } }));
+      }
       if (!cid || !run) continue;
       const was = queryClient.getQueryData<LiveRun[]>(liveKey(cid))?.find((x) => x.run === run);
       setRuns(cid, (runs) => stepRun(runs, d));
@@ -375,6 +436,7 @@ export function installConversationLive(): void {
     for (const e of batch) {
       const m = e.message;
       const cid = e.conversation_id ?? e.thread_id;
+      if (cid) stir(cid, (a) => ({ ...a, messages: a.messages + 1 }));
       if (!m || !cid) continue;
       // The posted reply takes its live row's place in the same frame.
       const turn = m.refs?.turn_id;
@@ -383,10 +445,12 @@ export function installConversationLive(): void {
       if (me && m.sender_id === me) {
         for (const id of new Set([cid, m.thread_id, m.conversation_id])) {
           if (!id) continue;
-          queryClient.setQueryData<Timeline>(timelineKey(id), (d) => withRows(d, (rows) => {
-            const i = rows.findIndex((x) => x.pending === 'sending' && (x.body ?? '') === (m.body ?? ''));
-            return i < 0 ? rows : rows.toSpliced(i, 1);
-          }));
+          // every view of the thread that holds the pending row (a task's comments, an agent's session)
+          for (const [key] of queryClient.getQueriesData<Timeline>({ queryKey: timelineKey(id) }))
+            queryClient.setQueryData<Timeline>(key, (d) => withRows(d, (rows) => {
+              const i = rows.findIndex((x) => x.pending === 'sending' && (x.body ?? '') === (m.body ?? ''));
+              return i < 0 ? rows : rows.toSpliced(i, 1);
+            }));
         }
       }
     }

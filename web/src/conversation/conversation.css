@@ -91,6 +91,13 @@ button.quote:hover span{color:var(--ink)}
   button.quote::before{content:"";position:absolute;inset:-11px 0}
 }
 
+/* A task's comments: each reply one level under its comment, past the comment's face; Reply in place there, the
+   chat's own box with who it reaches under it. */
+.msg-under{padding-left:calc(22px + var(--s-2))}
+.reply-box{display:grid;gap:var(--s-1);margin:0 0 var(--s-2);padding-left:calc(22px + var(--s-2))}
+.reply-foot{display:flex;align-items:center;gap:var(--s-2);min-height:22px;color:var(--muted);font-size:var(--t-sm)}
+.reply-reach{flex:1;min-width:0}
+
 /* Long words, links and inline code wrap inside the message wherever they must; a code block keeps its lines and
    scrolls inside itself. A bubble and its column never grow past the row. */
 .msg-main,.bubble{overflow-wrap:anywhere}
@@ -114,6 +121,8 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .msg.is-mine .msg-acts{right:auto;left:0}
 .msg:hover .msg-acts,.msg-acts:focus-within,.msg-acts:has([aria-expanded="true"]){opacity:1}
 @media (hover:none){.msg-acts{display:none}}
+/* a task's comments: Reply is the way to answer one, so a touch screen shows it, not only behind a long press */
+@media (hover:none){.chat-body.is-comments .msg-acts{display:flex;opacity:1}}
 
 /* ---------- a card in the timeline (plan/threads-team.html .kcard): a team's update ---------- */
 .kcard{display:grid;grid-template-columns:minmax(0,1fr);gap:var(--s-1);margin:var(--s-1) 0 var(--s-0);padding:var(--s-2h) var(--s-3);border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong);color:var(--ink)}

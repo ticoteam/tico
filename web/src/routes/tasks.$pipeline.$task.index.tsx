@@ -7,7 +7,7 @@ export const Route = createFileRoute('/tasks/$pipeline/$task/')({
   validateSearch: taskSearch,
   loaderDeps: ({ search }) => search,
   loader: async ({ params, deps, location, preload, context: { queryClient } }) => {
-    const loaded = await loadTask(queryClient, params.task, undefined, !preload && !('chat' in location.search));
+    const loaded = await loadTask(queryClient, params.task, undefined, !preload && !('chat' in location.search), (location.search as { session?: unknown }).session);
     if (!loaded) return;
     const { task, tab } = loaded;
     // Resolve the address before mounting the reader so replacing it cannot restart the first page reads.

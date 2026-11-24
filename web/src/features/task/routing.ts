@@ -32,14 +32,27 @@ export const boardOf =
     return live.some((p) => p.id === pipeline) ? pipeline : null;
   };
 
-/** Load the task while the route loads its code. A refused read leaves the page to show the error. */
-export async function loadTask(client: QueryClient, param: string, tab?: string, openChat = false): Promise<{ task: TaskData; tab: string } | null> {
+/** Load the task while the route loads its code, and with `openChat` the view its chat opens on: the comments, or the
+    agent's session the address names (`?session=`). A refused read leaves the page to show the error. */
+export async function loadTask(
+  client: QueryClient,
+  param: string,
+  tab?: string,
+  openChat = false,
+  session?: unknown,
+): Promise<{ task: TaskData; tab: string } | null> {
   try {
     const id = await client.ensureQueryData(taskRefQuery(param));
     const t = await client.ensureQueryData(taskDetailQuery(id));
     if (openChat && t.conversation_id) {
-      void client.prefetchQuery(threadQuery(t.conversation_id));
-      void client.prefetchInfiniteQuery(timelineQuery(t.conversation_id));
+      // the view the chat opens on: the task's own thread shows its comments, or the agent's session the address names;
+      // a task in its owner's main chat, that chat
+      const cid = t.conversation_id;
+      const view = typeof session === 'string' && session.startsWith('bot:') ? { session } : { comments: true as const };
+      void client
+        .fetchQuery(threadQuery(cid))
+        .then((room) => client.prefetchInfiniteQuery(timelineQuery(cid, room.task_id === t.id ? view : null)))
+        .catch(() => undefined);
     }
     const fileQuery = taskFilesQuery(id);
     const files = client.prefetchQuery(fileQuery);
@@ -71,7 +84,7 @@ export async function loadTask(client: QueryClient, param: string, tab?: string,
     opens, with the address's other words (an ask, a version, a thread beside it). Null when the task did not load. */
 export async function ownAddress(client: QueryClient, param: string, search: Record<string, unknown>, openChat = false) {
   const { tab: named, ...rest } = search;
-  const loaded = await loadTask(client, param, typeof named === 'string' && named ? named : undefined, openChat);
+  const loaded = await loadTask(client, param, typeof named === 'string' && named ? named : undefined, openChat, rest.session);
   if (!loaded) return null;
   const { task, tab } = loaded;
   return {
@@ -94,6 +107,8 @@ export interface TaskSearch {
   part?: number;
   /** The ask a card opened the task for (its requirement id): its tab, the version it pinned and its Approve. */
   ask?: string;
+  /** The agent whose session the task's chat shows (`bot:<id>`); none: the comments. */
+  session?: string;
 }
 
 const whole = (x: unknown): number => (typeof x === 'number' ? x : typeof x === 'string' && /^\d+$/.test(x) ? Number(x) : NaN);
@@ -108,6 +123,7 @@ export function taskSearch(raw: Record<string, unknown>): TaskSearch {
   if (typeof raw.file === 'string' && raw.file) out.file = raw.file;
   if (typeof raw.full === 'string' && raw.full) out.full = raw.full;
   if (typeof raw.ask === 'string' && raw.ask) out.ask = raw.ask;
+  if (typeof raw.session === 'string' && raw.session.startsWith('bot:')) out.session = raw.session;
   const v = n(raw.v);
   const vs = n(raw.vs);
   if (v) out.v = v;

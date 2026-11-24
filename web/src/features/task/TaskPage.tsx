@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useRouter, useRouterState, useSearch } from '@tanstack/react-router';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { run } from '@/actions';
 import { ApiError } from '@/api/client';
-import { Conversation, MessageBones, SessionLine, type Session } from '@/conversation';
+import { agentWords, Conversation, MessageBones, SessionLine, type ChatMessage, type Session } from '@/conversation';
 import { meQuery, useActor } from '@/data';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -15,7 +15,6 @@ import { toast } from '@/kit/Toast';
 import { useFollow } from '@/live/follow';
 import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
-import { threadQuery } from '@/features/threads/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
 import { leaveTask, nextInList, pressListRow } from '@/lib';
@@ -40,6 +39,7 @@ import { QuestionCard } from './QuestionCard';
 import { PageView, useVersions, VersionBar } from './Versions';
 import { Brief, EmailPointers, MatterBrief, MatterDates, MatterDatesOf, WaitingOnYou } from './Waiting';
 import { questionsFor, waitsNow } from './waits';
+import { ChatNotRead, COMMENTS, SessionRun, useTaskLive, useTaskReadMark, useThreadRead } from './sessions';
 import './task.css';
 
 /** How often an open task reads itself again, as a backstop for the stream. */
@@ -131,17 +131,97 @@ const decoded = (part: string): string => {
     where the email is on screen). */
 const decisionFor = (x: Tab | undefined): { email: string | null } | null => (x?.wait ? null : { email: x?.email ?? null });
 
-/** On the person's own task the box is theirs to write on: never "Message <their own name>". Someone who may not direct
-    the agent holding it comments: a comment reaches nobody it does not name. */
-const ownTask = (t: Pick<TaskData, 'owner_id' | 'can_direct'>, me: string | undefined): string | undefined =>
-  me && t.owner_id === me ? 'Add a note' : t.owner_id?.startsWith('bot:') && !t.can_direct ? 'Add a comment' : undefined;
+/** On the person's own task the box is theirs to write on: never "Message <their own name>". */
+const ownTask = (t: Pick<TaskData, 'owner_id'>, me: string | undefined): string | undefined => (me && t.owner_id === me ? 'Add a note' : undefined);
 
-/** The person's words on a task's chat are its comments; to the agent holding it, a message in its session, when they
-    may direct it (a plain comment wakes nobody). */
-const taskSend = (t: Pick<TaskData, 'id' | 'owner_id' | 'can_direct'>): { id: string; to?: string } => ({
-  id: t.id,
-  ...(t.owner_id?.startsWith('bot:') && t.can_direct && { to: t.owner_id }),
-});
+/** Back from an agent's session to the task's comments: the address without `session`, its other words kept. */
+function useToComments() {
+  const navigate = useNavigate();
+  return () => void navigate({ to: '.', search: (({ session: _, ...rest }: TaskSearch) => rest) as never });
+}
+
+/** Over an agent's session drawn as the page (a computer's `…/chat?session=`): whose it is, and the way back. */
+function SessionHead({ agent }: { agent: string }) {
+  const a = useActor(agent);
+  const toComments = useToComments();
+  const name = a?.name ?? agentWords(agent);
+  return (
+    <header className="side-head">
+      <Face id={agent} size={28} decorative />
+      <span className="head-who">
+        <b>{a ? <Link className="head-name" href={whoHref(a)}>{name}</Link> : name}</b>
+      </span>
+      <span className="grow" />
+      <IconButton icon="close" label="Back to comments" size="sm" onClick={toComments} />
+    </header>
+  );
+}
+
+interface TaskConversationProps {
+  t: TaskData;
+  variant: 'page' | 'task';
+  /** Its own thread (`useOwnThread`). */
+  own: boolean;
+  /** The agent whose session it shows; none: the comments. */
+  session?: string;
+  /** Over the comments' box. An agent's session has its run there instead, and `decision`. */
+  foot?: ReactNode;
+  /** The decision the task waits on and the ❓s for the person: over the box in a session too, so they stay in reach. */
+  decision?: ReactNode;
+  canPost?: boolean;
+  extra?: ChatMessage[];
+  card?: (m: ChatMessage) => ReactNode;
+}
+
+/** The task's chat: its comments, each a log entry that reaches only whom it names, with Reply in place on each; or one
+    agent's session (`?session=`), the normal chat bar to that agent, its reply being written, its run while it waits.
+    A task filed in its owner's main chat: that chat, as it is. */
+function TaskConversation({ t, variant, own, session, foot, decision, canPost, extra, card }: TaskConversationProps) {
+  const me = useQuery(meQuery).data?.id;
+  const owner = useActor(t.owner_id);
+  const agent = useActor(session);
+  if (!t.conversation_id) return null;
+  if (own && session)
+    return (
+      <Conversation
+        key={session}
+        id={t.conversation_id}
+        variant={variant}
+        title={agent?.name ?? agentWords(session)}
+        actor={session}
+        view={{ session }}
+        mentionFirst={onTask(t)}
+        task={{ id: t.id, to: session }}
+        canSend={t.can_direct}
+        canPost={canPost}
+        head={variant === 'page' ? <SessionHead agent={session} /> : undefined}
+        foot={
+          <>
+            <SessionRun t={t} agent={session} />
+            {decision}
+          </>
+        }
+        extra={extra}
+        card={card}
+      />
+    );
+  return (
+    <Conversation
+      id={t.conversation_id}
+      variant={variant}
+      title={owner?.name}
+      actor={t.owner_id ?? undefined}
+      compose={own ? 'Add a comment' : ownTask(t, me)}
+      {...(own && { view: COMMENTS })}
+      mentionFirst={onTask(t)}
+      task={{ id: t.id }}
+      foot={foot}
+      canPost={canPost}
+      extra={extra}
+      card={card}
+    />
+  );
+}
 
 /** Whom a task's @ list names first: who asked, who it is for, who has it, then its roles' people. */
 const onTask = (t: Pick<TaskData, 'requester_id' | 'assignee_id' | 'owner_id' | 'roles'>): string[] => [
@@ -237,7 +317,6 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const [adding, setAdding] = useState<Adding | null>(null);
   const [asking, setAsking] = useState(false);
   const search = useSearch({ strict: false }) as TaskSearch;
-  const owner = useActor(t.owner_id);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
   const versions = useVersions(current?.doc, search.v, search.vs, current?.version);
@@ -265,6 +344,11 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   };
 
   const beside = !!new URLSearchParams(useRouterState({ select: (s) => s.location.searchStr })).get('chat');
+  const room = useThreadRead(t);
+  const ownThread = room.own;
+  // one read mark per task: kept as the page opens, then the task is marked read; its sessions and runs kept current
+  useTaskReadMark(t, ownThread);
+  useTaskLive(t, ownThread);
   // The chat as the page (a computer's `…/chat`): an email's OK hung on this task, as a card in the chat.
   const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} details={quiet} />;
@@ -275,7 +359,9 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     .map((x) => {
       // The tab of the ask the address names keeps it (`?ask=`), so going back to it is still that ask.
       const mine = !!askTarget && (x.doc?.file_id ?? x.file?.id ?? x.other) === askTarget.id;
-      return { label: x.label, to: tabAddress(t, x.slug), ...(mine && ask && { search: { ask } }), mark: markOf(x), target: `task-tab:${x.slug}` };
+      // an agent's session open in the chat stays open from tab to tab
+      const kept = { ...(mine && ask && { ask }), ...(search.session && { session: search.session }) };
+      return { label: x.label, to: tabAddress(t, x.slug), ...(Object.keys(kept).length && { search: kept }), mark: markOf(x), target: `task-tab:${x.slug}` };
     });
 
   const body =
@@ -316,27 +402,36 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     ) : current?.email ? (
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
     ) : current?.chat && t.conversation_id ? (
-      // The chat as the page: the decision sits over its message box, and stands in for it while changes are asked.
-      <Conversation
-        id={t.conversation_id}
-        variant="page"
-        title={owner?.name}
-        actor={t.owner_id ?? undefined}
-        compose={ownTask(t, me)}
-        mentionFirst={onTask(t)}
-        task={taskSend(t)}
-        foot={
-          <>
-            {/* a pinned ❓ already says it needs them: the status line would say it again */}
-            {!questionsFor(t, me).length && <TaskStatus t={t} />}
-            <Decision t={t} onAsking={setAsking} email={null} />
-            <Questions t={t} ids={questionsFor(t, me)} />
-          </>
-        }
-        canPost={!asking}
-        extra={approvals}
-        card={approvalCard}
-      />
+      room.failed ? (
+        <ChatNotRead retry={room.retry} />
+      ) : ownThread === undefined ? (
+        <MessageBones />
+      ) : (
+        // The chat as the page: the decision sits over its message box, and stands in for it while changes are asked.
+        <TaskConversation
+          t={t}
+          variant="page"
+          own={ownThread}
+          session={search.session}
+          foot={
+            <>
+              {/* a pinned ❓ already says it needs them: the status line would say it again */}
+              {!questionsFor(t, me).length && <TaskStatus t={t} />}
+              <Decision t={t} onAsking={setAsking} email={null} />
+              <Questions t={t} ids={questionsFor(t, me)} />
+            </>
+          }
+          decision={
+            <>
+              <Decision t={t} onAsking={setAsking} email={null} />
+              <Questions t={t} ids={questionsFor(t, me)} />
+            </>
+          }
+          canPost={!asking}
+          extra={approvals}
+          card={approvalCard}
+        />
+      )
     ) : null;
 
   return (
@@ -393,7 +488,14 @@ export interface TaskChatProps {
  */
 export function TaskChat({ task }: TaskChatProps) {
   const { t } = useTask(task);
-  const owner = useActor(t?.owner_id);
+  // An agent's session open (`?session=`): its face and name head the chat, and ✕ goes back to the comments.
+  const open = useRouterState({ select: (s) => (s.location.search as TaskSearch).session });
+  const toComments = useToComments();
+  const room = useThreadRead(t);
+  const own = room.own;
+  const session = own ? open : undefined;
+  const who = session ?? t?.owner_id;
+  const owner = useActor(who);
   const me = useQuery(meQuery).data?.id;
   const [asking, setAsking] = useState(false);
   // On a phone the task page docks the one decision above the bar, in reach with the chat up, so its chat has none.
@@ -402,11 +504,10 @@ export function TaskChat({ task }: TaskChatProps) {
   // An email's OK hung on this task waits on the person: a card in its chat, pointing to the email.
   const approvals = useApprovalCards({ task: t });
   // Its conversation is the task's own, or (a task filed in its owner's room) the owner's main chat: the head says which.
-  const room = useQuery({ ...threadQuery(t?.conversation_id ?? ''), enabled: !!t?.conversation_id });
   if (!t) return <MessageBones />;
-  const name = owner?.name ?? (t.owner_id?.startsWith('bot:') ? 'Agent' : 'Person');
-  const session: Session | null = !room.data ? null : room.data.task_id === t.id ? { task: t.id, title: t.title } : 'main';
-  const sub = session && <SessionLine session={session} />;
+  const name = owner?.name ?? (who?.startsWith('bot:') ? agentWords(who) : 'Person');
+  const place: Session | null = own === undefined ? null : own ? { task: t.id, title: t.title } : 'main';
+  const sub = place && <SessionLine session={place} />;
   const asked = questionsFor(t, me);
   return (
     <>
@@ -415,7 +516,7 @@ export function TaskChat({ task }: TaskChatProps) {
         {owner ? (
           <>
             <Link className="head-face" href={whoHref(owner)} tabIndex={-1} aria-hidden>
-              <Face id={t.owner_id} size={28} decorative />
+              <Face id={who} size={28} decorative />
             </Link>
             <span className="head-who">
               <b>
@@ -428,7 +529,7 @@ export function TaskChat({ task }: TaskChatProps) {
           </>
         ) : (
           <>
-            <Face id={t.owner_id} size={28} decorative />
+            <Face id={who} size={28} decorative />
             <span className="head-who">
               <b>{name}</b>
               {sub}
@@ -436,20 +537,28 @@ export function TaskChat({ task }: TaskChatProps) {
           </>
         )}
         <span className="grow" />
+        {session && <IconButton icon="close" label="Back to comments" size="sm" onClick={toComments} />}
       </header>
-      {t.conversation_id ? (
-        <Conversation
-          id={t.conversation_id}
+      {t.conversation_id && room.failed ? (
+        <ChatNotRead retry={room.retry} />
+      ) : t.conversation_id && own === undefined ? (
+        <MessageBones />
+      ) : t.conversation_id ? (
+        <TaskConversation
+          t={t}
           variant="task"
-          title={name}
-          actor={t.owner_id ?? undefined}
-          compose={ownTask(t, me)}
-          mentionFirst={onTask(t)}
-          task={taskSend(t)}
+          own={!!own}
+          session={session}
           foot={
             <>
               {/* a pinned ❓ already says it needs them: the status line would say it again */}
               {!asked.length && <TaskStatus t={t} />}
+              {decision}
+              <Questions t={t} ids={asked} />
+            </>
+          }
+          decision={
+            <>
               {decision}
               <Questions t={t} ids={asked} />
             </>
