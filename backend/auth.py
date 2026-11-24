@@ -1168,7 +1168,12 @@ class Auth:
                     return "0"  # gone since: nothing
             elif kind == "task":
                 theirs = f"id={A.q(value)}"
-            audience = f"((coalesce(private,1)=0 AND {audience}) OR (coalesce(private,1)<>0 AND ({theirs})))"
+            audience = (
+                f"((coalesce(private,1)=0 AND {audience}) OR (coalesce(private,1)<>0 AND ({theirs})))"
+                if who.actor == H.assistant_actor(c)
+                # A person's chat form: she and the run both read it (task_privacy.principals_read).
+                else f"(({audience}) AND (coalesce(private,1)=0 OR ({theirs})))"
+            )
         elif who.task_actor:
             actor = A.q(who.task_actor)
             carried = A.qlist(sorted(private_subjects(c, who.task_actor)))
@@ -1180,8 +1185,10 @@ class Auth:
                 if assistant_for(c, who.actor, who.task_actor)
                 else ""
             )
+            # A person assignee reads it as its requester does, whichever of the two they are here.
+            carried_assignee = assignee_sql(who.task_actor) + " OR " if H.is_human(who.task_actor) else ""
             audience += (
-                f" AND (coalesce(private,1)=0 OR owner_id IN {carried} OR requester_id IN {carried} "
+                f" AND (coalesce(private,1)=0 OR {carried_assignee}owner_id IN {carried} OR requester_id IN {carried} "
                 f"OR {reader_sql(c, who.task_actor)} OR ({participant_access_sql(c, actor)}) "
                 f"OR {call_follow_ups.reader_sql(c, who.task_actor)}{own_oks})"
             )

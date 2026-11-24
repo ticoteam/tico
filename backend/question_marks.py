@@ -790,7 +790,8 @@ def ask(
     the person hears, in their Needs you."""
     if (not checked) if let_in is None else let_in:
         row: Row | None = H.task(conn, task_id)
-        if row and not H.task_private_readable(conn, person, row):
+        # A private task only: a company task they may not read stays closed to them, and no reader is written.
+        if row and H.task_private(conn, row) and not H.task_private_readable(conn, person, row):
             H.task_reach(conn, bot, row, person)
     _check(conn, bot, task_id, person, text, None, checked=checked)
     said: Row = H.task_comment(conn, bot, task_id, text, wake=False, checked=checked, extra_refs=refs)
