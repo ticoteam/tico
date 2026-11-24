@@ -474,8 +474,7 @@ describe('The call bar @s1049', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(room().disconnect).toHaveBeenCalled();
     // this window hung up first, then ended the call
-    const order = sent().map((x) => x.url.split('/').pop());
-    expect(order.indexOf('leave')).toBeLessThan(order.indexOf('end'));
+    expect(sent().map((x) => x.url.split('/').pop()).slice(-2)).toEqual(['leave', 'end']);
   });
 
   it('a person the server says is in my call keeps Leave, even before the room names them', async () => {
