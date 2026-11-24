@@ -62,21 +62,28 @@ export function zipEnd(tail: Uint8Array, total: number): ZipEnd | 'zip64' | null
 
 /** The high half of the DOS code page (CP437), which zip tools used for names before UTF-8. */
 const CP437 = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
-const strict = new TextDecoder('utf-8', { fatal: true });
+const utf8 = new TextDecoder('utf-8', { ignoreBOM: true });
+const strict = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
-/** An entry's name. Flagged UTF-8 (bit 11), or an Info-ZIP Unicode Path field (0x7075), is read as UTF-8. An
-    unflagged name is read as UTF-8 too when it is valid UTF-8, since many tools write UTF-8 without the flag;
-    otherwise as CP437, as older Windows and DOS tools wrote it. */
+/** An entry's name. A flagged name (bit 11) is UTF-8. Otherwise an Info-ZIP Unicode Path field (0x7075) that
+    is valid UTF-8 wins; then the name itself when it is valid UTF-8, since many tools write UTF-8 without the
+    flag; otherwise CP437, as older Windows and DOS tools wrote it. */
 function nameOf(raw: Uint8Array, flags: number, extra: Uint8Array): string {
+  if (flags & 0x800) return utf8.decode(raw);
   const x = view(extra);
   for (let j = 0; j + 4 <= extra.length; ) {
     const id = x.getUint16(j, true);
     const len = x.getUint16(j + 2, true);
     if (j + 4 + len > extra.length) break;
-    if (id === 0x7075 && len > 5 && extra[j + 4] === 1) return new TextDecoder().decode(extra.subarray(j + 9, j + 4 + len));
+    if (id === 0x7075 && len > 5 && extra[j + 4] === 1) {
+      try {
+        return strict.decode(extra.subarray(j + 9, j + 4 + len));
+      } catch {
+        break;
+      }
+    }
     j += 4 + len;
   }
-  if (flags & 0x800) return new TextDecoder().decode(raw);
   try {
     return strict.decode(raw);
   } catch {

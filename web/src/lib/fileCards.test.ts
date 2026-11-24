@@ -118,6 +118,18 @@ describe('zip name encodings', () => {
     const field = [0x75, 0x70, (5 + u.length) & 0xff, 0, 1, 0, 0, 0, 0, ...u];
     expect(nameIn(central([0x52, 0x3f, 0x73, 0x75, 0x6d, 0x3f, 0x2e, 0x74, 0x78, 0x74], 0, field))).toBe('Résumé.txt');
   });
+
+  it('keeps a flagged name over a stale Unicode Path field, and ignores a field that is not UTF-8', () => {
+    const old = utf8('old.txt');
+    const stale = [0x75, 0x70, 5 + old.length, 0, 1, 0, 0, 0, 0, ...old];
+    expect(nameIn(central(utf8('new.txt'), 0x800, stale))).toBe('new.txt');
+    const bad = [0x75, 0x70, 6, 0, 1, 0, 0, 0, 0, 0xff];
+    expect(nameIn(central(utf8('notes.txt'), 0, bad))).toBe('notes.txt');
+  });
+
+  it('keeps a leading byte-order mark in a name', () => {
+    expect(nameIn(central(utf8('\uFEFFnotes.txt'), 0x800))).toBe('\uFEFFnotes.txt');
+  });
 });
 
 describe('csvRows', () => {
