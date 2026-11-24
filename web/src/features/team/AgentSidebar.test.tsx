@@ -137,11 +137,11 @@ describe("An agent's own sidebar", () => {
 
   it('draws none of its pins once a read of them is refused, not the last ones it was shown', async () => {
     let refused = false;
-    open([w('page:f1'), w('card:c1'), w('tasks')], (u) => (refused && u.includes('/api/v2/places/') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : undefined));
+    open([w('page:f1'), w('card:c1'), w('tasks'), w('updates')], (u) => (refused && u.includes('/api/v2/places/') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : undefined));
     await screen.findByRole('region', { name: 'Waiting on Pat' });
     refused = true;
     await act(() => queryClient.invalidateQueries({ queryKey: ['team', 'pins'] }));
-    await waitFor(() => expect(order()).toEqual(['Tasks']));
+    await waitFor(() => expect(order()).toEqual(['Tasks', 'Latest update']));
   });
 
   it('keeps its dream with its latest update: hidden with it, and in its height', async () => {
@@ -210,8 +210,9 @@ describe("An agent's own sidebar", () => {
   });
 
   it('draws no empty box for a sized widget with nothing in it', async () => {
-    open([w('files', { height: 120 }), w('tasks')], (u) => (u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined));
-    await screen.findByRole('region', { name: 'Tasks' });
+    // an update, so the page has something to show; no files
+    open([w('files', { height: 120 }), w('tasks'), w('updates')], (u) => (u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined));
+    await screen.findByRole('region', { name: 'Latest update' });
     await settled(['team', 'files', 'ana']);
     expect(document.querySelector('.side-sized')).toBeNull();
   });
