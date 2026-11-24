@@ -2970,14 +2970,6 @@ for line in sys.stdin:
             .collect()
     }
 
-    fn thread_calls(dir: &std::path::Path) -> Vec<String> {
-        calls(dir)
-            .iter()
-            .map(|c| text_of(&c["method"]))
-            .filter(|m| m.starts_with("thread/") || m.starts_with("turn/"))
-            .collect()
-    }
-
     /// A first turn of `th` on `host` (cold), ended and given to the keeper.
     async fn first_turn(host: &CodexHost, settings: &Settings, text: &str) -> String {
         first_turn_on(host, settings, text, None).await
