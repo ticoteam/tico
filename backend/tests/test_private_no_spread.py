@@ -40,10 +40,23 @@ def _template(api, template):
 
 def test_a_sub_task_of_a_private_task_filed_without_a_choice_is_not_private(api):
     parent = _private_parent(api)
+    with api.app.state.store.transaction() as c:
+        said = c.execute("SELECT id FROM messages ORDER BY created_at DESC LIMIT 1").fetchone()[0]
+        c.execute("UPDATE tasks SET request_id=? WHERE id=?", (said, parent["id"]))
     child = post(
         api, "tasks", {"owner": "ops", "title": "Collect the totals", "body": "x", "parent": parent["id"]}, "ben-test"
     )
     assert child["private"] is False
+    kept = post(
+        api,
+        "tasks",
+        {"owner": "ops", "title": "Collect the payslips", "body": "x", "parent": parent["id"], "private": True},
+        "ben-test",
+    )
+    with api.app.state.store.read() as c:
+        # The private parent's request (a message id) stays its own; a private child carries it as before.
+        assert H.task(c, child["id"])["request_id"] is None
+        assert H.task(c, kept["id"])["request_id"] == said
     # The store's own create decides the same way, for a bot filing under its private task.
     with api.app.state.store.transaction() as c:
         made = H.task_create(c, "bot:ops", "Export the table", "x", "bot:ops", parent_id=parent["id"], lint=False)

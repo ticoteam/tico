@@ -924,9 +924,13 @@ def register_core(
                 None,
                 None,
             )
+        # A private parent's request is its own: a company-visible child does not carry that message's id.
         inherited_request = (
             parent.get("request_id")
-            if parent and H.is_human(who.actor) and who.actor == parent["requester_id"]
+            if parent
+            and H.is_human(who.actor)
+            and who.actor == parent["requester_id"]
+            and (private or not H.task_private(c, parent))
             else None
         )
         if request_id in ("turn", "default"):

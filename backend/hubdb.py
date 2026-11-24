@@ -692,11 +692,7 @@ def private_task_write(fn):
             with task_trigger_rules.pending(conn):
                 result = fn(*args, **kwargs)
             # Actions may have changed the task after the original write completed.
-            if (
-                fn.__name__ in ('task_create', 'task_update', 'task_close')
-                and isinstance(result, dict)
-                and result.get('id')
-            ):
+            if fn.__name__ == 'task_update' and isinstance(result, dict) and result.get('id'):
                 result = {**result, **(task(conn, result['id']) or {})}
             return result
         except Refused as exc:

@@ -121,7 +121,8 @@ def test_visibility_defaults_do_not_rewrite_tasks_and_private_never_publishes(ap
         },
     )
     assert get(api, 'tasks/' + task['id'])['task']['visibility'] == 'public'
-    assert get(api, 'tasks/' + child['id'])['task']['visibility'] == 'private'
+    # Privacy does not spread: under a private parent the child is company-visible, with its own public title.
+    assert get(api, 'tasks/' + child['id'])['task']['visibility'] == 'public'
 
 
 def test_a_bot_has_no_way_to_publish_yet_and_is_told_so(api):

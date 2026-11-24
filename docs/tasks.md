@@ -576,7 +576,7 @@ a private task of its own, of the inbox's approver alone.
   private pipeline, or when it comes from a narrower audience (a DM or a thread that isn't company-wide, a meeting
   that isn't the team's). A bot's `--public` never publishes past its template's private default. A copy of private
   words stays private: a stage's handoff from a private task, and Agent Ops' task quoting a private task's comment,
-  are private. Edits don't spread either: making a task private, or giving it to a bot that keeps its tasks private,
+  are private. So is a task the Assistant hands a helper, which quotes your own Assistant chat. Edits don't spread either: making a task private, or giving it to a bot that keeps its tasks private,
   leaves the tasks under it as they are, and a sub-task of a private task can be published.
 - A private sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first
   such person a reader of that task only. Anyone after that gets the sub-task alone. A company-visible sub-task makes
