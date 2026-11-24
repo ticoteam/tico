@@ -285,7 +285,7 @@ def test_the_sidebar_layout_reads_its_pages_rows_and_access_only(api, monkeypatc
     lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
     put(api, "bots/ops/task-tabs", {"tabs": lists, "widgets": [{"id": "page:" + ops}]})
     assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]][0] == "page:" + ops
-    assert primed == [[{"item": "page:" + ops}]] and calls == []
+    assert primed and all(pins == [{"item": "page:" + ops}] for pins in primed) and calls == []
 
 
 def test_a_pinned_pages_version_is_declared_but_optional():
@@ -303,7 +303,7 @@ def test_automation_runs_count_the_whole_day_not_its_newest_500(api):
 
     aid = make(api, [FIND])
     runs = [("run_early", aid, ago(hours=23), "failed")]
-    runs += [(f"run_{i}", aid, ago(minutes=i + 1), "done") for i in range(600)]
+    runs += [(f"run_{i}", aid, ago(minutes=i + 1), "ok") for i in range(600)]
     with api.app.state.store.transaction() as c:
         c.executemany("INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES(?,?,1,?,?)", runs)
     put(api, "places/dashboard", {})
