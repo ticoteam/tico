@@ -148,6 +148,17 @@
       ]
     },
     {
+      "query": "",
+      "only": [
+        "human:ben",
+        "bot:product-design"
+      ],
+      "want": [
+        "human:ben",
+        "bot:9f3c"
+      ]
+    },
+    {
       "query": "lee",
       "want": [
         "human:cara.lee"

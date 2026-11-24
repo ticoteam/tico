@@ -1559,18 +1559,27 @@ def mentions(c, thread, body, *, author=None, refused=None):
     if "@" not in text:
         return []
     found = []
-    for b in H.bots(c):
-        slug = b.get("slug") or ""
-        names = [slug]
-        if b.get("name"):
-            names.append(b["name"])
-        if b.get("display_name"):
-            names.append(b["display_name"])
-        spots = [_spot(text, n) for n in dict.fromkeys(n for n in names if n)]
-        spots = [s for s in spots if s is not None]
-        if spots and b.get("state") != "archived":
-            found.append((min(spots), "bot:" + b["id"]))
-    people = H.humans(c)
+    for actor, names in mention_names(c):
+        spots = [s for s in (_spot(text, n) for n in names) if s is not None]
+        if spots:
+            found.append((min(spots), actor))
+    out = []
+    for _, actor in sorted(found):
+        if actor != author and actor not in [a for a, _ in out]:
+            out.append((actor, "mention"))
+    return _writable(c, author, out, refused) if str(author or "").startswith("human:") else out
+
+
+def mention_names(c, bots=None, people=None):
+    """[(actor, [name, ...])]: every name `mentions` reads as each one, agents first. An agent that is not archived by
+    slug, name or display name; a person by id, the part of their email before the @, their full name, or a first name
+    no one else shares. `bots` and `people` are H.bots and H.humans when the caller has read them already."""
+    out = []
+    for b in H.bots(c) if bots is None else bots:
+        if b.get("state") != "archived":
+            names = [b.get("slug"), b.get("name"), b.get("display_name")]
+            out.append(("bot:" + b["id"], list(dict.fromkeys(n for n in names if n))))
+    people = H.humans(c) if people is None else people
     firsts = {}
     for p in people:
         first = str(p.get("name") or "").split(" ")[0].lower()
@@ -1581,14 +1590,8 @@ def mentions(c, thread, body, *, author=None, refused=None):
         names = [p["id"], str(p.get("email") or "").split("@")[0], name]
         if name and firsts.get(name.split(" ")[0].lower()) == 1:
             names.append(name.split(" ")[0])
-        spots = [s for s in (_spot(text, n) for n in dict.fromkeys(x for x in names if x)) if s is not None]
-        if spots:
-            found.append((min(spots), "human:" + p["id"]))
-    out = []
-    for _, actor in sorted(found):
-        if actor != author and actor not in [a for a, _ in out]:
-            out.append((actor, "mention"))
-    return _writable(c, author, out, refused) if str(author or "").startswith("human:") else out
+        out.append(("human:" + p["id"], list(dict.fromkeys(x for x in names if x))))
+    return out
 
 
 def _writable(c, author, found, refused=None):

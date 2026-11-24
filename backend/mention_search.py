@@ -2,8 +2,9 @@
 """Whom an @ picker offers (`GET /api/v2/mentions`, `tico_mention_search`, `tico mention`): the people and agents the
 caller sees on the org chart, best match first, each with the handle to insert.
 
-The ranking and the handle are the web picker's (web/src/conversation/mentions.ts `mentionMatches`, `mentionText`);
-backend/tests/fixtures/mention_ranking.json is one case list both must pass, so the two never drift. Whether a post
+The ranking is the web picker's (web/src/conversation/mentions.ts `mentionMatches`, `mentionText`):
+backend/tests/fixtures/mention_ranking.json is one case list both must pass, so the two never drift. The handle starts
+from the web's (`handle_of`) and is checked with the matcher a post uses (`threads.mention_names`, `threads._spot`). Whether a post
 reached them is the post's own answer (`woke`, `delivered`, `warnings`), not this one's."""
 
 import math
@@ -41,11 +42,11 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def roster(c: Any, auth: Any, who: Any) -> list[Row]:
+def roster(c: Any, auth: Any, who: Any, bots: list[Row]) -> list[Row]:
     """The people and agents `GET /api/v2/org` shows this caller, as the web directory reads them
     (web/src/data/directory.ts): the people on the roster they may see, and the configured agents they may see that are
     not archived, less the Strategy Owner when they hid it from their chart."""
-    people_hidden, _ = teammate_access.unseen(c, who, auth)
+    hidden: set[str] = teammate_access.hidden(c, who, "see", ("human",), auth)
     people: list[Row] = [
         {
             "id": "human:" + p["id"],
@@ -53,12 +54,12 @@ def roster(c: Any, auth: Any, who: Any) -> list[Row]:
             "name": _text(p.get("name")) or p["id"],
             "email": str(p.get("email") or ""),
         }
-        for p in P.visible_people(views.roster(c))
-        if p["id"] not in people_hidden
+        for p in P.visible_people(views.roster(c, shared=True))
+        if "human:" + p["id"] not in hidden
     ]
-    entries: Row = views.entries(c)
+    entries: Row = views.entries(c, shared=True)
     access: Row = auth.bot_accesses(c, who)
-    live: dict[str, Row] = {row["id"]: row for row in H.bots(c)}
+    live: dict[str, Row] = {row["id"]: row for row in bots}
     no_strategy = strategy_bot.hidden_for(c, who)
     agents: list[Row] = []
     for slug, entry in entries.items():
@@ -119,9 +120,13 @@ def ranked(
     self = {me, "human:" + me}
     order = {a: i for i, a in enumerate(first)}
     allowed = set(only) if only is not None else None
+
+    def among(a: Row, ids: Iterable[str]) -> bool:
+        return a["id"] in ids or (a.get("slug") is not None and "bot:" + str(a["slug"]) in ids)
+
     found: list[tuple[float, int, str, str, Row]] = []
     for a in everyone:
-        if a["id"] in self or a.get("lifecycle") == "archived" or (allowed is not None and a["id"] not in allowed):
+        if a["id"] in self or a.get("lifecycle") == "archived" or (allowed is not None and not among(a, allowed)):
             continue
         r = _rank(a, q)
         if r is None:
@@ -133,49 +138,22 @@ def ranked(
     return [(m[4], m[0] != math.inf) for m in found[:limit]]
 
 
-def names(c: Any) -> list[tuple[str, list[str]]]:
-    """[(actor, the names `threads.mentions` reads as them)] for everyone a post's @mention can name, read once: every
-    agent that is not archived by slug, name and display name; every person by id, email before the @, full name, and a
-    first name no one else shares. Not only those the caller sees: a post names the others too."""
-    out: list[tuple[str, list[str]]] = []
-    for b in H.bots(c):
-        if b.get("state") != "archived":
-            out.append(("bot:" + b["id"], [str(n) for n in (b.get("slug"), b.get("name"), b.get("display_name")) if n]))
-    people: list[Row] = H.humans(c)
-    firsts: dict[str, int] = {}
-    for p in people:
-        first = str(p.get("name") or "").split(" ")[0].lower()
-        if first:
-            firsts[first] = firsts.get(first, 0) + 1
-    for p in people:
-        name = str(p.get("name") or "").strip()
-        known = [str(p["id"]), str(p.get("email") or "").split("@")[0], name]
-        if name and firsts.get(name.split(" ")[0].lower()) == 1:
-            known.append(name.split(" ")[0])
-        out.append(("human:" + p["id"], [n for n in known if n]))
-    return out
+# What a pick is checked in: a handle followed by more words, as a post writes it, so a longer name that starts with it
+# (`@Money Desk` beside `Money Desk Can`) is caught by the same matcher a post uses.
+_PROBE = "{} can you check?"
 
 
-def _reached(text: str, index: list[tuple[str, list[str]]], me: str) -> set[str]:
-    """Whom `text` alone @mentions, as `threads.mentions` reads it for a post by `me` (never its author)."""
-    low = text.lower()
-    return {
-        actor
-        for actor, known in index
-        if actor != me and any(low.startswith("@" + n.lower()) and threads._spot(text, n) is not None for n in known)
-    }
+def _named(text: str, index: list[tuple[str, list[str]]], me: str) -> set[str]:
+    """Whom a post of `text` by `me` @mentions: `threads.mentions` over names already read (never its author)."""
+    return {actor for actor, known in index if actor != me and any(threads._spot(text, n) is not None for n in known)}
 
 
-def handle(actor: Row, index: list[tuple[str, list[str]]], me: str) -> str | None:
-    """The text to insert: `handle_of` when a post reads it as this one actor and no one else, else the first of their
-    other names that does (a slug that is also a person's email prefix reaches both); None when none does."""
-    if actor["kind"] == "agent":
-        others = [handle_of(actor)[1:], actor.get("slug"), actor["name"]]
-    else:
-        pid = str(actor["id"]).split(":", 1)[-1]
-        others = [handle_of(actor)[1:], pid, str(actor.get("email") or "").split("@")[0], actor["name"]]
-    for name in dict.fromkeys(str(n) for n in others if n):
-        if _reached("@" + name, index, me) == {actor["id"]}:
+def handle(actor: Row, index: dict[str, list[str]], pairs: list[tuple[str, list[str]]], me: str) -> str | None:
+    """The text to insert: the first one-word name of theirs (`handle_of`'s first) that a post reads as this one actor
+    and no one else; None when none does. Never a name with a space: the words after it could make a longer name."""
+    tried = [handle_of(actor)[1:], *index.get(actor["id"], [])]
+    for name in dict.fromkeys(n for n in tried if n and not any(ch.isspace() for ch in n)):
+        if _named(_PROBE.format("@" + name), pairs, me) == {actor["id"]}:
             return "@" + name
     return None
 
@@ -204,18 +182,27 @@ def search(
     first: list[str] = []
     only: list[str] | None = None
     if task:
-        row: Row = auth.task(c, who, auth.resolve_task(c, who, task))
+        row: Row = auth.task(c, who, auth.resolve_task(c, who, task), tags=False)
         first = _task_people(row, task_roles.roles_of(c, row["id"]))
     if thread:
-        # A direct chat's @ reaches only its members, its sub-threads' too: the list offers just them.
+        # A private chat's @ reaches only its members, its sub-threads' too (an outsider gets `mention_outside`; only a
+        # task's thread widens): the list offers just them.
         root = threads.root_of(c, threads.require(c, threads.viewer(auth, who), thread))
-        if threads.audience_of(root) in ("personal", "participants"):
+        if threads.audience_of(root) in ("members", "personal", "participants"):
             only = threads._dm_members(c, root)
-    picked = ranked(roster(c, auth, who), q, me, first, only, limit)
-    index = names(c) if picked else []
+    bots: list[Row] = H.bots(c)
+    picked = ranked(roster(c, auth, who, bots), q, me, first, only, limit)
+    pairs: list[tuple[str, list[str]]] = threads.mention_names(c, bots=bots) if picked else []
+    index = dict(pairs)
     return {
         "candidates": [
-            {"id": a["id"], "kind": a["kind"], "name": a["name"], "handle": handle(a, index, me), "on_task": on_task}
+            {
+                "id": a["id"],
+                "kind": a["kind"],
+                "name": a["name"],
+                "handle": handle(a, index, pairs, me),
+                "on_task": on_task,
+            }
             for a, on_task in picked
         ]
     }

@@ -1,6 +1,6 @@
 """The @ picker over the API (`GET /api/v2/mentions`, docs/connect-an-agent.md "Build an @ picker"): whom a custom
-frontend may offer, in the web picker's order, with a handle the server reads back as that one teammate and whether an
-@mention would reach them. Fictional people: ana (the owner), ben, cara."""
+frontend may offer, in the web picker's order, with a handle a post reads as that one teammate. Fictional people: ana
+(the owner), ben, cara."""
 
 import json
 from pathlib import Path
@@ -53,7 +53,7 @@ def test_a_tasks_people_come_first(api):
     assert conforms(r.json(), schema, document) is None, conforms(r.json(), schema, document)
 
 
-def test_a_direct_chat_and_a_thread_under_it_offer_only_its_members(api):
+def test_a_private_chat_and_a_thread_under_it_offer_only_its_members(api):
     from backend.tests.threads_e2e import create_thread, say
 
     dm = api.get("/api/v2/threads/dm", params={"with": "human:ben"}, headers=headers()).json()["id"]
@@ -62,8 +62,9 @@ def test_a_direct_chat_and_a_thread_under_it_offer_only_its_members(api):
     sub = say(api, "ana-test", dm, "One more thing.", parent_message_id=said["id"])["thread_id"]
     assert sub != dm
     assert ids(found(api, thread=sub, limit=50)) == ["human:ben"]
-    room = create_thread(api, "ana-test", members=["human:ben"])
-    assert {"human:ben", "human:cara"} <= set(ids(found(api, thread=room["id"], limit=50)))
+    # A private group chat too: its outsiders would get only `mention_outside`.
+    room = create_thread(api, "ana-test", members=["human:ben", "bot:ops"])
+    assert ids(found(api, thread=room["id"], limit=50)) == ["human:ben", "bot:ops"]
     found(api, "cara-test", 404, thread=room["id"])  # a thread the caller cannot read is never confirmed
 
 
@@ -78,38 +79,67 @@ def test_never_the_caller_an_archived_agent_or_one_they_cannot_see(api):
     assert found(api, "cara-test", q="inbox") == []
 
 
-def test_each_handle_reads_back_as_that_teammate_alone(api):
-    """`threads.mentions` reads every handle as exactly its teammate, a clash included: a person whose email starts
-    like an agent's slug gets that agent its display name instead."""
-    from backend import threads
+def add_person(api, pid, name, email):
     from backend.store import encode
 
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('fin','Fin Lee','finance@acme.example')")
+        c.execute("INSERT INTO humans(id,name,email) VALUES(?,?,?)", (pid, name, email))
         people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        people["people"].append({"id": "fin", "name": "Fin Lee", "email": "finance@acme.example"})
+        people["people"].append({"id": pid, "name": name, "email": email})
         c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
-        c.execute("UPDATE bots SET display_name='Money Desk' WHERE slug='finance'")
+
+
+def name_agent(api, slug, display):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bots SET display_name=? WHERE slug=?", (display, slug))
+
+
+def handles(api):
+    """{actor: handle} for everyone Ana is offered, each checked the way a post reads it: one word, and a post of it
+    followed by more words names that teammate alone."""
+    from backend import threads
+
     rows = found(api, limit=50)
-    by_id = {r["id"]: r["handle"] for r in rows}
-    assert by_id["bot:finance"] == "@Money Desk" and by_id["bot:ops"] == "@ops" and by_id["human:fin"] == "@fin"
     with api.app.state.store.read() as c:
         for r in rows:
-            assert threads.mentions(c, None, f"{r['handle']} can you look?") == [(r["id"], "mention")], r
+            if r["handle"] is not None:
+                assert " " not in r["handle"], r
+                said = threads.mentions(c, None, f"{r['handle']} can you check?", author="human:ana")
+                assert said == [(r["id"], "mention")], r
+    return {r["id"]: r["handle"] for r in rows}
+
+
+def test_a_handle_is_one_word_a_post_reads_as_that_teammate_alone(api):
+    """`Money Desk` beside `Money Desk Can`: "@Money Desk can you check?" names the second, so a name with a space is
+    never offered; Finance's slug is also Fin's email prefix, which leaves it no handle at all."""
+    add_person(api, "fin", "Fin Lee", "finance@acme.example")
+    name_agent(api, "finance", "Money Desk")
+    name_agent(api, "ops", "Money Desk Can")
+    by_id = handles(api)
+    assert by_id["bot:finance"] is None and by_id["bot:ops"] == "@ops" and by_id["human:fin"] == "@fin"
+
+
+def test_a_handle_is_matched_as_a_post_matches_it_case_and_all(api):
+    """A post reads `@iris` as anyone whose name is `ırıs` too (re's case-insensitive i), so Iris gets her email prefix."""
+    add_person(api, "iris", "Iris Park", "ipark@acme.example")
+    add_person(api, "kemal", "Kemal Ay", "ırıs@acme.example")
+    assert handles(api)["human:iris"] == "@ipark"
+
+
+def test_a_unique_first_name_is_a_handle_when_nothing_else_is(api):
+    """Nora's id and email prefix are both `ops`, the Ops agent's slug: only her first name is hers alone."""
+    add_person(api, "ops", "Nora Lee", "ops@acme.example")
+    name_agent(api, "ops", "Operations")
+    by_id = handles(api)
+    assert by_id["human:ops"] == "@Nora" and by_id["bot:ops"] == "@Operations"
 
 
 def test_no_handle_when_every_name_also_names_someone_else(api):
     """An agent Ops (slug ops) and a person whose email starts with ops: `@ops` and `@Ops` reach both, so the agent gets
     no handle; the person still has their id."""
-    from backend.store import encode
-
-    with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO humans(id,name,email) VALUES('olive','Olive Park','ops@acme.example')")
-        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
-        people["people"].append({"id": "olive", "name": "Olive Park", "email": "ops@acme.example"})
-        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
-        c.execute("UPDATE bots SET display_name='Ops' WHERE slug='ops'")
-    by_id = {r["id"]: r["handle"] for r in found(api, q="o", limit=50)}
+    add_person(api, "olive", "Olive Park", "ops@acme.example")
+    name_agent(api, "ops", "Ops")
+    by_id = handles(api)
     assert by_id["bot:ops"] is None and by_id["human:olive"] == "@olive"
 
 

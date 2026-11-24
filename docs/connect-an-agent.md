@@ -271,16 +271,21 @@ The web app's @ list is one call your own frontend or agent can make too:
    (MCP `tico_mention_search`, CLI `tico mention <text> [--task <task>] [--thread <id>]`). It answers the teammates
    `GET /api/v2/org` shows you, best first, never you and never an archived agent: with `task`, that task's people
    (who asked, who it is for, who has it, then its roles) come first; then a name or handle that starts with `q`, one
-   with a word that starts with it, one that contains it; then by name. With the `thread` of a direct chat (or of a
-   thread under one), only its members. `limit` is 1 to 50.
-2. **Insert `handle`** as written, followed by a space. It is the text a post reads as that one teammate and nobody
-   else (a slug that is also someone's email prefix gets the agent's name instead). It is null when every name they go
-   by also names someone else: offer them without a handle, or not at all.
+   with a word that starts with it, one that contains it; then by name. With the `thread` of a private chat (a direct
+   chat or a members-only room, or a thread under one), only its members. `limit` is 1 to 50.
+2. **Insert `handle`** as written, followed by a space. It is one word (a slug, an id, an email prefix or a first
+   name) that a post reads as that one teammate and nobody else: a slug that is also someone's email prefix gets
+   another of their names. It is null when every one-word name they go by also names someone else: offer them without
+   a handle, or not at all.
 3. **Post** the text as a task comment (`POST /api/v2/tasks/{id}/comments`, `tico_task_comment`,
    `tico task comment`) or a thread message (`POST /api/v2/threads/{id}/messages`, `tico_thread_post`).
-4. **Read the answer**: `woke` and `delivered` are booleans saying whether it reached anyone (`woke`: it queued an
-   agent's turn; `delivered`: it reached a person), and `warnings` names each @mention that reached nobody, such as
-   someone outside the chat ([Who can be reached](#who-can-be-reached-and-how-to-tell)).
+4. **Read the answer** ([Who can be reached](#who-can-be-reached-and-how-to-tell)):
+   - A task comment answers `{"comment", "comments", "woke", "delivered"}`. `woke` and `delivered` are booleans that
+     say whether it reached anyone: `woke` when it queued an agent's turn, `delivered` when it reached a person. A
+     `warnings` list, when present, names each @mention that reached nobody.
+   - A thread message answers the message itself (`id`, `seq`, `thread_id`, ...), without `woke` or `delivered`. Its
+     `warnings` list, when present, names each @mention that reached nobody, such as
+     `{"rule": "mention_outside", "actor": "human:cara"}` for someone outside the chat.
 
 Each candidate is `{"id", "kind", "name", "handle", "on_task"}`; `on_task` is true for the task's people.
 

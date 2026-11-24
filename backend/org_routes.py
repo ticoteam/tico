@@ -520,7 +520,7 @@ def register(app, auth, settings, settings_admin, store):
             parameters={
                 "q": "What follows the @ so far; empty: everyone, in the same order",
                 "task": "A task id, short id or #number: its people come first",
-                "thread": "A thread id: a direct chat (or a thread under one) offers only its members",
+                "thread": "A thread id: a private chat (or a thread under one) offers only its members",
                 "limit": "At most this many, 1 to 50 (default 8)",
             },
         ),
@@ -530,4 +530,5 @@ def register(app, auth, settings, settings_admin, store):
         from . import mention_search
 
         with store.read() as c:
+            privacy.snapshot(c)  # one read: the roster, the task and the names a post reads all agree
             return mention_search.search(c, auth, request.state.identity, q=q, task=task, thread=thread, limit=limit)
