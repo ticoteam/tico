@@ -26,7 +26,7 @@ import { tabTitle, useTabTitle } from './title';
 /* The root as the app draws it, with the features around the shell stood in: the second chat for Tico support, the
    desktop app's small call window, and what the page tells the desktop app. */
 
-const { gate, q, catchUpRead, lists, pages, ranked, rankFails, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
+const { gate, q, catchUpRead, lists, pages, ranked, rankFails, listFails, owners, asks, hops, needsRead, shellDraws } = vi.hoisted(() => ({
   /** Needs you read as the app reads it (GET /needs-you), where a test serves it: else the stand-in below. */
   needsRead: { real: false },
   /** Where `/task/<n>` passes on to, as its route does once the task is read: none unless a test names one. */
@@ -44,6 +44,8 @@ const { gate, q, catchUpRead, lists, pages, ranked, rankFails, owners, asks, hop
   ranked: {} as Record<string, unknown[]>,
   /** How many of the next reads by priority fail (a 503, not tried again). */
   rankFails: { n: 0 },
+  /** How many of the next pipeline list reads fail (a 503, not tried again). */
+  listFails: { n: 0 },
   q: <T,>(key: string, data: T) => ({ queryKey: [key], queryFn: async () => data, staleTime: Infinity }),
   catchUpRead: vi.fn(async () => ({ count: 0, items: [] })),
   /** How many times the shell drew itself (it asks whether a file is open, once a draw). */
@@ -150,7 +152,13 @@ vi.mock('@/features/tasks/routing', async () => {
   useStageSort: vi.fn(() => false),
   pipelineTasksQuery: vi.fn((pipeline: string, f: object) => ({
     queryKey: ['tasks', 'list', pipeline, JSON.stringify(f)],
-    queryFn: async () => ({ tasks: lists[pipeline] ?? [], cursor: '', ...pages[pipeline] }),
+    queryFn: async () => {
+      if (listFails.n > 0) {
+        listFails.n -= 1;
+        throw new ApiError(503, 'starting', 'Starting');
+      }
+      return { tasks: lists[pipeline] ?? [], cursor: '', ...pages[pipeline] };
+    },
     staleTime: Infinity,
   })),
   flowQuery: {
@@ -304,6 +312,7 @@ beforeEach(() => {
   for (const k of Object.keys(pages)) delete pages[k];
   for (const k of Object.keys(ranked)) delete ranked[k];
   rankFails.n = 0;
+  listFails.n = 0;
   for (const k of Object.keys(owners)) delete owners[k];
   for (const k of Object.keys(hops)) delete hops[k];
   needsRead.real = false;
@@ -1204,6 +1213,17 @@ describe('a task opened from a board', () => {
     const again = await within(list).findByRole('button', { name: 'Try again' });
     expect(within(list).getByText('These tasks did not load')).toBeTruthy();
     expect(within(list).queryByText('No open tasks')).toBeNull();
+    fireEvent.click(again);
+    expect(await within(list).findByRole('link', { name: /Bulk edit stock/ })).toBeTruthy();
+    expect(within(list).queryByRole('button', { name: 'Try again' })).toBeNull();
+  });
+
+  it('a pipeline read that failed before the open task’s stage is known says so with Try again, not a blank list', async () => {
+    listFails.n = 1;
+    show('/tasks/eng/7?owner=bot%3Aqa');
+    const list = await screen.findByRole('navigation', { name: 'Engineering' });
+    const again = await within(list).findByRole('button', { name: 'Try again' });
+    expect(within(list).getByText('These tasks did not load')).toBeTruthy();
     fireEvent.click(again);
     expect(await within(list).findByRole('link', { name: /Bulk edit stock/ })).toBeTruthy();
     expect(within(list).queryByRole('button', { name: 'Try again' })).toBeNull();

@@ -1930,7 +1930,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     expect(reads(sent)()).not.toContain('/api/v2/api-tools/rg-dev');
   });
 
-  it('finds a service in the catalog and offers its ways in; Paste a key adds it from the catalog’s entry', async () => {
+  it('finds a service in the catalog and offers its ways in; Paste key adds it from the catalog’s entry', async () => {
     const linear = { id: 'linear', name: 'Linear', auth_scheme: 'header:Authorization', site: 'linear.app', mcp_url: 'https://mcp.linear.app/mcp' };
     const stripe = { id: 'stripe', name: 'Stripe', auth_scheme: 'bearer', site: 'stripe.com', mcp_url: '' };
     const sent = serve((url, method) =>
@@ -1946,8 +1946,8 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     fireEvent.click(within(find).getByRole('button', { name: 'Linear' }));
     const ways = await screen.findByRole('dialog', { name: 'Linear' });
     expect(within(ways).getByRole('button', { name: 'Sign in with Linear' })).toBeTruthy();
-    expect(within(ways).getByRole('button', { name: 'Sign in on the website' })).toBeTruthy();
-    fireEvent.click(within(ways).getByRole('button', { name: 'Paste a key' }));
+    expect(within(ways).getByRole('button', { name: 'Use website' })).toBeTruthy();
+    fireEvent.click(within(ways).getByRole('button', { name: 'Paste key' }));
     const paste = await screen.findByRole('dialog', { name: 'Paste a Linear key' });
     expect(writes(sent)).toEqual([]); // nothing is made before the key is sent
     expect(within(paste).queryByRole('combobox')).toBeNull(); // never onto a connection that has a key or signs in
@@ -1966,7 +1966,7 @@ describe('the Tools page: requests, connections by vendor, find or connect', () 
     open('');
     fireEvent.click(await screen.findByRole('button', { name: 'Add tool' }));
     fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Find or connect' })).findByRole('button', { name: 'Linear' }));
-    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Linear' })).findByRole('button', { name: 'Sign in on the website' }));
+    fireEvent.click(await within(await screen.findByRole('dialog', { name: 'Linear' })).findByRole('button', { name: 'Use website' }));
     expect((within(await screen.findByRole('dialog', { name: 'Add website' })).getByLabelText('Site') as HTMLInputElement).value).toBe('linear.app');
   });
 

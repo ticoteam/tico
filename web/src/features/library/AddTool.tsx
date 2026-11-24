@@ -16,7 +16,7 @@ import { addApiTool, catalogQuery, probeMcp, type CatalogService, type LoginAdd,
 import { useAdmin } from './ToolShell';
 
 /* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
-   the vendor, Paste a key, Sign in on the website); any other tool by its kind, one click away (the old app's
+   the vendor, Paste key, Use website); any other tool by its kind, one click away (the old app's
    tools-api, tools-mcp and tools-website dialogs). Secrets typed here are only sent: nothing typed comes back. */
 
 export type Adding = 'api' | 'mcp' | 'website' | 'webhook' | 'mailbox' | 'tico' | 'number' | 'address';
@@ -91,12 +91,12 @@ function Ways({ service, onWay, onBack, onClose }: { service: CatalogService; on
         )}
         {admin && (
           <Button icon="keys" onClick={() => onWay('key')}>
-            Paste a key
+            Paste key
           </Button>
         )}
         {service.site && (
           <Button icon="globe" onClick={() => onWay('site')}>
-            Sign in on the website
+            Use website
           </Button>
         )}
       </div>
