@@ -337,3 +337,12 @@ def test_the_api_schema_names_every_plan_kind_and_runtime():
 
     assert schema._SUB_KIND["enum"] == list(KINDS)
     assert schema._RUNTIME["enum"] == list(RUNTIMES)
+
+
+def test_plan_exit_owners_name_every_plan_kind():
+    import re
+
+    from backend import plan_exits
+    from backend.model_subscriptions import POOL_KINDS
+
+    assert re.findall(r"'([a-z_]+)'", plan_exits.PLAN_OWNERS) == list(POOL_KINDS)
