@@ -163,6 +163,35 @@ def test_the_sessions_list_names_an_agent_with_a_waiting_job_and_dates_it_by_wha
     assert sessions(api, row["id"])["bot:cpo"] == theirs["seq"]
 
 
+def test_a_runs_snapshot_leaves_out_a_step_the_stream_would_withhold(api):
+    """The run a task's page (or an agent's session view) shows while it works passes each step through the stream's
+    own check (task_privacy.content_readable, as events._step_shown): a step naming a private task the reader cannot
+    read is in neither."""
+    machine = runner(api)
+    assign(api, machine, "ops")
+    ready(api, machine, ["ops"])
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile May."})
+    secret = post(api, "tasks", {"owner": "human:ana", "title": "Payroll", "body": "Ana only.", "private": True})
+    turn = claim(api, machine, "ops")
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t1"}, machine["token"])
+    steps = [
+        {"seq": 1, "kind": "delta", "payload": {"text": "Reconciling May. "}},
+        {"seq": 2, "kind": "delta", "payload": {"text": "Checking the payroll task too.", "task": secret["id"]}},
+    ]
+    post(api, f"attempts/{turn['id']}/events", {"events": steps}, machine["token"])
+    ben = Identity("human:ben", "human")
+    with api.app.state.store.read() as c:
+        stored = [
+            dict(e) for e in c.execute("SELECT * FROM attempt_events WHERE attempt_id=? ORDER BY seq", (turn["id"],))
+        ]
+        shown = [task_privacy.content_readable(c, task_privacy.actor(ben), e) for e in stored]
+    assert shown == [True, False], "the stream sends Ben the first step only"
+    for path in (f"tasks/{row['id']}", f"tasks/{row['id']}/execution?agent=ops"):
+        seen = get(api, path, "ben-test")["execution"]
+        assert seen and "Reconciling May." in seen["text"] and "payroll" not in str(seen), path
+    assert "payroll" in get(api, f"tasks/{row['id']}")["execution"]["text"], "Ana reads both"
+
+
 def test_two_agents_each_have_their_own_session_and_replay_skips_the_other(api):
     row = ticket(api)
     to_ops = comment(api, row["id"], "Ship the fix once the checks pass.", to="ops")["comment"]
