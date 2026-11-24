@@ -663,16 +663,26 @@ fn manual_code_link(link: &str) -> bool {
     let Ok(parsed) = url::Url::parse(link) else {
         return false;
     };
+    let redirects: Vec<String> = parsed
+        .query_pairs()
+        .filter(|(k, _)| k == "redirect_uri")
+        .map(|(_, v)| v.into_owned())
+        .collect();
     parsed.scheme() == "https"
-        && parsed.query_pairs().any(|(k, v)| {
-            k == "redirect_uri"
-                && url::Url::parse(&v).is_ok_and(|r| {
-                    r.scheme() == "https"
-                        && r.port().is_none()
-                        && r.path() == "/oauth/code/callback"
-                        && !matches!(r.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
-                })
+        && redirects.len() == 1
+        && url::Url::parse(&redirects[0]).is_ok_and(|r| {
+            r.scheme() == "https"
+                && r.port().is_none()
+                && r.path() == "/oauth/code/callback"
+                && r.host_str().is_some_and(anthropic_host)
         })
+}
+
+/// Claude's own sign-in hosts: claude.ai, claude.com, anthropic.com and their subdomains.
+fn anthropic_host(host: &str) -> bool {
+    ["claude.ai", "claude.com", "anthropic.com"]
+        .iter()
+        .any(|d| host == *d || host.ends_with(&format!(".{d}")))
 }
 
 #[test]
@@ -688,14 +698,23 @@ fn a_manual_code_link_is_read_from_its_redirect_alone() {
     let short = format!("https://claude.ai/oauth/authorize?z-{}", "a".repeat(43));
     assert!(short_sign_in_link(&short) && !manual_code_link(&short));
     assert!(!short_sign_in_link(local));
+    // A loopback host on the default port, or a second redirect beside the manual page, is not the manual-code page.
+    let loopback = "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2F127.0.0.2%3A443%2Foauth%2Fcode%2Fcallback";
+    assert!(!manual_code_link(loopback));
+    let twice = format!("{full}&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback");
+    assert!(!manual_code_link(&twice));
+    let short_local = format!("{short}&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback");
+    assert!(!short_sign_in_link(&short_local));
 }
 
 /// Claude Code's short sign-in link (2.1.330 on): scope bits and the 43-character code challenge, then optional
 /// parameters. The CLI shortens only a claude.ai link whose redirect is the manual-code page.
 fn short_sign_in_link(url: &str) -> bool {
+    // An explicit redirect would be the one the CLI shortens only for the manual-code page: never accept it here.
     Regex::new(r"^https://claude\.ai/oauth/authorize\?[A-Za-z0-9_-]{44,}(&\S*)?$")
         .unwrap()
         .is_match(url)
+        && !url.contains("redirect_uri=")
 }
 
 #[test]
