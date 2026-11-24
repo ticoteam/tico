@@ -3,5 +3,5 @@
 // must draw before any page's code arrives. The first run itself comes through exports.ts.
 export { landing, needsSetup, type StartScreenKind } from './queries';
 export { useStartGate, useSetupOwed, BOOT_WAIT_MS, type StartGate } from './gate';
-export { useSetupTranscript } from './transcript';
+export { useSetupTranscript, wentLive } from './transcript';
 export { StartScreen, type StartScreenProps } from './Cards';

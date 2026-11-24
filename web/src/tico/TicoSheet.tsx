@@ -3,7 +3,7 @@ import { useLocation } from '@tanstack/react-router';
 import { Suspense, lazy, useEffect, useRef } from 'react';
 import { Conversation, MessageBones, ticoRoomQuery } from '@/conversation';
 import { AssistantCall } from '@/features/calls/exports';
-import { useSetupOwed, useSetupTranscript } from '@/features/start/routing';
+import { useSetupOwed, useSetupTranscript, wentLive } from '@/features/start/routing';
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
@@ -40,18 +40,17 @@ export function TicoSheet() {
   const phone = usePhoneCards();
   const owed = useSetupOwed();
   const setupLines = useSetupTranscript();
-  // On a phone the first run brings Tico's card up once (a computer's sheet opens from the shell).
-  const raise = phone?.raise;
-  const raised = useRef(false);
+  // On a phone, going live from a setup file puts Tico's card down so Tasks shows (the shell brings it up for setup).
+  const tuck = phone?.tuck;
+  const wasOwed = useRef(owed);
   useEffect(() => {
-    if (!owed || !raise || raised.current) return;
-    raised.current = true;
-    raise('tico');
-  }, [owed, raise]);
+    if (wasOwed.current && !owed && wentLive(setupLines)) tuck?.();
+    wasOwed.current = owed;
+  }, [owed, setupLines, tuck]);
   return (
     <Sheet kind="tico" label="Tico">
       <SheetHead kind="tico" title="Tico" lead={phone ? undefined : <Dot size={TICO_MARK} />}>
-        {power?.available !== false && power?.bot && room.data && <AssistantCall thread={room.data} bot={power.bot} />}
+        {!owed && power?.available !== false && power?.bot && room.data && <AssistantCall thread={room.data} bot={power.bot} />}
         <IconButton icon="search" label="Search" onClick={() => openSearch()} />
       </SheetHead>
       {owed ? (

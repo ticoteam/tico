@@ -29,7 +29,7 @@ ask what is written down.
    bets) and that the Strategy Owner asks them to confirm it in Flow. A strategy draft or bet is never agreed in words.
 4. **The chart.** `tico team show`: name the two or three owners the winning goal needs first (a
    growth goal: the Growth Manager and its channel owners). On their yes, Agent Ops hires them:
-   `tico task create --owner agent-ops --title "Hire the owners for <goal>" --message "<the seats, and the goal they serve>" --request-id turn`.
+   `tico task create --owner botops --title "Hire the owners for <goal>" --message "<the seats, and the goal they serve>" --request-id turn`.
 5. **Goals that ladder up.** For each owner, one goal that serves the company goal, read back together in one
    `tico goal read-back` and saved on their yes. No owner acts before its goal is saved.
 6. **First drafts.** Say that each owner drafts its first work toward its goal, and the drafts wait for them in Needs you

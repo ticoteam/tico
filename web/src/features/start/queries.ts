@@ -79,12 +79,12 @@ export interface FilePerson {
   person?: string;
   invited_at?: string | null;
 }
-/** What a setup file left (backend/company_import.py `apply`). `drafts_waiting`: the file's drafts imported as tasks
-    waiting on the owner in Needs you (format 0.4); absent before that import lands. */
+/** What a setup file left (backend/company_import.py `apply`). `drafts` (format 0.4): how many of the file's drafts
+    wait on the owner in Needs you, were approved, skipped, or had no agent. */
 export interface FileImport {
   fingerprint: string;
   people?: FilePerson[];
-  drafts_waiting?: number;
+  drafts?: { waiting?: number; approved?: number; skipped?: number; unowned?: number };
 }
 export interface SetupRecord {
   names: SetupNames;
@@ -131,8 +131,9 @@ export async function inviteFromFile(person: FilePerson): Promise<void> {
  */
 export async function finishSetup(): Promise<{ fromFile: boolean }> {
   const record = await queryClient.fetchQuery(setupQuery);
-  const fromFile = !!record.completed;
-  if (!fromFile) {
+  const fromFile = !!record.company_import;
+  // A finish whose answer was lost already completed it: the starting team is saved once.
+  if (!record.completed) {
     const job = record.first_jobs?.picked ?? '';
     const team = record.first_jobs?.choices.find((c) => c.key === job)?.team;
     const teams_off = (record.default_chart ?? []).filter((t) => !t.on && !t.locked && t.team !== team).map((t) => t.team);

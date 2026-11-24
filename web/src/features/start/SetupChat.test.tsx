@@ -48,11 +48,11 @@ const FROM_FILE: SetupRecord = {
   ...FRESH,
   completed: '2026-11-23T10:00:00Z',
   live_owed: true,
-  company_import: { fingerprint: 'f1', drafts_waiting: 183, people: PEOPLE },
+  company_import: { fingerprint: 'f1', drafts: { waiting: 183, approved: 4 }, people: PEOPLE },
 };
 const READY = { kinds: [], subscriptions: [{ id: 's1', name: 'Claude plan', runtime: 'claude', status: 'working', available: true }] };
 const NONE = { kinds: [], subscriptions: [] };
-const CREDIT = { state: 'ok', credits: [{ label: 'Welcome', amount_micros: 20_000_000, left_micros: 20_000_000, current: true }] };
+const CREDIT = { state: 'active', credits: [{ label: 'Welcome', amount_micros: 20_000_000, left_micros: 20_000_000, current: true }] };
 
 function serve(record: SetupRecord, subs: unknown = READY) {
   answers = {

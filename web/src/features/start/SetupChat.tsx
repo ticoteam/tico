@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { Suspense, lazy, useState, type FormEvent, type ReactNode } from 'react';
+import { Suspense, lazy, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { reasonIn, run, useAction } from '@/actions';
 import { Message, MessageBones, type ChatMessage } from '@/conversation';
 import { configQuery, meQuery } from '@/data';
@@ -78,14 +78,14 @@ export function namesOf(people: readonly FilePerson[]): string {
 /** What Tico says first: a company a setup file made is welcomed back with its drafts; any other meets Tico. */
 export function welcomeOf(record: SetupRecord, company: string): string {
   if (!record.company_import) return "Hi, I'm Tico. I help companies win, with a team of AI agents.";
-  const n = record.company_import.drafts_waiting ?? 0;
+  const n = record.company_import.drafts?.waiting ?? 0;
   const saved = `Welcome back. ${company || 'Your company'} is saved.`;
   return n > 0 ? `${saved} ${n} ${n === 1 ? 'draft is' : 'drafts are'} waiting for your yes.` : saved;
 }
 
 /** The Gateway credit the company has left, in whole dollars, when it has any (Settings › Billing's Credit). */
 export function creditLeft(b: BillingView | undefined): number {
-  if (!b || !['ok', 'low'].includes(b.state)) return 0;
+  if (!b || !['active', 'low'].includes(b.state)) return 0;
   return Math.floor(b.credits.filter((c) => c.current).reduce((n, c) => n + c.left_micros, 0) / 1_000_000);
 }
 
@@ -320,7 +320,20 @@ function TouchChips({ onChoose }: { onChoose: (chosen: Chosen) => void }) {
   const download = useQuery({ ...desktopDownloadQuery(system ?? 'mac'), enabled: !!system });
   const href = downloadHref(download.data);
   const direct = href !== downloadHref(undefined);
+  // One choice: a second press, or one while the email switch is saving, would go live twice.
+  const [busy, setBusy] = useState(false);
+  const taken = useRef(false);
+  const take = () => {
+    if (taken.current) return false;
+    taken.current = true;
+    setBusy(true);
+    return true;
+  };
+  const choose = (chosen: Chosen) => {
+    if (take()) onChoose(chosen);
+  };
   const email = async () => {
+    if (!take()) return;
     const r = await run('settings.notify', { field: 'email_digest', on: true }, { via: 'click' });
     onChoose({ how: 'email', said: 'Email digest', text: r.ok ? 'Done. I’ll email you a daily summary.' : 'That did not go through. Turn it on in Settings › You.' });
   };
@@ -332,21 +345,22 @@ function TouchChips({ onChoose }: { onChoose: (chosen: Chosen) => void }) {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          onClick={() => onChoose({ how: 'desktop', said: 'Desktop app', text: direct ? 'Done. The desktop app is downloading.' : 'Done. Pick your computer on the download page.' })}
+          onClick={(e) => (busy ? e.preventDefault() : choose({ how: 'desktop', said: 'Desktop app', text: direct ? 'Done. The desktop app is downloading.' : 'Done. Pick your computer on the download page.' }))}
+          aria-disabled={busy || undefined}
         >
           <Icon name="download" />
           Desktop app
         </a>
       )}
-      <button type="button" className="qchip" onClick={() => onChoose({ how: 'phone', said: 'Phone', text: `Open ${location.host} on your phone and add it to your home screen.` })}>
+      <button type="button" className="qchip" disabled={busy} onClick={() => choose({ how: 'phone', said: 'Phone', text: `Open ${location.host} on your phone and add it to your home screen.` })}>
         <Icon name="sms" />
         Phone
       </button>
-      <button type="button" className="qchip" onClick={() => void email()}>
+      <button type="button" className="qchip" disabled={busy} onClick={() => void email()}>
         <Icon name="mail" />
         Email digest
       </button>
-      <button type="button" className="qchip" onClick={() => onChoose({ how: 'later', said: 'Not now', text: '' })}>
+      <button type="button" className="qchip" disabled={busy} onClick={() => choose({ how: 'later', said: 'Not now', text: '' })}>
         Not now
       </button>
     </div>

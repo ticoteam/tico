@@ -217,14 +217,14 @@ function App() {
   };
 
   // The first run is Tico's (SetupChat, in its sheet): while it is owed, Tico's sheet opens on it (on a phone its card
-  // comes up: TicoSheet). The sheets are drawn by now: this runs after the frame's own effects.
+  // comes up). The sheets are drawn by now: this runs after the frame's own effects.
   const setupOwed = useSetupOwed();
   useEffect(() => {
     if (!setupOwed) return;
     try {
       foldSheet('tico', false);
     } catch {
-      // the phone's cards: no sheets to fold
+      // nothing drawn to fold yet
     }
   }, [setupOwed]);
 

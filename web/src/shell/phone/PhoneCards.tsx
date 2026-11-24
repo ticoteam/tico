@@ -60,6 +60,13 @@ const Ctx = createContext<PhoneCardsControls | null>(null);
     before it changes the page). Null on a desktop layout. */
 export const usePhoneCards = () => use(Ctx);
 
+/* The shell's fold for a sheet (Frame `foldSheet`, the `shell.fold` action) while the phone's cards are drawn: Tico's
+   card comes up or goes down. Other sheets have no card of their own here. */
+let foldHand: ((sheet: string, folded?: boolean) => void) | null = null;
+export function foldPhoneCard(sheet: string, folded?: boolean): void {
+  foldHand?.(sheet, folded);
+}
+
 const EDITABLE = 'input,textarea,select,[contenteditable]:not([contenteditable="false"])';
 
 /** A chat's scroller to its newest message. A virtual list draws and measures the rows it comes to, and grows as it
@@ -134,6 +141,18 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
 
   const raise = (next: Slot) => setCard(next);
   const tuck = () => setCard('none');
+  useEffect(() => {
+    foldHand = (sheet, folded) => {
+      if (sheet !== 'tico') return;
+      setCard((now) => {
+        const up = folded === undefined ? now !== 'tico' : !folded;
+        return up ? 'tico' : now === 'tico' ? 'none' : now;
+      });
+    };
+    return () => {
+      foldHand = null;
+    };
+  }, []);
   /* Tico from the bar: its card comes up at its latest message with the cursor in its box. iOS raises the keyboard
      only for a focus() inside the tap's own handler, so the box (drawn all along, out of reach while the card is down)
      is let out and focused here, before the card moves. */

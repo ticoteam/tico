@@ -20,3 +20,7 @@ const subscribe = (fn: () => void) => {
 
 /** The first run's lines, once it finished on this page; none otherwise. */
 export const useSetupTranscript = (): ChatMessage[] => useSyncExternalStore(subscribe, () => lines);
+
+const LIVE_ID = 'tmp:setup:live';
+/** The kept lines end live: a company a setup file made went live and lands on Tasks. */
+export const wentLive = (kept: ChatMessage[]): boolean => kept.at(-1)?.id === LIVE_ID;
