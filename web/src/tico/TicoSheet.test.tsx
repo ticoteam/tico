@@ -1,18 +1,22 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ticoRoomQuery } from '@/conversation';
+import { queryClient } from '@/data';
+import { startLive, stopLive } from '@/live';
+import { FakeEventSource, opening } from '@/live/fake-stream';
 import { PhoneCards } from '@/shell/phone';
 import { closeSearch, searchState } from '@/search/state';
 import { ticoPowerQuery } from './queries';
 import { TicoSheet } from './TicoSheet';
 
-async function show(tree: () => ReactNode) {
+async function show(tree: () => ReactNode, read = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
-  client.setQueryData(ticoRoomQuery.queryKey, null);
+  // `read`: the room comes from the server (GET /api/v2/assistant), not the cache
+  if (!read) client.setQueryData(ticoRoomQuery.queryKey, null);
   const router = createRouter({ routeTree: createRootRoute({ component: tree }), history: createMemoryHistory({ initialEntries: ['/'] }) });
   const { container } = render(
     <QueryClientProvider client={client}>
@@ -46,5 +50,40 @@ describe("Tico's head", () => {
     expect(searchState().open).toBe(true);
     // the field that holds the cursor until the palette's own draws (search/state.ts)
     expect(document.activeElement?.tagName).toBe('INPUT');
+  });
+});
+
+describe("Tico's sheet when its read fails", () => {
+  afterEach(() => {
+    stopLive();
+    queryClient.clear();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('says why in one line, logs it once, and reads again by itself once the stream is back', async () => {
+    const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
+    let restarting = true;
+    vi.stubGlobal('fetch', async (url: string) =>
+      String(url) !== '/api/v2/assistant'
+        ? json(404, { error: { code: 'not_found', detail: 'No.' } })
+        : restarting
+          ? json(503, { error: { code: 'unavailable', detail: 'Restarting.' } })
+          : json(200, { available: true, bot: 'assistant', can_turn_on: false, state: 'active', room_id: null }),
+    );
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // the stream is down with the server: connecting, not live
+    startLive();
+    await show(() => <TicoSheet />, true);
+    expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // the server is back: the stream says so, and the read goes out again with no click
+    restarting = false;
+    act(() => FakeEventSource.last.feed(opening(1)));
+    expect(await screen.findByRole('img', { name: 'Tico has no chat yet' })).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 });

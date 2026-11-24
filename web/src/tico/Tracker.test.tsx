@@ -2,6 +2,8 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
+import { startLive, stopLive } from '@/live';
+import { FakeEventSource, opening } from '@/live/fake-stream';
 import { useFollow } from '@/live/follow';
 import { taskMatches } from '@/live/patch';
 import { Tracker } from './Tracker';
@@ -40,6 +42,7 @@ let seen: string | null = null;
 const ASK = { id: 'v1:r1', kind: 'ask', task_id: 't1', task: { id: 't1', number: 1, title: 'Research e-signature vendors' } };
 let needs: unknown[] = [ASK];
 let needsFail = false;
+let needsDown = false;
 
 beforeEach(() => {
   gets = [];
@@ -47,6 +50,7 @@ beforeEach(() => {
   seen = null;
   needs = [ASK];
   needsFail = false;
+  needsDown = false;
   vi.stubGlobal('fetch', async (url: string, init?: RequestInit) => {
     const u = String(url);
     if (init?.method === 'POST') {
@@ -55,6 +59,8 @@ beforeEach(() => {
     } else gets.push(u);
     if (needsFail && u.startsWith('/api/v2/needs-you'))
       return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+    if (needsDown && u.startsWith('/api/v2/needs-you'))
+      return new Response(JSON.stringify({ error: { code: 'unavailable', detail: 'Restarting.' } }), { status: 503, headers: { 'Content-Type': 'application/json' } });
     const q = new URL(u, 'http://x').searchParams;
     const body = u.startsWith('/api/v2/tasks')
       ? (q.get('status') === 'open' ? OPEN : BACK)[q.get('after') ?? '']
@@ -66,7 +72,9 @@ beforeEach(() => {
   queryClient.setQueryData(['me'], { id: ME, email: '', role: 'person', slug: null });
 });
 afterEach(() => {
+  stopLive();
   queryClient.clear();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -129,11 +137,32 @@ describe("Tico's tracker", () => {
     );
     const retry = await screen.findByRole('button', { name: 'Try again' });
     expect(screen.queryByRole('button', { name: /Tracking/ })).toBeNull();
-    expect(screen.getByRole('img', { name: 'Tracking did not load' })).toBeTruthy();
+    expect(screen.getByText("Tracking didn't load · no access")).toBeTruthy();
     needsFail = false;
     fireEvent.click(retry);
     const row = await screen.findByRole('button', { name: /Tracking 2/ });
     expect(row.textContent).toContain('1 needs you');
+  });
+
+  it('says why a read failed, and reads it again by itself once the stream is back', async () => {
+    needsDown = true;
+    vi.stubGlobal('EventSource', FakeEventSource);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // the stream is down with the server: connecting, not live
+    startLive();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Tracker />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Tracking didn't load · server restarting")).toBeTruthy();
+    expect(warn).toHaveBeenCalledTimes(1);
+    // the server is back: the stream says so, and the failed read goes out again with no click
+    needsDown = false;
+    act(() => FakeEventSource.last.feed(opening(1)));
+    const row = await screen.findByRole('button', { name: /Tracking 2/ });
+    expect(row.textContent).toContain('1 needs you');
+    expect(warn).toHaveBeenCalledTimes(1);
   });
 
   it('drops a result from the Back count when it ages past 7 days, on one timer', async () => {

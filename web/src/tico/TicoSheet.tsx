@@ -7,6 +7,7 @@ import { useSetupOwed, useSetupTranscript, wentLive } from '@/features/start/rou
 import { Button } from '@/kit/Button';
 import { Fault } from '@/kit/Fault';
 import { IconButton } from '@/kit/IconButton';
+import { useReadFault } from '@/live';
 // the open/close state alone, not the dialog: Tico's sheet only opens it
 import { openSearch } from '@/search/state';
 import { Sheet, SheetHead, TICO_MARK, fromPage, pageAt } from '@/shell';
@@ -34,6 +35,8 @@ const SetupChat = lazy(() => import('@/features/start/exports').then((m) => ({ d
 export function TicoSheet() {
   const power = useTicoPower();
   const room = useQuery(ticoRoomQuery);
+  // A failed read (most often a release's restart) says why, and is read again once the stream is back.
+  const fault = useReadFault('Tico', room.isError && !room.data ? room.error : null, () => room.refetch());
   // what the person is looking at: its page, and what is open there
   const [path, search] = useLocation({ select: (l) => `${l.pathname}\n${l.searchStr}` }).split('\n');
   // On a phone the bar draws Tico's one Dot: the head has none of its own.
@@ -76,11 +79,12 @@ export function TicoSheet() {
             extra={setupLines.length ? setupLines : undefined}
           />
         </>
-      ) : room.isError ? (
-        // The grey fault, then the one way out (the kit's empty-state row).
+      ) : fault ? (
+        // The grey fault and why, then the one way out (the kit's empty-state row).
         <div className="chat-body">
           <div className="empty">
-            <Fault label="Tico did not load" size={16} />
+            <Fault label={fault} size={16} />
+            <p>{fault}</p>
             <div className="q-row">
               <Button onClick={() => room.refetch()}>Try again</Button>
             </div>
