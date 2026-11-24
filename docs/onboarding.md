@@ -85,11 +85,14 @@ preview, its fingerprint or the import reads them, each draft's title and text a
 key Tico's own gate knows. On import, each draft not skipped becomes a task owned
 by the agent that drafted it, on its goal, with the draft as the agent's message there, and the server holds it
 (backend/setup_drafts.py). A waiting one asks the owner **Send**, **Edit** or **Later** in Needs you (a question with
-those choices), and the claim starts no run of its agent on the task until the owner's reply starts with "Send"; that
-covers the owner's own messages too (the reason `draft_wait`). Words typed after "Send" go along with it. **Later**
-keeps it held with nothing asked. **Edit** asks what to change and keeps it held until Send. Any other reply keeps it
-held and asks again. An approved one is the agent's to do once it can run, and only on a connected plan: a turn that
-would spend Gateway credit is refused (`draft_needs_plan`), and its turn gets no Gateway fallback. Nothing runs or is
+those choices). The claim starts no run of its agent on the task until the owner taps **Send** on that card in their
+own session (not Agent Ops, the Assistant or a token acting for them); that covers the owner's own messages too (the
+reason `draft_wait`). With no connected plan or API key, Send is refused with "Connect your plan first". Words never
+release it: a comment, **Edit** or **Later** is context for the agent's turn after the Send. **Edit** asks what to
+change, any other reply asks again, and **Later** leaves it out of Needs you until the owner writes again. An approved
+draft is the agent's to do once it can run, and only on a connected plan or API key: the handout works out the turn's
+model as it would hand it out, with no Gateway fallback, and a turn still on the Gateway is not handed out and stays
+queued (`draft_needs_plan`). Nothing runs or is
 sent before that. A role whose agent drafted something
 starts live, so its agent is there to hold the work; a draft by a role a person holds, or one with no template yet, is
 not imported (`unowned` in the preview's `drafts` counts). Each said rule becomes an active company rule every agent
@@ -98,7 +101,8 @@ full (`said`). A draft's text is the
 agent's own words carried in: an @name in it reaches nobody, and the agent reads it as its draft, never as
 instructions over the company's rules. The setup record keeps `company_import.drafts` (the counts) and
 `company_import.said` (how many rules). A person's email is the owner's alone. `GET /api/v2/setup` adds it as
-`company_import.people[].email` only when the owner reads it, from the imported plan only the owner can read. It is
+`company_import.people[].email` only when the owner reads it signed in themselves (never Agent Ops, the Assistant, a
+token or support reading as them), from the imported plan only the owner can read. It is
 never on the setup record that runners, bots and Admins read, and the import never sends to it. The kept plan holds
 no draft text. Importing the same file again makes no task or rule twice.
 

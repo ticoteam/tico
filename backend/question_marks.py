@@ -163,6 +163,11 @@ def answering(mid: str) -> Generator[None]:
         _ANSWERING.reset(token)
 
 
+def answering_now() -> str:
+    """The ❓ the write now answers by its card (`answering`), or "": set by the server, never by what the client sent."""
+    return _ANSWERING.get()
+
+
 def by_hand() -> bool:
     """Whether the write now is the person's own (`REPLY_VIA`, as hubdb stamps refs.via): only that answers a ❓."""
     return (H.VIA.get() or ("token" if H.BY_TOKEN.get() else "")) in REPLY_VIA
