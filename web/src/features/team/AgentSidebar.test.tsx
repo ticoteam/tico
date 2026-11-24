@@ -30,7 +30,7 @@ const pins = {
   saved: true,
   can_edit: true,
   pins: [
-    { id: 'p1', item: 'page:f1', position: 0, size: 'medium', page: { file_id: 'f1', title: 'Videos by stage', bot: '0190-ana', updated_at: '2026-11-20T10:00:00Z', archived: false } },
+    { id: 'p1', item: 'page:f1', position: 0, size: 'medium', page: { file_id: 'f1', title: 'Videos by stage', bot: '0190-ana', updated_at: '2026-11-20T10:00:00Z', archived: false, version: 2 } },
     {
       id: 'p2',
       item: 'card:c1',
@@ -162,7 +162,7 @@ describe("An agent's own sidebar", () => {
   it('reads a pinned page by an address that changes with each version', async () => {
     open([w('page:f1'), w('tasks')]);
     await screen.findByRole('region', { name: 'Videos by stage' });
-    await waitFor(() => expect(reads).toContain(`/api/v2/files/f1?v=${encodeURIComponent('2026-11-20T10:00:00Z')}`));
+    await waitFor(() => expect(reads).toContain('/api/v2/files/f1?v=2'));
     expect(reads).not.toContain('/api/v2/files/f1');
   });
 

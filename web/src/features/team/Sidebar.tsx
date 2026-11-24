@@ -83,16 +83,13 @@ function CardRow({ title, href, file, at, pills }: { title: string; href?: strin
 export function PinnedItem({ pin, live = true }: { pin: Pin | undefined; live?: boolean }) {
   if (!pinShows(pin)) return null;
   if (pin.page) {
-    const { file_id: id, title, updated_at } = pin.page;
+    const { file_id: id, title, updated_at, version } = pin.page;
+    // its address changes with each version, so a new one is read, never the cached last one
+    const src: `/api/${string}` = version ? `${fileHref(id)}?v=${version}` : `${fileHref(id)}?at=${encodeURIComponent(updated_at)}`;
     return (
       <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
         {live ? (
-          // its address changes with each version, so a new one is read, never the cached last one
-          <PageCard
-            src={`${fileHref(id)}?v=${encodeURIComponent(updated_at)}`}
-            title={title}
-            onOpen={() => void run('files.preview', { file: id }, { via: 'click' })}
-          />
+          <PageCard src={src} title={title} onOpen={() => void run('files.preview', { file: id }, { via: 'click' })} />
         ) : (
           <CardRow title={title} file={id} at={updated_at} />
         )}
