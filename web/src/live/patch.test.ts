@@ -358,6 +358,14 @@ describe('read-again topics', () => {
     }
   });
 
+  it("reads agents' sidebars and their pins again when a task leaves the reader", () => {
+    const held = [['team', 'tabs', 'ops'], ['team', 'pins', 'ops'], ['team', 'pins', 'sales']];
+    for (const key of held) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
+    flushFrame();
+    expect(held.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, true, true]);
+  });
+
   it('mark the letters list stale on a letters event', () => {
     queryClient.setQueryData(['letters'], []);
     FakeEventSource.last.feed(frame(901, 'letters', { seq: 901, actor: 'human:p1', at: AT }));

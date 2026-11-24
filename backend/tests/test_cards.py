@@ -238,6 +238,27 @@ def test_sidebar_pages_and_cards_follow_the_saved_widgets(api):
     put(api, "bots/assistant/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "page:" + ops}]}, expected=422)
 
 
+def test_a_runner_reads_no_sidebar_and_one_who_only_sees_the_bot_gets_its_defaults(api):
+    """GET /bots/{bot}/task-tabs guards as GET /bots/{bot} does: a runner's credential is refused, and one who may see
+    the bot but not read it gets the default lists and built-ins, none of its saved lists, pages or cards."""
+    from backend.tests.helpers.api import runner
+
+    ops = page(api, "ops", "Ops page")
+    card = post(api, "cards", {"template": "tasks_by_status", "place": "bot:ops"})["card"]
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists, "widgets": [{"id": "page:" + ops}, {"id": "card:" + card["id"]}]})
+    get(api, "bots/ops/task-tabs", runner(api)["token"], expected=403)
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    seen = get(api, "bots/ops/task-tabs", "cara-test")
+    assert [w["id"] for w in seen["widgets"]] == ["updates", "tasks", "files"]
+    assert "Launch" not in [t["name"] for t in seen["tabs"]]
+    assert (seen["saved"], seen["can_edit"]) == (False, False)
+    mine = get(api, "bots/ops/task-tabs")
+    assert [w["id"] for w in mine["widgets"]] == ["page:" + ops, "card:" + card["id"], "updates", "tasks", "files"]
+    assert [t["name"] for t in mine["tabs"]] == ["Launch"]
+
+
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):
     send(
         api, "POST", "groups", {"name": "Product", "add": {"people": ["cara"], "bots": ["cpo"]}, "lead": "person:cara"}

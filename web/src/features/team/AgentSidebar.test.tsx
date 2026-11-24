@@ -2,7 +2,7 @@
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { agentsQuery, groupsQuery, type AgentRow, type Group, type SidebarWidget } from './queries';
@@ -42,28 +42,38 @@ const pins = {
   ],
 };
 
-/** Ana's page: her sidebar as `widgets` (none: the server's answer without them), an update, a file and the pins. */
-function open(widgets?: SidebarWidget[]) {
+type Reply = { status?: number; body: unknown } | Promise<never>;
+let reads: string[] = [];
+
+/** Ana's page: her sidebar as `widgets` (none: the server's answer without them), an update, a file and the pins.
+    `reply` answers a read first when it knows it (`undefined`: the usual answer). */
+function open(widgets?: SidebarWidget[], reply: (url: string) => Reply | undefined = () => undefined) {
+  reads = [];
   vi.stubGlobal('fetch', async (url: string) => {
     const u = String(url);
-    const body = u.endsWith('/bots/ana/task-tabs')
-      ? { bot: '0190-ana', tabs: [], saved: !!widgets, can_edit: true, personal: false, updated_at: null, updated_by: null, ...(widgets && { widgets }) }
-      : u.includes('/api/v2/places/bot%3Aana')
-        ? pins
-        : u.includes('/api/v2/updates')
-          ? { updates: [{ id: 'u1', body: '- Cut the intro', created_at: '2026-11-20T10:00:00Z' }] }
-          : u.includes('/bots/ana/files')
-            ? { files: [{ id: 'f2', name: 'cut.mp4', last_activity_at: '2026-11-20T10:00:00Z' }], total: 1 }
-            : u.includes('/api/v2/groups')
-              ? groups
-              : u.includes('/api/employees')
-                ? roster
-                : u.includes('/api/runs')
-                  ? []
-                  : u.includes('/api/v2/tasks')
-                    ? { tasks: [] }
-                    : {};
-    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    reads.push(u);
+    const own = reply(u);
+    if (own instanceof Promise) return own;
+    const body = own
+      ? own.body
+      : u.endsWith('/bots/ana/task-tabs')
+        ? { bot: '0190-ana', tabs: [], saved: !!widgets, can_edit: true, personal: false, updated_at: null, updated_by: null, ...(widgets && { widgets }) }
+        : u.includes('/api/v2/places/bot%3Aana')
+          ? pins
+          : u.includes('/api/v2/updates')
+            ? { updates: [{ id: 'u1', body: '- Cut the intro', created_at: '2026-11-20T10:00:00Z' }] }
+            : u.includes('/bots/ana/files')
+              ? { files: [{ id: 'f2', name: 'cut.mp4', last_activity_at: '2026-11-20T10:00:00Z' }], total: 1 }
+              : u.includes('/api/v2/groups')
+                ? groups
+                : u.includes('/api/employees')
+                  ? roster
+                  : u.includes('/api/runs')
+                    ? []
+                    : u.includes('/api/v2/tasks')
+                      ? { tasks: [] }
+                      : {};
+    return new Response(JSON.stringify(body), { status: own?.status ?? 200, headers: { 'Content-Type': 'application/json' } });
   });
   const root = createRootRoute({ component: () => <TeamWho who="ana" /> });
   const router = createRouter({ routeTree: root, history: createMemoryHistory({ initialEntries: ['/team/ana'] }) });
@@ -74,16 +84,28 @@ function open(widgets?: SidebarWidget[]) {
   );
 }
 
-const SECTIONS = ['Latest update', 'Tasks', 'Files', 'Videos by stage', 'Waiting on Pat', 'Spend'];
+/** Ana's pins with one card of `template` showing `data`, pinned as card:c9. */
+const cardPins = (template: string, data: unknown) => ({
+  ...pins,
+  pins: [{ id: 'p9', item: 'card:c9', position: 0, size: 'medium', card: { id: 'c9', template, heading: 'Card', settings: {}, hidden: false, data } }],
+});
+const pinsReply = (body: unknown) => (u: string) => (u.includes('/api/v2/places/bot%3Aana') ? { body } : undefined);
+/** A read of what it holds that has come (the page drew from it). */
+const settled = (key: unknown[]) => waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe('success'));
+
+const SECTIONS = ['Latest update', 'Dream', 'Tasks', 'Files', 'Videos by stage', 'Waiting on Pat', 'Spend'];
 /** The sidebar's sections in the order they are drawn. */
 const order = () => screen.getAllByRole('region').map((r) => r.getAttribute('aria-label') ?? '').filter((n) => SECTIONS.includes(n));
 
-beforeEach(() => {
-  queryClient.clear();
+function seed() {
   queryClient.setQueryData(['me'], { id: 'human:p1', email: '', role: 'person', slug: null });
   queryClient.setQueryData(directoryQuery.queryKey, { actors, byId });
   queryClient.setQueryData(groupsQuery.queryKey, groups);
   queryClient.setQueryData(agentsQuery.queryKey, roster);
+}
+beforeEach(() => {
+  queryClient.clear();
+  seed();
 });
 afterEach(() => vi.unstubAllGlobals());
 
@@ -111,5 +133,86 @@ describe("An agent's own sidebar", () => {
     expect(within(card).getByText('Approve the storyboard').closest('a')?.getAttribute('href')).toBe('/task/t9');
     await waitFor(() => expect(order()).toEqual(['Waiting on Pat', 'Tasks', 'Latest update', 'Files']));
     expect(screen.queryByRole('region', { name: 'Spend' })).toBeNull();
+  });
+
+  it('draws none of its pins once a read of them is refused, not the last ones it was shown', async () => {
+    let refused = false;
+    open([w('page:f1'), w('card:c1'), w('tasks')], (u) => (refused && u.includes('/api/v2/places/') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : undefined));
+    await screen.findByRole('region', { name: 'Waiting on Pat' });
+    refused = true;
+    await act(() => queryClient.invalidateQueries({ queryKey: ['team', 'pins'] }));
+    await waitFor(() => expect(order()).toEqual(['Tasks']));
+  });
+
+  it('keeps its dream with its latest update: hidden with it, and in its height', async () => {
+    const dream = { dream: { auto: false, closed_at: null, doing: null, questions: null, reason: null, started_at: '2026-11-20T10:00:00Z', state: 'done', status: 'done', summary: 'Tidied its notes', task: '' } };
+    const withDream = (u: string) => (u.includes('/bots/ana/dream') ? { body: dream } : undefined);
+    open([w('updates', { height: 200 }), w('tasks'), w('files')], withDream);
+    const box = (await screen.findByRole('region', { name: 'Dream' })).closest('.side-sized');
+    expect(box).not.toBeNull();
+    expect(within(box as HTMLElement).getByRole('region', { name: 'Latest update' })).toBeTruthy();
+    cleanup();
+    queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
+    open([w('updates', { hidden: true }), w('tasks'), w('files')], withDream);
+    await screen.findByRole('region', { name: 'Files' });
+    await settled(['team', 'dream', 'ana']);
+    expect(order()).toEqual(['Tasks', 'Files']);
+  });
+
+  it('reads a pinned page by an address that changes with each version', async () => {
+    open([w('page:f1'), w('tasks')]);
+    await screen.findByRole('region', { name: 'Videos by stage' });
+    await waitFor(() => expect(reads).toContain(`/api/v2/files/f1?v=${encodeURIComponent('2026-11-20T10:00:00Z')}`));
+    expect(reads).not.toContain('/api/v2/files/f1');
+  });
+
+  it('draws its first three pinned pages live and any after them as their rows', async () => {
+    const page = (n: number) => ({ id: `p${n}`, item: `page:f${n}`, position: n, size: 'medium', page: { file_id: `f${n}`, title: `Page ${n}`, bot: '0190-ana', updated_at: '2026-11-20T10:00:00Z', archived: false } });
+    open([1, 2, 3, 4].map((n) => w(`page:f${n}`)), pinsReply({ ...pins, pins: [1, 2, 3, 4].map(page) }));
+    const fourth = await screen.findByRole('region', { name: 'Page 4' });
+    expect(within(fourth).getByRole('link').getAttribute('href')).toBe('/api/v2/files/f4');
+    await waitFor(() => expect(reads.filter((u) => u.startsWith('/api/v2/files/')).map((u) => u.split('?')[0])).toEqual(['/api/v2/files/f1', '/api/v2/files/f2', '/api/v2/files/f3']));
+  });
+
+  it('reads the automation runs card over its last 24 hours, with which runs failed', async () => {
+    const runs = { total: 4, failed: 1, running: 0, runs: [{ id: 'r1', automation_id: 'a1', name: 'Nightly sync', status: 'failed', started_at: '2026-11-20T10:00:00Z', finished_at: '2026-11-20T10:01:00Z' }] };
+    open([w('card:c9'), w('tasks')], pinsReply(cardPins('automation_runs', runs)));
+    const card = await screen.findByRole('region', { name: 'Card' });
+    expect(within(card).getByText('Last 24 hours')).toBeTruthy();
+    expect(within(card).getByText('Nightly sync')).toBeTruthy();
+  });
+
+  it("opens a latest page from its row as a file, in a new tab, not through the app's router", async () => {
+    open([w('card:c9'), w('tasks')], pinsReply(cardPins('latest_pages', { pages: [{ file_id: 'f7', title: 'Q3 plan', updated_at: '2026-11-20T10:00:00Z' }] })));
+    const link = (await screen.findByText('Q3 plan')).closest('a') as HTMLAnchorElement;
+    expect([link.getAttribute('href'), link.target, link.rel]).toEqual(['/api/v2/files/f7', '_blank', 'noreferrer']);
+  });
+
+  it('leaves the age of a row without a time empty', async () => {
+    open([w('card:c9'), w('tasks')], pinsReply(cardPins('unread_threads', { count: 1, threads: [{ id: 'th1', title: 'Launch notes', updated_at: null }] })));
+    const row = (await screen.findByText('Launch notes')).closest('a') as HTMLElement;
+    expect(row.querySelector('.row-age')).toBeNull();
+  });
+
+  it('says Nothing yet only once its pins have come, and counts only what it shows', async () => {
+    const empty = (u: string) => (u.includes('/api/v2/updates') ? { body: { updates: [] } } : u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined);
+    open([w('page:f1')], (u) => (u.includes('/api/v2/places/') ? new Promise<never>(() => {}) : empty(u)));
+    await settled(['team', 'tabs', 'ana']);
+    await waitFor(() => expect(reads.some((u) => u.includes('/api/v2/places/'))).toBe(true));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Nothing yet')).toBeNull();
+    cleanup();
+    queryClient.clear();
+    seed();
+    // an update and a file, both hidden, and no pins it may see: nothing to show
+    open([w('updates', { hidden: true }), w('tasks', { hidden: true }), w('files', { hidden: true })]);
+    expect(await screen.findByText('Nothing yet')).toBeTruthy();
+  });
+
+  it('draws no empty box for a sized widget with nothing in it', async () => {
+    open([w('files', { height: 120 }), w('tasks')], (u) => (u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined));
+    await screen.findByRole('region', { name: 'Tasks' });
+    await settled(['team', 'files', 'ana']);
+    expect(document.querySelector('.side-sized')).toBeNull();
   });
 });

@@ -152,6 +152,8 @@ def read(c, settings, who, bot, ctx=None):
     if ctx is not None:
         from . import cards
 
+        # Its pages read and checked a chunk at a time (as a place's pins are), not one by one in the loop.
+        cards.prime_pins(ctx, [{"item": w["id"]} for w in widgets if w["id"].startswith("page:")])
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
     return {
         "bot": bot,
@@ -476,13 +478,25 @@ def install(app, store, auth, mutate, settings, task_views=None):
     )
     def task_tabs(request: Request, bot: str):
         """The bot's sidebar: its widgets in order and its task tabs in order (the defaults until someone saves a
-        layout), and whether the caller may change them. The Assistant's are the caller's own."""
+        layout), and whether the caller may change them. The Assistant's are the caller's own. One who may see the bot
+        but not read it gets the defaults: none of its saved lists, pages or cards (as GET /api/v2/bots/{bot})."""
         who = request.state.identity
-        with store.read() as c:
+        auth.domain(who)
+        with store.read_transaction() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            auth.require_see(c, who, bot)
+            if not auth.require_see(c, who, bot)["read"]:
+                return {
+                    "bot": bot,
+                    "tabs": [legacy(t) for t in DEFAULT],
+                    "widgets": [dict(w) for w in DEFAULT_WIDGETS],
+                    "saved": False,
+                    "personal": personal(settings, bot),
+                    "updated_at": None,
+                    "updated_by": None,
+                    "can_edit": False,
+                }
             return {
                 **read(c, settings, who, bot, Ctx(c, auth, who, settings)),
                 "can_edit": may_edit(c, auth, settings, who, bot),

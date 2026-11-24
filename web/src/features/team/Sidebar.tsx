@@ -1,9 +1,12 @@
 import type { MouseEvent, ReactNode } from 'react';
 import { run } from '@/actions';
+import { ApiError } from '@/api/client';
 import type { Card, Place } from '@/api/schema';
 import { PageCard } from '@/conversation';
+import { Ago } from '@/kit/Ago';
 import { Facts, LabelValue } from '@/kit/LabelValue';
-import { Row, TaskRow } from '@/kit/Row';
+import { Pill } from '@/kit/Pill';
+import { Row } from '@/kit/Row';
 import { fmtMoney } from '@/lib';
 import { Section } from '@/pagekinds';
 import type { SidebarWidget } from './queries';
@@ -17,13 +20,20 @@ export const DEFAULT_WIDGETS: SidebarWidget[] = ['updates', 'tasks', 'files'].ma
 /** Its sidebar in order: the stored one, or the default when there is none (a read that has not come, or failed). */
 export const sidebarOf = (widgets: SidebarWidget[] | undefined): SidebarWidget[] => (widgets?.length ? widgets : DEFAULT_WIDGETS);
 
-/** A pinned page or card, not a built-in. */
-export const isPinned = (id: string) => id.startsWith('page:') || id.startsWith('card:');
-
 export type Pin = Place['pins'][number];
+
+/** A read of its pins refused (signed out, no Read, gone): it shows none, never the last ones it was allowed. */
+const REFUSED = new Set([401, 403, 404]);
+
+/** Its pins as this reader may see them now: none once a read of them is refused, else the last read's. */
+export const pinsOf = (read: { data?: Place; error: unknown }): Pin[] =>
+  read.error instanceof ApiError && REFUSED.has(read.error.status) ? [] : (read.data?.pins ?? []);
 
 /** Whether a pin shows this reader anything: a page they may read (the place leaves the rest out), a card not hidden. */
 export const pinShows = (pin: Pin | undefined): pin is Pin => !!pin && (!!pin.page || (!!pin.card && !pin.card.hidden));
+
+/** Live previews drawn at once, as under a message (conversation/Rich.tsx PAGE_REFS); a page past them is its row. */
+export const LIVE_PAGES = 3;
 
 /** Its height when it has one set: the most it grows to, then it scrolls. */
 export function Sized({ height, children }: { height: number | null; children: ReactNode }) {
@@ -43,14 +53,49 @@ const openFile = (id: string) => (e: MouseEvent) => {
   void run('files.preview', { file: id }, { via: 'click' });
 };
 
-/** A pinned page or card, drawn for this reader; nothing when it shows them nothing (or has not been read yet). */
-export function PinnedItem({ pin }: { pin: Pin | undefined }) {
+/** A row of words: its age when it has one, an empty cell when not. A file's row is a real link to the file (a new
+    tab, a copy), over the page on a plain click (Files.tsx). */
+function CardRow({ title, href, file, at, pills }: { title: string; href?: string; file?: string; at?: string | null; pills?: ReactNode }) {
+  const cells = (
+    <>
+      <span className="row-mark" />
+      <span className="row-title">{title}</span>
+      <span className="row-pills">{pills}</span>
+      <span className="av-gap" />
+      {at ? <Ago at={at} className="row-age" /> : <span />}
+    </>
+  );
+  if (file)
+    return (
+      <a className="row task" title={title} href={fileHref(file)} target="_blank" rel="noreferrer" onClick={openFile(file)}>
+        {cells}
+      </a>
+    );
+  return (
+    <Row className="task" title={title} href={href}>
+      {cells}
+    </Row>
+  );
+}
+
+/** A pinned page or card, drawn for this reader; nothing when it shows them nothing (or has not been read yet). A page
+    is its live preview when `live`, else its row. */
+export function PinnedItem({ pin, live = true }: { pin: Pin | undefined; live?: boolean }) {
   if (!pinShows(pin)) return null;
   if (pin.page) {
-    const { file_id: id, title } = pin.page;
+    const { file_id: id, title, updated_at } = pin.page;
     return (
       <section className="stage pk-sec side-page" aria-label={title} data-target={`page:${id}`}>
-        <PageCard src={fileHref(id)} title={title} onOpen={() => void run('files.preview', { file: id }, { via: 'click' })} />
+        {live ? (
+          // its address changes with each version, so a new one is read, never the cached last one
+          <PageCard
+            src={`${fileHref(id)}?v=${encodeURIComponent(updated_at)}`}
+            title={title}
+            onOpen={() => void run('files.preview', { file: id }, { via: 'click' })}
+          />
+        ) : (
+          <CardRow title={title} file={id} at={updated_at} />
+        )}
       </section>
     );
   }
@@ -85,22 +130,10 @@ interface CardData {
   total?: number;
   failed?: number;
   running?: number;
+  runs?: { id: string; name?: string; status: string; started_at?: string | null; finished_at?: string | null }[];
 }
 
 const taskPath = (id: string) => `/task/${encodeURIComponent(id)}`;
-
-/** A row that is only words: a Needs you item names its task when it has one. */
-function WordsRow({ title, href }: { title: string; href?: string }) {
-  return (
-    <Row className="task" title={title} href={href}>
-      <span className="row-mark" />
-      <span className="row-title">{title}</span>
-      <span className="row-pills" />
-      <span className="av-gap" />
-      <span />
-    </Row>
-  );
-}
 
 /** A card as the reader's own read of it: its rows, or its figures. */
 export function CardSection({ card }: { card: Card }) {
@@ -112,7 +145,7 @@ export function CardSection({ card }: { card: Card }) {
       return (
         <Section name={name} count={d.count || undefined}>
           {(d.items ?? []).map((it, i) => (
-            <WordsRow key={it.id ?? i} title={it.title ?? ''} href={it.task_id ? taskPath(it.task_id) : undefined} />
+            <CardRow key={it.id ?? i} title={it.title ?? ''} href={it.task_id ? taskPath(it.task_id) : undefined} />
           ))}
         </Section>
       );
@@ -120,7 +153,7 @@ export function CardSection({ card }: { card: Card }) {
       return (
         <Section name={name} count={d.count || undefined}>
           {(d.tasks ?? []).map((t) => (
-            <TaskRow key={t.id} title={t.title ?? ''} href={taskPath(t.id ?? '')} at={t.updated_at ?? new Date(0).toISOString()} />
+            <CardRow key={t.id} title={t.title ?? ''} href={taskPath(t.id ?? '')} at={t.updated_at} />
           ))}
         </Section>
       );
@@ -128,7 +161,7 @@ export function CardSection({ card }: { card: Card }) {
       return (
         <Section name={name} count={d.count || undefined}>
           {(d.threads ?? []).map((t) => (
-            <TaskRow key={t.id} title={t.title ?? ''} href={`/threads/${encodeURIComponent(t.id ?? '')}`} at={t.updated_at ?? new Date(0).toISOString()} />
+            <CardRow key={t.id} title={t.title ?? ''} href={`/threads/${encodeURIComponent(t.id ?? '')}`} at={t.updated_at} />
           ))}
         </Section>
       );
@@ -136,7 +169,7 @@ export function CardSection({ card }: { card: Card }) {
       return (
         <Section name={name}>
           {(d.updates ?? []).map((u) => (
-            <TaskRow key={u.id} title={u.headline ?? ''} href="/updates" at={u.created_at ?? new Date(0).toISOString()} />
+            <CardRow key={u.id} title={u.headline ?? ''} href="/updates" at={u.created_at} />
           ))}
         </Section>
       );
@@ -144,13 +177,7 @@ export function CardSection({ card }: { card: Card }) {
       return (
         <Section name={name}>
           {(d.pages ?? []).map((p) => (
-            <TaskRow
-              key={p.file_id}
-              title={p.title ?? ''}
-              href={fileHref(p.file_id ?? '')}
-              onClick={openFile(p.file_id ?? '')}
-              at={p.updated_at ?? new Date(0).toISOString()}
-            />
+            <CardRow key={p.file_id} title={p.title ?? ''} file={p.file_id} at={p.updated_at} />
           ))}
         </Section>
       );
@@ -192,12 +219,18 @@ export function CardSection({ card }: { card: Card }) {
         </Section>
       );
     case 'automation_runs':
+      // the server counts the last 24 hours (backend/cards.py automation_runs), its failed runs first
       return (
         <Section name={name}>
           <Facts label={name}>
-            <LabelValue label="Runs today">{d.total ?? 0}</LabelValue>
+            <LabelValue label="Last 24 hours">{d.total ?? 0}</LabelValue>
             <LabelValue label="Failed">{d.failed ?? 0}</LabelValue>
           </Facts>
+          {(d.runs ?? [])
+            .filter((r) => r.status === 'failed')
+            .map((r) => (
+              <CardRow key={r.id} title={r.name ?? ''} at={r.finished_at ?? r.started_at} pills={<Pill flag>Failed</Pill>} />
+            ))}
         </Section>
       );
     default:

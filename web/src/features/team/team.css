@@ -337,6 +337,7 @@ button.add-pick:hover,button.add-person:hover,button.tpl:hover,button.tpl.is-on{
   .rule-how{align-self:start;height:var(--row)}
   .now-step{padding:0 var(--s-2) var(--s-2h) calc(var(--s-6) + var(--s-1))}
   .upd{padding:0 var(--s-2) var(--s-2h) calc(var(--s-6) + var(--s-0))}
+  .side-page{padding:0 var(--s-2) var(--s-2h)}
   .rec .foot{flex-wrap:wrap;gap:0 calc(var(--s-6) + var(--s-0));padding:var(--s-1h) var(--s-2) 0}
   .rec .foot .verb{height:auto;min-height:var(--ctl);display:inline-flex;align-items:center}
   .mp-list .radio{min-height:var(--ctl)}

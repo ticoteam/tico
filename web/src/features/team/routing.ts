@@ -3,7 +3,7 @@ import { redirect } from '@tanstack/react-router';
 import { directoryQuery } from '@/data';
 import { ADD_STEPS, TABS, type AddStep, type Tab } from './actions';
 import { bareId, resolveWho, SEAT_PREFIX } from './model';
-import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQuery, peopleQuery, seatAgentQuery, slackQuery, taskTabsQuery } from './queries';
+import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQuery, peopleQuery, seatAgentQuery, showsPins, sidebarPinsQuery, slackQuery, taskTabsQuery } from './queries';
 
 // What the routes, the shell and other features use before a teammate's page loads: the address check, the reads and
 // a teammate's address. No components here: the first load imports this file, and a page comes through exports.ts.
@@ -42,7 +42,12 @@ export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined
     if (tab === 'instructions') return qc.ensureQueryData(instructionsQuery(found.actor.slug ?? found.actor.id.slice(4)));
     if (tab === 'settings' || tab === 'model') return qc.ensureQueryData(agentsQuery);
     // its sidebar's order with its tasks, so the page draws once, as the agent arranged it (a failed read: the default)
-    return Promise.all([qc.ensureQueryData(openTasksQuery(found.actor.id)), qc.prefetchQuery(taskTabsQuery(found.actor.slug ?? found.actor.id.slice(4)))]);
+    // Its sidebar with its tasks, then its pins when it shows any: the page draws them in their places from the start.
+    const slug = found.actor.slug ?? found.actor.id.slice(4);
+    const sidebar = qc.prefetchQuery(taskTabsQuery(slug)).then(() =>
+      showsPins(qc.getQueryData(taskTabsQuery(slug).queryKey)?.widgets) ? qc.prefetchQuery(sidebarPinsQuery(slug)) : undefined,
+    );
+    return Promise.all([qc.ensureQueryData(openTasksQuery(found.actor.id)), sidebar]);
   }
   if (found?.kind === 'person' && tab === 'settings') return qc.ensureQueryData(peopleQuery);
   if (found?.kind === 'person' && tab === 'slack') return qc.ensureQueryData(slackQuery(bareId(found.actor.id)));

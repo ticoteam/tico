@@ -1,5 +1,5 @@
 import { useInfiniteQuery, useQuery, useSuspenseQuery } from '@tanstack/react-query';
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useAction } from '@/actions';
 import { meQuery, pageOwnersQuery, useActors, type Actor, type PageOwnerRow } from '@/data';
 import { useFollow } from '@/live/follow';
@@ -20,7 +20,7 @@ import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type His
 import { ModelPicker } from './ModelPicker';
 import { PaidBy } from './PaidBy';
 import { ReposSection } from './Repos';
-import { isPinned, PinnedItem, pinShows, sidebarOf, Sized } from './Sidebar';
+import { LIVE_PAGES, PinnedItem, pinsOf, pinShows, sidebarOf, Sized } from './Sidebar';
 import { CopiesSection, CopyFacts, CopyPick, useCanMakeCopy } from './Copies';
 import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
 import { FilesSection } from './Files';
@@ -46,6 +46,7 @@ import {
   pauseQuery,
   rulesQuery,
   runsQuery,
+  showsPins,
   sidebarPinsQuery,
   taskTabsQuery,
   type AgentRow,
@@ -205,10 +206,13 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
   const widgets = sidebarOf(useQuery(taskTabsQuery(slug)).data?.widgets);
-  const pinned = widgets.some((w) => !w.hidden && isPinned(w.id));
+  const pinned = showsPins(widgets);
   const pins = useQuery({ ...sidebarPinsQuery(slug), enabled: pinned });
-  const pinOf = new Map((pins.data?.pins ?? []).map((p) => [p.item, p]));
-  const shownPins = widgets.filter((w) => !w.hidden && pinShows(pinOf.get(w.id))).length;
+  const pinOf = new Map(pinsOf(pins).map((p) => [p.item, p]));
+  const shown = widgets.filter((w) => !w.hidden);
+  const shownPins = shown.filter((w) => pinShows(pinOf.get(w.id)));
+  // The first few pinned pages are live previews; the rest their rows, so a long sidebar reads no more pages at once.
+  const livePages = new Set(shownPins.filter((w) => w.id.startsWith('page:')).slice(0, LIVE_PAGES).map((w) => w.id));
 
   const tasks = open.tasks;
   const nowId = detail.data?.status?.task_id;
@@ -227,7 +231,52 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     .filter(Boolean);
   const doneN = done.data?.tasks.length ?? 0;
 
-  const quiet = !tasks.length && !lines.length && !doneN && !actor.working && !dream.data && !lists.length && !fileN && !shownPins;
+  // What each built-in draws, or null when it has nothing: Dream rides with Updates (not a widget of its own yet).
+  const slot = (id: string): ReactNode => {
+    if (id === 'updates')
+      return lines.length > 0 || dream.data ? (
+        <>
+          {lines.length > 0 && update.data && (
+            <Section name="Latest update" actions={<Ago at={update.data.updated_at ?? update.data.created_at} className="row-age" />}>
+              <ul className="upd">
+                {lines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            </Section>
+          )}
+          <DreamSection slug={slug} actorId={actor.id} />
+        </>
+      ) : null;
+    if (id === 'tasks')
+      return (
+        <>
+          <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
+            <OwnRows tasks={rest} needs={needs} label="Open tasks" />
+            {doneN > 0 && (
+              <Fold label="Done" text={`${doneN} this week`}>
+                <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" />
+              </Fold>
+            )}
+          </Section>
+          <ListSections slug={slug} needs={needs} />
+        </>
+      );
+    if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} /> : null;
+    const pin = pinOf.get(id);
+    return pinShows(pin) ? <PinnedItem pin={pin} live={livePages.has(id)} /> : null;
+  };
+  const on = (id: string) => shown.some((w) => w.id === id);
+  // Nothing yet only when nothing it shows this reader has anything, and never while its pins are still coming.
+  const quiet =
+    !actor.working &&
+    !waits.length &&
+    !waiting.length &&
+    !(on('updates') && (lines.length || dream.data)) &&
+    !(on('tasks') && (rest.length || doneN || lists.length)) &&
+    !(on('files') && fileN) &&
+    !shownPins.length &&
+    !(pinned && pins.isPending);
   return (
     <RecordPage
       {...head}
@@ -277,44 +326,14 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
               ))}
             </Section>
           )}
-          {widgets.map((w) => (
-            <Fragment key={w.id}>
-              {!w.hidden && (
-                <Sized height={w.height}>
-                  {w.id === 'updates' ? (
-                    lines.length > 0 &&
-                    update.data && (
-                      <Section name="Latest update" actions={<Ago at={update.data.updated_at ?? update.data.created_at} className="row-age" />}>
-                        <ul className="upd">
-                          {lines.map((l, i) => (
-                            <li key={i}>{l}</li>
-                          ))}
-                        </ul>
-                      </Section>
-                    )
-                  ) : w.id === 'tasks' ? (
-                    <>
-                      <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
-                        <OwnRows tasks={rest} needs={needs} label="Open tasks" />
-                        {doneN > 0 && (
-                          <Fold label="Done" text={`${doneN} this week`}>
-                            <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" />
-                          </Fold>
-                        )}
-                      </Section>
-                      <ListSections slug={slug} needs={needs} />
-                    </>
-                  ) : w.id === 'files' ? (
-                    <FilesSection slug={slug} />
-                  ) : (
-                    <PinnedItem pin={pinOf.get(w.id)} />
-                  )}
-                </Sized>
-              )}
-              {/* its dreams are not a widget of their own yet: they keep their place under its latest update */}
-              {w.id === 'updates' && <DreamSection slug={slug} actorId={actor.id} />}
-            </Fragment>
-          ))}
+          {shown.map((w) => {
+            const drawn = slot(w.id);
+            return drawn === null ? null : (
+              <Sized key={w.id} height={w.height}>
+                {drawn}
+              </Sized>
+            );
+          })}
           <CopiesSection slug={slug} botId={bareId(actor.id)} actors={actors} />
         </>
       }

@@ -624,6 +624,12 @@ export const sidebarPinsQuery = (slug: string) =>
     queryFn: ({ signal }) => api.get<Place>(`/api/v2/places/${at(`bot:${slug}`)}`, { signal }),
   });
 
+/** A pinned page or card, not a built-in. */
+export const isPinned = (id: string) => id.startsWith('page:') || id.startsWith('card:');
+
+/** Whether its sidebar shows any pinned page or card (its pins are read only then). */
+export const showsPins = (widgets: SidebarWidget[] | undefined) => !!widgets?.some((w) => !w.hidden && isPinned(w.id));
+
 export const listKey = (tabs: TaskTab[], i: number) => tabs[i]?.builtin ?? `c${i}`;
 
 export interface ListTasks {

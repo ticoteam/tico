@@ -312,6 +312,15 @@ describe('Loading a teammate', () => {
     expect(reads).toEqual([]);
   });
 
+  it("reads an agent's pins with its sidebar when it shows any, so they draw in their places at once", async () => {
+    queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
+    queryClient.removeQueries({ queryKey: ['team', 'pins'] });
+    const sidebar = { bot: '0190-ana', tabs: [], widgets: [{ id: 'page:f1', hidden: false, height: null }], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    serve((u) => (u.endsWith('/bots/ana/task-tabs') ? ok(sidebar) : undefined));
+    await loadWho(queryClient, 'ana', undefined);
+    expect(reads).toContain('/api/v2/places/bot%3Aana');
+  });
+
   it('throws a failed read to the router, which draws the fault', async () => {
     serve(() => ({ status: 500, body: { detail: 'down' } }));
     await expect(loadWho(queryClient, 'ana', 'instructions')).rejects.toThrow();
