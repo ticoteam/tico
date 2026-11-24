@@ -58,4 +58,5 @@ example_output: knowledge/examples/onboarding-board.md
 reasoning_effort: medium
 recommend_when: [sells_to_businesses, sells_software, uses_crm, uses_meetings]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/get-customers-to-their-outcome

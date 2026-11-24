@@ -58,6 +58,7 @@ example_output: knowledge/examples/weekly-brief.md
 reasoning_effort: medium
 recommend_when: [always]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/forecast-cash-and-budget
   - .claude/skills/run-the-operating-cadence
   - .claude/skills/write-investor-and-board-updates

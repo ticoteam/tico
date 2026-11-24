@@ -97,9 +97,12 @@ When a pile was sampled, say how: "1,860 threads; read all 240 from the last 30 
 
 ## Findings page
 
-One HTML page, published on the task. Top first, proof below. No names, no contact details.
+One HTML page, built and checked with `.claude/skills/build-the-page` (its eight rules, its CSS and `page.py check`),
+published on the task. No names, no contact details.
 
-1. **Top, three lines, at most 70 words.** The decision. The answer in one sentence with its confidence. What to do with it ("enough to spec"; "interview five more first").
+1. **Title, its line, contents.** The title names the question. The line under it, one sentence: "This is the findings
+   page for <the decision>: <the answer>, <confidence>; <what to do with it>." It is the summary. Then contents
+   linking every H2.
 2. **A count strip.** Records read; share of the pile; distinct accounts with evidence; findings by confidence.
 3. **One block per finding**, strongest first:
    - the statement, with its confidence as a word (pattern, emerging, anecdote);
@@ -110,4 +113,5 @@ One HTML page, published on the task. Top first, proof below. No names, no conta
 4. **What was read and what was not** (from the read log).
 5. **Open questions** that the evidence could not answer, and the cheapest way to answer each.
 
-Use a real screenshot only where it shows where customers get stuck; follow the page rules in `.claude/skills/build-the-page/SKILL.md` for colour, size and no scripts. A table of counts beats a paragraph every time.
+Each numbered part is an H2 section, each finding an H3. Use a real screenshot only where it shows where customers
+get stuck. A chart or table of counts beats a paragraph every time.

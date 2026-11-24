@@ -56,4 +56,5 @@ example_output: knowledge/examples/interview-logistics.md
 reasoning_effort: medium
 recommend_when: [uses_email, uses_meetings]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/fill-a-role

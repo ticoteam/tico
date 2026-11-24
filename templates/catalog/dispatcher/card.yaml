@@ -55,3 +55,5 @@ first_routine:
 example_output: knowledge/examples/dispatch-plan.md
 reasoning_effort: medium
 recommend_when: [sells_to_consumers, sells_to_businesses, small_team]
+shared_files:
+  - .claude/skills/build-the-page

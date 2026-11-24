@@ -57,3 +57,5 @@ first_routine:
 example_output: knowledge/examples/app-store-review.md
 reasoning_effort: medium
 recommend_when: [sells_software, sells_to_consumers]
+shared_files:
+  - .claude/skills/build-the-page

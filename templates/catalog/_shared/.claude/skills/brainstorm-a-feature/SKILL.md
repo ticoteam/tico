@@ -151,7 +151,8 @@ Never wait on a person to pick between your candidates unless they asked for the
 
 ## Output
 
-- **The ideas page** on the task: the frame and the recommendation in three lines at the top; a table of the two or three candidates; the opportunity map (number, problems, options, tests) as a nested list or inline SVG; the premise table; what was set aside and why. Where the problem shows on a screen, put a real screenshot of that screen today at the top (`tico bot app-shot /#/<screen> --width 1280 --out shots/<screen>.png`), never a drawing.
+- **The ideas page** on the task, in the build-the-page shape: a title, one line saying what it is and the
+  recommendation, contents; then a table of the two or three candidates; the opportunity map (number, problems, options, tests) as a nested list or inline SVG; the premise table; what was set aside and why. Where the problem shows on a screen, put a real screenshot of that screen today at the top (`tico bot app-shot /#/<screen> --width 1280 --out shots/<screen>.png`), never a drawing.
 - **`knowledge/ideas.md`**: the parked options.
 - **One Product task** for the recommended candidate, or the next step on the task you are in.
 - **A one-line note on the task**: the recommendation, the page, the test started, what you could not read.

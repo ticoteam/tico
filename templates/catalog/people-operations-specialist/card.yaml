@@ -55,4 +55,5 @@ example_output: knowledge/examples/records-check.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
 shared_files:
+  - .claude/skills/build-the-page
   - .claude/skills/run-payroll

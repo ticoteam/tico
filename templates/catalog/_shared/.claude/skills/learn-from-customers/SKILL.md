@@ -192,7 +192,8 @@ Needs a person:
 
 ## Output
 
-- **Findings page** (one page): the decision and the answer in three lines at the top; then one block per finding with its statement, a confidence mark, the counts, two or three quotes with evidence ids, what speaks against it; then what was read (sources, counts, share read) and what was not.
+- **Findings page** (one page, in the build-the-page shape): a title, one line with the decision and the answer,
+  contents; then one block per finding with its statement, a confidence mark, the counts, two or three quotes with evidence ids, what speaks against it; then what was read (sources, counts, share read) and what was not.
 - **`knowledge/customers/findings.md`**: the standing list of findings, updated in place.
 - **`knowledge/customers/evidence/YYYY-MM.md`**: the evidence log.
 - **`knowledge/customers/read-log.md`**: what was read, when, how much.

@@ -89,8 +89,8 @@ text in its first message.
 A spec that is narrowed to some readers, or on a private task, gives the link only.
 
 Every page a person reads to decide is built the same way, with the `build-the-page` skill
-(`templates/catalog/_shared/.claude/skills/build-the-page/`, one copy the Feature Owner, Reviewer, Builder and Release
-Owner templates all take). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
+(`templates/catalog/_shared/.claude/skills/build-the-page/`, one copy every agent
+takes). Seven templates: a bug spec (the report, the root cause, the goal, then the fix before and
 after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
 a Review page, the Feature Owner's QA report (the result and what was not checked, then each acceptance criterion with its
 result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why

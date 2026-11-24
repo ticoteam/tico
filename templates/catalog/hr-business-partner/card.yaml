@@ -58,3 +58,5 @@ first_routine:
 example_output: knowledge/examples/performance-tracker.md
 reasoning_effort: medium
 recommend_when: [uses_docs, uses_meetings]
+shared_files:
+  - .claude/skills/build-the-page

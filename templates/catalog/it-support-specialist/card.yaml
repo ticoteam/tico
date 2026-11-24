@@ -54,3 +54,5 @@ first_routine:
 example_output: knowledge/examples/it-page.md
 reasoning_effort: medium
 recommend_when: [small_team, uses_docs]
+shared_files:
+  - .claude/skills/build-the-page
