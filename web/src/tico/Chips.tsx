@@ -38,14 +38,15 @@ export function chipsFor(pathname: string, news: boolean): Chip[] {
   return news ? [CATCH_UP, NEEDS] : [NEEDS];
 }
 
-/** Tico is answering in its chat: a run still going, or the person's message still on its way. */
-function useAnswering(room: string): boolean {
-  const { data: live = [] } = useQuery(liveQuery(room));
+/** Tico is answering in its chat: a run still going, or the person's message still on its way. With no room yet, no. */
+export function useAnswering(room: string | null | undefined): boolean {
+  const { data: live = [] } = useQuery(liveQuery(room ?? ''));
   const { data: sending = false } = useInfiniteQuery({
-    ...timelineQuery(room),
+    ...timelineQuery(room ?? ''),
+    enabled: !!room,
     select: (d) => d.pages.some((p) => p.messages?.some((m) => m.pending === 'sending')),
   });
-  return sending || live.some((r) => !r.ended);
+  return !!room && (sending || live.some((r) => !r.ended));
 }
 
 export function TicoChips({ room }: { room: string }) {

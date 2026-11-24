@@ -128,3 +128,30 @@ export function markTrackerSeen(at: string): Promise<unknown> {
     send: (idempotencyKey) => api.post(`/api/v2/preferences/${SEEN_KEY}`, { value: at }, { idempotencyKey }),
   });
 }
+
+/* ---------------------------------------------------------------- page intros (intros.ts) */
+
+const INTROS_KEY = 'intros.seen';
+export type IntrosSeen = Record<string, string>;
+
+/** The pages whose intro this person has had, each with when (preference intros.seen); {} before the first. */
+export const introsSeenQuery = queryOptions({
+  queryKey: ['tico', 'intros', 'seen'] as const,
+  queryFn: async ({ signal }): Promise<IntrosSeen> => {
+    const v = (await api.get<GetPreferenceResponse>(`/api/v2/preferences/${INTROS_KEY}`, { signal })).value;
+    return v && typeof v === 'object' && !Array.isArray(v) ? (v as IntrosSeen) : {};
+  },
+});
+
+/** The page's intro has played for this person: it does not play there again on its own. */
+export function markIntroSeen(page: string): Promise<unknown> {
+  // the whole map is written back: never before it was read, or the pages seen before would be lost
+  const was = queryClient.getQueryData(introsSeenQuery.queryKey);
+  if (!was || was[page]) return Promise.resolve();
+  const next = { ...was, [page]: new Date().toISOString() };
+  return write({
+    key: introsSeenQuery.queryKey,
+    optimistic: () => next,
+    send: (idempotencyKey) => api.post(`/api/v2/preferences/${INTROS_KEY}`, { value: next }, { idempotencyKey }),
+  });
+}

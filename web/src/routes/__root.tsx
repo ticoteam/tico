@@ -66,7 +66,7 @@ import {
   type TrailPart,
 } from '@/shell';
 import { usePhoneCards } from '@/shell/phone';
-import { TicoSheet, useTicoPower } from '@/tico';
+import { PageIntro, TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
 import { boardSearch, chatAddress, hearPlaces, holdRow, leaveTask, NEEDS_YOU, noteList, notePlace, openedFrom, pressListRow } from '@/lib';
@@ -356,6 +356,8 @@ function App() {
           <FirstRun />
         </Later>
       ) : null}
+      {/* each page's first-visit intro, in Tico's chat (it waits while the first run is open) */}
+      {signedIn ? <PageIntro /> : null}
       {/* Add teammate over any page (`?add=`), onto the team the address names */}
       <Later on={!!adding}>{adding ? <AddTeammate step={adding} team={addTo ?? ''} /> : null}</Later>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
