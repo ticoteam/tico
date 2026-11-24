@@ -85,6 +85,53 @@ def test_a_thread_picture_gets_its_thumbnail_for_readers_who_may_open_it(api):
     assert as_ben["refs"]["attachments"][0]["thumb_url"] == shown["thumb_url"]
 
 
+def test_a_reader_the_download_refuses_gets_nothing_of_a_files_bytes(api, monkeypatch):
+    """A chat picture kept as a file version: one who may see the file but whose download of that version is refused
+    (version_refusal: a scan, a fenced blob) gets no size, address, poster or thumbnail in the timeline."""
+    from backend import files
+
+    drive = worker(api)
+    chat = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "Review this"},
+        files={"files": ("plan.png", png(), "image/png")},
+        headers=headers("ben-test"),
+    )
+    assert chat.status_code == 200, chat.text
+    room, message = chat.json()["conversation"]["id"], chat.json()["message"]["id"]
+    drive.batch()
+    _, (seen,) = timeline_attachments(api, room, message, "ben-test")
+    assert seen["width"] == 40 and seen["src"] and seen["thumb_url"].endswith("/thumb?v=1")
+    monkeypatch.setattr(files, "version_refusal", lambda *args: "scan")
+    _, (refused,) = timeline_attachments(api, room, message, "ben-test")
+    assert not set(refused) & {"width", "height", "src", "thumb_url", "poster_url", "preview_url"}
+
+
+def test_a_malformed_attachment_ref_never_breaks_the_timeline(api):
+    thread = new_thread(api, members=("human:ben",))
+    sent = say(api, thread["id"], "Odd refs")
+    bad = [{"file_id": "file-x", "version": "two"}, {"file_id": {"nested": 1}}, {"id": 5}, "loose", {"name": "no id"}]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"attachments": bad}), sent["id"]))
+    status, shown = timeline_attachments(api, thread["id"], sent["id"], "ben-test")
+    assert status == 200 and len(shown) == len(bad)
+    assert shown[0] == {"file_id": "file-x", "version": "two", "removed": True}
+
+
+def test_the_rules_owner_sees_a_plain_upload_as_its_id_alone(api):
+    from backend.auth import Identity
+    from backend.counsel import SLUG
+
+    thread = new_thread(api, members=("human:ben",))
+    message = upload(api, thread["id"], [("plan.png", png(), "image/png")])
+    app = api.app
+    with app.state.store.read() as c:
+        (seen,) = visuals.for_reader(
+            app, app.state.store.settings, c, Identity("bot:" + SLUG, "bot"), [H.message(c, message["id"])]
+        )
+    assert seen["refs"]["attachments"] == [{"id": message["refs"]["attachments"][0]["id"]}]
+
+
 def test_a_removed_message_takes_its_pictures_previews_with_it(api, monkeypatch):
     """The parent goes first: released after it, the thumbnail is no longer named by any row, so nothing is left behind.
     The thumbnail's id sorts before its parent's here, the order that once kept it for good."""

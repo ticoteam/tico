@@ -654,7 +654,7 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     from .counsel import is_counsel
 
     plain = is_counsel(who)
-    from .files import prime_page_references, readable_page_refs
+    from .files import prime_page_references, readable_page_refs, version_refusal
 
     prime_page_references(c, [message for message in messages if message])
     for message in messages:
@@ -663,8 +663,9 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if shown != message:
                 message.clear()
                 message.update(shown)
-        items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if not any(isinstance(a, dict) and a.get("file_id") for a in items):
+        refs = (message or {}).get("refs")
+        items = refs.get("attachments") if isinstance(refs, dict) else None
+        if not isinstance(items, list) or not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
         for a in items:
@@ -674,7 +675,13 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
             if plain:
                 fresh.append({k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a})
                 continue
-            fid, number = a["file_id"], int(a.get("version") or 0)
+            named = version_of(a)
+            if named is None:  # a malformed ref names nothing to read: shown as gone, never a failed read
+                fresh.append(
+                    {k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a} | {"removed": True}
+                )
+                continue
+            fid, number = named
             if fid not in rows:
                 rows[fid] = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
             row = rows[fid]
@@ -699,7 +706,8 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 "removed": removed or v is None,
                 "current_version": None if removed else row["current_version"],
             }
-            if v is not None:
+            # Nothing of its bytes (its size, a poster, an address) for a reader the download itself would refuse.
+            if v is not None and not version_refusal(c, files.auth, who, row, number, v):
                 actor = who.actor
                 here = base if route is who or (route and files.visible(c, route, row, served)) else None
                 page = c.execute("SELECT audience FROM pages WHERE file_id=?", (fid,)).fetchone()
@@ -768,44 +776,93 @@ def for_reader(app, settings, c, who, messages):
     def hosted(v):
         return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
 
+    from .counsel import is_counsel
+
     files = app.state.files
+    stored(messages, is_counsel(who))
     decorated = decorate(
         c, who, files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
     )
     return previews(c, files.auth, who, decorated)
 
 
+# What only the server says of an attachment, for this reader now: never taken from what was stored with a message.
+SERVED = ("src", "open", "thumb_url", "poster_url", "preview_url", "width", "height", "duration_ms")
+
+
+def stored(messages, counsel=False):
+    """Each message's attachments as stored, less anything only the server says, so a value a client wrote is never
+    echoed. The Rules Owner sees a plain upload as its id alone, as decorate shows it a file's version (its plain
+    ref). A message whose attachments change gets new refs."""
+    for message in messages:
+        refs = (message or {}).get("refs")
+        if not isinstance(refs, dict) or not isinstance(items := refs.get("attachments"), list):
+            continue
+        fresh = [_stored(a, counsel) for a in items]
+        if fresh != items:
+            message["refs"] = {**refs, "attachments": fresh}
+    return messages
+
+
+def _stored(a, counsel):
+    if not isinstance(a, dict):
+        return a
+    if counsel and not a.get("file_id"):
+        return {k: a[k] for k in ("id",) if k in a}
+    return {k: v for k, v in a.items() if k not in SERVED}
+
+
+def version_of(a):
+    """A stored attachment's (file id, version), or None when either is malformed: such a ref is shown as gone."""
+    fid = a.get("file_id")
+    if not isinstance(fid, str) or not fid:
+        return None
+    try:
+        return fid, int(a.get("version") or 0)
+    except (TypeError, ValueError):
+        return None
+
+
 def previews(c, auth, who, messages):
     """Each attached picture, video or PDF whose preview is made, as `who` may see it: `width` and `height`, and
     `thumb_url` / `poster_url` on the app's own file routes (/api/v2/files/{id}/thumb and /poster, which check the
     reader again on each load). A plain upload (a blob, no file id) is read from blob_media, a file's version from its
-    own row, each in one batched read; only an attachment whose bytes the reader may open gains anything (media.blob_for,
-    files.version_refusal: the routes' own checks). The Rules Owner sees each file as its plain ref, so nothing here.
-    A message that gains a field gets new refs: the rows handed in may be read by others."""
+    own row, in batched reads; only an attachment whose bytes the reader may open gains anything (media.blob_for,
+    files.version_refusal: the routes' own checks, their rows read together first). The Rules Owner sees each file as
+    its plain ref, so nothing here. A message that gains a field gets new refs: the rows handed in may be read by
+    others."""
     from .counsel import is_counsel
+    from .store import H
+    from .media import prime_blob_for
+    from .task_privacy import prime_blobs
 
     if is_counsel(who):
         return messages
     blobs, versions = [], []
     for message in messages:
-        for i, a in enumerate(((message or {}).get("refs") or {}).get("attachments") or []):
+        refs = (message or {}).get("refs")
+        for i, a in enumerate((refs.get("attachments") if isinstance(refs, dict) else None) or []):
             if not isinstance(a, dict) or a.get("removed"):
                 continue
             if a.get("file_id"):
-                versions.append((message, i, (a["file_id"], int(a.get("version") or 0))))
+                key = version_of(a)
+                if key:
+                    versions.append((message, i, key))
             elif isinstance(a.get("id"), str) and a["id"]:
                 blobs.append((message, i, a["id"]))
     shown = {}  # (id of the message, index): the fields it gains
     if blobs:
-        ids = list({bid for _, _, bid in blobs})
-        made = {
-            r["blob_id"]: r
-            for r in c.execute(
-                "SELECT blob_id,width,height,thumb_blob_id,poster_blob_id FROM blob_media "
-                f"WHERE blob_id IN ({','.join('?' * len(ids))}) AND media_state='ready'",
-                ids,
+        made = {}
+        for part in H.chunks(sorted({bid for _, _, bid in blobs})):
+            made.update(
+                (r["blob_id"], r)
+                for r in c.execute(
+                    "SELECT blob_id,width,height,thumb_blob_id,poster_blob_id FROM blob_media "
+                    f"WHERE blob_id IN ({','.join('?' * len(part))}) AND media_state='ready'",
+                    part,
+                )
             )
-        }
+        prime_blob_for(c, list(made))
         readable = {}
         for message, i, bid in blobs:
             media = made.get(bid)
@@ -816,32 +873,39 @@ def previews(c, auth, who, messages):
             if readable[bid]:
                 shown[(id(message), i)] = _fields(media, "/api/v2/files/" + bid, "")
     if versions:
-        keys = list({key for _, _, key in versions})
-        made = {
-            (r["file_id"], r["version"]): r
-            for r in c.execute(
-                "SELECT * FROM bot_file_versions WHERE (file_id,version) IN "
-                f"(VALUES {','.join(['(?,?)'] * len(keys))}) AND media_state='ready'",
-                [x for key in keys for x in key],
+        made = {}
+        for part in H.chunks(sorted({key for _, _, key in versions}), 250):
+            made.update(
+                ((r["file_id"], r["version"]), r)
+                for r in c.execute(
+                    "SELECT * FROM bot_file_versions WHERE (file_id,version) IN "
+                    f"(VALUES {','.join(['(?,?)'] * len(part))}) AND media_state='ready' "
+                    "AND (thumb_blob_id IS NOT NULL OR poster_blob_id IS NOT NULL)",
+                    [x for key in part for x in key],
+                )
             )
-        }
-        rows, readable = {}, {}
+        rows = {}
+        for part in H.chunks(sorted({fid for fid, _ in made})):
+            rows.update(
+                (r["id"], r)
+                for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({','.join('?' * len(part))})", part)
+            )
+        prime_blobs(c, [v["blob_id"] for v in made.values()])
+        readable = {}
         for message, i, key in versions:
             v = made.get(key)
-            if v is None or not (v["thumb_blob_id"] or v["poster_blob_id"]):
+            if v is None:
                 continue
             if key not in readable:
-                if key[0] not in rows:
-                    rows[key[0]] = c.execute("SELECT * FROM bot_files WHERE id=?", (key[0],)).fetchone()
-                row = rows[key[0]]
+                row = rows.get(key[0])
                 readable[key] = bool(row) and not row["archived"] and _version_readable(c, auth, who, row, key[1], v)
             if readable[key]:
                 shown[(id(message), i)] = _fields(v, "/api/v2/files/" + key[0], f"?v={key[1]}")
     if not shown:
         return messages
     for message in messages:
-        items = ((message or {}).get("refs") or {}).get("attachments") or []
-        if any((id(message), i) in shown for i in range(len(items))):
+        items = message["refs"]["attachments"] if any(k[0] == id(message) for k in shown) else []
+        if items:
             fresh = [_with(a, shown[(id(message), i)]) if (id(message), i) in shown else a for i, a in enumerate(items)]
             message["refs"] = {**message["refs"], "attachments": fresh}
     return messages

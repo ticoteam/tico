@@ -176,6 +176,7 @@ def shared_files(c, files, who, attachments):
     as a new blob of the poster's, which threads._post links to the message as it links an upload, so whoever reads the
     message opens it and the file keeps its own access. Only a version of a file the poster may open is shared."""
     from .blobs import register
+    from .files import stored_version, version_refusal as files_version_refusal
 
     items = []
     for attachment in attachments:
@@ -186,7 +187,9 @@ def shared_files(c, files, who, attachments):
             if row and not row["archived"] and files.visible(c, who, row, {})
             else None
         )
-        if version is None:
+        # The exact version, as its download checks it (version_refusal): a file one may open can hold a version one
+        # may not (a page's audience, a scan, a fenced blob).
+        if version is None or files_version_refusal(c, files.auth, who, row, number, stored_version(c, fid, number)):
             raise Problem("not_found", SHARE_REFUSED.format(ref=f"{fid}@{number}"), 404)
         item = register(c, who, version["digest"], version["size"], version["name"], version["mime"])
         item["title"] = title or row["title"] or version["name"]
@@ -887,7 +890,8 @@ def install(app, store, auth, mutate, rule_check):
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
         who = request.state.identity
-        with store.read() as c:
+        # One snapshot, so read_cache keeps the rows each message's and each file's checks read (visuals.previews).
+        with store.read_transaction() as c:
             return threads.timeline(
                 c,
                 threads.viewer(auth, who),
@@ -1152,8 +1156,6 @@ def install(app, store, auth, mutate, rule_check):
             if "id" not in message:  # held: post wrote nothing and answers with the hold
                 return message
             out = _thread_message(message)
-            if shared:
-                out = visuals.for_reader(app, store.settings, c, who, [out])[0]
             out["reply_to"] = threads.reply_quotes(c, v, [out]).get(out["id"])
             return {**out, "sent_as": _sent_as(c, way, message)} if way else out
 
@@ -1534,7 +1536,6 @@ def install(app, store, auth, mutate, rule_check):
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
             assert message is not None  # the message just posted
-            message = visuals.for_reader(app, store.settings, c, who, [message])[0]
             if posted.get("warnings"):
                 message["warnings"] = posted["warnings"]  # the reload keeps what the post told its writer
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])

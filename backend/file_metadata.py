@@ -92,6 +92,7 @@ class DecodeError(Exception):
 IMAGES = ("image/png", "image/jpeg", "image/gif", "image/webp")
 VIDEOS = ("video/mp4", "video/webm", "video/quicktime")
 TRIES = 5  # failed passes before a source is given up on (`Metadata.retry`)
+MAX_BYTES = 25 * 1024**2  # a larger source gets no preview: it is never copied in to be read (the file still opens)
 WALL_SECONDS = 30
 RSS_KIB = 1024 * 1024  # what a child may hold on macOS, where address-space limits are refused
 
@@ -188,8 +189,8 @@ class Metadata:
         mime = (blob["content_type"] or "").split(";", 1)[0].strip().lower()
         if not (mime.startswith("image/") or mime.startswith("video/") or mime == "application/pdf"):
             return self.save(blob, result, [])
-        if not derives(mime):
-            # Nothing can be derived from it here (an SVG, or no tool for it), so it is never read: a file in Tico's
+        if not derives(mime) or (blob.get("size") or 0) > MAX_BYTES:
+            # Nothing is derived from it here (an SVG, no tool for it, or too big), so it is never read: a file in Tico's
             # bucket is read through the company's address, and every byte read there is charged as delivery.
             return self.save(blob, result | {"media_state": "ready" if result["poster_blob_id"] else "none"}, [])
         derived = []
@@ -259,6 +260,8 @@ class Metadata:
                         ],
                         root,
                     )
+                    if not poster.is_file():
+                        raise DecodeError("The video gave no frame")
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     _, _, preview = image(poster, thumb)
@@ -277,6 +280,8 @@ class Metadata:
                         ],
                         root,
                     )
+                    if not poster.is_file():
+                        raise DecodeError("The PDF gave no first page")
                     if not result["poster_blob_id"]:
                         derived.append(("poster_blob_id", poster))
                     result["width"], result["height"], preview = image(poster, thumb)
@@ -307,6 +312,10 @@ class Metadata:
         from types import SimpleNamespace
 
         with self.store.transaction() as c:
+            if not c.execute("SELECT 1 FROM blobs WHERE id=?", (blob["id"],)).fetchone():
+                # Deleted while it was read: nothing to describe, and no preview to keep for it.
+                c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))
+                return
             for field, upload in prepared:
                 result[field] = register(c, SimpleNamespace(actor=blob["owner"]), **upload)["id"]
             c.execute("DELETE FROM blob_media_retries WHERE blob_id=?", (blob["id"],))

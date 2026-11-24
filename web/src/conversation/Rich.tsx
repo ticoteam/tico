@@ -64,7 +64,9 @@ function AppChip({ p, words }: { p: Extract<Pointer, { kind: 'app' }>; words: Re
 }
 
 const fileHrefOf = (file: string, version?: number): `/api/${string}` => `/api/v2/files/${encodeURIComponent(file)}${version ? `/versions/${version}` : ''}`;
-const fileIcon = (mime: string | null | undefined, kind?: string): IconName => (fileKind(mime, undefined, kind) === 'html' ? 'tobar' : 'file');
+const fileIcon = (mime: string | null | undefined, kind?: string, name?: string | null): IconName => (fileKind(mime, name, kind) === 'html' ? 'tobar' : 'file');
+/** A page drawn small in the chat: only what its type or the library says is one, never its name alone. */
+const isPage = (mime: string | null | undefined, kind?: string) => fileKind(mime, undefined, kind) === 'html';
 
 /** Opens one of the app's files full screen, by its id (the library's) or as a message's own file. */
 const preview = (file: string, version?: number, held?: { url: string; mime: string; name: string; size?: number }) =>
@@ -80,7 +82,7 @@ function FileChip({ p, words }: { p: Extract<Pointer, { kind: 'file' }>; words: 
   };
   return (
     <a className="lchip" href={href} target="_blank" rel="noreferrer" onClick={open}>
-      <Icon name={fileIcon(facts?.mime, facts?.library_kind)} />
+      <Icon name={fileIcon(facts?.mime, facts?.library_kind, facts?.name)} />
       {words ?? (facts?.title || facts?.name || 'File')}
     </a>
   );
@@ -155,9 +157,8 @@ function RefCard({ p }: { p: Extract<Pointer, { kind: 'file' }> }) {
   if (!facts) return null;
   const title = facts.title || facts.name || 'Page';
   const src = fileHrefOf(p.file, p.version);
-  const kind = fileKind(facts.mime, facts.name, facts.library_kind);
-  if (kind === 'html') return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
-  if (kind === 'image') return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
+  if (isPage(facts.mime, facts.library_kind)) return <PageCard src={src} title={title} onOpen={() => preview(p.file, p.version)} />;
+  if (fileKind(facts.mime, facts.name, facts.library_kind) === 'image') return <Pictures list={[{ src, name: title }]} onOpen={() => preview(p.file, p.version)} />;
   return null;
 }
 
@@ -177,7 +178,7 @@ const ONE_TALL = 280;
 
 /** A lone picture of known size keeps its own shape and room before it loads, so the chat does not jump. */
 function reserved(p: Shown, alone: boolean): CSSProperties | undefined {
-  if (!alone || !p.width || !p.height) return undefined;
+  if (!alone || !(p.width && p.width > 0 && p.height && p.height > 0)) return undefined;
   const wide = Math.min(p.width, ONE_WIDE, (ONE_TALL * p.width) / p.height);
   return { width: `min(100%, ${Math.round(wide)}px)`, aspectRatio: `${p.width} / ${p.height}` };
 }
@@ -241,7 +242,7 @@ function AttachedFile({ f }: { f: Attachment }) {
   const url = attachmentHref(f);
   const name = attachmentLabel(f);
   const held = { url, mime: f.content_type ?? '', name, ...(typeof f.size === 'number' && { size: f.size }) };
-  if (fileKind(f.content_type, f.name) === 'html') return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
+  if (isPage(f.content_type)) return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
   const open = (e: MouseEvent) => {
     if (!plainClick(e)) return;
     e.preventDefault();
