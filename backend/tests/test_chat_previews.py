@@ -177,3 +177,21 @@ def test_malformed_attachment_refs_never_break_the_live_streams_decoration(api):
     first, second, third = as_reader(api, "human:ben", messages)
     assert [a.get("removed") for a in first["refs"]["attachments"][:6]] == [True] * 6
     assert "attachments" not in second["refs"] and third["refs"] == "{}"
+
+
+def test_the_wrapper_refuses_a_bad_call_and_sets_every_limit_before_it_becomes_the_tool(monkeypatch, tmp_path):
+    seen = []
+    monkeypatch.setattr(limited.resource, "setrlimit", lambda kind, value: seen.append(kind))
+    monkeypatch.setattr(limited.os, "chdir", lambda path: seen.append(("cwd", path)))
+    monkeypatch.setattr(limited.os, "execve", lambda program, args, env: seen.append(("exec", program, args, env)))
+    assert limited.main([str(tmp_path), "relative/tool"]) == 2 and not seen
+    limited.main([str(tmp_path), "/bin/true", "-v"])
+    assert seen[0] == ("cwd", str(tmp_path)) and seen[-1] == ("exec", "/bin/true", ["/bin/true", "-v"], limited.ENV)
+    assert {resource.RLIMIT_CPU, resource.RLIMIT_FSIZE, resource.RLIMIT_CORE} <= {
+        k for k in seen if not isinstance(k, tuple)
+    }
+
+
+def test_a_version_is_a_whole_number_or_its_digits():
+    assert visuals.version_of({"file_id": "file-x", "version": "2"}) == ("file-x", 2)
+    assert visuals.version_of({"file_id": "file-x"}) == ("file-x", 0)
