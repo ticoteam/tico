@@ -1469,9 +1469,8 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
         E._refuse(conn, by, "not-found", "No such task")
         return []
 
-    def refuse(rule: str, detail: str, kept: str | None = None) -> None:
-        stored = (kept, ()) if kept else None  # what is kept on record, when it names less than `by` is told
-        E._refuse(conn, by, rule, detail, task_id, row=row, then=("show",), version=row.get("version"), kept=stored)
+    def refuse(rule: str, detail: str) -> None:
+        E._refuse(conn, by, rule, detail, task_id, row=row, then=("show",), version=row.get("version"))
 
     if row["status"] != "open":
         refuse("task_ended", f"The task is {row['stage']['name']}. Reopen it first.")
@@ -1486,8 +1485,7 @@ def requeue(conn: "sqlite3.Connection", task_id: str, by: str, *, seen_version: 
     # history says so. One whose earlier task closed without merging is its owner's to queue for the first time.
     earlier = MO.held(conn, row)
     if earlier and not E.is_human(by):
-        said = [HELD_FOR.format(earlier=TC.named(conn, earlier["id"], MO.ref(earlier), r)) for r in (by, None)]
-        refuse("task_requirement", *said)
+        refuse("task_requirement", HELD_FOR.format(earlier=TC.named(conn, earlier["id"], MO.ref(earlier))))
     first = bool(earlier) or MO.closed_before(conn, row) is not None
     visit_id = str(row["visit"]["id"])
     again: list[Row] = []

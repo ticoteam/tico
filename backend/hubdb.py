@@ -4519,6 +4519,7 @@ def task_comments(conn, task_id, *, actor=None, session=None, comments=False):
                 m["answers"] = review_answers(conn, m["id"], actor=actor)
             if m["refs"].get("answer"):
                 m["answer"] = m["refs"]["answer"]
+            m.pop("wake_key", None)  # the engine's (message_view)
             out.append(m)
     return out
 
@@ -7199,9 +7200,11 @@ def prime_message_rows(conn, rows):
 
 
 def message_view(conn, row):
-    """Decorate a complete stored row without reading the same message again."""
+    """Decorate a complete stored row without reading the same message again. Its wake key stays the engine's: it may
+    name a task the reader may not open (task_privacy.INTERNAL_MESSAGE_COLUMNS)."""
     if row:
         row = dict(row)
+        row.pop("wake_key", None)
         row["refs"] = _json(row.get("refs"), {}) or {}
         if row["kind"] == "ask" and row["refs"].get("questions"):
             row["ask"] = {k: row["refs"].get(k) for k in ("questions", "who")}

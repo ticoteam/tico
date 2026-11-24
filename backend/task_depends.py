@@ -44,7 +44,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from . import read_cache
-from .task_calls import PRIVATE_TASK, named_line, refuse_naming
+from .task_calls import PRIVATE_TASK, capital, named, named_line
 
 if TYPE_CHECKING:
     import sqlite3
@@ -226,40 +226,39 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, blocker: Row, unti
     """Refuse a dependency that cannot hold: of a task that has ended, on one that has ended, or a loop (#304 already
     depends on #307, however far round). Until released, a Done task may be depended on while production does not run
     its release yet. The writer's rights are checked by the caller (task_relations.relate)."""
+    from . import hubdb
+
+    H: Any = hubdb
     E = _engine()
-    b = (blocker["id"], ref(blocker))  # named to the actor only if they may open it, and on record only if not private
+    said = named(conn, blocker["id"], ref(blocker))  # a refusal is kept on record: a private task is not named
     if until == UNTIL and blocker["status"] == "done":
         shipped = in_production(conn, str(blocker["id"]))
         if shipped == "":
             where = running(conn)[1] or "the repository"
-            refuse_naming(
+            H.refuse(
                 conn,
                 actor,
                 "task_ended",
-                lambda n: (
-                    f"{n(*b)} merged nothing into {where}, whose release this server runs: until released cannot "
+                capital(
+                    f"{said} merged nothing into {where}, whose release this server runs: until released cannot "
                     "wait for it. Another product's release is not seen here: snooze to the date you will look again."
                 ),
             )
         if shipped is not None:
-            said = "is in production already: there is nothing to wait for"
-            refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*b)} {said}")
+            ended = capital(f"{said} is in production already: there is nothing to wait for")
+            H.refuse(conn, actor, "task_ended", ended)
         blocker = {**blocker, "status": "open"}
-    if later["status"] != "open":
-        refuse_naming(conn, actor, "task_ended", lambda n: "The task has ended: there is nothing to wait for")
-    if blocker["status"] != "open":
-        refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*b)} has ended: there is nothing to wait for")
+    for row, what in ((later, "The task"), (blocker, capital(said))):
+        if row["status"] != "open":
+            H.refuse(conn, actor, "task_ended", f"{what} has ended: there is nothing to wait for")
     path = _path(conn, str(blocker["id"]), str(later["id"]))
     if path:
-        hops = [(t, ref(E.task(conn, t) or {"id": t})) for t in [str(later["id"]), *path]]
-        refuse_naming(
+        names = " → ".join(named(conn, t, ref(E.task(conn, t) or {"id": t})) for t in [str(later["id"]), *path])
+        H.refuse(
             conn,
             actor,
             "kind",
-            lambda n: (
-                f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*b)} already depends on "
-                f"{n(later['id'], ref(later))}."
-            ),
+            f"That would make a loop ({names}): {said} already depends on {named(conn, later['id'], ref(later))}.",
         )
 
 

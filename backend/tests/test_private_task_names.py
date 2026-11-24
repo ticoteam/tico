@@ -233,13 +233,12 @@ def test_a_loop_refusal_names_only_the_tasks_the_caller_may_open(c):
         TR.relate(c, "bot:builder", a, d, "depends_on")
     assert "a private task" in loop.value.detail and not told(loop.value.detail, b, "#2")
     assert "#1" in loop.value.detail and "#3" in loop.value.detail
-    # Ana opens the private task: she is told it, and the refusal on record still does not name it.
+    # Ana opens the private task, and is not told it either: a refusal is kept on record, so it names no private task.
     with pytest.raises(H.Refused) as hers:
         TR.relate(c, X.ANA, a, d, "depends_on")
-    assert "#2" in hers.value.detail
+    assert "a private task" in hers.value.detail and not told(hers.value.detail, b, "#2")
     recorded = c.execute("SELECT detail FROM refusals WHERE actor=? ORDER BY rowid DESC", (X.ANA,)).fetchone()[0]
-    kept = json.loads(recorded)
-    assert "a private task" in kept["detail"] and not told(kept["detail"], b, "#2") and "#1" in kept["detail"]
+    assert json.loads(recorded)["detail"] == hers.value.detail
 
 
 def test_a_merge_order_loop_refusal_names_only_the_tasks_the_caller_may_open(c):
@@ -270,3 +269,42 @@ def test_the_inbox_serves_no_wake_key(c):
     (woken,) = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (f"%:{D.WAKE}:{blocker}",)).fetchone()
     messages = H.inbox(c, "bot:builder")["messages"]
     assert woken in [m["id"] for m in messages] and all("wake_key" not in m for m in messages)
+
+
+# ----------------------------------------------------------------------------- over HTTP
+def test_a_loop_refused_over_http_names_no_private_hop_and_its_receipt_replays(api):
+    from backend.tests.helpers.api import headers, post
+
+    a, b, d = (post(api, "tasks", {"owner": "cpo", "title": t, "body": "x"})["id"] for t in ("A", SECRET, "D"))
+    post(api, f"tasks/{d}/relations", {"task": b, "kind": "depends_on"})
+    post(api, f"tasks/{b}/relations", {"task": a, "kind": "depends_on"})
+    with api.app.state.store.transaction() as c:
+        private(c, b)
+        hop = D.ref(H.task(c, b))
+    key = "loop-refusal-receipt"
+    first, again = (
+        api.post(f"/api/v2/tasks/{a}/relations", json={"task": d, "kind": "depends_on"}, headers=headers(key=key))
+        for _ in range(2)
+    )
+    assert 400 <= first.status_code < 500, first.text
+    assert "a private task" in first.text and not told(first.text, b, hop)
+    assert (again.status_code, again.json()) == (first.status_code, first.json())
+
+
+def test_an_unblock_wake_is_served_without_its_key(api):
+    from backend.tests.helpers.api import assign, claim, get, post, ready, runner
+
+    r = runner(api)
+    assign(api, r, "ops")
+    ready(api, r, ["ops"])
+    blocker = post(api, "tasks", {"owner": "cpo", "title": SECRET, "body": "x"})["id"]
+    blocked = post(api, "tasks", {"owner": "ops", "title": "Part 2", "body": "x"})["id"]
+    post(api, f"tasks/{blocked}/relations", {"task": blocker, "kind": "depends_on"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+        private(c, blocker)
+        E.move(c, blocker, E.DONE, X.ANA, "Finished")
+        (woken,) = c.execute("SELECT id FROM messages WHERE wake_key LIKE ?", (f"%:{D.WAKE}:{blocker}",)).fetchone()
+    for served in (get(api, f"tasks/{blocked}"), get(api, f"messages/{woken}"), claim(api, r, "ops")):
+        text = json.dumps(served, default=str)
+        assert woken in text and "wake_key" not in text and f"{D.WAKE}:{blocker}" not in text

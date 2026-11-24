@@ -1016,19 +1016,16 @@ def hidden_named(
 PRIVATE_TASK = "a private task"
 
 
-def may_name(
-    conn: "sqlite3.Connection", other_id: object, reader: str | None = None, visible_sql: str | None = None
-) -> bool:
-    """Whether words may name task `other_id` (its title, its number, its id). Words that are kept (a wake, a note, a
-    line in the history, what a refusal keeps on record) name only a task that is not private, which anyone in the
-    company may open. Words said only to `reader`, as a refusal is said to its caller, name a task they may read
-    (`_readable`)."""
-    return bool(other_id) and _readable(conn, reader or ON_RECORD, other_id, visible_sql)
+def may_name(conn: "sqlite3.Connection", other_id: object) -> bool:
+    """Whether words may name task `other_id` (its title, its number, its id) where they are kept or said to anyone
+    (a wake, a note, a line in the history, a refusal): only a task that is not private, which anyone in the company
+    may open. A read for one viewer hides by what they may read (`hidden_named`)."""
+    return bool(other_id) and _readable(conn, ON_RECORD, other_id)
 
 
-def named(conn: "sqlite3.Connection", other_id: object, ref: str, reader: str | None = None) -> str:
+def named(conn: "sqlite3.Connection", other_id: object, ref: str) -> str:
     """`ref`, words naming task `other_id`, or PRIVATE_TASK where they may not name it (`may_name`)."""
-    return ref if may_name(conn, other_id, reader) else PRIVATE_TASK
+    return ref if may_name(conn, other_id) else PRIVATE_TASK
 
 
 def capital(said: str) -> str:
@@ -1037,19 +1034,8 @@ def capital(said: str) -> str:
 
 
 def named_line(conn: "sqlite3.Connection", template: str, other_id: object, ref: str, **fields: object) -> str:
-    """`template`, words that are kept, with `{ref}` naming task `other_id` as `ref` or as PRIVATE_TASK (`may_name`)."""
+    """`template` with `{ref}` naming task `other_id` as `ref`, or as PRIVATE_TASK (`may_name`)."""
     return capital(template.format(ref=named(conn, other_id, ref), **fields))
-
-
-def refuse_naming(
-    conn: "sqlite3.Connection", actor: str, rule: str, say: Callable[[Callable[[object, str], str]], str]
-) -> NoReturn:
-    """Refuse with the words `say` makes, each task in them named by the function it is given (id, ref): to `actor`,
-    each task they may open; on record, only those that are not private (`may_name`)."""
-    told = capital(say(lambda task_id, ref: named(conn, task_id, ref, actor)))
-    kept = capital(say(lambda task_id, ref: named(conn, task_id, ref)))
-    _h().refuse(conn, actor, rule, told, stored={"detail": kept} if kept != told else None)
-    raise AssertionError("refuse() always raises")  # pragma: no cover
 
 
 def standing_line(standing: "R.Standing", hidden: list[str]) -> str:

@@ -28,7 +28,7 @@ refused (`check`).
 
 from typing import TYPE_CHECKING, Any
 
-from .task_calls import PRIVATE_TASK, may_name, named_line, refuse_naming
+from .task_calls import PRIVATE_TASK, capital, may_name, named, named_line
 
 if TYPE_CHECKING:
     import sqlite3
@@ -232,22 +232,21 @@ def check(conn: "sqlite3.Connection", actor: str, later: Row, earlier: Row) -> N
     """Refuse an order that cannot hold: on a task that has ended, after one that has ended, or a loop (#40 already goes
     after #42, however far round). The writer's right to change the later task and read the earlier one is checked by
     the caller (task_relations.relate)."""
-    e = (earlier["id"], ref(earlier))  # named to the actor only if they may open it, on record only if not private
-    if later["status"] != "open":
-        refuse_naming(conn, actor, "task_ended", lambda n: "The task has ended: there is no merge to wait for")
-    if earlier["status"] != "open":
-        refuse_naming(conn, actor, "task_ended", lambda n: f"{n(*e)} has ended: there is no merge to wait for")
+    from . import hubdb
+
+    H: Any = hubdb
+    said = named(conn, earlier["id"], ref(earlier))  # a refusal is kept on record: a private task is not named
+    for row, what in ((later, "The task"), (earlier, capital(said))):
+        if row["status"] != "open":
+            H.refuse(conn, actor, "task_ended", f"{what} has ended: there is no merge to wait for")
     path = _path(conn, str(earlier["id"]), str(later["id"]))
     if path:
-        hops = [(t, ref(_engine().task(conn, t))) for t in [str(later["id"]), *path]]
-        refuse_naming(
+        names = " → ".join(named(conn, t, ref(_engine().task(conn, t))) for t in [str(later["id"]), *path])
+        H.refuse(
             conn,
             actor,
             "kind",
-            lambda n: (
-                f"That would make a loop ({' → '.join(n(*h) for h in hops)}): {n(*e)} already goes after "
-                f"{n(later['id'], ref(later))}."
-            ),
+            f"That would make a loop ({names}): {said} already goes after {named(conn, later['id'], ref(later))}.",
         )
 
 
