@@ -76,8 +76,6 @@ def _mod(name: str) -> Any:
         from . import reconnects as found
     elif name == "repositories":
         from . import repositories as found
-    elif name == "rooms":
-        from . import rooms as found
     elif name == "threads":
         from . import threads as found
     elif name == "tool_access":
@@ -363,7 +361,7 @@ def _reach_reader(c: Any, auth: Any, row: Any, task: Any, vault: Any) -> Any:
     cards = json.loads(row["cards"] or "{}")
     added = {}
     for person in _ranked(c, row, readers):
-        message_id = _post_card(c, auth, person, row)
+        message_id = _post_card(c, person, row)
         if message_id:
             added[person.actor] = message_id
     if not added:
@@ -403,15 +401,16 @@ def card_of(c: Any, row: Any) -> Any:
     }
 
 
-def _post_card(c: Any, auth: Any, person: Any, row: Any) -> Any:
-    """One card in `person`'s chat with the poster bot; its message id, or None when there is nowhere to put it."""
-    rooms = _mod("rooms")
+def _post_card(c: Any, person: Any, row: Any) -> Any:
+    """One card in `person`'s chat with the poster bot; its message id, or None when there is nowhere to put it. The chat
+    is their member-private DM with it, the one their Agent bar opens (`threads.dm`, private), read by them alone: never
+    the bot's shared room or Home, whose other readers would see the tool and the reason (#5078)."""
     threads = _mod("threads")
 
     poster = _poster(c)
     if not poster:
         return None
-    room = rooms.chat_room(c, auth, person, poster)
+    room = threads.dm(c, person.actor, ["bot:" + poster], private=True)
     text = f"{_bot_name(c, row['subject'])} → {_label(row)}" + (f"\n{row['reason']}" if row["reason"] else "")
     token = key_grants.MINTING.set(True)
     try:
@@ -696,7 +695,7 @@ def ask(c: Any, who: Any, body: Any, vault: Any, auth: Any) -> Any:
     people = approvers(c, row, vault, auth)
     cards = {}
     for person in people:
-        message_id = _post_card(c, auth, person, row)
+        message_id = _post_card(c, person, row)
         if message_id:
             cards[person.actor] = message_id
     c.execute(
@@ -743,7 +742,7 @@ def _approve_at_once(c: Any, auth: Any, row: Any, vault: Any) -> Any:
     person = person or next(iter(approvers(c, _row(c, row["id"]), vault, auth)), None)
     if person:
         connector = person.actor
-        message_id = _post_card(c, auth, person, _row(c, row["id"]))
+        message_id = _post_card(c, person, _row(c, row["id"]))
         if message_id:
             c.execute(
                 "UPDATE access_requests SET approvers=?,cards=? WHERE id=?",
