@@ -761,3 +761,37 @@ def test_a_sub_threads_first_message_to_an_agent_without_write_is_refused_before
     assert r.status_code == 403 and "Write access" in r.text, r.text
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM org_rule_holds").fetchone()[0] == 0
+
+
+def test_a_held_reply_is_sent_anyway_as_the_reply_it_was(ruled):
+    """Cara replies to Finance's own message, `to` Finance, without Write on it (a Reply needs none); a rule holds it.
+    Send anyway posts it as written: it still answers Finance's message, so it still needs no Write, and reaches
+    Finance."""
+    from backend.tests.helpers.api import restrict
+
+    api, judge = ruled
+    block_everyone(api)
+    judge.needles[COLOR] = "gold"
+    thread = new_thread(api, "Totals", members=("human:cara", "bot:finance"))["id"]
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+        asked = H.say(c, "bot:finance", "human:cara", "Which color is ours?", conversation_id=thread)
+    r = api.post(
+        f"/api/v2/threads/{thread}/messages",
+        json={
+            "text": "Our favorite color is gold.",
+            "to": "bot:finance",
+            "in_reply_to": asked["id"],
+        },
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200 and r.json()["held"], r.text
+    hold = r.json()["held"]["id"]
+    view = get(api, f"rule-holds/{hold}", token="ana-test")
+    assert post(api, f"rule-holds/{hold}/send", {"nonce": view["nonce"]}, token="ana-test")["hold"]["state"] == "sent"
+    [sent] = sql(
+        api, "SELECT id, in_reply_to, recipient_id FROM messages WHERE body=?", ("Our favorite color is gold.",)
+    )
+    assert (sent["in_reply_to"], sent["recipient_id"]) == (asked["id"], "bot:finance")

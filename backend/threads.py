@@ -2853,6 +2853,11 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
             "via": args.get("via"),
             "origin": args.get("origin"),
             "attachments": args.get("attachments"),
+            # Every post argument Send anyway replays (THREAD_REPLAY), as an in-thread hold stores them. No caller
+            # holds a start or a sub-thread's first message with these today (the routes refuse `in_reply_to` beside
+            # `parent_message_id`, and `_post` refuses `ask` with either); stored so a new caller loses none.
+            "in_reply_to": args.get("in_reply_to"),
+            "ask": args.get("ask"),
             "start": start,
         }
         gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
@@ -3003,7 +3008,16 @@ def _post(
             start,
             parent_message_id,
             checked,
-            dict(kind=kind, refs=refs, recipient_id=to_actor, via=via, origin=origin, attachments=attachments),
+            dict(
+                kind=kind,
+                refs=refs,
+                recipient_id=to_actor,
+                via=via,
+                origin=origin,
+                attachments=attachments,
+                in_reply_to=in_reply_to,
+                ask=ask,
+            ),
         )
         if made.get("held") is not None:
             return made["held"]
