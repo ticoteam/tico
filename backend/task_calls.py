@@ -1061,10 +1061,11 @@ def named_line(
     **fields: object,
 ) -> str:
     """`template` with `{ref}` naming task `other_id` as `ref`, or as PRIVATE_TASK where it may not be named
-    (`may_name`), begun with a capital."""
-    shown = may_name(conn, other_id, kept_in=kept_in)
-    said = template.format(ref=ref if shown else PRIVATE_TASK, **fields)
-    return said[:1].upper() + said[1:]
+    (`may_name`), with a capital when it begins the line."""
+    if may_name(conn, other_id, kept_in=kept_in):
+        return template.format(ref=ref, **fields)
+    unnamed = PRIVATE_TASK.capitalize() if template.startswith("{ref}") else PRIVATE_TASK
+    return template.format(ref=unnamed, **fields)
 
 
 def hidden_named(

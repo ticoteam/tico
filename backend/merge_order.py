@@ -203,8 +203,9 @@ def named(conn: "sqlite3.Connection", row: Row, earlier: Row) -> str:
 
 
 def closed_line(conn: "sqlite3.Connection", row: Row, earlier: Row) -> str:
-    said = CLOSED.format(ref=named(conn, row, earlier))
-    return said[:1].upper() + said[1:]
+    from . import task_calls
+
+    return task_calls.named_line(conn, CLOSED, earlier["id"], ref(earlier), kept_in=row)
 
 
 def just_merged(conn: "sqlite3.Connection", row: Row) -> Row | None:
