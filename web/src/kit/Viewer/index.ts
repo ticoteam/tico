@@ -1,1 +1,1 @@
-export { Viewer, type ViewerProps } from './Viewer';
+export { InViewer, Viewer, type ViewerProps } from './Viewer';

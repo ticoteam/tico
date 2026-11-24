@@ -426,7 +426,7 @@ describe('Message', () => {
     expect(fireEvent.click(link)).toBe(false);
     expect(ran).toHaveBeenCalledExactlyOnceWith(
       'files.preview',
-      { file: 'f1', held: { url: '/api/v2/files/f1', mime: 'application/pdf', name: 'brief.pdf' } },
+      { file: 'f1', held: { url: '/api/v2/files/f1', mime: 'application/pdf', name: 'brief.pdf', filename: 'brief.pdf' } },
       { via: 'click' },
     );
     expect(fireEvent.click(link, { metaKey: true })).toBe(true);

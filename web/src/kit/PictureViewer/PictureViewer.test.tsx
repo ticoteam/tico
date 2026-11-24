@@ -1,6 +1,7 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { useState } from 'react';
-import { describe, expect, it } from 'vitest';
+import { act } from 'react';
+import { describe, expect, it, vi } from 'vitest';
 import { PictureViewer, type Picture } from './PictureViewer';
 
 const PICS: Picture[] = [
@@ -14,6 +15,9 @@ function Harness({ start = 0 }: { start?: number | null }) {
   return (
     <>
       <span data-testid="at">{String(at)}</span>
+      <button type="button" onClick={() => setAt(0)}>
+        Reopen
+      </button>
       <PictureViewer pictures={PICS} at={at} onAtChange={setAt} />
     </>
   );
@@ -42,6 +46,81 @@ describe('PictureViewer', () => {
     const dialog = await screen.findByRole('dialog');
     fireEvent.keyDown(dialog, { key: 'Escape' });
     expect(screen.getByTestId('at').textContent).toBe('null');
+  });
+
+  it('zooms with its buttons, opens the next picture at fit, and swipes only at fit', async () => {
+    render(<Harness />);
+    const front = await screen.findByRole('img', { name: 'Front.png' });
+    const stage = front.parentElement!;
+    expect((screen.getByRole('button', { name: 'Zoom out' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(front.style.transform).toContain('scale(1.5)');
+
+    // zoomed in, a swipe pans instead of walking the set
+    const swipe = (el: Element, dx: number) => {
+      fireEvent.pointerDown(el, { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 100 });
+      fireEvent.pointerMove(el, { pointerId: 1, pointerType: 'touch', clientX: 200 + dx, clientY: 100 });
+      fireEvent.pointerUp(el, { pointerId: 1, pointerType: 'touch', clientX: 200 + dx, clientY: 100 });
+    };
+    swipe(stage, -120);
+    expect(screen.getByTestId('at').textContent).toBe('0');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowRight' });
+    const back = await screen.findByRole('img', { name: 'Back.png' });
+    expect(back.style.transform).toBe('');
+
+    swipe(back.parentElement!, -120);
+    expect(screen.getByTestId('at').textContent).toBe('0');
+    expect(await screen.findByRole('img', { name: 'Front.png' })).toBeTruthy();
+  });
+
+  it('opens a picture at fit again after another one, and after closing', async () => {
+    render(<Harness />);
+    const zoomIn = () => fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    zoomIn();
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toContain('scale(1.5)');
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowRight' });
+    await screen.findByRole('img', { name: 'Back.png' });
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowLeft' });
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toBe('');
+    zoomIn();
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Reopen' }));
+    expect((await screen.findByRole('img', { name: 'Front.png' })).style.transform).toBe('');
+  });
+
+  it('ends a pinch under way when the picture area changes size, and stays at fit', async () => {
+    let fire: (sizes: [number, number]) => void = () => {};
+    const seen: Element[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: (entries: { target: Element; contentRect: { width: number; height: number } }[]) => void) {
+          fire = ([width, height]) => cb(seen.map((target) => ({ target, contentRect: { width, height } })));
+        }
+        observe(el: Element) {
+          seen.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    try {
+      render(<Harness />);
+      const front = await screen.findByRole('img', { name: 'Front.png' });
+      const stage = front.parentElement!;
+      act(() => fire([800, 600]));
+      fireEvent.pointerDown(stage, { pointerId: 1, pointerType: 'touch', clientX: 100, clientY: 100 });
+      fireEvent.pointerDown(stage, { pointerId: 2, pointerType: 'touch', clientX: 200, clientY: 100 });
+      fireEvent.pointerMove(stage, { pointerId: 2, pointerType: 'touch', clientX: 400, clientY: 100 });
+      expect(front.style.transform).toContain('scale(');
+      act(() => fire([390, 844]));
+      expect(front.style.transform).toBe('');
+      fireEvent.pointerMove(stage, { pointerId: 2, pointerType: 'touch', clientX: 500, clientY: 100 });
+      expect(front.style.transform).toBe('');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('draws nothing while closed', () => {

@@ -1,9 +1,10 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, use, useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
+import { InViewer } from '@/kit/Viewer';
 import { openPdf, type PdfDoc } from './pdf';
 import type { SignTarget } from './PdfSign';
 
@@ -12,7 +13,8 @@ const PdfSign = lazy(() => import('./PdfSign').then((m) => ({ default: m.PdfSign
 
 /* A PDF wherever it opens (an email's attachment or letter, a task's file, Files): its pages drawn by PDF.js as one
    long scroll, each fit to the width and drawn only as it nears the view, the same in every browser and on a phone.
-   Expand shows it over the whole window; Escape or Close brings it back. A task's PDF also offers Sign (PdfSign.tsx).
+   Expand shows it over the whole window; Escape or Close brings it back. Already full screen (kit/Viewer), it has no
+   Expand. A task's PDF also offers Sign (PdfSign.tsx).
    Where PDF.js cannot read it, it opens in a tab of its own. */
 
 /** A page's size in PDF points, as it is shown (its rotation applied). */
@@ -165,6 +167,7 @@ const pagesOf = (n: number) => (n === 1 ? '1 page' : `${n} pages`);
     a task's PDF at its current version, offers Sign. */
 export function PdfView({ src, title, url, name, sign }: { src: string; title: string; url: string; name?: string | null; sign?: SignTarget }) {
   const pdf = usePdf(src);
+  const nested = use(InViewer);
   const [full, setFull] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [signing, setSigning] = useState(false);
@@ -205,7 +208,7 @@ export function PdfView({ src, title, url, name, sign }: { src: string; title: s
       <div className="fv-pdf-tools">
         <span className="fv-pdf-count">{count}</span>
         <ZoomButtons zoom={zoom} onZoom={setZoom} />
-        <IconButton ref={expand} icon="expand" label="Expand" size="sm" quiet onClick={() => setFull(true)} />
+        {!nested && <IconButton ref={expand} icon="expand" label="Expand" size="sm" quiet onClick={() => setFull(true)} />}
         {sign && (
           <Button variant="quiet" icon="edit" className="fv-pdf-sign" onClick={startSigning}>
             Sign

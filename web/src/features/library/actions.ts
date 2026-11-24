@@ -373,13 +373,14 @@ export const filesPreview = defineAction({
         url: z.string().check(z.regex(/^\/api\/v2\/files\/[^/?#]+(\/versions\/\d+)?(\?v=\d+)?$/)),
         mime: text(200),
         name: text(500),
+        filename: z.optional(text(500)),
         size: z.optional(z.number()),
       }),
     ),
   }),
   run: async ({ queryClient }, i) => {
     if (!i.file) return viewing.set(null);
-    if (i.held) return viewing.set({ file: i.file, name: i.held.name, full: { mime: i.held.mime, size: i.held.size, url: i.held.url } });
+    if (i.held) return viewing.set({ file: i.file, name: i.held.name, full: { mime: i.held.mime, name: i.held.filename, size: i.held.size, url: i.held.url } });
     const f = await queryClient.ensureQueryData(fileQuery(i.file)).catch(() => null);
     viewing.set({ file: i.file, version: i.version, name: f?.title || f?.name || 'File', full: { mime: f?.mime ?? '', kind: f?.library_kind, size: f?.size } });
   },
