@@ -836,6 +836,15 @@ def test_autoscale_backs_off_company_after_never_enrolled_worker(api, fleet, sca
     assert hq.machines[worker]["state"] == "deleted"
 
 
+def test_burst_backoff_keeps_the_later_time_exactly(company):
+    with company.transaction() as c:
+        cloud_machines.burst_backoff(c, 1795543025.9915733)
+        cloud_machines.burst_backoff(c, 1795546625.9915733)
+        cloud_machines.burst_backoff(c, 1795543055.9915733)
+        (value,) = c.execute("SELECT value FROM registry_metadata WHERE key=?", (cloud_machines.BURST_NEXT,)).fetchone()
+    assert value == "1795546625.9915733"
+
+
 def test_launch_failures_stop_scaling_across_keys_until_reenabled(api, fleet, scaler):
     store, base, _ = fleet
     manager, hq, clock = scaler

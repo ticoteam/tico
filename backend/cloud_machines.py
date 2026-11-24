@@ -1937,9 +1937,12 @@ def drain_managed_burst(c):
 
 
 def burst_backoff(c, at):
+    # Keep the later time's own text: SQLite 3.45 (Ubuntu 24.04's) writes a REAL back as text with 15 digits, which
+    # rounds an epoch with microseconds up or down, so a launch due exactly at the backoff waited for the next tick.
     c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-        "value=max(CAST(registry_metadata.value AS REAL),CAST(excluded.value AS REAL))",
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=CASE "
+        "WHEN CAST(excluded.value AS REAL)>CAST(registry_metadata.value AS REAL) THEN excluded.value "
+        "ELSE registry_metadata.value END",
         (BURST_NEXT, str(at)),
     )
 
