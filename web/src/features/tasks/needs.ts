@@ -80,26 +80,28 @@ export const isNeedsYouRead = (cur: unknown): boolean => {
 };
 
 /** Needs you with `wait` on `task` answered (null: all of it), as a change to each Needs you read (isNeedsYouRead):
-    one answered of several leaves the task's row, showing what still waits on it; its last takes the row, its
-    approvals, its Dot (`task_ids`), its place (`order`), what it waits on and one from each count. The one change an
-    answer, a hold decided and a release make, so the row and the Dot go everywhere at once. `read`: the list as read
-    before the answer. */
+    one answered of several leaves the task's row, showing what still waits on it (the next approval, the next ❓); its
+    last takes the row, its approvals, its Dot (`task_ids`), its place (`order`) and what it waits on. The menu's count
+    is then the list's own count, when the list is read (so a count a live read already brought down never falls
+    twice), else one less. The one change an answer, a hold decided and a release make, so the row and the Dot go
+    everywhere at once. `read`: the list as read before the answer. */
 export function needsYouWithout(task: string, wait: string | null, read: Flow | undefined = queryClient.getQueryData(flowQuery.queryKey)): (cur: unknown) => unknown {
   const left = needsYouLeft(task, wait, read);
   const leaves = !left.length;
   // a task only a grouped row names (a paused agent's) is no row of its own: no count falls
   const row = read?.items.some((w) => w.id === task) ?? true;
-  return (cur) => {
-    if (!isNeedsYouRead(cur)) return cur;
-    if ('wakeAt' in (cur as object)) {
-      const c = cur as { count?: unknown };
-      return leaves && row && typeof c.count === 'number' ? { ...c, count: Math.max(0, c.count - 1) } : cur;
-    }
-    const f = cur as Flow;
+  const apply = (f: Flow): Flow => {
     const approvals = f.approvals?.filter((a) => !(a.id === task && (wait === null || a.ask.requirement === wait)));
     if (!leaves) {
       const next = approvals?.find((a) => a.id === task);
-      const items = f.items.map((w) => (w.id === task && w.ask?.requirement === wait ? (next ?? { ...w, ask: undefined, about: undefined }) : w));
+      const items = f.items.map((w) => {
+        if (w.id !== task) return w;
+        const asked = w.questions?.find((q) => q.id === wait);
+        // the row stood for that approval: it shows the next one, else what else waits there
+        const base = w.ask?.requirement === wait ? (next ?? { ...w, ask: undefined, about: undefined }) : w;
+        // an answered ❓ goes from the row, so its card shows the next one, and its line no longer names the row
+        return { ...base, questions: w.questions?.filter((q) => q.id !== wait), ...(asked && base.reason === asked.line && { reason: undefined }) };
+      });
       return { ...f, items, ...(approvals && { approvals }), ...(f.waits && { waits: { ...f.waits, [task]: left } }) };
     }
     const items = f.items.filter((w) => w.id !== task);
@@ -114,6 +116,15 @@ export function needsYouWithout(task: string, wait: string | null, read: Flow | 
       ...(waits && { waits }),
       ...(approvals && { approvals }),
     };
+  };
+  return (cur) => {
+    if (!isNeedsYouRead(cur)) return cur;
+    if ('wakeAt' in (cur as object)) {
+      const c = cur as { count?: unknown };
+      if (!leaves || !row || typeof c.count !== 'number') return cur;
+      return { ...c, count: read ? apply(read).count : Math.max(0, c.count - 1) };
+    }
+    return apply(cur as Flow);
   };
 }
 

@@ -42,6 +42,12 @@ NEEDS_ITEM = obj(
         "description": "A ❓'s suggested answers, at most 3: a tap posts one as the person's reply (`ask` on POST "
         "/api/v2/tasks/{tid}/comments); empty for a free-text ❓",
     },
+    detail={
+        "type": "string",
+        "description": "A ❓'s lines after its first (`line`): the rest of what it asks, numbered questions included, "
+        "up to 2,000 characters (whole lines, then …); absent when it has none, or when the request itself may not "
+        "read its message (then `choices` is empty too)",
+    },
     shows={
         "type": "array",
         "items": {"type": "string"},

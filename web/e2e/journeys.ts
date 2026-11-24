@@ -137,6 +137,39 @@ test('Needs you: open the first case and approve its email; the send goes out an
   clean(page);
 });
 
+test('Needs you: answer a ❓ by tapping an answer on its card, on Tasks, without opening the task (desktop and phone)', async ({ browser, hub }) => {
+  const YES = 'Yes, ship it on Friday morning as planned';
+  const ask = (title: string) => call<{ id: string; number: number; title: string; mark: string }>(hub, `/_e2e/ask?title=${encodeURIComponent(title)}`, 'POST');
+  const asks = [await ask('Launch note timing'), await ask('Launch note on the phone')];
+  for (const [i, options] of [DESKTOP, PHONE].entries()) {
+    const it = asks[i]!;
+    const page = await open(browser, hub, '/tasks', options);
+    const needs = page.locator('section[aria-label="Needs you"]');
+    const row = needs.locator(`a.row.task[title="${it.title}"]`);
+    // the row's title still opens the task; the ❓ is a card under it, whole, with the agent's answers and a reply box
+    await expect(row).toHaveAttribute('href', new RegExp(`/task/${it.number}$`));
+    const card = row.locator('xpath=ancestor::div[contains(@class,"flow-item")]').getByRole('region', { name: 'Question' });
+    await expect(card).toContainText('Ship the launch note on Friday?');
+    await expect(card).toContainText('2. Should the beta list get it too?');
+    await expect(card.getByRole('textbox', { name: 'Reply' })).toBeVisible();
+    await page.screenshot({ path: test.info().outputPath(`needs-you-question-${options.viewport!.width}.png`), fullPage: true });
+    const opened = page.url();
+    // three answers of about 40 letters: each wraps whole on a phone, never squeezed into a narrow column
+    const answer = card.getByRole('button', { name: YES });
+    if (options === PHONE) expect((await answer.boundingBox())!.width).toBeGreaterThan(200);
+    await answer.click();
+    // answered: the row leaves Needs you, and the page never left Tasks
+    await expect(row).toHaveCount(0);
+    expect(page.url()).toBe(opened);
+    await page.screenshot({ path: test.info().outputPath(`needs-you-answered-${options.viewport!.width}.png`), fullPage: true });
+    // the tap was Dana's reply on the task's chat, and it cleared that ❓
+    await expect.poll(async () => (await sql(hub, `SELECT cleared_at FROM question_marks WHERE id='${it.mark}'`))[0]?.cleared_at ?? null).not.toBeNull();
+    const said = await sql(hub, `SELECT body FROM messages WHERE sender_id='human:dana' AND body='${YES}' ORDER BY created_at`);
+    expect(said).toHaveLength(i + 1);
+    clean(page);
+  }
+});
+
 test("an approval card in an agent's chat opens the case beside it; Close goes back", async ({ browser, hub }) => {
   const { subject } = hub.facts.mail;
   const page = await open(browser, hub, '/team/engineering-manager');

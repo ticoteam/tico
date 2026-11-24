@@ -658,8 +658,21 @@ export interface FlowItem {
   /** What its ask is about, when the server lets this person read it (Needs you `about`): a page ask's page title, a
       Finance OK's payee and amount. The row shows it in place of the task's title. */
   about?: string;
+  /** Each open ❓ an agent put to the person on the task, in Tico's order, whatever item the row stands for: its id as
+      Needs you names it (`qmark:<id>`), its line, the lines after it (`detail`), up to three answers it offers and the
+      agent that asks. The row's card answers the first. */
+  questions?: FlowQuestion[];
   entity_id?: string;
   reason?: string;
+}
+
+/** A ❓ on a task's row (FlowItem `questions`). */
+export interface FlowQuestion {
+  id: string;
+  line: string;
+  detail?: string;
+  choices: string[];
+  by: string | null;
 }
 
 /** An approval that waits on the person, always with the requirement it answers. */
@@ -694,23 +707,6 @@ export function useContactNames(pages: readonly (readonly Pick<FlowItem, 'entity
     refetchOnWindowFocus: true,
   })) });
   return new Map(reads.flatMap((read) => read.isSuccess && !read.isFetching ? Object.entries(read.data.names) : []));
-}
-
-export function useFlowGroups(items: readonly FlowItem[], pages: readonly (readonly Pick<FlowItem, 'entity_id'>[])[] = [items]) {
-  const names = useContactNames(pages);
-  const out = new Map<string, { key: string; name: string; items: FlowItem[] }>();
-  for (const it of items) {
-    const id = it.entity_id ?? '';
-    const name = names.get(id);
-    const key = name ? id : '';
-    let g = out.get(key);
-    if (!g) {
-      g = { key, name: name || 'Other', items: [] };
-      out.set(key, g);
-    }
-    g.items.push(it);
-  }
-  return [...out.values()];
 }
 
 export function flowTask(t: TaskItem): FlowItem {
@@ -872,6 +868,15 @@ export function useNeedsYouSort(flow: Flow | undefined): boolean {
   return !!until && over !== until;
 }
 
+/** A ❓ item as its task's row carries it. */
+const questionOf = (it: NeedsYouItem): FlowQuestion => ({
+  id: it.id,
+  line: it.line,
+  ...(it.detail && { detail: it.detail }),
+  choices: it.choices ?? [],
+  by: it.from_id ?? null,
+});
+
 /** One Needs-you row on a task, as Flow lists it. */
 const flowItemOf = (it: NeedsYouItem, t: NonNullable<NeedsYouItem['task']>): FlowItem => ({
   id: t.id,
@@ -888,6 +893,7 @@ const flowItemOf = (it: NeedsYouItem, t: NonNullable<NeedsYouItem['task']>): Flo
   reason: it.line || t.turn?.line,
   ...(it.ask && { ask: { kind: it.ask.kind, by: it.ask.asked_by ?? null, shows: it.ask.shows ?? [], line: it.line, requirement: it.ask.requirement_id } }),
   ...(it.about && { about: it.about }),
+  ...(it.kind === 'question' && { questions: [questionOf(it)] }),
   // Paid shots to reconcile (backend/paid_renders.py): no ask to show, so the row says so beside the task's title.
   ...(it.requirement_id?.startsWith('paid_render:') && { about: `${it.line} · ${t.title}` }),
 });
@@ -936,9 +942,13 @@ export const flowQuery = queryOptions({
       }
       const at = seen.get(t.id);
       if (at !== undefined) {
-        const row = items[at];
-        if (row && it.requirement_id?.startsWith('paid_render:')) items[at] = { ...row, about: `${it.line} · ${row.about || row.title}` };
-        else if (row && !row.about && it.about) items[at] = { ...row, about: it.about };
+        let row = items[at];
+        if (!row) continue;
+        // a ❓ shows on its task's row whatever item the row stands for (an email's OK ordered first, another ❓)
+        if (it.kind === 'question') row = { ...row, questions: [...(row.questions ?? []), questionOf(it)] };
+        if (it.requirement_id?.startsWith('paid_render:')) row = { ...row, about: `${it.line} · ${row.about || row.title}` };
+        else if (!row.about && it.about) row = { ...row, about: it.about };
+        items[at] = row;
         continue;
       }
       seen.set(t.id, items.length);
