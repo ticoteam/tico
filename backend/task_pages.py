@@ -224,8 +224,8 @@ def _refuse(conn: "sqlite3.Connection", by: str, rule: str, detail: str, task_id
 # What a page for an OK is refused with when it is not HTML: what to do instead, in a few words the bot can act on.
 NOT_HTML = (
     "A page for an OK must be HTML, and this version is not (it reads as Markdown or plain text). Write it as HTML: "
-    "two or three lines at the top saying what it is and what to decide, then the sections, with simple inline CSS and "
-    "screenshots as images. Every such page: .claude/skills/build-the-page (a spec, Checked in production, a review, a QA "
+    "a title, one line saying what the page is, clickable contents, then short sections of bullets, with simple inline "
+    "CSS and screenshots as images. Every such page: .claude/skills/build-the-page (a spec, Checked in production, a review, a QA "
     "page). "
     "Then tico page publish the .html and attach the new version."
 )

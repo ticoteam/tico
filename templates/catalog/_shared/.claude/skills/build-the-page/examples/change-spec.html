@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>One stall system</title>
+<style>
+.pg{max-width:1000px;margin:0 auto;padding:16px;font:var(--t-base)/1.55 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-xl,28px);line-height:1.2;margin:8px 0 6px}
+.desc{font-size:var(--t-md);color:var(--muted);margin:0 0 16px;max-width:68ch}
+.toc{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0 0 8px}
+.toc b{font-size:var(--t-sm);color:var(--muted)}
+.toc ol{margin:4px 0 0;padding-left:22px}
+.pg a{color:var(--accent,#2f5fd0)}.toc a{color:var(--ink)}
+.pg h2{font-size:var(--t-lg);margin:32px 0 8px}
+.pg h3{font-size:var(--t-md);margin:20px 0 6px}
+.pg p,.pg li{max-width:72ch}
+.pg li{margin:3px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.pair>*{flex:1 1 300px;min-width:0}
+figure{margin:0 0 12px;max-width:100%}
+figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
+figcaption{color:var(--muted);margin-top:6px}
+/* A chart: one labelled bar per number, its value inside, readable without a legend. */
+.bars{display:grid;grid-template-columns:max-content 1fr;gap:6px 10px;align-items:center;max-width:640px}
+.bars i{display:block;min-width:2.5em;padding:2px 8px;border-radius:4px;background:var(--accent,#2f5fd0);color:var(--on-accent,#fff);font-style:normal;font-size:var(--t-sm);white-space:nowrap}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-sm) var(--mono)}
+code{font-family:var(--mono);overflow-wrap:anywhere}
+</style></head><body><main class="pg">
+<h1>One stall system</h1>
+<p class="desc">This is a spec to make stuck tasks, blocked ones too, wake their agent instead of a person. About 4 build days.</p>
+<nav class="toc" aria-label="Contents"><b>Contents</b><ol>
+  <li><a href="#behaviour">Today and after</a></li>
+  <li><a href="#why">Why now</a></li>
+  <li><a href="#criteria">Done when</a></li>
+  <li><a href="#scope">Scope</a></li>
+  <li><a href="#plan">Plan</a></li>
+</ol></nav>
+
+<section id="behaviour">
+  <h2>Today and after</h2>
+  <div class="pair">
+    <div><h3>Today</h3><pre>Build stage rules
+Owner on the team   block
+Quiet agent tasks   6 h, not blocked
+Late                hidden, built in</pre></div>
+    <div><h3>After</h3><pre>Build stage rules
+Owner on the team   block
+Quiet agent tasks   6 h, blocked too
+Late                24 h, owner agent</pre></div>
+  </div>
+  <ul>
+    <li>Late becomes a rule each stage shows and can edit; the manager hears 6 h after the agent.</li>
+    <li>No timer ever hands a task to a person.</li>
+  </ul>
+</section>
+
+<section id="why">
+  <h2>Why now</h2>
+  <figure class="chart" aria-label="Where Acme's 6.5 hour run went">
+    <div class="bars">
+      <span>Working</span><i style="width:46%">3 h</i>
+      <span>Stalled, fixed here</span><i style="width:31%">2 h</i>
+      <span>Stalled, other fix</span><i style="width:23%">1.5 h</i>
+    </div>
+    <figcaption>Acme's 6.5 h run, from its task log.</figcaption>
+  </figure>
+  <ul>
+    <li>All 4 blocked tasks at Acme sat 35 to 72 h with nobody told.</li>
+    <li>Late fired 202 times on 175 tasks in 14 days; 22 fired twice; none was on a person's own task.</li>
+  </ul>
+</section>
+
+<section id="criteria">
+  <h2>Done when</h2>
+  <ol>
+    <li>Given any stage, when its rules open, then a Late rule shows with its hours. <i>before release</i></li>
+    <li>Given a task behind a quiet blocker for 6 h, then its owner agent wakes once. <i>before release</i></li>
+    <li>Given any timer firing, then no message goes to a person. <i>before release</i></li>
+  </ol>
+</section>
+
+<section id="scope">
+  <h2>Scope</h2>
+  <ul>
+    <li>In: Late as a rule, blocked tasks in Quiet agent tasks, one wake per stall.</li>
+    <li>Out: timers on a person's own tasks; they decide when to look.</li>
+  </ul>
+</section>
+
+<section id="plan">
+  <h2>Plan</h2>
+  <ol>
+    <li>Move the built-in Late timer into the stage rules; about 400 lines out, 120 in.</li>
+    <li>Count blocked tasks in Quiet agent tasks, once per stall.</li>
+  </ol>
+</section>
+</main></body></html>

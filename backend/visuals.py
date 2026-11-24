@@ -228,7 +228,12 @@ class _Cleaner(HTMLParser):
         if rel_link and any(word in rel.split() for word in ("dns-prefetch", "preconnect", "prefetch", "prerender")):
             return
         if lowered == "a":
-            attrs.append(' target="_blank" rel="noopener noreferrer"')
+            # A link to a place in the page (its contents) stays in the page, over the page's <base target="_blank">.
+            hrefs = [
+                html.unescape(value.strip("\"'")) for _, key, _, value in ATTR.findall(body) if key.lower() == "href"
+            ]
+            inside = any(href.strip().startswith("#") for href in hrefs)
+            attrs.append(' target="_self"' if inside else ' target="_blank" rel="noopener noreferrer"')
         self.case[lowered] = name
         self.out.append("<" + name + "".join(attrs) + end)
         if lowered == "head" and self.base_target and not self.based:
@@ -297,7 +302,8 @@ class _Cleaner(HTMLParser):
 def clean(data, kind, base=True):
     """(bytes, unembedded): a page or SVG with every reference that would load from somewhere else removed, and the
     list of those references, in order. Embedded data: URIs stay. Scripts, frames and event handlers are dropped (v1
-    is static). A page's links open in a new tab, and it gets <base target="_blank">."""
+    is static). A page's links open in a new tab, and it gets <base target="_blank">; a link to a place in the page (#id)
+    stays in it."""
     text = data.decode("utf-8", errors="replace")
     cleaner = _Cleaner(base_target=base and kind == "page")
     cleaner.feed(text)

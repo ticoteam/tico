@@ -2,43 +2,35 @@
 
 Use it in steps 5 and 6. For each section: what it is for, what goes in, and a bad and a good line. The examples are invented.
 
-The section ids are the ones Tico's templates use. `page.py check` requires `goal`, `details`, `scope` and `criteria` in every spec, plus `pictures` in a screen spec, `behaviour` in a change spec, and `report`, `cause` and `solution` in a bug spec. Keep every section the template has; write "None." in one that has nothing.
+The section ids are the ones Tico's templates use. `page.py check` requires `criteria` and `scope` in every spec, plus `pictures` in a screen spec, `behaviour` in a change spec, and `report`, `cause` and `solution` in a bug spec. Each section is an H2 the contents link. Delete an optional section with nothing to say, and its link.
 
-## Above the line
+## The top
 
-### Goal (`#goal`, inside `#lead`)
+### The line under the title (`<p class="desc">`)
 
-For: the person deciding. Who it is for and what they can do afterwards that they cannot now. One sentence, no "so that we".
+For: everyone. What the page is and what it is for, in one plain sentence starting "This is a spec to". It is the goal: who it is for and what they can do afterwards that they cannot now. At most 40 words. Anything the OK must cover knowingly (a cost, a change customers will notice, billing, privacy) goes in it too.
 
 - Bad: "Improve the invoicing flow."
-- Good: "A tradesperson who marks a job done can send its invoice with one tap, before leaving the site."
-
-### Decide (inside `#lead`)
-
-For: making the OK mean something. What the reader agrees to, plus anything they would be upset to learn afterwards: a real assumption, a cost, a change customers will notice, a privacy or legal point.
-
-- Bad: "Please review."
-- Good: "OK this spec, or send it back with what is wrong. Assumed: the invoice is never sent without a tap. Customers will see a new screen after Mark done."
-
-The whole lead is at most 70 words.
+- Bad: "Invoices go out days late because Mark done returns to the list; this spec fixes that; OK it or send it back."
+- Good: "This is a spec to let a tradesperson send a job's invoice with one tap when they mark it done."
 
 ### Report and cause (bug spec only: `#report`, `#cause`)
 
-The report is the customer's or teammate's own words, cut to two lines, with who (by id) and where. The cause is the root cause in the code with `path:line`, found, not guessed.
+Two one-line bullets in `#report`. The report is the customer's or teammate's own words, cut to one line, with who (by id) and where. The cause is the root cause in the code with `path:line`, found, not guessed.
 
 - Bad: "Users report sync issues. Probably a race condition."
-- Good: "Report: 'Sent the invoice twice to the same customer' (ticket T-2291, account 3052, 2026-11-09). Cause: `invoices/send.py:88` retries on timeout without checking whether the first send completed."
+- Good: "Reported: 'Sent the invoice twice to the same customer', account 3052, ticket T-2291, 2026-11-09." and "Cause: `invoices/send.py:88` retries on timeout without checking the first send."
 
 ### Pictures (`#pictures`, or `#solution` in a bug spec)
 
 For: carrying the idea. Before and after, phone then desktop, one pair per screen in the order a person meets them. At most five arrows a picture. Under each picture, one line per arrow number.
 
 - Bad caption: "The new improved job screen."
-- Good caption: "Phone, 390 px, with the change. 1: Mark done now opens the invoice. 2: lines and total come from the quote. 3: Send."
+- Good caption: "After, phone. 1: Mark done opens the invoice. 2: lines and total from the quote. 3: Send."
 
 A change with no screen (`#behaviour`): two code blocks, the real call and real output today and with the change.
 
-## Below the line (`#details`)
+## The sections
 
 ### Done when (`#criteria`)
 
@@ -63,14 +55,14 @@ For: proving the spec fits what actually happened. Three to five lines. Account 
 - Bad: "As a busy user, I want to invoice quickly so that I get paid faster."
 - Good: "Account 4417, solo electrician: finished four jobs on 2026-10-27 and invoiced all four on 2026-11-01, from home. Covered by 1, 2."
 
-A persona or a user story is not a real case. If there are no real cases, write "missing: no recorded cases; first three come from `learn-from-customers`" and say so in the Decide line.
+A persona or a user story is not a real case. If there are no real cases, write "missing: no recorded cases; first three come from `learn-from-customers`".
 
 ### Why now and how we will know (`#why`)
 
-For: the person deciding whether this is worth doing, and the person who will judge it later. Evidence lines (count, kinds of source, date, finding id), one or two exact quotes, the number and its denominator, the appetite, then the measure, baseline, target, read date and guard.
+For: the person deciding whether this is worth doing, and the person who will judge it later. The main number as a chart (`<figure class="chart">`), then one-line bullets: evidence (count, kinds of source, date, finding id), one exact quote, the appetite, and the measure with its baseline, target, read date and guard.
 
 - Bad: "Many customers have asked for this and it should increase engagement."
-- Good: "17 accounts send invoices days after the job (finding F-03, pattern, tickets and calls, 2026-11-10). Median days from done to sent: 3.2 across 1,904 jobs (query `invoice-lag`, 2026-11-12). Appetite: small. Read 2026-12-16."
+- Good: a chart of days from done to sent (median 3.2 across 1,904 jobs, query `invoice-lag`, 2026-11-12), then "17 accounts send invoices days after the job (finding F-03, 2026-11-10)." and "Appetite: small. Read 2026-12-16."
 
 A bug that only needs fixing says who it hurts and how often, in one line.
 
@@ -94,11 +86,11 @@ For: making gaps visible instead of hidden. Each question, who owes the answer, 
 
 ### Sections the team added
 
-Anything `knowledge/spec-format.md` names goes in the details, after Release needs.
+Anything `knowledge/spec-format.md` names is its own H2, after Release needs.
 
 ## What a spec does not contain
 
-- Options that were not chosen (they are on the ideas page and in the ledger).
+- Options that were not chosen (they are on the ideas page and in the ledger), or options for the reader to pick from.
 - A timeline or a delivery date.
 - Personas, user stories without a real account behind them, market sizing.
 - Drawn mock-ups or wireframes.

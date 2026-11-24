@@ -94,9 +94,11 @@ Owner templates all take). Seven templates: a bug spec (the report, the root cau
 after), a feature spec for a screen and one for a change with no screen (the goal, then the change before and after),
 a Review page, the Feature Owner's QA report (the result and what was not checked, then each acceptance criterion with its
 result and proof), the release report for a batch (a changelog for customers with a screenshot per change, then why
-we are confident, the plan and at most three risks), and the Checked in production page. Each opens with what it is
-and what to decide in two or three lines, then real
-screenshots of the app at phone (390 px) and desktop width with red numbered arrows, then the details. Screenshots are
+we are confident, the plan and at most three risks), and the Checked in production page. Each follows eight rules:
+less is more; a title and one line saying what the page is ("This is a spec to..."), which is its summary; clickable
+contents linking every section; one H1, then H2 and H3; one-line bullets, no eyebrows or stacked captions; charts for
+numbers and real screenshots of the app at phone (390 px) and desktop width with red numbered arrows; no decision
+forms, since what to OK is plain from what the page is; and facts, not filler. `examples/change-spec.html` is a real one. Screenshots are
 never drawn: production through the read-only view (`tico bot app-shot`), and the branch through the demo. The skill's `page.py` embeds the pictures, checks the page against those rules, and draws
 the published copy at both widths, which the bot looks at before it attaches the page. In Validate, the Feature Owner
 does the checking itself; a person never does. Existing bots take the skill and their playbooks at their next template

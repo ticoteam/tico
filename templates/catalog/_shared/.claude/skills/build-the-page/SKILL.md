@@ -1,154 +1,114 @@
 ---
 name: build-the-page
-description: Build any page a person reads to decide - a spec, a Review page, a QA page, a release report or a Checked in production page - as one HTML page from a ready template. It opens with what it is and what to decide in two or three lines, then real screenshots of the app at phone and desktop width with red numbered arrows, then the details. page.py embeds the screenshots, checks the page and renders the published copy before it is attached. Read before you write any of those pages.
+description: Build any page a person reads - a spec, a Review page, a QA page, a release report, a Checked in production page, a plan or a report - as one clear HTML page from a ready template. Title, one line saying what the page is, clickable contents, then short sections of bullets, charts and real screenshots. page.py embeds the screenshots, checks the page against the eight rules and renders the published copy. Read before you write any page a person reads.
 metadata:
   function: tico
 ---
 
 # Build the page
 
-A person reads a page to decide: OK a spec, ship a change, start a release. They read it in a minute, on a phone or a
-desktop, without opening the app or the code, and finish it with no doubt about what they are agreeing to. So every
-page is built the same way, from one of seven templates, and is never sent until it was seen rendered.
+A person reads a page in a minute, on a phone or a desktop, without opening the app or the code. A good page is short,
+plain and visual. `examples/change-spec.html` is a real one: read it before you write your first page.
 
-## The seven rules
+## The eight rules
 
-1. **The opening says what it is and what to decide.** Two or three short lines in `<div id="lead">`: what the page is
-   about and its result, then a line that starts **Decide:**. A bug spec opens with **Report:**, any other spec with
-   **Goal:**. At most 70 words.
-2. **Then the pictures. Details last.** Before and after, at phone (390 px) and desktop (1280 px; 1440 px when both
-   sides come from the demo) width, with a red numbered arrow on each thing that changes or is measured. Under each
-   picture, one line per number. Then
-   `<section id="details">`: criteria, scope, plan, the head commit, whatever the template names.
-3. **Pictures are real screenshots of the app, never drawings.** No mock-up drawn in HTML, CSS or SVG: drawn screens
-   look nothing like the app and are sent back. Before is the app today; after is the app running with the change
-   applied (below). A change with no screen shows its real call and real output instead, and no picture.
-4. **One page.** Everything the reader needs is on it; nothing is "attached separately". One HTML file, under 8 MB,
-   no script, nothing loaded from outside (the pictures go in as `data:` URIs: `page.py build` does it).
-5. **Seen before it is sent.** After publishing, render the published page and look at it at both widths. A page that
-   does not draw, has a broken picture or a misplaced arrow is fixed and published again. It is never attached broken.
-6. **Every sentence names something specific**: a number, a screen, a file, a person, a command. Cut any sentence
-   that would fit another page, and any section that only restates the top. No "overview", "summary", "benefits",
-   "considerations" or "next steps". A section with nothing in it says "Nothing." or "None."
-7. **Colour comes from the tokens.** Keep the template's `<style>` block. Colour only through its tokens (`var(--ink)`,
-   `var(--muted)`, `var(--surface)`, `var(--line)`...), which the app supplies in light and dark. No hex or rgb colour of
-   your own. A page that really needs one also gives dark values, under `@media (prefers-color-scheme: dark)`.
-   `page.py check` refuses a page that breaks this.
+1. **Less is more.** Few words, plain English, no jargon. If two lines can be one, merge them.
+2. **The line under the title says what the page is.** `<p class="desc">This is a spec to ...</p>`, one plain
+   sentence, at most 40 words. It is the summary: no Summary section, no boxed opening, no date line.
+3. **Clickable contents.** `<nav class="toc">` right after that line, linking every H2. Sections stay open.
+4. **Semantic headings.** One H1 (the title), then H2 for each section and H3 inside it. Headings say what is inside.
+5. **Bullets, one line each.** One style per item. Never stack a heading, a bullet and a grey caption that say one
+   thing; no eyebrow labels over headings. No paragraph over 50 words.
+6. **Pictures first.** Numbers as a chart, screens as real screenshots. A chart reads without explanation: every bar
+   labelled, its value on it.
+7. **No picks or decision forms.** What to do is plain from what the page is: a spec is OK'd, a QA page approved. No
+   "Decide" line, no options to choose from, no form.
+8. **Facts, not filler.** Numbers, screens, files and real cases. One word for one thing, the same on every line. Cut
+   any sentence that would fit another page.
 
 The page brings the proof. It never asks its reader to test, look at the app, or send a screenshot.
 
 ## Which template
 
-| Page | Template | Kind | Who |
-|---|---|---|---|
-| A spec for a bug | `templates/bug-spec.html` | `bug-spec` | Feature Owner, Spec |
-| A spec for a new feature or change on a screen | `templates/screen-spec.html` | `screen-spec` | Feature Owner, Spec |
-| A spec for a change with no screen (API, command, job) | `templates/change-spec.html` | `change-spec` | Feature Owner, Spec |
-| A Review page | `templates/review.html` | `review` | Reviewer, Review |
-| The QA page | `templates/qa.html` | `qa` | Feature Owner, QA |
-| The release report, one for a batch | `templates/release.html` | `release` | Release Owner |
-| Checked in production | `templates/validation.html` | `validation` | Feature Owner, Validate |
+| Page | Template, kind | Who |
+|---|---|---|
+| A spec for a bug | `bug-spec` | Feature Owner, Spec |
+| A spec for a change on a screen | `screen-spec` | Feature Owner, Spec |
+| A spec for a change with no screen (API, command, job) | `change-spec` | Feature Owner, Spec |
+| A Review page | `review` | Reviewer |
+| The QA page | `qa` | Feature Owner or Builder, QA |
+| The release report for a batch | `release` | Release Owner |
+| Checked in production | `validation` | Feature Owner, Validate |
+| Anything else: a plan, a research report, an update | the closest template's shape | Anyone |
 
-What goes at the top, before `#details`:
-- **Bug spec:** the report (quoted, cut to two lines, who and where), the root cause with `path:line`, the goal, then
-  the solution before and after with arrows.
-- **Feature spec:** the goal (who, and what they can do after that they cannot now), then the solution before and
-  after, one pair per screen in the order a person meets them.
-- **QA page:** the result and what was not checked, then the verdict strip (four tiles: criteria passed of those due
-  before release, checks at the head, open review findings, risk in five words or fewer; then "Approve = ship to
-  production"), the plan (the spec's acceptance criteria, one row each, in its order, with how each was checked and
-  pass, fail or after launch), the proof, how it works (the parts the change touches as boxes, the changed ones
-  `class="box changed"`, and the files changed with their lines and a total; a one-file change names its file
-  instead), risk and rollback (how to undo it, and whether stored data changes), then the findings. Output over 10
-  lines (a log, the CI job list) is folded in a `<details>`.
-- **Release report:** the changelog first, written for customers, then why we are confident, the plan and the biggest
-  risks (three at most).
+Each template is `templates/<kind>.html`. Keep its sections in order. Delete an optional section that would say
+nothing, and its contents link; `page.py check` names the sections a kind must keep. A section it requires that has
+nothing in it says "Nothing." or "None."
 
-Below the line, only what the builder, QA or release needs. Each template has the sections its stage's checker reads
-(a spec: goal, scope, acceptance criteria; a review: the head commits, each model's checks and findings; QA: the
-strip, the proof, how it works, risk and rollback, the checks at the head, what each reviewer found; Checked in production: the version and what was run there).
-Keep every section; write "Nothing." in one that has nothing, and delete the pictures only where no screen changed
-(show the call and its output in two `<pre>` blocks instead, and say so in the opening).
+## Pictures
 
-## Real screenshots
+**Charts.** For a number, a comparison or a share, use the template's bars, one row per number:
 
-Name each file `shots/<screen>-<before|after>-<390|1280|1440>.png` (1440 when both sides come from the demo; for
-validation, `shots/<screen>-<390|1280>.png`), and say the same width in the picture's caption.
+    <figure class="chart" aria-label="Where the 6.5 h went">
+      <div class="bars"><span>Working</span><i style="width:46%">3 h</i><span>Stalled</span><i style="width:31%">2 h</i></div>
+      <figcaption>Source and date.</figcaption>
+    </figure>
 
-- **Production, as it is today** (every validation picture; a spec's before only where no demo runs): the read-only view, signed in as
-  yourself.
+**Screenshots** are real, never drawn: no mock-up in HTML, CSS or SVG. Before is the app today; after is the app
+running with the change. Name each `shots/<screen>-<before|after>-<390|1280|1440>.png` (validation:
+`shots/<screen>-<390|1280>.png`); the caption says today or after, and phone or desktop.
 
-      tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-before-390.png
-      tico bot app-shot /#/<screen> --width 1280 --out shots/<screen>-before-1280.png
+- **Production today** (every validation picture; a spec's before only where no demo runs), signed in as yourself:
+  `tico bot app-shot /#/<screen> --width 390 --out shots/<screen>-before-390.png` (and `--width 1280`; `--full` for
+  the whole page). Refused: the bot's **Can view the app (read only)** setting is off; an owner or admin turns it on
+  (`tico bot app-view <bot> on`). Say so in the task note; a spec uses the demo, a validation marks those checks
+  "Not checked" (a demo never proves production).
+- **The app with the change** (a spec's after, a review's before and after): the repository's demo, run from a branch
+  with the change. In Tico: build web/ (`npm ci && npm run build`), run `python3 -m backend.demo --port <port>` on each
+  side, and take each page in Playwright at 1440 and 390 px. A pair comes from one source: for a spec, both from the
+  demo (before on `origin/main`, after on your branch), named `-1440`.
+- **A spec, before anything is built:** make a local branch with the smallest change that shows the result, run the
+  demo, take the after picture. Never push it. Too big for an hour: show the before with arrows and say what changes.
+- **Another repository:** its demo or dev server as `knowledge/standards.md` says, at the same widths.
+- **A release report** takes no new pictures: each changelog entry reuses the after picture from its QA page.
+- **No screen changes:** show the real call and its real output, today and after, in two `<pre>` blocks.
 
-  `--full` takes the whole page. If it is refused, the bot's **Can view the app (read only)** setting is off: an owner or
-  admin turns it on (`tico bot app-view <bot> on`). Say so in the task note, and use the demo below for before.
-- **The app with the change applied** (a spec's after, a review's before and after): the repository's demo, run from a
-  branch with the change on it. In Tico's own repository, build the web app (`npm ci && npm run build` in web/), run
-  the demo (`python3 -m backend.demo --port <port>`) on each side, and take each changed page in Playwright at desktop
-  1440 px and phone 390 px. Name them `<page>-<width>-before.png` and `<page>-<width>-after.png` and use those names in
-  `data-shot`.
+Crop to what matters. Never show one person's real data: use your own view, the demo or a test account.
 
-  The demo's desktop pictures are 1440 px wide; production's are 1280. A before and after pair comes from one source,
-  so both sides match: for a spec, take both from the demo (before on `origin/main`, after on your branch), and name
-  them `-1440` instead of `-1280`. Never pair a 1280 production before with a 1440 demo after.
-
-  For a spec, nothing is built yet: make a local branch, apply the smallest change that shows the result (the copy,
-  the layout, the new row), run the demo and take the after picture. That branch is never pushed. Where the change is
-  too big to apply in an hour, show the before with arrows and say in its caption what will change; still draw nothing.
-- **Another repository**: run its demo or dev server the way `knowledge/standards.md` says, and take the pictures
-  with the same widths.
-- **A release report** takes no new pictures: each changelog entry reuses the after picture from that task's QA page
-  (or its spec, where QA showed output only), without arrows.
-
-Crop each picture to what matters, keeping enough around it to place it. A screen only another person sees is shot on
-your own view, the demo or a test account; never one person's real data.
-
-## Arrows
-
-Each `<figure data-shot="...">` in a template takes its arrows in `data-arrows`, in the picture's own pixels:
-
-    <figure data-shot="shots/drawer-before-390.png" data-arrows="1: 600,120 -> 420,1500; 2: 80,300 -> 160,420">
-
-`1: 600,120 -> 420,1500` is arrow 1, from its numbered tail to its head. Open the picture to read the positions. A phone
-picture from `tico bot app-shot` is twice its width in pixels (780 for 390). Point at the thing, not on it; at most
-five arrows a picture, and the same number for the same thing in the before, the after and the criterion that checks
-it. `page.py build` draws them in Tico's red (`var(--fail)`, with a fallback so it stays red outside the app), scaled to the picture.
+**Arrows.** Each `<figure data-shot="...">` takes red numbered arrows in `data-arrows`, in the picture's own pixels:
+`data-arrows="1: 600,120 -> 420,1500; 2: 80,300 -> 160,420"` (arrow 1 from its numbered tail to its head). A phone
+picture from `app-shot` is 780 px wide for 390. At most five a picture; the same number for the same thing in the
+before, the after and the criterion that checks it. One line per number in the caption.
 
 ## Steps
 
 1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
-   `reports/YYYY-MM-DD-checked-<slug>.html`.
-   Replace every `{{...}}`. Keep its styles (rule 7): they use only Tico's colour tokens, so the page follows light and dark.
-2. Take the screenshots and set the arrows.
-3. Build and check it (`page.py` is in this skill's folder):
+   `reports/YYYY-MM-DD-checked-<slug>.html`. Replace every `{{...}}`. Keep its `<style>`: colour only through its
+   tokens (`var(--ink)`, `var(--muted)`, `var(--surface)`, `var(--line)`, `var(--accent)`), which follow light and dark.
+   A colour of your own needs dark values under `@media (prefers-color-scheme: dark)`.
+2. Take the screenshots, set the arrows, draw the charts.
+3. Build and check:
 
        python3 .claude/skills/build-the-page/page.py build <draft>.html --out <page>.html
-       python3 .claude/skills/build-the-page/page.py check <page>.html --kind <kind from the table>
+       python3 .claude/skills/build-the-page/page.py check <page>.html --kind <kind>
 
-   `check` names each rule the page breaks: the opening, the sections, a picture that is not a screenshot, a picture
-   in the details, a placeholder left, a request to test, filler, length, more than three risks, a pull request
-   number in a changelog. Fix each and build again. A spec over its usual length (1,200 words, 1,000 for a change
-   spec) is a warning, not a failure: a spec may be long when clarity needs it, so cut every word that does not help
-   and keep the rest. Every other page's length is a rule.
-4. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--as Spec` for a spec (or
-   the document's name). It prints the file id and anything it removed. Anything of yours removed is a fault to fix;
-   with `--as Spec`, Tico's own fonts (`/vendor/fonts/...woff2`, from the app styles it adds) are always listed and are
-   not a fault.
-5. Render the published page and look at it:
+   `check` names each rule the page breaks. Fix each and build again. A spec over its usual length (1,200 words, 1,000
+   for a change spec) and a bullet over 30 words are warnings: cut what does not help, keep what clarity needs.
+4. Cut. Read it once more and remove every word the reader does not need. Most first drafts are twice too long.
+5. Publish it on the task: `tico page publish <page>.html --task <id> --title "<title>"`, with `--as Spec` for a spec
+   (or the document's name). It prints the file id and anything it removed; anything of yours removed is a fault to
+   fix (with `--as Spec`, Tico's own fonts are always listed and are not).
+6. Render the published page and look at it:
 
        python3 .claude/skills/build-the-page/page.py render <file id> --kind <kind>
 
-   It checks the published copy again and draws it at 390 and 1280 px. Open both pictures it names and look: the
-   opening at the top, every screenshot drawn, every arrow on its target, nothing cut off at 390 px. With the read-only
-   view on, also look at it as people see it in the app:
-   `tico bot app-shot /#/page/<file id> --width 390 --full --out render-390.png`. Fix, publish again (a new version) and
-   render again until it is right.
-6. Attach it to the requirement `tico task show` names:
-
-       tico task attach <id> page:<file id> --req "<requirement>" --version N
+   Open both pictures it names: the title and its line at the top, the contents, every screenshot drawn, every arrow
+   on its target, nothing cut off at 390 px. With the read-only view on, also
+   `tico bot app-shot /#/page/<file id> --width 390 --full --out render-390.png`. Fix, publish again and render again
+   until it is right.
+7. Attach it where `tico task show` names the requirement: `tico task attach <id> page:<file id> --req "<requirement>" --version N`.
 
 ## Done
 
-The requirement holds a page that opens with what it is and what to decide, shows real screenshots with numbered
-arrows, keeps its details last, names something specific in every sentence, and that you saw rendered at both widths.
+The page has a title, one line saying what it is, contents linking every H2, short sections of one-line bullets,
+charts for its numbers and real screenshots for its screens. `check` passes, and you saw it rendered at both widths.

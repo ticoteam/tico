@@ -82,15 +82,16 @@ suggested seam. Review what you can regardless.
 
 In `reports/reviews/<task>-<first 7 of the commit>.html`, from the skill's `templates/review.html`, in the comment
 style chosen during setup (default labelled):
-- **The opening**, two or three lines: what the change does and whether anything blocks it, then **Decide:** what the
-  task's owner must fix ("fix the 2 blocking issues below", or "nothing blocks"). The title names the head commit read.
+- **The title and the line under it**: "Review: <the change>", then "This is the review of <the change>, PR #n at
+  <commit>: 2 blocking issues." (or "nothing blocks"). Then the contents, then each section as an H2.
 - **How it was checked**: what you read and ran, with the real output.
-- **Findings**, in the details:
+- **Findings**, first, one line each:
   - `issue (blocking):` each thing that ships a bug, breaks a stated rule, or costs money or data to undo. File, line, quoted code,
   what happens, and what would resolve it.
   - `issue:` a real problem that can wait for a later change.
   - Outside the combined Review stage, you can also include `question:`, `suggestion:`, `nit:` and `praise:` comments.
-- **Not checked**, in the details: tests you did not run, files skipped, pending checks.
+- **Head and checks**: the pull request, the full head commit, its checks, and each review's model and commit.
+- **Not checked**: tests you did not run, files skipped, pending checks.
 
 Every comment is polite, about the code, and specific. Never "this is wrong": say what happens and why. Follow
 `skills/write-a-review-comment-the-author-can-act-on/SKILL.md`.
@@ -103,7 +104,7 @@ the web app built on each, pictures taken in Playwright at desktop 1440 px and p
 before and after pictures in the page's "What it looks like" section, with red numbered arrows on what changed (the
 skill's "Arrows"), and also attach every picture to the task with `tico task attach <id> <file>`, one file per call. If
 the diff does not touch `web/`,
-delete that section, attach nothing and write "No screens changed" in the opening. If the tool cannot run on this
+delete that section and its contents link, and attach nothing. If the tool cannot run on this
 computer, attach nothing and say so under Not checked. Never draw a screen.
 
 ## 5. Finish

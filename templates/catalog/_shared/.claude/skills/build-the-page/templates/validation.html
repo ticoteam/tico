@@ -1,46 +1,69 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Checked in production: {{change}}</title>
+<title>Checked in production: {{the change}}</title>
 <style>
-.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
-.pg h1{font-size:var(--t-lg);margin:0 0 8px}
-.pg h2{font-size:var(--t-md);margin:24px 0 8px}
-#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
-#lead p{margin:2px 0}
-.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
-figure.shot{margin:0;max-width:100%}
+.pg{max-width:1000px;margin:0 auto;padding:16px;font:var(--t-base)/1.55 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-xl,28px);line-height:1.2;margin:8px 0 6px}
+.desc{font-size:var(--t-md);color:var(--muted);margin:0 0 16px;max-width:68ch}
+.toc{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0 0 8px}
+.toc b{font-size:var(--t-sm);color:var(--muted)}
+.toc ol{margin:4px 0 0;padding-left:22px}
+.pg a{color:var(--accent,#2f5fd0)}.toc a{color:var(--ink)}
+.pg h2{font-size:var(--t-lg);margin:32px 0 8px}
+.pg h3{font-size:var(--t-md);margin:20px 0 6px}
+.pg p,.pg li{max-width:72ch}
+.pg li{margin:3px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.pair>*{flex:1 1 300px;min-width:0}
+figure{margin:0 0 12px;max-width:100%}
 figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
-figcaption{color:var(--muted);margin-top:6px;max-width:640px}
+figcaption{color:var(--muted);margin-top:6px}
+/* A chart: one labelled bar per number, its value inside, readable without a legend. */
+.bars{display:grid;grid-template-columns:max-content 1fr;gap:6px 10px;align-items:center;max-width:640px}
+.bars i{display:block;min-width:2.5em;padding:2px 8px;border-radius:4px;background:var(--accent,#2f5fd0);color:var(--on-accent,#fff);font-style:normal;font-size:var(--t-sm);white-space:nowrap}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-sm) var(--mono)}
+code{font-family:var(--mono);overflow-wrap:anywhere}
 .met{color:var(--ok,#2f7a4f);font-weight:600}.notmet{color:var(--fail,#c53030);font-weight:600}.nc{color:var(--wait,#b7791f);font-weight:600}
-@media (max-width:600px){.pair{flex-direction:column}}
 </style></head><body><main class="pg">
-<h1>Checked in production: {{change}} · {{YYYY-MM-DD}}</h1>
-<div id="lead">
-  <p>{{The verdict and the count: "Checked on v0.6.0-rc.13: the account row is 40 px tall and not clipped, on phone and desktop. 3 of 3 met."}}</p>
-  <p><b>Decide:</b> {{"Nothing: every criterion is met." Or, where the spec asked for a person's OK: "OK, or Not validated with a note."}}</p>
-</div>
+<h1>Checked in production: {{the change}}</h1>
+<p class="desc">This is the production check of {{the change}} on {{version}}: {{3 of 3}} criteria met.</p>
+<nav class="toc" aria-label="Contents"><b>Contents</b><ol>
+  <li><a href="#criteria">What was checked</a></li>
+  <li><a href="#version">Version checked</a></li>
+  <li><a href="#not-checked">Could not check</a></li>
+  <li><a href="#after-launch">After launch</a></li>
+</ol></nav>
 
 <section id="criteria">
   <h2>What was checked</h2>
   <ol>
-    <li>{{criterion, short}}: <span class="met">Met</span>, {{the measurement, or "see arrow 1"}}</li>
+    <li>{{criterion, short}}: <span class="met">Met</span>, {{the measurement, or "arrow 1"}}</li>
     <li>{{criterion}}: <span class="notmet">Not met</span>, {{what production does instead}}</li>
     <li>{{criterion}}: <span class="nc">Not checked</span>, {{why}}</li>
   </ol>
   <div class="pair">
     <figure data-shot="shots/{{screen}}-390.png" data-arrows="1: {{x,y}} -> {{x,y}}">
-      <figcaption>Phone, 390 px, production. 1: {{what criterion 1 measures here}}</figcaption></figure>
+      <figcaption>Production, phone. 1: {{what criterion 1 measures here}}</figcaption></figure>
     <figure data-shot="shots/{{screen}}-1280.png" data-arrows="3: {{x,y}} -> {{x,y}}">
-      <figcaption>Desktop, 1280 px, production. 3: {{...}}</figcaption></figure>
+      <figcaption>Production, desktop. 3: {{...}}</figcaption></figure>
   </div>
 </section>
 
-<section id="details">
-  <h2>Details</h2>
-  <section id="version"><h2>Version checked</h2>
-    <p>Production runs {{version}} (read {{YYYY-MM-DD HH:MM}} UTC). The change shipped in {{release}}. Checked by
-    {{bot}}, {{how: the read-only view, the release's code, an export}}.</p></section>
-  <section id="not-checked"><h2>Could not check</h2><p>{{Each part, why, and what would check it. Or "Nothing."}}</p></section>
-  <section id="after-launch"><h2>After launch</h2><p>{{Each after-launch criterion: who watches it, the measure, the read date.}}</p></section>
+<section id="version">
+  <h2>Version checked</h2>
+  <ul>
+    <li>Production runs {{version}}, read {{YYYY-MM-DD HH:MM}} UTC; the change shipped in {{release}}.</li>
+    <li>Checked by {{bot}} through {{the read-only view | the release's code | an export}}.</li>
+  </ul>
+</section>
+
+<section id="not-checked">
+  <h2>Could not check</h2>
+  <ul><li>{{each part, why, and what would check it; or "Nothing."}}</li></ul>
+</section>
+
+<section id="after-launch">
+  <h2>After launch</h2>
+  <ul><li>{{each after-launch criterion: who reads it, the measure, the date}}</li></ul>
 </section>
 </main></body></html>

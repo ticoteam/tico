@@ -96,8 +96,8 @@ do not wait.
 8. **Check the plan against itself.** Every acceptance criterion maps to a PR. No line says "to be decided",
    "handle edge cases" or "add tests" without naming the case or the test. Names and types match across PRs. If the
    plan is longer than the code will be, cut it.
-9. **Publish and start.** Build the plan as a page (use the shared `build-the-page` skill if you have it) with a
-   diagram of the systems touched. Publish with `tico page publish plan.html --task <id> --title "Plan: <goal>"`.
+9. **Publish and start.** Build the plan as a page with `.claude/skills/build-the-page/SKILL.md` (the
+   closest template's shape) with a diagram of the systems touched. Publish with `tico page publish plan.html --task <id> --title "Plan: <goal>"`.
    If the plan holds a one-way door, ask for the OK now:
    `tico task ask <id> --to <owner> --kind ok "Plan for <goal>: OK to <the one-way door>?" --show page:<file id> --version N`.
    Otherwise start the first PR straight away.
