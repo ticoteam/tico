@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { run } from '@/actions';
@@ -151,6 +151,52 @@ describe('A thread @s157', () => {
     show(<ThreadsPage pane="thread" thread="t1" />, '/threads/t1');
     expect(await screen.findByText('Closed for now.')).toBeTruthy();
     expect(screen.queryByRole('textbox', { name: 'Message Launch plan' })).toBeNull();
+  });
+});
+
+describe("An agent's question in a thread", () => {
+  const asks = () => ({ ...msg('m1', 'bot:qa', 'Ship the launch note Friday?'), refs: { question: { id: 'q1', to: 'human:me', choices: ['Yes'] } } });
+  const dm = (extra: Partial<Thread> = {}) => thread({ audience: 'personal', members: { members: [{ actor: 'human:me' }, { actor: 'bot:qa' }] }, ...extra });
+  const card = () => screen.queryByRole('region', { name: 'Question' });
+  const open = async (t: Thread) => {
+    cleanup();
+    seedThread(t, [asks()]);
+    show(<ThreadsPage pane="thread" thread="t1" />, '/threads/t1');
+    expect(await screen.findAllByText('Ship the launch note Friday?')).not.toHaveLength(0);
+  };
+
+  it('is a card only in my 1:1 chat with the agent: never in a shared chat, nor where I may only read', async () => {
+    serve();
+    seedList();
+    await open(dm());
+    expect(await screen.findByRole('region', { name: 'Question' })).toBeTruthy();
+    await open(thread()); // the agent, Ana and me
+    expect(card()).toBeNull();
+    await open(dm({ me: { can_manage: false, can_post: false } }));
+    expect(card()).toBeNull();
+  });
+
+  it('pins no card before the thread itself is read: who may post there is not known yet', async () => {
+    serve((url, method) => (method === 'GET' && url.split('?')[0]!.endsWith('/api/v2/threads/t1') ? new Promise<Reply>(() => {}) : undefined));
+    seedList();
+    queryClient.setQueryData(timelineQuery('t1').queryKey, { pages: [{ messages: [asks()], next_cursor: null, read_marks: {} }], pageParams: [null] } as never);
+    show(<ThreadsPage pane="thread" thread="t1" />, '/threads/t1');
+    expect(await screen.findByText('Ship the launch note Friday?')).toBeTruthy();
+    expect(card()).toBeNull();
+  });
+
+  it("is no card in a team's Home: a plain reply there answers it", async () => {
+    const home = { ...row('h1', 'Growth', 5), audience: 'home', home: { actor: 'group:g1' }, me: { can_post: true } };
+    serve((url) => {
+      if (url.includes('/api/v2/groups')) return ok([{ id: 'g1', name: 'Growth', parent: '', people: [], bots: ['qa'] }]);
+      if (url.includes('/threads/home/')) return ok(home);
+      if (url.includes('/api/v2/updates')) return ok({ updates: [], unread: 0, next_before: null });
+      if (url.includes('/timeline')) return ok({ messages: [{ ...asks(), thread_id: 'h1', conversation_id: 'h1' }], next_cursor: null, read_marks: {} });
+      return ok();
+    });
+    show(<TeamThread who="team:Growth" />, '/team/team%3AGrowth');
+    expect(await screen.findByText('Ship the launch note Friday?')).toBeTruthy();
+    expect(card()).toBeNull();
   });
 });
 

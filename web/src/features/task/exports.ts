@@ -6,6 +6,7 @@ export const TaskChat = lazy(() => import('./TaskPage').then((m) => ({ default: 
 export { loadTask, taskRefQuery, taskDetailQuery, taskAddress, taskSearch, type TaskSearch } from './routing';
 export { useApprovalCards, approvalCard, type ApprovalScope } from './ThreadCards';
 export { AskCard } from './AskCard';
+export { ChatQuestions } from './ChatQuestions';
 export { SendMark, TaskSend } from './sending';
 export { RequestCard } from './Requests';
 export { QuestionCard } from './QuestionCard';

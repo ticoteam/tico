@@ -3,6 +3,7 @@ import { ApiError, api } from '@/api/client';
 import type { OkPreview, PagePublished, PageShown, PipelineSettingsResult, PublishPageBody, TaskDetail, TaskDetailChild, TaskFileList, TaskLinkView, TaskRequirement, TaskResult } from '@/api/schema';
 import { keys, meQuery, queryClient, quietRoot, write } from '@/data';
 import { newId } from '@/lib/ids';
+import { timelineQuery } from '@/conversation';
 import { flowQuery, leaveNeedsYou, pipelinesQuery, settleNeedsYou } from '@/features/tasks/routing';
 import type { FileLibrary, FileSearch, ReconcileTaskShotsBody, ReconcileTaskShotsResponse, TaskFileResult, TaskFileView } from '@/api/schema';
 
@@ -351,6 +352,20 @@ export async function answerQuestion(task: string, question: string, text: strin
   }
   void queryClient.invalidateQueries({ queryKey: ['flow'] });
   return { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+}
+
+/** The same answer to a ❓ in the person's 1:1 chat with the agent that asked (POST /api/v2/threads/{id}/messages with
+    `ask`): their reply there, sent only while that ❓ is open (409 `answered` after), which clears it alone. Resolves
+    with the hold when a company rule held it, else null; the chat and Needs you are read again, failed or not (a lost
+    reply or a 409 `answered` must not leave the card standing). */
+export async function answerInChat(thread: string, question: string, text: string): Promise<{ id: string; reason: string } | null> {
+  try {
+    const r = await api.post<{ id?: string; held?: { id?: string; reason?: string } }>(`/api/v2/threads/${enc(thread)}/messages`, { text, ask: question }, { idempotencyKey: newId() });
+    return r.id ? null : { id: r.held?.id ?? '', reason: r.held?.reason ?? 'Held for review' };
+  } finally {
+    void queryClient.invalidateQueries({ queryKey: timelineQuery(thread).queryKey });
+    void queryClient.invalidateQueries({ queryKey: ['flow'] });
+  }
 }
 
 /** A task as a person names it: its number (412, #412) or its id. */

@@ -1,14 +1,19 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { act, render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
 import { TeammateChat } from './TeammateChat';
 
-vi.mock('@/conversation', () => ({
-  Conversation: ({ id, mentionOnly }: { id: string; mentionOnly?: readonly string[] }) => (
-    <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')}>
-      {id}
-    </div>
+vi.mock('@/conversation', async () => ({
+  timelineQuery: (await import('@/conversation/queries')).timelineQuery,
+  Conversation: ({ id, mentionOnly, foot }: { id: string; mentionOnly?: readonly string[]; foot?: ReactNode }) => (
+    <>
+      <div data-testid="conversation" data-mention-only={mentionOnly?.join(' ')}>
+        {id}
+      </div>
+      {foot}
+    </>
   ),
 }));
 
@@ -19,11 +24,13 @@ beforeAll(() => {
 const pat: Actor = { id: 'human:p1', kind: 'person', name: 'Pat Doe' };
 const ana: Actor = { id: 'bot:0190-ana', kind: 'agent', name: 'Ana', slug: 'ana' };
 let asked: string[] = [];
+let timeline: unknown[] = [];
 let answerMe: () => void = () => {};
 
 beforeEach(() => {
   queryClient.clear();
   asked = [];
+  timeline = [];
   queryClient.setQueryData(directoryQuery.queryKey, { actors: [pat, ana], byId: { 'human:p1': pat, p1: pat, 'bot:0190-ana': ana, ana } });
   // /me answers only when the test says so, as on a slow first load.
   const me = new Promise<void>((r) => (answerMe = r));
@@ -35,6 +42,7 @@ beforeEach(() => {
       return Response.json({ actor: 'human:p1', email: '', role: 'member', slug: null });
     }
     if (u.includes('/threads/dm')) return Response.json({ id: 'th-1' });
+    if (u.includes('/threads/th-1/timeline')) return Response.json({ messages: timeline, next_cursor: null });
     return Response.json({});
   });
 });
@@ -75,5 +83,18 @@ describe('TeammateChat', () => {
     expect(asked.find((u) => u.includes('/threads/dm'))).toContain('with=bot%3A0190-ana');
     // its @ list offers the teammate alone: the server refuses an @ of anyone outside a direct chat
     expect(chat.getAttribute('data-mention-only')).toBe('bot:0190-ana');
+  });
+
+  it("pins the agent's question to me over the box, with the answers it offers", async () => {
+    timeline = [
+      { id: 'm1', seq: 1, thread_id: 'th-1', sender_id: 'bot:0190-ana', body: 'Ship the launch note Friday?', refs: { question: { id: 'q1', to: 'human:p1', choices: ['Yes', 'Next week'] } } },
+    ];
+    show('ana');
+    await act(async () => {
+      answerMe();
+    });
+    const card = await screen.findByRole('region', { name: 'Question' });
+    expect(within(card).getByText('Ship the launch note Friday?')).toBeTruthy();
+    expect(within(card).getAllByRole('button').map((b) => b.textContent)).toEqual(['Next week', 'Yes']);
   });
 });

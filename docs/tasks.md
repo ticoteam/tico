@@ -127,8 +127,9 @@ Work a person has to go and do is a sub-task for them, not an ask. An @ in the c
 
 A bot that needs one person's reply marks its own chat message ❓ for them. Nothing is filed and nothing is sent: the
 message shows a small, muted "?" at its top right and is in that person's Needs you, under its task's title (or the
-bot's name in a direct chat). In the task's chat it is a Question card: the question, up to three answers the bot offers
-as buttons, and a reply box. A tap sends that answer as their reply; a reply in that chat clears it too.
+bot's name in a direct chat). In the task's chat, or the person's own 1:1 chat with the bot, it is a Question card: the
+question, up to three answers the bot offers as buttons, and a reply box. A tap sends that answer as their reply; a reply
+in that chat clears it too (in a shared chat, a plain reply is the only way).
 
 ```sh
 tico task ask <id> --to <person> "Ship the launch note Friday?" --choice "Yes, Friday" --choice "Next week" \
@@ -673,6 +674,7 @@ refusal never counts toward a bot's quarantine.
 | `DELETE /api/v2/questions/{id}` | | the bot that asked takes a ❓ back |
 | `POST /api/v2/questions/{id}/give` | `to` | give a ❓ to another person |
 | `POST /api/v2/tasks/{id}/comments` | `text, ask` | the person a ❓ waits on answers it by name (`qmark:<id>`): that ❓ alone, its bot woken; 409 `answered` once it is |
+| `POST /api/v2/threads/{id}/messages` | `text, ask` | the same, in the person's 1:1 chat with the bot that asked, in the ❓'s own thread (422 anywhere else) |
 | `GET /api/v2/needs-you` | | Needs you |
 | `GET /api/v2/pipelines`, `GET/POST /api/v2/pipelines/{id}`, `POST /api/v2/pipelines/{id}/retire` | | settings |
 
