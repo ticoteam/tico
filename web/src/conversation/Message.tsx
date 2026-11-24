@@ -19,7 +19,7 @@ import { Markdown } from '@/kit/Markdown';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Viewer } from '@/kit/Viewer';
 import { agentWords, Quote } from './Quote';
-import { attachmentHref, isOwnFile, isPicture, linkRender, richText, Shelf } from './Rich';
+import { isPicture, linkRender, ownFile, richText, Shelf } from './Rich';
 import { fromSlack, proposalQuery, slackPlaceOf, slackThreadQuery, type SlackPlace } from './queries';
 import type { ChatMessage, LiveRun, ReplyQuote, Variant } from './types';
 
@@ -65,7 +65,10 @@ const MD_PICTURE = /!\[([^\]]*)\]\((\/api\/[^()\s]+)\)/g;
 export function picturesOf(m: Pick<ChatMessage, 'body' | 'refs' | 'pending' | 'deleted'>): Picture[] {
   if (m.pending || m.deleted) return [];
   const inText = [...(m.body ?? '').matchAll(MD_PICTURE)].map((x) => ({ src: x[2]!, name: x[1] || 'Picture' }));
-  const attached = (m.refs?.attachments ?? []).filter((f) => isPicture(f) && isOwnFile(f)).map((f) => ({ src: attachmentHref(f), name: f.title?.trim() || f.name || 'Picture' }));
+  const attached = (m.refs?.attachments ?? []).flatMap((f) => {
+    const own = isPicture(f) ? ownFile(f) : null;
+    return own ? [{ src: own.href, name: f.title?.trim() || f.name || 'Picture' }] : [];
+  });
   return [...inText, ...attached];
 }
 

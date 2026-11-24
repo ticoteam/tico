@@ -65,9 +65,21 @@ describe('a message’s own media under its words', () => {
   });
 
   it('loads nothing for a file with neither a plain address nor a plain id: only its name shows', () => {
-    const { container } = shelf({ id: '..', name: 'clip.mp4', content_type: 'video/mp4' }, { id: '../x', name: 'shot.png', content_type: 'image/png' });
+    const odd = [undefined, null, 5, '..'].map((id, i) => ({ id, name: `clip${i}.mp4`, content_type: 'video/mp4' }) as unknown as Attachment);
+    const { container } = shelf(...odd, { id: '../x', name: 'shot.png', content_type: 'image/png' });
     expect(container.querySelectorAll('video, audio, img, a, button')).toHaveLength(0);
-    expect(screen.getByText('clip.mp4')).toBeTruthy();
-    expect(screen.getByText('shot.png')).toBeTruthy();
+    for (const name of ['clip0.mp4', 'clip1.mp4', 'clip2.mp4', 'clip3.mp4', 'shot.png']) expect(screen.getByText(name)).toBeTruthy();
+  });
+
+  it('takes the id from a plain address when the attachment’s own id is empty', () => {
+    shelf({ id: '', name: 'lease.pdf', content_type: 'application/pdf', url: '/api/v2/files/p9?v=2' });
+    const card = screen.getByRole('link', { name: 'lease.pdf' });
+    expect(card.getAttribute('href')).toBe('/api/v2/files/p9?v=2');
+    fireEvent.click(card);
+    expect(run).toHaveBeenCalledWith(
+      'files.preview',
+      { file: 'p9', held: { url: '/api/v2/files/p9?v=2', mime: 'application/pdf', name: 'lease.pdf', filename: 'lease.pdf' } },
+      { via: 'click' },
+    );
   });
 });

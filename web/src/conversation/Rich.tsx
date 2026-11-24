@@ -207,15 +207,22 @@ function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void
   );
 }
 
-const OWN_URL = /^\/api\/v2\/files\/[A-Za-z0-9_-]+(\?v=\d+)?$/;
+const OWN_URL = /^\/api\/v2\/files\/([A-Za-z0-9_-]+)(\?v=\d+)?$/;
 const OWN_ID = /^[A-Za-z0-9_-]+$/;
-/** A message's own file by the address it came with, only when that is plainly one of the app's files (no `..`, no
-    other route); else by its id. */
-export const attachmentHref = (f: Attachment): `/api/${string}` =>
-  typeof f.url === 'string' && OWN_URL.test(f.url) ? (f.url as `/api/${string}`) : `/api/v2/files/${encodeURIComponent(f.id)}`;
-/** Whether a message's file is one of the app's by a plain address or id: any other is only its name, and nothing
-    loads for it. */
-export const isOwnFile = (f: Attachment) => (typeof f.url === 'string' && OWN_URL.test(f.url)) || OWN_ID.test(f.id);
+/** A message's file as one of the app's: its id and address. */
+export interface OwnFile {
+  id: string;
+  href: `/api/${string}`;
+}
+/** The one place a message's file is addressed from: the plain address it came with (`/api/v2/files/<id>[?v=N]`, the
+    id read from it), else its plain id; null for anything else (`..`, another route, no id), which is only its name
+    and loads nothing. Every source, link and open below comes from this. */
+export function ownFile(f: Attachment): OwnFile | null {
+  const m = typeof f.url === 'string' ? OWN_URL.exec(f.url) : null;
+  if (m?.[1]) return { id: m[1], href: m[0] as `/api/${string}` };
+  if (typeof f.id === 'string' && OWN_ID.test(f.id)) return { id: f.id, href: `/api/v2/files/${f.id}` };
+  return null;
+}
 const attachmentLabel = (f: Attachment) => f.title?.trim() || f.name || 'File';
 const attachmentType = (f: Attachment) => {
   const end = /\.([a-z0-9]{1,5})$/i.exec(f.name ?? '')?.[1];
@@ -230,8 +237,8 @@ const previewOf = (href: string, kind: 'thumb' | 'poster') => {
   return m ? `${m[1]}/${kind}${m[2] ?? ''}` : undefined;
 };
 // the file's own name goes too: a caption says nothing of what it is, and `lease.pdf` sent as octet-stream is a PDF by its name
-const heldOf = (f: Attachment) => ({
-  url: attachmentHref(f),
+const heldOf = (f: Attachment, own: OwnFile) => ({
+  url: own.href,
   mime: f.content_type ?? '',
   name: attachmentLabel(f),
   ...(f.name && { filename: f.name }),
@@ -248,10 +255,10 @@ function faceOf(f: Attachment): Face {
 }
 
 /** A file that will not play here, offered to save instead. */
-function DownloadChip({ f }: { f: Attachment }) {
+function DownloadChip({ f, own }: { f: Attachment; own: OwnFile }) {
   const name = attachmentLabel(f);
   return (
-    <a className="file" href={attachmentHref(f)} download={f.name || name}>
+    <a className="file" href={own.href} download={f.name || name}>
       <Icon name="download" />
       <span>{name}</span>
       {attachmentType(f) && <em>{attachmentType(f)}</em>}
@@ -263,16 +270,16 @@ function DownloadChip({ f }: { f: Attachment }) {
  * A video: its frame with a play mark (the poster, else a plain card), playing in place on a tap. The player is made
  * only then, and reads the video from its address as it plays; Expand pauses it and opens it full screen.
  */
-function VideoCard({ f }: { f: Attachment }) {
-  const url = attachmentHref(f);
+function VideoCard({ f, own }: { f: Attachment; own: OwnFile }) {
+  const url = own.href;
   const name = attachmentLabel(f);
   const poster = previewOf(url, 'poster');
   const [face, setFace] = useState<'poster' | 'card' | 'playing' | 'failed'>(poster ? 'poster' : 'card');
   const player = useRef<HTMLVideoElement>(null);
-  if (face === 'failed') return <DownloadChip f={f} />;
+  if (face === 'failed') return <DownloadChip f={f} own={own} />;
   const expand = () => {
     player.current?.pause();
-    preview(f.id, undefined, heldOf(f));
+    preview(own.id, undefined, heldOf(f, own));
   };
   return (
     <div className="pcard is-video">
@@ -298,21 +305,21 @@ function VideoCard({ f }: { f: Attachment }) {
 }
 
 /** A sound: the browser's own compact player under its name, reading the file from its address as it plays. */
-function AudioBar({ f }: { f: Attachment }) {
+function AudioBar({ f, own }: { f: Attachment; own: OwnFile }) {
   const [failed, setFailed] = useState(false);
   const name = attachmentLabel(f);
-  if (failed) return <DownloadChip f={f} />;
+  if (failed) return <DownloadChip f={f} own={own} />;
   return (
     <div className="maudio">
       <span className="maudio-name">{name}</span>
-      <audio src={attachmentHref(f)} controls preload="metadata" aria-label={name} onError={() => setFailed(true)} />
+      <audio src={own.href} controls preload="metadata" aria-label={name} onError={() => setFailed(true)} />
     </div>
   );
 }
 
 /** A PDF: its first page small (the file's /thumb, else a plain card) over its name; the card opens it full screen. */
-function PdfCard({ f }: { f: Attachment }) {
-  const url = attachmentHref(f);
+function PdfCard({ f, own }: { f: Attachment; own: OwnFile }) {
+  const url = own.href;
   const name = attachmentLabel(f);
   const thumb = previewOf(url, 'thumb');
   const [lost, setLost] = useState(!thumb);
@@ -342,7 +349,7 @@ function PdfCard({ f }: { f: Attachment }) {
         onClick={(e) => {
           if (!plainClick(e)) return;
           e.preventDefault();
-          preview(f.id, undefined, heldOf(f));
+          preview(own.id, undefined, heldOf(f, own));
         }}
       />
     </div>
@@ -350,19 +357,19 @@ function PdfCard({ f }: { f: Attachment }) {
 }
 
 /** A message's own file that is not a picture: a video, a sound, a PDF or a page by its face, anything else its chip. */
-function AttachedFile({ f }: { f: Attachment }) {
-  const url = attachmentHref(f);
+function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
+  const url = own.href;
   const name = attachmentLabel(f);
-  const held = heldOf(f);
+  const held = heldOf(f, own);
   const face = faceOf(f);
-  if (face === 'video') return <VideoCard f={f} />;
-  if (face === 'audio') return <AudioBar f={f} />;
-  if (face === 'pdf') return <PdfCard f={f} />;
-  if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
+  if (face === 'video') return <VideoCard f={f} own={own} />;
+  if (face === 'audio') return <AudioBar f={f} own={own} />;
+  if (face === 'pdf') return <PdfCard f={f} own={own} />;
+  if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />;
   const open = (e: MouseEvent) => {
     if (!plainClick(e)) return;
     e.preventDefault();
-    preview(f.id, undefined, held);
+    preview(own.id, undefined, held);
   };
   return (
     <a className="file" href={url} target="_blank" rel="noreferrer" onClick={open}>
@@ -379,30 +386,33 @@ function AttachedFile({ f }: { f: Attachment }) {
  */
 export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: string) => void }) {
   const all = m.refs?.attachments ?? [];
-  const named = (f: Attachment) => (
-    <span key={f.id} className="file">
+  const named = (f: Attachment, i: number) => (
+    <span key={i} className="file">
       <Icon name="file" />
       <span>{attachmentLabel(f)}</span>
       {attachmentType(f) && <em>{attachmentType(f)}</em>}
     </span>
   );
   if (m.pending) return all.map(named);
-  const files = all.filter(isOwnFile);
-  const unknown = all.filter((f) => !isOwnFile(f));
-  const pictures = files.filter(isPicture).map((f): Shown => {
-    const src = attachmentHref(f);
+  const files = all.flatMap((f) => {
+    const own = ownFile(f);
+    return own ? [{ f, own }] : [];
+  });
+  const unknown = all.filter((f) => !ownFile(f));
+  const pictures = files.filter(({ f }) => isPicture(f)).map(({ f, own }): Shown => {
+    const src = own.href;
     // only a photo (JPEG) uses the thumbnail: thumbnails are JPEGs, so a PNG would lose its transparency and a GIF its motion
     const thumb = /^image\/jpe?g$/i.test(f.content_type ?? '') ? previewOf(src, 'thumb') : undefined;
     return { src, name: attachmentLabel(f), ...(thumb && { thumb }) };
   });
-  const others = files.filter((f) => !isPicture(f));
+  const others = files.filter(({ f }) => !isPicture(f));
   const refs = m.deleted ? [] : filesIn(m.body ?? '').slice(0, PAGE_REFS);
   if (!pictures.length && !others.length && !unknown.length && !refs.length) return null;
   return (
     <div className="mshelf">
       <Pictures list={pictures} onOpen={(i) => onPicture(pictures[i]!.src)} />
-      {others.map((f) => (
-        <AttachedFile key={f.id} f={f} />
+      {others.map(({ f, own }, i) => (
+        <AttachedFile key={`${i}:${own.id}`} f={f} own={own} />
       ))}
       {unknown.map(named)}
       {refs.map((p) => (
