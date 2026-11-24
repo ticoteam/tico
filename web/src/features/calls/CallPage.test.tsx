@@ -454,6 +454,27 @@ describe('The call bar @s1049', () => {
     await waitFor(() => expect(sent().some((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/end`))).toBe(true));
   });
 
+  it('on my call with only agents left, Leave is End call: it ends the call at once; a person in the room makes it Leave again', async () => {
+    base = { connector: 'human:me', bots: ['gm'] };
+    queryClient.setQueryData(callQuery(ROOM).queryKey, call());
+    show();
+    await joined();
+    const ana = { identity: 'human:ana', isMicrophoneEnabled: true };
+    act(() => {
+      room().remoteParticipants.set(ana.identity, ana);
+      room().emit('ParticipantConnected', ana);
+    });
+    expect(await screen.findByRole('button', { name: 'Leave' })).toBeTruthy();
+    act(() => {
+      room().remoteParticipants.delete(ana.identity);
+      room().emit('ParticipantDisconnected', ana);
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'End call' }));
+    await waitFor(() => expect(sent().some((x) => x.method === 'POST' && x.url.endsWith(`/calls/${ROOM}/end`))).toBe(true));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(room().disconnect).toHaveBeenCalled());
+  });
+
   it('More’s Add agent brings the agent in; End is not there for someone else’s call, and Tico may not end it either @s1049', async () => {
     show();
     await joined();

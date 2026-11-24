@@ -41,6 +41,23 @@ export async function press(id: string, input: unknown): Promise<boolean> {
 
 export const useMe = (): string | undefined => useQuery(meQuery).data?.id;
 
+/**
+ * Hanging up when only agents are left with me on my own call ends it: nothing is left to keep going, so it ends at once
+ * instead of waiting out the server's empty-room sweep. Anyone else's call, a Meet, or one with people: Leave.
+ */
+export function endsOnLeave(s: CallState, c: Call | undefined, me: string | undefined): boolean {
+  const mine = s.me ?? me;
+  return (
+    !!c && !!mine && s.callId === c.id && s.phase === 'live' && c.provider !== 'google_meet' && c.connector === mine && c.bots.length > 0 && s.others.length === 0
+  );
+}
+
+/** Leave, or End when {@link endsOnLeave}: the call ends for its agents too, and this window hangs up at once. */
+export async function hangUp(s: CallState, c: Call | undefined, me: string | undefined): Promise<void> {
+  if (c && endsOnLeave(s, c, me) && !(await press('calls.end', { id: c.id }))) return;
+  await press('calls.leave', {});
+}
+
 // The server sends its feature flags with config, outside the generated schema.
 export function useTicoMeet() {
   const { data, isPending } = useQuery({

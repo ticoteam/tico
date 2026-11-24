@@ -84,10 +84,10 @@ const SHEET_FOLD = { ms: 200, easing: 'cubic-bezier(.3,1,.3,1)', arriveMs: 120, 
 const SHEET_RESET = { ms: 240, easing: 'cubic-bezier(.2,0,0,1)', arriveMs: 340, fadeMs: 300, fadeDelayMs: 200 };
 
 /* what a tucked sheet's edge says, under its mark */
-const EDGE_NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'Menu', list: 'Tasks', chat: 'Chat', page: 'Page', panel: 'Panel', widgets: 'Page', stage: 'Call', side: 'Side' };
-const EDGE_ICON = { menu: 'company', list: 'tasks', chat: 'message', page: 'file', panel: 'panel', widgets: 'file', stage: 'call', side: 'panel' } as const;
+const EDGE_NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'Menu', list: 'Tasks', chat: 'Chat', page: 'Page', panel: 'Panel', widgets: 'Page', stage: 'Call', side: 'Chat' };
+const EDGE_ICON = { menu: 'company', list: 'tasks', chat: 'message', page: 'file', panel: 'panel', widgets: 'file', stage: 'call', side: 'message' } as const;
 
-const NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'the menu', list: 'the list', chat: 'the chat', page: 'the page', panel: 'the panel', widgets: 'widgets', stage: 'the call', side: 'the side' };
+const NAME: Record<SheetId, string> = { tico: 'Tico', menu: 'the menu', list: 'the list', chat: 'the chat', page: 'the page', panel: 'the panel', widgets: 'widgets', stage: 'the call', side: "the call's chat" };
 
 /* The mounted frame's hand fold, for the `shell.fold` action: fold (true) or open (false) a sheet; undefined flips it. */
 let foldHand: ((id: SheetId, folded?: boolean) => void) | null = null;

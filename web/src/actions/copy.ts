@@ -22,7 +22,7 @@ export const sheetName: Record<string, string> = {
   menu: 'the menu',
   list: 'the list',
   widgets: 'the widgets',
-  side: 'the side',
+  side: "the call's chat",
 };
 
 /** The menu's pages, for search rows and did lines: [path, name]. */
