@@ -478,3 +478,19 @@ def test_a_turn_answers_the_person_who_started_it_unless_its_post_already_reache
         assert answered == [{"recipient_id": "human:ana"}], "a post that reached nobody is no answer"
     else:
         assert answered == [], "its mention or ❓ already reached ana: the turn does not post twice"
+
+
+def test_the_demo_answers_a_session_message_in_that_agents_session(api):
+    """The demo's stand-in answer (demo.tick) is posted as a run's reply is: in its agent's session, never the comments."""
+    from backend import demo
+
+    row = ticket(api)
+    sent = comment(api, row["id"], "Can retries resume from the last chunk?", to="ops")["comment"]
+    assert jobs(api, "ops") == [sent["id"]]
+    demo.tick(api.app.state.store)
+    answer = rows(
+        api, "SELECT id, body, session_agent_id FROM messages WHERE sender_id='bot:ops' AND in_reply_to=?", sent["id"]
+    )
+    assert [(m["body"], m["session_agent_id"]) for m in answer] == [(demo.BOT_REPLY, "bot:ops")]
+    logged, session = set(view(api, row["id"], comments="true")), set(view(api, row["id"], session="ops"))
+    assert {sent["id"], answer[0]["id"]} <= session and not {sent["id"], answer[0]["id"]} & logged, "not a comment"

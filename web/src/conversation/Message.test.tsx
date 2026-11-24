@@ -369,6 +369,10 @@ describe('What a message holds besides words (thread-content.html)', () => {
 });
 
 describe('A question that shows a live browser', () => {
+  // The browser opens in a dialog the message loads when first asked (lazy): loaded here once, so the test times only
+  // the click, never the first build of that module on a busy machine.
+  beforeAll(() => import('@/features/team/exports'), 60_000);
+
   it('has Open browser, which opens that account\'s browser in place', async () => {
     serve((url) => (url.includes('/browser') ? { status: 200, body: { ok: true } } : undefined));
     const asked = { ...msg(1, 'bot:finance', 'Sign in to Stripe for the Wells import.\n\nOpen the browser below, finish there, then reply Done.'), refs: { shows: ['browser:stripe/acct-9'], question: { id: 'q1', to: ME } } };

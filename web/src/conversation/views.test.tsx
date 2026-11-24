@@ -197,15 +197,26 @@ describe("a task's comments", () => {
     expect(timelines().at(-1)?.url).toContain('comments=true');
   });
 
-  it('keeps Reply a tap away on a touch screen, where other message actions wait for a long press', async () => {
+  it('keeps Reply a tap away on a touch screen, where other message actions wait for a long press, never over the words', async () => {
     show({ comments: true });
     await screen.findByText('Ship it Friday?');
     expect(document.querySelector('.chat-body.is-comments')).toBeTruthy();
     // Read with node's fs (tests load no CSS), and web's types leave node out.
     const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
     const here = import.meta.url;
-    const css = fs.readFileSync(new URL('./conversation.css', here), 'utf8').replace(/\s+/g, '');
-    expect(css).toContain('@media(hover:none){.chat-body.is-comments.msg-acts{display:flex;opacity:1}}');
+    const css = fs.readFileSync(new URL('./conversation.css', here), 'utf8');
+    const touch = /@media \(hover:none\)\{\s*\.chat-body\.is-comments \.msg-acts\{display:flex;opacity:1\}([^@]*)\}/.exec(css)?.[1] ?? '';
+    // a comment keeps room above its author row for the 44px target, which ends level with that row
+    expect(touch).toContain('.chat-body.is-comments .msg:not(.is-mine):has(> .msg-acts){padding-top:var(--s-6)}');
+    expect(touch).toContain('.chat-body.is-comments .msg:not(.is-mine) > .msg-acts{top:0}');
+  });
+
+  it('gives each comment its author row, one after another from the same author too (where a phone’s Reply sits)', async () => {
+    pages.comments = [...pages.comments, msg(7, 'bot:build', 'Lint is green too')];
+    show({ comments: true });
+    const next = (await screen.findByText('Lint is green too')).closest('.msg')!;
+    expect(next.classList.contains('is-cont')).toBe(false);
+    expect(within(next as HTMLElement).getByText('Build agent')).toBeTruthy();
   });
 
   it('drops a Reply with Escape', async () => {

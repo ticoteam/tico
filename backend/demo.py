@@ -182,15 +182,18 @@ def tick(store):
         ).fetchall():
             c.execute("UPDATE jobs SET state='canceled' WHERE id=?", (job["id"],))
             if H.is_human(job["sender_id"]):
+                bot = H.bot_actor(job["bot_id"])
                 try:
-                    H.say(
-                        c,
-                        H.bot_actor(job["bot_id"]),
-                        job["sender_id"],
-                        BOT_REPLY,
-                        conversation_id=job["conversation_id"],
-                        in_reply_to=job["message"],
-                    )
+                    # as a run's reply is posted (fleet_runner_routes): in its agent's session on a task's thread
+                    with H.session_of(bot, bot):
+                        H.say(
+                            c,
+                            bot,
+                            job["sender_id"],
+                            BOT_REPLY,
+                            conversation_id=job["conversation_id"],
+                            in_reply_to=job["message"],
+                        )
                 except H.Refused:
                     pass
 
