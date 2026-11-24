@@ -53,6 +53,7 @@ import re
 import secrets
 import time
 import uuid
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 
 from . import people as P
@@ -2810,6 +2811,7 @@ def post(
     in_reply_to=None,
     reach=False,
     unmarked=None,
+    ask=None,
 ):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it.
@@ -2822,7 +2824,10 @@ def post(
     (backend/reach.py check_post); a run's reply to what woke it, and a held post a person sends anyway, are not.
 
     `unmarked`: digests of suspect keys the person un-marked in the Tools chat (backend/secret_drop.py), the only
-    suspects its backstop lets through, and only from the web."""
+    suspects its backstop lets through, and only from the web.
+
+    `ask`: the person's answer to a ❓ in this chat by name (`qmark:<id>`, its card): sent only while that ❓ is open,
+    and it clears that ❓ alone (question_marks.answer_check), here and in Send anyway's replay."""
     H.check_message_refs(refs)
     thread = thread_row(c, thread_id) if thread_id else start
     on_task = H.message_task_id({"refs": refs}, thread)
@@ -2847,8 +2852,12 @@ def post(
                 in_reply_to=in_reply_to,
                 reach=reach,
                 unmarked=unmarked,
+                ask=ask,
             ),
         )
+
+
+ANSWER_ELSEWHERE = "A ❓ is answered by name only in your chat with the bot that asked it: reply there in words"
 
 
 def _atomic(c, name, write):
@@ -2886,10 +2895,13 @@ def _post(
     in_reply_to,
     reach,
     unmarked=None,
+    ask=None,
 ):
     actor, v = _actor_of(principal)
     if origin and origin.get("origin_id") and start is not None:
         raise Problem("start", "A replicated message posts into a linked thread", 422)
+    if ask and (start is not None or parent_message_id):
+        raise Problem("validation", "An answer to a ❓ posts in the chat it was asked in", 422)
     if thread_id:
         # A person's old chat with a bot is now part of the bot's Home (backend/bot_home_merge.py).
         from . import bot_home_merge
@@ -2936,6 +2948,10 @@ def _post(
         raise Problem("kind", H.ASK_GONE, 422)
     if kind not in ("say", "notice", "steer"):
         raise Problem("kind", "A message is say, notice or steer", 422)
+    from . import question_marks
+
+    # A ❓ answered by name is checked before the rule check's verdict: a second tap is refused, never held.
+    named, asker = question_marks.answer_check(c, actor, ask, thread or {"id": ""}) if ask else ("", "")
     text = str(body or "")
     if not text.strip() and not attachments:
         raise Problem("empty", "Write the message", 422)
@@ -2969,6 +2985,14 @@ def _post(
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
+    if named:
+        # A card answers only in the person's 1:1 chat with the bot that asked, the reply to that bot alone: a shared
+        # chat's ❓ (a team's Home, a group DM) is answered with a plain reply there, as any message is.
+        root = root_of(c, thread)
+        one_to_one = audience_of(root) in ("personal", "participants") and not (thread or {}).get("parent_id")
+        peers = [a for a in _dm_members(c, root) if a != actor] if one_to_one else []
+        if peers != [asker] or target != asker:
+            raise Problem("validation", ANSWER_ELSEWHERE, 422)
     if reach and v is not None:
         from . import reach as R
 
@@ -3002,6 +3026,7 @@ def _post(
             "origin": origin,
             "attachments": attachments,
             "in_reply_to": in_reply_to,
+            **({"ask": ask} if ask else {}),  # a hold from before, or of any other post, is as it was
         }
         gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
         if gate and gate.get("moved"):
@@ -3013,14 +3038,18 @@ def _post(
             return _held_answer(c, v, gate)
         if gate and gate.get("warn"):
             text = org_rule_check.warned_text(gate, text)
+    assert thread is not None  # found above, or its sub-thread
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
-        if target and not str(target).startswith(OUTSIDE_PREFIXES):
-            message = H.say(c, actor, target, text, thread["id"], kind, refs, in_reply_to=in_reply_to)
-        else:
-            message = _write_open(c, actor, text, thread, kind, refs, target, in_reply_to)
+        with question_marks.answering(named) if named else nullcontext():
+            if target and not str(target).startswith(OUTSIDE_PREFIXES):
+                message = H.say(c, actor, target, text, thread["id"], kind, refs, in_reply_to=in_reply_to)
+            else:
+                message = _write_open(c, actor, text, thread, kind, refs, target, in_reply_to)
     finally:
         POSTING.reset(token)
+    if named and not question_marks.cleared_by(c, named, (message or {}).get("id")):
+        raise Problem("answered", question_marks.ANSWERED, 409)  # it did not answer that ❓: write nothing
     # Here and not in the upload route, so a held message released later (the replay of this post) keeps its files.
     for item in attachments or ():
         c.execute("INSERT OR IGNORE INTO message_assets VALUES(?,?)", (message["id"], item["id"]))

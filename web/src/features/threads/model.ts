@@ -144,6 +144,9 @@ export function agentOf(t: Thread | undefined, me: string | undefined): string |
   return others.length === 1 && others[0]!.startsWith('bot:') ? others[0] : undefined;
 }
 
+/** The agent of the viewer's 1:1 chat with one (a DM of the two of them, no task's), where its ❓s are cards. */
+export const dmAgentOf = (t: Thread | undefined, me: string | undefined): string | undefined => (isDm(t) && !t?.task_id ? agentOf(t, me) : undefined);
+
 /** What the Team tab holds, not Threads: your DM with one teammate, and an agent's own Home (its room is the agent's,
     as your DM is). */
 export const isOneToOne = (t: Thread, me: string | undefined) =>

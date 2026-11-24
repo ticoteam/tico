@@ -3201,7 +3201,7 @@ def _replay_letter(c, bot, hold, replay, ingest, gate=None):
     return {"approved": True}
 
 
-THREAD_REPLAY = ("kind", "refs", "parent_message_id", "via", "origin", "attachments", "in_reply_to", "start")
+THREAD_REPLAY = ("kind", "refs", "parent_message_id", "via", "origin", "attachments", "in_reply_to", "start", "ask")
 
 
 def _audience_people(c, audience, group_id):

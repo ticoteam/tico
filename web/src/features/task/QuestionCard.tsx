@@ -4,7 +4,7 @@ import { ApiError } from '@/api/client';
 import { Button } from '@/kit/Button';
 import { AskCard } from './AskCard';
 import { holdQuery } from './holds';
-import { answerQuestion } from './queries';
+import { answerInChat, answerQuestion } from './queries';
 import { questionLine } from './waits';
 
 /* A ❓ an agent put to the person on a task, answered in place (backend/question_marks.py): the question, up to three
@@ -18,8 +18,9 @@ import { questionLine } from './waits';
 export interface QuestionCardProps {
   /** The ❓'s id as a wait or a Needs-you item names it (`qmark:<id>`). */
   id: string;
-  /** The task whose chat it is on. */
-  task: string;
+  /** The task whose chat it is on, or `thread`: the person's 1:1 chat with the agent, where the reply then posts. */
+  task?: string;
+  thread?: string;
   /** The agent's line: the question. */
   line: string;
   /** The message's lines after it, when it has more (numbered questions): shown whole under it. */
@@ -39,7 +40,7 @@ const heldReplies = new Map<string, { hold: string; why: string }>();
     this is the five-minute backstop the app polls at, never faster. */
 export const HELD_EVERY_MS = 5 * 60_000;
 
-export function QuestionCard({ id, task, line, detail, choices = [], who }: QuestionCardProps) {
+export function QuestionCard({ id, task = '', thread, line, detail, choices = [], who }: QuestionCardProps) {
   const [text, setText] = useState('');
   const [error, setError] = useState('');
   const [state, setNow] = useState<State>(() => {
@@ -57,7 +58,7 @@ export function QuestionCard({ id, task, line, detail, choices = [], who }: Ques
     setError('');
     setState({ at: 'sending' });
     try {
-      const held = await answerQuestion(task, id, reply);
+      const held = await (thread ? answerInChat(thread, id, reply) : answerQuestion(task, id, reply));
       setState(held ? { at: 'held', hold: held.id, why: held.reason } : { at: 'sent' });
     } catch (e) {
       setState({ at: 'open' });

@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
 import { Conversation } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
-import { approvalCard, useApprovalCards } from '@/features/task/exports';
+import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
 import { AgentBox } from './AgentBox';
-import { agentOf, outsideOf, teamOf } from './model';
+import { agentOf, dmAgentOf, outsideOf, teamOf } from './model';
 import { useMe, useTitle } from './people';
 import { threadQuery } from './queries';
 import { TeamThread } from './TeamThread';
@@ -33,8 +33,11 @@ function ThreadConversation({ id }: { id: string }) {
   const title = useTitle(data);
   // A thread with an agent shows what it asked you to approve, as cards among its messages; a card's page opens
   // beside this thread.
-  const approvals = useApprovalCards({ agent: agentOf(data, useMe()) }, `thread:${id}`);
+  const me = useMe();
+  const approvals = useApprovalCards({ agent: agentOf(data, me) }, `thread:${id}`);
   const team = data && teamOf(data);
+  // its ❓s are cards only in the viewer's 1:1 chat with an agent
+  const agent = dmAgentOf(data, me);
   if (team) return <TeamThread who={team} />;
   const outside = outsideOf(data);
   return (
@@ -45,7 +48,13 @@ function ThreadConversation({ id }: { id: string }) {
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
       canPost={!outside && data?.me?.can_post !== false}
-      foot={outside?.handler ? <AgentBox agent={outside.handler} from={{ page: 'thread', label: 'Thread', item: { kind: 'thread', id } }} draftId={`agent:/threads/${id}`} /> : undefined}
+      foot={
+        <>
+          {/* the viewer's 1:1 chat with an agent only, once the thread is read */}
+          {data && agent && <ChatQuestions thread={id} agent={agent} canPost={!outside && data.me?.can_post !== false} />}
+          {outside?.handler && <AgentBox agent={outside.handler} from={{ page: 'thread', label: 'Thread', item: { kind: 'thread', id } }} draftId={`agent:/threads/${id}`} />}
+        </>
+      }
     />
   );
 }

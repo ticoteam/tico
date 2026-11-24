@@ -102,6 +102,17 @@ class ThreadPost(BaseModel):
     attachments: list[M.Attachment] = Field(default_factory=list, max_length=10)
     # Posted to /threads/dm/messages: the poster's DM with exactly this one (the Agent bar's), found or made at write time.
     to_dm: str | None = Field(None, max_length=200)
+    # The person's answer to a bot's ❓ in this chat by name (`qmark:<id>`, its card): sent only while it is open (409
+    # `answered` after), it clears that ❓ alone (question_marks.answer_check).
+    ask: str | None = Field(None, max_length=200)
+
+    def model_dump(self, **kwargs):
+        """As the request's idempotency hash reads it: an unset `ask` left out, so a post retried (or sent from a held
+        outbox) across the upgrade that added it hashes as it did."""
+        out = super().model_dump(**kwargs)
+        if out.get("ask") is None:
+            out.pop("ask", None)
+        return out
 
 
 class MessagePatch(BaseModel):
@@ -1078,7 +1089,7 @@ def install(app, store, auth, mutate, rule_check):
         **api_v2(
             "Threads",
             "postThreadMessage",
-            "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. `in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` otherwise): the post stays in this thread, quoting it, and a bot replied to is woken",
+            "Post a message in a thread, or in a sub-thread with `parent_message_id`; it passes the org rules first. `in_reply_to` answers a message of the same root's open subtree the poster reads (422 `reply_target_invalid` otherwise): the post stays in this thread, quoting it, and a bot replied to is woken. `ask` (`qmark:<id>`) answers a bot's ❓ to the poster by name, only in their 1:1 chat with that bot and the ❓'s own thread (422 elsewhere): sent only while it is open (409 `answered` after), it clears that ❓ alone",
             "ThreadMessage",
         ),
     )
@@ -1102,6 +1113,11 @@ def install(app, store, auth, mutate, rule_check):
             with store.read() as c:
                 threads.require(c, threads.viewer(auth, who), target, write=True)
                 _no_task_to(c, target, body)
+        if target and body.ask:  # a second tap is refused before the rule check spends any judgment
+            with store.read() as c:
+                # a retry of a sent answer (its key saved) replays that answer: `mutate` answers it from its receipt
+                if not store.saved(c, who, request.url.path, request.headers.get("idempotency-key")):
+                    question_marks.answer_check(c, who.actor, body.ask, threads.thread_row(c, target) or {"id": target})
         if target:
             rc = check(who, target, body)
         else:  # the poster's first message to that agent: the DM is made with it, only if it goes
@@ -1128,6 +1144,7 @@ def install(app, store, auth, mutate, rule_check):
                 in_reply_to=replying,
                 unmarked=_unmarked(who, body),
                 attachments=shared or None,
+                ask=body.ask,
                 **({"start": start} if start else {}),
             )
             if "id" not in message:  # held: post wrote nothing and answers with the hold
@@ -1856,7 +1873,7 @@ def register_messages(
             raise Problem("forbidden", "Only a bot marks a message ❓", 403)
         if shape := ask_shape.line_refusal(body.text):  # in plain code, before the rule check's call
             mutate(request, body, lambda c: H.refuse(c, who.actor, "task_ask_shape", shape))
-        sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id)
+        sent = M.MessageCreate(to=body.to, text=body.text, conversation_id=body.conversation_id or ask_dm(who, body.to))
         asking = question_marks.Asking(
             lambda c, author, recipients: rule_message_place(who, sent)(c, author, recipients)
         )
@@ -1870,6 +1887,14 @@ def register_messages(
             ingest,
             lambda: mutate(request, body, lambda c: chat_question_write(c, who, sent, rc, ingest, body.choices)),
         )
+
+    def ask_dm(who, to):
+        """Where a ❓ that names no chat goes: the person's member-private DM with the bot when they have one (the one
+        their Agent bar and the bot's page open), never an older chat read by its participant list beside it. None
+        otherwise, and the message goes as any other does; nothing is made here."""
+        with store.read() as c:
+            person = auth.target(c, who, to)
+            return threads._open_dm(c, person, [who.actor], legacy=False) if H.is_human(person) else None
 
     def chat_question_write(c, who, sent, rc, ingest, choices=()):
         """A ❓ in a direct chat, as the route writes it and Send anyway replays it: the message, then its mark, in one

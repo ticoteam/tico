@@ -1917,6 +1917,12 @@ def check_message_refs(refs, *, make_page=False):
         from .store import Problem
 
         raise Problem("forbidden", "Use the task’s Make page control", 403)
+    if refs and "question" in refs:
+        from .store import Problem
+
+        # A ❓ is marked by its route alone (backend/question_marks.py mirrors it): a client's would draw a card whose
+        # answers no check passed (question_marks.clean_choices), sent on the person's word.
+        raise Problem("forbidden", "Ask with tico chat ask: a ❓ is marked by the server alone", 403)
     if refs and any(card in refs or refs.get("card") == card for card in ("key_grant", "access_request")):
         from . import key_grants
         from .store import Problem

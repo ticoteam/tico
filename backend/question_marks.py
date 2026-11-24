@@ -26,8 +26,12 @@ the bot marks a newer message in the chat. Give to moves an open one to another 
 card names the ❓ it answers (task_comments_routes `replying_to`): the check and the reply are one write, so a second
 tap is refused, and it clears that ❓ alone.
 
-The open mark is mirrored on its message as refs.question {id, to} (the migration's triggers), so every chat renderer
-draws its glyph from the message alone and a change reaches open pages through the messages trigger.
+The open mark is mirrored on its message as refs.question {id, to} (the migration's triggers), and its suggested answers
+as refs.question.choices (`_mirror_choices`, here, not a trigger), so every chat renderer draws its card from the message
+alone, to whoever may read that message, and a change reaches open pages through the messages trigger. Only the server
+writes refs.question (hubdb.check_message_refs). In the person's 1:1 chat with the bot the card's answer is a post in the
+❓'s own thread naming it (thread_api `ask`, `answer_check`), with the same one-reply check as a task's; a shared chat
+takes no answer by name.
 """
 
 import sqlite3
@@ -718,9 +722,44 @@ def mark(
         ":line, :created_at, :choices)",
         row,
     )
+    _mirror_choices(conn, row)
     H.event(conn, bot, "question.marked", row["id"], {"message": message["id"], "to": target, "task": task_id})
     H._recount(conn, bot)  # its status's "waits on a person" (hubdb.status_counts)
     return {**row, "cleared_at": None, "replaced": replaced}
+
+
+def _mirror_choices(conn: sqlite3.Connection, mark: Mapping[str, Any]) -> None:
+    """The open ❓'s suggested answers on its message, beside the {id, to} its triggers mirror (refs.question.choices):
+    they reach exactly the readers of that message, as its words do. Again after Give to, whose trigger writes {id, to}
+    anew. Nothing for a free-text ❓."""
+    offered = choices_of(mark)
+    if offered:
+        conn.execute(
+            "UPDATE messages SET refs=json_set(refs, '$.question.choices', json(?)) "
+            "WHERE id=? AND json_valid(refs) AND json_extract(refs, '$.question.id')=?",
+            (H._dump(offered), mark["message_id"], mark["id"]),
+        )
+
+
+NOT_YOURS = "That is not a ❓ to you in this chat"
+
+
+def answer_check(conn: sqlite3.Connection, person: str, ask: object, conv: Mapping[str, Any]) -> tuple[str, str]:
+    """The ❓ a person's post names (`ask`, `qmark:<id>`, from its card in a chat), as (its id, the bot that asked): one
+    to them, asked in this very thread (`conv`, never another under the same root); the post goes to that bot. Checked before anything is written, and again by the write (`answering`, `cleared_by`): 409
+    `answered` once it is not open (a second tap sends nothing; Send anyway of a held answer checks again), and only in
+    their own hand (`by_hand`)."""
+    from .store import Problem
+
+    mid = mark_id(ask) or str(ask or "")
+    found = get(conn, mid)
+    if not found or found["person_id"] != person or found["conversation_id"] != conv.get("id"):
+        raise Problem("validation", NOT_YOURS, 422)
+    if found.get("cleared_at"):
+        raise Problem("answered", ANSWERED, 409)
+    if not by_hand():
+        raise Problem("validation", "Only the person asked answers a ❓, in their own hand", 422)
+    return mid, str(found["bot_id"])
 
 
 def ask(
@@ -824,6 +863,7 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
     conn.execute(
         "UPDATE question_marks SET person_id=?, given_by_id=?, given_at=? WHERE id=?", (target, by, at, found["id"])
     )
+    _mirror_choices(conn, found)
     H.event(conn, by, "question.given", found["id"], {"from": found["person_id"], "to": target})
     return {**found, "person_id": target, "given_by_id": by, "given_at": at}
 

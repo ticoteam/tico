@@ -1,10 +1,10 @@
 import { useQuery } from '@tanstack/react-query';
 import { Conversation, MessageBones, SideHead, type FromPage, type Session } from '@/conversation';
 import { callCard } from '@/features/calls/exports';
-import { approvalCard, useApprovalCards } from '@/features/task/exports';
+import { approvalCard, ChatQuestions, useApprovalCards } from '@/features/task/exports';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
-import { agentOf, isDm, othersOf } from './model';
+import { agentOf, dmAgentOf, isDm, othersOf } from './model';
 import { useMe, useNameOf, useTitle } from './people';
 import { chatQuery } from './queries';
 import { chatActor } from '@/lib';
@@ -42,6 +42,8 @@ export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) 
     );
   if (!t) return <MessageBones />;
   const name = (actor && nameOf(actor)) || title;
+  // its ❓s are cards only in the viewer's 1:1 chat with an agent
+  const agent = dmAgentOf(t, me);
   // Under the name, which chat this is: a task's own (unless the head already names it by the task), or an agent's main chat.
   const session: Session | undefined = t.task_id
     ? name !== title
@@ -61,6 +63,7 @@ export function ChatSheet({ chat, from, starters, dm = false }: ChatSheetProps) 
       session={session}
       card={(m) => approvalCard(m) ?? callCard(m)}
       extra={approvals}
+      foot={agent && <ChatQuestions thread={t.id} agent={agent} canPost={t.me?.can_post !== false} />}
       canPost={t.me?.can_post !== false}
       from={from}
       starters={starters}
