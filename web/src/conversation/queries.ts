@@ -4,10 +4,11 @@
 import { infiniteQueryOptions, queryOptions, type InfiniteData } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type { Assistant, SlackMessage, SlackThread } from '@/api/schema';
-import { keys, queryClient, quietRoot, write } from '@/data';
+import { keys, queryClient, quietRoot, rangeText, transient, write } from '@/data';
 import { onTopic, type TimelineView } from '@/live';
 import { newId } from '@/lib/ids';
 import { chatAddress } from '@/lib/chat';
+import { safeFrame } from '@/lib/safeFrame';
 import type { FromPage } from '@/shell/pageOwner';
 import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
@@ -543,11 +544,18 @@ export const fileFactsQuery = (id: string) =>
     retry: false,
   });
 
-/** A page's own words (HTML), for its small live preview in a message. Read once; a page is not edited under it. */
+/** The most of a page read for its card; a longer page is its chip. */
+const PAGE_MAX = 256 * 1024;
+
+/** A page's HTML made safe for its small live preview in a message (lib/safeFrame), once per read; null when it is
+    longer than a card reads or safeFrame refuses it. Read once; a page is not edited under it. */
 export const pageTextQuery = (url: `/api/${string}`) =>
   queryOptions({
-    queryKey: ['files', 'page-text', url],
-    queryFn: ({ signal }) => api.get<string>(url, { signal }).then((t) => (typeof t === 'string' ? t : '')),
+    queryKey: ['files', 'page-text', url, PAGE_MAX],
+    queryFn: async ({ signal }) => {
+      const read = await rangeText(url, PAGE_MAX, { signal });
+      return read.truncated ? null : safeFrame(read.text);
+    },
     staleTime: Infinity,
-    retry: false,
+    retry: transient,
   });

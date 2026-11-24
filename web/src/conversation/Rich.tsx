@@ -8,6 +8,7 @@ import { Link } from '@/kit/Link';
 import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
 import { besideThread, fileKind } from '@/lib';
+import { FileCard, isCardKind } from './FileCard';
 import { isRawWords, pointerOf, withFileRefs, type Pointer } from './links';
 import { fileFactsQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
@@ -128,10 +129,18 @@ function filesIn(text: string): Extract<Pointer, { kind: 'file' }>[] {
 
 /**
  * A page, small and live: its own drawing scaled down to the card, in a sandbox (no scripts, no app origin, nothing it
- * can press). The card opens it full screen.
+ * can press) under lib/safeFrame's policy (nothing it can load). A page too long for a card, or one safeFrame refuses,
+ * is its chip. The card opens it full screen.
  */
 function PageCard({ src, title, onOpen }: { src: `/api/${string}`; title: string; onOpen: () => void }) {
   const read = useQuery(pageTextQuery(src));
+  if (read.data === null)
+    return (
+      <button type="button" className="file fcard-chip" onClick={onOpen}>
+        <Icon name="tobar" />
+        <span>{title}</span>
+      </button>
+    );
   return (
     <div className="pcard">
       <span className="pcard-view" aria-hidden="true">
@@ -366,6 +375,8 @@ function AttachedFile({ f, own }: { f: Attachment; own: OwnFile }) {
   if (face === 'audio') return <AudioBar f={f} own={own} />;
   if (face === 'pdf') return <PdfCard f={f} own={own} />;
   if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(own.id, undefined, held)} />;
+  const kind = fileKind(f.content_type, f.name);
+  if (isCardKind(kind)) return <FileCard kind={kind} url={url} name={name} mime={f.content_type ?? ''} {...(typeof f.size === 'number' && { size: f.size })} />;
   const open = (e: MouseEvent) => {
     if (!plainClick(e)) return;
     e.preventDefault();

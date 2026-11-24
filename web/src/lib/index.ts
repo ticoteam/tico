@@ -7,3 +7,7 @@ export { poll } from './poll';
 export { tabId } from './tab';
 export { boardSearch, changeBoardSearch, forgetPlaces, hearPlaces, heldRow, holdList, holdRow, keepTop, keptOrder, isTaskPath, leaveTask, listShown, NEEDS_YOU, nextInList, noteList, notePlace, openedFrom, pressListRow, type ListRow, type Place, type Steps } from './places';
 export { stepBackIs, watchSteps } from './backTo';
+export { csvRows, delimiterOf } from './csv';
+export { FRAME_POLICY, safeFrame } from './safeFrame';
+export { decodeWords, firstLines, parseEml, parseIcs, parseVcf, stripAnsi, type Contact, type Invite, type Mail } from './smallFiles';
+export { isFolder, zipEnd, zipEntries, ZIP_DIR_MAX, ZIP_TAIL, type ZipEnd, type ZipEntry } from './zip';
