@@ -167,7 +167,8 @@ def test_agent_ops_handoff_quoting_a_private_tasks_comment_is_private(api, agent
         carried = c.execute(
             "SELECT detail FROM events WHERE action='botops.request_carried' AND target=?", (made["id"],)
         ).fetchone()
-        assert H._json(carried["detail"], {})["lends"] is True  # her words are quoted on it
+        detail = H._json(carried["detail"], {})
+        assert detail["lends"] is True, detail  # her words are quoted on it
     assert made["private"] is True
 
 

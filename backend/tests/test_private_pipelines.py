@@ -133,8 +133,8 @@ def test_a_task_filed_into_it_is_private_with_its_readers(c):
 
 
 def test_an_asked_public_task_and_a_bot_filing_are_forced_too(c):
-    """`public` (`private: false` asked from private work) does not make a Legal task public."""
-    made = _file(c, title="Is our NDA mutual", public=True)
+    """`private: false` does not make a Legal task public."""
+    made = _file(c, title="Is our NDA mutual", private=False)
     assert H.task_private(c, H.task(c, made["id"]))
     made = H.task_create(c, "bot:ops", "Check the DPA", "Attached.", "bot:ops", pipeline="legal", lint=False)
     row = H.task(c, made["id"])
