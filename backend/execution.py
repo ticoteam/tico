@@ -3568,10 +3568,11 @@ def quiet_recheck(c, aid, body, task, msg):
     )
 
 
-def turn_wrote(c, aid, conversation_id, actor, reached=False):
+def turn_wrote(c, aid, conversation_id, actor, reached=False, done_note=True):
     """Whether the bot wrote in this room during the turn (a comment, a ❓): its end-of-turn text is not posted too.
     `reached`: only a post that reached someone counts (it was delivered: written `to` an agent, a Reply, a mention,
-    a ❓); a plain comment on a task reaches nobody, so it answers nobody either."""
+    a ❓); a plain comment on a task reaches nobody, so it answers nobody either. `done_note=False`: the bot's done
+    note (task_calls.done_note, keyed `<task>:<visit>:done:<bot>`) does not count."""
     started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
     if not started or not started[0]:
         return False
@@ -3581,11 +3582,13 @@ def turn_wrote(c, aid, conversation_id, actor, reached=False):
         if reached
         else ""
     )
+    note = "" if done_note else " AND substr(coalesce(m.wake_key,''), -length(?)) IS NOT ?"
+    note_key = () if done_note else (":done:" + actor,) * 2
     return (
         c.execute(
             "SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.sender_id=? AND m.created_at>=? "
-            "AND m.deleted_at IS NULL" + delivered + " LIMIT 1",
-            (conversation_id, actor, started[0]),
+            "AND m.deleted_at IS NULL" + delivered + note + " LIMIT 1",
+            (conversation_id, actor, started[0], *note_key),
         ).fetchone()
         is not None
     )
@@ -3594,13 +3597,18 @@ def turn_wrote(c, aid, conversation_id, actor, reached=False):
 def check_unanswered(c, aid, actor, task_id, check, body, reply):
     """A check (backend/check_models.py) that its turn ended, done or closed, with nothing of the turn's in its room
     (no reply posted, no comment): a quiet Tico line there says why, so the parent's turn reading the room finds the
-    reason rather than an empty room. Its findings, if any, stay on the run."""
+    reason rather than an empty room. Its findings, if any, stay on the run. Its done note is not a reply: a note such as
+    "Findings are in the review reply." with no reply is the empty room this line explains."""
     task = H.task(c, task_id) if task_id else None
     if reply is not None or not task or task["owner_id"] != actor or task["status"] not in ("done", "closed"):
         return None
     started = c.execute("SELECT coalesce(started_at, created_at) FROM attempts WHERE id=?", (aid,)).fetchone()
     ended = max(task.get("done_at") or "", task.get("closed_at") or "")
-    if not started or ended < str(started[0] or "") or turn_wrote(c, aid, task["conversation_id"], actor):
+    if (
+        not started
+        or ended < str(started[0] or "")
+        or turn_wrote(c, aid, task["conversation_id"], actor, done_note=False)
+    ):
         return None
     model = f"{check['runtime']}:{check['model']}"
     said = (
