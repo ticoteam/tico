@@ -88,8 +88,13 @@ export function Tracker() {
     return (
       <div className="tracker">
         <div className="tracker-row is-fault">
-          <Fault label={fault} size={16} />
-          <span className="tracker-why">{fault}</span>
+          {/* the line says it: the mark is drawn only */}
+          <span aria-hidden="true">
+            <Fault label={fault} size={16} />
+          </span>
+          <span className="tracker-why" title={fault}>
+            {fault}
+          </span>
           <Button variant="quiet" onClick={() => failed.forEach((r) => void r.refetch())}>
             Try again
           </Button>

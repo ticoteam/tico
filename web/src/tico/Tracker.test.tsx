@@ -60,7 +60,7 @@ beforeEach(() => {
     if (needsFail && u.startsWith('/api/v2/needs-you'))
       return new Response(JSON.stringify({ error: { code: 'forbidden', detail: 'No.' } }), { status: 403, headers: { 'Content-Type': 'application/json' } });
     if (needsDown && u.startsWith('/api/v2/needs-you'))
-      return new Response(JSON.stringify({ error: { code: 'unavailable', detail: 'Restarting.' } }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ error: { code: 'starting', detail: 'Restarting.' } }), { status: 503, headers: { 'Content-Type': 'application/json' } });
     const q = new URL(u, 'http://x').searchParams;
     const body = u.startsWith('/api/v2/tasks')
       ? (q.get('status') === 'open' ? OPEN : BACK)[q.get('after') ?? '']
@@ -138,6 +138,12 @@ describe("Tico's tracker", () => {
     const retry = await screen.findByRole('button', { name: 'Try again' });
     expect(screen.queryByRole('button', { name: /Tracking/ })).toBeNull();
     expect(screen.getByText("Tracking didn't load · no access")).toBeTruthy();
+    // a refusal is not read again by itself when the stream comes up: only Try again reads it
+    vi.stubGlobal('EventSource', FakeEventSource);
+    startLive();
+    const asked = gets.length;
+    act(() => FakeEventSource.last.feed(opening(1)));
+    expect(gets.length).toBe(asked);
     needsFail = false;
     fireEvent.click(retry);
     const row = await screen.findByRole('button', { name: /Tracking 2/ });

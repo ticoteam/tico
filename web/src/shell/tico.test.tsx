@@ -72,7 +72,7 @@ describe('Tico, the first sheet @s212 @s238 @s624 @s1193', () => {
     queryClient.setQueryData(ticoPowerQuery.queryKey, { available: true, bot: 'assistant', can_turn_on: false, state: 'active' });
     queryClient.setQueryDefaults(ticoRoomQuery.queryKey, { retry: false });
     const tico = await show('page');
-    expect(await within(tico).findByRole('img', { name: 'Tico did not load' })).toBeTruthy();
+    expect(await within(tico).findByText("Tico didn't load · server error")).toBeTruthy();
     expect(screen.getByRole('main', { name: 'Tasks' })).toBeTruthy();
   });
 

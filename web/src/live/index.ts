@@ -12,7 +12,7 @@ export {
   type LiveEvent,
 } from './stream';
 export { follow, useFollow, type FollowScope } from './follow';
-export { faultReason, useReadFault } from './fault';
+export { useReadFault } from './fault';
 export {
   onTopic,
   onRefetch,
