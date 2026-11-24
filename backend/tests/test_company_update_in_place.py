@@ -296,7 +296,7 @@ class Company:
             tmp_path, "Owner", OWNER_EMAIL, {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Assistant"}
         )
         self.settings = settings_for(tmp_path, hosted="own", enabled_providers=("anthropic", "openai"))
-        self.settings.company_file_data = starter.pack(employees_file(CHARTS["0.6 hotmic"]), starter.MAX_PACKED)
+        self.settings.company_file_data = starter.pack(employees_file(CHARTS["hotmic"]), starter.MAX_PACKED)
         self.settings.company_file_configured = True
         self.before = seen(self.db)
         self.expected = updated(intended(self.before))  # what the update may change on purpose

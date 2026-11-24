@@ -1,13 +1,12 @@
-"""A company file names whatever template slugs its release had, and every later release still reads it.
+"""A company file names whatever template slugs its 0.6 release had, and every later release still reads it.
 
-- `draft.RENAMED` maps each slug a release renamed or folded away to the template that has the role now; `check` and
-  `from_yaml` read the old slug as the new one (bots, removed roles, YAML employees).
-- fixtures/shipped_template_slugs.json records every slug any release shipped. Each must still resolve, and every
-  current template must be in the record, so renaming a template fails here until its old slug is in RENAMED and the
-  record is rewritten (`python -m backend.tests.test_template_renames --write`, which refuses while a slug is lost).
-- fixtures/hq_starting_charts.json holds the starting charts Tico HQ hands new companies (HQ plans with an older
-  release's chart). Each must load in this release: the check that would have caught v0.6.0-rc.6 refusing HQ's plan.
-- A refused file's reason, as its owner reads it, names the role by its title.
+- `draft.RENAMED` maps each slug a 0.6 release renamed to the template that has the role now; `check` and `from_yaml`
+  read the old slug as the new one (bots, removed roles, YAML employees).
+- fixtures/shipped_template_slugs.json records every slug a release from v0.6.0 on shipped. Each must still resolve,
+  and every current template must be in the record, so renaming a template fails here until its old slug is in RENAMED
+  and the record is rewritten (`python -m backend.tests.test_template_renames --write`, which refuses while a slug is
+  lost).
+- A slug from before 0.6 is not read: the file is refused, and its reason names the role by its title and the slug.
 """
 
 import datetime as dt
@@ -16,12 +15,11 @@ import sys
 from pathlib import Path
 
 import pytest
-import yaml
 
 from backend import company_file as C
 from backend.company_file import draft as D
 from backend.company_file import starter
-from backend.tests.helpers.template_renames import CHARTS, employees_file
+from backend.tests.helpers.template_renames import employees_file
 
 ROOT = Path(__file__).resolve().parents[2]
 CATALOG = ROOT / "templates" / "catalog"
@@ -60,11 +58,13 @@ def company(bots, **more):
 # ---------------------------------------------------------------------------------------------- old slugs read as new
 def test_a_file_naming_every_old_slug_loads_with_the_new_ones():
     old = sorted(D.RENAMED)
-    rows = [bot(template, at) for at, template in enumerate(old)] + [bot("bookkeeping", len(old))]
-    removed = [{"template": "pr-reviewer", "title": "Reviewer"}]
+    rows = [bot(template, at) for at, template in enumerate(old)]
+    removed = [{"template": old[0], "title": "Fleet Fixer"}]
     saved = starter.load(company(rows, removed=removed))
-    assert [b["template"] for b in saved["bots"]] == [D.RENAMED[t] for t in old]  # the retired one leaves quietly
-    assert D.check(company(rows, removed=removed))["removed"] == [{"template": "reviewer", "title": "Reviewer"}]
+    assert [b["template"] for b in saved["bots"]] == [D.RENAMED[t] for t in old]
+    assert D.check(company(rows, removed=removed))["removed"] == [
+        {"template": D.RENAMED[old[0]], "title": "Fleet Fixer"}
+    ]
     assert rows[0]["template"] == old[0]  # the rows sent are not changed
 
     # The same through a YAML file's employees, and through the packed plan a server starts from.
@@ -83,13 +83,13 @@ def test_a_file_naming_every_old_slug_loads_with_the_new_ones():
 def test_renamed_maps_old_slugs_only_to_templates_this_release_has():
     assert not set(D.RENAMED) & CURRENT, "a current template can't also be an old name"
     assert {old: new for old, new in D.RENAMED.items() if new not in CURRENT} == {}
-    assert D.current("pr-reviewer") == "reviewer" and D.current("reviewer") == "reviewer" and D.current(None) is None
+    assert D.current("botops") == "agent-ops" and D.current("agent-ops") == "agent-ops" and D.current(None) is None
 
 
 # ---------------------------------------------------------------------------------------------- every shipped slug
 def lost(shipped=SHIPPED):
     """Slugs a release shipped that this release can no longer read."""
-    return sorted(s for s in shipped if s not in D.RETIRED and D.current(s) not in CURRENT)
+    return sorted(s for s in shipped if D.current(s) not in CURRENT)
 
 
 def test_every_slug_a_release_shipped_still_reads():
@@ -103,81 +103,6 @@ def test_every_template_a_file_can_name_has_its_card():
     """A live seat is made from its card folder, so each template the reader takes is one."""
     folders = {path.name for path in CATALOG.iterdir() if (path / "card.yaml").is_file()}
     assert sorted((D.TEMPLATES | D.HELPER_TEMPLATES) - folders) == []
-
-
-# ---------------------------------------------------------------------------------------------- HQ's starting charts
-def tree(saved):
-    """A chart's roles as the company gets them: each with its template, department, team, whether it starts live, and
-    the template of the role it reports to (None for the person)."""
-    templates = {b["id"]: b["template"] for b in saved["bots"]}
-    return [
-        (b["template"], b["dept"], b.get("team"), bool(b.get("live")), b["lead"], templates.get(D.manager_of(saved, b)))
-        for b in saved["bots"]
-    ]
-
-
-@pytest.mark.parametrize("name", sorted(CHARTS))
-def test_every_starting_chart_hq_hands_out_loads_in_this_release(name):
-    rows = CHARTS[name]
-    packed = starter.pack(employees_file(rows), starter.MAX_PACKED)  # what HQ stores for the server
-    saved = starter.unpack(packed)  # what the server reads at its first start
-    assert {b["template"] for b in saved["bots"]} <= CURRENT
-    # Each team's Team Manager seat and its Pipeline Managers are one Manager; every other role keeps its id.
-    folded = {r["id"] for r in rows if r["template"] == "pipeline-manager" or r["template"].endswith("-team-manager")}
-    kept = [r["id"] for r in rows if r["template"] not in D.RETIRED and r["id"] not in folded]
-    managers = [b for b in saved["bots"] if b["template"] in {row[0] for row in D.TEAM_MANAGERS.values()}]
-    assert [b["id"] for b in saved["bots"] if b not in managers] == kept
-    assert (
-        sorted(b["id"] for b in managers)
-        == sorted(b["template"] for b in managers)
-        == sorted(row[0] for row in D.TEAM_MANAGERS.values())
-    )
-    assert {b["id"]: b["title"] for b in managers} == {row[0]: row[2] for row in D.TEAM_MANAGERS.values()}
-
-
-@pytest.mark.parametrize("name", sorted(name for name in CHARTS if name.startswith("0.6 ")))
-def test_hqs_chart_in_the_older_shape_gives_the_tree_a_chart_in_todays_shape_gives(name):
-    """HQ plans a new company with the chart an older release drew: a Team Manager seat to recruit, a live Pipeline
-    Manager per pipeline, and every other seat on the Team Manager's line. Read here, it is the tree this release's
-    own chart gives the same company: one live Manager per team with the team under it."""
-    golden = json.loads((Path(__file__).parent / "fixtures" / "chart_formula_golden.json").read_text())
-    case = next(case for case in golden["cases"] if case["name"] == name.split()[1])
-    theirs = starter.load(employees_file(CHARTS[name]))
-    ours = starter.load(employees_file(case["expected"]["employees"]))
-    # Nov 14: the Product Owner is the Feature Owner (RENAMED), and today's chart has no Builder: the Feature Owner builds.
-    # An older chart's Builder seat is still read as the Builder it asked for.
-    assert [row for row in tree(theirs) if row[0] != "builder"] == tree(ours)
-    assert "feature-owner" in {b["template"] for b in theirs["bots"]}
-    live = {b["template"] for b in theirs["bots"] if b.get("live")}
-    assert {"product-manager", "engineering-manager", "growth-manager", "success-manager"} <= live
-    assert "corporate-manager" not in live
-
-
-def test_a_pipeline_manager_with_no_team_manager_becomes_its_teams_manager_and_goals_follow():
-    rows = [
-        {"id": "lead-pipeline-manager", "template": "pipeline-manager", "title": "Lead Pipeline Manager",
-         "department": "operations", "team": "Growth", "live": True},
-        {"id": "opportunity-pipeline-manager", "template": "pipeline-manager", "title": "Opportunity Pipeline Manager",
-         "department": "operations", "team": "Growth", "live": True},
-        {"id": "seo-owner", "template": "seo-owner", "title": "SEO Owner", "department": "marketing",
-         "reports_to": "opportunity-pipeline-manager"},
-        {"id": "ops", "template": "pipeline-manager", "title": "Ops Pipeline Manager", "department": "operations"},
-    ]  # fmt: skip
-    doc = yaml.safe_load(employees_file(rows))
-    doc["goals"] = [
-        {"id": "g1", "title": "More deals", "owner": "opportunity-pipeline-manager", "measure": "Deals", "unit": "",
-         "direction": "up"}
-    ]  # fmt: skip
-    saved = starter.load(yaml.safe_dump(doc, sort_keys=False))
-    assert [(b["id"], b["template"], b["title"], b["dept"], b.get("live")) for b in saved["bots"]] == [
-        ("growth-manager", "growth-manager", "Growth Manager", "marketing", True),
-        ("seo-owner", "seo-owner", "SEO Owner", "marketing", None),
-        ("ops", "general-manager", "Ops Pipeline Manager", "operations", None),  # no team said: the General Manager
-    ]
-    assert D.manager_of(saved, saved["bots"][1]) == "growth-manager" and saved["goals"][0]["owner"] == "growth-manager"
-    # A draft saved from the setup page folds the same way.
-    again = starter.load(saved | {"bots": saved["bots"]})
-    assert [b["id"] for b in again["bots"]] == ["growth-manager", "seo-owner", "ops"]
 
 
 # ---------------------------------------------------------------------------------------------- the owner's reason
@@ -194,6 +119,21 @@ def test_an_unknown_template_is_refused_naming_the_role_by_its_title():
     with pytest.raises(D.DraftError) as refused:
         starter.load(text)
     assert refused.value.plain == "Reviewer 1 names a role template this version of Tico doesn't have: no-such-role"
+
+
+# Slugs only a release before 0.6 had: a Pipeline Manager and Team Manager seat, a role renamed in the rc releases, and
+# a template retired before 0.6.
+@pytest.mark.parametrize(
+    "slug", ["pipeline-manager", "growth-team-manager", "pr-reviewer", "bookkeeper", "bookkeeping"]
+)
+def test_a_slug_from_before_0_6_is_refused_naming_the_slug(slug):
+    with pytest.raises(D.DraftError) as refused:
+        starter.load(company([bot("assistant", 0), bot(slug, 1, title="Old Seat")]))
+    assert refused.value.plain == "Old Seat names a role template this version of Tico doesn't have: " + slug
+    text = employees_file([{"id": "r1", "template": slug, "title": "Old Seat", "department": "operations"}])
+    with pytest.raises(D.DraftError) as refused:
+        starter.load(text)
+    assert refused.value.plain == "Old Seat names a role template this version of Tico doesn't have: " + slug
 
 
 def test_other_refusals_name_the_role_person_or_goal_in_plain_words():

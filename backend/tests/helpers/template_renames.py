@@ -1,12 +1,14 @@
-"""The starting charts Tico HQ hands new companies (fixtures/hq_starting_charts.json) and the company file a chart's
-rows make: shared by test_template_renames.py and test_company_import.py."""
+"""A starting chart as today's chart formula draws it (fixtures/chart_formula_golden.json) and the company file a chart's
+rows make: shared by test_template_renames.py, test_company_import.py and test_company_update_in_place.py."""
 
 import json
 from pathlib import Path
 
 import yaml
 
-CHARTS = json.loads((Path(__file__).parents[1] / "fixtures" / "hq_starting_charts.json").read_text())["charts"]
+_GOLDEN = json.loads((Path(__file__).parents[1] / "fixtures" / "chart_formula_golden.json").read_text())
+# {case name: the employees rows of the chart the formula draws for it}
+CHARTS = {case["name"]: case["expected"]["employees"] for case in _GOLDEN["cases"]}
 
 
 def employees_file(rows):
