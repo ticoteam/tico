@@ -1204,7 +1204,7 @@ class Store:
         c.pool_file = identity  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         # The server's file reader as the app has it configured now (media.install_media): work that holds only the
         # connection reads a company page's logo through it, so one saved in the company's own places is found.
-        c.burst_rehome = burst
+        c.burst_rehome = burst  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         c.blobs = self.blobs
         c.credential_cipher = (  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
             self.credential_vault.cipher if self.credential_vault else None

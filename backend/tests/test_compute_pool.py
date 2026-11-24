@@ -505,7 +505,7 @@ def test_preparation_uses_the_next_eligible_job_and_idle_slot(api, fleet):
 
 @pytest.mark.parametrize("signed_in", [True, False])
 def test_preparation_matches_runner_manifests_and_gateway_switch(api, fleet, signed_in, monkeypatch):
-    from backend.tests.test_models_preset import choose, on_claude
+    from backend.tests.helpers.models_preset import choose, on_claude
 
     monkeypatch.setenv("TICO_GATEWAY_KEY", "synthetic-test-key")
 

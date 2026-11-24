@@ -21,7 +21,7 @@ from collections import namedtuple
 from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from urllib.parse import quote, urlencode, urlparse
 
 import httpx
@@ -2789,8 +2789,8 @@ def install_github_app(app, settings, store):
                 ):
                     raise Problem("forbidden", "That repository is unavailable for Burst preparation", 403)
             repo = entry["repository"]
-            value, expires, repos, cached, _ = service.mint_reachable(
-                [repo], READ_PERMISSIONS, include_cache_status=True
+            value, expires, repos, cached, _ = cast(
+                tuple, service.mint_reachable([repo], READ_PERMISSIONS, include_cache_status=True)
             )
             if value and not cached:
                 with store.transaction() as c:
