@@ -711,8 +711,8 @@ def parser():
         dest="private",
         action="store_false",
         default=None,
-        help="company-visible, also from a run on a private task (whose tasks are private unless you say so) or under "
-        "a private parent; a bot's private-by-default setting still keeps its tasks private",
+        help="company-visible (left out, a task is private only by its owner's or your private-by-default setting or "
+        "where it is filed); a bot's private-by-default setting still keeps its tasks private",
     )
     s.add_argument(
         "--owner",

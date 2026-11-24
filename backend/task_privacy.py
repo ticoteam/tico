@@ -48,22 +48,12 @@ def as_the_person(who):
 
 
 def new_task(c, who, body, owner, parent, actual_bot):
-    """(body, public, private) for a task about to be filed (app.task_create): its explicit choice, the filer's and
-    owner's defaults, and a private parent. Delegation retains the bot's sensitive default and cannot use a person's
-    explicit-public choice to override either creator or assignee defaults."""
-    asked_public = body.private is False
-    if actual_bot and body.private is False:
-        body = body.model_copy(update={"private": None})
-    if actual_bot and H.private_tasks_default(c, actual_bot):
-        body = body.model_copy(update={"private": True})
-    defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
-    # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
-    # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
-    public = asked_public and body.private is not True and not (actual_bot and defaults)
-    private = not public and bool(
-        (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
-    )
-    return body, public, private
+    """(public, private) for a task about to be filed (app.task_create), by the one create rule
+    (hubdb.new_task_private): its filer's choice, else a sensitive default (the filer's, the acting bot's, which a
+    delegation keeps, or the owner's). Nothing spreads to it: a private parent stays its readers' alone
+    (task_relations shows it as "a private task"). `public` is a `private: false` that held."""
+    private = H.new_task_private(c, who.actor, owner, body.private, bot=actual_bot, parent=parent)
+    return body.private is False and not private, private
 
 
 def actor(who):
@@ -1255,8 +1245,8 @@ def private_meetings(c, ids):
 
 def private_execution(c, who):
     """Whether a run carries a private task. It narrows nothing the run may do: it keeps a refusal's record
-    content-free (hubdb.PRIVATE_WRITE) and makes a task the run files private unless the run asks otherwise
-    (app.task_create)."""
+    content-free (hubdb.PRIVATE_WRITE). A task the run files is not made private by it: its filer chooses
+    (hubdb.new_task_private)."""
     return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
 
 

@@ -569,8 +569,12 @@ pages, post in other threads, write rules and file tasks. Privacy stays on the r
 chat and files are seen only by its readers, wherever they are listed. A mail send that needs an OK still asks it, on
 a private task of its own, of the inbox's approver alone.
 
-- A task a private task's run files is private, with its assignee and requester able to read it; `--public`
-  (`"private": false`) files it company-visible, under the private task too. The private parent stays hidden.
+- Privacy does not spread. Whoever files a task, a person or a bot, chooses: `--private` (`"private": true`) or
+  `--public` (`"private": false`). A task filed with no choice is not private, even when a private task's run files
+  it or it is a sub-task of a private task; the private parent stays hidden. It is private with no choice only when
+  the filer's or its owner's template keeps tasks private (a General Counsel's, the Rules Owner's), when it goes in a
+  private pipeline, or when it comes from a narrower audience (a DM or a thread that isn't company-wide, a meeting
+  that isn't the team's). A bot's `--public` never publishes past its template's private default.
 - A sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first such
   person a reader of that task only. Anyone after that gets the sub-task alone.
 

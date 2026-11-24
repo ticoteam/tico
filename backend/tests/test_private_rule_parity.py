@@ -229,7 +229,8 @@ def world(api, monkeypatch):
         # The page copy is cara's: Finance and CPO, named as more readers, are not in the page's audience.
         c.execute("UPDATE tasks SET readers=? WHERE id=?", ('["bot:finance","bot:cpo"]', copy))
         X.pipeline(c, "eng", "Engineering", ({"name": "Build", "owner": "bot:ops", "requirements": []},))
-        tasks["stage"] = _make(c, "human:cara", "Build the export", "bot:ops", pipeline="eng")
+        # Given to Ben, held by Ops at Build: Ops is no party but the stage's, so it reads the task by the hold alone.
+        tasks["stage"] = _make(c, "human:cara", "Build the export", "human:ben", pipeline="eng")
         entity = entities.upsert(c, "human:ana", "organization", name="North", match={})["id"]
         tasks["rel_public"] = _make(c, "human:ana", "North renewal", "bot:ops", private=False)
         tasks["rel_private"] = _make(c, "human:ana", "North pricing", "bot:ops")
@@ -332,7 +333,9 @@ def test_every_reader_reads_every_task_by_one_rule(world):
     api, auth, readers, tasks = world
     with api.app.state.store.read() as c:
         reads = {label: _reads(c, auth, who, tasks) for label, who in readers.items()}
-        assert H.stage_read_held(c, "bot:ops", H.task(c, tasks["stage"])) == "Build"  # Ops reads it by its hold alone
+        staged = H.task(c, tasks["stage"])
+        assert (staged["owner_id"], staged["assignee_id"]) == ("bot:ops", "human:ben")
+        assert H.stage_read_held(c, "bot:ops", staged) == "Build"  # Ops reads it by its hold alone
         assert H.task(c, tasks["managed_open"])["owner_id"] is None
     # The fixture reaches every admission path it names (read by the list).
     for reader, task in (
@@ -400,10 +403,10 @@ def test_a_question_on_a_company_task_its_person_may_not_read_writes_no_reader(w
 
     api, _, _, tasks = world
     with api.app.state.store.transaction() as c:
-        try:
+        with pytest.raises(H.Refused) as refused:
             question_marks.ask(
                 c, "bot:ops", tasks["public_inbox"], "human:cara", "Can you look at this?", checked=False
             )
-        except H.Refused:
-            pass  # the chat is not hers to read
+        assert refused.value.rule == "private", refused.value  # the chat is not hers to read
+        # Outside the refusal's check: a reader written before it was refused is caught too.
         assert H.task_readers(H.task(c, tasks["public_inbox"])) == []

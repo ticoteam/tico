@@ -551,9 +551,6 @@ def register_core(
         if body.from_private:
             # Older clients' name for `private: false` from a private task's run.
             body = body.model_copy(update={"private": False, "from_private": False})
-        elif body.private is None and privacy.private_execution(c, who):
-            # What a run on private work files is private unless it asks for company-visible (`private: false`).
-            body = body.model_copy(update={"private": True})
         request_id = body.request_id
         handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
         if request_id and handoff:
@@ -703,7 +700,7 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        body, public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
+        public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.

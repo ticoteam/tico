@@ -299,9 +299,7 @@ def prepare(
         raise Problem("route", PRIVATE_REFUSAL, 422)  # its owner would read the private task above it
     if getattr(body, "from_private", False):  # older clients' name for `private: false` (app.task_create)
         body = body.model_copy(update={"private": False, "from_private": False})
-    elif body.private is None and task_privacy.private_execution(conn, who):
-        raise Problem("route", PRIVATE_REFUSAL, 422)  # a run on private work files private work
-    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[2]:
+    if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[1]:
         raise Problem("route", PRIVATE_REFUSAL, 422)
     return Work(
         pipeline_id=support,

@@ -79,9 +79,9 @@ def same_people(readers, shared):
         "due": _s("ISO-8601 date-time with timezone"),
         "private": {
             "type": "boolean",
-            "description": "true: only its requester, owner and readers see it. false: company-visible, also from a "
-            "run on a private task or under a private parent. Left out: a private task's run files it private; "
-            "bot defaults also apply",
+            "description": "true: only its requester, owner and readers see it. false: company-visible. Left out: "
+            "not private, even from a run on a private task or under a private parent, unless a bot's private "
+            "default or a private pipeline makes it private",
         },
         "shared_with": {
             "type": "array",
