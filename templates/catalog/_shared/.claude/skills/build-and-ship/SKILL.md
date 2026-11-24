@@ -125,7 +125,7 @@ you, the work stalls: nobody will prompt you again.
   timeout. Never a sleep loop.
 - When the checks settle, read the live state and every comment:
   - `gh pr view <n> --json state,mergeable,mergeStateStatus,statusCheckRollup,reviews,comments`
-  - `gh api repos/<owner>/<repo>/pulls/<n>/comments`
+  - `gh api --paginate repos/<owner>/<repo>/pulls/<n>/comments`
 - A failing check: `.claude/skills/get-the-checks-green-at-the-head/SKILL.md`. Never skip, loosen or rerun a check
   to get green.
 - Review comments: `.claude/skills/answer-each-review-comment/SKILL.md`. Fix the real ones and prove each fix. Run
@@ -158,8 +158,10 @@ All of these are true at the head:
 
 ## Merge
 
-- Where the merge queue merges a repository, add the PR to the queue and stay with it until GitHub says it merged.
-  Never merge by hand there.
+- In {{app_name}}, never enqueue or merge: {{app_name}} moves the task on when the checks pass and queues the PR at
+  the checked head when it reaches Merge.
+- Elsewhere, where the merge queue merges a repository, add the PR to the queue and stay with it until GitHub says it
+  merged. Never merge by hand there.
 - Elsewhere, merge with the method the repository uses. Check the allowed methods and recent merged PRs.
 - Never merge with red checks. Never use `--admin` or any other way around branch protection.
 - An automated review that only says "needs human review" may be set aside when your proof covers the whole change.

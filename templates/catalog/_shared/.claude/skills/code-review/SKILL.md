@@ -43,7 +43,7 @@ the goal needs.
     moving parts.
   - Prove it with tests and ship with no further round.
   - Decline narrow failures the rest of the system already has (for example, storage that writes and then raises),
-    with a one-line reason.
+    with a one-line reason, unless this change makes them worse (a new retry that repeats the write).
   - List anything left as a follow-up.
 - **Stop early** when a round returns only nits. Declined nits, and edits to comments, docs or formatting, need no new
   round.
@@ -84,12 +84,16 @@ the goal needs.
      `codex exec -m gpt-6.2-sol -c model_reasoning_effort="high" -s read-only -C <repo> -o <scratch>/code-review-r<N>.md - < brief.txt`.
    - If the default cannot run, use the company's check model from another provider (`--check-model` with no value),
      and say so in the report.
+   - In {{app_name}}, push the change first: the reviewer reads the pushed head, not your working tree. Put the head
+     SHA in the brief.
    - Do not edit the scoped files while the review runs. Do not start a second reviewer. A timeout, an error or an
-     empty answer is not approval: stop that run and start again with the ledger.
+     empty answer is not approval: stop that run and start again with the ledger. After two failed runs in one round,
+     stop and tell the task's owner the review could not run.
 6. **Answer each finding, proven by a run.** Check every finding and its severity yourself, against the live code.
    For a subtle bug, a race or a rare case, run a quick test or script to see whether the failure is real before you
-   make the code more complex. Another path, a rare case or a tiny speed cost is a nit, whatever the reviewer called
-   it.
+   make the code more complex. Grade by impact, not by the reviewer's label: a rare case that loses data, leaks
+   access or breaks someone's work keeps its severity; another path, a harmless rare case or a tiny speed cost is a
+   nit.
    - **Agree:** make the smallest fix. Prefer deleting or narrowing to adding a lock, cache, helper or option. Fix the
      case that happened. Add one focused test that fails without the fix when the intent needs it.
    - **Disagree:** say why, with evidence: a `file:line`, a test or command output.
@@ -118,6 +122,7 @@ Review only. Do not edit, commit, push, comment on pull requests, or start helpe
 Repo: <path> Base: <sha> Intent: <intent> Out of scope: <scope> Checks: <results>
 One fact to challenge: <the fact and its proof level>
 See: git diff <base> [-- <paths>]; git status --short (read untracked files).
+(A pushed head: git diff <base> <head> [-- <paths>].)
 Read the code around the diff and look past it: callers, API and database contracts,
 timing, shared state. Judge: security (access, privacy, credentials, data exposure),
 simplicity, performance (extra queries, N+1, work inside locks, polling), whether it
@@ -126,7 +131,7 @@ Cite real file:line and trace concrete failure paths. No speculation.
 Say plainly if a part, or the whole change, should not be built at all.
 Skip style unless it hides a bug. Hold to the smallest change. Flag code, tests or
 guards the intent does not need. Other paths, rare cases, small speed costs, extra
-compatibility: nits.
+compatibility: nits, unless they lose data, leak access or break someone's work.
 blocker = the intended case is wrong, or proven breakage. should = a real bug callers
 will hit, within the intent. nit = the rest.
 Reply:

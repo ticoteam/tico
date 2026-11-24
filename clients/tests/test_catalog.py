@@ -633,7 +633,10 @@ class ShippedLayers(unittest.TestCase):
             except yaml.YAMLError as error:
                 bad.append(f"{path.relative_to(self.directory)}: {str(error).splitlines()[0]}")
                 continue
-            if len(str(meta.get("description", ""))) > skills.MAX_DESCRIPTION:
+            library = skills.frontmatter(text)
+            if not library.get("description"):
+                bad.append(f"{path.relative_to(self.directory)}: the library reads no description")
+            elif len(library["description"]) > skills.MAX_DESCRIPTION:
                 bad.append(f"{path.relative_to(self.directory)}: description over {skills.MAX_DESCRIPTION} characters")
         self.assertEqual(bad, [])
 
