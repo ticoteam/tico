@@ -396,14 +396,50 @@ def test_toggling_routing_clears_exit_bound_turn_windows(api, computers):
             assert "turn_weekly" not in metadata(c, key)
         if not enabled:
             agent_on(api, exit_runner, "cpo", sid)
-            turn(api, exit_runner, "cpo")
+            direct = turn(api, exit_runner, "cpo")
+            post(api, f"attempts/{direct}/started", {"thread_id": "direct"}, exit_runner["token"])
             heartbeat(
                 api, exit_runner, "ops", weekly=reading, five_hour={**reading, "resets_at": H.shift(taken, hours=2)}
             )
+            heartbeat(api, exit_runner, "cpo", weekly={k: v for k, v in reading.items() if k != "attempt_id"})
             with store.read() as c:
                 assert "turn_weekly" not in metadata(c, key)
         [plan] = get(api, "model-subscriptions")["subscriptions"]
         assert plan["usage"]["used_pct"] is None
+
+
+def test_exit_bound_turn_usage_survives_readiness_loss_until_the_exit_changes(api, computers):
+    exit_runner, other = computers
+    sid = add(api)["id"]
+    select(api, exit_runner)
+    agent_on(api, exit_runner, "ops", sid)
+    attempt = turn(api, exit_runner, "ops")
+    heartbeat(
+        api,
+        exit_runner,
+        "ops",
+        weekly={
+            **window(42),
+            "origin": "subscription",
+            "subscription_id": sid,
+            "attempt_id": attempt,
+            "reported_at": H.now(),
+        },
+    )
+    heartbeat(api, exit_runner, installed=False)
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["used_pct"] == 42
+
+    store = api.app.state.store
+    key = SR.plan_key(sid)
+    with store.read() as c:
+        saved = metadata(c, key)
+    select(api, other)
+    # A stale saved window must be rejected even if it is still present after the cutover.
+    with store.transaction() as c:
+        save_metadata(c, key, {**saved, **metadata(c, key)})
+    [plan] = get(api, "model-subscriptions")["subscriptions"]
+    assert plan["usage"]["used_pct"] is None
 
 
 def test_cloud_turn_usage_survives_a_stale_model_exit_report(api, computers):

@@ -1,6 +1,6 @@
 {
   "title": "Tico runner wire contract",
-  "version": "1.1",
+  "version": "1.2",
   "x-note": "The core turn path between a runner and its server (docs/runner-wire-contract.md). Requests are the server's own models (requests.json, generated from backend/models.py); answers and errors are declared here from what the handlers send. An object with additionalProperties false is fully declared: the server sends nothing else. One with additionalProperties true is not contracted below that level yet: readers keep it as opaque JSON. x-open-enum marks a string whose readers must accept values not listed.",
   "endpoints": {
     "heartbeat": {"method": "POST", "path": "/api/v2/runners/heartbeat", "request": "Heartbeat", "answer": "HeartbeatAnswer"},

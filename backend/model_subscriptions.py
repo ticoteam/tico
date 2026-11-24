@@ -1096,10 +1096,10 @@ def provenance(reading):
 
 
 def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, *, routing):
+    attempt_id = reading.get("attempt_id")
     binding = ""
     args = (sid, runtime, runner_id)
     if routing:
-        attempt_id = reading.get("attempt_id")
         if route and (route.runner_id != runner_id or not attempt_id):
             return False
         binding = "AND e.exit_generation IS ? AND s.delivery<>'model_exit' "
@@ -1110,7 +1110,7 @@ def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, *, routing):
             args = (*args, attempt_id, reading["reported_at"])
     from .subscription_refresh import PLAN_PREFIX
 
-    # After a routing cutover (plan_exits._clear_turn_usage) only a turn the hub started later can vouch for a reading.
+    # After a cutover only a newer attempt vouches for a reading. Without an attempt ID the reading must also be newer.
     return (
         c.execute(
             "SELECT 1 FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
@@ -1121,9 +1121,9 @@ def _turn_usage_receipt(c, sid, runtime, runner_id, route, reading, *, routing):
             "AND a.created_at>=m.credential_at "
             "AND (r.value IS NULL OR NOT json_valid(r.value) OR json_extract(r.value, '$.turn_cutover_at') IS NULL "
             "OR (julianday(a.created_at)>julianday(json_extract(r.value, '$.turn_cutover_at')) "
-            # A runner that names its turn must name this one (old runners name none and never run routed turns).
-            "AND (? IS NULL OR s.attempt_id=?))) " + binding + "LIMIT 1",
-            (PLAN_PREFIX, *args[:3], reading.get("attempt_id"), reading.get("attempt_id"), *args[3:]),
+            "AND CASE WHEN ? IS NULL THEN julianday(?)>julianday(json_extract(r.value, '$.turn_cutover_at')) "
+            "ELSE s.attempt_id=? END)) " + binding + "LIMIT 1",
+            (PLAN_PREFIX, *args[:3], attempt_id, reading["reported_at"], attempt_id, *args[3:]),
         ).fetchone()
         is not None
     )
@@ -1195,6 +1195,7 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     runners = ctx["runners"]
     exits = ctx.get("exits")
     route = plan_exits.routed(c, sub, exits)
+    binding_route = plan_exits.routed(c, sub, exits, require_ready=False) if route and not route.runner_id else route
     # With exit routing, turn windows come from receipts checked at heartbeat ingestion.
     computers = [
         g
@@ -1204,9 +1205,13 @@ def _plan_usage(c, sub, runtime, ctx, windows=None):
     meta = ctx["meta"].get(SR.plan_key(sub["id"])) or {}
     turn_weekly, turn_five_hour = (
         meta.get(field)
-        if not route
-        or meta.get(field + "_exit") is None
-        or (route.runner_id and meta.get(field + "_exit") == list(route) and (meta.get(field) or {}).get("attempt_id"))
+        if meta.get(field + "_exit") is None
+        or (
+            binding_route
+            and binding_route.runner_id
+            and meta.get(field + "_exit") == list(binding_route)
+            and (meta.get(field) or {}).get("attempt_id")
+        )
         else None
         for field in ("turn_weekly", "turn_five_hour")
     )

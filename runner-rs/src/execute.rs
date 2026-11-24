@@ -1071,8 +1071,7 @@ pub(crate) struct Drove {
     pub(crate) retryable: bool,
     /// The turn running when the drive ended (a goal's continuation, a carried input's turn).
     pub(crate) turn: String,
-    /// The turn gave its place up for an update drain (crate::drain): its job goes back in the queue to continue, not
-    /// to review.
+    /// The turn gave its place up and its job goes back in the queue to continue.
     pub(crate) yielded: bool,
 }
 
@@ -3328,17 +3327,20 @@ impl Runner {
                 .as_ref()
                 .is_some_and(|exit| exit.transport_failed())
         {
-            let reason = "The plan exit connection was interrupted";
-            self.diagnose(&aid, reason);
+            let _ = self.state.append(
+                &aid,
+                "status",
+                &json!({"yielded": "The plan exit connection was interrupted"}),
+            );
             drove = Drove {
                 outcome: "interrupted".into(),
                 limited: false,
                 capacity: false,
                 continues: false,
                 retryable: false,
+                yielded: true,
                 ..drove
             };
-            goal.failure = Some(reason.into());
             auth_rejected = None;
             unavailable = false;
         } else if let Err(e) = &ran {
@@ -6285,8 +6287,10 @@ mod tests {
                     let model = window
                         .as_ref()
                         .and_then(|w| w.lock().unwrap().answer(&path, &body));
+                    let exit_offline = path.ends_with("/browser-exit/tunnels");
                     let rejected = model.as_ref().map_or(
-                        (revoke_start.is_some() || payer_wait) && path.ends_with("/started"),
+                        exit_offline
+                            || (revoke_start.is_some() || payer_wait) && path.ends_with("/started"),
                         |(rejected, _)| *rejected,
                     );
                     let waiting = revoke_start.is_some_and(|after_start| {
@@ -6301,6 +6305,8 @@ mod tests {
                     let answer = match (body["events"].as_array().and_then(|e| e.last()), voice.as_deref()) {
                         (Some(last), _) => json!({"ack_seq": last["seq"]}),
                         (None, _) if model.is_some() => model.unwrap().1,
+                        (None, _) if exit_offline => json!({"error": {"code": "model_exit_offline"}}),
+                        (None, _) if path.ends_with("/a-exit/goal") => json!({"goal": plan_exit_test_goal()}),
                         (None, _) if rejected && payer_wait => json!({"error": {"code": "payer_wait", "detail": "Paid by: the provider credential is unavailable"}}),
                         (None, _) if rejected => json!({"error": {"code": "start_wait", "detail": "Synthetic reservation expired"}}),
                         (None, _) if path.ends_with("/start-place") => json!({"reserved": !waiting}),
@@ -10723,6 +10729,81 @@ else:
             .collect();
         assert_eq!(done.len(), 1, "{done:?}");
         done[0].clone()
+    }
+
+    fn plan_exit_test_goal() -> Value {
+        json!({"id": "g1", "status": "active", "objective": "Save the Acme receipts", "updated_at": "rev1"})
+    }
+
+    #[tokio::test]
+    async fn a_started_plan_exit_turn_yields_without_stopping_its_goal() {
+        let _controls = RunControls;
+        let (url, seen, server) = recording_server().await;
+        let (runner, dir) = runner_at(&url, "offline-plan-exit");
+        std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap();
+        let script = dir.join("claude.py");
+        std::fs::write(&script, r#"import json, os, sys, urllib.error, urllib.request
+if '--version' in sys.argv:
+    print('2.1.999 (Claude Code)'); sys.exit(0)
+if '--help' in sys.argv:
+    sys.exit(0)
+def emit(**event):
+    print(json.dumps(event), flush=True)
+sys.stdin.readline()
+emit(type='system', subtype='init', session_id='plan-exit-session')
+emit(type='assistant', message={'content': [{'type': 'tool_use', 'id': 'tool1', 'name': 'Bash', 'input': {'command': 'true'}}]})
+emit(type='user', message={'content': [{'type': 'tool_result', 'tool_use_id': 'tool1', 'content': 'Saved the Acme receipt'}]})
+request = urllib.request.Request(os.environ['ANTHROPIC_BASE_URL'] + '/v1/messages', b'{}',
+    {'Authorization': 'Bearer ' + os.environ['CLAUDE_CODE_OAUTH_TOKEN']})
+try:
+    urllib.request.urlopen(request, timeout=5)
+except urllib.error.HTTPError as error:
+    assert json.load(error)['error']['code'] == 'model_exit_offline'
+    emit(type='result', subtype='error_during_execution', is_error=True, result='The model connection closed')
+"#).unwrap();
+        HOST_COMMAND.with(|command| {
+            *command.borrow_mut() = Some(vec![
+                crate::env::python().display().to_string(),
+                script.display().to_string(),
+            ])
+        });
+        let attempt = json!({
+            "id": "a-exit", "bot": "ops", "token": "synthetic", "lease_seconds": 120,
+            "conversation": {"id": "c1"}, "message": {"refs": {}},
+            "config": {"runtime": "claude", "harness": "claude", "model": "synthetic", "session": "bot"},
+            "chat_goal": plan_exit_test_goal(),
+            "subscriptions": [{"id": "plan", "kind": "claude_token", "runtime": "claude", "billing": "subscription",
+                               "source": "agent", "revision": 1, "delivery": "model_exit", "exit_generation": 3}],
+        });
+        tokio::time::timeout(Duration::from_secs(12), runner.clone().execute(attempt))
+            .await
+            .expect("the turn settles")
+            .unwrap();
+        let done = completion(&seen, "a-exit");
+        assert_eq!(done["outcome"], "interrupted", "{done:?}");
+        assert_eq!(done["yielded"], true, "{done:?}");
+        assert_eq!(posted(&seen, "/a-exit/started"), 1);
+        assert_eq!(posted(&seen, "/browser-exit/tunnels"), 1);
+        let calls = seen.lock().unwrap();
+        let events: Vec<_> = calls
+            .iter()
+            .filter(|(_, path, _)| path.ends_with("/a-exit/events"))
+            .flat_map(|(_, _, body)| body["events"].as_array().into_iter().flatten())
+            .collect();
+        assert!(
+            events
+                .iter()
+                .any(|event| event["kind"] == "tool" && event["payload"]["status"] == "completed"),
+            "{events:?}"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["kind"] == "goal" && event["payload"]["status"] == "stopped"),
+            "{events:?}"
+        );
+        server.abort();
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]

@@ -214,6 +214,14 @@ mod tests {
     }
 
     #[test]
+    fn heartbeat_model_exit_is_optional() {
+        let absent = decode::<HeartbeatAnswer>(serde_json::json!({})).unwrap();
+        let enabled = decode::<HeartbeatAnswer>(serde_json::json!({"model_exit": true})).unwrap();
+        assert_eq!(absent.model_exit, None);
+        assert_eq!(enabled.model_exit, Some(true));
+    }
+
+    #[test]
     fn an_answer_of_the_wrong_shape_is_a_protocol_error_not_a_guess() {
         let e = decode::<EventsAnswer>(serde_json::json!({"ack_seq": "seven"})).unwrap_err();
         assert_eq!((e.code.as_str(), e.retryable), ("protocol", false));
