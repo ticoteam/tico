@@ -1093,6 +1093,7 @@
        "model_subscriptions_v1",
        "attempt_credentials_v1",
        "burst_preparation_v1",
+       "burst_lease_v1",
        "plan_usage_v1",
        "browser_exit_v1",
        "model_exit_v1",
@@ -1118,7 +1119,7 @@
       ],
       "type": "string"
      },
-     "maxItems": 39,
+     "maxItems": 40,
      "title": "Capabilities",
      "type": "array"
     },

@@ -7121,6 +7121,10 @@ class Execution:
             return {"reserved": False, "stop": True}
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        from .cloud_machines import burst_start_fence
+
+        if burst_start_fence(c, row):
+            return {"reserved": False}
         if body.waiting:
             start_places.waiting(c, aid, body.waiting)
         # Check before reserve clears the wait, including when the last renewal preceded task completion.
@@ -7134,6 +7138,10 @@ class Execution:
         row = self.attempt(c, who, aid)
         if row["state"] != "leased":
             raise Problem("already_started", "This attempt was already started", 409)
+        from .cloud_machines import burst_start_fence
+
+        if code := burst_start_fence(c, row):
+            return {"started": False, "refused": {"code": code, "detail": "Burst admission is closed"}}
         payer = c.execute(
             "SELECT delivery FROM attempt_subscriptions WHERE attempt_id=? AND runtime=?",
             (aid, row["handed_runtime"]),

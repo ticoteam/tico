@@ -33,6 +33,7 @@ const ATTEMPT_CREDENTIALS: &str = "attempt_credentials_v1";
 /// The computer's own logins are the ones readiness reads for these bots (runner.rs `computer_logins_for`).
 const COMPUTER_LOGINS: &str = "computer_logins_v1";
 const BURST_PREPARATION: &str = "burst_preparation_v1";
+pub const BURST_LEASE: &str = "burst_lease_v1";
 pub const CAPABILITIES: &[&str] = &[
     "task_lanes_v2",
     "session_roots_v1",
@@ -81,7 +82,7 @@ pub const CAPABILITIES: &[&str] = &[
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 // A 0.6.0 hub that reports only a list refusal can need eighteen capability drops before it accepts the heartbeat.
-pub const MAX_HEARTBEAT_POSTS: u32 = 19;
+pub const MAX_HEARTBEAT_POSTS: u32 = 20;
 
 #[derive(Clone, Debug)]
 pub struct Running {
@@ -311,7 +312,10 @@ pub fn refused_field(detail: &str, body: &Value) -> Option<String> {
         if let Some(name) = index.and_then(|i| caps.get(i)).filter(|n| !n.is_empty()) {
             return Some(name.clone());
         }
-        if let Some(name) = NEWEST_FIRST.iter().find(|n| caps.iter().any(|c| c == *n)) {
+        if let Some(name) = std::iter::once(&BURST_LEASE)
+            .chain(NEWEST_FIRST)
+            .find(|n| caps.iter().any(|c| c == *n))
+        {
             return Some(name.to_string());
         }
     }

@@ -4,6 +4,7 @@ import json
 from fastapi import Request
 from . import (
     bot_settings as BS,
+    cloud_machines,
     compute_pool,
     harness_actions,
     inbox_isolation,
@@ -68,6 +69,10 @@ def register(app, auth, execution, mutate, settings, store, telemetry):
         # `runner` change of kind "assignments" tells it to, and never read this one (at 53 bots it was ~0.5 MB a beat).
         # Kept as an empty list for the 0.5.0 and 0.6.0 contracts, which require the field (contracts/runner/releases).
         result["assignments"] = []
+        # Compute the remaining time after the mutation, including on an idempotent heartbeat replay.
+        with store.read() as c:
+            if lease := cloud_machines.burst_lease(c, request.state.identity.runner_id):
+                result["burst_lease"] = lease
         return result
 
     @app.get("/api/v2/runners/desired")

@@ -35,6 +35,13 @@ struct Inner {
     /// When a container stop began (`stop`): a drain of its own with a fixed STOP_LIMIT_S, that no update's end clears.
     /// `drain_timeout_seconds` (`limit`) is an update drain's alone.
     stopping: Option<Instant>,
+    burst: Option<Burst>,
+}
+
+struct Burst {
+    confirmed_at_ms: u64,
+    cutoff: Instant,
+    draining: bool,
 }
 
 pub struct Drain {
@@ -73,7 +80,34 @@ impl Drain {
     }
 
     pub fn claims_closed(&self) -> bool {
-        self.inner.lock().unwrap().active()
+        self.inner.lock().unwrap().active(Instant::now())
+    }
+
+    pub fn burst_managed(&self) -> bool {
+        self.inner.lock().unwrap().burst.is_some()
+    }
+
+    /// Anchor the remaining time to the request's send time. A lost reply leaves the last cutoff armed.
+    pub fn confirm_burst(&self, sent: Instant, lease: crate::wire::BurstLease) {
+        let mut s = self.inner.lock().unwrap();
+        let cutoff = sent
+            .checked_add(Duration::from_secs(lease.run_seconds))
+            .unwrap_or(sent);
+        if let Some(old) = &mut s.burst {
+            if lease.confirmed_at_ms < old.confirmed_at_ms {
+                return;
+            }
+            if lease.confirmed_at_ms == old.confirmed_at_ms {
+                old.cutoff = old.cutoff.min(cutoff);
+                old.draining |= lease.draining;
+                return;
+            }
+        }
+        s.burst = Some(Burst {
+            confirmed_at_ms: lease.confirmed_at_ms,
+            cutoff,
+            draining: lease.draining,
+        });
     }
 
     /// A container stop: no claim starts again, and running turns are stopped at STOP_LIMIT_S, inside Docker's grace.
@@ -90,7 +124,7 @@ impl Drain {
             Some(Turn::Returning(_)) => return false,
             _ => {}
         }
-        if s.active() {
+        if s.active(Instant::now()) {
             s.turns.insert(aid.into(), Turn::Returning(WAITING));
             s.handed_back += 1;
             return false;
@@ -140,7 +174,7 @@ impl Drain {
         if let Turn::Returning(line) = turn {
             return Some(line);
         }
-        if !s.active() {
+        if !s.active(now) {
             return None;
         }
         let past = |from: Option<Instant>, limit: Option<Duration>| {
@@ -151,7 +185,8 @@ impl Drain {
             Turn::Waiting => WAITING,
             Turn::Running
                 if (s.capped_update && past(s.since, self.limit))
-                    || past(s.stopping, Some(Duration::from_secs(STOP_LIMIT_S))) =>
+                    || past(s.stopping, Some(Duration::from_secs(STOP_LIMIT_S)))
+                    || s.burst.as_ref().is_some_and(|lease| now >= lease.cutoff) =>
             {
                 CAPPED
             }
@@ -175,19 +210,63 @@ impl Drain {
 
     pub fn progress(&self) -> Option<Value> {
         let s = self.inner.lock().unwrap();
-        s.active().then(|| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
+        s.active(Instant::now()).then(|| json!({"running": s.turns.values().filter(|t| **t == Turn::Running).count(), "handed_back": s.handed_back}))
     }
 }
 
 impl Inner {
-    fn active(&self) -> bool {
-        self.since.is_some() || self.stopping.is_some()
+    fn active(&self, now: Instant) -> bool {
+        self.since.is_some()
+            || self.stopping.is_some()
+            || self
+                .burst
+                .as_ref()
+                .is_some_and(|lease| lease.draining || now >= lease.cutoff)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn burst_deadline_survives_a_lost_or_stale_reply() {
+        let drain = Drain::new(None);
+        let sent = Instant::now();
+        drain.confirm_burst(
+            sent,
+            crate::wire::BurstLease {
+                confirmed_at_ms: 1,
+                run_seconds: 240,
+                draining: false,
+            },
+        );
+        assert!(drain.start("active"));
+        drain.register("waiting");
+        let fence = sent + Duration::from_secs(75);
+        drain.confirm_burst(
+            fence,
+            crate::wire::BurstLease {
+                confirmed_at_ms: 2,
+                run_seconds: 165,
+                draining: true,
+            },
+        );
+        drain.confirm_burst(
+            sent,
+            crate::wire::BurstLease {
+                confirmed_at_ms: 1,
+                run_seconds: 360,
+                draining: false,
+            },
+        );
+        assert_eq!(drain.due("waiting", fence), Some(WAITING));
+        assert_eq!(drain.due("active", sent + Duration::from_secs(239)), None);
+        assert_eq!(
+            drain.due("active", sent + Duration::from_secs(240)),
+            Some(CAPPED)
+        );
+    }
 
     #[test]
     fn running_turns_finish_unless_the_drain_has_a_deadline() {

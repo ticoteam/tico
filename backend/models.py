@@ -1791,6 +1791,7 @@ class Heartbeat(Contract):
             "model_subscriptions_v1",
             "attempt_credentials_v1",
             "burst_preparation_v1",
+            "burst_lease_v1",
             "plan_usage_v1",
             "browser_exit_v1",
             "model_exit_v1",
@@ -1814,7 +1815,7 @@ class Heartbeat(Contract):
             "antigravity_plan_v1",  # Antigravity plans on a runner that ran agy headless (0.6.250 to 0.6.253)
             "antigravity_acp_v1",  # Antigravity plans: Connect, install and turns over ACP (backend/model_subscriptions.py)
         ]
-    ] = Field(default_factory=list, max_length=39)
+    ] = Field(default_factory=list, max_length=40)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)

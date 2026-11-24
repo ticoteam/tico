@@ -1426,6 +1426,9 @@ impl Runner {
                 self.places.lock().unwrap().remove(aid);
                 Ok(false)
             }
+            Err(e) if e.code == "burst_draining" => {
+                Err(self.drain_failure(aid, crate::drain::WAITING))
+            }
             Err(e) => Err(e.into()),
         }
     }

@@ -804,6 +804,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "service-key list",
     "service-key revoke",
     "settings",
+    "settings burst-autoscale",
     "settings burst-rehome",
     "settings find",
     "settings plan-exit-routing",

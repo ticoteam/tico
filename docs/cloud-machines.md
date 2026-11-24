@@ -427,5 +427,11 @@ can review the stopped run, recover any checkout changes, and run
 `"acknowledge_uncertain_effects": true` and `"fresh_session": true`.
 If Base is unavailable, the return stays pending until Base comes back.
 New claims need a confirmed HQ lease with at least three minutes to start and one minute to drain.
-The pilot uses manually provisioned workers. Stop new borrows with `tico settings burst-rehome off`. To pin a bot, include `"pinned": true` when setting its assignment through
+`tico settings burst-autoscale on` lets the company owner or an admin enable automatic scaling after enabling
+Burst re-home and configuring a daily budget in HQ. The hub prefers a parked Large (8 vCPU) worker. It requests one
+worker after an eligible, company-paid Base turn waits 30 seconds without a free slot. A worker parks after 30 idle
+minutes, once its turn settles and its bot returns to Base. The runner reserves the final minute of confirmed HQ
+lease time for publishing and settlement. `tico settings burst-autoscale off` drains and parks the managed workers.
+
+Stop new borrows with `tico settings burst-rehome off`. To pin a bot, include `"pinned": true` when setting its assignment through
 `POST /api/v2/bots/{bot}/assignment`. Send `"pinned": false` to clear the pin.

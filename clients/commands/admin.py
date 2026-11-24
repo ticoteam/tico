@@ -736,9 +736,28 @@ def burst_rehome(api, args):
     return api.call("PUT", path, {"enabled": mode == "on"}, key=_key(args))
 
 
+@tool(
+    "tico_settings_burst_autoscale",
+    "Read or change company Burst autoscaling. Only the company owner and admins.",
+    {"mode": {"type": "string", "enum": ["on", "off"], "description": "Enable, disable, or omit to read."}},
+    writes=True,
+)
+def burst_autoscale(api, args):
+    path = "settings/burst-autoscale"
+    if (mode := args.get("mode")) is None:
+        return api.get(path)
+    return api.call("PUT", path, {"enabled": mode == "on"}, key=_key(args))
+
+
 _TARGETS = ("bot", "computer", "id", "person")  # the one thing a setting is set on, or none
 SETTINGS = (
     Group("settings", "find, read and change a control in Settings by its words (docs/permissions.md)"),
+    Command(
+        "settings burst-autoscale",
+        "read or change company Burst autoscaling (admin)",
+        args=(Arg("mode", positional=True, nargs="?"),),
+        example="tico settings burst-autoscale on",
+    ),
     Command(
         "settings burst-rehome",
         "read or change company Burst re-home (admin)",
