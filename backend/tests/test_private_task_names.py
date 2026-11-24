@@ -192,7 +192,7 @@ def test_a_deleted_blocker_is_named_in_the_history_of_the_task_it_blocked_only_w
 
 
 def test_a_blocker_whose_release_production_runs_is_not_named_when_private(c):
-    from backend.tests.test_task_depends import APP, merged_pr
+    from backend.tests.helpers.task_depends import APP, merged_pr, published
 
     blocker, blocked = blocked_on(c, hide=True)
     c.execute("DELETE FROM task_relations WHERE from_task=? AND kind='depends_on'", (blocked,))
@@ -201,8 +201,6 @@ def test_a_blocker_whose_release_production_runs_is_not_named_when_private(c):
     assert TR.relate(c, X.ANA, blocked, blocker, "depends_on", until="released")
     private(c, blocker)
     E.move(c, blocker, E.DONE, X.ANA, "Finished")
-    from backend.tests.test_task_depends import published
-
     published(c, "v0.6.0-rc.9", "m7")
     assert D.on_release(c, "0.6.0-rc.9", APP) == [blocked]
     (body,) = unblocked(c, blocked)
