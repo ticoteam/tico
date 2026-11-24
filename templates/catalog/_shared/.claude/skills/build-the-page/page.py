@@ -3,7 +3,7 @@
 
     python3 page.py build  DRAFT.html --out PAGE.html        real screenshots in, red numbered arrows drawn on them
     python3 page.py check  PAGE.html --kind KIND              the page's rules; exit 1 names each one it breaks (a
-                                                              long spec is a warning that does not fail)
+                                                              long spec or a long bullet is a warning that does not fail)
     python3 page.py render FILE_ID --kind KIND [--out DIR]    the published page, checked again and drawn at 390 and 1280 px
 
 KIND is bug-spec, screen-spec, change-spec, validation, review, qa or release. Standard library only.
@@ -23,23 +23,24 @@ import tempfile
 from pathlib import Path
 
 KINDS = ("bug-spec", "screen-spec", "change-spec", "validation", "review", "qa", "release")
-# The sections each kind must have, by id. Details come after the pictures, inside <section id="details">.
+# The sections each kind must have, by id. Every page is a title, one line saying what it is, the contents, then its
+# sections, each an H2 (SKILL.md, "The eight rules"). Other sections are the template's too, kept when they say something.
 SECTIONS = {
-    "bug-spec": ("report", "cause", "goal", "solution", "details", "scope", "criteria"),
-    "screen-spec": ("goal", "pictures", "details", "scope", "criteria"),
-    "change-spec": ("goal", "behaviour", "details", "scope", "criteria"),
-    "validation": ("criteria", "details", "version", "not-checked"),
-    "review": ("checked", "details", "head", "findings", "not-checked"),
-    "qa": ("strip", "plan", "proof", "how", "risk", "findings", "details", "head", "reviews", "not-checked"),
-    "release": ("changelog", "confidence", "plan", "risks", "details", "tasks"),
+    "bug-spec": ("report", "cause", "solution", "criteria", "scope"),
+    "screen-spec": ("pictures", "criteria", "scope"),
+    "change-spec": ("behaviour", "criteria", "scope"),
+    "validation": ("criteria", "version", "not-checked"),
+    "review": ("findings", "checked", "head", "not-checked"),
+    "qa": ("strip", "plan", "proof", "how", "risk", "findings", "head", "reviews", "not-checked"),
+    "release": ("changelog", "confidence", "plan", "risks", "tasks"),
 }
-# What the opening of each spec starts with: a bug its report, a change its goal.
-OPENS_WITH = {"bug-spec": "report", "screen-spec": "goal", "change-spec": "goal"}
 MAX_RISKS = 3
 TILES = 4  # a QA page's verdict strip: criteria, checks, review findings, risk
 FOLD_LINES = 10  # output longer than this sits in a <details>, never on the face of the page
 MAX_BYTES = 8 * 1024 * 1024
-LEAD_WORDS = 70
+DESC_WORDS = 40  # the line under the title: what the page is, in one plain sentence
+PARAGRAPH_WORDS = 50  # longer is a blob: bullets, one line each
+BULLET_WORDS = 30  # a longer bullet is a warning: one line each
 # A spec may run long when clarity needs it, so its length is a warning (Nov 18); every other page's is a rule.
 SPECS = ("bug-spec", "screen-spec", "change-spec")
 PAGE_WORDS = {
@@ -62,6 +63,10 @@ ASKS_TO_TEST = re.compile(
 FILLER = re.compile(
     r"\b(seamless(ly)?|leverag(e|es|ing)|robust|delightful|cutting[- ]edge|best[- ]in[- ]class)\b", re.I
 )
+DESC = re.compile(r"</h1>\s*<p\b[^>]*\bclass=\"[^\"]*\bdesc\b[^\"]*\"[^>]*>(.*?)</p>", re.S | re.I)
+TOC = re.compile(r"<nav\b[^>]*\bclass=\"[^\"]*\btoc\b[^\"]*\"[^>]*>(.*?)</nav>", re.S | re.I)
+H2_SECTION = re.compile(r"<section\b[^>]*\bid=\"([^\"]+)\"[^>]*>\s*<h2\b", re.I)
+FORM = re.compile(r"<(form|input|select|textarea|button)\b", re.I)
 PICTURE = re.compile(r"data:image/(png|jpeg|webp);base64,", re.I)
 FIGURE = re.compile(r"<figure\b(?:[^>\"]|\"[^\"]*\")*>(.*?)</figure>", re.S | re.I)
 # Attribute values may hold ">" (an arrow is written "1: 600,120 -> 420,500"), so a tag runs to the first ">" outside quotes.
@@ -205,33 +210,15 @@ def problems_in(text, kind):
         out.append("a placeholder is still in the page ({{...}} or TODO)")
     if 'data-shot="' in text:
         out.append("a screenshot was not built in: run page.py build first")
-    lead = re.search(r"<(\w+)\b[^>]*\bid=\"lead\"[^>]*>(.*?)</\1>", text, re.S | re.I)
-    if not lead:
-        out.append('no opening: the page starts with <div id="lead">, what it is and what to decide')
-    else:
-        lines = len(re.findall(r"<(p|li)\b", lead.group(2), re.I)) or 1
-        if lines > 3:
-            out.append(f"the opening has {lines} lines; at most 3")
-        if len(words(lead.group(2))) > LEAD_WORDS:
-            out.append(f"the opening has {len(words(lead.group(2)))} words; at most {LEAD_WORDS}")
-        if not re.search(r"\bdecide\b", lead.group(2), re.I):
-            out.append("the opening does not say what to decide (a line starting 'Decide:')")
-        opens = OPENS_WITH.get(kind)
-        if opens and not re.search(rf"\b{opens}\b", " ".join(words(lead.group(2))), re.I):
-            out.append(f"a {kind} opens with its {opens} (a line starting '{opens.capitalize()}:')")
-        first = min((m.start() for m in re.finditer(r"<(figure|section)\b", text, re.I)), default=len(text))
-        if lead.start() > first:
-            out.append("the opening is not the first thing on the page")
+    out += shape_problems(text)
     for name in SECTIONS[kind]:
         if not re.search(rf"\bid=\"{name}\"", text):
             out.append(f'no section id="{name}"')
-    details = text.find('id="details"')
-    figures = list(FIGURE.finditer(text))
+    # A chart (<figure class="chart">) draws numbers; every other picture is a real screenshot of the app.
+    figures = [f for f in FIGURE.finditer(text) if not re.match(r"<figure\b[^>]*\bclass=\"[^\"]*\bchart\b", f.group(0))]
     for i, fig in enumerate(figures, 1):
         if not PICTURE.search(fig.group(1)):
             out.append(f"picture {i} is not a screenshot: every picture is the real app, never a drawing")
-        if details != -1 and fig.start() > details:
-            out.append(f"picture {i} is in the details: pictures come before the details")
     if kind == "screen-spec" and len(figures) < 2:
         out.append("a screen spec shows before and after: at least two screenshots")
     if re.search(r"class=\"[^\"]*\bmock", text, re.I):
@@ -266,18 +253,75 @@ def problems_in(text, kind):
     for m in FILLER.finditer(plain):
         out.append(f"'{m.group(0)}': say what it does instead")
     if kind not in SPECS and len(words(text)) > PAGE_WORDS[kind]:
-        out.append(f"{len(words(text))} words; a {kind} page keeps under {PAGE_WORDS[kind]}: cut the details")
+        out.append(
+            f"{len(words(text))} words; a {kind} page keeps under {PAGE_WORDS[kind]}: cut what the reader does not need"
+        )
+    return out
+
+
+def shape_problems(text):
+    """The shape every page has: one H1, one plain line under it saying what the page is, contents linking each H2,
+    headings in order, bullets over blobs, and nothing to fill in."""
+    out = []
+    h1 = len(re.findall(r"<h1\b", text, re.I))
+    if h1 != 1:
+        out.append(f"{h1} H1 headings: a page has one, its title")
+    desc = DESC.search(text)
+    if not desc:
+        out.append('no line under the title: <p class="desc">This is a spec to ...</p>, right after the H1')
+    else:
+        said = " ".join(words(desc.group(1)))
+        if not re.match(r"This\b", said):
+            out.append(
+                'the line under the title says what the page is, starting "This is": "This is the QA page for ..."'
+            )
+        if len(words(desc.group(1))) > DESC_WORDS:
+            out.append(f"the line under the title has {len(words(desc.group(1)))} words; at most {DESC_WORDS}")
+    linked = H2_SECTION.findall(text)
+    if len(re.findall(r"<h2\b", text, re.I)) > len(linked):
+        out.append('an H2 that does not open a <section id="...">: the contents cannot link it')
+    toc = TOC.search(text)
+    if not toc:
+        out.append('no contents: <nav class="toc"> after the line under the title, linking every H2')
+    else:
+        hrefs = re.findall(r"href=\"#([^\"]+)\"", toc.group(1))
+        for name in linked:
+            if name not in hrefs:
+                out.append(f'the contents do not link "#{name}"')
+        for name in hrefs:
+            if name not in linked:
+                out.append(f'the contents link "#{name}", which is not an H2 section on the page')
+    levels = [int(n) for n in re.findall(r"<h([1-6])\b", text, re.I)]
+    for i in range(1, len(levels)):
+        before, after = levels[i - 1], levels[i]
+        if after > before + 1:
+            out.append(f"an H{after} right after an H{before}: headings go H1, H2, H3 in order")
+            break
+    for block in re.findall(r"<p\b[^>]*>(.*?)</p>", text, re.S | re.I):
+        said = words(block)
+        if len(said) > PARAGRAPH_WORDS:
+            out.append(
+                f'a paragraph of {len(said)} words ("{" ".join(said[:6])} ..."): split it into bullets, one line each'
+            )
+    if FORM.search(text):
+        out.append("a form or a button: the page asks for nothing; what to OK is plain from what the page is")
     return out
 
 
 def warnings_in(text, kind):
-    """What the page may keep but should look at again: a spec over its length, which clarity can need."""
+    """What the page may keep but should look at again: a spec over its length, which clarity can need, and a bullet
+    longer than a line."""
+    out = []
     count = len(words(text))
     if kind in SPECS and count > PAGE_WORDS[kind]:
-        return [
+        out.append(
             f"{count} words; a {kind} page is usually under {PAGE_WORDS[kind]}: cut every word clarity does not need"
-        ]
-    return []
+        )
+    for item in re.findall(r"<li\b[^>]*>(.*?)</li>", text, re.S | re.I):
+        said = words(item)
+        if len(said) > BULLET_WORDS:
+            out.append(f'a bullet of {len(said)} words ("{" ".join(said[:6])} ..."): one line each, or two bullets')
+    return out
 
 
 def qa_problems(text):

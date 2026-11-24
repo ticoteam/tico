@@ -1,48 +1,70 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Review: {{change}}</title>
+<title>Review: {{the change}}</title>
 <style>
-.pg{max-width:1100px;margin:0 auto;padding:16px;font:var(--t-base)/1.5 var(--sans,system-ui,sans-serif);color:var(--ink)}
-.pg h1{font-size:var(--t-lg);margin:0 0 8px}
-.pg h2{font-size:var(--t-md);margin:24px 0 8px}
-#lead{font-size:var(--t-md);margin:0 0 20px;padding:12px;border-left:3px solid var(--fail,#c53030);background:var(--surface)}
-#lead p{margin:2px 0}
-.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start;margin-bottom:16px}
-figure.shot{margin:0;max-width:100%}
+.pg{max-width:1000px;margin:0 auto;padding:16px;font:var(--t-base)/1.55 var(--sans,system-ui,sans-serif);color:var(--ink)}
+.pg h1{font-size:var(--t-xl,28px);line-height:1.2;margin:8px 0 6px}
+.desc{font-size:var(--t-md);color:var(--muted);margin:0 0 16px;max-width:68ch}
+.toc{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:10px 0;margin:0 0 8px}
+.toc b{font-size:var(--t-sm);color:var(--muted)}
+.toc ol{margin:4px 0 0;padding-left:22px}
+.toc a{color:var(--ink)}
+.pg h2{font-size:var(--t-lg);margin:32px 0 8px}
+.pg h3{font-size:var(--t-md);margin:20px 0 6px}
+.pg p,.pg li{max-width:72ch}
+.pg li{margin:3px 0}
+.pair{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.pair>*{flex:1 1 300px;min-width:0}
+figure{margin:0 0 12px;max-width:100%}
 figure.shot svg{display:block;max-width:100%;height:auto;border:1px solid var(--line);border-radius:6px}
-figcaption{color:var(--muted);margin-top:6px;max-width:640px}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-base) var(--mono)}
-@media (max-width:600px){.pair{flex-direction:column}}
+figcaption{color:var(--muted);margin-top:6px}
+/* A chart: one labelled bar per number, its value inside, readable without a legend. */
+.bars{display:grid;grid-template-columns:max-content 1fr;gap:6px 10px;align-items:center;max-width:640px}
+.bars i{display:block;min-width:2.5em;padding:2px 8px;border-radius:4px;background:var(--accent,#2f5fd0);color:var(--on-accent,#fff);font-style:normal;font-size:var(--t-sm);white-space:nowrap}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface2);padding:8px;border-radius:6px;font:var(--t-sm) var(--mono)}
+code{font-family:var(--mono);overflow-wrap:anywhere}
 </style></head><body><main class="pg">
-<h1>Review: {{change}} · PR {{#n}} at {{commit, 7 characters}}</h1>
-<div id="lead">
-  <p>{{What the change does, in one sentence, and the result: "Nothing blocks." / "2 blocking issues."}}</p>
-  <p><b>Decide:</b> {{For the feature owner: "fix the 2 blocking issues below." Or "Nothing to fix."}}</p>
-</div>
+<h1>Review: {{the change}}</h1>
+<p class="desc">This is the review of {{the change}}, PR {{#n}} at {{commit, 7 characters}}: {{nothing blocks | 2 blocking issues}}.</p>
+<nav class="toc" aria-label="Contents"><b>Contents</b><ol>
+  <li><a href="#findings">Findings</a></li>
+  <li><a href="#pictures">What it looks like</a></li>
+  <li><a href="#checked">How it was checked</a></li>
+  <li><a href="#head">Head and checks</a></li>
+  <li><a href="#not-checked">Not checked</a></li>
+</ol></nav>
+
+<section id="findings">
+  <h2>Findings</h2>
+  <ul><li><b>Blocking:</b> {{what is wrong and what fixes it}}, <code>{{file:line}}</code>, found by {{which review}}.</li></ul>
+</section>
 
 <section id="pictures">
   <h2>What it looks like</h2>
   <div class="pair">
     <figure data-shot="shots/{{page}}-390-before.png" data-arrows="1: {{x,y}} -> {{x,y}}">
-      <figcaption>Phone, before. 1: {{...}}</figcaption></figure>
+      <figcaption>Before, phone. 1: {{...}}</figcaption></figure>
     <figure data-shot="shots/{{page}}-390-after.png" data-arrows="1: {{x,y}} -> {{x,y}}">
-      <figcaption>Phone, after. 1: {{...}}</figcaption></figure>
+      <figcaption>After, phone. 1: {{...}}</figcaption></figure>
   </div>
 </section>
 
 <section id="checked">
   <h2>How it was checked</h2>
-  <pre>{{The commands run and their real output: test counts, the test that fails on the old code and passes now.}}</pre>
+  <pre>{{the commands run and their real output: test counts, the test that fails on the old code and passes now}}</pre>
 </section>
 
-<section id="details">
-  <h2>Details</h2>
-  <section id="head"><h2>Head and checks</h2>
-    <p>PR <a href="{{pull request link}}">{{#n}}</a>, head {{full commit}}. Checks at that head: {{passing, running, or which failed}}.</p>
-    <ul><li>First review: {{model, full commit, what it checked}}</li>
-        <li>Second review: {{check model, full commit, what it checked}}</li></ul></section>
-  <section id="findings"><h2>Findings</h2>
-    <ul><li><b>issue (blocking):</b> {{file:line, severity, which review found it, why it matters, what resolves it}}</li></ul></section>
-  <section id="not-checked"><h2>Not checked</h2><p>{{Tests not run, files skipped, pending checks. Or "Nothing."}}</p></section>
+<section id="head">
+  <h2>Head and checks</h2>
+  <ul>
+    <li>PR <a href="{{pull request link}}">{{#n}}</a>, head {{full commit}}; checks {{passing | running | which failed}}.</li>
+    <li>First review: {{model}} at {{commit}}, {{what it checked}}.</li>
+    <li>Second review: {{check model}} at {{commit}}, {{what it checked}}.</li>
+  </ul>
+</section>
+
+<section id="not-checked">
+  <h2>Not checked</h2>
+  <ul><li>{{a test not run, a file skipped, a check pending; or "Nothing."}}</li></ul>
 </section>
 </main></body></html>

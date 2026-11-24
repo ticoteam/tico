@@ -1,6 +1,6 @@
 # The fewest words
 
-Use it in step 7, on a finished draft. The aim is not a short page. The aim is a page where nothing has to be guessed and nothing has to be skipped. Cut first, then put back anything whose absence makes a reader guess.
+Use it on a finished draft, with the eight rules in `.claude/skills/build-the-page/SKILL.md`. The aim is not a short page. The aim is a page where nothing has to be guessed and nothing has to be skipped. Cut first, then put back anything whose absence makes a reader guess.
 
 ## Replace words with something better
 
@@ -18,7 +18,7 @@ Use it in step 7, on a finished draft. The aim is not a short page. The aim is a
 ## Cut these
 
 - **Background and history.** How the team got here, what was tried, who suggested it. If a past decision matters, link the ledger row.
-- **Anything that restates the top.** No overview, summary, introduction or conclusion.
+- **Anything that restates the line under the title.** No overview, summary, introduction or conclusion.
 - **Sentences that fit another spec.** "This will improve the user experience." "We want this to be easy to use." Test: swap the feature's name for another; if the sentence still reads true, cut it.
 - **Benefits.** The goal says who can do what. The reader does not need selling.
 - **Hedges.** "Should", "ideally", "where possible", "may want to", "as needed". Decide: it does, or it does not.

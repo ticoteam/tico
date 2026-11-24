@@ -55,9 +55,10 @@ know".
 
 ## 4. Build the page and attach it
 
-Follow `.claude/skills/build-the-page/SKILL.md` with `templates/validation.html`: the verdict and its count first, then what
-to decide, then each criterion with its result and proof and the screenshots at both widths with red numbered arrows,
-then the details: the version checked, what could not be checked and the after-launch checks. Write
+Follow `.claude/skills/build-the-page/SKILL.md` with `templates/validation.html`: the title, then the line under it
+with the version and the count ("This is the production check of <the change> on v0.6.0-rc.13: 3 of 3 criteria
+met."), the contents, each criterion with its result and proof and the screenshots at both widths with red numbered
+arrows, then the version checked, what could not be checked and the after-launch checks, each an H2. Write
 `reports/YYYY-MM-DD-checked-<slug>.html`, build and check it with `page.py`, publish it on the task (it prints the
 file id), render the published page with `page.py render` and look at it, then attach it:
 

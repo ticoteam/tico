@@ -314,6 +314,7 @@ def filled(kind, folder):
 
 @pytest.mark.parametrize("kind", PAGE_KINDS)
 def test_a_page_built_from_each_template_passes_its_check_once_published(kind, tmp_path):
+    # Its contents stay in the page once published: a link to a place in it is not sent to a new tab.
     from backend import visuals
 
     tool = page_tool()
@@ -331,6 +332,14 @@ def test_a_page_built_from_each_template_passes_its_check_once_published(kind, t
     cleaned, removed = visuals.clean(page.encode(), "page")
     assert removed == []
     assert tool.problems_in(cleaned.decode(), kind) == []
+    links = re.findall(r'<a href="#[^"]+"[^>]*>', cleaned.decode())
+    assert links and all('target="_self"' in a for a in links)
+
+
+def test_the_example_page_passes_its_own_check():
+    tool = page_tool()
+    example = page_skill()["examples/change-spec.html"].decode()
+    assert tool.problems_in(example, "change-spec") == [] and tool.warnings_in(example, "change-spec") == []
 
 
 def test_the_page_check_refuses_what_people_sent_back(tmp_path):
@@ -348,11 +357,12 @@ def test_the_page_check_refuses_what_people_sent_back(tmp_path):
         + good[first:]
     )
     assert any("not a screenshot" in p for p in tool.problems_in(drawn, "screen-spec"))
-    no_decision = re.sub(r"<p><b>Decide:</b>.*?</p>", "", good, count=1, flags=re.S)
-    assert any("what to decide" in p for p in tool.problems_in(no_decision, "screen-spec"))
-    late = good.replace('<section id="details">', '<section id="details"><figure class="x"></figure>', 1)
-    assert any("in the details" in p for p in tool.problems_in(late, "screen-spec"))
-    asks = good.replace('<section id="details">', "<p>Please check it on your phone.</p><section id=\"details\">", 1)
+    # A chart is drawn, and is not a screenshot: it passes.
+    chart = good.replace(
+        '<section id="scope">', '<figure class="chart"><div class="bars"></div></figure><section id="scope">', 1
+    )
+    assert tool.problems_in(chart, "screen-spec") == []
+    asks = good.replace('<section id="scope">', "<p>Please check it on your phone.</p><section id=\"scope\">", 1)
     assert any("never asks the reader" in p for p in tool.problems_in(asks, "screen-spec"))
 
 
@@ -369,7 +379,7 @@ def test_a_page_of_its_own_light_colours_needs_dark_values_too(tmp_path):
     light_only = "colours are light-only"
     styled = good.replace("</style>", ".card{background:#fff;color:#1d1d1f;border:1px solid #e5e5e5}\n</style>", 1)
     assert any(light_only in p for p in tool.problems_in(styled, "screen-spec"))
-    inline = good.replace('<section id="details">', '<section id="details"><p style="color:rgb(34, 34, 34)">x</p>', 1)
+    inline = good.replace('<section id="scope">', '<section id="scope"><p style="color:rgb(34, 34, 34)">x</p>', 1)
     assert any(light_only in p for p in tool.problems_in(inline, "screen-spec"))
     named = good.replace("</style>", "p.note{color:white}\n</style>", 1)
     assert any(light_only in p for p in tool.problems_in(named, "screen-spec"))
@@ -383,9 +393,10 @@ def test_a_page_of_its_own_light_colours_needs_dark_values_too(tmp_path):
     assert tool.problems_in(picture, "screen-spec") == []
 
 
-def test_each_page_opens_the_way_its_reader_needs(tmp_path):
-    # A bug spec opens with the report, a change spec with its goal; a release report names at most three risks and
-    # its changelog is written for customers, so it can be published as it is (Chris, Nov 13).
+def test_each_page_is_a_title_one_line_contents_and_short_sections(tmp_path):
+    # Chris, Nov 24: a boxed opening is "really bad". Every page is a title, one line saying what it is (its summary),
+    # clickable contents linking every H2, headings in order and one-line bullets, never a form to fill in. A release
+    # report names at most three risks and its changelog is written for customers (Chris, Nov 13).
     tool = page_tool()
     (tmp_path / "shots").mkdir()
     pages = {}
@@ -395,10 +406,32 @@ def test_each_page_opens_the_way_its_reader_needs(tmp_path):
         tool.build(draft, tmp_path / f"{kind}-page.html")
         pages[kind] = (tmp_path / f"{kind}-page.html").read_text()
         assert tool.problems_in(pages[kind], kind) == []
-    no_report = pages["bug-spec"].replace("<b>Report:</b>", "<b>Bug:</b>")
-    assert any("opens with its report" in p for p in tool.problems_in(no_report, "bug-spec"))
-    no_goal = pages["screen-spec"].replace("<b>Goal:</b>", "<b>Change:</b>")
-    assert any("opens with its goal" in p for p in tool.problems_in(no_goal, "screen-spec"))
+    spec = pages["screen-spec"]
+    no_line = re.sub(r'<p class="desc">.*?</p>', "", spec, count=1, flags=re.S)
+    assert any("no line under the title" in p for p in tool.problems_in(no_line, "screen-spec"))
+    boxed = spec.replace('<p class="desc">This is', '<p class="desc"><b>Goal:</b> To', 1)
+    assert any('starting "This is"' in p for p in tool.problems_in(boxed, "screen-spec"))
+    long_line = spec.replace('<p class="desc">This is', '<p class="desc">This is' + " very" * 40, 1)
+    assert any("the line under the title has" in p for p in tool.problems_in(long_line, "screen-spec"))
+    no_toc = re.sub(r'<nav class="toc".*?</nav>', "", spec, count=1, flags=re.S)
+    assert any("no contents" in p for p in tool.problems_in(no_toc, "screen-spec"))
+    unlinked = spec.replace('<li><a href="#scope">Scope</a></li>', "", 1)
+    assert 'the contents do not link "#scope"' in tool.problems_in(unlinked, "screen-spec")
+    stray = spec.replace('<section id="plan">', '<h2>Notes</h2><section id="plan">', 1)
+    assert any("an H2 that does not open" in p for p in tool.problems_in(stray, "screen-spec"))
+    skipped = spec.replace("<h2>Scope</h2>", "<h2>Scope</h2><h4>In</h4>", 1)
+    assert any("an H4 right after an H2" in p for p in tool.problems_in(skipped, "screen-spec"))
+    two_titles = spec.replace("<h2>Scope</h2>", "<h1>Scope</h1>", 1)
+    assert any("2 H1 headings" in p for p in tool.problems_in(two_titles, "screen-spec"))
+    blob = spec.replace("<h2>Scope</h2>", "<h2>Scope</h2><p>" + " ".join(["word"] * 60) + "</p>", 1)
+    assert any("a paragraph of 60 words" in p for p in tool.problems_in(blob, "screen-spec"))
+    picks = spec.replace("<h2>Scope</h2>", '<h2>Scope</h2><form><input type="radio" name="d1">As written</form>', 1)
+    assert any("a form or a button" in p for p in tool.problems_in(picks, "screen-spec"))
+    long_bullet = spec.replace("<h2>Scope</h2>", "<h2>Scope</h2><ul><li>" + " ".join(["word"] * 40) + "</li></ul>", 1)
+    assert tool.problems_in(long_bullet, "screen-spec") == []
+    assert any("a bullet of 40 words" in w for w in tool.warnings_in(long_bullet, "screen-spec"))
+    no_cause = pages["bug-spec"].replace('id="cause"', "", 1)
+    assert 'no section id="cause"' in tool.problems_in(no_cause, "bug-spec")
     four = re.sub(
         r'(<section id="risks">.*?)</ol>', r"\1" + "<li>more</li>" * 3 + "</ol>", pages["release"], count=1, flags=re.S
     )
@@ -407,7 +440,7 @@ def test_each_page_opens_the_way_its_reader_needs(tmp_path):
     found = tool.problems_in(internal, "release")
     assert any("'PR' in the changelog" in p for p in found) and any("'#4325' in the changelog" in p for p in found)
     # Nov 18: a spec may be long when clarity needs it, so its length warns and passes; a release report's still fails.
-    padding = "<p>" + " ".join(["row"] * 2000) + "</p></section>"
+    padding = "<ul>" + "<li>row row row row</li>" * 500 + "</ul></section>"
     long_spec = pages["screen-spec"].replace("</section>", padding, 1)
     assert tool.problems_in(long_spec, "screen-spec") == []
     assert any("words" in w for w in tool.warnings_in(long_spec, "screen-spec"))

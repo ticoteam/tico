@@ -92,7 +92,8 @@ these in one numbered message and save the answers under "QA" with the date. Wor
    neighbouring flow.
 10. **Pin again if the build moved.** A new commit after your checks means your results describe an older build.
     Rerun the happy paths and everything the changed files touch, and mark which results came from which SHA.
-11. **Publish the QA report.** Build the page (shared `build-the-page` skill, kind `qa`, if you have it) and publish:
+11. **Publish the QA report.** Build the page with `.claude/skills/build-the-page/SKILL.md` (kind `qa`; its eight
+    rules: title, one line saying what the page is, contents, one-line bullets, pictures first) and publish:
     `tico page publish qa.html --task <id> --title "QA: <change>" --as "QA report"`, then attach it to the stage's
     requirement with `tico task attach <id> page:<file id> --req "<requirement>" --version N`. Give one verdict:
     **Pass**, **Pass with low issues listed**, or **Fail**. Then move the task: forward with

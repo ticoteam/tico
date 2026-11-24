@@ -33,24 +33,26 @@ and the proof, without running anything.
 Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/qa.html`, in `reports/<task id>-qa.html`, at the head
 commit:
 
-- The title: "QA: " and the task's title, word for word, so the review screen names it once.
-- The opening: what changed for the person who asked and the result ("Passed: 5 of 5 checks"), then what was not
-  checked, plainly, then **Decide:** "Approve = ship it, or send it back with what is wrong."
-- The verdict strip, under the opening: four tiles (criteria passed of those due before release, checks at the head,
-  open review findings, risk in five words or fewer) and "Approve = ship to production."
-- Plan and results: the table, one row per check in the spec's order, each with how it was checked (its proof's letter
-  or arrow) and pass, fail or after launch.
-- Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; say "No
-  screens changed" in the opening. Output over 10 lines (a test run, the CI job list) goes in a `<details>`.
+- The title: "QA: " and the task's title, word for word, so the review screen names it once. Nothing else in it.
+- The line under it: "This is the QA page for <what changed, for whom>, at <commit>: <5 of 5 checks pass>." It is
+  the summary; what was not checked goes in its own section.
+- Contents linking every section, then each section as an H2, in the template's order.
+- Verdict: four tiles (criteria passed of those due before release, checks at the head, open review findings, risk
+  in five words or fewer) and "Approve = ship to production."
+- Checks and results: the table, one row per check in the spec's order, each with how it was checked (its proof's
+  letter or arrow) and pass, fail or after launch.
+- Proof: the screenshots and the output, lettered to match the table. A change with no screen has no pictures; the
+  proof is the output. Output over 10 lines (a test run, the CI job list) goes in a `<details>`.
 - How it works: the parts the change touches as boxes, the changed ones highlighted (`class="box changed"`), and the
   files changed with their lines and a total (`git diff --stat <merge base>..<head>`). A one-file change names its file
   instead of a diagram.
 - Risk and rollback: what could go wrong and for whom; how to undo it, and whether stored data changes.
-- Findings: what failed and was fixed in this round, and the follow-ups filed, each with what was done, what happened,
-  what was expected and `file:line`. Or "None."
-- In the details: where it ran (the demo or preview, the pull request link and the full head commit, the checks at that
-  head with the link), what each review found at its commit, who or which model reviewed it, and what you did about each finding,
-  and what was not checked, with why and what would check it.
+- Findings: what failed and was fixed in this round, and the follow-ups filed, each in one line with `file:line` and
+  what became of it. Or "None."
+- Where it ran (the demo or preview, the pull request link and the full head commit, the checks at that head), the
+  reviews (what each found at its commit and what you did about it), and what was not checked, with why and what
+  would check it.
+- One-line bullets throughout, no paragraphs; the eight rules in the skill apply.
 
 A check only a person can do (a physical device, a reply someone owes) goes under not checked with why. The page never
 asks its reader to test.

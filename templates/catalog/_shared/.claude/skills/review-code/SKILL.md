@@ -93,8 +93,8 @@ meanwhile.
     `nit:`. Use `question:` when you could not prove something but it matters enough to ask. More than three
     blocking findings means the design is wrong, not the lines: stop, say so, and send the PR back to
     `plan-before-coding`.
-12. **Publish the Review page and the verdict.** Build the page (shared `build-the-page` skill, kind `review`, if you
-    have it), save it as `reports/reviews/<task>-<first 7 of SHA>.html`, and publish:
+12. **Publish the Review page and the verdict.** Build the page with `.claude/skills/build-the-page/SKILL.md`
+    (kind `review`), save it as `reports/reviews/<task>-<first 7 of SHA>.html`, and publish:
     `tico page publish <file> --task <id> --title "Review: PR <n> at <first 7 of SHA>"`. Attach it to the stage's
     requirement with `tico task attach <id> page:<file id> --req "<requirement>" --version N`. Submit the verdict on
     GitHub with `tico repo review <owner/repo> <PR number> --head <full 40-character SHA> --verdict approve|changes --body-file <file>`. The verdict covers that SHA and no other.

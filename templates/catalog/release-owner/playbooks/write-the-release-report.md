@@ -43,22 +43,25 @@ needs (a back end before the screen that calls it), and a data change that locks
 
 ## 3. Write the page
 
-Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom:
+Follow `.claude/skills/build-the-page/SKILL.md` with its `templates/release.html`, top to bottom. The title is
+"Release YYYY-MM-DD.N". The line under it says what the page is, the batch and the suggested version with its reason
+(`knowledge/versioning.md`): "This is the release report for 2026-11-24.1: 4 changes, suggested version 2.15.0
+(minor: a new setting)." A person records the version. Then the contents, then each section as an H2:
 
 1. **Changelog.** Written for customers, good enough to publish as the company's changelog as it is. One entry per
-   change people will notice: its kind (New, Improved, Fixed), a short plain headline, one or two sentences on what
-   they can now do or what no longer goes wrong (`.claude/skills/ship-a-release/SKILL.md`, `references/release-notes.md`), and the after
-   picture from its QA page. The change people will like most comes first. No task or pull request numbers, no
-   internal names, no jargon. Changes nobody will notice go in one closing line: "Plus 3 fixes behind the scenes."
-2. **Why we're confident.** Short: each task's QA page and its approval, what was checked live, anything unusual.
+   change people will notice: a short plain headline (H3), one sentence on what they can now do or what no longer
+   goes wrong (`.claude/skills/ship-a-release/SKILL.md`, `references/release-notes.md`), and the after
+   picture from its QA page. The change people will like most comes first. No kind labels over the headline, no task
+   or pull request numbers, no internal names, no jargon. Changes nobody will notice go in one closing line: "Plus 3 fixes behind the scenes."
+2. **Why we're confident.** One line per task: its QA page and its approval, what was checked live, anything unusual.
 3. **Plan.** Numbered steps, in order, each runnable as written: the release itself, data changes, settings, deploys,
    store submissions, and the checks after it. The release follows this list and nothing else.
 4. **Biggest risks.** At most three, most likely first. Each says what could go wrong, how we would notice (the alert,
    the log line, the number), and how we would undo it.
 
-Below the line: the tasks (title, repository, pull request, QA page version), what you checked across them, what is
-watched after the release and for how long, and what was pulled. The opening names the batch, its state and the
-suggested version with its reason (`knowledge/versioning.md`); a person records the version.
+Then: the tasks (title, repository, pull request, QA page version), what you checked across them, what is watched
+after the release and for how long, and what was pulled. One-line bullets throughout; the eight rules in the skill
+apply.
 
 ## 4. File the release task
 
