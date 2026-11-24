@@ -1573,3 +1573,138 @@ def test_company_set_takes_where_the_company_serves_from_the_visitor():
     assert not results[1]["ok"] and "60" in results[1]["refused"]
     draft, results = run(draft, ("company_set", {"regions": []}))
     assert results[0]["ok"] and "regions" not in draft["company"]
+
+
+def swarm_draft():
+    """The starter chart with two of the swarm's drafts (one on a goal), a rule the visitor said and Priya's email."""
+    draft, _ = run(
+        started(),
+        ("company_set", {"name": "Acme Tea"}),
+        ("person_set", {"name": "me", "role": "Founder"}),
+        ("person_set", {"name": "Priya", "role": "Marketing"}),
+        ("goal_add", {"title": "Grow the newsletter", "owner": "Email Owner"}),
+        ("add_said_rule", {"text": "Never offer a discount over 10%"}),
+    )
+    next(p for p in draft["people"] if p["name"] == "Priya")["email"] = "priya@acme.example"
+    goal = draft["goals"][0]["id"]
+    draft, added = C.add_drafts(
+        draft,
+        [
+            {"id": "d1", "bot": "email-owner", "goal": goal, "kind": "email", "title": "Welcome", "body": "Hi.\nBye."},
+            {"id": "d2", "bot": "content-owner", "kind": "post", "title": "Spring", "body": 'A "quoted" line'},
+        ],
+    )
+    assert added == {"added": 2, "dropped": 0, "keys_removed": False}
+    return draft
+
+
+def test_a_plan_with_drafts_said_rules_or_an_email_is_format_0_4_and_reads_back_to_the_same_file():
+    draft = swarm_draft()
+    text = C.to_yaml(draft, CREATED)
+    assert "version: 0.4\n" in text and "# Format 0.4." in text and '    email: "priya@acme.example"' in text
+    assert text.endswith(
+        "drafts:\n"
+        "  - id: d1\n    bot: email-owner\n    goal: %s\n    kind: email\n    status: waiting\n"
+        '    title: "Welcome"\n    body: "Hi.\\nBye."\n'
+        "  - id: d2\n    bot: content-owner\n    kind: post\n    status: waiting\n"
+        '    title: "Spring"\n    body: "A \\"quoted\\" line"\n'
+        "said:\n  - id: s1\n    by: you\n    text: \"Never offer a discount over 10%%\"\n" % draft["goals"][0]["id"]
+    )
+    back = C.from_yaml(text)
+    assert C.to_yaml(back, CREATED) == text
+    assert back["drafts"] == draft["drafts"] and back["said"] == draft["said"]
+    assert next(p for p in back["people"] if p["name"] == "Priya")["email"] == "priya@acme.example"
+    # The starter import keeps them, and a coworker with an email comes along to be invited.
+    saved = starter.load(text)
+    assert saved["drafts"] == draft["drafts"] and saved["said"] == draft["said"]
+
+
+def test_a_plan_without_drafts_said_rules_or_an_email_is_written_as_before_byte_for_byte():
+    """Empty drafts and said lists and a blank email are no part of the plan: the file is the 0.3 fixture, or 0.2
+    without the strategy, exactly as before."""
+    text = (FIXTURES / "company.yaml").read_text()
+    draft = fixture_draft()
+    draft["people"][0]["email"] = " "
+    assert C.to_yaml({**draft, "drafts": [], "said": []}, FIXTURE_CREATED) == text
+    del draft["strategy"]
+    for goal in draft["goals"]:
+        goal.pop("bet")
+    plain = dict(draft)
+    plain["people"] = [{k: v for k, v in p.items() if k != "email"} for p in draft["people"]]
+    assert C.to_yaml(draft, FIXTURE_CREATED) == C.to_yaml(plain, FIXTURE_CREATED)
+    assert "version: 0.2\n" in C.to_yaml(draft, FIXTURE_CREATED)
+
+
+def test_the_swarm_s_drafts_are_capped_cut_to_their_limits_and_scrubbed_and_a_bad_draft_is_refused():
+    draft = started()
+    rows = [{"bot": "content-owner", "kind": "post", "title": "Post %d" % i, "body": "x"} for i in range(305)]
+    rows[0].update(kind="tweet", title="T " * 100, body="key sk-" + "a" * 40 + " " + "word " * 500, status="nope")
+    rows[1].update(bot="not-on-the-chart")
+    out, added = C.add_drafts(draft, rows)
+    assert added == {"added": 300, "dropped": 5, "keys_removed": True}
+    first = out["drafts"][0]
+    assert first["kind"] == "other" and first["status"] == "waiting" and "sk-" not in first["body"]
+    assert len(first["title"]) <= D.LIMITS["draft_title"] and len(first["body"]) <= D.LIMITS["draft_body"]
+    assert len({d["id"] for d in out["drafts"]}) == 300
+    assert C.add_drafts(out, rows[2:4])[1]["dropped"] == 2  # full
+    for bad, match in (
+        (out["drafts"] + [{**first, "id": "one-more"}], "drafts has more than 300 entries"),
+        ([{**first, "title": "x" * 121}], "drafts\\[0\\].title is longer than 120"),
+        ([{**first, "body": "x" * 2001}], "drafts\\[0\\].body is longer than 2000"),
+        ([{**first, "status": "sent"}], "drafts\\[0\\].status must be"),
+        ([first, first], "drafts has two entries with the same id"),
+    ):
+        with pytest.raises(C.DraftError, match=match):
+            C.validate({**out, "drafts": bad})
+    with pytest.raises(C.DraftError, match="email must be an email address"):
+        C.validate(
+            {**draft, "people": [{"id": "ana", "name": "Ana", "role": "", "dept": None, "owner": True, "email": "ana"}]}
+        )
+
+
+def test_the_chat_decides_edits_and_says_rules_and_undo_takes_it_back():
+    draft = swarm_draft()
+    keyed = "Use token: " + "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2Ji1Hg0Fe"
+    out, results = run(
+        draft,
+        ("mark_draft", {"id": "d1", "status": "approved"}),
+        ("mark_draft", {"id": "d2", "status": "skipped"}),
+        ("edit_draft", {"id": "d2", "body": keyed}),
+        ("add_said_rule", {"text": "Sign off as the Acme team"}),
+        ("remove_said_rule", {"id": "s1"}),
+    )
+    assert all(r["ok"] for r in results), results
+    assert [(d["id"], d["status"]) for d in out["drafts"]] == [("d1", "approved"), ("d2", "skipped")]
+    assert out["drafts"][1]["body"] == "Use token: [removed]"
+    assert [s["text"] for s in out["said"]] == ["Sign off as the Acme team"]
+    turn = C.Turn(out, TODAY)
+    for name, args, words in (
+        ("mark_draft", {"id": "d9", "status": "approved"}, "no draft"),
+        ("edit_draft", {"id": "d1"}, "Say what to change"),
+        ("edit_draft", {"id": "d1", "title": "x" * 121}, "too long"),
+        ("add_said_rule", {"text": "sign off as the ACME  team"}, "already there"),
+        ("add_said_rule", {"text": "x" * 201}, "too long"),
+        ("remove_said_rule", {"id": "s9"}, "no rule"),
+    ):
+        assert words in turn.apply(name, args)["refused"], name
+    for i in range(D.LIMITS["said"] - 1):
+        assert turn.apply("add_said_rule", {"text": "Rule %s" % tag(i)})["ok"]
+    assert "at most 40" in turn.apply("add_said_rule", {"text": "One more"})["refused"]
+    undone = C.undo(out, TODAY)[0]
+    assert [(d["id"], d["status"]) for d in undone["drafts"]] == [("d1", "waiting"), ("d2", "waiting")]
+    assert undone["said"] == draft["said"]
+    # A draft goes with its agent when the agent leaves the chart.
+    gone, _ = run(out, ("bot_remove", {"bot": "content-owner"}))
+    assert [d["id"] for d in gone["drafts"]] == ["d1"]
+
+
+def test_keys_are_cut_from_drafts_and_said_rules_in_a_file_read_back():
+    draft = swarm_draft()
+    text = (
+        C.to_yaml(draft, CREATED)
+        .replace('"Hi.\\nBye."', '"Here: %s"' % OPENAI)
+        .replace("Never offer a discount over 10%", "Our key is " + GITHUB)
+    )
+    back = C.from_yaml(text)
+    assert back["drafts"][0]["body"] == "Here: [removed]" and back["said"][0]["text"] == "Our key is [removed]"
+    assert OPENAI not in C.to_yaml({**draft, "drafts": [{**draft["drafts"][0], "title": OPENAI}]}, CREATED)

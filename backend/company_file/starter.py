@@ -14,11 +14,12 @@ from . import draft as D
 from .keys import scrub_all
 from .yamlfile import from_yaml, to_yaml
 
-MAX_BYTES = (
-    524288  # a 300-seat plan, normalized, with room (about 320 KB at 300 bots and 329 goals, every text at full length)
-)
-# A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES is about 700 KB.
-MAX_PACKED = 1048576
+# A 300-seat plan, normalized, with room: about 320 KB at 300 bots and 329 goals, every text at full length, and about
+# 700 KB more for 300 drafts and 40 said rules at theirs.
+MAX_BYTES = 1572864
+# A packed plan HQ carries to the server as a file (the hosted plan bucket): gzip+base64 of MAX_BYTES, with room for
+# text that compresses badly.
+MAX_PACKED = 2097152
 # A packed plan carried in TICO_COMPANY_FILE_B64 (self-install, and AWS without --plan-bucket): Parameter Store's 8 KB
 # with the install settings, and far below Linux's 128 KB limit on one environment string.
 ENV_PACKED = 7168
@@ -42,9 +43,10 @@ def load(source):
         raise D.DraftError("the starter plan must be a company file")
     if any(b["existing"] for b in draft["bots"]):
         raise D.DraftError("Connect existing agents in Tico after importing the starter team")
-    # A coworker comes along only as the person who holds a seat; they join the team in Tico, never by import.
+    # A coworker comes along as the person who holds a seat, or one the visitor typed an email for (to invite): either
+    # joins the team in Tico when the owner invites them, never by import.
     holders = {b.get("person") for b in draft["bots"]}
-    if any(not p["owner"] and p["id"] not in holders for p in draft["people"]):
+    if any(not p["owner"] and p["id"] not in holders and not p.get("email") for p in draft["people"]):
         raise D.DraftError(
             "This import supports the owner, AI employees and the people who hold seats; add other coworkers in Tico first"
         )

@@ -935,6 +935,60 @@ def resize_market(draft, args, today, notes):
     return "Sizing the market again with that."
 
 
+# ---------------------------------------------------------------------------------------------------- the swarm's work
+def _draft(draft, ref):
+    found = next((d for d in draft.get("drafts", []) if d["id"] == str(ref).strip()), None)
+    if not found:
+        raise Refusal("There's no draft \"%s\"." % str(ref)[:80])
+    return found
+
+
+def add_said_rule(draft, args, today, notes):
+    """A rule the visitor said, in their words, said once: the owner's (only the visitor talks to setup)."""
+    text = _text(args, "text", D.LIMITS["said_text"])
+    said = draft.setdefault("said", [])
+    if D.fold(text) in {D.fold(row["text"]) for row in said}:
+        raise Refusal("That rule is already there.")
+    if len(said) >= D.LIMITS["said"]:
+        raise Refusal("The plan holds at most %d rules said this way. Take one back first." % D.LIMITS["said"])
+    taken, n = {row["id"] for row in said}, len(said) + 1
+    while "s%d" % n in taken:
+        n += 1
+    said.append({"id": "s%d" % n, "text": text, "by": D.owner_id(draft)})
+    return "Kept the rule: %s" % text
+
+
+def remove_said_rule(draft, args, today, notes):
+    said = draft.get("said", [])
+    found = next((row for row in said if row["id"] == str(args["id"]).strip()), None)
+    if not found:
+        raise Refusal("There's no rule \"%s\"." % str(args["id"])[:80])
+    said.remove(found)
+    if not said:
+        draft.pop("said")
+    return "Took back the rule: %s" % found["text"]
+
+
+DECISIONS = {"approved": "Approved", "skipped": "Skipped", "waiting": "Left for later"}
+
+
+def mark_draft(draft, args, today, notes):
+    found = _draft(draft, args["id"])
+    found["status"] = args["status"]
+    return "%s \"%s\"." % (DECISIONS[args["status"]], found["title"])
+
+
+def edit_draft(draft, args, today, notes):
+    found = _draft(draft, args["id"])
+    if not any(key in args for key in ("title", "body")):
+        raise Refusal("Say what to change: the draft's title, its text, or both.")
+    if "title" in args:
+        found["title"] = _text(args, "title", D.LIMITS["draft_title"])
+    if "body" in args:
+        found["body"] = _text(args, "body", D.LIMITS["draft_body"], needed=False)
+    return "Updated the draft \"%s\"." % found["title"]
+
+
 def step_go(draft, args, today, notes):
     draft["step"] = args["step"]
     return "Moved to %s." % args["step"]
@@ -1012,6 +1066,10 @@ ACTIONS = {
         add_listening_request,
         drop_listening_request,
         resize_market,
+        add_said_rule,
+        remove_said_rule,
+        mark_draft,
+        edit_draft,
         step_go,
     )
 }
@@ -1020,7 +1078,11 @@ ACTIONS = {
 def touched(before, after):
     """The parts of the plan that differ: a top-level part by name, and the strategy by its own parts (summary,
     vision, sections.know, bets.b1, market, listening.requests), as the page's "Updated from chat" flash names them."""
-    out = [key for key in ("company", "people", "bots", "goals", "rules", "tools") if before.get(key) != after.get(key)]
+    out = [
+        key
+        for key in ("company", "people", "bots", "goals", "rules", "tools", "drafts", "said")
+        if before.get(key) != after.get(key)
+    ]
     one, two = before.get("strategy") or D.blank_strategy(), after.get("strategy") or D.blank_strategy()
     out += [key for key in ("summary", "vision") if one[key] != two[key]]
     out += ["sections." + key for key in D.SECTIONS if one["sections"][key] != two["sections"][key]]

@@ -1,5 +1,5 @@
 {
- "about": "The company file's edit actions (tico.company.yaml, format 0.2, or 0.3 with a strategy). Each action's input_schema is a strict JSON schema; `limits` and `vocabulary` are what backend/company_file checks besides the schema. A tool-use model gets `actions` as its tools.",
+ "about": "The company file's edit actions (tico.company.yaml, format 0.2, 0.3 with a strategy, or 0.4 with the agents' drafts, the rules the visitor said or a teammate's email). Each action's input_schema is a strict JSON schema; `limits` and `vocabulary` are what backend/company_file checks besides the schema. A tool-use model gets `actions` as its tools. Drafts are added only by setup's draft job (company_file.add_drafts), never by a tool.",
  "format": "0.2",
  "vocabulary": {
   "steps": [
@@ -215,6 +215,21 @@
    "app-store",
    "affiliates",
    "events"
+  ],
+  "draft_kinds": [
+   "email",
+   "post",
+   "list",
+   "page",
+   "ad",
+   "reply",
+   "plan",
+   "other"
+  ],
+  "draft_statuses": [
+   "waiting",
+   "approved",
+   "skipped"
   ]
  },
  "limits": {
@@ -240,7 +255,7 @@
   "chat_text": 4000,
   "number": 1000000000000,
   "seq": 1000000,
-  "draft_bytes": 1000000,
+  "draft_bytes": 2000000,
   "bets": 5,
   "segments": 16,
   "players": 10,
@@ -263,7 +278,13 @@
   "region": 60,
   "channels": 11,
   "bet_name": 40,
-  "bet_segment": 80
+  "bet_segment": 80,
+  "drafts": 300,
+  "draft_title": 120,
+  "draft_body": 2000,
+  "said": 40,
+  "said_text": 200,
+  "email": 254
  },
  "actions": [
   {
@@ -1064,6 +1085,92 @@
     },
     "required": [
      "step"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "add_said_rule",
+   "description": "Keep a rule the visitor said for their agents, in their own words (\"never offer discounts\", \"always sign off as Priya\"). Use it when their feedback on a draft is a standing rule, not a one-off edit; it becomes a company rule every agent follows once the company is live.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string",
+      "description": "The rule as the visitor said it, one sentence, at most 200 characters"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "remove_said_rule",
+   "description": "Take back a rule the visitor said, when they change their mind.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The rule's id in the plan's said list"
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "mark_draft",
+   "description": "Record the visitor's decision on one agent's draft: approved (Send: the agent does it once the company is live and a plan is connected; nothing is sent before), skipped (not wanted: it is not imported), or waiting (Later: it waits in Needs you). Approving sends nothing now.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The draft's id"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "waiting",
+       "approved",
+       "skipped"
+      ],
+      "description": "approved for Send, skipped for not wanted, waiting for Later"
+     }
+    },
+    "required": [
+     "id",
+     "status"
+    ],
+    "additionalProperties": false
+   }
+  },
+  {
+   "name": "edit_draft",
+   "description": "Change one agent's draft as the visitor asked (its title, its text, or both). Its decision stays as it was; mark it too when they also said Send or Later.",
+   "input_schema": {
+    "type": "object",
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "The draft's id"
+     },
+     "title": {
+      "type": "string",
+      "description": "The new title, at most 120 characters"
+     },
+     "body": {
+      "type": "string",
+      "description": "The new text in full, at most 2000 characters"
+     }
+    },
+    "required": [
+     "id"
     ],
     "additionalProperties": false
    }

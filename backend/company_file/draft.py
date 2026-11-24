@@ -2,7 +2,8 @@
 
 A draft is the object the tico.team/setup page keeps (setup.js `blankDraft()`): step, company, people, bots, goals,
 rules, tools and seq, and `strategy` once the Strategy step has drafted one (optional: a draft without it is still
-valid). The server adds four fields the page passes back untouched and the company file never holds:
+valid). Two more optional parts come from the swarm: `drafts`, the work the agents drafted (each waiting on the visitor,
+approved or skipped), and `said`, the rules the visitor said in their own words. The server adds four fields the page passes back untouched and the company file never holds:
 `undo` (the draft before Agent Ops's last change), `chat` (the conversation so far), `removed` (bots taken off the chart,
 so they are not added back unasked) and `pending` (teams Agent Ops has suggested removing). Anything else is refused.
 """
@@ -200,13 +201,18 @@ METHODS = tuple(VOCAB["methods"])  # how a segment was sized (tico backend/marke
 POST_SOURCES = tuple(VOCAB["post_sources"])
 POST_TAGS = tuple(VOCAB["post_tags"])
 CHANNELS = tuple(VOCAB["channels"])  # the channels a strategy can pick; chart_formula.json has each one's seat
+DRAFT_KINDS = tuple(VOCAB["draft_kinds"])
+DRAFT_STATUSES = tuple(VOCAB["draft_statuses"])
 
 ID = re.compile(r"[a-z0-9][a-z0-9-]*")
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 SERVER_FIELDS = ("undo", "chat", "removed", "pending")
 TOP = ("step", "company", "people", "bots", "goals", "rules", "tools", "seq")
 # Parts of the plan a draft may leave out: an older page, and a plan made before the Strategy step, has none.
-OPTIONAL = ("strategy",)
+OPTIONAL = ("strategy", "drafts", "said")
+DRAFT_FIELDS = ("id", "bot", "kind", "title", "body", "status")
+SAID_FIELDS = ("id", "text", "by")
+EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 BET_ID = re.compile(r"b[1-9]")
 URL = re.compile(r"https?://\S+", re.I)
 YEARS = (1990, 2100)
@@ -534,7 +540,7 @@ def _bot_fields(raw, at):
 
 def _person(raw, at):
     field = "people[%d]" % at
-    _keys(raw, field, PERSON_FIELDS, ("isNew",))
+    _keys(raw, field, PERSON_FIELDS, ("isNew", "email"))
     person = {
         "id": _id(raw["id"], field + ".id"),
         "name": _text(raw["name"], field + ".name", LIMITS["name"]),
@@ -544,6 +550,13 @@ def _person(raw, at):
     }
     if person["dept"] is not None and person["dept"] not in DEPARTMENTS:
         raise DraftError(field + ".dept is not a department")
+    if raw.get("email") is not None:
+        # Only when the visitor typed it, to invite them once the company is live: absent when blank.
+        email = _text(raw["email"], field + ".email", LIMITS["email"]).strip()
+        if email and not EMAIL.fullmatch(email):
+            raise DraftError(field + ".email must be an email address")
+        if email:
+            person["email"] = email
     if raw.get("isNew") is True:
         person["isNew"] = True
     return person
@@ -610,6 +623,41 @@ def _goal(raw, at):
     if raw.get("isNew") is True:
         goal["isNew"] = True
     return goal
+
+
+# ---------------------------------------------------------------------------------------------------- the swarm's work
+def _draft_row(raw, at):
+    """One agent's draft: whose (`bot`), for which goal (optional), what kind, its title and text, and the visitor's
+    decision (waiting, approved or skipped)."""
+    field = "drafts[%d]" % at
+    _keys(raw, field, DRAFT_FIELDS, ("goal",))
+    out = {
+        "id": _id(raw["id"], field + ".id"),
+        "bot": _id(raw["bot"], field + ".bot"),
+        "kind": raw["kind"],
+        "title": _text(raw["title"], field + ".title", LIMITS["draft_title"], empty=False),
+        "body": _text(raw["body"], field + ".body", LIMITS["draft_body"]),
+        "status": raw["status"],
+    }
+    if out["kind"] not in DRAFT_KINDS:
+        raise DraftError(field + ".kind is not a kind of draft")
+    if out["status"] not in DRAFT_STATUSES:
+        raise DraftError(field + ".status must be waiting, approved or skipped")
+    if raw.get("goal") is not None:
+        out["goal"] = _id(raw["goal"], field + ".goal")  # a goal no longer in the plan is let go in check()
+    return out
+
+
+def _said_row(raw, at):
+    """A rule the visitor said, in their own words, and who said it (a person's id; check() gives a gone one to the
+    owner)."""
+    field = "said[%d]" % at
+    _keys(raw, field, SAID_FIELDS)
+    return {
+        "id": _id(raw["id"], field + ".id"),
+        "text": _text(raw["text"], field + ".text", LIMITS["said_text"], empty=False).strip(),
+        "by": _id(raw["by"], field + ".by"),
+    }
 
 
 # ---------------------------------------------------------------------------------------------------- the strategy
@@ -947,6 +995,11 @@ def fold_managers(rows, dept="dept"):
     return out, ids
 
 
+def _folded_bot(row, folded):
+    """Whether a draft's agent is a role that folded into its team's Manager (`fold_managers`)."""
+    return isinstance(row, dict) and isinstance(row.get("bot"), str) and row["bot"] in folded
+
+
 def _folded_owner(goal, folded):
     """Whether a goal's owner is a role that folded into its team's Manager (`fold_managers`)."""
     return isinstance(goal, dict) and isinstance(goal.get("owner"), str) and goal["owner"] in folded
@@ -1014,8 +1067,17 @@ def check(raw, snapshot=False):
             draft["company"]["regions"] = serves  # absent when the company says nothing about where it serves
     if raw.get("strategy") is not None:
         draft["strategy"] = _strategy(raw["strategy"])
-    for field in ("people", "bots", "goals"):
-        _unique(draft[field], field)
+    if raw.get("drafts"):
+        rows = _list(raw["drafts"], "drafts", LIMITS["drafts"])
+        draft["drafts"] = [
+            _draft_row({**d, "bot": folded.get(d["bot"], d["bot"])} if _folded_bot(d, folded) else d, i)
+            for i, d in enumerate(rows)
+        ]
+    if raw.get("said"):
+        draft["said"] = [_said_row(s, i) for i, s in enumerate(_list(raw["said"], "said", LIMITS["said"]))]
+    for field in ("people", "bots", "goals", "drafts", "said"):
+        if field in draft:
+            _unique(draft[field], field)
     if draft["people"] and not any(p["owner"] for p in draft["people"]):
         draft["people"][0]["owner"] = True
     for extra in [p for p in draft["people"] if p["owner"]][1:]:
@@ -1046,6 +1108,19 @@ def check(raw, snapshot=False):
             goal["parent"] = None
         if "bet" in goal and goal["bet"] not in {b["id"] for b in (draft.get("strategy") or {}).get("bets", [])}:
             del goal["bet"]
+    # A draft goes with its agent when the agent leaves the chart (an agent of the visitor's own drafts nothing), and a
+    # goal that left the plan is let go; a rule said by someone who left the team is the owner's.
+    if "drafts" in draft:
+        makers = {b["id"] for b in draft["bots"] if not b["existing"]}
+        draft["drafts"] = [d for d in draft["drafts"] if d["bot"] in makers]
+        for row in draft["drafts"]:
+            if row.get("goal") is not None and row["goal"] not in goal_ids:
+                del row["goal"]
+        if not draft["drafts"]:
+            del draft["drafts"]
+    for row in draft.get("said", []):
+        if row["by"] not in people:
+            row["by"] = owner_id(draft)
     if "removed" in raw:
         draft["removed"] = []
         for i, row in enumerate(_list(raw["removed"], "removed", LIMITS["removed"])):
@@ -1080,6 +1155,66 @@ def check(raw, snapshot=False):
     if len(json.dumps(draft)) > LIMITS["draft_bytes"]:
         raise DraftError("the draft is too large")
     return draft
+
+
+def _clip(text, limit):
+    """Text cut to `limit` characters at a word, with an ellipsis when cut."""
+    text = re.sub("[\ud800-\udfff\x00]", "", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rsplit(" ", 1)[0].rstrip(" ,;:") + "\u2026"
+
+
+def add_drafts(draft, rows):
+    """The swarm's drafts added to a draft: the only way drafts come in (no chat tool adds one). Each row is
+    {id?, bot, goal?, kind, title, body, status?} as a model wrote it, so it is taken as far as it can be: key-shaped
+    strings are removed, a title or text past its limit is cut at a word, an unknown kind is `other`, a missing status is
+    `waiting`, and an id that is not a short free id gets a new one. A row whose agent is not one of Tico's on the chart,
+    or with no title, is dropped; so is any row past LIMITS["drafts"] in all, or one that would make the draft too large.
+    Returns (the checked draft, {"added": n, "dropped": n, "keys_removed": bool})."""
+    from .keys import scrub_all
+
+    out = check(draft)
+    rows, hit = scrub_all(rows if isinstance(rows, list) else [])
+    kept = list(out.get("drafts", []))
+    makers = {b["id"] for b in out["bots"] if not b["existing"]}
+    goals = {g["id"] for g in out["goals"]}
+    taken = {d["id"] for d in kept}
+    size = len(json.dumps(out))
+    added = dropped = 0
+    for raw in rows:
+        raw = raw if isinstance(raw, dict) else {}
+        title = _clip(raw.get("title") if isinstance(raw.get("title"), str) else "", LIMITS["draft_title"])
+        if raw.get("bot") not in makers or not title or len(kept) >= LIMITS["drafts"]:
+            dropped += 1
+            continue
+        ident = raw.get("id")
+        if not (isinstance(ident, str) and len(ident) <= LIMITS["id"] and ID.fullmatch(ident)) or ident in taken:
+            n = len(taken) + 1
+            while "d%d" % n in taken:
+                n += 1
+            ident = "d%d" % n
+        row = {
+            "id": ident,
+            "bot": raw["bot"],
+            "kind": raw.get("kind") if raw.get("kind") in DRAFT_KINDS else "other",
+            "title": title,
+            "body": _clip(raw.get("body") if isinstance(raw.get("body"), str) else "", LIMITS["draft_body"]),
+            "status": raw.get("status") if raw.get("status") in DRAFT_STATUSES else "waiting",
+        }
+        if raw.get("goal") in goals:
+            row["goal"] = raw["goal"]
+        grows = len(json.dumps(row)) + 2
+        if size + grows > LIMITS["draft_bytes"]:
+            dropped += 1
+            continue
+        kept.append(row)
+        taken.add(ident)
+        size += grows
+        added += 1
+    if kept:
+        out["drafts"] = kept
+    return check(out), {"added": added, "dropped": dropped, "keys_removed": hit}
 
 
 def content(draft):
