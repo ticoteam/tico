@@ -2002,14 +2002,17 @@ impl Place {
 /// Whether the turn may start on the runner's recent fetch of its checkout (crate::fetch_fresh): a person waits for it,
 /// on the bot's main lane, in the bot's own repository. A task turn (it builds and pushes from its worktree), a shared
 /// checkout (others push to it all day), a private meeting's copy and a turn no person waits for fetch first, as before.
-/// A task's turn on the main lane (`session: bot`) is a task's all the same.
+/// A task's turn on the main lane (`session: bot`) is a task's all the same. A person's own Assistant chat is a chat: its
+/// PersonalCopy is cloned from the checkout once refreshed, and the fetch behind it writes only the checkout's
+/// refs/tico/fetched/ ref, which the clone does not take.
 pub fn chat_refresh(place: &Place, attempt: &Value) -> bool {
     let task = if place.task.is_empty() {
         text_of(&attempt["task"]["id"])
     } else {
         place.task.clone()
     };
-    chat_turn(&task, place.person, place.disposable, &attempt["config"])
+    let disposable = place.disposable && !place.personal;
+    chat_turn(&task, place.person, disposable, &attempt["config"])
 }
 
 fn chat_turn(task: &str, person: bool, disposable: bool, config: &Value) -> bool {

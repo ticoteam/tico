@@ -10060,6 +10060,98 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
+    /// One personal chat turn's refresh of the bot's checkout, as `execute` runs it; the turn's flight marks. The
+    /// fetch it leaves running behind it is awaited, so nothing is left writing to the checkout.
+    async fn personal_refresh_marks(runner: &Runner, config: &Value) -> Value {
+        let aid = format!("a-chat-{}", uuid::Uuid::new_v4().simple());
+        let mut attempt = json!({"id": aid, "bot": "ops", "config": config, "personal": true,
+                                 "conversation": {"id": "c1", "scope": "personal"},
+                                 "message": {"from_actor": "human:ann"}});
+        let lost = AtomicBool::new(false);
+        let place = runner.enter_lanes(&attempt, &lost).await.unwrap();
+        assert!(place.personal && place.disposable);
+        let chat = crate::sessions::chat_refresh(&place, &attempt);
+        crate::flight::track();
+        crate::flight::phase("claimed", &aid);
+        let env = crate::env::process_environment();
+        crate::fetch_fresh::in_turn(
+            &aid,
+            chat,
+            runner.refresh_checkout(&place, &mut attempt, &env),
+        )
+        .await
+        .unwrap();
+        crate::fetch_fresh::behind_done(&place.main_path, &env).await;
+        let marks = crate::flight::timings(&aid).unwrap()["phases"].clone();
+        crate::flight::turn_end(&aid, "ops", "pi", "completed", true);
+        marks
+    }
+
+    #[tokio::test]
+    async fn a_personal_chat_starts_on_the_runners_recent_fetch() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "personal-fetch");
+        let config = json!({"session": "bot"});
+        let (remote, seed) = (dir.join("ops.git"), dir.join("seed"));
+        let main = crate::sessions::local_path(&runner.config, "ops", &config);
+        repo_git(&dir, &["init", "--bare", "-q", remote.to_str().unwrap()]);
+        repo_git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                seed.to_str().unwrap(),
+            ],
+        );
+        let push = |file: &str| {
+            std::fs::write(seed.join(file), "elsewhere\n").unwrap();
+            repo_git(&seed, &["add", "-A"]);
+            repo_git(&seed, &["commit", "-qm", file]);
+            repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
+        };
+        push("AGENTS.md");
+        std::fs::create_dir_all(main.parent().unwrap()).unwrap();
+        repo_git(
+            &dir,
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                main.to_str().unwrap(),
+            ],
+        );
+        // The first personal turn fetches before it starts: the runner has no recent fetch.
+        push("first.md");
+        let marks = personal_refresh_marks(&runner, &config).await;
+        assert!(
+            marks.get("fetched_first").is_some() && marks.get("fetch_skipped").is_none(),
+            "{marks}"
+        );
+        assert!(main.join("first.md").is_file());
+        // The next one, moments later, starts on that fetch and fetches behind it.
+        push("late.md");
+        let marks = personal_refresh_marks(&runner, &config).await;
+        assert!(
+            marks.get("fetch_skipped").is_some() && marks.get("fetched_first").is_none(),
+            "{marks}"
+        );
+        assert!(
+            !main.join("late.md").exists(),
+            "the personal chat fetched before it started"
+        );
+        // Past CHAT_FRESH_FOR it fetches first again.
+        crate::fetch_fresh::CHAT_OVERRIDE.with(|v| v.set(Some(Duration::ZERO)));
+        push("paused.md");
+        let marks = personal_refresh_marks(&runner, &config).await;
+        crate::fetch_fresh::CHAT_OVERRIDE.with(|v| v.set(None));
+        assert!(
+            marks.get("fetched_first").is_some() && marks.get("fetch_skipped").is_none(),
+            "{marks}"
+        );
+        assert!(main.join("paused.md").is_file());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
     #[tokio::test]
     async fn a_memory_pass_without_a_checkout_of_its_own_is_refused_and_an_ordinary_task_still_falls_back_to_the_bots_checkout(
     ) {

@@ -3,7 +3,7 @@
 //! Inside a turn (`in_turn`), a fetch of a repository and upstream the same turn already fetched, or pushed to, within
 //! FRESH_FOR is skipped; the merge or rebase onto it still runs.
 //!
-//! A chat turn (a person waits for it in the bot's own checkout, `in_turn` with `chat`) also starts on this runner's
+//! A chat turn (a person waits for it on the bot's checkout, `in_turn` with `chat`) also starts on this runner's
 //! last fetch or push of the repository from any turn, when it began less than CHAT_FRESH_FOR ago. The turn moves the
 //! remote-tracking ref to what the last background fetch brought (`Upstream::take_behind`), fast-forwards onto it, and
 //! then fetches again in the background beside the model's start (`Upstream::refresh_behind`), so the next chat turn
@@ -591,6 +591,15 @@ pub async fn note(path: &Path, env: &Env, began: Instant) {
     }
 }
 
+/// Waits for a background fetch of the checkout's repository to finish.
+#[cfg(test)]
+pub(crate) async fn behind_done(path: &Path, env: &Env) {
+    let key = upstream(path, env).await.unwrap().key;
+    while running().lock().unwrap().contains_key(&key) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,14 +809,6 @@ mod tests {
             f.mine.join("late.md").is_file(),
             "a failed fetch counted as fresh"
         );
-    }
-
-    /// Waits for a background fetch of the checkout's repository to finish.
-    async fn behind_done(path: &Path, env: &Env) {
-        let key = upstream(path, env).await.unwrap().key;
-        while running().lock().unwrap().contains_key(&key) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
     }
 
     fn head(dir: &Path, rev: &str) -> String {
