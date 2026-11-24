@@ -1,12 +1,24 @@
 # Finish setup
 
-The first time the owner opens a new environment, setup is a modal over the app (`#/welcome`): the app's sidebar and
-pages are behind it, dimmed, and the heading reads **Set up <company>** with **Step 1 of 3**. Three steps, one question
-and one primary button each:
+The first time the owner opens a new environment, Tico sets it up with them in its own chat, the sheet on the left (on a
+phone, Tico's card). Nothing runs before a plan is connected, so Tico's first lines are the app's own, each with its card
+in the chat:
 
-1. **What are you building?** The website and one line. The strategy research starts from them in the background.
-2. **Connect your AI plan.** Connect Claude or ChatGPT, or choose **Use an API key**. **Continue** appears when a provider is ready.
-3. **Pick a team.** Pick the team's first job and choose **Start**, or choose **Skip**. Setup lands on Tasks.
+1. **Welcome.** A company a setup file made (the public setup page, then sign-up): "Welcome back. <company> is saved.",
+   with how many of the file's drafts wait for the owner's yes in Needs you. Any other company: "Hi, I'm Tico."
+2. **Connect your plan.** Claude or ChatGPT, signed in on a computer, or **Use an API key**. A plan counts once the
+   server says it is ready; a sign-in that fails offers Try again or its token pasted instead, and the other provider and
+   the key stay offered. Then: "Your plan runs the agents." with the company's Tico Gateway credit when it has some (it
+   covers rule checks; agents never run on it).
+3. **Invite.** Only for a setup file that named people with an email: "Invite Priya and Leo?", one tap, through the
+   same invite as Settings > People (`POST /api/v2/setup/company/people/{key}/invite`).
+4. **Stay in touch.** Desktop app (its download for this computer; left out inside the desktop app), Phone (open Tico
+   there and add it to the home screen, [push](push.md)), Email digest (the person's daily email summary), or Not now.
+5. **Live.** A company a setup file made lands on Tasks, Needs you on top, and its bots are pinged for what they still
+   need ([Setup in Flow](#setup-in-flow)). A company started in the app gets its starting team (the first job's seat live, the
+   rest Recruiting, below), and Tico takes the setup over in its chat, winning first: what winning looks like, the company
+   and its website, the strategy, the chart, each owner's goal under the company's, then their first drafts in Flow, and
+   the owner's feedback becomes rules (`templates/catalog/assistant/skills/set-up-the-company/`).
 
 The default model is in **Settings > Agents > Defaults**.
 
@@ -16,15 +28,10 @@ at once. Every other role is laid out as a **Recruiting** seat with its job desc
 repository, computer slot or Agent Ops task until someone picks a bot for it ([A bot's stages](#a-bots-stages)). To choose a
 first team and get the most from it, read the [setup guide](onboarding-guide.md).
 
-Nobody else sees setup. Only the owner may write it, and the sidebar entry **Finish setup** appears only while it is
-unfinished; it opens the modal again. **Don't remind me** on that step hides it for good only once the required rows
-(the computer, GitHub) are done: the subscription row is the one it can set aside. Behind the modal the page is Tasks, so Tasks is the sidebar's current row. Before the team is created the modal has no close button and Escape does nothing;
-from step 3 on, ✕ or Escape closes it and lands on Tasks. On a phone the modal is a full page.
-
-While setup is open on a new install, **What's new** and its count wait, the phone's bottom bar and Ask's button are
-hidden, and the anonymous usage-count notice is not shown; it appears on the first other page you open (for example
-Tasks), and counting starts only once it has been shown ([PRIVACY.md](../PRIVACY.md)). The owner's tour is marked seen
-when the team is created; **Take the tour** in the account menu replays it.
+Nobody else sees setup: anyone but the owner lands on Tasks. Setup is owed while `GET /api/v2/config` says
+`onboarding_needed`: until the owner finishes, for a company a setup file made too (`live_owed` on the setup record, set by
+the import and cleared by the owner's finish, which then lays nothing out again). The pages stay usable beside it. Once it
+is done, **Set up** on the Company page asks Tico to set up the rest in its chat. GitHub is connected from Tools › GitHub.
 
 ### A company file
 
@@ -39,10 +46,8 @@ itself, so a Corporate Manager hired later takes it along.
 Import retries do not duplicate a seat, and an import cannot replace a company whose setup is complete.
 
 A file named at install (`TICO_COMPANY_FILE_B64` or `TICO_COMPANY_FILE`) is imported when the server starts, and that
-completes setup: there is nothing for the owner to fill in. Their first visit opens one **Welcome to <company>** screen in
-the same modal instead of the tour: the team as the chart has it (each team's lead first, open seats muted; the built-ins last, under their group's name, General), what the bots
-run on (the computer, ticked on Tico Cloud, and the Claude or ChatGPT subscription line until one is signed in), and
-**Start**. Start, ✕ or Escape close it where it opened and mark the tour seen; the tour stays in the account menu. If it
+completes the team: there is nothing for the owner to pick. Their first visit is Tico's welcome back, above: connect a
+plan, invite, stay in touch, live. If it
 cannot be read or applied, the server still starts, **no sample team is set up in its place**, and setup opens on its
 first step as usual; the Your team step shows the default team, picked, with one line above it giving the server's
 reason. Health shows "Company file from setup not imported" until it is over: an import works (the same file again
@@ -84,8 +89,8 @@ which covers every goal the setup page suggests; a file with more is refused bef
 routines, model choices and tool connections are saved for later setup and listed in the preview; the team uses its
 currently configured AI providers.
 
-The implementation is `backend/onboarding.py` (the record, creating the team), `web/src/features/start/` (the modal and
-its steps), `backend/strategy_setup.py` (What are you building), `backend/company_import.py` (the default chart and
+The implementation is `backend/onboarding.py` (the record, creating the team), `web/src/features/start/` (the first run in
+Tico's sheet), `backend/strategy_setup.py` (What are you building), `backend/company_import.py` (the default chart and
 company files), `backend/recruit.py` and `backend/recruit_rank.py` (the team builder's templates and suggestions), Tico HQ's
 `POST /v1/recruit` ([its API](tico-hq.md), for HQ's suggestions), `clients/catalog.py` (turning a template into a
 repository), `runner_support/catalog_job.py` (the bots the computer sets up itself, run by the runner as
@@ -94,7 +99,9 @@ repository), `runner_support/catalog_job.py` (the bots the computer sets up itse
 
 ## The steps
 
-Every **Next** saves the whole draft with `PUT /api/v2/setup`, so a closed tab loses nothing. `GET /api/v2/setup`
+The app no longer shows these steps (the first run is Tico's, above); the record keeps them, and an agent sets them over
+the API, the CLI or MCP (`tico setup show`, `tico api PUT setup`, `tico setup complete`). Every save sends the whole draft
+with `PUT /api/v2/setup`. `GET /api/v2/setup`
 returns the record, plus `default_chart` (the default chart by team, below) until setup is complete.
 
 | Step | What it asks | What it stores |
