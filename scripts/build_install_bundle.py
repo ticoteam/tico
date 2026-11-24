@@ -3,7 +3,7 @@
 installer infra/windows/install-wsl.ps1 likewise, the compose bundle for that exact tag, and SHA256SUMS over all three.
 Used by .github/workflows/release.yml.
 
-    python3 scripts/build_install_bundle.py --version v0.2.0 --output dist
+    python3 scripts/build_install_bundle.py --version v0.6.264 --output dist
 """
 
 from __future__ import annotations

@@ -224,8 +224,7 @@ def org(environment):
     api = environment(
         cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (AGENT_OPS_CARD, "")] + [(row, "") for row in CARDS[:-1]]
     )
-    # The older file name is still read (backend/recruit.py).
-    (Path(api.app.state.store.settings.catalog_dir).parent / "departments.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
+    (Path(api.app.state.store.settings.catalog_dir).parent / "groups.yaml").write_text(yaml.safe_dump(DEPARTMENTS))
     api.put(
         "/api/v2/setup",
         headers=signed_in(),
@@ -285,9 +284,25 @@ def test_the_install_sends_an_answer_to_hq_only_when_the_toggle_is_on_and_keeps_
         "off_by": "",
     }
 
+    # An HQ on the older engine says Matches “<word>”: the install's own why replaces it (none for a niche card).
+    hq.reply["json"] = {
+        "bots": [
+            {"template_id": "sales-manager", "why": "Matches “managers”"},
+            {"template_id": "account-manager", "why": "Matches “renewals”"},
+            {"template_id": "partner-scout", "why": "Matches “resellers”"},
+            {"template_id": "sdr", "why": "Books your demos"},
+        ]
+    }
+    assert {row["template_id"]: row["why"] for row in ask(api).json()["bots"]} == {
+        "sales-manager": "Heads Sales and reports to you",
+        "account-manager": "Common in Sales",
+        "partner-scout": "",
+        "sdr": "Books your demos",
+    }
+
     # The person's toggle off: nothing leaves, and the local recommender answers.
     local = ask(api, share=False).json()
-    assert len(hq.seen) == 1 and local["source"] == "local" and local["shared"] is False
+    assert len(hq.seen) == 2 and local["source"] == "local" and local["shared"] is False
     assert local["bots"][0]["template_id"] == "sales-manager"
 
     # HQ down, slow or talking nonsense: the local answer, never an error.

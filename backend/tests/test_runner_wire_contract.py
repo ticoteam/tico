@@ -171,7 +171,7 @@ def heartbeat_body(bot):
         "readiness": readiness(bot),
         "mail_agent_instructions": {},
         "agent_instructions": {},
-        "release": "0.6.0-rc.1",
+        "release": "0.6.0",
         "kind": "docker",
         "update": {"state": "idle", "target": "", "error": ""},
         "profiles": [],
@@ -352,7 +352,7 @@ def test_the_committed_requests_are_the_servers_models():
 
 
 def kept():
-    # A copy below the minimum runner release is not served any more (runner_versions.MIN_RUNNER_RELEASE, 0.6.0-rc.1).
+    # A copy below the minimum runner release is not served any more (runner_versions.MIN_RUNNER_RELEASE, 0.6.0).
     return [path for version, path in W.window(W.releases()) if version >= (0, 6, 0)]
 
 

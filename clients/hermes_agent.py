@@ -21,7 +21,7 @@ What it does:
         the same steps with no token to copy: it prints a code and what to tell Agent Ops,
         waits for a person (or Agent Ops) to approve it for a bot, and receives the credential itself.
     python3 hermes_agent.py update --profile scout       # newest connector from Tico, then install again
-    python3 hermes_agent.py doctor --profile scout       # what works, what does not, old tool names
+    python3 hermes_agent.py doctor --profile scout       # what works and what does not
     python3 hermes_agent.py heartbeat --profile scout    # what the timer runs
     python3 hermes_agent.py status --profile scout       # the last reply, and what is waiting
     python3 hermes_agent.py check --profile scout        # what the sync job asks first: what is waiting
@@ -1334,119 +1334,6 @@ def cmd_reinstall(args):
     )
 
 
-# Every tool was `hub_*` before Tico 0.6.0 and is `tico_*` now (`hub_task_show` is `tico_task_show`). These are the
-# ones renamed or taken away on top of that, in 0.2.21, with asks (0.5) and with the old task engine (0.6),
-# old -> new. Names ending in `_` are prefixes.
-RENAMED_TOOLS = {
-    "hub_say": "tico_message_send",
-    "hub_notice": "tico_message_send (fyi)",
-    "hub_inbox": "tico_message_list",
-    "hub_ack": "tico_message_mark_read",
-    "hub_history": "tico_conversation_show",
-    "hub_ask": "tico_task_ask (a person, on your task) or tico_message_send (a bot)",
-    "hub_answer": "tico_task_answer",
-    "hub_question_ask": "tico_task_ask (a person, on your task) or tico_message_send (a bot)",
-    "hub_question_answer": "tico_task_answer",
-    "hub_task_question": "tico_task_ask",
-    "hub_task_ask_resolve": "tico_task_answer",
-    "hub_task_answers": "tico_task_show (To leave)",
-    "hub_approval_": "tico_task_ask (asking) or tico_task_answer (answering)",
-    "hub_task_wait": "tico_task_file or tico_task_snooze",
-    "hub_task_check_back": "tico_task_snooze",
-    "hub_task_later": "tico_task_snooze",
-    "hub_task_defer": "tico_task_snooze",
-    "hub_task_bulk": "one task at a time",
-    "hub_task_waive_qa": "tico_task_move",
-    "hub_task_types": "tico_task_show (a task's pipeline and stage)",
-    "hub_task_type_": "tico_task_show (a task's pipeline and stage)",
-    "hub_requirements": "tico_task_show (To leave)",
-    "hub_requirement_": "tico_task_show (To leave)",
-    "hub_pipeline": "tico_task_show (a task's pipeline and stage)",
-    "hub_pipeline_": "tico_task_show (a task's pipeline and stage)",
-    "hub_board": "tico_task_list (all)",
-    "hub_task_stuck": "tico_task_list",
-    "hub_goals": "tico_goal_list",
-    "hub_goal_auto": "tico_goal_status (auto)",
-    "hub_kpi_add": "tico_kpi_create",
-    "hub_context_search": "tico_doc_search",
-    "hub_context_show": "tico_doc_read",
-    "hub_meetings_transcript": "tico_meeting_read",
-    "hub_bot_register": "tico_bot_create",
-    "hub_bot_set": "tico_bot_update",
-    "hub_bot_onboarded": "tico_bot_setup_done",
-    "hub_turns": "tico_run_list",
-    "hub_fleet": "tico_health_check",
-    "hub_fleet-check": "tico_health_check",
-    "hub_fleet_check": "tico_health_check",
-    "hub_computers": "tico_computer_list",
-    "hub_catalog": "tico_template_list",
-    "hub_routine_on": "tico_automation_update (enabled)",
-    "hub_routine_off": "tico_automation_update (enabled)",
-    "hub_routine_": "tico_automation_",
-    "hub_rule_": "tico_automation_",
-    "hub_org": "tico_team_show",
-    "hub_updates": "tico_update_list",
-    "hub_integrations": "tico_tool_*",
-    "hub_integration": "tico_tool_*",
-    "hub_queries": "tico_tool_*",
-    "hub_learn": "tico_tool_*",
-    "hub_decisions": "tico_decision_ask",
-    "hub_judge": "tico_decision_ask",
-    "hub_listen_judge": "tico_listening_*",
-    "hub_docs_": "tico_doc_",
-    "hub_files_": "tico_file_",
-    "hub_status_": "tico_bot_status_",
-    "hub_people_": "tico_human_",
-    "hub_person_": "tico_human_",
-    "hub_tools_": "tico_tool_",
-    "hub_batch_": "tico_needs_you_",
-    "hub_listen_": "tico_listening_",
-    "hub_intake_": "tico_listening_",
-}
-TOOL_WORD = re.compile(r"\bhub_[A-Za-z0-9_]+(?:-check)?")
-SCAN_LIMIT = 2_000_000
-MAX_SHOWN = 100
-
-
-def new_tool_name(word):
-    """What to use for an old `hub_*` tool name: a later rename, or the same name as `tico_*`."""
-    if word in RENAMED_TOOLS:
-        return RENAMED_TOOLS[word]
-    for old, new in RENAMED_TOOLS.items():
-        if old.endswith("_") and word.startswith(old):
-            return new + (word[len(old) :] or "*")
-    return "tico_" + word[len("hub_") :]
-
-
-def scan_old_tool_names(directory):
-    """(file, line number, old name, new name) for each old tool name a profile's own text still uses:
-    SOUL.md, skills/, cron definitions and memories/. Reads only; never edits."""
-    roots = [directory / "SOUL.md", directory / "skills", directory / "cron", directory / "memories"]
-    roots += (
-        sorted(directory.glob("cron*.json"))
-        + sorted(directory.glob("cron*.yaml"))
-        + sorted(directory.glob("cron*.yml"))
-    )
-    found = []
-    for root in roots:
-        files = [root] if root.is_file() else sorted(f for f in root.rglob("*") if f.is_file()) if root.is_dir() else []
-        for path in files:
-            if any(part.startswith(".") for part in path.relative_to(directory).parts):
-                continue
-            try:
-                if path.stat().st_size > SCAN_LIMIT:
-                    continue
-                lines = path.read_text(encoding="utf-8").splitlines()
-            except (OSError, UnicodeDecodeError):
-                continue
-            for number, line in enumerate(lines, 1):
-                for word in TOOL_WORD.findall(line):
-                    new = new_tool_name(word)
-                    if new:
-                        found.append((path, number, word, new))
-    return found
-
-
 def env_value(directory, key, name=".env"):
     try:
         for line in (directory / name).read_text().splitlines():
@@ -1755,15 +1642,6 @@ def cmd_doctor(args):
             "(above) shows whether it worked",
         )
 
-    old = scan_old_tool_names(directory)
-    if old:
-        say("warn", f"{len(old)} use(s) of old tool names (not edited; change them by hand):")
-        for file, number, word, new in old[:MAX_SHOWN]:
-            print(f"            {file}:{number}: {word} -> {new}")
-        if len(old) > MAX_SHOWN:
-            print(f"            ... and {len(old) - MAX_SHOWN} more")
-    else:
-        say("ok", "SOUL.md, skills, cron and memories use no old tool names")
     if problems:
         print(f"{len(problems)} problem(s) found.")
     elif model_checked:
@@ -1873,7 +1751,7 @@ def parser():
         ("heartbeat", cmd_heartbeat, "post one heartbeat (what the timer runs)"),
         ("status", cmd_status, "the saved configuration and the last reply"),
         ("update", cmd_update, "download the newest connector from Tico and install again"),
-        ("doctor", cmd_doctor, "check the wiring, the sync job and old tool names (changes nothing)"),
+        ("doctor", cmd_doctor, "check the wiring and the sync job (changes nothing)"),
         ("uninstall", cmd_uninstall, "remove the timer, the sync job and skill, the env line and the MCP entry"),
     ):
         s = sub.add_parser(name, help=help_text)

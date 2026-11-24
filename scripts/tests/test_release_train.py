@@ -27,7 +27,7 @@ MORNING = pt(2026, 11, 5, 7, 0)  # half an hour before NOW
 
 
 def run(
-    sha, version="v0.5.201", previous="v0.5.200", *, status="completed", conclusion="success", at=NOW, id=1, anchor=None
+    sha, version="v0.6.201", previous="v0.6.200", *, status="completed", conclusion="success", at=NOW, id=1, anchor=None
 ):
     return {
         "id": id,
@@ -41,17 +41,17 @@ def run(
 
 
 class FakeGitHub:
-    """main is A <- B <- C (C is the head); v0.5.200 is tagged at A and was published six hours before MORNING."""
+    """main is A <- B <- C (C is the head); v0.6.200 is tagged at A and was published six hours before MORNING."""
 
     def __init__(self, runs=(), tags=None, head=C, published=MORNING - timedelta(hours=6)):
-        self.tags_ = dict(tags if tags is not None else {"v0.5.199": "0" * 40, "v0.5.200": A, "v0.6.0-rc.1": B})
+        self.tags_ = dict(tags if tags is not None else {"v0.6.199": "0" * 40, "v0.6.200": A, "v0.6.0-rc.1": B})
         self.order = [A, B, C]
         self.head_ = head
         self.runs = list(runs)
         self.others = {"ci.yml": [], "hotfix.yml": []}  # runs on other branches/events (recent_runs only)
         self.release_runs = []
         self.releases = (
-            {"v0.5.200": dict(released("v0.5.200"), published_at=published.isoformat())} if published else {}
+            {"v0.6.200": dict(released("v0.6.200"), published_at=published.isoformat())} if published else {}
         )
         self.dispatched, self.tagged = [], []
         self.comments, self.closed = [], []  # (number, body) of the comments this run posted; the numbers it closed
@@ -61,7 +61,7 @@ class FakeGitHub:
         self.blockers = []
         self.writers = {"chris"}  # the logins with write access
         self.latest = []
-        self.latest_ = "v0.5.200"  # GitHub's latest release before this run
+        self.latest_ = "v0.6.200"  # GitHub's latest release before this run
         self.on_dispatch = None
         self.numbers = iter(range(100, 100000))
         self.failed = {}  # per run id: the tests its failed jobs name (None: a failure nobody can name)
@@ -230,7 +230,7 @@ def approval_of(gh, version):
 
 # An approval body whose notes list a High risk item, as scripts/release_notes.py writes them.
 HIGH_RISK_NOTES = (
-    "Changes since v0.5.199: 0 user-facing, 1 high risk, 0 backend, 0 internal\n\n"
+    "Changes since v0.6.199: 0 user-facing, 1 high risk, 0 backend, 0 internal\n\n"
     "## High risk\n\n### #9 Rewrite the task store\n- Risk: high — moves every task row\n"
 )
 
@@ -295,8 +295,7 @@ COMMANDS = []
 @pytest.fixture(autouse=True)
 def clean_log(monkeypatch):
     monkeypatch.setattr(rt, "LOG", [])
-    # The tests' world is a 0.5 main (v0.5.200); the 0.6 line has tests of its own (test_a_new_line_...).
-    monkeypatch.setattr(rt, "LINE", (0, 5))
+    # The tests' world is a 0.6 main (v0.6.200); a new line has a test of its own (test_a_new_line_...).
     monkeypatch.setattr(rt, "sleep", lambda seconds: None)
     COMMANDS.clear()
     monkeypatch.setattr(rt, "run_command", lambda argv, timeout=180: COMMANDS.append(argv) or (0, ""))
@@ -325,14 +324,14 @@ AUTO = {key: value for key, value in ENV.items() if key != "RELEASE_NEEDS_PERSON
 
 
 def test_versions_order_numerically_and_skip_prereleases():
-    tags = {"v0.5.9", "v0.5.10", "v0.6.0-rc.1", "latest", "v1.0"}
-    assert rt.newest_stable(tags) == "v0.5.10"
-    assert rt.next_patch("v0.5.10") == "v0.5.11"
+    tags = {"v0.6.9", "v0.6.10", "v0.6.0-rc.1", "latest", "v1.0"}
+    assert rt.newest_stable(tags) == "v0.6.10"
+    assert rt.next_patch("v0.6.10") == "v0.6.11"
     assert rt.newest_stable({"v0.6.0-rc.1"}) is None
 
 
 def test_validation_title_round_trips_for_release_yml():
-    assert rt.parse_title(rt.title(C, "v0.5.201", "v0.5.200")) == (C, "v0.5.201", "v0.5.200")
+    assert rt.parse_title(rt.title(C, "v0.6.201", "v0.6.200")) == (C, "v0.6.201", "v0.6.200")
     assert rt.parse_title("Release train check") is None
 
 
@@ -347,7 +346,7 @@ def plan(gh, now=NOW, finished=None, manual=False):
     "now", [NOW, pt(2026, 11, 6, 3, 0), pt(2026, 11, 7, 23, 30)], ids=["morning", "3am", "late-saturday"]
 )
 def test_there_are_no_windows_a_green_candidate_ships_at_any_hour_right_after_the_last_release(now):
-    # v0.5.200 was published a minute before C's validation finished: the next release goes out at once.
+    # v0.6.200 was published a minute before C's validation finished: the next release goes out at once.
     gh = FakeGitHub([run(C, at=now)], published=now - timedelta(minutes=1))
     assert plan(gh, now=now)["action"] == "ship"
     # Main's head with no validation yet is validated at once, whatever the hour.
@@ -365,14 +364,14 @@ def release_run(status="completed", conclusion="failure", at=NOW - timedelta(min
 
 def test_an_unpublished_tag_waits_for_its_release_run_then_runs_it_once_more_then_asks_for_a_person():
     gh = FakeGitHub([run(C)])
-    gh.tags_["v0.5.201"] = B
+    gh.tags_["v0.6.201"] = B
     gh.release_runs = [release_run(status="in_progress", conclusion=None)]
     assert plan(gh)["action"] == "none" and "running" in plan(gh)["why"]
     gh.release_runs = [release_run(at=NOW - timedelta(minutes=10))]
     assert plan(gh)["action"] == "none" and "runs again at 07:50 PST" in plan(gh)["why"]
     gh.release_runs = [release_run()]
     again = plan(gh)
-    assert (again["action"], again["sha"], again["version"], again["republish"]) == ("ship", B, "v0.5.201", True)
+    assert (again["action"], again["sha"], again["version"], again["republish"]) == ("ship", B, "v0.6.201", True)
     gh.release_runs = [release_run(id=71), release_run()]
     stuck = plan(gh)
     assert stuck["action"] == "none" and rt.problems(stuck) == [stuck["stuck"]] and "release/71" in stuck["stuck"]
@@ -384,12 +383,12 @@ def test_nothing_to_do_when_main_has_not_moved():
 
 def test_the_first_green_candidate_of_the_next_release_ships():
     picked = plan(FakeGitHub([run(B, id=2, at=MORNING + timedelta(minutes=20))]))
-    assert (picked["action"], picked["sha"], picked["version"]) == ("ship", B, "v0.5.201")
+    assert (picked["action"], picked["sha"], picked["version"]) == ("ship", B, "v0.6.201")
     # However long ago it went green: an older commit ships too, and the next push validates main's head.
     assert plan(FakeGitHub([run(C, at=MORNING - timedelta(hours=2))]))["action"] == "ship"
     assert plan(FakeGitHub([run(B, at=MORNING - timedelta(hours=2))]))["sha"] == B
     # A green run of another release (validated from an older one) ships nothing.
-    assert plan(FakeGitHub([run(C, "v0.5.200", "v0.5.199", at=MORNING)]))["action"] != "ship"
+    assert plan(FakeGitHub([run(C, "v0.6.200", "v0.6.199", at=MORNING)]))["action"] != "ship"
 
 
 HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Release train by hand to validate again"
@@ -399,8 +398,8 @@ HELD = "a full validation already ran in the last 24h (%s, %s): a person runs Re
     "runs, action, mode",
     [
         ([run(D)], "wait", None),  # not on main: no anchor, but its full run is the day's one
-        ([run(C, "v0.5.201", "v0.5.199")], "dispatch", "incremental"),  # an upgrade from another release: an anchor
-        ([run(C, "v0.5.202", "v0.5.201")], "dispatch", "incremental"),  # another version: an anchor
+        ([run(C, "v0.6.201", "v0.6.199")], "dispatch", "incremental"),  # an upgrade from another release: an anchor
+        ([run(C, "v0.6.202", "v0.6.201")], "dispatch", "incremental"),  # another version: an anchor
         ([run(B, conclusion="cancelled")], "wait", None),  # cancelled: no anchor, and the day's full run holds
     ],
     ids=["off-main", "other-previous", "other-version", "older-cancelled"],
@@ -422,7 +421,7 @@ def test_a_red_or_cancelled_head_waits_for_a_push_is_reported_and_a_manual_run_v
     waiting = plan(FakeGitHub([run(C, conclusion=conclusion, id=4)]))
     assert waiting["action"] == "wait"
     assert rt.problems(waiting) == [
-        "Candidate v0.5.201 at %s ended %s: https://github.example/run/4" % (C[:12], conclusion)
+        "Candidate v0.6.201 at %s ended %s: https://github.example/run/4" % (C[:12], conclusion)
     ]
     forced = plan(FakeGitHub([run(C, conclusion=conclusion, id=4)]), manual=True)
     assert forced["action"] == "dispatch" and rt.problems(forced) == []
@@ -441,9 +440,9 @@ def test_a_red_head_waits_for_a_push_and_a_red_older_commit_holds_the_day_until_
 
 
 def test_a_finished_red_candidate_of_the_next_release_is_reported():
-    finished = {"conclusion": "failure", "title": rt.title(B, "v0.5.201", "v0.5.200"), "url": "red-url"}
+    finished = {"conclusion": "failure", "title": rt.title(B, "v0.6.201", "v0.6.200"), "url": "red-url"}
     assert plan(FakeGitHub([run(B, conclusion="failure")]), finished=finished)["red"]["sha"] == B
-    stale = dict(finished, title=rt.title(B, "v0.5.200", "v0.5.199"))
+    stale = dict(finished, title=rt.title(B, "v0.6.200", "v0.6.199"))
     assert plan(FakeGitHub(), finished=stale)["red"] is None
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="cancelled"))["red"]["conclusion"] == "cancelled"
     assert plan(FakeGitHub(), finished=dict(finished, conclusion="success"))["red"] is None
@@ -461,7 +460,7 @@ def test_a_run_the_ceiling_stopped_holds_the_train_and_is_never_a_failure():
         assert held["action"] == "wait" and held["why"].endswith(CEILING_HOLD)
         assert (held["red"], held["held"], rt.problems(held)) == (None, None, [])
     # Its failed finish, handed to the train job by the workflow_run event, is no red candidate either.
-    finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200"), "url": stopped["html_url"]}
+    finished = {"conclusion": "failure", "title": rt.title(C, "v0.6.201", "v0.6.200"), "url": stopped["html_url"]}
     assert plan(gh, finished=finished)["red"] is None
 
 
@@ -472,7 +471,7 @@ def test_a_real_red_on_main_is_still_reported_beside_the_ceiling_hold():
     gh.ceiling_ids = {9}
     red = plan(gh)
     assert red["action"] == "wait" and red["why"].endswith(CEILING_HOLD)
-    assert rt.problems(red) == ["Candidate v0.5.201 at %s ended failure: https://github.example/run/4" % C[:12]]
+    assert rt.problems(red) == ["Candidate v0.6.201 at %s ended failure: https://github.example/run/4" % C[:12]]
 
 
 def test_only_a_run_the_ceiling_stopped_on_this_utc_day_is_a_stop():
@@ -485,7 +484,7 @@ def test_only_a_run_the_ceiling_stopped_on_this_utc_day_is_a_stop():
 def test_the_ceiling_never_reads_an_incremental_runs_jobs():
     # ci.yml's ceiling counts and stops full validations only; reading each red incremental's jobs cost the train about
     # 30 seconds a step.
-    incremental = dict(run(C, conclusion="failure", id=9), display_title=rt.title(C, "v0.5.201", "v0.5.200", B))
+    incremental = dict(run(C, conclusion="failure", id=9), display_title=rt.title(C, "v0.6.201", "v0.6.200", B))
     gh = FakeGitHub([incremental])
     read = []
     gh.ceiling_stopped = lambda item: read.append(item["id"]) or True
@@ -528,9 +527,9 @@ PLAN_TEXT = '{"jobs":[{"name":"python-1","part":"python","files":["backend/tests
 
 
 def out(sha, **fields):
-    """A validation of the release that is out (v0.5.200, from v0.5.199). A green validation of the next release ships
+    """A validation of the release that is out (v0.6.200, from v0.6.199). A green validation of the next release ships
     at once, so the green anchors the next candidates build on are the release's that went out before them."""
-    return run(sha, "v0.5.200", "v0.5.199", **fields)
+    return run(sha, "v0.6.200", "v0.6.199", **fields)
 
 
 def red_then_anchor(anchor_at=MORNING - timedelta(hours=1), red_at=NOW - timedelta(hours=1)):
@@ -548,7 +547,7 @@ def test_a_red_validation_reruns_incrementally_once_a_commit_selects_what_failed
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", C)
-    assert picked["carried"] == ["backend/tests/test_b.py"] and picked["anchor_previous"] == "v0.5.200"
+    assert picked["carried"] == ["backend/tests/test_b.py"] and picked["anchor_previous"] == "v0.6.200"
     assert "carries backend/tests/test_b.py" in picked["why"] and "incrementally on %s" % C[:12] in picked["why"]
     assert ("tokens_since", C, D) in checkout.calls and ("plan", C, D, {"backend/tests/test_b.py"}) in checkout.calls
 
@@ -622,7 +621,7 @@ def spot_red(attempt=1):
     """C (main's head) validated incrementally on B, red at the given attempt because AWS took its product VM."""
     gh = FakeGitHub([dict(run(C, conclusion="failure", id=7, anchor=B), run_attempt=attempt), out(B, id=2, at=MORNING)])
     gh.failed, gh.infra = {7: {"product"}}, {7: SPOT_CAUSES}
-    finished = {"conclusion": "failure", "title": rt.title(C, "v0.5.201", "v0.5.200", B), "url": run_url(7)}
+    finished = {"conclusion": "failure", "title": rt.title(C, "v0.6.201", "v0.6.200", B), "url": run_url(7)}
     return gh, finished
 
 
@@ -637,7 +636,7 @@ def test_a_red_only_its_infrastructure_failed_runs_its_failed_jobs_again_once_wh
     assert picked["action"] == "rerun" and picked["rerun"]["id"] == 7
     assert "failed on its infrastructure" in picked["why"]
     assert rt.problems(picked)[1] == (
-        'Infrastructure rerun: %s (v0.5.201) failed on product: Spot interrupted ("%s"); its failed jobs run again once'
+        'Infrastructure rerun: %s (v0.6.201) failed on product: Spot interrupted ("%s"); its failed jobs run again once'
         % (run_url(7), SPOT)
     )
     # Its second attempt is not run again, whatever stopped it: the red waits as any red does.
@@ -667,7 +666,7 @@ def test_the_train_job_runs_the_failed_jobs_again_and_records_the_case_on_the_is
     assert rt.cmd_step(gh, handed, NOW) == 1
     assert gh.reran == [7] and gh.dispatched == [] and gh.tagged == []
     body = gh.created[0]["body"]
-    assert "Candidate v0.5.201 at %s ended failure" % C[:12] in body and "Infrastructure rerun: %s" % run_url(7) in body
+    assert "Candidate v0.6.201 at %s ended failure" % C[:12] in body and "Infrastructure rerun: %s" % run_url(7) in body
 
 
 def test_infrastructure_is_read_from_the_annotations_of_the_parts_that_failed(monkeypatch):
@@ -793,44 +792,44 @@ def test_a_second_full_is_never_planned_while_an_anchor_under_a_day_old_exists(r
 
 def test_an_incremental_validation_names_its_anchor_and_plan_and_a_full_one_names_neither():
     gh = FakeGitHub()
-    rt.dispatch_candidate(gh, C, "v0.5.201", "v0.5.200", timeout=0)
+    rt.dispatch_candidate(gh, C, "v0.6.201", "v0.6.200", timeout=0)
     rt.dispatch_candidate(
         gh,
         C,
-        "v0.5.201",
-        "v0.5.200",
+        "v0.6.201",
+        "v0.6.200",
         timeout=0,
         anchor=B,
         carried={"backend/tests/test_b.py"},
-        anchor_previous="v0.5.199",
+        anchor_previous="v0.6.199",
     )
-    assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"}
+    assert gh.dispatched[0][2] == {"candidate_sha": C, "previous_release": "v0.6.200", "version": "v0.6.201"}
     assert gh.dispatched[1][2] == {
         "candidate_sha": C,
-        "previous_release": "v0.5.200",
-        "version": "v0.5.201",
+        "previous_release": "v0.6.200",
+        "version": "v0.6.201",
         "anchor": B,
         "carried": '["backend/tests/test_b.py"]',
-        "anchor_previous": "v0.5.199",
+        "anchor_previous": "v0.6.199",
     }
     assert any("(incremental on %s)" % B in line for line in rt.LOG)
 
 
 def test_an_incremental_title_keeps_the_prefix_release_yml_finds_and_names_its_anchor():
-    text = rt.title(C, "v0.5.201", "v0.5.200", anchor=B)
-    assert text == "Validate %s as v0.5.201 from v0.5.200 (incremental on %s)" % (C, B)
-    assert text.startswith("Validate %s as v0.5.201 from " % C)
-    assert rt.parse_title(text) == (C, "v0.5.201", "v0.5.200")
+    text = rt.title(C, "v0.6.201", "v0.6.200", anchor=B)
+    assert text == "Validate %s as v0.6.201 from v0.6.200 (incremental on %s)" % (C, B)
+    assert text.startswith("Validate %s as v0.6.201 from " % C)
+    assert rt.parse_title(text) == (C, "v0.6.201", "v0.6.200")
     assert rt.parse_anchor(text) == B
-    assert rt.parse_anchor(rt.title(C, "v0.5.201", "v0.5.200")) is None
+    assert rt.parse_anchor(rt.title(C, "v0.6.201", "v0.6.200")) is None
 
 
 def test_validation_records_say_which_runs_are_incremental_and_only_full_green_ones_anchor():
     full = rt.validation_record(run(B, id=2))
-    incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B)))
+    incremental = rt.validation_record(dict(run(C, id=3), display_title=rt.title(C, "v0.6.201", "v0.6.200", anchor=B)))
     assert (full["incremental"], full["sha"], full["id"]) == (False, B, 2)
     assert (incremental["incremental"], incremental["sha"], incremental["id"]) == (True, C, 3)
-    assert full["previous"] == incremental["previous"] == "v0.5.200"
+    assert full["previous"] == incremental["previous"] == "v0.6.200"
 
 
 def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_waited_for():
@@ -838,8 +837,8 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
     # within the day, so it is the anchor. C is an earlier release's green incremental run after B: it supersedes B's
     # red, so nothing is carried and nothing waits.
     earlier = dict(
-        run(C, version="v0.5.200", previous="v0.5.199", id=3, at=MORNING - timedelta(minutes=30)),
-        display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=A),
+        run(C, version="v0.6.200", previous="v0.6.199", id=3, at=MORNING - timedelta(minutes=30)),
+        display_title=rt.title(C, "v0.6.200", "v0.6.199", anchor=A),
     )
     gh = FakeGitHub(
         [
@@ -859,13 +858,13 @@ def test_a_red_superseded_by_a_later_green_validation_is_neither_carried_nor_wai
 
 
 def test_an_anchor_of_an_earlier_release_runs_the_product_part_when_the_previous_release_moved():
-    # The newest tag is v0.5.200; the anchor validated v0.5.200 from v0.5.199, a green full run two hours ago.
-    gh = FakeGitHub([run(B, version="v0.5.200", previous="v0.5.199", id=2, at=NOW - timedelta(hours=2))])
+    # The newest tag is v0.6.200; the anchor validated v0.6.200 from v0.6.199, a green full run two hours ago.
+    gh = FakeGitHub([run(B, version="v0.6.200", previous="v0.6.199", id=2, at=NOW - timedelta(hours=2))])
     checkout = FakeCheckout(plan=PLAN_TEXT)
     picked = rt.plan_step(gh, NOW, checkout=checkout)
     assert (picked["action"], picked["mode"], picked["anchor"]) == ("dispatch", "incremental", B)
     assert checkout.previous_changed is True
-    assert "the product part runs: the previous release is v0.5.200, the anchor's was v0.5.199" in picked["why"]
+    assert "the product part runs: the previous release is v0.6.200, the anchor's was v0.6.199" in picked["why"]
     # The same previous release (a red full run of the next release that names its failure): not forced.
     gh = FakeGitHub([run(B, id=2, conclusion="failure", at=MORNING - timedelta(hours=1))])
     gh.failed = {2: {"backend/tests/test_b.py"}}
@@ -901,7 +900,7 @@ def test_guard_runs_the_train_job_only_when_it_has_work(tmp_path, monkeypatch):
         "GITHUB_EVENT_NAME": "workflow_run",
         "RUN_EVENT": "workflow_dispatch",
         "RUN_CONCLUSION": "failure",
-        "RUN_TITLE": rt.title(C, "v0.5.201", "v0.5.200"),
+        "RUN_TITLE": rt.title(C, "v0.6.201", "v0.6.200"),
         "RUN_URL": "u",
     }
     assert guard(FakeGitHub([run(C, conclusion="failure")]), dict(on, **red), tmp_path, monkeypatch)["go"] == "true"
@@ -920,19 +919,19 @@ def test_the_backstop_runs_the_job_for_an_approved_release_that_stable_does_not_
 
     assert guard(idle(), backstop, tmp_path, monkeypatch) == {"go": "false"}, "no approval record"
     labelled = idle()
-    approval_for(labelled, "v0.5.200", approved_by="mallory")  # approved by someone without write access
+    approval_for(labelled, "v0.6.200", approved_by="mallory")  # approved by someone without write access
     assert guard(labelled, backstop, tmp_path, monkeypatch) == {"go": "false"}
     approved = idle()
-    approval_for(approved, "v0.5.200", approved_by="chris")
+    approval_for(approved, "v0.6.200", approved_by="chris")
     assert guard(approved, backstop, tmp_path, monkeypatch) == {"go": "true"}
     held = idle()
-    approval_for(held, "v0.5.200", approved_by="chris", held=True)
+    approval_for(held, "v0.6.200", approved_by="chris", held=True)
     assert guard(held, backstop, tmp_path, monkeypatch) == {"go": "false"}
     # With RELEASE_NEEDS_PERSON off (or unset), a release with no High risk item is approved automatically.
     auto = {key: value for key, value in backstop.items() if key != "RELEASE_NEEDS_PERSON"}
     assert guard(labelled, auto, tmp_path, monkeypatch) == {"go": "true"}
     risky = idle()
-    approval_for(risky, "v0.5.200", body=HIGH_RISK_NOTES)
+    approval_for(risky, "v0.6.200", body=HIGH_RISK_NOTES)
     assert guard(risky, auto, tmp_path, monkeypatch) == {"go": "false"}
     # While RELEASE_HOLD or a release-blocker holds stable, an approved release does not run the job every 20 minutes.
     assert guard(labelled, dict(auto, RELEASE_HOLD="billing fix first"), tmp_path, monkeypatch) == {"go": "false"}
@@ -965,7 +964,7 @@ def test_a_validation_ci_hands_over_counts_as_a_finished_run_not_a_manual_one(tm
     gh = FakeGitHub([run(C, conclusion="failure")])
     assert rt.event_run(on, gh) == {
         "conclusion": "failure",
-        "title": rt.title(C, "v0.5.201", "v0.5.200"),
+        "title": rt.title(C, "v0.6.201", "v0.6.200"),
         "url": "https://github.example/run/1",
     }
     assert rt.plan_step(gh, NOW, rt.event_run(on, gh))["red"]["sha"] == C
@@ -992,15 +991,15 @@ def installs(monkeypatch):
     state = {
         "canary": {
             "state": "healthy",
-            "running": "0.5.200",
-            "to": "0.5.200",
-            "history": [{"version": "0.5.200", "since": (NOW - timedelta(hours=5)).isoformat()}],
+            "running": "0.6.200",
+            "to": "0.6.200",
+            "history": [{"version": "0.6.200", "since": (NOW - timedelta(hours=5)).isoformat()}],
         },
         "stable": {
             "state": "healthy",
-            "running": "0.5.199",
-            "to": "0.5.199",
-            "history": [{"version": "0.5.199", "since": (NOW - timedelta(days=1)).isoformat()}],
+            "running": "0.6.199",
+            "to": "0.6.199",
+            "history": [{"version": "0.6.199", "since": (NOW - timedelta(days=1)).isoformat()}],
         },
         "updated": [],
         "paths": [],
@@ -1036,26 +1035,36 @@ def installs(monkeypatch):
 
 
 def test_updates_use_only_the_update_key_routes(installs):
-    rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
-    assert installs["updated"] == [("canary", "0.5.201")]
+    rt.update_install(rt.install("CANARY", ENV), "v0.6.201")
+    assert installs["updated"] == [("canary", "0.6.201")]
     assert {path for _, _, path, _ in installs["paths"]} <= {rt.UPDATE_PATH, rt.UPDATE_PATH + "/check"}
     assert all(key for *_, key in installs["paths"])
+
+
+def test_the_train_never_updates_from_or_to_a_release_before_v0_6_0(installs):
+    for version in ("v0.5.216", "v0.6.0-rc.1", "main"):
+        with pytest.raises(rt.Fail, match="not updated to"):
+            rt.update_install(rt.install("CANARY", ENV), version)
+    installs["stable"]["running"] = "0.5.216"
+    with pytest.raises(rt.Fail, match="older than v0.6.0"):
+        rt.update_install(rt.install("STABLE", ENV), "v0.6.201")
+    assert installs["updated"] == []
 
 
 def test_a_rolled_back_or_unreadable_update_fails(installs):
     installs["outcome"] = "rolled_back"
     with pytest.raises(rt.Fail, match="rolled_back"):
-        rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
+        rt.update_install(rt.install("CANARY", ENV), "v0.6.201")
     installs["down"].add("stable")
     with pytest.raises(rt.Fail, match="cannot be read"):
-        rt.update_install(rt.install("STABLE", ENV), "v0.5.201")
+        rt.update_install(rt.install("STABLE", ENV), "v0.6.201")
 
 
 def test_a_status_read_that_goes_unanswered_is_read_again_before_the_step_fails(installs, monkeypatch):
     # Nov 18: single reads of stable went unanswered about one train step in two while it was up; each failed the step.
     stable = rt.install("STABLE", ENV)
     installs["misses"]["stable"] = rt.READ_TRIES - 1
-    assert rt.running(stable) == "0.5.199"
+    assert rt.running(stable) == "0.6.199"
     installs["misses"]["stable"] = rt.READ_TRIES
     with pytest.raises(rt.Fail, match=r"stable: its update status cannot be read \(.*HTTP 502, 3 tries\)"):
         rt.running(stable)
@@ -1063,7 +1072,7 @@ def test_a_status_read_that_goes_unanswered_is_read_again_before_the_step_fails(
     with pytest.raises(rt.Fail, match="no answer"):
         rt.running(stable)
     # Promotion holds, naming why, rather than reading stable once.
-    installs["canary"].update(running="0.5.200")
+    installs["canary"].update(running="0.6.200")
     with pytest.raises(rt.Fail, match="promote: holding, stable: its update status cannot be read"):
         rt.promote(FakeGitHub([]), ENV)
 
@@ -1072,8 +1081,8 @@ def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
     polls = []
     answers = iter(
         [
-            {"state": "healthy", "running": "0.5.200", "to": "0.5.200", "message": ""},
-            {"state": "failed", "running": "0.5.200", "to": "0.5.201", "message": "pull: manifest unknown"},
+            {"state": "healthy", "running": "0.6.200", "to": "0.6.200", "message": ""},
+            {"state": "failed", "running": "0.6.200", "to": "0.6.201", "message": "pull: manifest unknown"},
         ]
     )
 
@@ -1085,20 +1094,20 @@ def test_a_near_instant_failure_is_judged_at_once(monkeypatch):
 
     monkeypatch.setattr(rt.rollout, "call", call)
     with pytest.raises(rt.Fail, match="manifest unknown"):
-        rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
+        rt.update_install(rt.install("CANARY", ENV), "v0.6.201")
     assert len(polls) == 2  # the snapshot, then the first poll
 
 
 def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
     """A rollback to the same version left from before this request, still shown until the updater picks it up."""
-    stale = {"state": "rolled_back", "running": "0.5.200", "to": "0.5.201", "message": "earlier"}
+    stale = {"state": "rolled_back", "running": "0.6.200", "to": "0.6.201", "message": "earlier"}
     answers = iter(
         [
             stale,
             stale,
-            {"state": "pulling", "running": "0.5.200", "to": "0.5.201"},
+            {"state": "pulling", "running": "0.6.200", "to": "0.6.201"},
             None,
-            {"state": "healthy", "running": "0.5.201", "to": "0.5.201"},
+            {"state": "healthy", "running": "0.6.201", "to": "0.6.201"},
         ]
     )
 
@@ -1109,12 +1118,12 @@ def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
         return (200, answer) if answer else (502, {})
 
     monkeypatch.setattr(rt.rollout, "call", call)
-    rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
+    rt.update_install(rt.install("CANARY", ENV), "v0.6.201")
     assert any("healthy" in line for line in rt.LOG)
     # Once this update is seen under way, a rollback fails it.
-    answers = iter([stale, {"state": "restarting", "running": "0.5.200", "to": "0.5.201"}, stale])
+    answers = iter([stale, {"state": "restarting", "running": "0.6.200", "to": "0.6.201"}, stale])
     with pytest.raises(rt.Fail, match="rolled_back"):
-        rt.update_install(rt.install("CANARY", ENV), "v0.5.201")
+        rt.update_install(rt.install("CANARY", ENV), "v0.6.201")
 
 
 # ---- the promotion gate ----
@@ -1122,8 +1131,8 @@ def test_an_earlier_updates_outcome_is_not_judged(monkeypatch):
 
 def gate(**overrides):
     args = dict(
-        version="0.5.201",
-        canary_status={"state": "healthy", "running": "0.5.201", "history": []},
+        version="0.6.201",
+        canary_status={"state": "healthy", "running": "0.6.201", "history": []},
         approval_waits=[],
         hold="",
         blockers=[],
@@ -1136,9 +1145,9 @@ def gate(**overrides):
     "status, why",
     [
         (None, "cannot be read"),
-        ({"state": "rolled_back", "running": "0.5.201", "message": "health check"}, "rolled_back"),
-        ({"state": "", "running": "0.5.201"}, "unknown"),
-        ({"state": "healthy", "running": "0.5.200"}, "runs 0.5.200"),
+        ({"state": "rolled_back", "running": "0.6.201", "message": "health check"}, "rolled_back"),
+        ({"state": "", "running": "0.6.201"}, "unknown"),
+        ({"state": "healthy", "running": "0.6.200"}, "runs 0.6.200"),
     ],
 )
 def test_promotion_gate_faults_on_what_it_cannot_tell(status, why):
@@ -1153,10 +1162,10 @@ def test_promotion_gate_faults_on_what_it_cannot_tell(status, why):
     "setup, why",
     [
         (lambda gh: None, "no open approval"),
-        (lambda gh: approval_for(gh, "v0.5.200"), "not approved yet"),
-        (lambda gh: approval_for(gh, "v0.5.200", approved_by="mallory"), "not approved yet"),
-        (lambda gh: approval_for(gh, "v0.5.200", comment_by="mallory"), "not approved yet"),
-        (lambda gh: approval_for(gh, "v0.5.200", approved_by="chris", held=True), "on hold"),
+        (lambda gh: approval_for(gh, "v0.6.200"), "not approved yet"),
+        (lambda gh: approval_for(gh, "v0.6.200", approved_by="mallory"), "not approved yet"),
+        (lambda gh: approval_for(gh, "v0.6.200", comment_by="mallory"), "not approved yet"),
+        (lambda gh: approval_for(gh, "v0.6.200", approved_by="chris", held=True), "on hold"),
     ],
     ids=["no-record", "unapproved", "label-by-non-writer", "comment-by-non-writer", "held"],
 )
@@ -1169,9 +1178,9 @@ def test_promote_waits_unless_someone_with_write_access_approved_and_nothing_hol
 
 def test_promote_updates_stable_to_the_approved_canary_release_and_closes_its_approval(installs):
     gh = FakeGitHub()
-    record = approval_for(gh, "v0.5.200", approved_by="chris")
+    record = approval_for(gh, "v0.6.200", approved_by="chris")
     rt.promote(gh, ENV)
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
     assert record["state"] == "closed" and record["number"] in gh.closed
     assert any("approved by @chris" in line for line in rt.LOG)
     assert record["body"].startswith("Promoted to stable (TIDY), approved by @\u2060chris.\n\n")
@@ -1180,9 +1189,9 @@ def test_promote_updates_stable_to_the_approved_canary_release_and_closes_its_ap
 
 def test_a_comment_approve_by_someone_with_write_access_counts(installs):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", comment_by="chris")
+    approval_for(gh, "v0.6.200", comment_by="chris")
     rt.promote(gh, ENV)
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
 
 
 @pytest.mark.parametrize(
@@ -1195,9 +1204,9 @@ def test_a_bot_or_app_with_write_access_never_approves(installs, login, account_
     gh = FakeGitHub()
     gh.writers.add(login)  # write access does not make an account a person
     if how == "label":
-        approval_for(gh, "v0.5.200", approved_by=login, account_type=account_type)
+        approval_for(gh, "v0.6.200", approved_by=login, account_type=account_type)
     else:
-        approval_for(gh, "v0.5.200", comment_by=login, account_type=account_type)
+        approval_for(gh, "v0.6.200", comment_by=login, account_type=account_type)
     rt.promote(gh, ENV)
     assert installs["updated"] == [] and any("not approved yet" in line for line in rt.LOG)
 
@@ -1205,15 +1214,15 @@ def test_a_bot_or_app_with_write_access_never_approves(installs, login, account_
 def test_a_bots_newer_approve_comment_does_not_hide_a_persons_earlier_one(installs):
     gh = FakeGitHub()
     gh.writers.add("release-app")
-    record = approval_for(gh, "v0.5.200", comment_by="chris")
+    record = approval_for(gh, "v0.6.200", comment_by="chris")
     gh.user_comments[record["number"]].append({"body": "/approve", "user": {"login": "release-app", "type": "Bot"}})
     rt.promote(gh, ENV)
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
 
 
 def test_promote_holds_on_release_hold_blockers_and_faults_on_unknowns(installs):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
+    approval_for(gh, "v0.6.200", approved_by="chris")
     rt.promote(gh, dict(ENV, RELEASE_HOLD="yes"))
     assert installs["updated"] == []
     gh.blockers = [{"number": 7, "title": "Tasks vanish"}]
@@ -1232,8 +1241,8 @@ def test_promote_holds_on_release_hold_blockers_and_faults_on_unknowns(installs)
 
 def test_promote_never_moves_stable_backwards(installs):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.198", approved_by="chris")
-    installs["canary"]["running"] = "0.5.198"
+    approval_for(gh, "v0.6.198", approved_by="chris")
+    installs["canary"]["running"] = "0.6.198"
     rt.promote(gh, ENV)
     assert installs["updated"] == []
 
@@ -1247,15 +1256,15 @@ def test_promote_skips_without_keys(installs):
 
 
 def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagged(monkeypatch):
-    monkeypatch.setattr(rt, "LINE", (0, 6))
-    gh = FakeGitHub([run(C)])  # a green v0.5.201 candidate of main: it never ships
+    monkeypatch.setattr(rt, "LINE", (0, 7))
+    gh = FakeGitHub([run(C)])  # a green v0.6.201 candidate of main: it never ships
     held = plan(gh)
-    assert held["action"] == "wait" and "tag v0.6.0 by hand" in held["held"]
+    assert held["action"] == "wait" and "tag v0.7.0 by hand" in held["held"]
     assert rt.problems(held) == [held["held"]]  # reported once on the release-train issue
-    gh.tags_["v0.6.0"] = B
-    gh.releases["v0.6.0"] = released("v0.6.0")
+    gh.tags_["v0.7.0"] = B
+    gh.releases["v0.7.0"] = released("v0.7.0")
     resumed = plan(gh)
-    assert resumed["version"] == "v0.6.1" and resumed["action"] == "dispatch"
+    assert resumed["version"] == "v0.7.1" and resumed["action"] == "dispatch"
 
 
 # ---- approved automatically: no person needed (RELEASE_NEEDS_PERSON off, no High risk item) ----
@@ -1263,9 +1272,9 @@ def test_a_new_line_is_never_cut_as_a_patch_of_the_old_one_and_resumes_once_tagg
 
 def test_a_release_with_no_high_risk_item_is_approved_automatically_and_its_issue_says_so(installs):
     gh = FakeGitHub()
-    record = approval_for(gh, "v0.5.200")  # nobody approved it
+    record = approval_for(gh, "v0.6.200")  # nobody approved it
     rt.promote(gh, AUTO)
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
     assert record["state"] == "closed"
     assert record["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % rt.AUTO_APPROVED)
     assert gh.comments == []
@@ -1283,7 +1292,7 @@ def test_a_release_with_no_high_risk_item_is_approved_automatically_and_its_issu
 )
 def test_a_high_risk_release_or_needs_person_on_still_waits_for_a_person(installs, body, env, why):
     gh = FakeGitHub()
-    record = approval_for(gh, "v0.5.200", body=body)
+    record = approval_for(gh, "v0.6.200", body=body)
     rt.promote(gh, env)
     assert installs["updated"] == [] and record["state"] == "open"
     assert any("not approved yet (a person must approve: %s" % why in line for line in rt.LOG)
@@ -1293,7 +1302,7 @@ def test_a_high_risk_release_or_needs_person_on_still_waits_for_a_person(install
     ]
     record["labels"].append({"name": rt.APPROVED})
     rt.promote(gh, env)
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
     assert record["body"].startswith("Promoted to stable (TIDY), approved by @\u2060chris.\n\n")
     assert gh.comments == []
 
@@ -1301,13 +1310,13 @@ def test_a_high_risk_release_or_needs_person_on_still_waits_for_a_person(install
 @pytest.mark.parametrize("state, how", [("closed", "approved_by"), ("open", "comment_by")])
 def test_prior_human_approval_covers_the_same_high_risk_pr(installs, state, how):
     gh = FakeGitHub()
-    older = approval_for(gh, "v0.5.199", body=HIGH_RISK_NOTES, **{how: "chris"})
+    older = approval_for(gh, "v0.6.199", body=HIGH_RISK_NOTES, **{how: "chris"})
     older["state"] = state
-    current = approval_for(gh, "v0.5.200", body=HIGH_RISK_NOTES)
-    assert rt.pending_approval(gh, AUTO) == ("v0.5.200" if state == "closed" else "v0.5.199")
+    current = approval_for(gh, "v0.6.200", body=HIGH_RISK_NOTES)
+    assert rt.pending_approval(gh, AUTO) == ("v0.6.200" if state == "closed" else "v0.6.199")
     rt.promote(gh, AUTO)
     reason = "approved earlier in #%d" % older["number"]
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert installs["updated"] == [("stable", "0.6.200")]
     assert current["state"] == "closed" and current["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % reason)
     assert any(reason in line for line in rt.LOG)
     assert gh.comments == []
@@ -1324,9 +1333,9 @@ def test_prior_human_approval_covers_the_same_high_risk_pr(installs, state, how)
 )
 def test_prior_human_approval_does_not_cover_unreviewed_risk_or_override_gates(installs, body, env):
     gh = FakeGitHub()
-    older = approval_for(gh, "v0.5.199", body=HIGH_RISK_NOTES, approved_by="chris")
+    older = approval_for(gh, "v0.6.199", body=HIGH_RISK_NOTES, approved_by="chris")
     older["state"] = "closed"
-    current = approval_for(gh, "v0.5.200", body=body)
+    current = approval_for(gh, "v0.6.200", body=body)
     assert rt.pending_approval(gh, env) is None
     rt.promote(gh, env)
     assert installs["updated"] == [] and current["state"] == "open"
@@ -1336,7 +1345,7 @@ def test_prior_human_approval_does_not_cover_unreviewed_risk_or_override_gates(i
 def test_earlier_approval_reads_closed_records_beyond_the_first_page(monkeypatch):
     gh = rt.GitHub("o/r", "token")
     previous_page = "https://github.example/second-page"
-    old = {"title": rt.approval_title("v0.5.198"), "body": HIGH_RISK_NOTES, "number": 8, "state": "closed"}
+    old = {"title": rt.approval_title("v0.6.198"), "body": HIGH_RISK_NOTES, "number": 8, "state": "closed"}
     ignored = dict(old, number=9, pull_request={})
 
     def call(method, path):
@@ -1351,7 +1360,7 @@ def test_earlier_approval_reads_closed_records_beyond_the_first_page(monkeypatch
         return 200, {"permission": "write"}, ""
 
     monkeypatch.setattr(gh, "call", call)
-    assert rt.earlier_approval(gh, "v0.5.200", {9}) == 8
+    assert rt.earlier_approval(gh, "v0.6.200", {9}) == 8
 
 
 def test_approval_history_never_fetches_a_fourth_page(monkeypatch):
@@ -1373,7 +1382,7 @@ def test_approval_history_never_fetches_a_fourth_page(monkeypatch):
 
 def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approval(installs):
     gh = FakeGitHub()
-    record = approval_for(gh, "v0.5.200", held=True)
+    record = approval_for(gh, "v0.6.200", held=True)
     rt.promote(gh, AUTO)
     assert installs["updated"] == [] and any("on hold" in line for line in rt.LOG)
     record["labels"] = [{"name": rt.APPROVAL_LABEL}]
@@ -1389,14 +1398,14 @@ def test_the_hold_label_release_hold_and_blockers_still_stop_an_automatic_approv
 
 
 def test_with_no_person_needed_releases_flow_canary_then_stable_with_no_one_in_the_loop(installs):
-    # v0.5.200 is on the canary and nobody approved it; C is green as v0.5.201.
+    # v0.6.200 is on the canary and nobody approved it; C is green as v0.6.201.
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200")
+    older = approval_for(gh, "v0.6.200")
     assert rt.cmd_step(gh, dict(AUTO, GITHUB_EVENT_NAME="push"), NOW) == 0
-    # Continuous: the same step takes v0.5.201 to stable as soon as the canary runs it healthy, not at the next event.
-    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201"), ("stable", "0.5.201")]
+    # Continuous: the same step takes v0.6.201 to stable as soon as the canary runs it healthy, not at the next event.
+    assert installs["updated"] == [("stable", "0.6.200"), ("canary", "0.6.201"), ("stable", "0.6.201")]
     assert older["state"] == "closed"
-    newer = approval_of(gh, "v0.5.201")
+    newer = approval_of(gh, "v0.6.201")
     assert newer["state"] == "closed" and "approved automatically" in newer["body"]
     assert newer["body"].startswith("Promoted to stable (TIDY), %s.\n\n" % rt.AUTO_APPROVED)
     assert gh.comments == []
@@ -1406,7 +1415,7 @@ def test_a_canary_that_rolls_back_never_reaches_stable_in_the_same_step(installs
     gh = publishes(FakeGitHub([run(C)]))
     installs["outcome"] = "rolled_back"
     assert rt.cmd_step(gh, dict(AUTO, GITHUB_EVENT_NAME="push"), NOW) == 1
-    assert ("stable", "0.5.201") not in installs["updated"]
+    assert ("stable", "0.6.201") not in installs["updated"]
 
 
 # ---- the train job ----
@@ -1415,14 +1424,14 @@ def test_a_canary_that_rolls_back_never_reaches_stable_in_the_same_step(installs
 def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(installs, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200", approved_by="chris")
+    older = approval_for(gh, "v0.6.200", approved_by="chris")
     gh.add_issue("Release train failing", labels=[rt.ISSUE_LABEL], number=7)
     assert rt.cmd_step(gh, ENV, NOW) == 0
-    assert installs["updated"] == [("stable", "0.5.200"), ("canary", "0.5.201")]
-    assert gh.tagged == [("v0.5.201", C)]
-    assert gh.dispatched == [("release.yml", "v0.5.201", {"desktop": "false", "latest": "false"})]
+    assert installs["updated"] == [("stable", "0.6.200"), ("canary", "0.6.201")]
+    assert gh.tagged == [("v0.6.201", C)]
+    assert gh.dispatched == [("release.yml", "v0.6.201", {"desktop": "false", "latest": "false"})]
     # Latest only once the canary is healthy: the GitHub release and each image's latest tag.
-    assert gh.latest == ["v0.5.201"]
+    assert gh.latest == ["v0.6.201"]
     assert COMMANDS == [
         [
             "docker",
@@ -1431,29 +1440,29 @@ def test_a_step_promotes_then_ships_the_green_candidate_and_closes_the_issues(in
             "create",
             "-t",
             "ghcr.io/ticoteam/%s:latest" % image,
-            "ghcr.io/ticoteam/%s:v0.5.201" % image,
+            "ghcr.io/ticoteam/%s:v0.6.201" % image,
         ]
         for image in rt.IMAGES
     ]
     # The promoted release's approval closes, the train's failure issue closes, and the new release awaits approval.
     assert gh.closed == [older["number"], 7]
-    assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
+    assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.6.201")]
     # Published, and main has nothing newer: the next event does nothing.
     assert rt.plan_step(gh, NOW + timedelta(minutes=5))["action"] == "none"
 
 
 def test_a_shipped_candidate_behind_main_has_main_validated_in_the_same_step(installs, tmp_path, monkeypatch):
-    # B is green as v0.5.201 and main moved on to C: the step ships B, then validates C as v0.5.202 at once. Waiting for
+    # B is green as v0.6.201 and main moved on to C: the step ships B, then validates C as v0.6.202 at once. Waiting for
     # another event could take hours: a quiet main has no pushes, and GitHub drops most backstop schedules.
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     checkout = FakeCheckout(since={"backend/tests/test_b.py"}, plan=PLAN_TEXT)
     monkeypatch.setattr(rt.increment, "Checkout", lambda root: checkout)
     gh = publishes(FakeGitHub([run(B)]))
     assert rt.cmd_step(gh, ENV, NOW) == 0
-    assert gh.tagged == [("v0.5.201", B)] and installs["updated"][-1] == ("canary", "0.5.201")
+    assert gh.tagged == [("v0.6.201", B)] and installs["updated"][-1] == ("canary", "0.6.201")
     (validation,) = [inputs for workflow, _, inputs in gh.dispatched if workflow == "ci.yml"]
-    assert validation["candidate_sha"] == C and validation["version"] == "v0.5.202"
-    assert validation["previous_release"] == "v0.5.201"
+    assert validation["candidate_sha"] == C and validation["version"] == "v0.6.202"
+    assert validation["previous_release"] == "v0.6.201"
 
 
 def test_the_next_validation_starts_once_the_release_is_published_before_the_canary_updates(
@@ -1486,39 +1495,39 @@ def test_the_next_validation_starts_once_the_release_is_published_before_the_can
 def test_without_an_approval_stable_waits_and_the_canary_still_ships(installs):
     gh = publishes(FakeGitHub([run(C)]))
     assert rt.cmd_step(gh, ENV, NOW) == 0
-    assert installs["updated"] == [("canary", "0.5.201")]
+    assert installs["updated"] == [("canary", "0.6.201")]
     assert any("no open approval" in line for line in rt.LOG)
-    assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.5.201")]
+    assert [issue["title"] for issue in open_issues(gh, rt.APPROVAL_LABEL)] == [rt.approval_title("v0.6.201")]
 
 
 @pytest.mark.parametrize("event", ["push", "backstop", "workflow_run"])
 def test_every_step_promotes_an_approved_release_even_with_nothing_to_ship(installs, event):
     gh = FakeGitHub([run(C)], head=A)  # main has not moved: nothing to ship
-    record = approval_for(gh, "v0.5.200", approved_by="chris")
+    record = approval_for(gh, "v0.6.200", approved_by="chris")
     env = dict(ENV, GITHUB_EVENT_NAME="schedule" if event == "backstop" else event, SCHEDULE=rt.BACKSTOP_CRON)
     assert rt.cmd_step(gh, env, NOW) == 0
-    assert installs["updated"] == [("stable", "0.5.200")] and record["state"] == "closed"
+    assert installs["updated"] == [("stable", "0.6.200")] and record["state"] == "closed"
 
 
 @pytest.mark.parametrize("protection", [{"held": True}, {"comment_by": "chris"}], ids=["held", "approved"])
 def test_a_newer_canary_release_keeps_a_protected_records_title_and_closes_it_silently(installs, protection):
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200", **protection)
+    older = approval_for(gh, "v0.6.200", **protection)
     assert rt.cmd_step(gh, dict(ENV, RELEASE_HOLD="billing fix first"), NOW) == 0
-    newer = approval_of(gh, "v0.5.201")
-    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.5.200")
-    assert older["body"].startswith("Superseded by v0.5.201, which is on the canary: %s\n\n" % newer["html_url"])
+    newer = approval_of(gh, "v0.6.201")
+    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.6.200")
+    assert older["body"].startswith("Superseded by v0.6.201, which is on the canary: %s\n\n" % newer["html_url"])
     assert gh.comments == []
     # The new release's notes start at the last stable release (the one stable runs), and the record says how to decide.
-    assert newer["body"].startswith("Candidate v0.5.201 at %s" % C[:12])
-    assert "NOTES v0.5.199..%s" % C in newer["body"] and "/approve" in newer["body"]
+    assert newer["body"].startswith("Candidate v0.6.201 at %s" % C[:12])
+    assert "NOTES v0.6.199..%s" % C in newer["body"] and "/approve" in newer["body"]
 
 
 def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkeypatch):
     gh = publishes(FakeGitHub())
     monkeypatch.setattr(rt.release_notes, "build", lambda api, base, head: HIGH_RISK_NOTES + "\n@octocat\n")
-    for patch, sha, previous in [(201, B, "v0.5.200"), (202, C, "v0.5.201"), (203, D, "v0.5.202")]:
-        version = "v0.5.%d" % patch
+    for patch, sha, previous in [(201, B, "v0.6.200"), (202, C, "v0.6.201"), (203, D, "v0.6.202")]:
+        version = "v0.6.%d" % patch
         if sha not in gh.order:
             gh.order.append(sha)
         gh.head_ = sha
@@ -1535,12 +1544,12 @@ def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkey
         else:
             assert {label["name"] for label in issue["labels"]} == {rt.APPROVAL_LABEL, "release-owner"}
         assert any("Promote: holding %s" % version in line and "not approved yet" in line for line in rt.LOG)
-    assert installs["updated"] == [("canary", "0.5.%d" % patch) for patch in (201, 202, 203)]
+    assert installs["updated"] == [("canary", "0.6.%d" % patch) for patch in (201, 202, 203)]
     assert gh.comments == []
     gh.user_comments[issue["number"]] = [{"body": "/approve", "user": {"login": "chris", "type": "User"}}]
-    assert rt.pending_approval(gh, AUTO) == "v0.5.203"
+    assert rt.pending_approval(gh, AUTO) == "v0.6.203"
     rt.promote(gh, AUTO)
-    assert installs["updated"][-1] == ("stable", "0.5.203")
+    assert installs["updated"][-1] == ("stable", "0.6.203")
     assert issue["state"] == "closed" and gh.comments == []
 
 
@@ -1548,24 +1557,24 @@ def test_waiting_high_risk_candidates_share_one_approval_record(installs, monkey
 def test_a_canary_that_rolls_back_leaves_the_old_canarys_approval_intact(installs, held):
     installs["outcome"] = "rolled_back"
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200", held=held)
+    older = approval_for(gh, "v0.6.200", held=held)
     old_body = older["body"]
     assert rt.cmd_step(gh, ENV, NOW) == 1
-    assert "v0.5.201" in gh.releases and gh.latest == [] and COMMANDS == []
+    assert "v0.6.201" in gh.releases and gh.latest == [] and COMMANDS == []
     assert "rolled_back" in filed(gh)[0]["body"]
-    refused = rt.find_approval(gh, "v0.5.201", state="all")
+    refused = rt.find_approval(gh, "v0.6.201", state="all")
     if held:
         assert refused["state"] == "closed" and refused["body"].startswith("Not on the canary")
     else:
         assert refused is None
     assert older["state"] == "open" and older["body"] == old_body
-    assert rt.find_approval(gh, "v0.5.200") is older
+    assert rt.find_approval(gh, "v0.6.200") is older
     assert gh.comments == []
 
 
 def test_a_hold_added_during_a_failed_rollout_stays_with_the_candidate(installs, monkeypatch):
     gh = publishes(FakeGitHub([run(C)]))
-    older = approval_for(gh, "v0.5.200")
+    older = approval_for(gh, "v0.6.200")
     old_body = older["body"]
 
     def fail(target, version):
@@ -1576,8 +1585,8 @@ def test_a_hold_added_during_a_failed_rollout_stays_with_the_candidate(installs,
 
     monkeypatch.setattr(rt, "update_install", fail)
     assert rt.cmd_step(gh, ENV, NOW) == 1
-    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.5.201")
-    restored = rt.find_approval(gh, "v0.5.200")
+    assert older["state"] == "closed" and older["title"] == rt.approval_title("v0.6.201")
+    restored = rt.find_approval(gh, "v0.6.200")
     assert restored["body"] == old_body and restored["labels"] == [{"name": rt.APPROVAL_LABEL}]
     assert gh.comments == []
 
@@ -1591,12 +1600,12 @@ def test_a_failed_image_move_is_reported_and_the_release_stays_not_latest(instal
 
 def test_latest_never_moves_backwards(installs):
     gh = publishes(FakeGitHub([run(C)]))
-    gh.latest_ = "v0.5.202"  # pushed by a person while the canary was updating
-    assert rt.mark_latest(gh, "v0.5.201") is False and COMMANDS == [] and gh.latest == []
+    gh.latest_ = "v0.6.202"  # pushed by a person while the canary was updating
+    assert rt.mark_latest(gh, "v0.6.201") is False and COMMANDS == [] and gh.latest == []
     assert rt.cmd_step(gh, ENV, NOW) == 0
-    assert ("canary", "0.5.201") in installs["updated"] and gh.latest == [] and COMMANDS == []
-    assert filed(gh)[0]["title"] == "Release v0.5.201 shipped, not marked latest (a newer release is)"
-    assert "v0.5.202, a newer release" in filed(gh)[0]["body"]
+    assert ("canary", "0.6.201") in installs["updated"] and gh.latest == [] and COMMANDS == []
+    assert filed(gh)[0]["title"] == "Release v0.6.201 shipped, not marked latest (a newer release is)"
+    assert "v0.6.202, a newer release" in filed(gh)[0]["body"]
 
 
 def test_the_github_release_is_marked_only_after_every_image_moved(installs, monkeypatch):
@@ -1608,20 +1617,20 @@ def test_the_github_release_is_marked_only_after_every_image_moved(installs, mon
         ),
     )
     with pytest.raises(rt.Fail, match="tico-runner"):
-        rt.mark_latest(publishes(FakeGitHub()), "v0.5.200")
+        rt.mark_latest(publishes(FakeGitHub()), "v0.6.200")
     assert not any("tico-updater" in argv[-1] for argv in COMMANDS)
 
 
 def lagging():
-    """v0.5.201 was published and the canary updated, but marking it latest did not finish."""
-    gh = FakeGitHub([run(C)], tags={"v0.5.200": A, "v0.5.201": C}, head=C)
-    gh.releases["v0.5.201"] = released("v0.5.201")
+    """v0.6.201 was published and the canary updated, but marking it latest did not finish."""
+    gh = FakeGitHub([run(C)], tags={"v0.6.200": A, "v0.6.201": C}, head=C)
+    gh.releases["v0.6.201"] = released("v0.6.201")
     return gh
 
 
 def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, tmp_path, monkeypatch):
     gh = lagging()
-    assert rt.lagging_latest(gh) == "v0.5.201"
+    assert rt.lagging_latest(gh) == "v0.6.201"
     # The guard cannot read the canary: only the backstop runs the job for it; a push with nothing else to do does not.
     on = {"RELEASE_TRAINS": "on"}
     assert (
@@ -1631,20 +1640,20 @@ def test_a_missed_latest_is_caught_up_once_the_canary_runs_it_healthy(installs, 
     assert guard(gh, dict(on, GITHUB_EVENT_NAME="push"), tmp_path, monkeypatch)["go"] == "false"
     # The canary still runs the older release (rolled back): it stays not latest, quietly.
     assert rt.cmd_step(gh, ENV, NOW) == 0 and gh.latest == [] and filed(gh) == []
-    installs["canary"].update(running="0.5.201", state="healthy")
-    assert rt.cmd_step(gh, ENV, NOW) == 0 and gh.latest == ["v0.5.201"] and len(COMMANDS) == 3
+    installs["canary"].update(running="0.6.201", state="healthy")
+    assert rt.cmd_step(gh, ENV, NOW) == 0 and gh.latest == ["v0.6.201"] and len(COMMANDS) == 3
     assert rt.lagging_latest(gh) is None
 
 
 def test_an_unpublished_tag_is_released_again_once_and_recorded(installs):
     gh = publishes(FakeGitHub([run(C)]))
-    gh.tags_["v0.5.201"] = B
+    gh.tags_["v0.6.201"] = B
     gh.release_runs = [release_run()]
     assert rt.cmd_step(gh, dict(ENV, GITHUB_EVENT_NAME="schedule", SCHEDULE=rt.BACKSTOP_CRON), NOW) == 0
-    assert gh.dispatched == [("release.yml", "v0.5.201", {"desktop": "false", "latest": "false"})]
-    assert gh.tagged == [] and ("canary", "0.5.201") in installs["updated"] and gh.latest == ["v0.5.201"]
+    assert gh.dispatched == [("release.yml", "v0.6.201", {"desktop": "false", "latest": "false"})]
+    assert gh.tagged == [] and ("canary", "0.6.201") in installs["updated"] and gh.latest == ["v0.6.201"]
     record = filed(gh)[0]
-    assert record["title"] == "Release v0.5.201 republished" and gh.closed == [record["number"]]
+    assert record["title"] == "Release v0.6.201 republished" and gh.closed == [record["number"]]
     assert "release/70" in record["body"]
 
 
@@ -1652,7 +1661,7 @@ def test_a_step_validates_main_and_waits_until_the_run_is_listed(installs):
     gh = publishes(FakeGitHub())
     assert rt.cmd_step(gh, ENV, NOW) == 0
     assert gh.dispatched == [
-        ("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"})
+        ("ci.yml", "main", {"candidate_sha": C, "previous_release": "v0.6.200", "version": "v0.6.201"})
     ]
     assert any("run/50" in line for line in rt.LOG)
     assert gh.tagged == [] and installs["updated"] == [] and gh.created == []
@@ -1667,7 +1676,7 @@ def test_a_red_candidate_goes_on_the_issue_and_holds_main_until_a_person_validat
         GITHUB_EVENT_NAME="workflow_run",
         RUN_EVENT="workflow_dispatch",
         RUN_CONCLUSION="failure",
-        RUN_TITLE=rt.title(B, "v0.5.201", "v0.5.200"),
+        RUN_TITLE=rt.title(B, "v0.6.201", "v0.6.200"),
         RUN_URL="https://github.example/run/red",
     )
     assert rt.cmd_step(gh, env, NOW) == 1
@@ -1697,7 +1706,7 @@ def test_a_failed_release_workflow_is_reported(installs):
         }
     ]
     assert rt.cmd_step(gh, ENV, NOW) == 1
-    assert "release-run" in gh.created[0]["body"] and ("canary", "0.5.201") not in installs["updated"]
+    assert "release-run" in gh.created[0]["body"] and ("canary", "0.6.201") not in installs["updated"]
 
 
 def test_wait_release_fails_on_this_release_run_only():
@@ -1711,7 +1720,7 @@ def test_wait_release_fails_on_this_release_run_only():
         }
     ]
     with pytest.raises(rt.Fail, match="no GitHub release"):
-        rt.wait_release(gh, "v0.5.201", NOW, timeout=0)
+        rt.wait_release(gh, "v0.6.201", NOW, timeout=0)
 
 
 # ---- the release-train issue ----
@@ -1742,9 +1751,9 @@ def test_an_existing_tag_at_another_commit_or_a_refused_tag_says_so():
     def call(self, method, path, body=None, token=None):
         if method == "POST":
             return 422, {"message": "Reference already exists"}, ""
-        if path == "git/ref/tags/v0.5.201":
+        if path == "git/ref/tags/v0.6.201":
             return 200, {"object": {"type": "commit", "sha": B}}, ""
-        if path == "git/ref/tags/v0.5.202":
+        if path == "git/ref/tags/v0.6.202":
             return 200, {"object": {"type": "tag", "sha": "t" * 40}}, ""
         if path == "git/tags/" + "t" * 40:
             return 200, {"object": {"type": "commit", "sha": C}}, ""
@@ -1752,12 +1761,12 @@ def test_an_existing_tag_at_another_commit_or_a_refused_tag_says_so():
 
     gh = rt.GitHub("acme/tico", "token")
     gh.call = call.__get__(gh)
-    assert gh.create_tag("v0.5.201", B) is False
-    assert gh.create_tag("v0.5.202", C) is False  # annotated, at the same commit
+    assert gh.create_tag("v0.6.201", B) is False
+    assert gh.create_tag("v0.6.202", C) is False  # annotated, at the same commit
     with pytest.raises(rt.Fail, match="already exists at another commit"):
-        gh.create_tag("v0.5.201", C)
-    with pytest.raises(rt.Fail, match="creating tag v0.5.203: 422 Reference already exists"):
-        gh.create_tag("v0.5.203", C)
+        gh.create_tag("v0.6.201", C)
+    with pytest.raises(rt.Fail, match="creating tag v0.6.203: 422 Reference already exists"):
+        gh.create_tag("v0.6.203", C)
 
 
 # ---- hotfix ----
@@ -1796,17 +1805,17 @@ def test_hotfix_needs_a_real_reason_and_a_commit_on_main(installs):
 
 def test_hotfix_validates_publishes_and_updates_canary_then_stable(installs):
     gh = hotfix_github()
-    assert rt.hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == "v0.5.201"
+    assert rt.hotfix(gh, ENV, "", "Tasks vanish from the board after an update", True) == "v0.6.201"
     assert gh.dispatched[0] == (
         "ci.yml",
         "main",
-        {"candidate_sha": C, "previous_release": "v0.5.200", "version": "v0.5.201"},
+        {"candidate_sha": C, "previous_release": "v0.6.200", "version": "v0.6.201"},
     )
-    assert gh.tagged == [("v0.5.201", C)]
-    assert installs["updated"] == [("canary", "0.5.201"), ("stable", "0.5.201")]
-    assert gh.latest == ["v0.5.201"]
+    assert gh.tagged == [("v0.6.201", C)]
+    assert installs["updated"] == [("canary", "0.6.201"), ("stable", "0.6.201")]
+    assert gh.latest == ["v0.6.201"]
     # Stable took the hotfix at once, so its approval record is closed.
-    assert approval_of(gh, "v0.5.201")["state"] == "closed"
+    assert approval_of(gh, "v0.6.201")["state"] == "closed"
 
 
 @pytest.mark.parametrize("hold, blockers", [("billing fix first", []), ("", [{"number": 7, "title": "Tasks vanish"}])])
@@ -1816,14 +1825,14 @@ def test_hotfix_respects_holds_on_stable_unless_overridden(installs, tmp_path, m
     gh.blockers = blockers
     env = dict(ENV, RELEASE_HOLD=hold, GITHUB_ACTOR="chris")
     assert rt.cmd_hotfix(gh, env, "", "Tasks vanish from the board after an update", True) == 0
-    assert installs["updated"] == [("canary", "0.5.201")] and "Stable: held" in filed(gh)[0]["body"]
-    assert approval_of(gh, "v0.5.201")["state"] == "open", "a held hotfix waits for an approval"
+    assert installs["updated"] == [("canary", "0.6.201")] and "Stable: held" in filed(gh)[0]["body"]
+    assert approval_of(gh, "v0.6.201")["state"] == "open", "a held hotfix waits for an approval"
     gh = hotfix_github()
     gh.blockers = blockers
     installs["updated"].clear()
     monkeypatch.setattr(rt, "LOG", [])
     assert rt.cmd_hotfix(gh, env, "", "Tasks vanish from the board after an update", True, True) == 0
-    assert installs["updated"] == [("stable", "0.5.201")]
+    assert installs["updated"] == [("stable", "0.6.201")]
     assert "HOLD OVERRIDDEN by chris" in filed(gh)[0]["body"]
 
 
@@ -1831,22 +1840,22 @@ def test_hotfix_without_promote_leaves_stable_and_records_the_reason(installs, t
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     gh = hotfix_github()
     assert rt.cmd_hotfix(gh, ENV, B, "Tasks vanish from the board after an update", False) == 0
-    assert installs["updated"] == [("canary", "0.5.201")]
+    assert installs["updated"] == [("canary", "0.6.201")]
     record = filed(gh)[0]
-    assert record["title"].startswith("Hotfix v0.5.201: Tasks vanish") and gh.closed == [record["number"]]
-    assert "NOTES v0.5.199..%s" % B in record["body"], "the hotfix's notes are on its issue"
-    assert approval_of(gh, "v0.5.201")["state"] == "open", "the approval decides stable"
+    assert record["title"].startswith("Hotfix v0.6.201: Tasks vanish") and gh.closed == [record["number"]]
+    assert "NOTES v0.6.199..%s" % B in record["body"], "the hotfix's notes are on its issue"
+    assert approval_of(gh, "v0.6.201")["state"] == "open", "the approval decides stable"
 
 
 def test_hotfix_waiting_for_a_person_reuses_the_canarys_waiting_record(installs, monkeypatch):
     gh = hotfix_github()
-    older = approval_for(gh, "v0.5.200", body=HIGH_RISK_NOTES)
+    older = approval_for(gh, "v0.6.200", body=HIGH_RISK_NOTES)
     monkeypatch.setattr(rt.release_notes, "build", lambda api, base, head: HIGH_RISK_NOTES)
-    assert rt.hotfix(gh, AUTO, "", "Tasks vanish from the board after an update", False) == "v0.5.201"
-    assert rt.find_approval(gh, "v0.5.200", state="all") is None
-    assert rt.find_approval(gh, "v0.5.201") is older
+    assert rt.hotfix(gh, AUTO, "", "Tasks vanish from the board after an update", False) == "v0.6.201"
+    assert rt.find_approval(gh, "v0.6.200", state="all") is None
+    assert rt.find_approval(gh, "v0.6.201") is older
     rt.promote(gh, AUTO)
-    assert installs["updated"] == [("canary", "0.5.201")]
+    assert installs["updated"] == [("canary", "0.6.201")]
     assert any("#%d is not approved yet" % older["number"] in line for line in rt.LOG)
     assert len(gh.issue_list) == 1 and gh.comments == []
 
@@ -1889,9 +1898,9 @@ def test_a_shipped_candidate_hands_its_version_sha_and_base_to_the_shots(install
     assert step_outputs(tmp_path / "out") == {
         "reported": "true",
         "shipped": "true",
-        "version": "v0.5.201",
+        "version": "v0.6.201",
         "sha": C,
-        "base": "v0.5.199",
+        "base": "v0.6.199",
     }
 
 
@@ -1906,12 +1915,12 @@ def test_the_shipped_candidate_is_in_the_outputs_even_if_the_step_dies_after_it(
     with pytest.raises(RuntimeError, match="runner went away"):
         rt.cmd_step(gh, ENV, NOW)
     # The canary runs the candidate, so its shots still run; reported is missing, so the job's fallback reports the death.
-    assert installs["updated"] == [("canary", "0.5.201")]
+    assert installs["updated"] == [("canary", "0.6.201")]
     assert step_outputs(tmp_path / "out") == {
         "shipped": "true",
-        "version": "v0.5.201",
+        "version": "v0.6.201",
         "sha": C,
-        "base": "v0.5.199",
+        "base": "v0.6.199",
     }
 
 
@@ -1927,9 +1936,9 @@ def test_a_later_step_that_fails_keeps_the_shipped_candidate_in_the_outputs(inst
     assert step_outputs(tmp_path / "out") == {
         "reported": "true",
         "shipped": "true",
-        "version": "v0.5.201",
+        "version": "v0.6.201",
         "sha": C,
-        "base": "v0.5.199",
+        "base": "v0.6.199",
     }
 
 
@@ -1946,14 +1955,14 @@ def test_without_stable_the_pictures_compare_with_the_previous_release(installs,
     gh = publishes(FakeGitHub([run(C)]))
     no_stable = {key: value for key, value in ENV.items() if not key.startswith("STABLE")}
     assert rt.cmd_step(gh, no_stable, NOW) == 0
-    assert installs["updated"] == [("canary", "0.5.201")]
-    assert step_outputs(tmp_path / "out")["base"] == "v0.5.200"
+    assert installs["updated"] == [("canary", "0.6.201")]
+    assert step_outputs(tmp_path / "out")["base"] == "v0.6.200"
 
 
 def test_the_base_is_stables_release_and_an_unreachable_stable_falls_back_to_the_previous_tag(installs):
-    assert rt.release_base(ENV, "v0.5.200") == "v0.5.199"
+    assert rt.release_base(ENV, "v0.6.200") == "v0.6.199"
     installs["down"] = {"stable"}
-    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+    assert rt.release_base(ENV, "v0.6.200") == "v0.6.200"
 
 
 def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(installs, monkeypatch):
@@ -1961,21 +1970,21 @@ def test_a_stable_that_cannot_be_read_is_noted_and_the_previous_tag_stands(insta
         raise rt.Fail("stable is down")
 
     monkeypatch.setattr(rt, "running", unreadable)
-    assert rt.release_base(ENV, "v0.5.200") == "v0.5.200"
+    assert rt.release_base(ENV, "v0.6.200") == "v0.6.200"
     assert any("stable's release cannot be read (stable is down)" in line for line in rt.LOG)
 
 
 def test_putting_pictures_on_an_approval_changes_nothing_now_releases_have_none(tmp_path, monkeypatch):
     gh = FakeGitHub()
-    issue, _ = rt.open_approval(gh, ENV, "v0.5.201", C, "NOTES v0.5.199..%s" % C)
+    issue, _ = rt.open_approval(gh, ENV, "v0.6.201", C, "NOTES v0.6.199..%s" % C)
     assert "What it looks like" not in issue["body"]
     body = issue["body"]
     edits = []
     monkeypatch.setattr(gh, "edit", lambda *args, **kwargs: edits.append(args))
     shots = tmp_path / "release-shots.md"
     shots.write_text("## What it looks like\n\npictures\n")
-    assert rt.cmd_shots_into_approval(gh, "v0.5.201", str(shots)) == 0
-    assert rt.cmd_shots_into_approval(gh, "v0.5.202", str(tmp_path / "missing.md")) == 0
+    assert rt.cmd_shots_into_approval(gh, "v0.6.201", str(shots)) == 0
+    assert rt.cmd_shots_into_approval(gh, "v0.6.202", str(tmp_path / "missing.md")) == 0
     assert edits == [] and issue["body"] == body
 
 
@@ -1987,10 +1996,10 @@ def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_fa
         [
             dict(
                 run(C, id=3, conclusion="failure", at=NOW - timedelta(hours=1)),
-                display_title=rt.title(C, "v0.5.201", "v0.5.200", anchor=B),
+                display_title=rt.title(C, "v0.6.201", "v0.6.200", anchor=B),
             ),
             dict(
-                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.200", "v0.5.199", anchor=A)
+                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.6.200", "v0.6.199", anchor=A)
             ),
             out(A, id=1, at=NOW - timedelta(hours=5)),
         ],
@@ -2006,10 +2015,10 @@ def test_two_incrementals_in_a_row_select_only_their_own_diff_and_the_carried_fa
     gh = FakeGitHub(
         [
             dict(
-                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=B)
+                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.6.200", "v0.6.199", anchor=B)
             ),
             dict(
-                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.5.200", "v0.5.199", anchor=A)
+                out(B, id=2, at=NOW - timedelta(hours=3)), display_title=rt.title(B, "v0.6.200", "v0.6.199", anchor=A)
             ),
             out(A, id=1, at=NOW - timedelta(hours=5)),
         ],
@@ -2026,7 +2035,7 @@ def test_a_full_validation_older_than_a_day_runs_even_when_a_fresh_incremental_a
     gh = FakeGitHub(
         [
             dict(
-                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.5.200", "v0.5.199", anchor=B)
+                out(C, id=3, at=NOW - timedelta(hours=1)), display_title=rt.title(C, "v0.6.200", "v0.6.199", anchor=B)
             ),
             out(B, id=2, at=NOW - timedelta(hours=26)),
         ],
@@ -2076,7 +2085,7 @@ def speeds(monkeypatch, installs, **by_install):
 
     def call(target, method, path, body=None, key=True):
         if method == "GET" and path.startswith(rt.SPEED_PATH + "?") and target["name"] in by_install:
-            assert path.endswith("?base=0.5.199"), path  # against the release stable runs
+            assert path.endswith("?base=0.6.199"), path  # against the release stable runs
             answers = by_install[target["name"]]
             return 200, answers.pop(0) if len(answers) > 1 else answers[0]
         return plain(target, method, path, body, key)
@@ -2102,11 +2111,11 @@ ROUTES = [
 
 def test_a_route_twice_as_slow_on_the_canary_holds_stable_and_routes_over_1s_are_listed(installs, monkeypatch):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
+    approval_for(gh, "v0.6.200", approved_by="chris")
     speeds(
         monkeypatch,
         installs,
-        canary=[{"release": "0.5.200", "base": "0.5.199", "since": 1000, "now": 1600, "routes": ROUTES}],
+        canary=[{"release": "0.6.200", "base": "0.6.199", "since": 1000, "now": 1600, "routes": ROUTES}],
     )
     with pytest.raises(rt.Fail, match=r"holding, the canary answers 1 route\(s\).*rail p95 900 ms, was 300 ms"):
         rt.promote(gh, ENV)
@@ -2116,29 +2125,29 @@ def test_a_route_twice_as_slow_on_the_canary_holds_stable_and_routes_over_1s_are
     assert "health" not in over and "tool-proxy" not in over and "GET / " not in over and "inbound" not in over
     assert not any("bots p95" in line for line in rt.LOG)
     # A person can let it through once, with the repository variable.
-    assert rt.promote(gh, dict(ENV, RELEASE_SPEED_HOLD="off")) == ("v0.5.200", "v0.5.199")
-    assert installs["updated"] == [("stable", "0.5.200")]
+    assert rt.promote(gh, dict(ENV, RELEASE_SPEED_HOLD="off")) == ("v0.6.200", "v0.6.199")
+    assert installs["updated"] == [("stable", "0.6.200")]
 
 
 def test_the_check_waits_until_the_canary_has_run_the_release_a_few_minutes(installs, monkeypatch):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
+    approval_for(gh, "v0.6.200", approved_by="chris")
     slept = []
     monkeypatch.setattr(rt, "sleep", slept.append)
-    early = {"release": "0.5.200", "base": "0.5.199", "since": 1000, "now": 1060, "routes": []}
+    early = {"release": "0.6.200", "base": "0.6.199", "since": 1000, "now": 1060, "routes": []}
     later = dict(early, now=1000 + rt.SPEED_AFTER, routes=ROUTES[1:])
     speeds(monkeypatch, installs, canary=[early, later])
-    assert rt.promote(gh, ENV) == ("v0.5.200", "v0.5.199")
-    assert slept[0] == rt.SPEED_AFTER - 60 and installs["updated"] == [("stable", "0.5.200")]  # then update polls
+    assert rt.promote(gh, ENV) == ("v0.6.200", "v0.6.199")
+    assert slept[0] == rt.SPEED_AFTER - 60 and installs["updated"] == [("stable", "0.6.200")]  # then update polls
     assert any(
-        "canary, 6 minutes on v0.5.200 against v0.5.199, 3 routes: none twice as slow" in line for line in rt.LOG
+        "canary, 6 minutes on v0.6.200 against v0.6.199, 3 routes: none twice as slow" in line for line in rt.LOG
     )
 
 
 def test_a_hold_put_on_while_the_check_waits_still_holds_stable(installs, monkeypatch):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
-    early = {"release": "0.5.200", "base": "0.5.199", "since": 1000, "now": 1060, "routes": []}
+    approval_for(gh, "v0.6.200", approved_by="chris")
+    early = {"release": "0.6.200", "base": "0.6.199", "since": 1000, "now": 1060, "routes": []}
     speeds(monkeypatch, installs, canary=[early, dict(early, now=2000, routes=ROUTES[1:])])
     monkeypatch.setattr(rt, "sleep", lambda seconds: installs["canary"].update(state="rolled_back"))
     with pytest.raises(rt.Fail, match="the canary's last update is rolled_back"):
@@ -2148,22 +2157,22 @@ def test_a_hold_put_on_while_the_check_waits_still_holds_stable(installs, monkey
 
 @pytest.mark.parametrize(
     "answer",
-    [{"release": "0.5.200", "base": "0.5.199", "since": 1000, "routes": []}, {"release": "0.5.200", "routes": "x"}],
+    [{"release": "0.6.200", "base": "0.6.199", "since": 1000, "routes": []}, {"release": "0.6.200", "routes": "x"}],
     ids=["no-clock", "not-a-list"],
 )
 def test_a_malformed_speed_answer_is_not_checked_and_never_waits(installs, monkeypatch, answer):
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
+    approval_for(gh, "v0.6.200", approved_by="chris")
     slept = []
     monkeypatch.setattr(rt, "sleep", slept.append)
     speeds(monkeypatch, installs, canary=[answer])
-    assert rt.promote(gh, ENV) == ("v0.5.200", "v0.5.199")
+    assert rt.promote(gh, ENV) == ("v0.6.200", "v0.6.199")
     assert rt.SPEED_AFTER - 60 not in slept and any("cannot be read; not checked" in line for line in rt.LOG)
 
 
 def test_a_speed_answer_that_cannot_be_read_never_holds_stable(installs):
     # The fake installs answer the speed route with their update status: no routes, as a release without the route.
     gh = FakeGitHub()
-    approval_for(gh, "v0.5.200", approved_by="chris")
-    assert rt.promote(gh, ENV) == ("v0.5.200", "v0.5.199")
-    assert any("canary's speed on v0.5.200 against v0.5.199 cannot be read; not checked" in line for line in rt.LOG)
+    approval_for(gh, "v0.6.200", approved_by="chris")
+    assert rt.promote(gh, ENV) == ("v0.6.200", "v0.6.199")
+    assert any("canary's speed on v0.6.200 against v0.6.199 cannot be read; not checked" in line for line in rt.LOG)

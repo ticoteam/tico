@@ -57,8 +57,8 @@ def test_a_reason_only_on_stderr_reaches_the_summary(tmp_path):
     assert why in '\n'.join(result.stdout.splitlines()[-40:])
 
 
-@pytest.mark.parametrize('previous', ['v0.5.216', 'v0.2.5'])
-def test_a_previous_release_before_0_6_is_refused(tmp_path, previous):
+@pytest.mark.parametrize('previous', ['v0.5.216', 'v0.2.5', 'v0.6.0-rc.1', 'main', 'v0.6'])
+def test_a_previous_release_before_0_6_or_not_a_release_is_refused_before_any_step(tmp_path, previous):
     result, steps = run_journey(tmp_path, previous)
     assert result.returncode == 2 and steps == []
-    assert f'the previous release must be v0.6.0 or later, not {previous}' in result.stderr
+    assert f'the previous release must be a release v0.6.0 or later (like v0.6.1), not {previous}' in result.stderr

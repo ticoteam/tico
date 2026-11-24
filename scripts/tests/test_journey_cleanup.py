@@ -32,7 +32,7 @@ def test_cleanup_leaves_resources_this_run_did_not_make(tmp_path):
         'TICO_JOURNEY_RELEASES_URL': (tmp_path / 'no-releases').as_uri(),
     }
     result = subprocess.run(
-        ['bash', 'scripts/journey-test.sh', '--previous', 'v0.0.1'],
+        ['bash', 'scripts/journey-test.sh', '--previous', 'v0.6.208'],
         cwd=ROOT,
         env=env,
         capture_output=True,

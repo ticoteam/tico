@@ -35,6 +35,7 @@ import urllib.request
 from clients import gateway as G
 
 from . import hubdb as H, releases, tico_notices
+from .release_floor import refused
 from .replication import rehearsal_on
 from .store import Problem
 
@@ -183,6 +184,7 @@ def _target(answer):
         or set(target) != {"version", "request_id"}
         or not isinstance(target["version"], str)
         or not STABLE.fullmatch(target["version"])
+        or refused(target["version"])
         or not isinstance(target["request_id"], str)
         or not REQUEST_ID.fullmatch(target["request_id"])
     ):

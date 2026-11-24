@@ -190,11 +190,7 @@ show the plain cause. A lock that is a link, a special file, or larger than 4 Ki
 The Rust runner also saves this wait when its own lock check or updater launch fails. Polls keep the saved
 retry time; they do not start a fresh wait on each check.
 
-The Rust follower sets `TICO_UPDATE_RETRY=short` for the updater, including under systemd. Older Python followers,
-including v0.3.45, ignore `not_before` and treat `waiting` and `busy` as due at once. For them alone, the updater
-uses `failed` and the six-hour wait they already honor, so they take work between tries instead of draining
-without an end. Persistent causes use the same blocked rule. It never installs, restarts or rolls back without
-the shared update lock.
+The updater never installs, restarts or rolls back without the shared update lock.
 
 ### Linux from a checkout: run `scripts/tico-computer install` once
 
@@ -536,6 +532,12 @@ Tico supports v0.6.0 and later only. A 0.6 server opens only a database that Tic
 refuses an older one without changing it: "This database was made by a Tico older than 0.6.0, or not by Tico. Tico 0.6
 does not carry tasks over: every company starts on a new database. Nothing was changed. Run the release that made it on
 this database, or set up a new company on 0.6."
+
+Every place that takes a release to install or update to accepts only a stable release at v0.6.0 or later, and refuses
+anything else (an older release, a release candidate, a malformed version) with the reason, before it changes anything:
+Update now and the update key (`POST /api/v2/system/update`), a target Tico support sets for a hosted server,
+`scripts/install.sh --version` (server and runner), the release train and the release journey
+(`backend/release_floor.py`). A computer below v0.6.0 gets no work, but still reads the release to update to.
 
 ## For maintainers
 

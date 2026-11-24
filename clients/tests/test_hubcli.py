@@ -1592,12 +1592,7 @@ def test_chat_send_runs_message_send_with_a_notice(monkeypatch):
 @pytest.mark.parametrize(
     "argv, instead",
     [
-        (["question", "ask", "ops", "Which plan?"], "tico task ask"),
-        (["question", "answer", "m1", "Yes"], "tico task answer"),
-        (["ask", "ops", "Which plan?"], "tico task ask"),
-        (["answer", "m1", "Yes"], "tico task answer"),
         (["task", "question", "Which plan?", "--on", "ana"], "tico task ask"),
-        (["task", "ask-resolve", "t1", "c1"], "Needs you"),
         (["task", "answers", "t1"], "tico task show <id>, under To leave"),
         (["approval", "approve", "ap1"], "tico task answer"),
         (["approval", "request", "--kind", "send"], "tico task ask"),
@@ -1622,7 +1617,7 @@ def test_a_removed_command_prints_one_line_naming_its_replacement(argv, instead,
     lines = out.err.strip().splitlines()
     assert out.out == "" and len(lines) == 1 and lines[0].startswith('tico: "') and "is gone" in lines[0]
     assert instead in lines[0]
-    if instead == "tico task ask" and argv[0] in ("ask", "question"):
+    if argv[:2] == ["task", "question"]:
         assert "tico message send" in lines[0] and "--needs-action" in lines[0]
 
 

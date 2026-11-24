@@ -13,7 +13,7 @@ from backend.tests.helpers.task_lanes import RUNNER_CAPABILITIES, new_task, task
 
 
 def setup(api, monkeypatch, tasks=8):
-    """A computer that reports the capabilities of the oldest supported release (0.6.0-rc.1): its claims take the
+    """A computer that reports the capabilities of the oldest supported release (0.6.0): its claims take the
     session root and lane rules every computer runs, so the query counts below measure those."""
     machine = bare_setup(api, monkeypatch, tasks=tasks)
     ready(api, machine, ["ops"], capabilities=RUNNER_CAPABILITIES)

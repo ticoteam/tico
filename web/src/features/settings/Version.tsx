@@ -169,7 +169,7 @@ export function Version({ update, owner }: { update: ReleaseOffer; owner: boolea
       if (found.checking) {
         setChecking(true);
       } else {
-        setFeedback(found.available || found.held ? '' : 'Up to date.');
+        setFeedback(found.available ? '' : 'Up to date.');
         await client.invalidateQueries({ queryKey: configQuery.queryKey });
       }
     } catch (error) {

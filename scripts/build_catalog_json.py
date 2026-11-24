@@ -150,10 +150,7 @@ def build():
 def export(out):
     """{path: text} for every file `--out DIR` writes: the engine's .py files headed as generated, roles.json as just built."""
     out = Path(out)
-    groups_file = TEMPLATES / "groups.yaml"
-    departments = (
-        yaml.safe_load((groups_file if groups_file.is_file() else TEMPLATES / "departments.yaml").read_text()) or {}
-    )
+    departments = yaml.safe_load((TEMPLATES / "groups.yaml").read_text()) or {}
     documents = cards()
     role_list = json.dumps(roles(documents), indent=1, ensure_ascii=False) + "\n"
     files = {

@@ -19,7 +19,7 @@ from . import releases
 from .store import H
 from . import sources as SRC
 
-MIN_RUNNER_RELEASE = "0.6.0-rc.1"
+MIN_RUNNER_RELEASE = "0.6.0"
 # Templates sent to runners under an older name, {template: old name}: a runner's catalog is its own copy
 # (runner_support/catalog_job.py), an older one knows Agent Ops' only as `botops`, and a newer one reads either (#4863).
 OLD_TEMPLATE_NAMES = {H.AGENT_OPS_SLUG: "botops"}

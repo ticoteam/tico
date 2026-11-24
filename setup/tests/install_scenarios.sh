@@ -44,7 +44,7 @@ code_is() { if [ "$3" = "$2" ]; then ok "$1"; else bad "$1" "exit $3, wanted $2:
 has() { case $3 in *"$2"*) ok "$1" ;; *) bad "$1" "missing '$2' in: $3" ;; esac; }
 lacks() { case $3 in *"$2"*) bad "$1" "found '$2' in: $3" ;; *) ok "$1" ;; esac; }
 sum() { sha256sum "$1" | cut -d' ' -f1; }
-inst() { sh /rel/download/v0.2.0/install.sh "$@"; }
+inst() { sh /rel/download/v0.6.2/install.sh "$@"; }
 
 # --- preflight -------------------------------------------------------------------------------------
 D=/work/pre
@@ -68,10 +68,10 @@ D=/work/fresh
 : > $S/docker.log
 out=$(TICO_OIDC_CLIENT_SECRET=SEKRET-VALUE-123 inst --dir $D --yes -- --domain tico.example.com --company Acme 2>&1); code_is fresh-exit 0 $? "$out"
 lacks fresh-secret-not-echoed SEKRET-VALUE "$out"
-if [ "$(cat $D/.bundle-version)" = v0.2.0 ]; then ok fresh-pins-baked-version; else bad fresh-pins-baked-version "$(cat $D/.bundle-version 2>&1)"; fi
-if grep -q 'marker v0.2.0' $D/compose.yaml; then ok fresh-compose-from-bundle; else bad fresh-compose-from-bundle "no marker"; fi
+if [ "$(cat $D/.bundle-version)" = v0.6.2 ]; then ok fresh-pins-baked-version; else bad fresh-pins-baked-version "$(cat $D/.bundle-version 2>&1)"; fi
+if grep -q 'marker v0.6.2' $D/compose.yaml; then ok fresh-compose-from-bundle; else bad fresh-compose-from-bundle "no marker"; fi
 args=$(cat $D/wizard-args.txt)
-has fresh-wizard-target "--target local --tico-version v0.2.0" "$args"
+has fresh-wizard-target "--target local --tico-version v0.6.2" "$args"
 has fresh-wizard-yes "--yes" "$args"
 has fresh-wizard-noninteractive-without-tty "--non-interactive" "$args"
 has fresh-wizard-passthrough "--domain tico.example.com --company Acme" "$args"
@@ -123,33 +123,42 @@ out=$(inst --dir $D --yes 2>&1); code_is repair-exit 0 $? "$out"
 if [ -f $D/compose.yaml ]; then ok repair-restores-compose; else bad repair-restores-compose "missing"; fi
 
 # --- upgrade and no silent downgrade -----------------------------------------------------------------
-out=$(inst --dir $D --version v0.3.0 --yes 2>&1); code_is upgrade-exit 0 $? "$out"
-if grep -q 'marker v0.3.0' $D/compose.yaml; then ok upgrade-new-compose; else bad upgrade-new-compose "no marker"; fi
-if grep -q '^TICO_TAG=v0.3.0$' $D/.env; then ok upgrade-pins-tag; else bad upgrade-pins-tag "$(cat $D/.env | grep TICO_TAG)"; fi
+out=$(inst --dir $D --version v0.6.3 --yes 2>&1); code_is upgrade-exit 0 $? "$out"
+if grep -q 'marker v0.6.3' $D/compose.yaml; then ok upgrade-new-compose; else bad upgrade-new-compose "no marker"; fi
+if grep -q '^TICO_TAG=v0.6.3$' $D/.env; then ok upgrade-pins-tag; else bad upgrade-pins-tag "$(cat $D/.env | grep TICO_TAG)"; fi
 if grep -q '^MY_CUSTOM_SETTING=keep-me$' $D/.env; then ok upgrade-keeps-settings; else bad upgrade-keeps-settings "lost"; fi
 if [ "$(grep -c '^TICO_TAG=' $D/.env)" = 1 ]; then ok upgrade-single-tag; else bad upgrade-single-tag "duplicate"; fi
 if [ "$(stat -c %a $D/.env)" = 600 ]; then ok upgrade-env-private; else bad upgrade-env-private "mode"; fi
 if [ -f $D/compose.yaml.previous ]; then ok upgrade-keeps-previous-compose; else bad upgrade-keeps-previous-compose "missing"; fi
 out=$(inst --dir $D --yes 2>&1); code_is older-installer-exit 0 $? "$out"; has older-installer-holds "newer than this installer" "$out"
-if grep -q '^TICO_TAG=v0.3.0$' $D/.env; then ok older-installer-keeps-tag; else bad older-installer-keeps-tag "changed"; fi
-out=$(inst --dir $D --version v0.2.0 --yes 2>&1); code_is explicit-downgrade 0 $? "$out"
-if grep -q '^TICO_TAG=v0.2.0$' $D/.env; then ok explicit-downgrade-applies; else bad explicit-downgrade-applies "not applied"; fi
+if grep -q '^TICO_TAG=v0.6.3$' $D/.env; then ok older-installer-keeps-tag; else bad older-installer-keeps-tag "changed"; fi
+out=$(inst --dir $D --version v0.6.2 --yes 2>&1); code_is explicit-downgrade 0 $? "$out"
+if grep -q '^TICO_TAG=v0.6.2$' $D/.env; then ok explicit-downgrade-applies; else bad explicit-downgrade-applies "not applied"; fi
 
 # --- checksum ----------------------------------------------------------------------------------------
 D=/work/tampered
-out=$(inst --dir $D --version v0.9.0 --yes 2>&1); code_is checksum-mismatch-refused 4 $? "$out"; has checksum-msg "Checksum mismatch" "$out"
+out=$(inst --dir $D --version v0.6.9 --yes 2>&1); code_is checksum-mismatch-refused 4 $? "$out"; has checksum-msg "Checksum mismatch" "$out"
 if [ ! -e $D/compose.yaml ] && [ ! -e $D/.env ]; then ok checksum-installs-nothing; else bad checksum-installs-nothing "files exist"; fi
-out=$(inst --dir $D --version v0.8.0 --yes 2>&1); code_is missing-release 4 $? "$out"
+out=$(inst --dir $D --version v0.6.8 --yes 2>&1); code_is missing-release 4 $? "$out"
+# Nothing before v0.6.0 and no prerelease: refused before anything is downloaded or changed.
+for v in v0.5.216 v0.6.0-rc.1; do
+  out=$(inst --dir $D --version $v --yes 2>&1); code_is "floor-refused-$v" 2 $? "$out"
+done
+has floor-msg "no release before v0.6.0 is supported" "$(inst --dir $D --version v0.5.216 --yes 2>&1)"
+if [ ! -e $D/compose.yaml ] && [ ! -e $D/.env ]; then ok floor-installs-nothing; else bad floor-installs-nothing "files exist"; fi
+out=$(inst --dir /work/old-runner --runner --url http://server:8765 --code abc123 --label "Old" --version v0.5.216 2>&1)
+code_is floor-runner-refused 2 $? "$out"
+if [ ! -e /work/old-runner/runner.compose.yaml ]; then ok floor-runner-installs-nothing; else bad floor-runner-installs-nothing "files exist"; fi
 
 # --- version pinning ---------------------------------------------------------------------------------
 D=/work/unpinned
 out=$(sh /rel/unpinned/install.sh --dir $D --yes -- --domain a.example.com 2>&1); code_is unpinned-exit 0 $? "$out"
-if [ "$(cat $D/.bundle-version)" = v0.3.0 ]; then ok unpinned-uses-latest-release; else bad unpinned-uses-latest-release "$(cat $D/.bundle-version)"; fi
+if [ "$(cat $D/.bundle-version)" = v0.6.3 ]; then ok unpinned-uses-latest-release; else bad unpinned-uses-latest-release "$(cat $D/.bundle-version)"; fi
 has unpinned-warns "not pinned to a release" "$out"
 D=/work/plain
-out=$(inst --dir $D --version 0.3.0 --yes -- --domain b.example.com 2>&1); code_is version-flag-without-v 0 $? "$out"
-if [ "$(cat $D/.bundle-version)" = v0.3.0 ]; then ok version-flag-overrides-baked; else bad version-flag-overrides-baked "$(cat $D/.bundle-version)"; fi
-if grep -q '"' /rel/download/v0.2.0/install.sh && grep -q "^TICO_VERSION_BAKED='v0.2.0'" /rel/download/v0.2.0/install.sh; then ok baked-line; else bad baked-line "not baked"; fi
+out=$(inst --dir $D --version 0.6.3 --yes -- --domain b.example.com 2>&1); code_is version-flag-without-v 0 $? "$out"
+if [ "$(cat $D/.bundle-version)" = v0.6.3 ]; then ok version-flag-overrides-baked; else bad version-flag-overrides-baked "$(cat $D/.bundle-version)"; fi
+if grep -q '"' /rel/download/v0.6.2/install.sh && grep -q "^TICO_VERSION_BAKED='v0.6.2'" /rel/download/v0.6.2/install.sh; then ok baked-line; else bad baked-line "not baked"; fi
 
 # --- docker-only and help -----------------------------------------------------------------------------
 out=$(inst --docker-only --dir /work/d 2>&1); code_is docker-only 0 $? "$out"

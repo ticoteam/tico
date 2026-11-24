@@ -19,7 +19,6 @@ answer names the bet the department clearly serves (`bet`), which setup stores o
 
 import logging
 import re
-import sqlite3
 from pathlib import Path
 
 import httpx
@@ -59,12 +58,9 @@ def _install_id(c):
 
 
 def departments_file(settings):
-    """templates/groups.yaml (older: departments.yaml) beside the catalog in use, else the one this release ships."""
-    for name in ("groups.yaml", "departments.yaml"):
-        beside = Path(settings.catalog_dir).parent / name
-        if beside.is_file():
-            return beside
-    return BUNDLED_DEPARTMENTS
+    """templates/groups.yaml beside the catalog in use, else the one this release ships."""
+    beside = Path(settings.catalog_dir).parent / "groups.yaml"
+    return beside if beside.is_file() else BUNDLED_DEPARTMENTS
 
 
 def catalog(settings):
@@ -97,18 +93,14 @@ def _about(answers):
 
 
 def strategy_bets(c, who=None):
-    """The bets that are not retired, in rank order; none on a database from before Strategy. The draft's for the
-    owner (and for setup itself, `who` None); for anyone else, as a bot administrator, the live version's (the
-    same, since every save is live)."""
+    """The bets that are not retired, in rank order. The draft's for the owner (and for setup itself, `who` None); for
+    anyone else, as a bot administrator, the live version's (the same, since every save is live)."""
     from . import goal_routes
     from . import strategy as S
 
-    try:
-        if who is not None and not goal_routes.company_editor(who):
-            return [b for b in (S.current(c) or {}).get("bets") or [] if b.get("status") != "retired"]
-        return [b for b in S.bets(c) if b["status"] != "retired"]
-    except sqlite3.OperationalError:
-        return []
+    if who is not None and not goal_routes.company_editor(who):
+        return [b for b in (S.current(c) or {}).get("bets") or [] if b.get("status") != "retired"]
+    return [b for b in S.bets(c) if b["status"] != "retired"]
 
 
 def bets_text(bets):
@@ -149,6 +141,20 @@ def _from_hq(answer, cards):
         return None
     defaults = answer.get("suggested_default") if isinstance(answer.get("suggested_default"), list) else []
     return {"bots": bots, "suggested_default": [str(t) for t in defaults if str(t) in seen]}
+
+
+def _plain_reasons(answer, value, department, briefing, about):
+    """An HQ still on an older engine says "Matches “managers”" for any word the answer shares with a card. Each such why
+    becomes the one this install's own recommender gives that bot (backend/recruit_rank.py), or none."""
+    if not any(row["why"].startswith("Matches “") for row in answer["bots"]):
+        return
+    ours = {
+        row["template_id"]: row["why"]
+        for row in R.rank(value, department, briefing, about, limit=len(value["cards"]))["bots"]
+    }
+    for row in answer["bots"]:
+        if row["why"].startswith("Matches “"):
+            row["why"] = ours.get(row["template_id"], "")
 
 
 class Recruiter:
@@ -204,4 +210,5 @@ class Recruiter:
             answer = None
         if answer is None:
             return {**local, "source": "local", "shared": True, "off_by": ""}
+        _plain_reasons(answer, value, body.department, body.briefing, about)
         return {**answer, "bet": local["bet"], "source": "hq", "shared": True, "off_by": ""}

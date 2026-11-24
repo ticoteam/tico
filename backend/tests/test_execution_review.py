@@ -778,13 +778,13 @@ def owner_update(api, monkeypatch):
         'TRANSPORT',
         httpx.MockTransport(
             lambda request: httpx.Response(
-                200, json={'state': 'pulling', 'from': '0.4.16', 'to': '0.4.17', 'message': ''}
+                200, json={'state': 'pulling', 'from': '0.6.16', 'to': '0.6.17', 'message': ''}
             )
         ),
     )
     monkeypatch.setenv('TICO_UPDATER_URL', 'http://updater:9000')
-    monkeypatch.setenv('TICO_VERSION', '0.4.16')
-    post(api, 'system/update', {'version': 'v0.4.17'})
+    monkeypatch.setenv('TICO_VERSION', '0.6.16')
+    post(api, 'system/update', {'version': 'v0.6.17'})
 
 
 def live_shell_run(api, summary):
@@ -822,7 +822,7 @@ def test_a_run_live_as_the_owner_updates_is_flagged_and_resumes_naming_its_outsi
         [flag] = c.execute(
             "SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?", (attempt['id'],)
         ).fetchall()
-    assert json.loads(flag[0])['cause'] == 'update' and json.loads(flag[0])['update'] == '0.4.17'
+    assert json.loads(flag[0])['cause'] == 'update' and json.loads(flag[0])['update'] == '0.6.17'
     lapse(api, machine, attempt)
     assert [d['state'] for d in sweep(api)] == ['queued']
     no_one_asked(api)
@@ -1445,7 +1445,7 @@ def test_a_runner_from_before_the_floor_is_never_handed_the_continuation(api, mo
     assert claim_at(api, monkeypatch, machine, at(121), continues=False, release='0.5.9') is None
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'queued'
-    following = claim_at(api, monkeypatch, machine, at(130), release='0.6.0-rc.1')
+    following = claim_at(api, monkeypatch, machine, at(130), release='0.6.0')
     assert following['job_id'] == attempt['job_id'] and following['continue_thread'] == 'capacity-thread'
 
 

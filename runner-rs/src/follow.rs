@@ -2328,7 +2328,6 @@ scope['main'](sys.argv[1:])
 
     #[tokio::test]
     async fn deferral_statuses_obey_the_due_and_claim_rules() {
-        // The released Python follower runs the same table but ignores not_before.
         let cases: Vec<Value> = serde_json::from_str(include_str!(
             "../../runner_support/tests/fixtures/update-status-cases.json"
         ))

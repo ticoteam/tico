@@ -134,8 +134,8 @@ downloaded `hermes_agent.py` in your current folder works the same while it is t
 - **Status.** `python3 hermes_agent.py status --profile <name>` prints the saved settings and the last
   heartbeat reply. It never prints the credential.
 - **Doctor.** `python3 hermes_agent.py doctor --profile <name>` checks the setup (config,
-  credential, reach to Tico, timer, last heartbeat, sync job and when it last ran) and scans the profile's `SOUL.md`, skills, cron
-  jobs and memories for old tool names. It changes nothing and says what to fix. A sync run that ended in an error
+  credential, reach to Tico, timer, last heartbeat, sync job and when it last ran). It changes nothing and says what
+  to fix. A sync run that ended in an error
   is a problem, with Hermes's error. `doctor` does not check the model, because Hermes has no offline check for it
   and doctor never calls a model: it prints a `NOTE` saying so, and its last line says
   `Everything doctor checks is working; it did not check the model`.

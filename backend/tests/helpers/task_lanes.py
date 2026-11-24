@@ -3,7 +3,7 @@
 from backend.tests.helpers.api import assign, post, runner
 from backend import bot_settings as BS
 
-# What every runner at the minimum release (0.6.0-rc.1) advertises: runner-rs/src/lanes.rs CAPABILITIES.
+# What every runner at the minimum release (0.6.0) advertises: runner-rs/src/lanes.rs CAPABILITIES.
 RUNNER_CAPABILITIES = [
     "task_lanes_v2",
     "session_roots_v1",

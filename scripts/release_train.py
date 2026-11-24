@@ -165,6 +165,7 @@ FAIL_FAST_UNDER = timedelta(minutes=40)
 rollout = _load("tico_rollout", ROLLOUT_PATH)
 release_notes = _load("tico_release_notes", NOTES_PATH)
 increment = _load("tico_release_increment", INCREMENT_PATH)
+release_floor = _load("tico_release_floor", ROOT / "backend/release_floor.py")
 
 
 def sleep(seconds):
@@ -725,8 +726,14 @@ def update_install(target, version, timeout=UPDATE_WAIT):
     `pulling`, then restarts the server; or its state, target or message is no longer what it said before the request):
     an earlier update's outcome, even one to the same version, is never judged."""
     want, name = rollout.plain(version), target["name"]
+    why = release_floor.refused(want)
+    if why:
+        raise Fail("%s: not updated to %s: %s" % (name, version, why))
     snapshot = read_status(target)
     before = rollout.plain(snapshot.get("running"))
+    why = release_floor.refused(before)
+    if why:
+        raise Fail("%s runs %s, which the train does not update: %s" % (name, before, why))
     if before == want:
         note("%s already runs v%s" % (name, want))
         return

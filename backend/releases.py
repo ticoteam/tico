@@ -31,6 +31,7 @@ from pathlib import Path
 import httpx
 
 from .census import hq_url
+from .release_floor import refused
 from .replication import rehearsal_on
 from .store import Problem
 
@@ -424,8 +425,9 @@ def status():
 
 
 def start(target):
-    if parse(target) is None:
-        raise Problem("invalid_version", "That is not a release version", 422)
+    why = refused(target)
+    if why:
+        raise Problem("invalid_version", why, 422)
     if managed():
         raise Problem("managed_update", "Tico updates this server. There is nothing to run here.", 409)
     if not _updater()[0]:

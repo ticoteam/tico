@@ -440,34 +440,6 @@ class Doctor(Base):
         self.assertEqual(self.credential()["heartbeat_mode"], "timer")
         self.assertEqual(self.run_cli("doctor", "--profile", "scout")[0], 1)
 
-    def seed_old_names(self):
-        (self.profile / "SOUL.md").write_text("You are Scout.\nAlways use\nhub_say to reply.\n")
-        (self.profile / "skills" / "triage").mkdir(parents=True)
-        (self.profile / "skills" / "triage" / "SKILL.md").write_text("Call `hub_docs_search` then hub_message_send.\n")
-        (self.profile / "cron").mkdir(exist_ok=True)
-        jobs = self.profile / "cron" / "jobs.json"  # the tico-sync job is in it already: keep it, on one line
-        data = json.loads(jobs.read_text()) if jobs.exists() else {}
-        data["prompt"] = "check hub_inbox and hub_fleet-check"
-        jobs.write_text(json.dumps(data) + "\n")
-        (self.profile / "memories").mkdir()
-        (self.profile / "memories" / "MEMORY.md").write_text("- a\n- mark with hub_ack, status via hub_status_set\n")
-
-    def test_the_old_tool_names_in_a_profile_are_found_with_what_to_use_now(self):
-        self.seed_old_names()
-        found = {(path.name, word, new) for path, _, word, new in H.scan_old_tool_names(self.profile)}
-        self.assertEqual(
-            found,
-            {
-                ("SOUL.md", "hub_say", "tico_message_send"),
-                ("SKILL.md", "hub_docs_search", "tico_doc_search"),
-                ("SKILL.md", "hub_message_send", "tico_message_send"),
-                ("jobs.json", "hub_inbox", "tico_message_list"),
-                ("jobs.json", "hub_fleet-check", "tico_health_check"),
-                ("MEMORY.md", "hub_ack", "tico_message_mark_read"),
-                ("MEMORY.md", "hub_status_set", "tico_bot_status_set"),
-            },
-        )
-
 
 class OldCredential(Base):
     def test_a_credential_file_saved_with_bot_still_loads_as_bot_id(self):

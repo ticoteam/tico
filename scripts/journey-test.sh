@@ -70,6 +70,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ "$LOCAL" = 1 ] && CAND="${TICO_JOURNEY_CANDIDATE:-v9.9.9}"
+supported() {  # backend/release_floor.py's check: a stable vX.Y.Z at v0.6.0 or later (no prerelease, nothing malformed)
+  [[ "$1" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 ))
+}
+# The candidate may be a prerelease of 0.6 or later (ci.yml's version input); the previous release is a stable one.
+[[ "$CAND" =~ ^v([0-9]+)\.([0-9]+)\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] && (( 10#${BASH_REMATCH[1]} > 0 || 10#${BASH_REMATCH[2]} >= 6 )) \
+  || { echo "journey: the candidate must be a release v0.6.0 or later (like v0.6.1), not $CAND" >&2; exit 2; }
+if [ -n "$PREV" ] && ! supported "$PREV"; then
+  echo "journey: the previous release must be a release v0.6.0 or later (like v0.6.1), not $PREV" >&2; exit 2
+fi
 BROKEN=v9.9.10   # newer than the candidate: the updater refuses a downgrade
 THIRD=v9.9.11    # the second updater hop's target: the candidate again, as another release
 RELEASES="${TICO_JOURNEY_RELEASES_URL:-https://github.com/ticoteam/tico/releases}"
@@ -106,9 +115,7 @@ if [ -z "$PREV" ]; then
   PREV="$(git tag -l 'v[0-9]*' --sort=-v:refname | grep -v -- - | grep -vx "$CAND" | head -n 1)"
   [ -n "$PREV" ] || { echo "journey: no previous release tag found; pass --previous" >&2; exit 2; }
 fi
-case "$PREV" in
-  v0.[0-5].*) echo "journey: the previous release must be v0.6.0 or later, not $PREV" >&2; exit 2 ;;
-esac
+supported "$PREV" || { echo "journey: the newest release tag, $PREV, is not v0.6.0 or later; pass --previous" >&2; exit 2; }
 
 rollback_changed() {  # 0: run the rollback steps. Their code changed since $PREV, or the diff cannot be computed.
   export GIT_TERMINAL_PROMPT=0

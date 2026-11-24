@@ -263,7 +263,7 @@ What a server accepts is what the code enforces. This is the matrix the release 
 | Part | Accepted | Enforced by |
 |---|---|---|
 | Database | made or upgraded by v0.6.0 (the compatibility floor) or later, up to this release's migrations | `backend/migrations` `preflight`, before the first write |
-| Runner | release `MIN_RUNNER_RELEASE` (0.6.0-rc.1) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
+| Runner | release `MIN_RUNNER_RELEASE` (0.6.0) and newer | `backend/runner_versions.py`: claims from an older runner are paused, with the reason |
 | Runner wire | the current and previous minor release, both directions | `scripts/check_wire_contract.py`, [runner-wire-contract.md](runner-wire-contract.md) |
 | Desktop app | the release's own version, or the previous release's files when the shell did not change | the release workflow; see [Desktop apps follow the release](#desktop-apps-follow-the-release) |
 
@@ -540,7 +540,7 @@ branch there and deletes it, the way a bot's turn pushes ([e2e/bots/README.md](.
 Without the secrets that check skips and names them.
 
 ```sh
-gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.3.48 -f version=v0.3.49
+gh workflow run ci.yml --ref main -f candidate_sha=<full-40-character-commit-SHA> -f previous_release=v0.6.263 -f version=v0.6.264
 ```
 
 The run is titled `Validate <sha> as <version> from <previous>`, which is how the Release workflow finds it. It builds
@@ -642,7 +642,7 @@ or, for an intended revert, a receipt naming the pull request and the change it 
 
 ```
 python scripts/release_checks.py --release                     # this checkout is the candidate (v9.9.9)
-python scripts/release_checks.py --release --previous v0.3.21  # upgrade from a given release instead of the newest tag
+python scripts/release_checks.py --release --previous v0.6.263  # upgrade from a given release instead of the newest tag
 ```
 
 This is the full suite, run once per release. It builds the server, runner and updater images once (BuildKit cache;

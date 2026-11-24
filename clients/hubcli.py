@@ -1604,7 +1604,7 @@ RENAMED = [
 ]
 RENAMED.sort(key=lambda rule: -len(rule[0]))
 
-# Commands taken away (asks in Tico 0.5, the old task engine in 0.6): each prints one line naming what to use instead
+# Commands the old task engine took away in 0.6: each prints one line naming what to use instead
 # and exits 1, so a bot told an old command does not loop on it. The longest old spelling that matches wins.
 ASK_INSTEAD = (
     'ask a person on your task with: tico task ask <id> --to <person> "<question>" (a message marked ❓); '
@@ -1624,13 +1624,7 @@ MOVE_INSTEAD = (
 )
 PIPELINE_INSTEAD = "a pipeline's settings are a person's, on its page; tico task show <id> says where a task is"
 REMOVED = [
-    (("question", "ask"), ASK_INSTEAD),
-    (("question", "answer"), ANSWER_INSTEAD),
-    (("question",), ASK_INSTEAD),
-    (("ask",), ASK_INSTEAD),
-    (("answer",), ANSWER_INSTEAD),
     (("task", "question"), ASK_INSTEAD),
-    (("task", "ask-resolve"), ANSWER_INSTEAD),
     (("task", "answers"), "the answers are on the task: tico task show <id>, under To leave"),
     (("approval", "request"), ASK_INSTEAD),
     (("approval",), ANSWER_INSTEAD),
