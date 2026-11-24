@@ -93,9 +93,9 @@ a parent task) or having been given some task by them does not open them. Only f
 the receiver: a direct reply to that person's own message; a write in a conversation where that person wrote to the
 bot in the last 7 days; a write on a task that person handed this bot (they are its requester, the bot its owner); an
 ask (a ❓ on the task or a stage ask, `reach.check(ask=True)`, never a message, a new task or a hand-off) on an open
-task the bot owns whose assignee that person is, unless the latest change to that task's own assignee was a bot's
-(`reach.assignee_of`; an assignee a bot named opens nothing, and no parent task is read; an action's approval keeps the
-plain reach); and,
+task the bot owns whose assignee that person is, unless the latest change to that task's own assignee was a bot's, or
+with no change on record a bot filed the task (`reach.assignee_of`; an assignee a bot named opens nothing, and no
+parent task is read; an action's approval keeps the plain reach); and,
 for a day, any write by a bot that person pinged for questions from Flow ([Tasks](tasks.md#needs-you), `reach.pinged`),
 so its questions reach them even when it is not theirs.
 

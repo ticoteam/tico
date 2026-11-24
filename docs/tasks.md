@@ -420,13 +420,15 @@ ladder already brought it to, else its holder when that is a person, else its **
 it is for, whoever holds this stage), else its pipeline's owner or manager when a person, else the first person above
 its manager agent on the chart, else the company's owner. Anyone who left, cannot sign in or cannot read a private task is
 passed over. So a review stage a person holds asks that person, and a stage an agent holds asks the person assignee;
-the agent's wake names them, and it may ask them on the task (a ❓ or a stage ask) unless an agent named them assignee.
+the agent's wake names them, and it may ask them on the task (a ❓ or a stage ask) unless an agent named them assignee
+(or, with no change of assignee on record, an agent filed the task).
 A change of assignee moves both people's Needs you.
 
 A task used to name a **Human** for this; the assignee does that now. Each task's Human became its assignee where it
 was a company task with none, and otherwise its `human` role (a label, see above). Until the upgrade floor passes this
 release, `"human"` on task create and update (the API and the MCP tools) sets only that role, a person who can
-already read the task; `""` or null takes it off. The task no longer carries `human_id`.
+already read the task; `""` or null takes it off. Sent with `roles.human` too, both must name the same people (else
+422). A task deleted before the upgrade gets the same move when it is restored. The task no longer carries `human_id`.
 
 ## Files
 
