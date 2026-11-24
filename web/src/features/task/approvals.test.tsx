@@ -454,9 +454,9 @@ describe('the decision', () => {
     shown = task({ waits: [{ state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true }] });
     show(<TaskChat task="12" />, '/tasks/p1/12');
     const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
-    const pin = await within(chat).findByRole('region', { name: 'Needs you' });
+    const pin = await within(chat).findByRole('region', { name: 'Question' });
     expect(within(pin).getByText('Which address should it go to?')).toBeTruthy();
-    // free-form: answered in the message box, so the pin has no buttons of its own
+    // a free-text ❓: its card offers the reply box alone, no buttons until something is typed
     expect(within(pin).queryByRole('button')).toBeNull();
     await ready(await decision());
     expect(within(chat).getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
@@ -1182,6 +1182,15 @@ describe('on a phone, the decision holds the bottom', () => {
     expect(screen.getAllByRole('region', { name: 'The decision' })).toHaveLength(1);
   });
 
+  it('of the Chat tab: a ❓ to the person is pinned over its message box too @approvals', async () => {
+    const waits = [{ state: 'person', who: 'human:me', line: 'Which address should it go to?', requirement_id: 'qmark:m1', since: null, until: null, ask: true }];
+    shown = task({ to_leave: [], waits } as Partial<TaskData>);
+    show(<TaskPage task="12" pipeline="p1" tab="chat" />, '/tasks/p1/12/chat');
+    const chat = await screen.findByRole('region', { name: 'Chat with Legal Owner' });
+    const pin = await within(chat).findByRole('region', { name: 'Question' });
+    expect(within(pin).getByText('Which address should it go to?')).toBeTruthy();
+  });
+
   it('on a phone, of the chat’s own address too: it stays the address, the page under the chat card, one box @approvals', async () => {
     shown = task({ to_leave: [req(), req({ requirement_id: 'r2', shows: [], line: 'Check the brief?' })] });
     document.documentElement.dataset.layout = 'cards';
@@ -1584,7 +1593,7 @@ describe('an open task reads itself afresh', () => {
   it('reopened after its ❓ cleared while it was closed, with a rename between, it shows no pin, after one read @live', async () => {
     shown = task({ to_leave: [], waits: [asked] } as Partial<TaskData>);
     open();
-    expect(await screen.findByRole('region', { name: 'Needs you' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Question' })).toBeTruthy();
     cleanup();
     // closed: the person answered elsewhere, then the task was renamed; the copy held gets the rename's row
     shown = task({ to_leave: [], waits: [], version: 4, title: 'Send: Renamed' } as Partial<TaskData>);
@@ -1595,7 +1604,7 @@ describe('an open task reads itself afresh', () => {
     open();
     await screen.findByRole('region', { name: 'Chat with Legal Owner' });
     await waitFor(() => expect(reads).toBe(1));
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Question' })).toBeNull());
     expect(reads).toBe(1);
   });
 
@@ -1614,7 +1623,7 @@ describe('an open task reads itself afresh', () => {
       );
     }
     show(<Route />, '/tasks/p1/12');
-    expect(await screen.findByRole('region', { name: 'Needs you' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Question' })).toBeTruthy();
     act(() => go('13'));
     // away on #13: the person answered elsewhere, then the task was renamed; the copy held gets the rename's row
     shown = task({ to_leave: [], waits: [], version: 4, title: 'Send: Renamed' } as Partial<TaskData>);
@@ -1624,7 +1633,7 @@ describe('an open task reads itself afresh', () => {
     reply = (url, method) => (isRead(url, method) && reads++, null);
     act(() => go('12'));
     await waitFor(() => expect(reads).toBeGreaterThan(0));
-    await waitFor(() => expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Question' })).toBeNull());
   });
 
   it('a ❓ cleared while the route reads the task: the page opens on a fresh read, and nothing is canceled @live', async () => {
@@ -1641,6 +1650,6 @@ describe('an open task reads itself afresh', () => {
     open();
     await screen.findByRole('region', { name: 'Chat with Legal Owner' });
     await waitFor(() => expect(queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'))?.version).toBe(4));
-    expect(screen.queryByRole('region', { name: 'Needs you' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Question' })).toBeNull();
   });
 });

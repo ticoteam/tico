@@ -36,6 +36,12 @@ NEEDS_ITEM = obj(
     requirement_id={"type": ["string", "null"]},
     message_id={"type": "string", "description": "A ❓'s message"},
     mark_id={"type": "string", "description": "A ❓'s mark (POST /api/v2/questions/{mid}/give)"},
+    choices={
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "A ❓'s suggested answers, at most 3: a tap posts one as the person's reply (`ask` on POST "
+        "/api/v2/tasks/{tid}/comments); empty for a free-text ❓",
+    },
     shows={
         "type": "array",
         "items": {"type": "string"},

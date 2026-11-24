@@ -2066,6 +2066,7 @@ def needs_items(c, auth, who, task_view=None, count_only=False, snoozed="hide"):
                 "task_id": it.get("task_id"),
                 "from_id": it["bot_id"],
                 "line": it["line"],
+                "choices": it.get("choices") or [],
                 "since": it["since"],
                 "task": briefs.get(it.get("task_id")),
                 **({"shows": shows} if shows else {}),

@@ -38,7 +38,8 @@ RETRY = timedelta(hours=1)  # after a failed call, the next pass that asks
 NOTE = "Closed by Tico: this is a decision for {person}, so {bot} asks it with a ❓ message on its own task."
 TOLD = (
     "Your to-do “{title}” for {person} was a decision, so Tico closed it. Ask it on your own task: "
-    'tico task ask <task> --to {handle} "<question>". Say why, the options and your pick in the message.'
+    'tico task ask <task> --to {handle} "<question>" --choice "<your pick>" --choice "<other>" --context "<why>": '
+    "answers they can tap, your pick first."
 )
 
 

@@ -664,12 +664,19 @@ def parser():
     s.add_argument("objective", nargs="?")
     s.set_defaults(fn="chat goal")
     s = chat.add_parser("ask", help="ask a person in your direct chat, marked ❓: it needs their reply")
-    s.add_argument("message", help="what you ask: a short first line that stands on its own")
+    s.add_argument("message", help="the question: one line that stands on its own")
     s.add_argument("--to", required=True, help="the person: their id")
+    s.add_argument(
+        "--choice", dest="choices", action="append", help="a short answer they can tap; up to 3, your pick first"
+    )
+    s.add_argument("--context", help="what they need to decide, under the question")
     s.add_argument(
         "--conversation", dest="conversation_id", help="a chat you are both in; your chat with them if left out"
     )
     s.set_defaults(fn="chat ask")
+    s = chat.add_parser("take-back", help="take back your open ❓ in a chat: it leaves their Needs you")
+    s.add_argument("question_id")
+    s.set_defaults(fn="chat take-back")
     cli_spec.add(sub, assistant_commands.ASSISTANT)  # tico assistant: clients/commands/assistant.py
     cli_spec.add(sub, task_work_commands.TAG)  # tico tag: clients/commands/task_work.py
 
@@ -781,10 +788,13 @@ def parser():
     s.add_argument(
         "line",
         nargs="?",
-        help="the message: prefer one question, its first line the question itself, then any detail; a new ❓ "
-        "replaces yours, so number several in one",
+        help="the question: one line that stands on its own; a new ❓ replaces yours",
     )
     s.add_argument("--to", help="the person you ask: their id")
+    s.add_argument(
+        "--choice", dest="choices", action="append", help="a short answer they can tap; up to 3, your pick first"
+    )
+    s.add_argument("--context", help="what they need to decide, under the question")
     s.add_argument(
         "--kind",
         choices=["ok"],
@@ -794,6 +804,9 @@ def parser():
     s.add_argument("--for", dest="subject", metavar="KIND:ID", help="an OK bound to what you will do, with --content")
     s.add_argument("--content", type=json_value, help="with --for: exactly what the OK covers, as JSON")
     s.add_argument("--withdraw", action="store_true", default=None, help="take back your open ask instead")
+    s.add_argument(
+        "--take-back", dest="take_back", action="store_true", default=None, help="take back your open ❓ here"
+    )
     s.add_argument("--requirement", help="with --withdraw: the ask's requirement id, when several may be withdrawn")
     s.add_argument(
         "--not-known",

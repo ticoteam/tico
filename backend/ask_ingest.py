@@ -495,7 +495,8 @@ def message(reason, name, load_now, manager_name, handle=""):
     if reason == "decision":
         return (
             f'This asks {name} to decide, so ask it on your own task: tico task ask <task> --to {handle or name} '
-            '"<question>". Say why, the options and your pick in the message.'
+            '"<question>" --choice "<your pick>" --choice "<other>" --context "<why>": answers they can tap, your '
+            "pick first."
         )
     why = REASONS.get(reason, "it doesn't meet {name}'s asking criteria").format(name=name, load=load_now)
     ask = f"ask {manager_name}, " if manager_name else ""

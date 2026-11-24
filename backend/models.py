@@ -731,6 +731,16 @@ class Question(Contract):
     text: Text
     # A question Tico answered itself (backend/ask_known.py), sent again because the answer did not cover it.
     not_known: bool = False
+    # Up to three suggested answers: the person taps one (sent as their reply) or types their own.
+    choices: list[Annotated[StrictStr, Field(min_length=1, max_length=60)]] = Field(default_factory=list, max_length=3)
+
+    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
+        """As the request's idempotency hash reads it: no `choices` left out, so a question retried across the upgrade
+        that added them hashes as it did."""
+        out = super().model_dump(**kwargs)
+        if not out.get("choices"):
+            out.pop("choices", None)
+        return out
 
 
 class ChatQuestion(Question):

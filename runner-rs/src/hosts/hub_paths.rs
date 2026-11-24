@@ -230,6 +230,7 @@ pub(super) const HUB_PATHS: &[&str] = &[
     "chat ask",
     "chat goal",
     "chat send",
+    "chat take-back",
     "classify",
     "cloud",
     "cloud replace",
