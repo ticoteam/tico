@@ -705,6 +705,8 @@ fn a_manual_code_link_is_read_from_its_redirect_alone() {
     assert!(!manual_code_link(&twice));
     let short_local = format!("{short}&redirect_uri=http%3A%2F%2Flocalhost%3A54545%2Fcallback");
     assert!(!short_sign_in_link(&short_local));
+    let short_encoded = format!("{short}&redirect%5Furi=http%3A%2F%2Flocalhost%3A54545%2Fcallback");
+    assert!(!short_sign_in_link(&short_encoded));
 }
 
 /// Claude Code's short sign-in link (2.1.330 on): scope bits and the 43-character code challenge, then optional
@@ -714,7 +716,7 @@ fn short_sign_in_link(url: &str) -> bool {
     Regex::new(r"^https://claude\.ai/oauth/authorize\?[A-Za-z0-9_-]{44,}(&\S*)?$")
         .unwrap()
         .is_match(url)
-        && !url.contains("redirect_uri=")
+        && url::Url::parse(url).is_ok_and(|u| !u.query_pairs().any(|(k, _)| k == "redirect_uri"))
 }
 
 #[test]
