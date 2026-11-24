@@ -261,7 +261,49 @@ handle is an agent's slug and also a person's id or email prefix (`@ops` for the
 reaches both. Write an agent's slug and a person's id, and check `GET /api/v2/org` for a clash.
 
 Look handles up with `GET /api/v2/org` (each person's `id`, `name` and `email`; each agent's `slug` and
-`display_name`), MCP `tico_team_show`, or `tico team show`.
+`display_name`), MCP `tico_team_show`, or `tico team show`. To offer them as you type, use the @ picker search below.
+
+### Build an @ picker
+
+The web app's @ list is one call your own frontend or agent can make too:
+
+1. **Find candidates** with what follows the @ so far: `GET /api/v2/mentions?q=<text>&task=<task>&thread=<id>&limit=8`
+   (MCP `tico_mention_search`, CLI `tico mention <text> [--task <task>] [--thread <id>]`). It answers the teammates
+   `GET /api/v2/org` shows you, best first, never you and never an archived agent: with `task`, that task's people
+   (who asked, who it is for, who has it, then its roles) come first; then a name or handle that starts with `q`, one
+   with a word that starts with it, one that contains it; then by name. With the `thread` of a direct chat (or of a
+   thread under one), only its members. `limit` is 1 to 50.
+2. **Insert `handle`** as written, followed by a space. It is one word (a slug, an id, an email prefix or a first
+   name) that a post reads as that one teammate and nobody else, and that begins no one else's longer name: a slug that
+   is also someone's email prefix gets another of their names. It is null when every one-word name they go by also names someone else: offer them without
+   a handle, or not at all.
+3. **Post** the text as a task comment (`POST /api/v2/tasks/{id}/comments`, `tico_task_comment`,
+   `tico task comment`) or a thread message (`POST /api/v2/threads/{id}/messages`, `tico_thread_post`).
+4. **Read the answer** ([Who can be reached](#who-can-be-reached-and-how-to-tell)):
+   - A task comment answers `{"comment", "comments", "woke", "delivered"}`. `woke` and `delivered` are booleans that
+     say whether it reached anyone: `woke` when it queued an agent's turn, `delivered` when it reached a person. A
+     `warnings` list, when present, names each @mention that reached nobody.
+   - A thread message answers the message itself (`id`, `seq`, `thread_id`, ...), without `woke` or `delivered`. Its
+     `warnings` list, when present, names each @mention that reached nobody, such as
+     `{"rule": "mention_outside", "actor": "human:cara"}` for someone outside the chat.
+
+Each candidate is `{"id", "kind", "name", "handle", "on_task"}`; `on_task` is true for the task's people.
+
+```sh
+curl "$TICO/api/v2/mentions?q=fin&task=%2342" -H "Authorization: Bearer $TOKEN"
+# {"candidates": [{"id": "bot:finance", "kind": "agent", "name": "Finance", "handle": "@finance",
+#                  "on_task": true}, ...]}
+curl -X POST "$TICO/api/v2/tasks/%2342/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Idempotency-Key: 9b2d4e6f-1a3c-4b5d-8e7f-0a1b2c3d4e05" \
+  -H "Content-Type: application/json" -d '{"text": "@finance can you check the May totals?"}'
+# {"comment": {...}, "woke": true, ...}
+```
+
+- MCP: `tico_mention_search` with `{"q": "fin", "task": "#42"}`, then `tico_task_comment` with
+  `{"id": "#42", "text": "@finance can you check the May totals?"}`.
+- CLI: `tico mention fin --task '#42'`, then `tico task comment '#42' "@finance can you check the May totals?"`.
+
+The web app ranks the same way on its own copy of the team chart, so its list and this answer agree.
 
 ### Examples
 

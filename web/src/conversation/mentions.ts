@@ -38,7 +38,7 @@ export function mentionMatches(actors: readonly Actor[], query: string, me: stri
   const order = new Map(first.map((id, i) => [id, i]));
   const allowed = only && new Set(only);
   return actors
-    .filter((a) => !self.has(a.id) && a.lifecycle !== 'archived' && (!allowed || allowed.has(a.id)))
+    .filter((a) => !self.has(a.id) && a.lifecycle !== 'archived' && (!allowed || allowed.has(a.id) || (a.slug !== undefined && allowed.has(`bot:${a.slug}`))))
     .map((a) => ({ a, r: rank(a, q), f: order.get(a.id) ?? (a.slug !== undefined ? order.get(`bot:${a.slug}`) : undefined) }))
     .filter((m): m is { a: Actor; r: number; f: number | undefined } => m.r !== null)
     .sort((x, y) => (x.f ?? Infinity) - (y.f ?? Infinity) || x.r - y.r || x.a.name.localeCompare(y.a.name))

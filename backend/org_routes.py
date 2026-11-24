@@ -23,6 +23,7 @@ from .harnesses import output_style, resolve_harness, verbosity
 from .settings_admin import compact_at as compact_at_of
 from .store import H, P, Problem, repo_url
 from .api_contract import api_v2
+from .api_answers.team import MentionCandidates
 
 
 def register(app, auth, settings, settings_admin, store):
@@ -507,3 +508,27 @@ def register(app, auth, settings, settings_admin, store):
             return teammate_access.redact_chart(
                 {**view, "bots": bots, "seats": seats}, roster, people_hidden, groups_hidden
             )
+
+    @app.get(
+        "/api/v2/mentions",
+        **api_v2(
+            "Team chart",
+            "searchMentions",
+            "Whom an @ picker offers: the people and agents /api/v2/org shows the caller, best match for `q` first, "
+            "each with the handle to insert",
+            MentionCandidates,
+            parameters={
+                "q": "What follows the @ so far; empty: everyone, in the same order",
+                "task": "A task id, short id or #number: its people come first",
+                "thread": "A thread id: a direct chat (or a thread under one) offers only its members",
+                "limit": "At most this many, 1 to 50 (default 8)",
+            },
+        ),
+    )
+    def mentions(request: Request, q: str = "", task: str | None = None, thread: str | None = None, limit: int = 8):
+        """The @ picker's candidates (backend/mention_search.py): never the caller, never an archived agent."""
+        from . import mention_search
+
+        with store.read() as c:
+            privacy.snapshot(c)  # one read: the roster, the task and the names a post reads all agree
+            return mention_search.search(c, auth, request.state.identity, q=q, task=task, thread=thread, limit=limit)

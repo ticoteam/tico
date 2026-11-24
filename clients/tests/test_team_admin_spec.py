@@ -73,3 +73,10 @@ def test_general_manager_paths_send_what_the_hand_branch_sent(monkeypatch):
     assert schedule["tools"][0][1] == {"at": "08:00", "operation_id": None, "preset": "daily"}
     bot = run_line(["general-manager", "bot", "off"], monkeypatch)
     assert bot["tools"] == [["tico_general_manager_set", {"bot": "off", "operation_id": None}]]
+
+
+def test_mention_sends_the_query_and_where_it_will_be_written(monkeypatch):
+    result = run_line(["mention", "fin", "--task", "#42", "--limit", "5"], monkeypatch)
+    assert result["tools"] == [["tico_mention_search", {"limit": 5, "operation_id": None, "q": "fin", "task": "#42"}]]
+    assert result["http"] == [["GET", "mentions?q=fin&task=%2342&limit=5", None]]
+    assert run_line(["mention"], monkeypatch)["http"] == [["GET", "mentions", None]]

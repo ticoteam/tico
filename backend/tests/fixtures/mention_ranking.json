@@ -1,0 +1,192 @@
+{
+  "_about": "One case list for the @ picker's ranking and handles: web/src/conversation/mentions.test.ts runs it through mentionMatches and mentionText, backend/tests/test_mention_search.py through backend/mention_search.py. Names differ in more than case or accents, where the two sorts may differ.",
+  "me": "ana",
+  "actors": [
+    {
+      "id": "human:ana",
+      "kind": "person",
+      "name": "Ana Ortiz"
+    },
+    {
+      "id": "human:ben",
+      "kind": "person",
+      "name": "Ben Ortiz"
+    },
+    {
+      "id": "human:cara.lee",
+      "kind": "person",
+      "name": "Cara Lee"
+    },
+    {
+      "id": "human:dan smith",
+      "kind": "person",
+      "name": "Dan Smith"
+    },
+    {
+      "id": "human:opal",
+      "kind": "person",
+      "name": "Opal"
+    },
+    {
+      "id": "bot:ops",
+      "kind": "agent",
+      "name": "Ops",
+      "slug": "ops"
+    },
+    {
+      "id": "bot:finance",
+      "kind": "agent",
+      "name": "Finance Desk",
+      "slug": "finance"
+    },
+    {
+      "id": "bot:9f3c",
+      "kind": "agent",
+      "name": "Product Design",
+      "slug": "product-design"
+    },
+    {
+      "id": "bot:qa",
+      "kind": "agent",
+      "name": "QA",
+      "slug": "qa",
+      "lifecycle": "active"
+    },
+    {
+      "id": "bot:old",
+      "kind": "agent",
+      "name": "Old Agent",
+      "slug": "old",
+      "lifecycle": "archived"
+    }
+  ],
+  "handles": {
+    "human:ana": "@ana",
+    "human:cara.lee": "@cara.lee",
+    "human:dan smith": "@Dan Smith",
+    "bot:ops": "@ops",
+    "bot:9f3c": "@product-design"
+  },
+  "cases": [
+    {
+      "query": "",
+      "want": [
+        "human:ben",
+        "human:cara.lee",
+        "human:dan smith",
+        "bot:finance",
+        "human:opal",
+        "bot:ops",
+        "bot:9f3c",
+        "bot:qa"
+      ]
+    },
+    {
+      "query": "o",
+      "want": [
+        "human:opal",
+        "bot:ops",
+        "human:ben",
+        "bot:9f3c"
+      ]
+    },
+    {
+      "query": "O",
+      "want": [
+        "human:opal",
+        "bot:ops",
+        "human:ben",
+        "bot:9f3c"
+      ]
+    },
+    {
+      "query": "de",
+      "want": [
+        "bot:finance",
+        "bot:9f3c"
+      ]
+    },
+    {
+      "query": "o",
+      "first": [
+        "human:cara.lee",
+        "bot:product-design"
+      ],
+      "want": [
+        "bot:9f3c",
+        "human:opal",
+        "bot:ops",
+        "human:ben"
+      ]
+    },
+    {
+      "query": "",
+      "first": [
+        "bot:qa",
+        "human:ben"
+      ],
+      "want": [
+        "bot:qa",
+        "human:ben",
+        "human:cara.lee",
+        "human:dan smith",
+        "bot:finance",
+        "human:opal",
+        "bot:ops",
+        "bot:9f3c"
+      ]
+    },
+    {
+      "query": "",
+      "only": [
+        "human:ben",
+        "bot:ops"
+      ],
+      "want": [
+        "human:ben",
+        "bot:ops"
+      ]
+    },
+    {
+      "query": "",
+      "only": [
+        "human:ben",
+        "bot:product-design"
+      ],
+      "want": [
+        "human:ben",
+        "bot:9f3c"
+      ]
+    },
+    {
+      "query": "lee",
+      "want": [
+        "human:cara.lee"
+      ]
+    },
+    {
+      "query": "smith",
+      "want": [
+        "human:dan smith"
+      ]
+    },
+    {
+      "query": "sk",
+      "want": [
+        "bot:finance"
+      ]
+    },
+    {
+      "query": "old",
+      "want": []
+    },
+    {
+      "query": "ana",
+      "want": []
+    },
+    {
+      "query": "zz",
+      "want": []
+    }
+  ]
+}
