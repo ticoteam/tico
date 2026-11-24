@@ -141,7 +141,7 @@ def same_people(readers, shared):
             "someone on in their team, or the inbox fallback, by availability (label urgent: nobody async). On the "
             "Support pipeline when none is named",
         },
-        "human": _s("Its Human: a person or `me`"),
+        "human": _s("A person or `me` in its `human` role, a label"),
         "after": {
             "type": "array",
             "items": {"type": "string"},
@@ -929,7 +929,7 @@ def task_list(api, args):
         },
         "goal_id": _s("The goal this task serves; an empty string takes it off"),
         "entity": _s("The Contacts entity it is for: its id, email or domain; an empty string takes it off"),
-        "human": _s("Its Human: a person, `me`, or \"\" for none"),
+        "human": _s("A person or `me` in its `human` role (a label), or \"\" to take the role off"),
         "note": _s("What changed, in a sentence"),
         "version": VERSION,
         "on_behalf_of": ASKED,

@@ -465,15 +465,22 @@ Besides its owner, a task can list people or bots under a **role**, a short name
 `"roles": {"reviewer": ["human:charlie"]}` (each role named replaces its people, `[]` clears one).
 `tico task list --member me [--role reviewer]` lists the tasks you are on. In SQL they are the `task_roles` table.
 
-## The task's Human
+## Who a task falls to
 
-A task may name one **Human**: the person accountable for it, whoever owns it, such as the developer on a ticket a bot
-owns. It is optional. The owner still has the work and is the one woken; the Human is the person the task falls to
-first. An OK or a page that names nobody goes to them and is in their Needs you, and the owner bot's wake
-tells it to ask them. Naming one who cannot read a private task
-is refused (it adds no reader). A Human who left, cannot sign in or can no longer read the task is passed over for the
-rest of the ladder. Task create and update take `"human": "human:charlie"` (`""` takes them off); the task carries
-`human_id`. `tico task create|update --human <person>`. It stays when the task moves to another pipeline.
+When no agent can take a task further, or an OK or a page names nobody, it falls to a person: the one the never-stuck
+ladder already brought it to, else its holder when that is a person, else its **assignee** when that is a person (who
+it is for, whoever holds this stage), else its pipeline's owner or manager when a person, else the first person above
+its manager agent on the chart, else the company's owner. Anyone who left, cannot sign in or cannot read a private task is
+passed over. So a review stage a person holds asks that person, and a stage an agent holds asks the person assignee;
+the agent's wake names them, and it may ask them on the task (a ❓ or a stage ask) unless an agent named them assignee
+(or, with no change of assignee on record, an agent filed the task).
+A change of assignee moves both people's Needs you.
+
+A task used to name a **Human** for this; the assignee does that now. Each task's Human became its assignee where it
+was a company task with none, and otherwise its `human` role (a label, see above). Until the upgrade floor passes this
+release, `"human"` on task create and update (the API and the MCP tools) sets only that role, a person who can
+already read the task; `""` or null takes it off. Sent with `roles.human` too, both must name the same people (else
+422). A task deleted before the upgrade gets the same move when it is restored. The task no longer carries `human_id`.
 
 ## Files
 

@@ -214,7 +214,7 @@ class TaskCreate(Contract):
     body: Text | None = Field(default=None, validation_alias=AliasChoices("message", "body"))
     # Who does it. Left out, the pipeline's first stage must pick from several (backend/stage_pick.py): it picks one.
     owner: ID | None = None
-    # The person accountable for it, whoever owns it (hubdb.task_human): asks that name nobody go to them first.
+    # The old Human field: until the upgrade floor passes, it sets the `human` role alone (a person; hubdb.human_roles).
     human: ID | None = None
     # The pipeline it goes in, by id; General when none is named. It starts in the pipeline's first stage.
     pipeline: ID | None = None
@@ -355,18 +355,25 @@ class TaskUpdate(Contract):
     number: TaskNumber | None = None  # a mover's, for a task that has none
     # Replace the people in the roles named: {role: [actors]}; [] clears one.
     roles: dict[str, list[str]] | None = None
-    # The task's Human (hubdb.task_human), a person; "" takes them off.
+    # The old Human field: until the upgrade floor passes, it sets the `human` role alone (a person; hubdb.human_roles);
+    # "" or null takes the role off.
     human: str | None = Field(default=None, max_length=200)
     # Agent Ops applying a person's own request to a task they own or requested (backend/app.py
     # delegated_identity): checked as that person, never as Agent Ops.
     on_behalf_of: ID | None = None
 
     def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """As the request's idempotency hash reads it: an unset `entity` left out, so an edit retried across the upgrade
-        that added it hashes as it did. "" (take it off) stays."""
+        """As the request's idempotency hash and a held edit read it: an unset `entity` left out, so an edit retried
+        across the upgrade that added it hashes as it did. "" (take it off) stays. `human` is left out unless it was
+        sent, and sent as null it is "" (both take the role off): a held edit that never named it replays without it,
+        and a null in a held edit is one stored before this (`rule_replay_update` drops it)."""
         out = super().model_dump(**kwargs)
         if out.get("entity") is None:
             out.pop("entity", None)
+        if "human" not in self.model_fields_set:
+            out.pop("human", None)
+        elif "human" in out and out["human"] is None:
+            out["human"] = ""
         return out
 
     @model_validator(mode="before")

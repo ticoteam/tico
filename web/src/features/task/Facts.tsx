@@ -10,7 +10,7 @@ import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
-import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
+import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { toast } from '@/kit/Toast';
 import { Section } from '@/pagekinds';
@@ -24,7 +24,7 @@ import { fixHref } from './StatusLine';
 import { taskGoalQuery, taskMeetingsQuery, visibleOf, type TaskData, type TaskFacts, type Visible } from './queries';
 import { questionLine } from './waits';
 
-/* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size, Human,
+/* The facts the old task window had (ui/app/task-props.ts) that Details draws as rows (more.js dKv): Size,
    Assignee, Goal, Roadmap, People, Visible to, the public text; and the Meetings section. Each value edits
    in place or through a small pick, and saves at once. */
 
@@ -37,18 +37,6 @@ const act = async (id: string, input: object) => {
 function useNames() {
   const actors = useActors();
   return (id: string) => actors.find((a) => a.id === id)?.name ?? 'Someone';
-}
-
-/** People only, for the Human. */
-function PeopleItems({ current, onPick }: { current: string | null | undefined; onPick: (id: string) => void }) {
-  const people = useActors().filter((a) => a.kind === 'person');
-  return (
-    <>
-      {people.map((a) => (
-        <MenuItem key={a.id} label={a.name} lead={<Face id={a.id} size={16} decorative />} on={a.id === current} onSelect={() => onPick(a.id)} />
-      ))}
-    </>
-  );
 }
 
 /** A face that opens a short menu (take them off). */
@@ -195,11 +183,10 @@ export function SizeFact({ t }: { t: TaskData }) {
   );
 }
 
-/** Human, Assignee, Goal, Roadmap, People, Visible to: after Tags. */
+/** Assignee, Goal, Roadmap, People, Visible to: after Tags. */
 export function MoreFacts({ t }: { t: TaskFacts }) {
   return (
     <>
-      <HumanFact t={t} />
       <Kv k="Assignee">
         {t.assignee_id ? (
           <>
@@ -217,38 +204,6 @@ export function MoreFacts({ t }: { t: TaskFacts }) {
       <PeopleFact t={t} />
       <VisibleFact t={t} />
     </>
-  );
-}
-
-function HumanFact({ t }: { t: TaskData }) {
-  const human = t.human_id ?? null;
-  const set = (to: string | null) => act('task.setHuman', { task: t.id, human: to });
-  return (
-    <PickKv
-      k="Human"
-      label="Human"
-      target={`task-human:${t.id}`}
-      value={
-        human ? (
-          <>
-            <Face id={human} />
-            <span>
-              <NameOf id={human} />
-            </span>
-          </>
-        ) : (
-          none
-        )
-      }
-    >
-      <PeopleItems current={human} onPick={set} />
-      {human && (
-        <>
-          <MenuRule />
-          <MenuItem label="None" icon="close" onSelect={() => set(null)} />
-        </>
-      )}
-    </PickKv>
   );
 }
 

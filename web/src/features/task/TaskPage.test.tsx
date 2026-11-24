@@ -983,15 +983,6 @@ describe('Details: the facts @s58', () => {
     expect(screen.queryByText('Waiting on')).toBeNull();
   });
 
-  it('sets the Human in place', async () => {
-    serve(base);
-    details();
-    await facts();
-    fireEvent.click(await screen.findByRole('button', { name: 'Human' }));
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Bo Lee' }));
-    await waitFor(() => expect(sent.at(-1)).toMatchObject({ url: '/api/v2/tasks/t1', body: { human: 'human:bo' } }));
-  });
-
   it('validates and saves the size in place', async () => {
     serve(base);
     details();

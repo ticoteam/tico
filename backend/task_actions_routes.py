@@ -829,7 +829,6 @@ def register_core(
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
             unassigned=unassigned,
             wake_refs=wake_refs,
-            human_id=body.human,
             asks=owner if asks_person and holder != owner else None,
             entity_id=entity_id,
         )
@@ -967,11 +966,19 @@ def register_core(
             )
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
+        # The old `human` field is the `human` role: checked against `roles` first, then written once the task entered its
+        # first stage, so the person is judged on the privacy it has there. Filing it is the right to name them, as it
+        # was for the Human; `roles` keeps its own check.
+        # Sent as null or "", `human` names nobody, which `roles.human` must then agree with; left out, it says nothing.
+        named = (body.human or "") if "human" in body.model_fields_set else None
+        folded = H.human_roles(c, who.actor, named, body.roles)
         if body.roles:
             try:
                 TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
+        if body.human and folded:
+            TRo.set_roles(c, who.actor, row["id"], {"human": folded["human"]}, checked=True)
         if close_read:
             close_items.save(c, close_read)
         note = " ".join(
@@ -1213,10 +1220,14 @@ def register_core(
     def rule_replay_task(c, bot, hold, replay, ingest, gate=None, close_read=None):
         if (replay.get("body") or {}).get("route"):
             raise Problem("route", ROUTED_HELD, 422)  # routed creates are never held; one from before is not sent
+        held = dict(replay["body"])
+        if "human" in held and held["human"] is None:
+            # A hold stores the whole create, so a `human` left out is stored as null: it names nothing here.
+            del held["human"]
         return task_create(
             c,
             bot,
-            M.TaskFile.model_validate(replay["body"]),
+            M.TaskFile.model_validate(held),
             ingest=ingest,
             rule=org_rule_check.decided(gate),
             close_read=close_read,
@@ -1303,7 +1314,9 @@ def register_core(
             warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
-        fields["human_id"] = fields.pop("human")  # the column's name: `human` is the API's, as `owner` is
+        # The old `human` field, the `human` role until the upgrade floor passes: sent as "" or null, it takes it off.
+        named = fields.pop("human", None)
+        fields["human_role"] = (named or "") if "human" in body.model_fields_set else None
         entity = fields.pop("entity", None)
         fields["entity_id"] = None if entity is None else for_entity(c, who, entity)
         if "size" in body.model_fields_set and body.size is None:
@@ -1341,7 +1354,11 @@ def register_core(
 
     @org_rule_check.replayer("task_update")
     def rule_replay_update(c, bot, hold, replay, ingest, gate=None):
-        body = M.TaskUpdate.model_validate(replay["body"])
+        held = dict(replay["body"])
+        if "human" in held and held["human"] is None:
+            # Held before `human` was left out when not sent: every edit stored it as null, so null names nothing.
+            del held["human"]
+        body = M.TaskUpdate.model_validate(held)
         row = H.task(c, replay["task"])
         if row:
             # `send` refused it if the task changed since the hold (its version is the check's object), so this is

@@ -4815,25 +4815,36 @@ def review_finding_route(conn, actor, task_id, target):
 
 
 def task_human(conn, actor, value):
-    """A task's Human as stored: `value` (`human:ana`, `ana`) as a person's actor. The Human is optional and never a
-    co-owner: the owner still has the work, and the Human is the person the task falls to first
-    (waiting_on.person_for). Refused for a bot, a group, nobody known, or a person who left or cannot sign in."""
+    """The person the old `human` field on a task's create or update names, as stored: `value` (`human:ana`, `ana`) as
+    a person's actor. Until the upgrade floor passes the release that retired a task's Human, `human` sets the task's
+    `human` role and nothing else (`human_roles`). Refused for a bot, a group, nobody known, or a person who left or
+    cannot sign in."""
     from . import task_requirements
 
     found = resolve_actor(conn, value)
     if not found or not is_human(found):
-        refuse(conn, actor, "kind", f"A task's Human is a person, not {value}")
+        refuse(conn, actor, "kind", f"The human role is a person, not {value}")
     if not task_requirements.active_person(conn, found):
-        refuse(conn, actor, "kind", f"{actor_name(conn, found)} can't sign in, so can't be a task's Human")
+        refuse(conn, actor, "kind", f"{actor_name(conn, found)} can't sign in, so can't be in the human role")
     return found
 
 
-def _task_human_reads(conn, actor, row):
-    """Refuse a private task's Human who cannot read it: naming them never adds a reader. Checked once the task's
-    privacy and readers are written, so a write that sets both is judged as it lands."""
-    who = row.get("human_id")
-    if who and task_private(conn, row) and not task_private_readable(conn, who, row):
-        refuse(conn, actor, "kind", f"{actor_name(conn, who)} can't read this private task")
+def human_roles(conn, actor, value, roles):
+    """`roles` ({role: [actors]}, each role name as task_roles stores it) with the old `human` field folded in:
+    {"human": [person]}, or [] for "" (takes the role off); `roles` as it is when `human` was not sent (None). The role
+    is a label, written as task_roles writes every role, so naming someone who cannot read a private task is refused
+    there. Sent both ways (`roles.Human` is `roles.human`), they must name the same people, else the write is
+    refused."""
+    if value is None:
+        return roles
+    wanted = [task_human(conn, actor, value)] if value else []
+    try:
+        named = TRo.clean(roles) or {}
+    except ValueError as exc:
+        refuse(conn, actor, "kind", str(exc))
+    if "human" in named and [resolve_actor(conn, who) or who for who in named["human"]] != wanted:
+        refuse(conn, actor, "kind", "human and roles.human name different people: send one of them")
+    return {**named, "human": wanted}
 
 
 def task_create(
@@ -4881,7 +4892,6 @@ def task_create(
     readers=(),
     readers_check=None,
     unassigned=False,
-    human_id=None,
     asks=None,
     instructions=None,
     entity_id="",
@@ -4915,7 +4925,6 @@ def task_create(
     `follow` is accepted and ignored: nobody follows a task (backend/task_followers.py).
     `readers` are who else sees a private task (`set_task_readers`, `readers_check(task_id, added)` its check), set
     before it enters its first stage: the engine lets a private task in only where whoever has it there reads it.
-    `human_id` is the task's Human (`task_human`): the person accountable for it, whoever owns it.
 
     A task is a title and a chat: it has no description. `body` is its first message, the request, posted in its chat
     as its author's (`first_message`), and none when it is empty or only repeats the title. `instructions` are a
@@ -4924,7 +4933,6 @@ def task_create(
     Tico tells a bot things in its run, so its words are the bot's instructions, not a chat message.
     """
     _writer(conn, actor)
-    human_id = task_human(conn, actor, human_id) if human_id else None
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
     public_title = str(public_title or "").strip()
     public_summary = str(public_summary or "").strip()
@@ -5169,17 +5177,15 @@ def task_create(
             "occurrence": occurrence or None,
             "occurrence_step": occurrence_step or None,
             "rule_due_id": (rule_due_id or None) if occurrence else None,
-            "human_id": human_id,
             "entity_id": entity_id or "",
         }
         conn.execute(
             "INSERT INTO tasks (id, title, body, requester_id, owner_id, status, due_at, "
             "conversation_id, created_at, updated_at, done_at, closed_at, closed_by_id, note, lane, rank, "
-            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, human_id, entity_id) VALUES "
+            "goal_id, number, private, occurrence, occurrence_step, rule_due_id, entity_id) VALUES "
             "(:id, :title, :body, :requester_id, :owner_id, :status, :due_at, "
             ":conversation_id, :created_at, :updated_at, :done_at, :closed_at, :closed_by_id, :note, "
-            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :human_id, "
-            ":entity_id)",
+            ":lane, :rank, :goal_id, :number, :private, :occurrence, :occurrence_step, :rule_due_id, :entity_id)",
             row,
         )
         _building(conn, row["id"])  # its first stage is part of task.created, not a change
@@ -5227,9 +5233,6 @@ def task_create(
             _task_event(conn, row["id"], actor, "goal_id", None, goal_id, "")
         if entity_id:
             _task_event(conn, row["id"], actor, "entity_id", None, entity_id, "")
-        if human_id:
-            _task_human_reads(conn, actor, task(conn, row["id"]) or row)
-            _task_event(conn, row["id"], actor, "human_id", None, human_id, "")
         if plain:
             # warn mode: the problem is on the record, the task still exists (the refuse week follows)
             _task_event(conn, row["id"], TICO_ACTOR, "lint", None, "; ".join(plain), "")
@@ -5451,13 +5454,13 @@ def task_update(
     clear_size=False,
     public_allowance=0,
     seen_version=None,
-    human_id=None,
+    human_role=None,
     entity_id=None,
 ):
     """Edit a task's fields: title, due date, note, labels, lane, rank, goal, the Contacts entity it is for
     (`entity_id`, "" for none; the caller resolved it as one the editor sees), number, privacy, roles, size, its
-    Human and its public text. One edit raises the task's version once. `seen_version` is the version the caller looked
-    at: an edit against an older one is refused.
+    `human` role and its public text. One edit raises the task's version once. `seen_version` is the version the
+    caller looked at: an edit against an older one is refused.
 
     This never writes the task's status, stage or owner: the engine does (backend/task_engine.py). For the callers
     that still say it this way, `status="done"` is `task_done`, `status="closed"` is `task_close`, `status="open"` on
@@ -5468,8 +5471,8 @@ def task_update(
     is). `rank` is the position in the owner's queue. `goal_id` names the goal the task serves; "" takes it off.
     `number` gives a task that has none its number; it never changes. `title` renames it, checked as a new task's
     title would be (`_retitle`). `roles` replaces the people in the roles it names ({role: [actors]}; task_roles).
-    `human_id` names the task's Human (`task_human`); "" takes them off. A task has no description to edit: what it
-    asks is said on its chat.
+    `human_role` is the person the old `human` field names for the `human` role (`human_roles`); "" takes it off. A
+    task has no description to edit: what it asks is said on its chat.
     """
     if status is not None and status not in ("open", "done", "closed"):
         raise ValueError(f"a task is open, done or closed, not {status!r}: move it with task_move")
@@ -5529,7 +5532,7 @@ def task_update(
                 ("entity", entity_id),
                 ("private", private),
                 ("roles", roles),
-                ("human", human_id),
+                ("human", human_role),
                 ("visibility", visibility),
                 ("public title", public_title),
                 ("public summary", public_summary),
@@ -5566,7 +5569,7 @@ def task_update(
                 title,
                 private,
                 roles,
-                human_id,
+                human_role,
                 visibility,
                 public_title,
                 public_summary,
@@ -5685,12 +5688,7 @@ def task_update(
         sets.append("entity_id=:entity_id")
         args["entity_id"] = entity_id
         _task_event(conn, task_id, actor, "entity_id", row.get("entity_id") or None, entity_id or None, note or "")
-    if human_id is not None:
-        human_id = task_human(conn, actor, human_id) if human_id else None
-        if human_id != row.get("human_id"):
-            sets.append("human_id=:human_id")
-            args["human_id"] = human_id
-            _task_event(conn, task_id, actor, "human_id", row.get("human_id"), human_id, note or "")
+    roles = human_roles(conn, actor, human_role, roles)
     edited = bool(
         sets or roles or clear_size or any(v is not None for v in (visibility, public_title, public_summary, size))
     )
@@ -5750,8 +5748,6 @@ def task_update(
             event(conn, actor, "task.lint", task_id, {"problems": plain})
         event(conn, actor, "task.update", task_id, {"note": note})
         after = isolate_private_task(conn, task(conn, task_id) or row)
-        if args.get("human_id"):
-            _task_human_reads(conn, actor, after)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
         if task_private(conn, after) and not task_private(conn, row):
