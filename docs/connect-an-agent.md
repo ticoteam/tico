@@ -271,24 +271,23 @@ The web app's @ list is one call your own frontend or agent can make too:
    (MCP `tico_mention_search`, CLI `tico mention <text> [--task <task>] [--thread <id>]`). It answers the teammates
    `GET /api/v2/org` shows you, best first, never you and never an archived agent: with `task`, that task's people
    (who asked, who it is for, who has it, then its roles) come first; then a name or handle that starts with `q`, one
-   with a word that starts with it, one that contains it; then by name. With a direct chat's `thread`, only its
-   members. `limit` is 1 to 50.
-2. **Insert `handle`** as written, followed by a space. It is the text the server reads back as that one teammate and
-   nobody else (a slug that is also someone's email prefix gets the agent's name instead).
+   with a word that starts with it, one that contains it; then by name. With the `thread` of a direct chat (or of a
+   thread under one), only its members. `limit` is 1 to 50.
+2. **Insert `handle`** as written, followed by a space. It is the text a post reads as that one teammate and nobody
+   else (a slug that is also someone's email prefix gets the agent's name instead). It is null when every name they go
+   by also names someone else: offer them without a handle, or not at all.
 3. **Post** the text as a task comment (`POST /api/v2/tasks/{id}/comments`, `tico_task_comment`,
    `tico task comment`) or a thread message (`POST /api/v2/threads/{id}/messages`, `tico_thread_post`).
-4. **Read the answer**: `woke` and `delivered` say whom it reached, and `warnings` names an @mention that reached
-   nobody ([Who can be reached](#who-can-be-reached-and-how-to-tell)).
+4. **Read the answer**: `woke` and `delivered` are booleans saying whether it reached anyone (`woke`: it queued an
+   agent's turn; `delivered`: it reached a person), and `warnings` names each @mention that reached nobody, such as
+   someone outside the chat ([Who can be reached](#who-can-be-reached-and-how-to-tell)).
 
-Each candidate is `{"id", "kind", "name", "handle", "on_task", "wakes"}`. `on_task` is true for the task's people.
-`wakes` is false, with a `reason`, when your @mention would not reach them: an agent you may see but have no Write on,
-or someone who cannot read the task or chat (on a private task your @mention adds them to its readers instead, so they
-count as reached). Gray those out or leave them off.
+Each candidate is `{"id", "kind", "name", "handle", "on_task"}`; `on_task` is true for the task's people.
 
 ```sh
 curl "$TICO/api/v2/mentions?q=fin&task=%2342" -H "Authorization: Bearer $TOKEN"
 # {"candidates": [{"id": "bot:finance", "kind": "agent", "name": "Finance", "handle": "@finance",
-#                  "on_task": true, "wakes": true}, ...]}
+#                  "on_task": true}, ...]}
 curl -X POST "$TICO/api/v2/tasks/%2342/comments" -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: 9b2d4e6f-1a3c-4b5d-8e7f-0a1b2c3d4e05" \
   -H "Content-Type: application/json" -d '{"text": "@finance can you check the May totals?"}'

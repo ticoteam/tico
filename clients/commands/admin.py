@@ -623,12 +623,12 @@ def org(api, args):
 @tool(
     "tico_mention_search",
     "Find people and agents to @mention, best match first, as the web app's @ list offers them: never you, never an "
-    "archived agent. Each has the `handle` to write in a comment or message (the server reads it back as that one "
-    "teammate), `on_task`, and `wakes` (false, with a `reason`, when your @mention would not reach them).",
+    "archived agent. Each has the `handle` to write in a comment or message (a post reads it as that one teammate; "
+    "null when no name of theirs is theirs alone) and `on_task`. The post's answer says whom it reached.",
     {
         "q": _s("What follows the @ so far; empty for everyone"),
-        "task": _s("A task id, short id or #number: its people come first, and `wakes` is for a comment there"),
-        "thread": _s("A thread id: `wakes` is for a post there; a direct chat offers only its members"),
+        "task": _s("A task id, short id or #number: its people come first"),
+        "thread": _s("A thread id: a direct chat (or a thread under one) offers only its members"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "description": "At most this many (default 8)"},
     },
 )

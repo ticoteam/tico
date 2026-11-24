@@ -1,21 +1,34 @@
 # pyright: strict
-"""Whom an @ picker offers (`GET /api/v2/mentions`, `tico_mention_search`, `tico mention`): the teammates the caller
-sees on the org chart, best match first, each with the handle to insert and whether an @mention of them would reach
-them here.
+"""Whom an @ picker offers (`GET /api/v2/mentions`, `tico_mention_search`, `tico mention`): the people and agents the
+caller sees on the org chart, best match first, each with the handle to insert.
 
 The ranking and the handle are the web picker's (web/src/conversation/mentions.ts `mentionMatches`, `mentionText`);
-backend/tests/fixtures/mention_ranking.json is one case list both must pass, so the two never drift."""
+backend/tests/fixtures/mention_ranking.json is one case list both must pass, so the two never drift. Whether a post
+reached them is the post's own answer (`woke`, `delivered`, `warnings`), not this one's."""
 
 import math
 import re
 from collections.abc import Iterable
 from typing import Any
 
-from . import task_roles as _task_roles, threads as _threads
+from . import (
+    people as _people,
+    strategy_bot as _strategy_bot,
+    task_roles as _task_roles,
+    teammate_access as _teammate_access,
+    threads as _threads,
+    views as _views,
+)
+from .store import H as _H
 
-# The thread and task modules are not strictly typed: they are used through Any here (as call_notes.py does).
-threads: Any = _threads
+# The store, roster and thread modules are not strictly typed: they are used through Any here (as call_notes.py does).
+H: Any = _H
+P: Any = _people
+strategy_bot: Any = _strategy_bot
 task_roles: Any = _task_roles
+teammate_access: Any = _teammate_access
+threads: Any = _threads
+views: Any = _views
 Row = dict[str, Any]
 
 LIMIT, MAX_LIMIT = 8, 50
@@ -28,40 +41,42 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
 
-def no_write(slug: str) -> str:
-    """The words of the 403 a send to an agent without Write on it gets (Auth.require)."""
-    return f"You can see {slug} but not send it requests. Ask the person who runs it for Write access."
-
-
-def _access(bot: Row) -> Row:
-    level: Row = bot.get("access") or {}
-    return level
-
-
-def actors(chart: Row) -> list[Row]:
-    """The org answer's people and agents as the web directory reads them (web/src/data/directory.ts)."""
-    rows: list[Row] = chart.get("people") or []
-    bots: list[Row] = chart.get("bots") or []
+def roster(c: Any, auth: Any, who: Any) -> list[Row]:
+    """The people and agents `GET /api/v2/org` shows this caller, as the web directory reads them
+    (web/src/data/directory.ts): the people on the roster they may see, and the configured agents they may see that are
+    not archived, less the Strategy Owner when they hid it from their chart."""
+    people_hidden, _ = teammate_access.unseen(c, who, auth)
     people: list[Row] = [
         {
             "id": "human:" + p["id"],
             "kind": "person",
             "name": _text(p.get("name")) or p["id"],
-            "email": p.get("email") or "",
+            "email": str(p.get("email") or ""),
         }
-        for p in rows
+        for p in P.visible_people(views.roster(c))
+        if p["id"] not in people_hidden
     ]
-    agents: list[Row] = [
-        {
-            "id": "bot:" + b["id"],
-            "kind": "agent",
-            "name": _text(b.get("display_name")) or _text(b.get("slug")) or b["id"],
-            "slug": _text(b.get("slug")) or b["id"],
-            "lifecycle": b.get("status") or "",
-            "write": bool(_access(b).get("write", True)),
-        }
-        for b in bots
-    ]
+    entries: Row = views.entries(c)
+    access: Row = auth.bot_accesses(c, who)
+    live: dict[str, Row] = {row["id"]: row for row in H.bots(c)}
+    no_strategy = strategy_bot.hidden_for(c, who)
+    agents: list[Row] = []
+    for slug, entry in entries.items():
+        bot: Row = live.get(slug) or {}
+        config: Row = entry or {}
+        if bot.get("state") == "archived" or not access.get(slug, auth.FULL)["see"]:
+            continue
+        if no_strategy and slug == strategy_bot.SLUG:
+            continue
+        name = _text(bot.get("slug")) or slug
+        agents.append(
+            {
+                "id": "bot:" + slug,
+                "kind": "agent",
+                "name": _text(bot.get("display_name")) or _text(config.get("display_name")) or name,
+                "slug": name,
+            }
+        )
     return people + agents
 
 
@@ -118,25 +133,51 @@ def ranked(
     return [(m[4], m[0] != math.inf) for m in found[:limit]]
 
 
-def _round_trips(c: Any, actor: Row, handle: str) -> bool:
-    return threads.mentions(c, None, handle) == [(actor["id"], "mention")]
+def names(c: Any) -> list[tuple[str, list[str]]]:
+    """[(actor, the names `threads.mentions` reads as them)] for everyone a post's @mention can name, read once: every
+    agent that is not archived by slug, name and display name; every person by id, email before the @, full name, and a
+    first name no one else shares. Not only those the caller sees: a post names the others too."""
+    out: list[tuple[str, list[str]]] = []
+    for b in H.bots(c):
+        if b.get("state") != "archived":
+            out.append(("bot:" + b["id"], [str(n) for n in (b.get("slug"), b.get("name"), b.get("display_name")) if n]))
+    people: list[Row] = H.humans(c)
+    firsts: dict[str, int] = {}
+    for p in people:
+        first = str(p.get("name") or "").split(" ")[0].lower()
+        if first:
+            firsts[first] = firsts.get(first, 0) + 1
+    for p in people:
+        name = str(p.get("name") or "").strip()
+        known = [str(p["id"]), str(p.get("email") or "").split("@")[0], name]
+        if name and firsts.get(name.split(" ")[0].lower()) == 1:
+            known.append(name.split(" ")[0])
+        out.append(("human:" + p["id"], [n for n in known if n]))
+    return out
 
 
-def handle(c: Any, actor: Row) -> str:
-    """The text to insert: `handle_of` when `threads.mentions` reads it back as this one actor and no one else, else the
-    first of their other names that does (a slug that is also a person's id reaches both); `handle_of` when none
-    does."""
-    first = handle_of(actor)
-    if _round_trips(c, actor, first):
-        return first
+def _reached(text: str, index: list[tuple[str, list[str]]], me: str) -> set[str]:
+    """Whom `text` alone @mentions, as `threads.mentions` reads it for a post by `me` (never its author)."""
+    low = text.lower()
+    return {
+        actor
+        for actor, known in index
+        if actor != me and any(low.startswith("@" + n.lower()) and threads._spot(text, n) is not None for n in known)
+    }
+
+
+def handle(actor: Row, index: list[tuple[str, list[str]]], me: str) -> str | None:
+    """The text to insert: `handle_of` when a post reads it as this one actor and no one else, else the first of their
+    other names that does (a slug that is also a person's email prefix reaches both); None when none does."""
     if actor["kind"] == "agent":
-        others = [actor.get("slug"), actor["name"]]
+        others = [handle_of(actor)[1:], actor.get("slug"), actor["name"]]
     else:
-        others = [str(actor["id"]).split(":", 1)[-1], str(actor.get("email") or "").split("@")[0], actor["name"]]
+        pid = str(actor["id"]).split(":", 1)[-1]
+        others = [handle_of(actor)[1:], pid, str(actor.get("email") or "").split("@")[0], actor["name"]]
     for name in dict.fromkeys(str(n) for n in others if n):
-        if "@" + name != first and _round_trips(c, actor, "@" + name):
+        if _reached("@" + name, index, me) == {actor["id"]}:
             return "@" + name
-    return first
+    return None
 
 
 def _task_people(row: Row, roles: dict[str, list[str]]) -> list[str]:
@@ -146,57 +187,35 @@ def _task_people(row: Row, roles: dict[str, list[str]]) -> list[str]:
     return list(dict.fromkeys(str(a) for a in ids if a))
 
 
-def _reach(c: Any, thread: Row, author: str, actor: str) -> str | None:
-    """Why an @mention of `actor` by `author` in `thread` would reach nobody, or None when it reaches them: someone
-    outside it, unless the mention would add them to a private task (threads.reaches)."""
-    if threads.audience_has(c, thread, actor) or threads._widens(c, threads.root_of(c, thread), author, actor):
-        return None
-    if threads.audience_of(threads.root_of(c, thread)) == "task":
-        return "Cannot read this task, and an @mention would not add them."
-    return "Not in this chat: an @mention reaches only its members."
-
-
 def search(
     c: Any,
     auth: Any,
     who: Any,
-    chart: Row,
     *,
     q: str = "",
     task: str | None = None,
     thread: str | None = None,
     limit: int = LIMIT,
 ) -> Row:
-    """The picker's answer for this caller (`chart`: their `GET /api/v2/org`)."""
+    """The picker's answer for this caller."""
+    auth.domain(who)
     limit = max(1, min(limit, MAX_LIMIT))
     me = str(getattr(who, "actor", "") or "")
     first: list[str] = []
     only: list[str] | None = None
-    here: Row | None = None
     if task:
         row: Row = auth.task(c, who, auth.resolve_task(c, who, task))
         first = _task_people(row, task_roles.roles_of(c, row["id"]))
-        here = threads.thread_row(c, row.get("conversation_id")) if row.get("conversation_id") else None
     if thread:
-        chat: Row = threads.require(c, threads.viewer(auth, who), thread)
-        here, root = chat, threads.root_of(c, chat)
-        if threads.audience_of(root) in ("personal", "participants") and not chat.get("parent_id"):
+        # A direct chat's @ reaches only its members, its sub-threads' too: the list offers just them.
+        root = threads.root_of(c, threads.require(c, threads.viewer(auth, who), thread))
+        if threads.audience_of(root) in ("personal", "participants"):
             only = threads._dm_members(c, root)
-    out: list[Row] = []
-    for a, on_task in ranked(actors(chart), q, me, first, only, limit):
-        # A person's @mention wakes an agent only with Write on it (threads.mentions); an agent's has its own rules.
-        reason = no_write(str(a["slug"])) if a["kind"] == "agent" and not a["write"] and who.role != "bot" else None
-        if reason is None and here is not None:
-            reason = _reach(c, here, me, a["id"])
-        out.append(
-            {
-                "id": a["id"],
-                "kind": a["kind"],
-                "name": a["name"],
-                "handle": handle(c, a),
-                "on_task": on_task,
-                "wakes": reason is None,
-                **({"reason": reason} if reason else {}),
-            }
-        )
-    return {"candidates": out}
+    picked = ranked(roster(c, auth, who), q, me, first, only, limit)
+    index = names(c) if picked else []
+    return {
+        "candidates": [
+            {"id": a["id"], "kind": a["kind"], "name": a["name"], "handle": handle(a, index, me), "on_task": on_task}
+            for a, on_task in picked
+        ]
+    }

@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, NotRequired, TypedDict
+from typing import Literal, TypedDict
 
 from ._base import answer
 
@@ -13,15 +13,11 @@ class MentionCandidate(TypedDict):
     """The actor id: `human:<id>` or `bot:<id>`"""
     kind: Literal["person", "agent"]
     name: str
-    handle: str
-    """The text to insert, @ included: the server reads it back as this teammate and no one else"""
+    handle: str | None
+    """The text to insert, @ included, which a post reads as this teammate and no one else; null when every name they
+    go by also names someone else"""
     on_task: bool
     """One of the task's people (`task=`): who asked, who it is for, who has it, or someone in a role"""
-    wakes: bool
-    """Whether an @mention by the caller would reach them: an agent needs the caller's Write on it, and on a task or in
-    a chat they must be able to read it (or be added to a private task's readers by the mention)"""
-    reason: NotRequired[str]
-    """Why it would not, when `wakes` is false"""
 
 
 @answer
