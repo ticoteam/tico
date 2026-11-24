@@ -206,15 +206,15 @@ def supervised(c: Connection, runner_id: str) -> bool:
         return False
     from .claude_login import platform_can_refresh
 
+    # A Codex plan counts only on an exit whose Codex can take the relay (carries: capability and Codex >= 0.170.0).
     return any(
-        row["has_portable_plan"] or platform_can_refresh(row)
+        (carries(row, row) if row["kind"] == CODEX_KIND else row["kind"] == "claude_token" or platform_can_refresh(row))
         for row in c.execute(
-            "SELECT r.platform, max(s.kind IN ('claude_token','codex_login')) AS has_portable_plan "
+            "SELECT DISTINCT r.platform, r.capabilities, r.readiness, s.kind "
             "FROM plan_exits e JOIN runners_with_state r ON r.id=e.runner_id "
             "JOIN model_subscriptions s ON s.owner_id='human:'||e.person_id "
-            "WHERE e.runner_id=? AND s.kind IN ('claude_token','claude_login','codex_login') "
-            "AND (s.kind<>'codex_login' OR ? IN (SELECT value FROM json_each(r.capabilities))) GROUP BY r.platform",
-            (runner_id, CODEX_CAPABILITY),
+            "WHERE e.runner_id=? AND s.kind IN ('claude_token','claude_login','codex_login')",
+            (runner_id,),
         )
     )
 
