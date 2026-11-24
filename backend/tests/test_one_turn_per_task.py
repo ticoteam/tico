@@ -1,6 +1,6 @@
 """At most one live turn per bot and task: while a bot's turn on a task is out, every later wake for that bot on that
-task (a person's comment, Tico's own notice) goes into that turn or waits for the next one on the task. It never starts
-a second turn there. The bot's own comment never wakes itself. The same bot's other tasks still run beside it."""
+task (a person's comment to it, Tico's own notice) goes into that turn or waits for the next one on the task. It never
+starts a second turn there. The bot's own comment never wakes itself. The same bot's other tasks still run beside it."""
 
 from backend.store import H
 from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
@@ -34,26 +34,19 @@ def busy_on(api, machine, task_id):
     return active
 
 
-def test_wakes_on_a_task_with_a_live_turn_join_it_and_only_the_other_side_starts_its_own(api):
-    machine = task_bot(api, lanes=True, others=("finance",))
-    with api.app.state.store.transaction() as c:
-        task = H.task_create(c, "bot:finance", "Install", "Install the admin page.", "bot:ops", lint=False)
-        # The owner's status note before its turn names its requester, which follows the task from then on.
-        H.task_comment(c, "bot:ops", task["id"], "@finance Install started; receipt follows.", wake=False)
+def test_wakes_on_a_task_with_a_live_turn_join_it_and_start_no_second_turn(api):
+    machine = task_bot(api, lanes=True)
+    task = new_task(api, "install")
     active = busy_on(api, machine, task["id"])
     # The owner does not comment on its own task during its turn there (its reply at the end is posted on it).
     said = {"text": "Install started; receipt follows.", "needs_action": True}
     post(api, f"tasks/{task['id']}/comments", said, token=active["token"], expected=409)
     assert queued(api) == [] and claim(api, machine) is None
-    # A person's comment and Tico's own notice wake the owner; while its turn runs, each waits for that turn.
-    person = post(api, f"tasks/{task['id']}/comments", {"text": "One installer only."})["comment"]
+    # A person's comment to the owner and Tico's own notice wake it; while its turn runs, each waits for that turn.
+    person = post(api, f"tasks/{task['id']}/comments", {"text": "One installer only.", "to": "bot:ops"})["comment"]
     with api.app.state.store.transaction() as c:
         notice = H._wake(c, H.task(c, task["id"]), "bot:ops", "A related task moved.", {"wake": "update"})
     assert queued(api) == [person["id"], notice["id"]]
-    # The person's words also reach the requester bot, which follows the task: that is the other side's own run (a
-    # person's message always gets an answer). The owner's turn still starts nothing new.
-    other_side = claim(api, machine)
-    assert other_side["bot"] == "finance" and "One installer only." in other_side["message"]["body"]
     assert claim(api, machine) is None
     assert inputs(api, machine, active) == [person["id"], notice["id"]]
     assert ops_turns(api, task["id"]) == 1
@@ -66,7 +59,8 @@ def test_a_wake_the_live_turn_never_took_is_the_next_turn_on_the_task(api):
     machine = task_bot(api, lanes=True)
     task = new_task(api, "install")
     active = busy_on(api, machine, task["id"])
-    person = post(api, f"tasks/{task['id']}/comments", {"text": "Use the owner-only transport."})["comment"]
+    said = {"text": "Use the owner-only transport.", "to": "bot:ops"}
+    person = post(api, f"tasks/{task['id']}/comments", said)["comment"]
     assert claim(api, machine) is None
     # The turn ends before it asked for inputs (a runtime that cannot steer): the comment is not lost.
     post(
