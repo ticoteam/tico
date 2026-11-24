@@ -417,7 +417,7 @@ fn agy_session(exe: &str, home: &std::path::Path, env: &Env, most: Duration) -> 
             return Err("agy has no pipes".into());
         };
         let (tx, rx) = std::sync::mpsc::channel::<Value>();
-        std::thread::spawn(move || {
+        let reader = std::thread::spawn(move || {
             for line in std::io::BufReader::new(stdout)
                 .lines()
                 .map_while(Result::ok)
@@ -454,11 +454,29 @@ fn agy_session(exe: &str, home: &std::path::Path, env: &Env, most: Duration) -> 
             session = ask(3, "session/new", json!({"cwd": cwd, "mcpServers": []}));
         }
         drop(stdin);
+        // agy has a moment to exit on its own, watched without reaping it: then its whole group goes while the group's
+        // number is still its own (as hosts/antigravity.rs's turns), and only then is it reaped.
+        let pid = child.id() as i32;
         let until = Instant::now() + Duration::from_secs(2);
-        while matches!(child.try_wait(), Ok(None)) && Instant::now() < until {
+        while !crate::hosts::exited_unreaped(pid) && Instant::now() < until {
             std::thread::sleep(Duration::from_millis(50));
         }
-        kill(&mut child);
+        // SAFETY: agy leads group `pid` (setsid above) and is not reaped yet.
+        unsafe { libc::killpg(pid, libc::SIGKILL) };
+        let _ = child.wait();
+        // Nothing of the group holds agy's output now, so its reader ends (its sender with it) before the scratch it ran
+        // in goes; a process that left the group could hold it open, so it has two seconds.
+        let until = Instant::now() + Duration::from_secs(2);
+        while let Ok(_) | Err(std::sync::mpsc::RecvTimeoutError::Timeout) =
+            rx.recv_timeout(until.saturating_duration_since(Instant::now()))
+        {
+            if Instant::now() >= until {
+                break;
+            }
+        }
+        if reader.is_finished() {
+            let _ = reader.join();
+        }
         if agy::models(&session?) == 0 {
             return Err("session/new: no models".into());
         }
@@ -3170,6 +3188,10 @@ if sys.argv[1:] == ["acp", "--login", "--gemini-dir", home, "--app-data-dir", "a
     sys.exit(0)
 if sys.argv[1:] != ["acp", "--gemini-dir", home, "--app-data-dir", "antigravity-cli"] or env.get("AGY_ACP_FORCE_FILE_STORAGE") != "1":
     sys.exit(2)
+# A tool of agy's that ignores SIGTERM and holds its output: it goes with agy's group.
+import subprocess
+helper = subprocess.Popen(["sh", "-c", "trap '' TERM; exec sleep 30"])
+open(os.path.join(env["HOME"], "helper.pid"), "w").write(str(helper.pid))
 for line in sys.stdin:
     m = json.loads(line)
     i, method = m["id"], m["method"]
@@ -3259,6 +3281,15 @@ for line in sys.stdin:
             });
             login.submit("4/pasted-code");
             running.join().unwrap();
+            if let Ok(pid) = std::fs::read_to_string(root.join("helper.pid")) {
+                let pid: i32 = pid.trim().parse().unwrap();
+                let gone = (0..50).any(|_| {
+                    std::thread::sleep(Duration::from_millis(20));
+                    (unsafe { libc::kill(pid, 0) }) == -1
+                });
+                assert!(gone, "{id}: the tool agy left in its group is gone");
+                std::fs::remove_file(root.join("helper.pid")).unwrap();
+            }
             let i = login.inner.lock().unwrap();
             if said.is_empty() {
                 assert_eq!(

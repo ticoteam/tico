@@ -11,8 +11,15 @@ from backend.tests.helpers.cloud_machines import cloud  # noqa: F401 - fixture
 from backend.tests.helpers.credentials import setup
 from backend.tests.helpers.model_subscriptions import company, pick
 
-OLD = ["model_subscriptions_v1", "model_sign_out_v1", "model_connect_v1", "attempt_credentials_v1"]
-CAPS = [*OLD, "antigravity_plan_v1"]
+# A runner that ran agy headless (0.6.250 to 0.6.253) reports antigravity_plan_v1 too, and gets no plan.
+OLD = [
+    "model_subscriptions_v1",
+    "model_sign_out_v1",
+    "model_connect_v1",
+    "attempt_credentials_v1",
+    "antigravity_plan_v1",
+]
+CAPS = [*OLD, "antigravity_acp_v1"]
 VALUE = json.dumps(
     {"token": {"access_token": "ya29.synthetic-access-token-0123456789", "expiry": "2099-01-01T00:00:00Z"}}
 )

@@ -68,6 +68,9 @@ pub const AGY_TOKEN: &str = "antigravity-cli/antigravity-oauth-token";
 pub const OVER_SSH: (&str, &str) = ("SSH_CONNECTION", "127.0.0.1 0 127.0.0.1 0");
 /// This runner can sign in, install and run Antigravity plans; the hub gives such work to no other runner.
 pub const AGY_PLAN_CAPABILITY: &str = "antigravity_plan_v1";
+/// This runner runs Antigravity over ACP (hosts/antigravity.rs): 0.6.250 to 0.6.253 report AGY_PLAN_CAPABILITY but
+/// run agy headless, so the hub gives plans only to a runner that reports this.
+pub const AGY_ACP_CAPABILITY: &str = "antigravity_acp_v1";
 
 /// A runtime whose plan login lives in a home made for each turn, which its CLI finds through `var`.
 pub struct TurnHome {

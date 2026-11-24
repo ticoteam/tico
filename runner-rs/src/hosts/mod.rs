@@ -1010,7 +1010,7 @@ pub fn new_group(command: &mut tokio::process::Command) -> &mut tokio::process::
 
 /// Whether child `pid` has exited, without reaping it: while it stays unreaped its pid, and so the number of the
 /// group it leads, can go to no other process. An error (it was reaped already) counts as exited.
-fn exited_unreaped(pid: i32) -> bool {
+pub(crate) fn exited_unreaped(pid: i32) -> bool {
     // SAFETY: with WNOWAIT, waitid only writes the child's state into `info`.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
     let r = unsafe {

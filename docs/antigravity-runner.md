@@ -9,8 +9,7 @@ publishes it only through its own updater, so `runner-rs/harnesses/antigravity-i
 repository at the checksum `antigravity.toml` pins) reads the updater's manifest for the platform (Linux x64 and arm64,
 musl included, and Mac arm64 and x64), checks the download's address and sha512, and installs its one executable as
 `agy`. An `agy` already on PATH is used as it is. Tico does not change its global settings, and runs it with
-`AGY_CLI_DISABLE_AUTO_UPDATE=1`. A Gemini API key alone does not select Antigravity's API-key provider; follow
-Google's CLI settings documentation if switching that authentication mode. Readiness finds `agy` and checks the
+`AGY_CLI_DISABLE_AUTO_UPDATE=1`. Readiness finds `agy` and checks the
 computer's own sign-in with `agy models` before the runner claims work.
 
 Tico runs `agy` the way T3 Code does: `agy acp --gemini-dir <home> --app-data-dir antigravity-cli`, speaking ACP
@@ -18,11 +17,16 @@ Tico runs `agy` the way T3 Code does: `agy acp --gemini-dir <home> --app-data-di
 turn's own home on a plan; only `agy acp` takes its home from that flag (headless `agy -p` and `agy models` read
 `$HOME/.gemini` whatever `GEMINI_HOME` says). It runs with `GEMINI_HOME` set to that home, no `BROWSER`, unbuffered
 output, a `TMPDIR` of its own (removed once it has exited) and, on Linux, a CA bundle when none is set. A turn says
-`initialize`, `authenticate` with the Google account's method, resumes the thread's conversation (`session/resume`)
+`initialize`, `authenticate` (a plan turn with the Google account's method; any other with the computer's own: a
+`GEMINI_API_KEY` signs in with the Gemini API key, a `GOOGLE_API_KEY` or Application Default Credentials (`AGY_ADC_AUTH`,
+`GOOGLE_APPLICATION_CREDENTIALS`) with Google Cloud, else the Google account), resumes the thread's conversation (`session/resume`)
 or begins one (`session/new`, given the bot's MCP servers of a transport `agy` offers, none so far), sets the model
 and thinking level as the session's config options, and sends `session/prompt`; tool permissions are given as asked.
 A sign-in `agy` has not got (`Authentication required`, or "No browser is available here") fails the turn as a
-sign-in, and `QUOTA_EXHAUSTED` as a usage limit.
+sign-in, and `QUOTA_EXHAUSTED` (or a typed `refusal`) as a usage limit. `agy` streams a failed model call as chat
+text and ends the turn as answered, so, as T3 Code does, the turn reads the steps its prompt added to the
+conversation's session log (`antigravity-cli/conversations/<id>.db`, read only): an error step fails it. Usage counts
+cache reads as input. What `agy` says refusing a request is passed on scrubbed and cut short, never its raw data.
 
 A turn signs in with the computer's own Google account (on a Mac, from its keychain), or with an Antigravity plan:
 Settings > Providers > Add > Antigravity plan. Connect runs `agy acp --login` on one of your computers, in a home of
@@ -32,7 +36,7 @@ address) and writes its sign-in to a file there, never the keychain; it counts o
 did not start within 90 seconds, or showed no Google link 30 seconds after it did (broken IPv6 is a common cause), the
 link expired, Google's page was not approved, the account has no eligible Antigravity subscription, `agy` exited with
 its code, or it signed in but could not start a session or load models; the scrubbed last lines it printed go to the
-runner's log. Only a computer on a Tico release that reports `antigravity_plan_v1` signs a plan in, installs `agy` for one,
+runner's log. Only a computer on a Tico release that reports `antigravity_acp_v1` signs a plan in, installs `agy` for one,
 or runs its turns, and only with an `agy` at least as new as `antigravity.toml`'s minimum (an older one of the
 person's own is named, with the release to update to). With no online computer that has `agy`, the owner's first
 Connect turns Antigravity on for their computer (or the company's shared cloud computer) and the page waits while it

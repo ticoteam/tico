@@ -1,5 +1,5 @@
 //! The Antigravity host: each turn starts its own `agy acp` and reaps it when the turn ends. It speaks ACP (JSON-RPC 2.0
-//! over stdio) as T3 Code does: `initialize`, `authenticate` with the Google account's method, `session/resume` of the
+//! over stdio) as T3 Code does: `initialize`, `authenticate` with the sign-in's method (`auth_method`), `session/resume` of the
 //! thread's saved conversation (`session/load` on an agy without resume) or `session/new`, the model and thinking level
 //! as the session's config options, then `session/prompt`, whose `session/update`s are the turn's events. Its
 //! `--gemini-dir` is the turn's home: a plan's own (model_subscriptions.rs TURN_HOMES), else the bot's `~/.gemini`,
@@ -34,6 +34,13 @@ const DEFAULT_EFFORT: &str = "high";
 pub const APP_DATA_DIR: &str = "antigravity-cli";
 /// The Google account's sign-in method, which `authenticate` names (T3 Code's `oauth-personal`).
 pub const AUTH_METHOD: &str = "oauth-personal";
+/// What a typed `refusal` is: agy gives it for the model API's QUOTA_EXHAUSTED only (T3 Code's turnFailure).
+const QUOTA: &str =
+    "Antigravity usage limit: you have reached your Antigravity quota for this period (QUOTA_EXHAUSTED)";
+/// The native session log's step that records an error (CORTEX_STEP_TYPE_ERROR_MESSAGE), and how much of what it says
+/// is read: the error leads, a Go stack trace follows.
+const ERROR_STEP: i64 = 17;
+const ERROR_PAYLOAD: i64 = 16_384;
 /// What agy prints in place of a protocol line when it would have a person open a sign-in link.
 const AUTH_LINK: &str = "Open the following link to authenticate the ACP server: ";
 // A test's stuck fake waits out the grace; a second is as good a proof as five.
@@ -104,6 +111,32 @@ pub fn acp_env(env: &Env, home: &str, plan: bool, tmp: &Path) -> Env {
         );
     }
     out
+}
+
+/// The method `authenticate` names (T3 Code's authMethod): a plan's is always the Google account's. Any other turn keeps
+/// the computer's own sign-in as `env` selects it: a Gemini API key, Google Cloud (its key or its Application Default
+/// Credentials), else the Google account.
+pub fn auth_method(env: &Env, plan: bool) -> &'static str {
+    let set = |k: &str| env.get(k).is_some_and(|v| !v.trim().is_empty());
+    if plan {
+        AUTH_METHOD
+    } else if set("GEMINI_API_KEY") {
+        "gemini-api-key"
+    } else if [
+        "GOOGLE_API_KEY",
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "AGY_ADC_AUTH",
+    ]
+    .iter()
+    .any(|k| set(k))
+        || env
+            .get("GOOGLE_GENAI_USE_VERTEXAI")
+            .is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "1" | "true"))
+    {
+        "agent-platform"
+    } else {
+        AUTH_METHOD
+    }
 }
 
 /// A CA bundle for agy's own Python on Linux, which may look for one where this distribution has none, unless `env`
@@ -242,24 +275,134 @@ fn signed_out(error: &Value) -> bool {
     }
 }
 
-/// What agy said refusing a request: its message and any data, read as a sign-in it has not got when it is one
-/// (hosts::is_auth_rejected_on).
-fn said(error: &Value) -> String {
-    let message = error["message"]
-        .as_str()
-        .filter(|m| !m.trim().is_empty())
-        .map(String::from)
-        .unwrap_or_else(|| error.to_string());
-    let text = match error.get("data").filter(|d| truthy(Some(d))) {
-        Some(Value::String(d)) => format!("{message}: {d}"),
-        Some(d) => format!("{message}: {d}"),
-        None => message,
+/// What agy said refusing a request: its message, scrubbed of credentials and bounded, never its `data` as it is. The
+/// data is read in memory only, for a usage limit or a sign-in agy has not got (hosts::is_auth_rejected_on), which
+/// the text then names.
+fn said(error: &Value, scrub: &crate::redact::Redactor) -> String {
+    let message = error["message"].as_str().unwrap_or_default();
+    let text: String = crate::run_diagnostics::safe(message.trim(), scrub)
+        .chars()
+        .take(ERROR_CHARS)
+        .collect();
+    let text = if text.is_empty() {
+        format!("error {}", error["code"])
+    } else {
+        text
     };
-    if signed_out(error) && !super::is_auth_rejected_on("antigravity", &text) {
+    let data = error.get("data").map(|d| match d {
+        Value::String(d) => d.clone(),
+        d => d.to_string(),
+    });
+    let all = format!("{message} {}", data.unwrap_or_default());
+    let auth = |t: &str| super::is_auth_rejected_on("antigravity", t);
+    if (signed_out(error) || auth(&all)) && !auth(&text) {
         format!("Authentication required: {text}")
+    } else if is_limit(&all) && !is_limit(&text) {
+        format!("Antigravity usage limit: {text}")
     } else {
         text
     }
+}
+
+/// The turn's native session log (T3 Code's AntigravityTurnOutcome): agy records each step of `session`'s conversation
+/// in it, an error it streams as chat text and ends with `end_turn` among them.
+fn session_log(home: &str, session: &str) -> PathBuf {
+    Path::new(home)
+        .join(APP_DATA_DIR)
+        .join("conversations")
+        .join(format!("{session}.db"))
+}
+
+/// `read` on the session log's `steps` table, read only: Some(None) when it has no such table yet, None when the log
+/// is not a plain file (a link could be another session's) or cannot be read.
+fn steps<T>(
+    log: &Path,
+    read: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>,
+) -> Option<Option<T>> {
+    use rusqlite::OpenFlags;
+    if !std::fs::symlink_metadata(log).ok()?.is_file() {
+        return None;
+    }
+    let db = rusqlite::Connection::open_with_flags(
+        log,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    db.busy_timeout(Duration::from_millis(100)).ok()?;
+    let tables: i64 = db
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'steps'",
+            [],
+            |r| r.get(0),
+        )
+        .ok()?;
+    if tables == 0 {
+        return Some(None);
+    }
+    read(&db).ok().map(Some)
+}
+
+/// The log's last step before the prompt: -1 when it has none yet (a conversation agy begins with this turn); None when
+/// it cannot be read, and only the prompt's typed answer counts.
+fn last_step(log: &Path) -> Option<i64> {
+    if std::fs::symlink_metadata(log).is_err() {
+        return Some(-1);
+    }
+    let last = steps(log, |db| {
+        db.query_row("SELECT coalesce(max(idx), -1) FROM steps", [], |r| r.get(0))
+    })?;
+    Some(last.unwrap_or(-1))
+}
+
+/// What the prompt's last step says when it records an error: a step after `before`, so never an earlier turn's.
+fn step_error(log: &Path, before: i64) -> Option<String> {
+    use rusqlite::types::Value as Sql;
+    let (kind, payload) = steps(log, |db| {
+        db.query_row(
+            "SELECT step_type, substr(step_payload, 1, ?1) FROM steps WHERE idx > ?2 ORDER BY idx DESC LIMIT 1",
+            rusqlite::params![ERROR_PAYLOAD, before],
+            |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Sql>(1)?)),
+        )
+    })??;
+    (kind == ERROR_STEP).then(|| match payload {
+        Sql::Text(t) => t,
+        Sql::Blob(b) => String::from_utf8_lossy(&b).into_owned(),
+        _ => String::new(),
+    })
+}
+
+/// A failure from what an error step says (T3 Code's turnFailure): the quota, else the model API's own message and
+/// status, else that there was an error. Scrubbed of credentials and bounded.
+fn step_failure(text: &str, scrub: &crate::redact::Redactor) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static R: OnceLock<[Regex; 3]> = OnceLock::new();
+    let [quota, api, status] = R.get_or_init(|| {
+        [
+            Regex::new(r"\breason:QUOTA_EXHAUSTED\b").unwrap(),
+            // The Go harness's rendering of a Google API error.
+            Regex::new(r"(?s)Error (\d{3}), Message: (.+?), Status: ([A-Z_]+|\d{3}[^,\n]*)")
+                .unwrap(),
+            // Antigravity 1.5 with a Google account: "STATUS (code NNN): message".
+            Regex::new(r"(?:^|[^A-Z_])([A-Z_]+) \(code (\d{3})\): ([^\x00-\x1f\x7f]+)").unwrap(),
+        ]
+    });
+    if quota.is_match(text) {
+        return QUOTA.into();
+    }
+    let (code, message, name) = match (api.captures(text), status.captures(text)) {
+        (Some(c), _) => (c[1].to_string(), c[2].to_string(), c[3].to_string()),
+        (None, Some(c)) => (c[2].to_string(), c[3].to_string(), c[1].to_string()),
+        (None, None) => return "Antigravity stopped this turn because of an error".into(),
+    };
+    let message: String = crate::run_diagnostics::safe(message.trim(), scrub)
+        .chars()
+        .take(ERROR_CHARS)
+        .collect();
+    format!(
+        "Antigravity stopped this turn: HTTP {code} {}: {message}",
+        name.trim()
+    )
 }
 
 /// Python's `str(uuid.UUID(text))`: the canonical lower-case hyphenated form, or None when it is no uuid.
@@ -298,6 +441,15 @@ fn count(v: &Value) -> i64 {
 fn last_chars(text: &str, n: usize) -> String {
     let skip = text.chars().count().saturating_sub(n);
     text.chars().skip(skip).collect()
+}
+
+/// The environment the turn's agy starts from: the turn's own, else this runner's.
+fn env_of(settings: &Settings) -> Env {
+    if settings.env.is_empty() {
+        crate::env::process_environment()
+    } else {
+        settings.env.clone()
+    }
 }
 
 /// The turn's `--gemini-dir`: its plan's home, else the bot's own `~/.gemini`.
@@ -375,8 +527,8 @@ struct Stream {
 
 /// How a turn's stream ended.
 enum End {
-    /// `session/prompt` answered: its result.
-    Result(Value),
+    /// `session/prompt` answered: its result, and the failure the session log recorded for an `end_turn`.
+    Result(Value, Option<String>),
     /// agy refused a request, or did not answer it in time: why.
     Failed(String),
     /// The stream closed, or broke (why).
@@ -394,9 +546,9 @@ enum Answer {
 }
 
 /// `method` refused (or not answered in time) before the prompt went.
-fn refused(method: &str, answer: Answer) -> String {
+fn refused(method: &str, answer: Answer, scrub: &crate::redact::Redactor) -> String {
     match answer {
-        Answer::Err(e) => format!("Antigravity {method} failed: {}", said(&e)),
+        Answer::Err(e) => format!("Antigravity {method} failed: {}", said(&e, scrub)),
         _ => format!("Antigravity did not answer {method} in time"),
     }
 }
@@ -408,6 +560,9 @@ struct Conv<'a> {
     io: &'a mut Io,
     stream: &'a mut Stream,
     scrub: crate::redact::Redactor,
+    /// `authenticate` names the Google account: a sign-in link agy prints ends the turn, as no person is there to open
+    /// it. On a key or Google Cloud sign-in it is only skipped.
+    oauth: bool,
 }
 
 struct Inner {
@@ -631,11 +786,7 @@ impl AntigravityHost {
                 .map_err(failed)?;
         }
         let argv = acp_argv(&self.0.cmd, home);
-        let env = if settings.env.is_empty() {
-            crate::env::process_environment()
-        } else {
-            settings.env.clone()
-        };
+        let env = env_of(settings);
         let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
@@ -776,6 +927,11 @@ impl AntigravityHost {
                 .unwrap_or_default();
             crate::redact::Redactor::new(&crate::redact::env_secrets(&env))
         };
+        let oauth = {
+            let inner = self.inner();
+            let settings = inner.settings.clone().unwrap_or_default();
+            auth_method(&env_of(&settings), settings.plan_home.is_some()) == AUTH_METHOD
+        };
         let end = {
             let mut c = Conv {
                 tid,
@@ -783,6 +939,7 @@ impl AntigravityHost {
                 io: &mut running.io,
                 stream: &mut stream,
                 scrub,
+                oauth,
             };
             self.converse(&mut c, text, model, effort).await
         };
@@ -807,7 +964,9 @@ impl AntigravityHost {
         running.stderr.drained().await;
         let stderr = running.stderr.tail();
         match end {
-            End::Result(result) => self.finish(tid, turn, &result, &stream, &stderr),
+            End::Result(result, failure) => {
+                self.finish(tid, turn, &result, failure, &stream, &stderr)
+            }
             End::Failed(error) => self.fail(tid, turn, &error, &stderr),
             End::Closed(why) => {
                 if let Some(why) = &why {
@@ -838,23 +997,26 @@ impl AntigravityHost {
             .await
         {
             Ok(Answer::Ok(v)) => v,
-            Ok(a) => return End::Failed(refused("initialize", a)),
+            Ok(a) => return End::Failed(refused("initialize", a, &c.scrub)),
             Err(why) => return End::Closed(why),
         };
+        let method = auth_method(&env_of(&settings), plan);
         match self
             .call(
                 c,
                 "authenticate",
-                json!({"methodId": AUTH_METHOD}),
+                json!({"methodId": method}),
                 Some(REQUEST_WAIT),
             )
             .await
         {
             Ok(Answer::Ok(_)) => {}
-            Ok(a) if plan => return End::Failed(refused("authenticate", a)),
-            // The computer's own sign-in may be another method (a key, a Google Cloud login): the session says whether
-            // it is signed in at all.
-            Ok(a) => log(&format!("Antigravity: {}", refused("authenticate", a))),
+            Ok(a) if plan => return End::Failed(refused("authenticate", a, &c.scrub)),
+            // The session says whether the computer's own sign-in holds at all.
+            Ok(a) => log(&format!(
+                "Antigravity: {}",
+                refused("authenticate", a, &c.scrub)
+            )),
             Err(why) => return End::Closed(why),
         }
         let servers = servers(&settings, &init);
@@ -883,7 +1045,7 @@ impl AntigravityHost {
             match answer {
                 Answer::Ok(v) => resumed = Some((saved, v)),
                 Answer::Err(e) if signed_out(&e) => {
-                    return End::Failed(refused(method, Answer::Err(e)))
+                    return End::Failed(refused(method, Answer::Err(e), &c.scrub))
                 }
                 Answer::Err(_) if settings.require_existing_session => return End::Mismatch(LOST),
                 Answer::Late if settings.require_existing_session => {
@@ -902,7 +1064,7 @@ impl AntigravityHost {
                     .await
                 {
                     Ok(Answer::Ok(v)) => v,
-                    Ok(a) => return End::Failed(refused("session/new", a)),
+                    Ok(a) => return End::Failed(refused("session/new", a, &c.scrub)),
                     Err(why) => return End::Closed(why),
                 };
                 let Some(id) = v["sessionId"].as_str().and_then(conversation) else {
@@ -946,17 +1108,42 @@ impl AntigravityHost {
             }
             None => text.to_string(),
         };
+        // Where the session log stands before the prompt, so only the steps it adds are read after.
+        let native = home_for(&settings)
+            .map(|home| session_log(&home, &session))
+            .ok();
+        let before = match native.clone() {
+            Some(log) => tokio::task::spawn_blocking(move || last_step(&log))
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
         c.stream.prompting = true;
         let params = json!({"sessionId": session, "prompt": [{"type": "text", "text": prompt}]});
         let answer = match self.call(c, "session/prompt", params, None).await {
             Ok(a) => a,
             Err(why) => return End::Closed(why),
         };
+        // An end_turn whose last step records an error: the model API failed and agy streamed that as its answer.
+        let failure = match (&answer, native, before) {
+            (Answer::Ok(result), Some(log), Some(before))
+                if !matches!(result["stopReason"].as_str(), Some("refusal" | "error")) =>
+            {
+                tokio::task::spawn_blocking(move || step_error(&log, before))
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|text| step_failure(&text, &c.scrub))
+            }
+            _ => None,
+        };
         let mut inner = self.inner();
         let stream = &mut *c.stream;
         match answer {
             Answer::Ok(result) => {
-                let ok = !matches!(result["stopReason"].as_str(), Some("refusal" | "error"));
+                let ok = failure.is_none()
+                    && !matches!(result["stopReason"].as_str(), Some("refusal" | "error"));
                 // A refusal before any work leaves the saved conversation as it was.
                 if ok || stream.worked {
                     if let Err(e) = self.commit(&mut inner, stream) {
@@ -970,7 +1157,7 @@ impl AntigravityHost {
                         return End::Closed(Some(e));
                     }
                 }
-                End::Result(result)
+                End::Result(result, failure)
             }
             Answer::Err(e) => {
                 if stream.worked {
@@ -978,7 +1165,7 @@ impl AntigravityHost {
                         return End::Closed(Some(e));
                     }
                 }
-                End::Failed(said(&e))
+                End::Failed(said(&e, &c.scrub))
             }
             Answer::Late => End::Closed(None),
         }
@@ -998,7 +1185,11 @@ impl AntigravityHost {
             .await
         {
             Ok(Answer::Ok(v)) => Ok(v.get("configOptions").filter(|o| o.is_array()).cloned()),
-            Ok(a) => Err(End::Failed(refused("session/set_config_option", a))),
+            Ok(a) => Err(End::Failed(refused(
+                "session/set_config_option",
+                a,
+                &c.scrub,
+            ))),
             Err(why) => Err(End::Closed(why)),
         }
     }
@@ -1040,8 +1231,11 @@ impl AntigravityHost {
             let msg: Value = match serde_json::from_str(line.trim()) {
                 Ok(v) => v,
                 Err(_) => {
-                    // Its link is never passed on: no person is there to open it.
+                    // Its link is never passed on or kept: no person is there to open it.
                     if line.starts_with(AUTH_LINK) {
+                        if !c.oauth {
+                            continue;
+                        }
                         return Err(Some(
                             "Authentication required: Antigravity asked for a Google sign-in in a browser".into(),
                         ));
@@ -1178,7 +1372,15 @@ impl AntigravityHost {
     }
 
     /// The turn's events from the prompt's answer.
-    fn finish(&self, tid: &str, turn: &str, result: &Value, stream: &Stream, stderr: &str) {
+    fn finish(
+        &self,
+        tid: &str,
+        turn: &str,
+        result: &Value,
+        failure: Option<String>,
+        stream: &Stream,
+        stderr: &str,
+    ) {
         // A turn stopped meanwhile says nothing more: no usage or answer after the stop.
         {
             let inner = self.inner();
@@ -1186,7 +1388,8 @@ impl AntigravityHost {
                 return;
             }
         }
-        // The prompt's own usage: this turn's, however long the conversation.
+        // The prompt's own usage: this turn's, however long the conversation. agy's input leaves out what it read from
+        // the cache, which Tico's input counts.
         let usage = &result["usage"];
         let (i, o, c) = (
             count(&usage["inputTokens"]).max(0),
@@ -1199,12 +1402,17 @@ impl AntigravityHost {
                 "tokens",
                 Some(tid),
                 Some(turn),
-                json!({"input": i, "output": o, "cached": c, "total": i + o, "usage": {"input": i, "cached": c, "output": o}}),
+                json!({"input": i + c, "output": o, "cached": c, "total": i + c + o, "usage": {"input": i + c, "cached": c, "output": o}}),
             ));
         }
         let stop = result["stopReason"].as_str().unwrap_or("end_turn");
-        if matches!(stop, "refusal" | "error") {
-            return self.fail(tid, turn, &format!("Antigravity stopped: {stop}"), stderr);
+        let failure = match stop {
+            "refusal" => Some(QUOTA.to_string()),
+            "error" => Some("Antigravity stopped: error".to_string()),
+            _ => failure,
+        };
+        if let Some(failure) = failure {
+            return self.fail(tid, turn, &failure, stderr);
         }
         self.emit(event(
             "message",
@@ -1396,7 +1604,9 @@ mod tests {
     /// A prompt is answered with the fixture (`$FIXTURE`: its lines, `@ID@` the prompt's id and `@SID@` the session's;
     /// with its `.stderr` beside it, that on stderr and exit 1 in place of an answer), or with the prompt as the reply.
     /// `session/new` begins `$NEW` (else SAVED). A resume is refused with `$LOSE`, never answered with `$NOINIT`. With
-    /// `$REFUSE_FRESH` a prompt in a conversation it began is refused; with `$SIGNED_OUT` it has no sign-in. With `$STUCK`
+    /// `$REFUSE_FRESH` a prompt in a conversation it began is refused; with `$SIGNED_OUT` it has no sign-in; with `$LINK`
+    /// it prints a sign-in link on `authenticate` and has no Google sign-in. A prompt adds a `$STEP` step (`$STEP_TEXT`)
+    /// to the conversation's session log. With `$STUCK`
     /// it ignores SIGTERM (then writes `.ready`) and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM
     /// in its group. It exits when its input closes.
     fn fake_agy(dir: &Path) -> String {
@@ -1425,9 +1635,11 @@ def options():
              "options": [{"value": "gemini-4-neon", "name": "Gemini 4 Neon"}, {"value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen"}]},
             {"id": "thinking_level", "name": "Thinking", "category": "thought_level", "type": "select", "currentValue": level,
              "options": [{"value": e, "name": e} for e in ("low", "medium", "high", "xhigh")]}]
-def send(m):
-    sys.stdout.write(json.dumps(m) + "\n")
+def send_line(text):
+    sys.stdout.write(text + "\n")
     sys.stdout.flush()
+def send(m):
+    send_line(json.dumps(m))
 def answer(i, result):
     send({"jsonrpc": "2.0", "id": i, "result": result})
 def refuse(i, code, message):
@@ -1443,7 +1655,12 @@ for line in sys.stdin:
     if method == "initialize":
         answer(i, INIT)
     elif method == "authenticate":
-        refuse(i, -32603, NO_BROWSER) if env("SIGNED_OUT") else answer(i, {})
+        if env("LINK"):
+            send_line("Open the following link to authenticate the ACP server: https://accounts.google.com/o/oauth2/auth?state=s1")
+        if env("SIGNED_OUT") or (env("LINK") and p["methodId"] == "oauth-personal"):
+            refuse(i, -32603, NO_BROWSER)
+        else:
+            answer(i, {})
     elif method in ("session/resume", "session/load"):
         if env("SIGNED_OUT"):
             refuse(i, -32000, "Authentication required")
@@ -1467,6 +1684,16 @@ for line in sys.stdin:
     elif method == "session/prompt":
         text = p["prompt"][0]["text"]
         open(log + ".prompts", "a").write(text + "\n")
+        if env("STEP"):
+            import sqlite3
+            home = sys.argv[sys.argv.index("--gemini-dir") + 1]
+            folder = os.path.join(home, "antigravity-cli", "conversations")
+            os.makedirs(folder, exist_ok=True)
+            db = sqlite3.connect(os.path.join(folder, sid + ".db"))
+            db.execute("CREATE TABLE IF NOT EXISTS steps (idx INTEGER PRIMARY KEY, step_type INTEGER, step_payload BLOB)")
+            db.execute("INSERT INTO steps (step_type, step_payload) VALUES (?, ?)", (int(env("STEP")), (env("STEP_TEXT") or "").encode()))
+            db.commit()
+            db.close()
         fixture = env("FIXTURE")
         if fixture:
             for row in open(fixture).read().splitlines():
@@ -1779,16 +2006,139 @@ for line in sys.stdin:
             json!({"code": -32603, "message": NO_BROWSER}),
             json!({"code": -32000, "message": "Not signed in"}),
         ] {
-            let error = refused("authenticate", Answer::Err(refusal));
+            let error = refused(
+                "authenticate",
+                Answer::Err(refusal),
+                &crate::redact::Redactor::new(&[]),
+            );
             assert!(
                 super::super::is_auth_rejected_on("antigravity", &error),
                 "{error}"
             );
         }
+        // Its data is read for what it is, never passed on.
+        let data = json!({"code": -32603, "message": "Internal error",
+                          "data": {"token": "ya29.synthetic-secret", "reason": "QUOTA_EXHAUSTED"}});
+        let text = said(&data, &crate::redact::Redactor::new(&[]));
+        assert!(!text.contains("ya29") && is_limit(&text), "{text}");
         assert!(!super::super::is_auth_rejected_on(
             "antigravity",
-            &said(&json!({"code": -32603, "message": "Internal error"}))
+            &said(
+                &json!({"code": -32603, "message": "Internal error"}),
+                &crate::redact::Redactor::new(&[])
+            )
         ));
+    }
+
+    #[tokio::test]
+    async fn a_key_or_google_cloud_turn_keeps_its_method_and_a_sign_in_link_does_not_end_it() {
+        for (var, method) in [
+            ("GEMINI_API_KEY", "gemini-api-key"),
+            ("AGY_ADC_AUTH", "agent-platform"),
+        ] {
+            let rig = Rig::new();
+            let s = rig.settings(&[(var, "1".into()), ("LINK", "1".into())]);
+            let (host, mut rx) = rig.host();
+            let thread = host.start_thread(&s);
+            host.start_turn(&thread, "hi", None).unwrap();
+            let events = turn_events(&mut rx).await;
+            assert!(
+                events.iter().any(|e| e["kind"] == "turn_completed"),
+                "{var}: {events:?}"
+            );
+            assert!(events
+                .iter()
+                .all(|e| !e.to_string().contains("accounts.google.com")));
+            host.stop().await;
+            assert!(
+                rig.read(".calls")
+                    .starts_with(&format!(r#"authenticate {{"methodId": "{method}"}}"#)),
+                "{}",
+                rig.read(".calls")
+            );
+        }
+        // On the Google account the link ends the turn as a sign-in it has not got, and a plan's is always that.
+        let rig = Rig::new();
+        let s = rig.settings(&[("LINK", "1".into())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hi", None).unwrap();
+        let events = turn_events(&mut rx).await;
+        let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
+        assert!(super::super::is_auth_rejected_on(
+            "antigravity",
+            &text_of(&failed["error"])
+        ));
+        host.stop().await;
+        let key: Env = [("GEMINI_API_KEY".to_string(), "k".to_string())].into();
+        assert_eq!(auth_method(&key, true), AUTH_METHOD);
+        assert_eq!(auth_method(&Env::new(), false), AUTH_METHOD);
+    }
+
+    #[tokio::test]
+    async fn an_error_the_session_log_records_fails_the_turn_agy_ended_as_an_answer() {
+        let rig = Rig::new();
+        let error = "Error 503, Message: The model is overloaded., Status: UNAVAILABLE, Details: []\ngoroutine 1";
+        let quota = "Error 429, Message: Quota exhausted., Status: RESOURCE_EXHAUSTED, Details: [reason:QUOTA_EXHAUSTED]";
+        let turn = |vars: Vec<(&'static str, String)>, resume: Option<String>| {
+            let s = rig.settings(&vars);
+            let (host, mut rx) = rig.host();
+            let thread = match resume {
+                Some(t) => {
+                    host.resume_thread(&t, &s).unwrap();
+                    t
+                }
+                None => host.start_thread(&s),
+            };
+            async move {
+                host.start_turn(&thread, "hi", None).unwrap();
+                let events = turn_events(&mut rx).await;
+                host.stop().await;
+                (thread, events)
+            }
+        };
+        let end = |events: &[Value]| {
+            events
+                .iter()
+                .find(|e| e["kind"] == "turn_failed" || e["kind"] == "turn_completed")
+                .cloned()
+                .unwrap()
+        };
+        // The model API failed: agy streamed that as its answer and ended the turn, its log's last step an error.
+        let (thread, events) = turn(
+            vec![("STEP", "17".into()), ("STEP_TEXT", error.into())],
+            None,
+        )
+        .await;
+        let failed = end(&events);
+        assert_eq!(failed["kind"], "turn_failed", "{events:?}");
+        assert_eq!(
+            failed["error"],
+            "Antigravity stopped this turn: HTTP 503 UNAVAILABLE: The model is overloaded."
+        );
+        assert!(events.iter().all(|e| e["kind"] != "message"), "{events:?}");
+        // The next turn's own steps are read, never that error before it.
+        let (thread, events) = turn(vec![("STEP", "15".into())], Some(thread)).await;
+        assert_eq!(end(&events)["kind"], "turn_completed", "{events:?}");
+        let (_, events) = turn(
+            vec![("STEP", "17".into()), ("STEP_TEXT", quota.into())],
+            Some(thread),
+        )
+        .await;
+        let failed = end(&events);
+        assert_eq!(
+            (failed["error"].as_str(), failed["limit"].as_bool()),
+            (Some(QUOTA), Some(true))
+        );
+        // A typed refusal is the quota, whatever agy printed.
+        let refusal = json!({"jsonrpc": "2.0", "id": "@ID@", "result": {"stopReason": "refusal"}});
+        let (host, _, events) = played(&rig, "typed-refusal", &[refusal], None).await;
+        let failed = end(&events);
+        assert_eq!(
+            (failed["error"].as_str(), failed["limit"].as_bool()),
+            (Some(QUOTA), Some(true))
+        );
+        host.stop().await;
     }
 
     #[tokio::test]

@@ -28,9 +28,10 @@ with `model_subscriptions_v1` read the payer from `credential-runtime` when it m
 A turn with a different payer waits for a runner update. A Codex shell payer is scoped to that agent
 and sent in `attempt_credential.shell`. Both server and runner omit its value from durable receipts. When the
 credential disappears before use, the job returns to the queue without a failed start.
-Heartbeats can carry 37 capabilities. If an older hub refuses the count, the runner drops
-`model_exit_codex_v1` first, then `model_exit_claude_v1`, then `antigravity_plan_v1`, then `model_exit_v1`, then `attempt_credentials_v1` if needed.
-Only a runner with `antigravity_plan_v1` gets an Antigravity plan's Connect, install or turns.
+Heartbeats can carry 39 capabilities. If an older hub refuses the count, the runner drops `antigravity_acp_v1`
+first, then `burst_preparation_v1`, then `model_exit_codex_v1`, then `model_exit_claude_v1`, then `antigravity_plan_v1`, then `model_exit_v1`, then
+`attempt_credentials_v1` if needed. Only a runner with `antigravity_acp_v1` gets an Antigravity plan's Connect, install
+or turns: 0.6.250 to 0.6.253 report `antigravity_plan_v1` but run agy headless.
 
 When the company enables plan exit routing, a routed Claude or Codex claim carries `delivery: "model_exit"`
 and `exit_generation` in its payer metadata. Both computers report `model_exit_v1` and the turn
