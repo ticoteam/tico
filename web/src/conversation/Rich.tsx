@@ -207,10 +207,15 @@ function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void
   );
 }
 
+const OWN_URL = /^\/api\/v2\/files\/[A-Za-z0-9_-]+(\?v=\d+)?$/;
+const OWN_ID = /^[A-Za-z0-9_-]+$/;
 /** A message's own file by the address it came with, only when that is plainly one of the app's files (no `..`, no
     other route); else by its id. */
 export const attachmentHref = (f: Attachment): `/api/${string}` =>
-  typeof f.url === 'string' && /^\/api\/v2\/files\/[A-Za-z0-9_-]+(\?v=\d+)?$/.test(f.url) ? (f.url as `/api/${string}`) : `/api/v2/files/${encodeURIComponent(f.id)}`;
+  typeof f.url === 'string' && OWN_URL.test(f.url) ? (f.url as `/api/${string}`) : `/api/v2/files/${encodeURIComponent(f.id)}`;
+/** Whether a message's file is one of the app's by a plain address or id: any other is only its name, and nothing
+    loads for it. */
+export const isOwnFile = (f: Attachment) => (typeof f.url === 'string' && OWN_URL.test(f.url)) || OWN_ID.test(f.id);
 const attachmentLabel = (f: Attachment) => f.title?.trim() || f.name || 'File';
 const attachmentType = (f: Attachment) => {
   const end = /\.([a-z0-9]{1,5})$/i.exec(f.name ?? '')?.[1];
@@ -221,7 +226,7 @@ export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) ===
     `/poster` for a video's frame, `?v=` kept), which checks its reader as the file does and answers 404 until the
     copy is made, or when it never is. */
 const previewOf = (href: string, kind: 'thumb' | 'poster') => {
-  const m = /^(\/api\/v2\/files\/[^/?#]+)(\?v=\d+)?$/.exec(href);
+  const m = /^(\/api\/v2\/files\/[A-Za-z0-9_-]+)(\?v=\d+)?$/.exec(href);
   return m ? `${m[1]}/${kind}${m[2] ?? ''}` : undefined;
 };
 // the file's own name goes too: a caption says nothing of what it is, and `lease.pdf` sent as octet-stream is a PDF by its name
@@ -246,7 +251,7 @@ function faceOf(f: Attachment): Face {
 function DownloadChip({ f }: { f: Attachment }) {
   const name = attachmentLabel(f);
   return (
-    <a className="file" href={attachmentHref(f)} download={name}>
+    <a className="file" href={attachmentHref(f)} download={f.name || name}>
       <Icon name="download" />
       <span>{name}</span>
       {attachmentType(f) && <em>{attachmentType(f)}</em>}
@@ -373,15 +378,17 @@ function AttachedFile({ f }: { f: Attachment }) {
  * `onPicture` opens one of the message's pictures by its address (the viewer walks them all).
  */
 export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: string) => void }) {
-  const files = m.refs?.attachments ?? [];
-  if (m.pending)
-    return files.map((f) => (
-      <span key={f.id} className="file">
-        <Icon name="file" />
-        <span>{attachmentLabel(f)}</span>
-        {attachmentType(f) && <em>{attachmentType(f)}</em>}
-      </span>
-    ));
+  const all = m.refs?.attachments ?? [];
+  const named = (f: Attachment) => (
+    <span key={f.id} className="file">
+      <Icon name="file" />
+      <span>{attachmentLabel(f)}</span>
+      {attachmentType(f) && <em>{attachmentType(f)}</em>}
+    </span>
+  );
+  if (m.pending) return all.map(named);
+  const files = all.filter(isOwnFile);
+  const unknown = all.filter((f) => !isOwnFile(f));
   const pictures = files.filter(isPicture).map((f): Shown => {
     const src = attachmentHref(f);
     // only a photo (JPEG) uses the thumbnail: thumbnails are JPEGs, so a PNG would lose its transparency and a GIF its motion
@@ -390,13 +397,14 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
   });
   const others = files.filter((f) => !isPicture(f));
   const refs = m.deleted ? [] : filesIn(m.body ?? '').slice(0, PAGE_REFS);
-  if (!pictures.length && !others.length && !refs.length) return null;
+  if (!pictures.length && !others.length && !unknown.length && !refs.length) return null;
   return (
     <div className="mshelf">
       <Pictures list={pictures} onOpen={(i) => onPicture(pictures[i]!.src)} />
       {others.map((f) => (
         <AttachedFile key={f.id} f={f} />
       ))}
+      {unknown.map(named)}
       {refs.map((p) => (
         <RefCard key={p.file} p={p} />
       ))}

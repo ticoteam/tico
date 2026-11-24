@@ -63,4 +63,11 @@ describe('a message’s own media under its words', () => {
     const { container } = shelf({ id: 's2', name: 'memo.mp3', content_type: 'audio/mpeg', url: '/api/v2/files/../admin/x' });
     expect(container.querySelector('audio')?.getAttribute('src')).toBe('/api/v2/files/s2');
   });
+
+  it('loads nothing for a file with neither a plain address nor a plain id: only its name shows', () => {
+    const { container } = shelf({ id: '..', name: 'clip.mp4', content_type: 'video/mp4' }, { id: '../x', name: 'shot.png', content_type: 'image/png' });
+    expect(container.querySelectorAll('video, audio, img, a, button')).toHaveLength(0);
+    expect(screen.getByText('clip.mp4')).toBeTruthy();
+    expect(screen.getByText('shot.png')).toBeTruthy();
+  });
 });

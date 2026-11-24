@@ -78,6 +78,23 @@ export function PictureViewer({ pictures, at, onAtChange, local = false }: Pictu
     gesture.current = null;
     lastTap.current = null;
   }, [shown]);
+  // a turned phone or a resized window changes the fit under the zoom: start again at fit
+  useEffect(() => {
+    if (!area || typeof ResizeObserver === 'undefined') return;
+    const sizes = new Map<Element, string>();
+    const seen = new ResizeObserver((entries) => {
+      let changed = false;
+      for (const e of entries) {
+        const size = `${e.contentRect.width}x${e.contentRect.height}`;
+        if (sizes.has(e.target) && sizes.get(e.target) !== size) changed = true;
+        sizes.set(e.target, size);
+      }
+      if (changed) setHeld((h) => (h.of === shown ? { ...h, z: FIT } : h));
+    });
+    seen.observe(area);
+    if (img.current) seen.observe(img.current);
+    return () => seen.disconnect();
+  }, [area, shown]);
 
   const box = (): Box | undefined => boxOf(area, img.current);
   const rel = (clientX: number, clientY: number) => relTo(area, clientX, clientY);

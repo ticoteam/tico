@@ -18,8 +18,6 @@ export interface Box {
 export const FIT: Zoom = { scale: 1, x: 0, y: 0 };
 /** The most the wheel, a pinch or + zooms to. */
 export const MAX_SCALE = 8;
-/** The most actual size goes to: a huge picture shown pixel for pixel may go past MAX_SCALE. */
-export const ACTUAL_MAX = 16;
 /** A press moves this far before it counts as a drag, so a shaky tap or click is still a tap. */
 export const DRAG_PX = 5;
 /** A swipe moves at least this far, and more across than down. */
@@ -39,7 +37,7 @@ export function swipeStep(z: Zoom, dx: number, dy: number): -1 | 0 | 1 {
 
 /** Kept so the picture's edge never comes inside the area while it is larger than it, and centred where it is smaller. */
 export function clamp(z: Zoom, box?: Box): Zoom {
-  const scale = Math.min(ACTUAL_MAX, Math.max(1, z.scale));
+  const scale = Math.max(1, z.scale);
   if (scale <= 1.001) return FIT;
   if (!box) return { scale, x: z.x, y: z.y };
   const mx = Math.max(0, (box.w * scale - box.areaW) / 2);
@@ -57,13 +55,14 @@ export function zoomTo(z: Zoom, scale: number, px = 0, py = 0, box?: Box, cap = 
 
 export const pan = (z: Zoom, dx: number, dy: number, box?: Box): Zoom => (isFit(z) ? z : clamp({ ...z, x: z.x + dx, y: z.y + dy }, box));
 
-/** The scale that shows the picture pixel for pixel; twice the fit when the picture is no larger than its fit. */
+/** The scale that shows the picture pixel for pixel, however far past MAX_SCALE; twice the fit when the picture is no
+    larger than its fit. */
 export function actualScale(naturalW: number, fitW: number): number {
-  return fitW > 0 && naturalW > fitW ? Math.min(ACTUAL_MAX, naturalW / fitW) : 2;
+  return fitW > 0 && naturalW > fitW ? naturalW / fitW : 2;
 }
 
 /** A click (or a double tap) goes from fit to actual size at that point, and from any zoom back to fit. */
-export const toggle = (z: Zoom, actual: number, px = 0, py = 0, box?: Box): Zoom => (isFit(z) ? zoomTo(z, actual, px, py, box, ACTUAL_MAX) : FIT);
+export const toggle = (z: Zoom, actual: number, px = 0, py = 0, box?: Box): Zoom => (isFit(z) ? zoomTo(z, actual, px, py, box, Infinity) : FIT);
 
 /** A wheel's turn in pixels, whether it counts in pixels, lines or pages. */
 export const wheelPx = (deltaY: number, deltaMode: number) => deltaY * (deltaMode === 1 ? 32 : deltaMode === 2 ? 400 : 1);

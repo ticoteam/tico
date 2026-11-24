@@ -32,6 +32,10 @@ describe('picture zoom', () => {
 
   it('toggles between fit and actual size, or twice the fit for a small picture', () => {
     expect(actualScale(1600, 400)).toBe(4);
+    // past the manual most: an 8,000 px picture fit to 390 px goes all the way, and a zoom out from there never jumps in
+    const huge = toggle(FIT, actualScale(8000, 390));
+    expect(huge.scale).toBeCloseTo(20.51, 2);
+    expect(zoomTo(huge, huge.scale / 1.5).scale).toBeCloseTo(13.68, 2);
     expect(actualScale(300, 400)).toBe(2);
     expect(toggle(FIT, 4).scale).toBe(4);
     expect(toggle(zoomTo(FIT, 3), 4)).toEqual(FIT);
