@@ -60,10 +60,33 @@ export function zipEnd(tail: Uint8Array, total: number): ZipEnd | 'zip64' | null
   return null;
 }
 
+/** The high half of the DOS code page (CP437), which zip tools used for names before UTF-8. */
+const CP437 = 'ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢£¥₧ƒáíóúñÑªº¿⌐¬½¼¡«»░▒▓│┤╡╢╖╕╣║╗╝╜╛┐└┴┬├─┼╞╟╚╔╩╦╠═╬╧╨╤╥╙╘╒╓╫╪┘┌█▄▌▐▀αßΓπΣσµτΦΘΩδ∞φε∩≡±≥≤⌠⌡÷≈°∙·√ⁿ²■ ';
+const strict = new TextDecoder('utf-8', { fatal: true });
+
+/** An entry's name. Flagged UTF-8 (bit 11), or an Info-ZIP Unicode Path field (0x7075), is read as UTF-8. An
+    unflagged name is read as UTF-8 too when it is valid UTF-8, since many tools write UTF-8 without the flag;
+    otherwise as CP437, as older Windows and DOS tools wrote it. */
+function nameOf(raw: Uint8Array, flags: number, extra: Uint8Array): string {
+  const x = view(extra);
+  for (let j = 0; j + 4 <= extra.length; ) {
+    const id = x.getUint16(j, true);
+    const len = x.getUint16(j + 2, true);
+    if (j + 4 + len > extra.length) break;
+    if (id === 0x7075 && len > 5 && extra[j + 4] === 1) return new TextDecoder().decode(extra.subarray(j + 9, j + 4 + len));
+    j += 4 + len;
+  }
+  if (flags & 0x800) return new TextDecoder().decode(raw);
+  try {
+    return strict.decode(raw);
+  } catch {
+    return Array.from(raw, (b) => (b < 0x80 ? String.fromCharCode(b) : CP437[b - 0x80])).join('');
+  }
+}
+
 /** Up to `max` entries of a central directory (or its first part); null when its first record is not one. */
 export function zipEntries(dir: Uint8Array, max = Infinity): ZipEntry[] | null {
   const d = view(dir);
-  const words = new TextDecoder();
   const out: ZipEntry[] = [];
   let i = 0;
   while (out.length < max && i + 46 <= dir.length) {
@@ -72,8 +95,9 @@ export function zipEntries(dir: Uint8Array, max = Infinity): ZipEntry[] | null {
     const extraLen = d.getUint16(i + 30, true);
     const noteLen = d.getUint16(i + 32, true);
     if (i + 46 + nameLen > dir.length) break; // cut off where the read stopped
+    const extraAt = i + 46 + nameLen;
     out.push({
-      name: words.decode(dir.subarray(i + 46, i + 46 + nameLen)),
+      name: nameOf(dir.subarray(i + 46, extraAt), d.getUint16(i + 8, true), dir.subarray(extraAt, Math.min(dir.length, extraAt + extraLen))),
       method: d.getUint16(i + 10, true),
       packed: d.getUint32(i + 20, true),
       size: d.getUint32(i + 24, true),

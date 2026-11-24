@@ -86,6 +86,40 @@ describe('zip names', () => {
   });
 });
 
+/** One central-directory record with these raw name bytes, flags and extra field. */
+function central(name: number[], flags = 0, extra: number[] = []) {
+  const r = new Uint8Array(46 + name.length + extra.length);
+  const d = new DataView(r.buffer);
+  d.setUint32(0, 0x02014b50, true);
+  d.setUint16(8, flags, true);
+  d.setUint16(28, name.length, true);
+  d.setUint16(30, extra.length, true);
+  r.set(name, 46);
+  r.set(extra, 46 + name.length);
+  return r;
+}
+
+describe('zip name encodings', () => {
+  const utf8 = (t: string) => [...new TextEncoder().encode(t)];
+  const nameIn = (r: Uint8Array) => zipEntries(r)?.[0]?.name;
+
+  it('reads an unflagged name that is not UTF-8 as CP437, as older Windows tools wrote it', () => {
+    // "Résumé.txt" in CP437: é is 0x82
+    expect(nameIn(central([0x52, 0x82, 0x73, 0x75, 0x6d, 0x82, 0x2e, 0x74, 0x78, 0x74]))).toBe('Résumé.txt');
+  });
+
+  it('reads a flagged name, and an unflagged one that is valid UTF-8, as UTF-8', () => {
+    expect(nameIn(central(utf8('Données/clients.csv'), 0x800))).toBe('Données/clients.csv');
+    expect(nameIn(central(utf8('日本語.txt')))).toBe('日本語.txt');
+  });
+
+  it('prefers the Info-ZIP Unicode Path field', () => {
+    const u = utf8('Résumé.txt');
+    const field = [0x75, 0x70, (5 + u.length) & 0xff, 0, 1, 0, 0, 0, 0, ...u];
+    expect(nameIn(central([0x52, 0x3f, 0x73, 0x75, 0x6d, 0x3f, 0x2e, 0x74, 0x78, 0x74], 0, field))).toBe('Résumé.txt');
+  });
+});
+
 describe('csvRows', () => {
   it('splits on the delimiter it is given', () => {
     expect(csvRows('a\tb,c\n1\t"2\t3"\n', '\t')).toEqual([
