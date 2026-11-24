@@ -1961,8 +1961,7 @@ impl Runner {
     }
 
     /// Bring the checkout up to date before the turn: a shared one is rebased (its problem goes to the prompt),
-    /// any other fast-forwarded; then the siblings it reads, except for a person's own chat, which reaches its
-    /// PersonalCopy alone (`granted_paths`).
+    /// any other fast-forwarded; then the siblings it reads.
     pub async fn refresh_checkout(
         &self,
         place: &Place,
@@ -1989,10 +1988,7 @@ impl Runner {
             }
         }
         // A chat turn's own checkout may start on the runner's recent fetch; its `reads:` siblings fetch first.
-        if !place.personal {
-            crate::fetch_fresh::fetching_first(ensure_reads(&self.config.projects_dir(), path))
-                .await?;
-        }
+        crate::fetch_fresh::fetching_first(ensure_reads(&self.config.projects_dir(), path)).await?;
         // A templated bot's files follow the release (crate::product_files); a task lane pushes them at once.
         if (attempt["burst_repository"].is_null() || !self.drain.burst_managed())
             && crate::product_files::refresh_due(&place.bot, &attempt["config"])

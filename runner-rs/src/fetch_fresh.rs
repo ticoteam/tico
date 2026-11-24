@@ -591,6 +591,15 @@ pub async fn note(path: &Path, env: &Env, began: Instant) {
     }
 }
 
+/// Waits for a background fetch of the checkout's repository to finish.
+#[cfg(test)]
+pub(crate) async fn behind_done(path: &Path, env: &Env) {
+    let key = upstream(path, env).await.unwrap().key;
+    while running().lock().unwrap().contains_key(&key) {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,14 +809,6 @@ mod tests {
             f.mine.join("late.md").is_file(),
             "a failed fetch counted as fresh"
         );
-    }
-
-    /// Waits for a background fetch of the checkout's repository to finish.
-    async fn behind_done(path: &Path, env: &Env) {
-        let key = upstream(path, env).await.unwrap().key;
-        while running().lock().unwrap().contains_key(&key) {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
     }
 
     fn head(dir: &Path, rev: &str) -> String {

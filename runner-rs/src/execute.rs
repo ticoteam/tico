@@ -9950,18 +9950,16 @@ for line in sys.stdin:
         std::fs::remove_dir_all(dir).ok();
     }
 
-    /// One chat turn's refresh of the bot's checkout, as `execute` runs it; the turn's flight marks.
-    async fn chat_refresh_marks(runner: &Runner, config: &Value, personal: bool) -> Value {
+    /// One personal chat turn's refresh of the bot's checkout, as `execute` runs it; the turn's flight marks. The
+    /// fetch it leaves running behind it is awaited, so nothing is left writing to the checkout.
+    async fn personal_refresh_marks(runner: &Runner, config: &Value) -> Value {
         let aid = format!("a-chat-{}", uuid::Uuid::new_v4().simple());
-        let mut attempt = json!({"id": aid, "bot": "ops", "config": config, "conversation": {"id": "c1"},
+        let mut attempt = json!({"id": aid, "bot": "ops", "config": config, "personal": true,
+                                 "conversation": {"id": "c1", "scope": "personal"},
                                  "message": {"from_actor": "human:ann"}});
-        if personal {
-            attempt["personal"] = json!(true);
-            attempt["conversation"]["scope"] = json!("personal");
-        }
         let lost = AtomicBool::new(false);
         let place = runner.enter_lanes(&attempt, &lost).await.unwrap();
-        assert_eq!(place.personal, personal);
+        assert!(place.personal && place.disposable);
         let chat = crate::sessions::chat_refresh(&place, &attempt);
         crate::flight::track();
         crate::flight::phase("claimed", &aid);
@@ -9973,29 +9971,19 @@ for line in sys.stdin:
         )
         .await
         .unwrap();
+        crate::fetch_fresh::behind_done(&place.main_path, &env).await;
         let marks = crate::flight::timings(&aid).unwrap()["phases"].clone();
         crate::flight::turn_end(&aid, "ops", "pi", "completed", true);
         marks
     }
 
     #[tokio::test]
-    async fn a_personal_chat_starts_on_the_runners_recent_fetch_and_refreshes_no_sibling_it_cannot_reach(
-    ) {
+    async fn a_personal_chat_starts_on_the_runners_recent_fetch() {
         let (runner, dir) = runner_at("http://127.0.0.1:1", "personal-fetch");
         let config = json!({"session": "bot"});
         let (remote, seed) = (dir.join("ops.git"), dir.join("seed"));
         let main = crate::sessions::local_path(&runner.config, "ops", &config);
         repo_git(&dir, &["init", "--bare", "-q", remote.to_str().unwrap()]);
-        // The sibling it reads, which a chat turn's refresh clones beside the checkout from the checkout's own host.
-        repo_git(
-            &dir,
-            &[
-                "init",
-                "--bare",
-                "-q",
-                dir.join("bot-designer.git").to_str().unwrap(),
-            ],
-        );
         repo_git(
             &dir,
             &[
@@ -10006,12 +9994,12 @@ for line in sys.stdin:
             ],
         );
         let push = |file: &str| {
-            std::fs::write(seed.join(file), "reads: [bot-designer]\n").unwrap();
+            std::fs::write(seed.join(file), "elsewhere\n").unwrap();
             repo_git(&seed, &["add", "-A"]);
             repo_git(&seed, &["commit", "-qm", file]);
             repo_git(&seed, &["push", "-q", "origin", "HEAD:main"]);
         };
-        push("bot.yaml");
+        push("AGENTS.md");
         std::fs::create_dir_all(main.parent().unwrap()).unwrap();
         repo_git(
             &dir,
@@ -10022,10 +10010,9 @@ for line in sys.stdin:
                 main.to_str().unwrap(),
             ],
         );
-        let sibling = runner.config.projects_dir().join("bot-designer");
         // The first personal turn fetches before it starts: the runner has no recent fetch.
         push("first.md");
-        let marks = chat_refresh_marks(&runner, &config, true).await;
+        let marks = personal_refresh_marks(&runner, &config).await;
         assert!(
             marks.get("fetched_first").is_some() && marks.get("fetch_skipped").is_none(),
             "{marks}"
@@ -10033,7 +10020,7 @@ for line in sys.stdin:
         assert!(main.join("first.md").is_file());
         // The next one, moments later, starts on that fetch and fetches behind it.
         push("late.md");
-        let marks = chat_refresh_marks(&runner, &config, true).await;
+        let marks = personal_refresh_marks(&runner, &config).await;
         assert!(
             marks.get("fetch_skipped").is_some() && marks.get("fetched_first").is_none(),
             "{marks}"
@@ -10045,20 +10032,13 @@ for line in sys.stdin:
         // Past CHAT_FRESH_FOR it fetches first again.
         crate::fetch_fresh::CHAT_OVERRIDE.with(|v| v.set(Some(Duration::ZERO)));
         push("paused.md");
-        let marks = chat_refresh_marks(&runner, &config, true).await;
+        let marks = personal_refresh_marks(&runner, &config).await;
         crate::fetch_fresh::CHAT_OVERRIDE.with(|v| v.set(None));
         assert!(
             marks.get("fetched_first").is_some() && marks.get("fetch_skipped").is_none(),
             "{marks}"
         );
         assert!(main.join("paused.md").is_file());
-        // Its copy is all a personal chat reaches, so the siblings it reads are left alone; another chat refreshes them.
-        assert!(
-            !sibling.exists(),
-            "a personal chat refreshed a sibling it reads"
-        );
-        chat_refresh_marks(&runner, &config, false).await;
-        assert!(sibling.join(".git").exists());
         std::fs::remove_dir_all(dir).ok();
     }
 
