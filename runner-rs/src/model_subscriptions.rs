@@ -1316,21 +1316,16 @@ impl Drop for KeptHome {
     }
 }
 
-/// What names the plan a turn's home (TURN_HOMES) signs in with: its subscription and the sign-in it was handed, so a
-/// reconnected plan, or another, is another; None for any other home.
-pub fn plan_of(home: &Path) -> Option<String> {
-    let id = home
-        .parent()?
-        .parent()
-        .filter(|t| t.file_name() == Some(OsStr::new(TURNS)))?;
-    let id = id.parent()?.file_name()?.to_string_lossy().to_string();
+/// What names the plan a turn's home (TURN_HOMES) signs in with: its subscription (`plan_of`) and the sign-in it was
+/// handed, so a reconnected plan, or another, is another; None for any other home.
+pub fn turn_plan(home: &Path) -> Option<String> {
     let t = TURN_HOMES
         .iter()
         .find(|t| home.file_name() == Some(OsStr::new(t.runtime)))?;
     let signed = t.sign_in(&home.display().to_string()).ok()?;
     let digest = ring::digest::digest(&ring::digest::SHA256, signed.as_bytes());
     let digest: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
-    Some(format!("{id}:{digest}"))
+    Some(format!("{}:{digest}", plan_of(home)?))
 }
 
 /// `subscriptions/<id>/turns/<turn>` of a full Claude login's home; None for any other home.

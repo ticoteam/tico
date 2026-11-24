@@ -1154,7 +1154,7 @@ impl AntigravityHost {
         let home = home_for(settings)?;
         let named = match &settings.plan_home {
             Some(plan) => {
-                crate::model_subscriptions::plan_of(Path::new(plan)).map(|p| format!("plan:{p}"))
+                crate::model_subscriptions::turn_plan(Path::new(plan)).map(|p| format!("plan:{p}"))
             }
             None => Some(home.clone()),
         };
