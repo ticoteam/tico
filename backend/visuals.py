@@ -739,6 +739,19 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     return messages
 
 
+def version_of(a):
+    """A stored attachment's (file id, version), or None when either is malformed (not a non-empty string id, or not a
+    whole number SQLite can hold): such a ref is shown as gone."""
+    fid, number = a.get("file_id"), a.get("version")
+    if not isinstance(fid, str) or not fid or isinstance(number, bool):
+        return None
+    try:
+        number = int(number or 0)
+    except (TypeError, ValueError):
+        return None
+    return (fid, number) if 0 <= number < 2**63 else None
+
+
 def elsewhere(base, message, task=None):
     """The one line a message with visuals carries where it leaves Tico (Slack today; an email or push outlet later),
     as {"count", "label", "url"}, or None when it has none. Nothing visual is rendered there (Visual replies, choice 4).
@@ -776,171 +789,9 @@ def for_reader(app, settings, c, who, messages):
     def hosted(v):
         return visual_ready(blobs, v["digest"], v["size"], (v["mime"] or "").split(";", 1)[0].strip().lower(), frames)
 
-    from .counsel import is_counsel
-
-    files = app.state.files
-    stored(messages, is_counsel(who))
-    decorated = decorate(
-        c, who, files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
+    return decorate(
+        c, who, app.state.files, key_for(app, settings), settings.visual_origin if full else "", messages, full, hosted
     )
-    return previews(c, files.auth, who, decorated)
-
-
-# What only the server says of an attachment, for this reader now: never taken from what was stored with a message.
-SERVED = ("src", "open", "thumb_url", "poster_url", "preview_url", "width", "height", "duration_ms")
-
-
-def stored(messages, counsel=False):
-    """Each message's attachments as stored, less anything only the server says, so a value a client wrote is never
-    echoed. The Rules Owner sees a plain upload as its id alone, as decorate shows it a file's version (its plain
-    ref). A message whose attachments change gets new refs."""
-    for message in messages:
-        refs = (message or {}).get("refs")
-        if not isinstance(refs, dict) or not isinstance(items := refs.get("attachments"), list):
-            continue
-        fresh = [_stored(a, counsel) for a in items]
-        if fresh != items:
-            message["refs"] = {**refs, "attachments": fresh}
-    return messages
-
-
-def _stored(a, counsel):
-    if not isinstance(a, dict):
-        return a
-    if counsel and not a.get("file_id"):
-        return {k: a[k] for k in ("id",) if k in a}
-    return {k: v for k, v in a.items() if k not in SERVED}
-
-
-def version_of(a):
-    """A stored attachment's (file id, version), or None when either is malformed: such a ref is shown as gone."""
-    fid = a.get("file_id")
-    if not isinstance(fid, str) or not fid:
-        return None
-    try:
-        return fid, int(a.get("version") or 0)
-    except (TypeError, ValueError):
-        return None
-
-
-def previews(c, auth, who, messages):
-    """Each attached picture, video or PDF whose preview is made, as `who` may see it: `width` and `height`, and
-    `thumb_url` / `poster_url` on the app's own file routes (/api/v2/files/{id}/thumb and /poster, which check the
-    reader again on each load). A plain upload (a blob, no file id) is read from blob_media, a file's version from its
-    own row, in batched reads; only an attachment whose bytes the reader may open gains anything (media.blob_for,
-    files.version_refusal: the routes' own checks, their rows read together first). The Rules Owner sees each file as
-    its plain ref, so nothing here. A message that gains a field gets new refs: the rows handed in may be read by
-    others."""
-    from .counsel import is_counsel
-    from .store import H
-    from .media import prime_blob_for
-    from .task_privacy import prime_blobs
-
-    if is_counsel(who):
-        return messages
-    blobs, versions = [], []
-    for message in messages:
-        refs = (message or {}).get("refs")
-        for i, a in enumerate((refs.get("attachments") if isinstance(refs, dict) else None) or []):
-            if not isinstance(a, dict) or a.get("removed"):
-                continue
-            if a.get("file_id"):
-                key = version_of(a)
-                if key:
-                    versions.append((message, i, key))
-            elif isinstance(a.get("id"), str) and a["id"]:
-                blobs.append((message, i, a["id"]))
-    shown = {}  # (id of the message, index): the fields it gains
-    if blobs:
-        made = {}
-        for part in H.chunks(sorted({bid for _, _, bid in blobs})):
-            made.update(
-                (r["blob_id"], r)
-                for r in c.execute(
-                    "SELECT blob_id,width,height,thumb_blob_id,poster_blob_id FROM blob_media "
-                    f"WHERE blob_id IN ({','.join('?' * len(part))}) AND media_state='ready'",
-                    part,
-                )
-            )
-        prime_blob_for(c, list(made))
-        readable = {}
-        for message, i, bid in blobs:
-            media = made.get(bid)
-            if media is None:
-                continue
-            if bid not in readable:
-                readable[bid] = _blob_readable(c, auth, who, bid)
-            if readable[bid]:
-                shown[(id(message), i)] = _fields(media, "/api/v2/files/" + bid, "")
-    if versions:
-        made = {}
-        for part in H.chunks(sorted({key for _, _, key in versions}), 250):
-            made.update(
-                ((r["file_id"], r["version"]), r)
-                for r in c.execute(
-                    "SELECT * FROM bot_file_versions WHERE (file_id,version) IN "
-                    f"(VALUES {','.join(['(?,?)'] * len(part))}) AND media_state='ready' "
-                    "AND (thumb_blob_id IS NOT NULL OR poster_blob_id IS NOT NULL)",
-                    [x for key in part for x in key],
-                )
-            )
-        rows = {}
-        for part in H.chunks(sorted({fid for fid, _ in made})):
-            rows.update(
-                (r["id"], r)
-                for r in c.execute(f"SELECT * FROM bot_files WHERE id IN ({','.join('?' * len(part))})", part)
-            )
-        prime_blobs(c, [v["blob_id"] for v in made.values()])
-        readable = {}
-        for message, i, key in versions:
-            v = made.get(key)
-            if v is None:
-                continue
-            if key not in readable:
-                row = rows.get(key[0])
-                readable[key] = bool(row) and not row["archived"] and _version_readable(c, auth, who, row, key[1], v)
-            if readable[key]:
-                shown[(id(message), i)] = _fields(v, "/api/v2/files/" + key[0], f"?v={key[1]}")
-    if not shown:
-        return messages
-    for message in messages:
-        items = message["refs"]["attachments"] if any(k[0] == id(message) for k in shown) else []
-        if items:
-            fresh = [_with(a, shown[(id(message), i)]) if (id(message), i) in shown else a for i, a in enumerate(items)]
-            message["refs"] = {**message["refs"], "attachments": fresh}
-    return messages
-
-
-def _fields(media, base, query):
-    out = {field: media[field] for field in ("width", "height") if media[field] is not None}
-    if media["thumb_blob_id"]:
-        out["thumb_url"] = base + "/thumb" + query
-    if media["poster_blob_id"]:
-        out["poster_url"] = base + "/poster" + query
-    return out
-
-
-def _with(a, fields):
-    """A copy of the attachment with its preview fields; what decorate already gave it (a visual route's poster, its
-    size) stays."""
-    return {**fields, **a, **({"thumb_url": fields["thumb_url"]} if "thumb_url" in fields else {})}
-
-
-def _blob_readable(c, auth, who, bid):
-    from .media import blob_for
-    from .store import Problem
-
-    try:
-        blob_for(c, auth, who, bid)
-    except Problem:
-        return False
-    return True
-
-
-def _version_readable(c, auth, who, row, number, v):
-    from .files import version_refusal
-
-    return version_refusal(c, auth, who, row, number, v) is None
 
 
 # ---------------------------------------------------------------------------------------------- serve

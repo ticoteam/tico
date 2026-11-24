@@ -1,8 +1,8 @@
 """A chat's pictures, videos and PDFs get the previews task files get: a thread upload is queued for the preview worker,
-and once its thumbnail is made the timeline, the upload's answer and the live stream (visuals.for_reader) carry its size
-and thumbnail address, only for a reader who may open the file. A source that keeps failing is given up after a few
-tries, and the media tools run under backend/limited.py's limits. Fictional people only: ana and ben share a thread,
-cara is in none of it."""
+and the chat draws a picture's /thumb, which checks its reader as the file itself does. A source that keeps failing is
+given up after a few tries, the media tools run under backend/limited.py's limits, and a message's malformed or refused
+file never breaks or leaks through the live stream's decoration (visuals.for_reader). Fictional people only: ana and
+ben share a thread, cara is in none of it."""
 
 import io
 import json
@@ -15,7 +15,7 @@ from PIL import Image
 from backend import file_metadata, limited, visuals
 from backend.store import H
 from backend.tests.helpers.api import headers
-from backend.tests.helpers.thread_api import new_thread, say
+from backend.tests.helpers.thread_api import new_thread
 
 
 def png(width=40, height=30):
@@ -43,93 +43,27 @@ def upload(api, thread_id, files, token="ana-test"):
     return sent.json()["message"]
 
 
-def timeline_attachments(api, thread_id, message_id, token):
-    got = api.get(f"/api/v2/threads/{thread_id}/timeline", headers=headers(token))
-    if got.status_code != 200:
-        return got.status_code, None
-    (row,) = [m for m in got.json()["messages"] if m.get("id") == message_id]
-    return 200, row["refs"]["attachments"]
+def as_reader(api, actor, messages):
+    app = api.app
+    with app.state.store.read() as c:
+        who = app.state.auth.identity_for_actor(c, actor)
+        return visuals.for_reader(app, app.state.store.settings, c, who, messages)
 
 
-def test_a_thread_picture_gets_its_thumbnail_for_readers_who_may_open_it(api):
+def test_a_thread_picture_is_queued_and_its_thumbnail_opens_only_for_its_readers(api):
     drive = worker(api)
     thread = new_thread(api, members=("human:ben",))
-    say(api, thread["id"], "Mock-ups below")  # a message with no refs reads beside them
     message = upload(api, thread["id"], [("plan.png", png(), "image/png"), ("notes.txt", b"words", "text/plain")])
-    picture, notes = message["refs"]["attachments"]
+    picture, _ = message["refs"]["attachments"]
     with api.app.state.store.read() as c:
         queued = {r[0]: r[1] for r in c.execute("SELECT blob_id,media_state FROM blob_media")}
     assert queued == {picture["id"]: "pending"}  # only a type the worker reads is queued
-    assert "thumb_url" not in picture  # nothing made yet: the picture itself stands in
-
+    thumb = picture["url"] + "/thumb"
+    assert api.get(thumb, headers=headers("ben-test")).status_code == 404  # not made yet: the chat draws the file
     assert drive.batch() is True
-    status, (shown, text) = timeline_attachments(api, thread["id"], message["id"], "ben-test")
-    assert status == 200
-    assert shown["thumb_url"] == f"/api/v2/files/{picture['id']}/thumb"
-    assert (shown["width"], shown["height"]) == (40, 30)
-    assert shown["url"] == picture["url"]  # the viewer still opens the whole file
-    assert "thumb_url" not in text and "width" not in text
-    thumb = api.get(shown["thumb_url"], headers=headers("ben-test"))
-    assert thumb.status_code == 200 and thumb.headers["content-type"] == "image/jpeg"
-
-    # Cara is not in the thread: no timeline, no thumbnail, and the live stream's decoration gives her nothing either.
-    assert timeline_attachments(api, thread["id"], message["id"], "cara-test")[0] == 404
-    assert api.get(shown["thumb_url"], headers=headers("cara-test")).status_code in (403, 404)
-    app = api.app
-    with app.state.store.read() as c:
-        cara = app.state.auth.identity_for_actor(c, "human:cara")
-        ben = app.state.auth.identity_for_actor(c, "human:ben")
-        (as_cara,) = visuals.for_reader(app, app.state.store.settings, c, cara, [H.message(c, message["id"])])
-        (as_ben,) = visuals.for_reader(app, app.state.store.settings, c, ben, [H.message(c, message["id"])])
-    assert not any("thumb_url" in a or "width" in a for a in as_cara["refs"]["attachments"])
-    assert as_ben["refs"]["attachments"][0]["thumb_url"] == shown["thumb_url"]
-
-
-def test_a_reader_the_download_refuses_gets_nothing_of_a_files_bytes(api, monkeypatch):
-    """A chat picture kept as a file version: one who may see the file but whose download of that version is refused
-    (version_refusal: a scan, a fenced blob) gets no size, address, poster or thumbnail in the timeline."""
-    from backend import files
-
-    drive = worker(api)
-    chat = api.post(
-        "/api/v2/uploads/chat/ops",
-        data={"text": "Review this"},
-        files={"files": ("plan.png", png(), "image/png")},
-        headers=headers("ben-test"),
-    )
-    assert chat.status_code == 200, chat.text
-    room, message = chat.json()["conversation"]["id"], chat.json()["message"]["id"]
-    drive.batch()
-    _, (seen,) = timeline_attachments(api, room, message, "ben-test")
-    assert seen["width"] == 40 and seen["src"] and seen["thumb_url"].endswith("/thumb?v=1")
-    monkeypatch.setattr(files, "version_refusal", lambda *args: "scan")
-    _, (refused,) = timeline_attachments(api, room, message, "ben-test")
-    assert not set(refused) & {"width", "height", "src", "thumb_url", "poster_url", "preview_url"}
-
-
-def test_a_malformed_attachment_ref_never_breaks_the_timeline(api):
-    thread = new_thread(api, members=("human:ben",))
-    sent = say(api, thread["id"], "Odd refs")
-    bad = [{"file_id": "file-x", "version": "two"}, {"file_id": {"nested": 1}}, {"id": 5}, "loose", {"name": "no id"}]
-    with api.app.state.store.transaction() as c:
-        c.execute("UPDATE messages SET refs=? WHERE id=?", (json.dumps({"attachments": bad}), sent["id"]))
-    status, shown = timeline_attachments(api, thread["id"], sent["id"], "ben-test")
-    assert status == 200 and len(shown) == len(bad)
-    assert shown[0] == {"file_id": "file-x", "version": "two", "removed": True}
-
-
-def test_the_rules_owner_sees_a_plain_upload_as_its_id_alone(api):
-    from backend.auth import Identity
-    from backend.counsel import SLUG
-
-    thread = new_thread(api, members=("human:ben",))
-    message = upload(api, thread["id"], [("plan.png", png(), "image/png")])
-    app = api.app
-    with app.state.store.read() as c:
-        (seen,) = visuals.for_reader(
-            app, app.state.store.settings, c, Identity("bot:" + SLUG, "bot"), [H.message(c, message["id"])]
-        )
-    assert seen["refs"]["attachments"] == [{"id": message["refs"]["attachments"][0]["id"]}]
+    made = api.get(thumb, headers=headers("ben-test"))
+    assert made.status_code == 200 and made.headers["content-type"] == "image/jpeg"
+    assert api.get(thumb, headers=headers("cara-test")).status_code in (403, 404)  # not in the thread
 
 
 def test_a_removed_message_takes_its_pictures_previews_with_it(api, monkeypatch):
@@ -193,3 +127,52 @@ def test_a_media_tool_runs_inside_its_limits(tmp_path):
     with pytest.raises(file_metadata.DecodeError):
         file_metadata.run([sys.executable, "-I", "-c", "open('big','wb').write(b'x' * (11 << 20))"], tmp_path)
     assert (tmp_path / "big").stat().st_size <= limited.FILE_BYTES
+
+
+def test_a_reader_the_download_refuses_gets_nothing_of_a_versions_bytes(api, monkeypatch):
+    """A chat picture kept as a file version: one who may see the file but whose download of that version is refused
+    (version_refusal: a scan, a fenced blob) gets no size, address or poster from the live stream's decoration."""
+    from backend import files
+
+    drive = worker(api)
+    chat = api.post(
+        "/api/v2/uploads/chat/ops",
+        data={"text": "Review this"},
+        files={"files": ("plan.png", png(), "image/png")},
+        headers=headers("ben-test"),
+    )
+    assert chat.status_code == 200, chat.text
+    mid = chat.json()["message"]["id"]
+    drive.batch()
+    with api.app.state.store.read() as c:
+        stored = H.message(c, mid)
+    (seen,) = as_reader(api, "human:ben", [dict(stored)])[0]["refs"]["attachments"]
+    assert seen["width"] == 40 and seen["src"]
+    # The chat draws <url>/thumb, by the blob's address or the version's (`?v=`): both reach the version's thumbnail.
+    by_blob = seen["url"] + "/thumb"
+    by_version = f"/api/v2/files/{seen['file_id']}/thumb?v={seen['version']}"
+    for thumb in (by_blob, by_version):
+        assert api.get(thumb, headers=headers("ben-test")).status_code == 200, thumb
+    monkeypatch.setattr(files, "version_refusal", lambda *args: "scan")
+    (refused,) = as_reader(api, "human:ben", [dict(stored)])[0]["refs"]["attachments"]
+    assert not set(refused) & {"width", "height", "duration_ms", "src", "poster_url", "preview_url"}
+
+
+def test_malformed_attachment_refs_never_break_the_live_streams_decoration(api):
+    thread = new_thread(api, members=("human:ben",))
+    bad = [
+        {"file_id": "file-x", "version": "two", "kind": "image"},
+        {"file_id": "file-x", "version": 2**70, "kind": "image"},
+        {"file_id": "file-x", "version": -1, "kind": "image"},
+        {"file_id": "file-x", "version": True, "kind": "image"},
+        {"file_id": {"nested": 1}, "kind": "image"},
+        "loose",
+    ]
+    messages = [
+        {"id": "m1", "conversation_id": thread["id"], "refs": {"attachments": bad}},
+        {"id": "m2", "conversation_id": thread["id"], "refs": {"attachments": "not a list"}},
+        {"id": "m3", "conversation_id": thread["id"], "refs": "{}"},
+    ]
+    first, second, third = as_reader(api, "human:ben", messages)
+    assert [a.get("removed") for a in first["refs"]["attachments"][:5]] == [True] * 5
+    assert second["refs"]["attachments"] == "not a list" and third["refs"] == "{}"

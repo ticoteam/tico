@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { createContext, use, useState, type CSSProperties, type MouseEvent, type ReactNode } from 'react';
+import { createContext, use, useState, type MouseEvent, type ReactNode } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
@@ -166,48 +166,27 @@ interface Shown {
   /** The picture itself: what the viewer opens. */
   src: string;
   name: string;
-  /** Its small copy (the server's thumbnail), drawn in its place when there is one. */
+  /** Its small copy (the file's /thumb), drawn in its place; the picture itself when there is none yet. */
   thumb?: string;
-  width?: number;
-  height?: number;
-}
-
-/** The most a single picture takes in the chat (conversation.css `.pics`, `.pics.is-1 .pic img`). */
-const ONE_WIDE = 360;
-const ONE_TALL = 280;
-
-/** A lone picture of known size keeps its own shape and room before it loads, so the chat does not jump. */
-function reserved(p: Shown, alone: boolean): CSSProperties | undefined {
-  if (!alone || !(p.width && p.width > 0 && p.height && p.height > 0)) return undefined;
-  const wide = Math.min(p.width, ONE_WIDE, (ONE_TALL * p.width) / p.height);
-  return { width: `min(100%, ${Math.round(wide)}px)`, aspectRatio: `${p.width} / ${p.height}` };
 }
 
 /** One to four pictures as pictures: one at its own shape, more as tiles, past four a count on the last. */
 function Pictures({ list, onOpen }: { list: Shown[]; onOpen: (i: number) => void }) {
-  // a thumbnail that does not load gives way to the picture itself; a picture that does not load (gone, or its bytes
-  // not kept) is its name as a chip, never a broken image
+  // a thumbnail that does not load (not made yet, or never) gives way to the picture itself; a picture that does not
+  // load (gone, or its bytes not kept) is its name as a chip, never a broken image
   const [lost, setLost] = useState<ReadonlySet<string>>(new Set());
   if (!list.length) return null;
   const shown = list.filter((p) => !lost.has(p.src));
   const more = shown.length - 4;
-  const alone = shown.length === 1;
   return (
     <>
       {shown.length > 0 && (
         <div className={`pics is-${Math.min(shown.length, 4)}`}>
           {shown.slice(0, 4).map((p, i) => {
             const face = p.thumb && !lost.has(p.thumb) ? p.thumb : p.src;
-            const room = reserved(p, alone);
             return (
-              <button key={p.src} type="button" className={room ? 'pic is-sized' : 'pic'} style={room} onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
-                <img
-                  src={face}
-                  alt={p.name}
-                  loading="lazy"
-                  {...(p.width && p.height && { width: p.width, height: p.height })}
-                  onError={() => setLost((was) => new Set(was).add(face))}
-                />
+              <button key={p.src} type="button" className="pic" onClick={() => onOpen(list.indexOf(p))} aria-label={p.name}>
+                <img src={face} alt={p.name} loading="lazy" onError={() => setLost((was) => new Set(was).add(face))} />
                 {i === 3 && more > 0 && <span className="pic-more">+{more}</span>}
               </button>
             );
@@ -234,8 +213,12 @@ const attachmentType = (f: Attachment) => {
   return (end ?? f.content_type?.split('/')[1] ?? '').toUpperCase();
 };
 export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) === 'image';
-/** Only the server's own file routes: a preview address is never somewhere else. */
-const previewHref = (u: unknown) => (typeof u === 'string' && /^\/api\/v2\/files\/[^/?#]+\/(thumb|poster)(\?v=\d+)?$/.test(u) ? u : undefined);
+/** A file's thumbnail on the server's own route (`/api/v2/files/<id>/thumb`, `?v=` kept), which checks its reader as the
+    file does and answers 404 until the picture's thumbnail is made. */
+const thumbOf = (href: string) => {
+  const m = /^(\/api\/v2\/files\/[^/?#]+)(\?v=\d+)?$/.exec(href);
+  return m ? `${m[1]}/thumb${m[2] ?? ''}` : undefined;
+};
 
 /** A message's own file that is not a picture: a page small and live, anything else its chip. */
 function AttachedFile({ f }: { f: Attachment }) {
@@ -271,14 +254,11 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
         {attachmentType(f) && <em>{attachmentType(f)}</em>}
       </span>
     ));
-  const pictures = files.filter(isPicture).map(
-    (f): Shown => ({
-      src: attachmentHref(f),
-      name: attachmentLabel(f),
-      ...(previewHref(f.thumb_url) && { thumb: previewHref(f.thumb_url) }),
-      ...(f.width && f.height && { width: f.width, height: f.height }),
-    }),
-  );
+  const pictures = files.filter(isPicture).map((f): Shown => {
+    const src = attachmentHref(f);
+    const thumb = thumbOf(src);
+    return { src, name: attachmentLabel(f), ...(thumb && { thumb }) };
+  });
   const others = files.filter((f) => !isPicture(f));
   const refs = m.deleted ? [] : filesIn(m.body ?? '').slice(0, PAGE_REFS);
   if (!pictures.length && !others.length && !refs.length) return null;

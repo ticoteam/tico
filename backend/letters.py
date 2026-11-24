@@ -337,39 +337,13 @@ def get(c, auth, who, ident, *, metadata=False) -> dict[str, Any]:
     return dict(row) | {"_redacted": level != "full"}
 
 
-BLOB_LETTERS_SQL = (
-    "SELECT l.* FROM letters l WHERE l.source_blob_id=? OR EXISTS "
-    "(SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)"
-)
-
-
 def blob_access(c, auth, who, bid):
-    from . import read_cache
-
-    rows = read_cache.rows(c, BLOB_LETTERS_SQL, (bid, bid))
+    rows = c.execute(
+        "SELECT l.* FROM letters l WHERE l.source_blob_id=? OR EXISTS "
+        "(SELECT 1 FROM letter_proofs p WHERE p.letter_id=l.id AND p.blob_id=?)",
+        (bid, bid),
+    ).fetchall()
     return any(readable(c, auth, who, row) for row in rows) if rows else None
-
-
-def prime_blob_letters(c, bids):
-    """blob_access's letters for each of `bids`, read together into this snapshot's read_cache (media.prime_blob_for)."""
-    from . import read_cache
-
-    bids = list(bids)
-    if not bids or read_cache.cache(c) is None:
-        return
-    marks = ",".join("?" * len(bids))
-    named = {bid: set() for bid in bids}
-    for row in c.execute(
-        f"SELECT id,source_blob_id AS blob FROM letters WHERE source_blob_id IN ({marks}) UNION "
-        f"SELECT letter_id,blob_id FROM letter_proofs WHERE blob_id IN ({marks})",
-        bids * 2,
-    ):
-        named[row["blob"]].add(row["id"])
-    ids = sorted({i for found in named.values() for i in found})
-    rows = {}
-    if ids:
-        rows = {r["id"]: r for r in c.execute(f"SELECT * FROM letters WHERE id IN ({','.join('?' * len(ids))})", ids)}
-    read_cache.prime_rows(c, BLOB_LETTERS_SQL, {(bid, bid): [rows[i] for i in sorted(named[bid])] for bid in bids})
 
 
 def public(row):

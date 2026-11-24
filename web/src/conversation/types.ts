@@ -12,12 +12,6 @@ export interface Attachment {
   /** Where its bytes are (`/api/v2/files/<id>…`). */
   url?: string;
   size?: number;
-  /** A picture's, video's or PDF's size in pixels (a PDF's first page), once the server has read it. */
-  width?: number;
-  height?: number;
-  /** Its small copy and, for a video or PDF, its still (`/api/v2/files/<id>/thumb`, `/poster`), once made. */
-  thumb_url?: string;
-  poster_url?: string;
 }
 
 /** What a message's `refs` holds that this module reads; the server sends more. */

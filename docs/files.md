@@ -580,9 +580,9 @@ Media fields live on each file version: `width`, `height`, `duration_ms`, `poste
 `thumb_blob_id`, and `media_state` (`pending`, `ready`, `none`). One background worker fills them;
 existing versions default to `none` and are not automatically backfilled. New versions are `pending`.
 A picture, video or PDF posted in a thread (a plain attachment, with no file version) is queued the same way when its
-message is written, only for a type the worker can read on this server. Messages handed to a reader (the timeline,
-an upload's answer, the live stream) carry each attachment's `width`, `height`, `thumb_url` and `poster_url` once
-made, on the `/thumb` and `/poster` routes, only for a reader who may open the file; the full file stays at `url`.
+message is written, only for a type the worker can read on this server and only up to 25 MB; a larger source gets no
+preview and is never read for one. The web app draws a chat picture from its `/thumb` (which checks its reader as the
+file does, and is 404 until made), falling back to the file itself; messages carry no preview fields.
 Transient storage failures retry with bounded backoff, and a source that fails five passes becomes `none`; permanent
 decode failures become `none`.
 Missing tools or unsupported media never fail an upload, and a version nothing can be derived from (an SVG, or a

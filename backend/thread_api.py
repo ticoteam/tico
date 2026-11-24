@@ -889,12 +889,10 @@ def install(app, store, auth, mutate, rule_check):
         task's thread, `session=<agent>` reads only that agent's session and `comments=true` only the comments.
         `next_cursor` is the seq to pass as `cursor` for the page above. Each message has `reply_to` and `routed`; the
         first page has `bot_status`. A person's direct chat with a bot can also have `task_activity` in that seq window."""
-        who = request.state.identity
-        # One snapshot, so read_cache keeps the rows each message's and each file's checks read (visuals.previews).
-        with store.read_transaction() as c:
+        with store.read() as c:
             return threads.timeline(
                 c,
-                threads.viewer(auth, who),
+                threads.viewer(auth, request.state.identity),
                 thread_id,
                 cursor=cursor,
                 limit=limit or 50,
@@ -902,7 +900,6 @@ def install(app, store, auth, mutate, rule_check):
                 flat=bool(flat),
                 session=session,
                 comments=comments,
-                enrich=lambda rows: visuals.for_reader(app, store.settings, c, who, rows),
             )
 
     @app.get(

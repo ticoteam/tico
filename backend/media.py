@@ -608,40 +608,10 @@ def write_upload(store, request, body, uploads, fn):
     return result
 
 
-BLOB_ROW_SQL = "SELECT * FROM blobs WHERE id=?"
-BLOB_MEETINGS_SQL = "SELECT meeting_id FROM media_assets WHERE blob_id=?"
-
-
-def prime_blob_for(c, bids):
-    """What blob_for reads for each of `bids`, read together into this snapshot's read_cache: the privacy rows
-    (task_privacy.prime_blobs, its messages and tasks among them), the blob rows, their letters and meetings. The
-    decision stays blob_for's own, one blob at a time, from the same rows. Outside a snapshot it reads nothing."""
-    from . import letters, read_cache, task_privacy
-    from .store import H
-
-    task_privacy.prime_blobs(c, bids)
-    if read_cache.cache(c) is None:
-        return
-    for part in H.chunks(sorted({bid for bid in bids if bid})):
-        marks = ",".join("?" * len(part))
-        found = {bid: [] for bid in part}
-        for row in c.execute(f"SELECT * FROM blobs WHERE id IN ({marks})", part):
-            found[row["id"]].append(row)
-        read_cache.prime_rows(c, BLOB_ROW_SQL, {(bid,): found[bid] for bid in part})
-        found = {bid: [] for bid in part}
-        for row in c.execute(f"SELECT meeting_id,blob_id FROM media_assets WHERE blob_id IN ({marks})", part):
-            found[row["blob_id"]].append(row)
-        read_cache.prime_rows(c, BLOB_MEETINGS_SQL, {(bid,): found[bid] for bid in part})
-        letters.prime_blob_letters(c, part)
-
-
 def blob_for(c, auth, who, bid):
     """The blob row if `who` may read it (its owner, or anyone who may see a message or task it
-    is attached to); refuses otherwise. Shared by the download and its metadata. Its reads go through read_cache, so a
-    caller that checks many (visuals.previews) reads them together first (prime_blob_for)."""
-    from . import read_cache
-
-    row = next(iter(read_cache.rows(c, BLOB_ROW_SQL, (bid,))), None)
+    is attached to); refuses otherwise. Shared by the download and its metadata."""
+    row = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone()
     if not row:
         raise Problem("not_found", "File not found", 404)
     from . import letters
@@ -674,14 +644,16 @@ def blob_for(c, auth, who, bid):
     # object below, using the same authorization as its conversation or task.
     allowed = who.role in ("owner", "human") and row["owner"] == who.actor
     if not allowed and who.role in ("owner", "human", "bot"):
-        for linked in read_cache.rows(c, BLOB_MEETINGS_SQL, (bid,)):
+        for linked in c.execute("SELECT meeting_id FROM media_assets WHERE blob_id=?", (bid,)):
             try:
                 authorized(c, who, linked[0])
                 allowed = True
                 break
             except Problem:
                 pass
-        for linked in read_cache.rows(c, privacy.BLOB_MESSAGES_SQL, (bid,)):
+        for linked in c.execute(
+            "SELECT m.* FROM message_assets a JOIN messages m ON m.id=a.message_id WHERE a.blob_id=?", (bid,)
+        ):
             try:
                 auth.conversation(c, who, linked["conversation_id"])
                 privacy.require_message(c, who, dict(linked))
@@ -689,7 +661,7 @@ def blob_for(c, auth, who, bid):
                 break
             except Problem:
                 pass
-        for linked in read_cache.rows(c, privacy.BLOB_TASKS_SQL, (bid,)):
+        for linked in c.execute("SELECT task_id FROM task_assets WHERE blob_id=?", (bid,)):
             try:
                 auth.task(c, who, linked[0])
                 allowed = True
