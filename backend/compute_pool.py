@@ -1,3 +1,4 @@
+# pyright: strict
 """One prepared Base turn at a time on an idle company Burst runner."""
 
 import hashlib
