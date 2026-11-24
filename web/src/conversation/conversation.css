@@ -195,6 +195,8 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
    the player in the same place once tapped */
 .pcard-view>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top}
 .pcard-foot em{flex:none;font-style:normal;font-size:var(--t-xs);color:var(--muted)}
+/* a Word or Excel preview: drawn at half size, so its words stay near reading size on the card */
+.pcard.is-office .pcard-view iframe{width:200%;height:200%;transform:scale(.5)}
 .pcard.is-video .pcard-view{aspect-ratio:16/9;background:var(--scrim);border-bottom:0}
 .pcard.is-video .pcard-view>video,.pcard-play img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
 .pcard-play{position:absolute;inset:0;display:grid;place-items:center;padding:0;border:0;background:none;cursor:pointer}

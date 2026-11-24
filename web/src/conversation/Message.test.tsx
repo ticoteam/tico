@@ -353,6 +353,50 @@ describe('What a message holds besides words (thread-content.html)', () => {
     expect(card.closest('.pcard')).toBeTruthy();
   });
 
+  it('shows a Word or Excel file by the preview the server made, large on Expand, and its plain chip when there is none', async () => {
+    const DOCX = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+    const XLSX = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    let asked = 0;
+    serve((url) => {
+      if (url === '/api/v2/files/x2/preview')
+        return (asked += 1) === 1 ? { status: 202, body: {} } : { status: 200, body: '<html><body class="sheet" data-sheet="Later" data-sheets="2"><table></table></body></html>' };
+      if (url === '/api/v2/files/d1/preview') return { status: 200, body: '<!doctype html><html><head></head><body><h1>Quarterly plan</h1><script>alert(1)</script></body></html>' };
+      if (url === '/api/v2/files/x1/preview') return { status: 200, body: '<html><body class="sheet" data-sheet="Budget" data-sheets="3"><table><tr><td>Rent</td></tr></table></body></html>' };
+      if (url === '/api/v2/files/d2/preview') return { status: 404, body: { code: 'not_found' } };
+      return undefined;
+    });
+    const files = [
+      { id: 'd1', name: 'plan.docx', content_type: DOCX },
+      { id: 'x1', name: 'budget.xlsx', content_type: XLSX },
+      { id: 'd2', name: 'old.docx', content_type: DOCX },
+      { id: 'x2', name: 'sent.xlsx', content_type: 'application/octet-stream' }, // known by its name, as the server knows it
+    ];
+    show([msg(1, 'bot:qa', 'The numbers', { refs: { attachments: files } })]);
+    const word = await screen.findByRole('button', { name: 'plan.docx' });
+    const frame = await waitFor(() => {
+      const f = word.closest('.pcard')?.querySelector('iframe');
+      expect(f).toBeTruthy();
+      return f!;
+    });
+    expect(frame.getAttribute('sandbox')).toBe(''); // closed: no scripts, no app origin
+    expect(frame.getAttribute('srcdoc')).toContain('<h1>Quarterly plan</h1>');
+    expect(frame.getAttribute('srcdoc')).not.toContain('<script'); // lib/safeFrame drew it
+    const sheet = await screen.findByRole('button', { name: 'budget.xlsx' });
+    await waitFor(() => expect(within(sheet.closest('.pcard') as HTMLElement).getByText('Budget of 3')).toBeTruthy());
+    // no preview: the plain chip it always had, which opens the file
+    expect((await screen.findByRole('link', { name: /old\.docx/ })).getAttribute('href')).toBe('/api/v2/files/d2');
+    // still being made (202): its chip until the preview arrives, then the card; a 404 is never asked again
+    expect((await screen.findByRole('link', { name: /sent\.xlsx/ })).getAttribute('href')).toBe('/api/v2/files/x2');
+    const later = await screen.findByRole('button', { name: 'sent.xlsx' }, { timeout: 6_000 });
+    expect(within(later.closest('.pcard') as HTMLElement).getByText('Later of 2')).toBeTruthy();
+    expect(asked).toBe(2);
+    expect(calls.filter((c) => c.url === '/api/v2/files/d2/preview')).toHaveLength(1);
+    fireEvent.click(word);
+    const dialog = await screen.findByRole('dialog', { name: 'plan.docx' });
+    expect(dialog.querySelector('iframe')?.getAttribute('srcdoc')).toContain('Quarterly plan');
+    expect(within(dialog).getByRole('link', { name: 'Download' }).getAttribute('href')).toBe('/api/v2/files/d1');
+  }, 10_000);
+
   it('shows a picture that does not load as its name', async () => {
     serve();
     show([msg(1, 'bot:qa', 'Shot', { refs: { attachments: [{ id: 'f3', name: 'gone.png', content_type: 'image/png' }] } })]);

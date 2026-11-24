@@ -555,18 +555,22 @@ class ReadIndex:
             for bid, mid in self.c.execute("SELECT blob_id,message_id FROM message_assets"):
                 rows[bid]["messages"].add(mid)
             for r in self.c.execute(
-                "SELECT v.blob_id,v.poster_blob_id,v.thumb_blob_id,v.attempt_id,f.task_id,f.scope "
+                "SELECT v.blob_id,v.poster_blob_id,v.thumb_blob_id,v.preview_html_blob_id,v.attempt_id,f.task_id,f.scope "
                 "FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id"
             ):
-                for bid in filter(None, (r["blob_id"], r["poster_blob_id"], r["thumb_blob_id"])):
+                for bid in filter(
+                    None, (r["blob_id"], r["poster_blob_id"], r["thumb_blob_id"], r["preview_html_blob_id"])
+                ):
                     if r["task_id"]:
                         rows[bid]["tasks"].add(r["task_id"])
                     if r["scope"].startswith("task:"):
                         rows[bid]["tasks"].add(r["scope"][5:])
                     if r["attempt_id"]:
                         rows[bid]["attempts"].add(r["attempt_id"])
-            for bid, poster, thumb in self.c.execute("SELECT blob_id,poster_blob_id,thumb_blob_id FROM blob_media"):
-                for child in filter(None, (poster, thumb)):
+            for bid, *children in self.c.execute(
+                "SELECT blob_id,poster_blob_id,thumb_blob_id,preview_html_blob_id FROM blob_media"
+            ):
+                for child in filter(None, children):
                     rows[child]["parents"].add(bid)
             self._attachments = rows
         return self._attachments

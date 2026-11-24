@@ -559,3 +559,25 @@ export const pageTextQuery = (url: `/api/${string}`) =>
     staleTime: Infinity,
     retry: transient,
   });
+
+/** How many times a Word or Excel preview that is not there yet is asked for again, and the first wait (it doubles). */
+const PREVIEW_TRIES = 10;
+const PREVIEW_WAIT = 2_000;
+/** The server's answer while its worker is still making the preview (backend/media.py preview_html). */
+const PENDING = 202;
+
+/** A Word or Excel file's preview (backend/office_preview.py, at the file's `/preview`), made safe as a page's is; null
+    when safeFrame refuses it. The server makes it a moment after the file arrives and answers 202 until then, so only
+    that is asked again (from 2 s apart up to 30 s, about four minutes in all); a 404 (none, and none coming) settles at
+    once. */
+export const officePreviewQuery = (url: `/api/${string}`) =>
+  queryOptions({
+    queryKey: ['files', 'office-preview', url, PAGE_MAX],
+    queryFn: async ({ signal }) => {
+      const read = await rangeText(url, PAGE_MAX, { signal });
+      return read.truncated ? null : safeFrame(read.text);
+    },
+    staleTime: Infinity,
+    retry: (tries, e) => transient(tries, e) || (tries < PREVIEW_TRIES && e instanceof ApiError && e.status === PENDING),
+    retryDelay: (tries, e) => Math.min((e instanceof ApiError && e.status === PENDING ? PREVIEW_WAIT : 1000) * 2 ** tries, 30_000),
+  });

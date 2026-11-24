@@ -12,7 +12,7 @@ from email.parser import BytesParser
 from email.policy import HTTP
 from types import SimpleNamespace
 
-from fastapi import Query, Request
+from fastapi import Query, Request, Response
 
 from pydantic import Field, ValidationError
 
@@ -21,6 +21,7 @@ from . import models as M
 from . import task_text_keys
 from . import note_outcomes
 from .blobs import Blobs, brief, register
+from .file_metadata import PREVIEW_PENDING, preview_missing
 from .files import adopt_title, is_file_id
 from clients import bot_files as BF
 from . import rooms
@@ -1230,7 +1231,7 @@ def install_media(
             preview = media[derivative + "_blob_id"] if media else None
             row = c.execute("SELECT * FROM blobs WHERE id=?", (preview,)).fetchone() if preview else None
             if not row:
-                raise Problem("not_found", "File preview not found", 404)
+                raise preview_missing(derivative, media)
         return dict(row)
 
     @app.head("/api/v2/files/{bid}/poster", include_in_schema=False)
@@ -1242,6 +1243,20 @@ def install_media(
     @app.get("/api/v2/files/{bid}/thumb")
     def thumb(request: Request, bid: str, v: int | None = None):
         return download_blob(request, bid, v, "thumb")
+
+    @app.head("/api/v2/files/{bid}/preview", include_in_schema=False)
+    @app.get("/api/v2/files/{bid}/preview")
+    def preview_html(request: Request, bid: str, v: int | None = None):
+        """A Word or Excel file's HTML preview (backend/office_preview.py), for its reader only. It is served as any
+        file is, a sandboxed download; the chat reads it and draws it in a closed frame. While the worker is still
+        making it the answer is 202 with no body, so the chat asks again; a file that has none, never will have one or
+        was sent before previews were made gets 404."""
+        try:
+            return download_blob(request, bid, v, "preview_html")
+        except Problem as exc:
+            if exc.code != PREVIEW_PENDING:
+                raise
+            return Response(status_code=202, headers={"Retry-After": "2", "Cache-Control": "no-store"})
 
     @app.head("/api/v2/files/{bid}", include_in_schema=False)
     @app.get("/api/v2/files/{bid}")

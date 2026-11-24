@@ -3010,9 +3010,12 @@ class Files:
                 }
             if derivative:
                 bid = v[derivative + "_blob_id"]
-                v = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone() if bid else None
-                if not v:
-                    raise Problem("not_found", "File preview not found", 404)
+                found = c.execute("SELECT * FROM blobs WHERE id=?", (bid,)).fetchone() if bid else None
+                if not found:
+                    from .file_metadata import preview_missing
+
+                    raise preview_missing(derivative, v)
+                v = found
                 blob = dict(v)
             else:
                 blob = {"digest": v["blob_digest"], "size": v["size"], "name": v["name"], "content_type": v["mime"]}
