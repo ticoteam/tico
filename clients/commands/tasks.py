@@ -183,17 +183,17 @@ def task_create(api, args):
         "model",
         "effort",
         "harness",
-        "readers",
         "follow",
         "route",
     ):
         if args.get(field) not in (None, "", [], False):
             body[field] = args[field]
-    if args.get("shared_with"):
+    readers, shared = args.get("readers"), args.get("shared_with")
+    if readers is not None and shared is not None and sorted(readers) != sorted(shared):
+        raise ValueError("shared_with and readers are one list, and these differ: give one")
+    if chosen := (readers if readers is not None else shared):
         # Sent as `readers`, the name every server takes (backend/models.py one_reader_list).
-        if body.get("readers") and sorted(body["readers"]) != sorted(args["shared_with"]):
-            raise ValueError("shared_with and readers are one list, and these differ: give one")
-        body["readers"] = args["shared_with"]
+        body["readers"] = list(chosen)
     if args.get("private") is not None:
         body["private"] = args["private"]
     after = _after(args)

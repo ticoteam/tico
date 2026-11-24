@@ -1037,9 +1037,12 @@ describe('Details: the facts @s58', () => {
   });
 
   it('has no Follow, and puts someone in a role', async () => {
-    serve(base);
+    // an older server still answers with followers: the facts show none of them
+    serve(reads(task({ followers: [{ actor: 'human:bo', notify: 'live' }] } as Partial<TaskData>)));
     details();
     await facts();
+    expect(await screen.findByText('Assignee')).toBeTruthy();
+    expect(screen.queryByText('Followers')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Follow' })).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add someone' }));
@@ -1065,6 +1068,20 @@ describe('Details: the facts @s58', () => {
     details();
     await facts();
     expect(((await screen.findByText('Assignee')).parentElement as HTMLElement).textContent).toBe('AssigneeNone');
+  });
+
+  it('lets someone see a private task, keeping both names of its reader list', async () => {
+    serve((url, method) =>
+      method === 'POST' && url.endsWith('/readers')
+        ? { status: 200, body: { private: true, readers: ['human:bo'], shared_with: ['human:bo'] } }
+        : reads(task({ private: true, readers: [], shared_with: [] } as Partial<TaskData>))(url),
+    );
+    details();
+    await facts();
+    expect(await run('task.setReaders', { task: 't1', add: ['human:bo'], remove: [] }, { via: 'click' })).toMatchObject({ ok: true });
+    const t = queryClient.getQueryData<TaskData>(keys.tasks.detail('t1'));
+    expect(t?.readers).toEqual(['human:bo']);
+    expect(t?.shared_with).toEqual(['human:bo']);
   });
 
   it('lists the meetings the task was in, each opening in the calendar', async () => {

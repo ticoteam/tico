@@ -491,12 +491,14 @@ export async function setTaskVisible(id: string, to: Visible) {
 
 /** Who else sees a private task (POST /api/v2/tasks/{tid}/readers). */
 type ReadersAnswer = { private: boolean; readers: string[] };
+/** `readers` and `shared_with` are one list by two names: the cache keeps them the same. */
+const withReaders = (cur: TaskData, readers: string[]): TaskData => ({ ...cur, readers, shared_with: readers });
 export function setTaskReaders(id: string, add: string[], remove: string[]) {
   return write<ReadersAnswer>({
     key: keys.tasks.detail(id),
-    optimistic: (cur: TaskData | undefined) => cur && { ...cur, readers: [...new Set([...(cur.readers ?? []), ...add])].filter((r) => !remove.includes(r)) },
+    optimistic: (cur: TaskData | undefined) => cur && withReaders(cur, [...new Set([...(cur.readers ?? []), ...add])].filter((r) => !remove.includes(r))),
     send: (idem) => api.post<ReadersAnswer>(`${taskPath(id)}/readers`, { add, remove }, { idempotencyKey: idem }),
-    settle: (cur: TaskData | undefined, answer) => cur && { ...cur, readers: answer.readers, private: answer.private },
+    settle: (cur: TaskData | undefined, answer) => cur && { ...withReaders(cur, answer.readers), private: answer.private },
   });
 }
 

@@ -168,21 +168,22 @@ class TaskRelationRef(Contract):
 ReaderName = Annotated[str, Field(min_length=1, max_length=200)]
 
 
-def one_reader_list(data: Any) -> Any:
-    """`shared_with` is `readers` by the name the task read answers with: either name sets the list, and naming both
-    with different people is refused. Its value moves to `readers`, so `shared_with` is never in a dump (an idempotency
-    hash reads the same either way)."""
-    if not isinstance(data, dict) or "shared_with" not in data:
-        return data
-    data = dict(data)
-    shared = data.pop("shared_with")
-    if shared is None:
-        return data
-    if "readers" in data and isinstance(shared, list) and isinstance(data["readers"], list):
-        if sorted(map(str, shared)) != sorted(map(str, data["readers"])):
+def one_reader_list(model: Any) -> Any:
+    """`shared_with` is `readers` by the name the task read answers with, checked once both are validated: either name
+    sets the list; both, naming different people, is refused; both naming the same people keeps `readers` as sent.
+    A null never clears it (only [] does). `shared_with` is never dumped, so an idempotency hash reads the same
+    whichever name was sent."""
+    sent = model.model_fields_set
+    if "shared_with" not in sent:
+        return model
+    if model.shared_with is None:
+        raise ValueError("shared_with is a list: [] clears it")
+    if "readers" in sent:
+        if sorted(model.readers) != sorted(model.shared_with):
             raise ValueError("readers and shared_with are one list, and these differ: send one of them")
-    data["readers"] = shared
-    return data
+        return model
+    model.readers = list(model.shared_with)
+    return model
 
 
 # The version of the task the caller was shown. A bot's own command always carries it; a person may leave it out.
@@ -257,10 +258,9 @@ class TaskCreate(Contract):
     for_actor: ID | None = None
     from_message: ID | None = None
 
-    @model_validator(mode="before")
-    @classmethod
-    def same_readers(cls, data: Any) -> Any:
-        return one_reader_list(data)
+    @model_validator(mode="after")
+    def same_readers(self):
+        return one_reader_list(self)
 
     @model_validator(mode="after")
     def for_a_person(self):
@@ -758,13 +758,12 @@ class TaskReaderList(Contract):
     """The whole reader list of a private task, replacing what it had. `shared_with` is its newer name."""
 
     readers: list[ReaderName] = Field(default_factory=list, max_length=50)
-    # one_reader_list moves it to `readers` before validation, so it is always None here and never dumped.
+    # `readers` by its newer name (one_reader_list); never dumped.
     shared_with: list[ReaderName] | None = Field(default=None, exclude=True, max_length=50)
 
-    @model_validator(mode="before")
-    @classmethod
-    def same_readers(cls, data: Any) -> Any:
-        return one_reader_list(data)
+    @model_validator(mode="after")
+    def same_readers(self):
+        return one_reader_list(self)
 
 
 class TaskFollower(Contract):
