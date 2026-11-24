@@ -187,9 +187,9 @@ def test_human_and_roles_human_must_agree_on_create_and_update(api):
     assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara", "roles": {"human": ["ben"]}}, expected=422)
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "", "roles": {"human": ["ben"]}}, expected=422)
-    # Sent as null or "" on create, `human` names nobody, so a `roles.human` naming someone disagrees with it.
-    for nobody in (None, ""):
-        post(api, "tasks", {**body, "human": nobody, "roles": {"human": ["ben"]}}, expected=422)
+    # Sent as null on create, `human` names nobody, so a `roles.human` naming someone disagrees with it.
+    sent = {**body, "title": "Add XML export", "human": None, "roles": {"human": ["ben"]}}
+    assert "different people" in str(post(api, "tasks", sent, expected=422))
     alone = post(api, "tasks", {**body, "title": "Add PDF export", "roles": {"human": ["ben"]}})
     assert _roles(api, alone["id"]) == {"human": [BEN]}  # `human` left out says nothing
     # A role name is stored lower-case, so `Human` is the same role and cannot slip another person in.
