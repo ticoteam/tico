@@ -424,7 +424,8 @@ def from_document(doc):
     """The draft a parsed company file holds (`read`). Key-shaped strings in it are removed. The draft starts on the
     chart tab with no undo, chat, removed or pending."""
     doc, _ = scrub_all(doc)
-    swarm = str(doc.get("version")) == SWARM_FORMAT  # email, drafts and said are read only under a 0.4 header
+    # email, drafts and said are read only under a 0.4 header
+    swarm = isinstance(doc, dict) and str(doc.get("version")) == SWARM_FORMAT
     company = doc.get("company")
     company = company if isinstance(company, dict) else {}
     draft = D.blank()
