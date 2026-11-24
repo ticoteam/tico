@@ -1370,7 +1370,7 @@ impl Runner {
     async fn keeper_loop(self: Arc<Self>) {
         while !self.stopping() {
             tokio::time::sleep(crate::keeper::PRUNE_EVERY).await;
-            self.keeper.prune(false).await;
+            self.keeper.prune_later();
         }
     }
 

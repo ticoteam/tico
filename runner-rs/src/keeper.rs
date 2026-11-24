@@ -269,6 +269,16 @@ impl Keeper {
         // Stopped off the turn's path: the turn that gave this one back does not wait on others' stops.
         let mut ending = self.overdue(Instant::now(), false);
         ending.extend(old);
+        self.end_later(ending);
+    }
+
+    /// `prune` without waiting: the runner's periodic one (Runner::keeper_loop). Its stops are joined at shutdown.
+    pub fn prune_later(&self) {
+        self.end_later(self.overdue(Instant::now(), false));
+    }
+
+    /// Stop `ending` in the background, tracked for `prune` with `close` to join.
+    fn end_later(&self, ending: Vec<Kept>) {
         if !ending.is_empty() {
             let mut stopping = self.stopping.lock().unwrap_or_else(|p| p.into_inner());
             stopping.retain(|stop| !stop.is_finished());

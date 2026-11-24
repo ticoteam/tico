@@ -1862,8 +1862,10 @@ impl PersonalCopy {
                     .is_none_or(|held| !held.contains_key(&path))
             {
                 // Never followed: a link in its place is removed itself.
-                remove_copy(&path);
-                let _ = std::fs::remove_file(record.path());
+                // Its record stays for the next start while the copy could not be removed.
+                if remove_copy(&path) {
+                    let _ = std::fs::remove_file(record.path());
+                }
             }
         }
     }
@@ -1890,19 +1892,22 @@ fn hold_copy(path: &Path) -> usize {
     *count - 1
 }
 
-/// Remove a copy; a link in its place is removed, never followed.
-fn remove_copy(path: &Path) {
+/// Remove a copy (a link in its place is removed, never followed): whether it is gone.
+fn remove_copy(path: &Path) -> bool {
     let gone = match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_dir() => std::fs::remove_dir_all(path),
         Ok(_) => std::fs::remove_file(path),
         Err(e) => Err(e),
     };
     match gone {
-        Err(e) if e.kind() != std::io::ErrorKind::NotFound => log(&format!(
-            "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
-            path.display()
-        )),
-        _ => {}
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            log(&format!(
+                "Tico runner: cannot remove a chat's copy of its checkout {}: {e}",
+                path.display()
+            ));
+            false
+        }
+        _ => true,
     }
 }
 
@@ -1939,8 +1944,9 @@ impl Drop for PersonalCopy {
             }
         };
         if last {
-            remove_copy(&self.0);
-            let _ = std::fs::remove_file(&self.1);
+            if remove_copy(&self.0) {
+                let _ = std::fs::remove_file(&self.1);
+            }
         }
     }
 }

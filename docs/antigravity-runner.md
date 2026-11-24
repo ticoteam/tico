@@ -48,8 +48,9 @@ Google key, nor the computer's Application Default Credentials (`AGY_ADC_AUTH`),
 during the turn, or while it is kept after it, is masked before anything it says is kept; without the file in place
 it is not started. The home is removed once `agy` has exited (a kept one, below, when it is stopped), and any left by a
 stopped runner when it starts again. The file holds the plan's refresh token, so, as for a ChatGPT plan, a bot paid by
-the plan can read it while its turn runs, and while its `agy` is kept after it: at most 2 minutes unused, which is
-also how long a removed or revoked plan's sign-in can stay on the computer (SECURITY.md). No new turn reaches it.
+the plan can read it while its turn runs, and while its `agy` is kept after it: about 2 minutes 15 seconds unused at
+most (the idle time and the 15-second check) plus the time to stop it, which is also how long a removed or revoked
+plan's sign-in can stay on the computer (SECURITY.md). No new turn reaches it.
 
 The `agy` process stays up after a turn that completed cleanly or that a person's Stop or a drain stopped (never after
 a timeout, a lost lease or an error), as T3 Code keeps it: one per
