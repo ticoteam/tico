@@ -54,7 +54,7 @@ DAY: Shows = (True, False, False)
 BUILT_IN: dict[int, Shows] = {
     **dict.fromkeys((14, 15, 16, 17), DAY),
     **dict.fromkeys((18, 20), (False, True, False)),
-    **dict.fromkeys((19, 21, 45, 46, 47), (False, True, True)),
+    **dict.fromkeys((19, 21, 45, 47), (False, True, True)),  # 46 is elapsed time ([h]:mm:ss): the number as stored
     22: (True, True, False),
 }
 LAST_DAY = 2958465  # 9999-12-31 in the 1900 calendar
@@ -87,21 +87,26 @@ def _archive(data: bytes) -> zipfile.ZipFile:
     return archive
 
 
-def _plain(archive: zipfile.ZipFile, name: str) -> None:
-    """Refuse a part with an XML DOCTYPE or entity declaration (UTF-8 or UTF-16), read as a stream: every entry of that
-    name, as a zip may hold a name twice and a reader may take either."""
+def _scan(archive: zipfile.ZipFile, entry: zipfile.ZipInfo) -> None:
+    """Refuse one zip entry with an XML DOCTYPE or entity declaration (UTF-8 or UTF-16), read as a stream."""
     keep = max(len(m) for m in MARKS) - 1
+    tail = b""
     try:
-        for entry in (e for e in archive.infolist() if e.filename == name):
-            tail = b""
-            with archive.open(entry) as stream:
-                while chunk := stream.read(CHUNK):
-                    window = tail + chunk
-                    if any(m in window for m in MARKS):
-                        raise ValueError("The file uses XML features Tico does not read")
-                    tail = window[-keep:]
+        with archive.open(entry) as stream:
+            while chunk := stream.read(CHUNK):
+                window = tail + chunk
+                if any(m in window for m in MARKS):
+                    raise ValueError("The file uses XML features Tico does not read")
+                tail = window[-keep:]
     except (zipfile.BadZipFile, NotImplementedError, RuntimeError) as exc:  # bad CRC, unknown compression, encrypted
         raise ValueError("The file could not be read") from exc
+
+
+def _plain(archive: zipfile.ZipFile, name: str) -> None:
+    """Scan every entry of one name (a zip may hold a name twice, and a reader may take either)."""
+    for entry in archive.infolist():
+        if entry.filename == name:
+            _scan(archive, entry)
 
 
 def page(body: str, attrs: str = "", room: int = MAX_HTML) -> str:
@@ -160,8 +165,8 @@ def word(data: bytes) -> str:
 
     docs = _docs()
     archive = _archive(data)
-    for name in dict.fromkeys(e.filename for e in archive.infolist() if not e.is_dir()):
-        _plain(archive, name)
+    for entry in archive.infolist():  # every entry once, whatever its name: a "folder" can hold a part too
+        _scan(archive, entry)
     convert: Any = mammoth.convert_to_html  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
     body: str = convert(
         io.BytesIO(data),
@@ -214,10 +219,17 @@ def _whole(text: str | None) -> int | None:
 
 
 def format_shows(code: str) -> Shows | None:
-    """What a number format shows of a date, or None for a number. Quoted text, escaped characters, spacing (`_x`),
-    fill (`*x`), [colors and conditions] and AM/PM go first; then y or d, or an m that is no minute (not just after h or
-    just before s), is a day, and h, s or a minute is a time of day."""
-    code = re.sub(r'"[^"]*"|\\.|_.|\*.|\[[^\]]*\]', "", code)
+    """What a number format shows of a date, or None: then the cell shows its number as stored, which is never wrong,
+    only unformatted. Quoted text, escaped characters, spacing (`_x`) and fill (`*x`) go first, and only the first
+    `;` section counts. A code past Excel's 255 characters, or with any [...] but a locale [$...] (colors, conditions,
+    elapsed [h]), is left as a number. Then y or d, or an m that is no minute (not just after h or just before s), is a
+    day, and h, s or a minute is a time of day."""
+    if len(code) > 255:
+        return None
+    code = re.sub(r'"[^"]*"|\\.|_.|\*.', "", code).split(";", 1)[0]
+    if re.search(r"\[(?!\$)", code):
+        return None
+    code = re.sub(r"\[\$[^\]]*\]", "", code)
     code = re.sub(r"am/pm|a/p", "", code, flags=re.I).lower()
     months = re.sub(r"(h+[^a-z0-9]*)m+|m+([^a-z0-9]*s)", r"\1\2", code)
     day = bool(re.search(r"[yd]", code)) or "m" in months

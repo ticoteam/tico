@@ -734,7 +734,9 @@ def queue_purge(c, digest, kind, now):
     if not still_used(c, digest):
         c.execute(
             "INSERT INTO blob_purges(digest,kind,queued_at) VALUES(?,?,?) ON CONFLICT(digest) DO UPDATE SET "
-            "queued_at=excluded.queued_at,attempts=0,error=''",
+            "queued_at=excluded.queued_at,attempts=0,error='',"
+            # a page or SVG kind, once known, is kept: its hosted copy goes with the bytes
+            "kind=CASE WHEN excluded.kind<>'' THEN excluded.kind ELSE blob_purges.kind END",
             (digest, kind if kind in ("page", "svg") else "", now),
         )
 

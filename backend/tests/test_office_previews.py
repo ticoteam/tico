@@ -247,7 +247,13 @@ def test_every_word_part_is_checked_whatever_the_file_calls_it():
             z.writestr(entry.filename, source.read(entry))
         z.writestr("word/document.xml", hidden)
         z.writestr("word/document.xml", source.read("word/document.xml"))
+    # a part in an entry named like a folder
+    slashed = (
+        f'<Relationships xmlns="{PKG}"><Relationship Id="rId1" Type="{R}/officeDocument" '
+        f'Target="word/doc.xml/"/></Relationships>'
+    )
     for case in (
+        docx([(None, "Hi")], extra={"_rels/.rels": slashed, "word/doc.xml/": hidden}),
         docx([(None, "Hi")], extra={"_rels/.rels": labelled, "word/document.xml": hidden}),
         docx([(None, "Hi")], extra={"_rels/.rels": twice, "word/media/doc.xml": hidden}),
         out.getvalue(),
@@ -264,3 +270,28 @@ def test_one_long_paragraph_is_cut_inside_its_words_not_to_nothing():
     assert len(out.encode()) <= office_preview.MAX_HTML and out.endswith("</body></html>")
     body = out.split("<body>", 1)[1]
     assert body.startswith("<p>é &amp; é") and not re.search(r"&(?!amp;)", body)  # no entity cut in half
+
+
+def test_a_number_format_excel_draws_its_own_way_shows_the_stored_number():
+    shows = office_preview.format_shows
+    assert shows("[h]:mm") is None and shows("[>=1]0.00;[<1]h:mm") is None and shows("m" * 256) is None
+    assert shows("[$-409]mmm d, yyyy") == (True, False, False) and shows("0.00;[Red]h:mm") is None
+    codes = ["[h]:mm", "[>=1]0.00;[<1]h:mm", "mmm" + " " * 300]
+    fmts = "".join(f'<numFmt numFmtId="{164 + i}" formatCode="{html.escape(c)}"/>' for i, c in enumerate(codes))
+    xfs = '<xf numFmtId="0"/><xf numFmtId="46"/>' + "".join(f'<xf numFmtId="{164 + i}"/>' for i in range(len(codes)))
+    styles = f'<styleSheet xmlns="{S}"><numFmts>{fmts}</numFmts><cellXfs>{xfs}</cellXfs></styleSheet>'
+    cells = "".join(f'<c r="{chr(65 + i)}1" s="{i + 1}"><v>1.5</v></c>' for i in range(len(codes) + 1))
+    book = xlsx(
+        [("One", [["x"]])], styles=styles, extra={"xl/worksheets/sheet1.xml": sheet_xml(f'<row r="1">{cells}</row>')}
+    )
+    assert re.findall(r'<td class="n">([^<]*)</td>', office_preview.sheet(book)) == ["1.5"] * 4  # 46 is elapsed time
+
+
+def test_a_purge_queued_again_keeps_the_kind_that_names_its_hosted_copy(api):
+    store = api.app.state.store
+    digest = "1" * 64
+    with store.transaction() as c:
+        file_library.queue_purge(c, digest, "", "2026-01-01T00:00:00.000000Z")
+        file_library.queue_purge(c, digest, "page", "2026-01-01T00:00:01.000000Z")
+        file_library.queue_purge(c, digest, "", "2026-01-01T00:00:02.000000Z")
+        assert c.execute("SELECT kind FROM blob_purges WHERE digest=?", (digest,)).fetchone()[0] == "page"
