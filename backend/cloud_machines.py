@@ -1937,9 +1937,12 @@ def drain_managed_burst(c):
 
 
 def burst_backoff(c, at):
+    # Keep the later deadline as Python wrote it. A max() computed in SQL is a REAL stored back into this TEXT column,
+    # and SQLite 3.45 (Ubuntu 24.04) writes that with 15 digits: 1795546269.9122357 became 1795546269.91224, a few
+    # microseconds late, so the scaler looking exactly at the deadline saw it still closed.
     c.execute(
-        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-        "value=max(CAST(registry_metadata.value AS REAL),CAST(excluded.value AS REAL))",
+        "INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+        "WHERE CAST(excluded.value AS REAL)>CAST(registry_metadata.value AS REAL)",
         (BURST_NEXT, str(at)),
     )
 
