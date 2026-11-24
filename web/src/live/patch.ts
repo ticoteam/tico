@@ -263,9 +263,10 @@ function patchTasks(batch: TaskEvent[]): void {
   }
   if (!batch.length) return;
   for (const [key, data] of queryClient.getQueriesData<TaskList>({ queryKey: ['tasks', 'list'] })) {
+    // a stage by priority is re-read, never spliced: after any read already out, as that read may be from before this
+    const ranked = (key[2] as { sort?: unknown } | undefined)?.sort === 'priority';
     if (!data || !Array.isArray(data.tasks)) {
-      // a stage by priority whose first read is out: read again once it is in, as that read may be from before this
-      if ((key[2] as { sort?: unknown } | undefined)?.sort === 'priority' && batch.some((e) => !statusOnly(e))) refetchSoon(key, true);
+      if (ranked && batch.some((e) => !statusOnly(e))) refetchSoon(key, true);
       continue;
     }
     const { list, unsure, reset } = patchTaskList(data, batch, key[2] as Record<string, unknown> | undefined);
@@ -274,7 +275,7 @@ function patchTasks(batch: TaskEvent[]): void {
       continue;
     }
     if (list !== data) queryClient.setQueryData(key, list);
-    if (unsure) refetchSoon(key);
+    if (unsure) refetchSoon(key, ranked);
   }
   // Flow needs the server's claimability and page boundaries (relationship names come from their own query).
   for (const [key, data] of queryClient.getQueriesData<{ pages: TaskList[] }>({ queryKey: ['tasks', 'flow'] })) {
