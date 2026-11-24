@@ -958,7 +958,7 @@ def listed_caps(c):
 
 def burst_budget(c):
     budget = listed_caps(c).get("daily_budget_usd")
-    return type(budget) in (int, float) and 0 <= budget <= 100_000
+    return isinstance(budget, (int, float)) and not isinstance(budget, bool) and 0 <= budget <= 100_000
 
 
 def resizing(current):
