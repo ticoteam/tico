@@ -4,6 +4,7 @@ has none, else into the task's `human` role. Until the upgrade floor passes, `hu
 that role. Acme is the fictional company: Ana owns it, Ben and Cara are people."""
 
 import importlib
+import json
 
 import pytest
 
@@ -155,7 +156,91 @@ def test_human_on_create_and_update_sets_only_the_human_role(api):
         post(api, "tasks/" + t["id"], {"version": t["version"], "human": wrong}, expected=422)
         post(api, "tasks", {"owner": "ops", "title": "Add PDF export", "body": "x", "human": wrong}, expected=422)
     post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara"}, token="cara-test", expected=403)
+    with api.app.state.store.transaction() as c:
+        X.no_sign_in(c, CARA)
+    post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara"}, expected=422)
     assert _roles(api, t["id"]) == {}
+
+
+def test_human_and_roles_human_must_agree_on_create_and_update(api):
+    """Sent both ways in one request, `human` and `roles.human` name the same people or the write is refused, on create
+    and on update alike; agreeing, the role is set once."""
+    body = {"owner": "ops", "title": "Add CSV export", "body": "x"}
+    post(api, "tasks", {**body, "human": "ben", "roles": {"human": ["cara"]}}, expected=422)
+    t = post(api, "tasks", {**body, "human": "ben", "roles": {"human": [BEN], "qa": ["cara"]}})
+    assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
+    post(api, "tasks/" + t["id"], {"version": t["version"], "human": "cara", "roles": {"human": ["ben"]}}, expected=422)
+    post(api, "tasks/" + t["id"], {"version": t["version"], "human": "", "roles": {"human": ["ben"]}}, expected=422)
+    assert _roles(api, t["id"]) == {"human": [BEN], "qa": [CARA]}
+
+
+def test_a_held_edit_that_never_named_human_keeps_the_role_when_it_replays(api):
+    """A held title edit is stored without `human`, so replaying it leaves the role; one held before this release
+    stored `human: null` for every edit, and that null names nothing. Leaving `human` out and sending null are
+    different requests to the idempotency check."""
+    from backend import models as M
+    from backend import org_rule_check
+    from backend.auth import Identity
+
+    t = post(api, "tasks", {"owner": "ops", "title": "Add CSV export", "body": "x", "human": "ben"})
+    edit = M.TaskUpdate.model_validate({"version": t["version"], "title": "Add CSV export now"})
+    held = edit.model_dump(mode="json", by_alias=True)
+    assert "human" not in held
+    assert (
+        M.TaskUpdate.model_validate({"title": "x", "human": None}).model_dump() != M.TaskUpdate(title="x").model_dump()
+    )
+    replay = org_rule_check.REPLAY["task_update"]
+    ana = Identity(ANA, "owner", "ana@acme.example")
+    with api.app.state.store.transaction() as c:
+        replay(c, ana, None, {"task": t["id"], "body": held}, None)
+    assert _roles(api, t["id"]) == {"human": [BEN]}
+    legacy = {**held, "title": "Add CSV export today", "human": None}
+    with api.app.state.store.transaction() as c:
+        replay(c, ana, None, {"task": t["id"], "body": legacy}, None)
+    assert _roles(api, t["id"]) == {"human": [BEN]}
+
+
+def test_restoring_a_ticket_trashed_before_the_human_was_retired_moves_its_human(dev):
+    """A snapshot taken before the upgrade still holds the Human: its restore moves it as the migration did, to the
+    assignee of a company ticket with none (who then gets its unnamed OK), else into the `human` role."""
+    api = dev
+    public = _file(api, "Add CSV export", "dev", private=False)["id"]
+    private = _file(api, "Payroll fix", "dev", private=True, readers=[BEN])["id"]
+    for task_id in (public, private):
+        post(api, f"tasks/{task_id}/delete", {})
+    with api.app.state.store.transaction() as c:
+        for task_id in (public, private):  # as an older release trashed it: its Human in the row, no assignee
+            snap = json.loads(c.execute("SELECT rows FROM task_trash WHERE task_id=?", (task_id,)).fetchone()[0])
+            assert "human_id" not in snap["rows"]["tasks"][0]  # a ticket trashed now carries no Human
+            snap["rows"]["tasks"][0].update(human_id=BEN, assignee_id=None)
+            c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snap), task_id))
+    for task_id in (public, private):
+        post(api, f"tasks/{task_id}/restore", {})
+    assert get(api, f"tasks/{public}")["task"]["assignee_id"] == BEN
+    assert (public, "OK the spec") in _asks(api, "ben-test")
+    assert _roles(api, public) == {}
+    assert _roles(api, private) == {"human": [BEN]}
+
+
+def test_a_role_named_on_create_is_judged_on_the_privacy_its_first_stage_gives_it(dev):
+    """Spec's agent makes every task it holds private: filed for Ben (who reads it as its assignee), the ticket goes
+    private as it enters Spec, so naming Cara, who would not read it, is refused, and nothing is filed."""
+    from backend import bot_settings as BS
+
+    api = dev
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "builder", {"private_tasks_default": True})
+    before = len(get(api, "tasks?status=open")["tasks"])
+    refused = post(
+        api,
+        "tasks",
+        {"title": "Bulk export", "body": "x", "owner": "ben", "pipeline": "dev", "human": "cara"},
+        expected=422,
+    )
+    assert "cannot read this private task" in str(refused)
+    assert len(get(api, "tasks?status=open")["tasks"]) == before
+    t = _file(api, "Bulk export", "dev", owner="ben", human="ben")
+    assert t["private"] and _roles(api, t["id"]) == {"human": [BEN]}
 
 
 def test_human_naming_someone_who_cannot_read_a_private_task_is_refused(api):

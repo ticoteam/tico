@@ -1027,19 +1027,20 @@ def handed(c, sender, receiver, task_id, before=None):
     )
 
 
-def _assignee_set_by_a_person(c, task_id, receiver, before=None):
-    """Whether `receiver` became this task's assignee by a person, Tico or the filing: the latest change to the task's
-    assignee, read from this task's own history, made them its assignee and was not a bot's; with no change, the
-    assignee is the one it was filed for (a bot's filing for a person is a write to them, checked as one). A bot cannot
-    open its own reach by naming someone, and no other task is read (so nothing about a parent the bot may not see shows
-    through)."""
+def _assignee_set_by_a_person(c, task_id, receiver, requester, before=None):
+    """Whether a person or Tico made `receiver` this task's assignee: the latest change to the task's assignee, read
+    from this task's own history, made them its assignee and was not a bot's; with no change, the task was filed for
+    them, and its requester (who filed it) is not a bot. A bot cannot open its own reach by naming someone, and no
+    other task is read (so nothing about a parent the bot may not see shows through)."""
     row = c.execute(
         "SELECT actor_id, new FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='assignee_id'"
         + (" AND created_at<?" if before else "")
         + " ORDER BY created_at DESC, rowid DESC LIMIT 1",
         (task_id, *((before,) if before else ())),
     ).fetchone()
-    return not row or row["new"] == receiver and not H.is_bot(row["actor_id"])
+    if not row:
+        return not H.is_bot(requester)
+    return row["new"] == receiver and not H.is_bot(row["actor_id"])
 
 
 def assignee_of(c, sender, receiver, task_id, before=None):
@@ -1050,11 +1051,11 @@ def assignee_of(c, sender, receiver, task_id, before=None):
     if not task_id or not H.is_human(receiver):
         return False
     row = c.execute(
-        "SELECT 1 FROM tasks WHERE id=? AND assignee_id=? AND owner_id=? AND status='open'"
+        "SELECT requester_id FROM tasks WHERE id=? AND assignee_id=? AND owner_id=? AND status='open'"
         + (" AND created_at<?" if before else ""),
         (task_id, receiver, sender, *((before,) if before else ())),
     ).fetchone()
-    return row is not None and _assignee_set_by_a_person(c, task_id, receiver, before)
+    return row is not None and _assignee_set_by_a_person(c, task_id, receiver, row["requester_id"], before)
 
 
 def _assignee_refused(c, sender, receiver, task_id):

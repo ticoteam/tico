@@ -981,6 +981,18 @@ def test_only_an_assignee_a_person_or_tico_named_on_this_task_opens_it(api):
     _ask(api, "bot:ops", _humaned(api, set_by=None, chart_too=False)["id"])  # filed for him: no change to read
 
 
+def test_an_assignee_an_agent_filed_for_opens_nothing(api):
+    """With no change of assignee on record, who filed the task named its assignee: an agent's filing opens nothing,
+    so ops cannot ask Ben on a task an agent filed and Ben was made the assignee of without a trace."""
+    two_levels_down(api)
+    filed = task(api, "ops-test", "bot:ops", title="Write the launch note (filed by ops)")
+    assert filed["requester_id"] == "bot:ops", filed
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET assignee_id='human:ben' WHERE id=?", (filed["id"],))
+    detail = _refused_ask(api, "bot:ops", filed["id"])
+    assert detail.startswith("An agent named this task's assignee"), detail
+
+
 def test_an_actions_approval_keeps_the_plain_reach_and_an_ended_task_says_so_first(api):
     """Only a ❓ and a stage ask open the assignee: an OK for an action (POST /oks, a grant the bot then uses) is
     refused as before. A stage ask on an ended task is refused for that, in one sentence, before reach is read."""

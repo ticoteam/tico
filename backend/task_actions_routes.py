@@ -802,7 +802,6 @@ def register_core(
             readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
             unassigned=unassigned,
             wake_refs=wake_refs,
-            human_role=body.human,
             asks=owner if asks_person and holder != owner else None,
             entity_id=entity_id,
         )
@@ -940,9 +939,12 @@ def register_core(
             )
             c.execute("UPDATE tasks SET live_meeting_id=? WHERE id=?", (body.live_meeting_id, row["id"]))
             meeting_audience.grant(c, row["id"], meeting_participants, who.actor)
-        if body.roles:
+        # The old `human` field is the `human` role, set as every role is: after the task entered its first stage, so
+        # who may be in it is judged on the privacy it has there.
+        roles = H.human_roles(c, who.actor, body.human or None, body.roles)
+        if roles:
             try:
-                TRo.set_roles(c, who.actor, row["id"], body.roles, mover=mover(c, who) or None)
+                TRo.set_roles(c, who.actor, row["id"], roles, mover=mover(c, who) or None)
             except ValueError as exc:
                 raise Problem("roles", str(exc), 422)
         if close_read:
@@ -1277,7 +1279,7 @@ def register_core(
             body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         fields = body.model_dump(exclude={"version", "on_behalf_of"})
         # The old `human` field, the `human` role until the upgrade floor passes: sent as "" or null, it takes it off.
-        named = fields.pop("human")
+        named = fields.pop("human", None)
         fields["human_role"] = (named or "") if "human" in body.model_fields_set else None
         entity = fields.pop("entity", None)
         fields["entity_id"] = None if entity is None else for_entity(c, who, entity)
@@ -1316,7 +1318,11 @@ def register_core(
 
     @org_rule_check.replayer("task_update")
     def rule_replay_update(c, bot, hold, replay, ingest, gate=None):
-        body = M.TaskUpdate.model_validate(replay["body"])
+        held = dict(replay["body"])
+        if "human" in held and held["human"] is None:
+            # Held before `human` was left out when not sent: every edit stored it as null, so null names nothing.
+            del held["human"]
+        body = M.TaskUpdate.model_validate(held)
         row = H.task(c, replay["task"])
         if row:
             # `send` refused it if the task changed since the hold (its version is the check's object), so this is

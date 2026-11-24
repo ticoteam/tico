@@ -140,7 +140,7 @@ def same_people(readers, shared):
             "someone on in their team, or the inbox fallback, by availability (label urgent: nobody async). On the "
             "Support pipeline when none is named",
         },
-        "human": _s("A person or `me` in its `human` role (roles {human: [...]}), a label"),
+        "human": _s("A person or `me` in its `human` role, a label"),
         "after": {
             "type": "array",
             "items": {"type": "string"},
@@ -170,6 +170,7 @@ def task_create(api, args):
         **({"message": said} if (said := args.get("message") or args.get("body")) else {}),
         "due": args.get("due"),
         "goal_id": args.get("goal_id") or None,
+        **({"human": _target(api, args["human"])} if args.get("human") else {}),
     }
     for field in (
         "pipeline",
@@ -209,8 +210,6 @@ def task_create(api, args):
     if after:
         body["relations"] = [{"task": other, "kind": "after"} for other in after]
     roles = _roles(api, args)
-    if args.get("human"):
-        roles["human"] = [_target(api, args["human"])]  # the retired Human is this role now
     if roles:
         body["roles"] = roles
     if args.get("dry_run"):
@@ -933,7 +932,7 @@ def task_update(api, args):
         if args.get(field) is not None:
             body[field] = args[field]
     if args.get("human") is not None:
-        body["roles"] = {"human": [_target(api, args["human"])] if args["human"] else []}
+        body["human"] = _target(api, args["human"]) if args["human"] else ""
     links = s3links.apply(api, body, ("note",))
     return s3links.annotate(_asked(api, args).post("tasks/" + args["id"], body, key=_key(args)), links)
 

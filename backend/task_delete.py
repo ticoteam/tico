@@ -221,6 +221,9 @@ def _rowid_alias(c, table):
 def _snapshot(c, tid, relations=None):
     """Every row deleting task `tid` removes, by table, in the order a restore puts them back."""
     task = dict(c.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone())
+    # The retired Human (20261123231209_retire_task_human) is already the assignee or the `human` role: only a snapshot
+    # taken before that carries it, and its restore moves it as the migration did (`_retired_human`).
+    task.pop("human_id", None)
     conversations = _owned_conversations(c, [tid])
     messages = _column(c, "SELECT id FROM messages WHERE conversation_id IN ({})", conversations)
     rows = {
@@ -635,7 +638,7 @@ def restore_tasks(c, ids, actor=None):
     for e, snap in snapshots:
         was = snap["rows"]["tasks"][0]
         try:
-            task_engine.restore(c, e["task_id"], actor, {k: was.get(k) for k in PLACED})
+            task_engine.restore(c, e["task_id"], actor, _retired_human(c, e["task_id"], was))
             back = c.execute("SELECT pipeline_id FROM tasks WHERE id=? AND number IS NULL", (e["task_id"],)).fetchone()
             if back and back[0]:
                 H.number_task(c, actor, e["task_id"], back[0], "Numbered when it was restored")
@@ -655,6 +658,32 @@ def restore_tasks(c, ids, actor=None):
     skipped.pop("meeting_task_links", None)
     skipped.pop("call_follow_ups", None)
     return {"restored": [e["task_id"] for e in entries], "unlinked": unlinked, "skipped": skipped}
+
+
+def _retired_human(c, tid, was):
+    """Where the engine places a restored task (`PLACED`), with the Human of a snapshot taken before the Human was
+    retired moved as 20261123231209_retire_task_human moved every live one: the assignee of a company task with none
+    (its history saying who named them, Tico when nobody did), else nothing when that person already is its assignee,
+    else the task's `human` role."""
+    placed = {k: was.get(k) for k in PLACED}
+    human = was.get("human_id")
+    if not human:
+        return placed
+    public = was.get("private") is not None and not was.get("private")
+    if public and not placed.get("assignee_id"):
+        named = c.execute(
+            "SELECT actor_id FROM history_events WHERE subject_type='task' AND subject_id=? AND kind='human_id' "
+            "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+            (tid,),
+        ).fetchone()
+        H._task_event(c, tid, (named[0] if named and named[0] else H.TICO_ACTOR), "assignee_id", None, human, "")
+        return {**placed, "assignee_id": human}
+    if not (public and placed.get("assignee_id") == human):
+        c.execute(
+            "INSERT OR IGNORE INTO task_roles (task_id, role, actor, added_by, created_at) VALUES (?, 'human', ?, ?, ?)",
+            (tid, human, H.TICO_ACTOR, H.now()),
+        )
+    return placed
 
 
 def _mirror_parents(c, ids):
