@@ -852,6 +852,7 @@ class Store:
         # Reads still use independent WAL snapshots; other processes remain governed by busy_timeout.
         self.writer = WriterGate()
         self.plan_exit_policy = (False, 0)
+        self.burst_rehome = False
         self.plan_exit_lock = threading.Lock()
         # Requests in another app must neither drain this store's runs nor consume its pending wakeup.
         self.automation_bell = threading.Event()
@@ -1156,6 +1157,10 @@ class Store:
         with self.pool_lock:
             self.pool_age += 1
 
+    def set_burst_rehome(self, enabled):
+        with self.pool_lock:
+            self.burst_rehome = enabled
+
     def _take(self):
         while True:
             with self.pool_lock:
@@ -1163,7 +1168,7 @@ class Store:
                 if identity != self.pool_file:
                     # A restored or replaced database file, or retire_pool: connections opened before are not reused.
                     _close_idle(self.pool)
-                    from . import plan_exits
+                    from . import compute_pool, plan_exits
                     from .provenance_clock import Cache
                     from .row_clock import Cache as RowCache
 
@@ -1174,7 +1179,9 @@ class Store:
                     previous_file = self.pool_file[0] if self.pool_file is not None else None
                     try:
                         with self.plan_exit_lock:
-                            enabled = plan_exits.stored_enabled(c)
+                            flags = plan_exits.stored_flags(c, compute_pool.SETTING)
+                            self.burst_rehome = flags.get(compute_pool.SETTING) == "true"
+                            enabled = flags.get(plan_exits.SETTING) == "true"
                             was_enabled, counter = self.plan_exit_policy
                             if identity[0] != previous_file or enabled != was_enabled:
                                 self.plan_exit_policy = (enabled, counter + 1)
@@ -1187,7 +1194,7 @@ class Store:
                     self.row_cache = RowCache()
                 else:
                     c = self.pool.pop() if self.pool else None
-                policy = self.plan_exit_policy
+                policy, burst = self.plan_exit_policy, self.burst_rehome
             if c is None:
                 c = self.connect(factory=self.pooled, check_same_thread=False)
                 if self._file() != identity[0]:
@@ -1197,6 +1204,7 @@ class Store:
         c.pool_file = identity  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
         # The server's file reader as the app has it configured now (media.install_media): work that holds only the
         # connection reads a company page's logo through it, so one saved in the company's own places is found.
+        c.burst_rehome = burst
         c.blobs = self.blobs
         c.credential_cipher = (  # pyright: ignore[reportAttributeAccessIssue] - the pooled subclass carries this field
             self.credential_vault.cipher if self.credential_vault else None

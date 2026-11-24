@@ -296,6 +296,33 @@ def turns(api, args):
 
 
 @tool(
+    "tico_run_restart",
+    "Retry a job held for a Burst session on Base in a fresh session. Only the bot's operator may do this, "
+    "after checking prior effects and recovering any unpublished checkout changes.",
+    {
+        "job": _s("Job id from the stopped run"),
+        "acknowledge_uncertain_effects": {"type": "boolean", "description": "Confirm prior effects have been reviewed"},
+    },
+    required=("job", "acknowledge_uncertain_effects"),
+    writes=True,
+)
+def run_restart(api, args):
+    return api.post(
+        "jobs/" + quote(args["job"], safe="") + "/retry",
+        {"acknowledge_uncertain_effects": args["acknowledge_uncertain_effects"], "fresh_session": True},
+        key=_key(args),
+    )
+
+
+RUN_RESTART = Command(
+    "run restart",
+    "retry a held Burst job in a fresh session on Base",
+    args=(Arg("acknowledge_uncertain_effects", flag="--acknowledge-uncertain-effects", required=True),),
+    example="tico run restart JOB --acknowledge-uncertain-effects",
+)
+
+
+@tool(
     "tico_run_export",
     "Owners and engineering bots: whether a run's raw provider stream was captured, and its size. "
     "Write the replay fixture with `tico run export <run> --fixture`. A bounded stderr tail is "

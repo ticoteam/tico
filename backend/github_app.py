@@ -2044,8 +2044,8 @@ class TokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     bot: str = Field(min_length=1, max_length=100)
     repository: str | None = None
-    # This selects cache headroom only; grants and permissions are identical for both purposes.
-    purpose: Literal["turn", "git"] = "turn"
+    # Git and turn use the same grants. Preparation can only read the offered checkout.
+    purpose: Literal["turn", "git", "burst_checkout"] = "turn"
 
 
 def _said(response):
@@ -2769,6 +2769,40 @@ def install_github_app(app, settings, store):
     @app.post("/api/v2/github/token")
     def token(request: Request, body: TokenRequest):
         who = request.state.identity
+        if body.purpose == "burst_checkout":
+            from . import compute_pool
+
+            executor = app.state.execution
+            with store.read_transaction() as c:
+                validate_identity(c, who)
+                entry = (
+                    compute_pool.offer(c, executor, executor.runner(c, who), prepare=True)
+                    if who.role == "runner"
+                    else None
+                )
+                app_row = service.row(c)
+                if (
+                    not entry
+                    or (entry["bot"], entry["repository"]) != (body.bot, body.repository)
+                    or not app_row
+                    or entry["repository"].split("/")[0].lower() != app_row["org"].lower()
+                ):
+                    raise Problem("forbidden", "That repository is unavailable for Burst preparation", 403)
+            repo = entry["repository"]
+            value, expires, repos, cached, _ = service.mint_reachable(
+                [repo], READ_PERMISSIONS, include_cache_status=True
+            )
+            if value and not cached:
+                with store.transaction() as c:
+                    service.keep_tokens(c, [value])
+                    H.event(c, who.actor, "github.token", body.bot, {"repository": repo, "purpose": body.purpose})
+            return {
+                "configured": True,
+                "token": value,
+                "expires_at": expires,
+                "repository": repo,
+                "repositories": repos,
+            }
         with store.read_transaction() as c:
             validate_identity(c, who)
             if who.attempt_id and rooms.personal_attempt(c, settings.assistant_bot, who.attempt_id):

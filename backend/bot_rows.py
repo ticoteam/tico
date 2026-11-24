@@ -198,7 +198,8 @@ class BotRows:
                 self.assignments = _by(
                     c,
                     "SELECT a.bot,a.runner_id,a.generation,r.label,r.owner_id,r.last_seen_at,"
-                    "r.revoked_at FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
+                    "r.revoked_at,EXISTS(SELECT 1 FROM assignment_pins p WHERE p.bot=a.bot) AS pinned "
+                    "FROM assignments a JOIN runners_with_state r ON r.id=a.runner_id "
                     "WHERE a.bot IN ({})",
                     read,
                 )

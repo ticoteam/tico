@@ -114,7 +114,8 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls, releases, runner_online
+from . import cloud_access, compute_pool, outbound_tls, releases, runner_online, start_places
+from .compute_pool import burst_key
 from .computers import mark_revoked
 from .store import H, Problem, digest, encode
 from . import bot_settings as BS
@@ -145,6 +146,7 @@ SYNC = 60  # seconds between HQ lists
 DELETION_BATCH = 4  # old ids reconciled per look, even when HQ's list cannot be read
 DELETION_WARN = 24 * 60 * 60  # an unsettled disk may still cost money even after its bot has a fresh machine
 HEARTBEAT = 60
+BURST_DRAIN_SECONDS = 60  # Leave time to stop and report before HQ takes the worker away.
 # An own machine HQ still runs whose runner has been silent this long while claimable work waits is stopped, and the
 # work's wake starts it again (HQ's start leaves a live machine as it is). At most one per OFFLINE_RESTART_GAP, and none
 # again until its runner has checked in since the last. A restart its runner has not checked in from this long after the
@@ -752,6 +754,8 @@ def hosted(c, key):
     """The bots set to run on machine `key`: the shared machine's members, or the bot whose own machine it is."""
     if key == SHARED:
         return members(c)
+    if burst_key(key):
+        return []
     current = row(c, key)
     return [key] if current and current["mode"] == "cloud" and current["placement"] == "own" else []
 
@@ -1120,7 +1124,7 @@ def checked_pause(value):
 def mint(c, key, owner=None):
     """A one-time runner enrollment code for machine `key`: the add-a-runner flow's, with the bot's operator as the
     computer's, or `owner` (the company's) for the shared machine. Only its digest is kept, with the key it binds to."""
-    if key == SHARED:
+    if key == SHARED or burst_key(key):
         operator = owner
     else:
         config = c.execute("SELECT owner_id FROM bot_config WHERE bot=?", (key,)).fetchone()
@@ -1171,13 +1175,16 @@ def enrolled(c, execution, runner_id, key):
 
     current = row(c, key)
     old = current.get("runner_id")
+    burst = burst_key(key)
     if old and old != runner_id:
-        mark_revoked(c, old)
-    replaced(c, key, old, runner_id)
+        mark_revoked(c, old, execution=execution if burst else None)
+    if not burst:
+        replaced(c, key, old, runner_id)
     save(c, key, runner_id=runner_id, enroll_by=0, enroll_fails=0)
     checked_in(c, runner_id)
     H.event(c, H.TICO_ACTOR, "cloud_machine.enrolled", key, {"runner": runner_id})
-    c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
+    if not burst:
+        c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     for bot in hosted(c, key):
         bind(c, execution, bot)
 
@@ -1187,6 +1194,8 @@ def left(c, key):
     `deleted`) before the next one enrolls. Kept, newest first, so `replaced` still finds it when the bots set to run there are no
     longer assigned to it by then: otherwise the new computer gets only what the company lends, and a person's plans
     given to the old one are lost (Tico Team, 2026-11-18: Reviewer 1 and Reviewer 2 lost Chris's Claude set)."""
+    if burst_key(key):
+        return
     runner_id = (row(c, key) or {}).get("runner_id")
     if not runner_id:
         return
@@ -1231,13 +1240,24 @@ def replaced(c, key, old, runner_id):
     return out
 
 
+PLACED_ON = (
+    "SELECT a.runner_id,a.generation,g.return_pending FROM assignments a "
+    "LEFT JOIN burst_guests g ON g.bot=a.bot AND g.runner_id=a.runner_id WHERE a.bot=?"
+)
+
+
 def unplaced(c, bot):
     """Whether a cloud-mode bot's machine has a computer the bot is not assigned to yet."""
-    target = (home(c, bot) or {}).get("runner_id")
+    machine = home(c, bot) or {}
+    target = machine.get("runner_id")
     if not target:
         return False
-    placed_on = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
-    return not placed_on or placed_on["runner_id"] != target
+    placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
+    if placed_on and placed_on["return_pending"]:
+        return machine["state"] not in DEAD and bool(
+            c.execute("SELECT 1 FROM runners WHERE id=? AND revoked_at IS NULL", (target,)).fetchone()
+        )
+    return not placed_on or (placed_on["runner_id"] != target and placed_on["return_pending"] != "")
 
 
 TEMPORARY_REFUSALS = ("busy", "removing", "version_conflict")
@@ -1255,7 +1275,13 @@ def bind(c, execution, bot, lasting=False):
         moving(c, bot, False)
         return False
     target = machine.get("runner_id")
-    placed_on = c.execute("SELECT runner_id,generation FROM assignments WHERE bot=?", (bot,)).fetchone()
+    placed_on = c.execute(PLACED_ON, (bot,)).fetchone()
+    if placed_on and placed_on["return_pending"] is not None:
+        from .compute_pool import resume_return
+
+        if target:
+            resume_return(c, execution, placed_on["runner_id"], placed_on["return_pending"])
+        return False
     if not target:
         moving(c, bot, False)
         if lasting and placed_on:
@@ -1775,6 +1801,10 @@ RESIZE_HELD = "This cloud machine restarts at a new size once its turns finish. 
 
 
 def held(c, runner_id):
+    return claim_status(c, runner_id)[0]
+
+
+def claim_status(c, runner_id):
     """Why the claim gives computer `runner_id` no new turn, or "": it is a cloud machine reserved for a stop
     (`reserve`, until its reservation lapses), awaiting reconciliation of an unanswered manual deletion, one HQ
     says is stopping or stopped, or one draining to restart at another size (`resizing`): its turns out finish, and the
@@ -1785,12 +1815,25 @@ def held(c, runner_id):
         (runner_id, runner_id),
     ).fetchone()
     found = c.execute(
-        "SELECT state,stop_until,machine_id,size,machine_size FROM cloud_machines WHERE runner_id=? LIMIT 1",
+        "SELECT state,stop_until,machine_id,size,machine_size,bot,heartbeat_at,ttl_s,next_try_at "
+        "FROM cloud_machines WHERE runner_id=? LIMIT 1",
         (runner_id,),
     ).fetchone()
+    key = found["bot"] if found else ""
+    if (
+        burst_key(key)
+        and compute_pool.enabled(c)
+        and (
+            found["state"] != "running"
+            or found["next_try_at"] is not None
+            or (found["heartbeat_at"] or 0) + (found["ttl_s"] or 0)
+            < now() + start_places.START_SECONDS + BURST_DRAIN_SECONDS
+        )
+    ):
+        return "This Burst machine has no confirmed renewal for new turns.", key
     if not intent and (not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now())):
-        return RESIZE_HELD if found and resizing(found) else ""
-    return "This cloud machine is stopping. Its bots' work waits for it to start again."
+        return (RESIZE_HELD if found and resizing(found) else ""), key
+    return "This cloud machine is stopping. Its bots' work waits for it to start again.", key
 
 
 def stopped_unknown(refused):
@@ -1972,6 +2015,10 @@ class Manager:
                     if current["machine_id"] != machine["id"]:
                         self.adopt(c, current, machine, at)
                         continue
+                    if burst_key(key) and machine["state"] in DEAD and current["runner_id"]:
+                        deleted(c, current, H.TICO_ACTOR, execution=self.execution)
+                        save(c, key, last_error=machine["last_error"])
+                        continue
                     gone = {"enroll_by": None, "start_asked_at": None} if machine["state"] == "deleted" else {}
                     if machine["state"] == "failed" or machine["state"] == "deleted" and not current["runner_id"]:
                         counted = count_enrollment_failure(c, key, machine["id"], machine["last_error"])
@@ -2060,13 +2107,13 @@ class Manager:
         if intent["reason"] == "never_enrolled":
             count_enrollment_failure(c, intent["bot"], intent["machine_id"])
         if intent["runner_id"]:
-            mark_revoked(c, intent["runner_id"])
+            mark_revoked(c, intent["runner_id"], execution=self.execution if burst_key(intent["bot"]) else None)
         current = row(c, intent["bot"])
         if current and current["machine_id"] == intent["machine_id"] and current["state"] != "deleted":
             if intent["reason"] == "never_enrolled":
                 self.never_enrolled(current, c)
             else:
-                deleted(c, current, H.TICO_ACTOR)
+                deleted(c, current, H.TICO_ACTOR, execution=self.execution)
         c.execute("DELETE FROM cloud_machine_deletions WHERE machine_id=?", (intent["machine_id"],))
 
     def reconcile_delete(self, hq, machine_id):
@@ -2104,6 +2151,7 @@ class Manager:
     def adopt(self, c, current, machine, at):
         """A new id gets only its own attempt's codes, runner, deadline and wake state, from create or from a list."""
         key, old_id = current["bot"], current["machine_id"]
+        burst = burst_key(key)
         if old_id and (
             current["state"] == "failed"
             or not current["runner_id"]
@@ -2113,7 +2161,7 @@ class Manager:
             current = count_enrollment_failure(c, key, old_id) or current
         fresh_runner = replacement_runner(c, key, old_id)
         if current["runner_id"] and current["runner_id"] != fresh_runner:
-            mark_revoked(c, current["runner_id"])
+            mark_revoked(c, current["runner_id"], execution=self.execution if burst else None)
             c.execute(
                 "UPDATE cloud_machine_deletions SET runner_id=? WHERE machine_id=?", (current["runner_id"], old_id)
             )
@@ -2160,6 +2208,23 @@ class Manager:
 
     def step(self, hq, key, at):
         """One machine's look. A bot's own row also binds that bot to its machine, own or shared, once it has one."""
+        if burst_key(key):
+            with self.store.read() as c:
+                current = row(c, key)
+            if (
+                current
+                and current["machine_id"]
+                and current["state"] == "running"
+                and at >= (current["next_try_at"] or 0)
+                and (not current["ttl_s"] or at - (current["heartbeat_at"] or 0) >= HEARTBEAT)
+            ):
+                with self.store.transaction() as c:
+                    if (row(c, key) or {}).get("machine_id") != current["machine_id"]:
+                        return None
+                    save(c, key, next_try_at=at + WAIT)  # An unanswered renewal keeps its claim fence.
+                self.act(hq, current, "heartbeat", {}, at)
+                return "heartbeat"
+            return None
         if key != SHARED:
             with self.store.read() as c:
                 # `bind` lifts a drain for a move on every path but a turn still out ("busy"), so a row with one is
@@ -2360,8 +2425,11 @@ class Manager:
                 return
             else:
                 ttl = hq.heartbeat(current["machine_id"])
+                if burst_key(key) and (not ttl or ttl < 0):
+                    raise Refused("bad_answer")
                 with self.store.transaction() as c:
-                    save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try_at=None)
+                    if not burst_key(key) or (row(c, key) or {}).get("machine_id") == current["machine_id"]:
+                        save(c, key, heartbeat_at=at, ttl_s=ttl, failures=0, next_try_at=None)
                 return
         except Refused as refused:
             self.refused(current, action, refused, at, restarting=restarting)
@@ -2491,7 +2559,9 @@ class Manager:
         elif refused.status == 404 and action != "create":
             # Keep the old id so its runner and codes cannot become the next attempt's initial enrollment.
             with self.store.transaction() as c:
-                deleted(c, row(c, key), H.TICO_ACTOR, replacing=True)  # HQ lost it: the next one takes its place
+                live = row(c, key)
+                if not burst_key(key) or (live and live["machine_id"] == current["machine_id"]):
+                    deleted(c, live, H.TICO_ACTOR, replacing=not burst_key(key), execution=self.execution)
             return
         else:
             fields = retry_backoff(current, at)
@@ -3122,20 +3192,21 @@ def present(current):
     return bool(current["machine_id"]) and current["state"] != "deleted"
 
 
-def deleted(c, current, actor, changed_by=None, details=None, replacing=False):
+def deleted(c, current, actor, changed_by=None, details=None, replacing=False, *, execution=None):
     """Finish a deletion under the write lock, revoking the old computer and its codes while keeping fresh attempts.
     `replacing`: the next machine takes this one's place (a Replace, the shared machine, one HQ lost, or an attempt
     that never enrolled), so its computer is kept for the next to carry its plans over (`left`). Any other deletion
     forgets the computers kept: a machine deleted for good gives a later one no plan, a person's included, without a
     new grant."""
     key = current["bot"]
+    burst = burst_key(key)
     fails = row(c, key)["enroll_fails"]
     fresh_runner = replacement_runner(c, key, current["machine_id"]) if current["machine_id"] else None
-    if not replacing:
+    if not replacing and not burst:
         c.execute("DELETE FROM registry_metadata WHERE key=?", (REPLACES_KEY + key,))
     if current["runner_id"] and current["runner_id"] != fresh_runner:
-        mark_revoked(c, current["runner_id"])
-        if replacing:
+        mark_revoked(c, current["runner_id"], execution=execution if burst else None)
+        if replacing and not burst:
             left(c, key)
     c.execute(
         "DELETE FROM enrollments WHERE code_hash IN (SELECT code_hash FROM cloud_machine_codes "
@@ -3244,6 +3315,7 @@ def _remove(service, who, auth, key, request, mutate, replace):
             who.actor,
             live["changed_by"] if replace and not MS.may_grant(c, auth, who.actor) else who.actor,
             replacing=explicit,
+            execution=service.execution,
         )
         return {"ok": True}
 

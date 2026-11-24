@@ -1074,6 +1074,7 @@ def parser():
     )
     s.add_argument("--out", help="with --fixture: the parent folder (default: the current one)")
     s.set_defaults(fn="run export")
+    cli_spec.add(sub, (assistant_commands.RUN_RESTART,), parents={("run",): runs})
 
     # `tico team` (clients/commands/admin.py): every leaf but icon, which sends a file's bytes from this computer.
     cli_spec.add(sub, admin_commands.TEAM)

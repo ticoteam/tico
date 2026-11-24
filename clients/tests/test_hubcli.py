@@ -1287,6 +1287,24 @@ def test_thread_link_slack_runs_the_mcp_tool_for_each_of_its_three_behaviours(mo
     ]
 
 
+def test_run_restart_requires_acknowledgement_and_requests_a_fresh_session(monkeypatch):
+    from clients import remotecli
+
+    class Api:
+        def post(self, path, body=None, key=None):
+            assert path == "jobs/j123/retry"
+            assert body == {"acknowledge_uncertain_effects": True, "fresh_session": True}
+            return {"job_id": "j123", "state": "queued"}
+
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: Api())
+    parser = hubcli.parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "restart", "j123"])
+    args = parser.parse_args(["run", "restart", "j123", "--acknowledge-uncertain-effects"])
+    assert remotecli.run(args) == {"job_id": "j123", "state": "queued"}
+
+
 def test_who_can_see_runs_from_the_cli_and_its_mcp_tools(monkeypatch):
     """`tico task create --private --share-with X` (or `--reader X`, the same list) sends the readers; `tico task readers list|add|remove` run the
     tico_task_readers_* tools against /tasks/{id}/readers."""

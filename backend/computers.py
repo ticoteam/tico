@@ -5,28 +5,56 @@ from .store import H
 UNASSIGNED_OFFLINE_RETIRE_SECONDS = 24 * 60 * 60
 
 
-def mark_revoked(c, runner_id, at=None):
+def mark_revoked(c, runner_id, at=None, *, execution=None):
+    from .compute_pool import REVOKING, changed, return_guests
     from .plan_exits import replace_retired
+
+    if execution is not None:
+        first = c.execute(
+            "UPDATE burst_guests SET return_pending='revoke' WHERE runner_id=? AND return_pending<>'revoke' RETURNING bot",
+            (runner_id,),
+        ).fetchall()
+        execution.expire(c, lost_runner=runner_id)
+        if not return_guests(c, runner_id):
+            # Reject runner credentials while its return is pending, including for a deleted machine row.
+            c.execute("UPDATE runners SET token_hash=? WHERE id=?", (REVOKING + runner_id, runner_id))
+            for (bot,) in first:
+                moved = c.execute(
+                    "UPDATE assignments SET generation=generation+1,updated_at=?,updated_by=? "
+                    "WHERE bot=? AND runner_id=? RETURNING generation",
+                    (H.now(), H.TICO_ACTOR, bot, runner_id),
+                ).fetchone()
+                if moved:
+                    changed(c, bot, runner_id, moved[0])
+            return False
 
     if c.execute(
         "UPDATE runners SET revoked_at=? WHERE id=? AND revoked_at IS NULL", (at or H.now(), runner_id)
     ).rowcount:
         replace_retired(c, runner_id)
+    return True
 
 
-def revoke(c, actor, runner_id, *, reason=None, at=None):
+def revoke(c, actor, runner_id, *, reason=None, at=None, execution=None):
     """Keep the audit record and remove the registration."""
-    mark_revoked(c, runner_id, at)
+    revoked = mark_revoked(c, runner_id, at, execution=execution)
     c.execute(
         "DELETE FROM registry_metadata WHERE key IN (?,?)",
         ("computer-repositories:" + runner_id, "computer-enrolled-as:" + runner_id),
     )
     c.execute("DELETE FROM registry_metadata WHERE key='browser-host' AND value=?", (runner_id,))
-    H.event(c, actor, "runner.revoked", runner_id, {"reason": reason} if reason else None)
+    H.event(
+        c,
+        actor,
+        "runner.revoked" if revoked else "runner.revocation_pending",
+        runner_id,
+        {"reason": reason} if reason else None,
+    )
     from . import task_reads
 
     # Its agents have no computer now: their tasks say Paused.
     task_reads.status_moved(c, [r[0] for r in c.execute("SELECT bot FROM assignments WHERE runner_id=?", (runner_id,))])
+    return revoked
 
 
 def disconnect(store, runner_id):

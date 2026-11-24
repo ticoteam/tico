@@ -1487,6 +1487,7 @@ class MailSettingsUpdate(Contract):
 
 class BotReadiness(GoalReadiness):
     ready: bool
+    burst_preparation: str | None = Field(default=None, max_length=64, exclude_if=lambda value: value is None)
     runtime: str = Field(default="", max_length=100)
     harness: str = Field(default="", max_length=100)
     model: str = Field(default="", max_length=200)
@@ -1789,6 +1790,7 @@ class Heartbeat(Contract):
             "private_lanes_v1",
             "model_subscriptions_v1",
             "attempt_credentials_v1",
+            "burst_preparation_v1",
             "plan_usage_v1",
             "browser_exit_v1",
             "model_exit_v1",
@@ -1811,7 +1813,7 @@ class Heartbeat(Contract):
             "relay_hints_v1",  # importer and Gateway changes are told to its computer (backend/events.py RELAY_HINTS)
             "antigravity_plan_v1",  # Antigravity plans: Connect, install and turns (backend/model_subscriptions.py)
         ]
-    ] = Field(default_factory=list, max_length=37)
+    ] = Field(default_factory=list, max_length=38)
     # The bool map remains accepted during runner rollout. The server normalizes both
     # shapes before storing them, so every read path sees one structured document.
     readiness: StructuredReadiness | dict[str, bool] = Field(default_factory=dict)
@@ -1890,6 +1892,7 @@ class Assignment(Contract):
     runner_id: ID
     expected_generation: int = Field(ge=0)
     on_behalf_of: ID | None = None
+    pinned: bool | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class AgentPairingCreate(Contract):
@@ -3095,6 +3098,9 @@ class Completion(Contract):
     subscription_unavailable: SubscriptionUnavailable | None = None
     profile_used: str | None = Field(default=None, max_length=80)
     outcome: Literal["completed", "failed", "interrupted"]
+    burst_checkout: Literal["mismatch", "unpublished"] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
     text: str = Field(default="", max_length=200_000)
     # The message this reply goes under when it answers one in a sub-thread (docs/threads.md). Declared so a runner that
     # sends it is not refused: Completion forbids fields it does not know.
@@ -3136,6 +3142,16 @@ class Completion(Contract):
 
 class Retry(Contract):
     acknowledge_uncertain_effects: bool
+    fresh_session: bool = Field(
+        default=False,
+        exclude_if=lambda value: not value,
+        description="Release a held Burst session and retry on Base after reviewing effects and recovering any checkout changes.",
+    )
+
+
+class RetryJobResult(Contract):
+    job_id: ID
+    state: Literal["queued"]
 
 
 class ReconcileJob(Contract):

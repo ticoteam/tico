@@ -104,6 +104,7 @@ pub struct Runner {
     pub upload_bounds: crate::upload_pace::Bounds,
     /// The last `runners/assignments` answer. A writer replaces the Arc; a reader takes a clone of it, not the list.
     assignments: Mutex<Arc<Vec<Value>>>,
+    burst: Mutex<Vec<Value>>,
     /// Whether `assignments` holds an answer from the server yet, not the empty list it starts with.
     assignments_loaded: AtomicBool,
     published: Mutex<HashMap<String, Option<(i128, u64)>>>,
@@ -225,6 +226,7 @@ impl Runner {
             upload_load: crate::upload_pace::Load::default(),
             upload_bounds: crate::upload_pace::ADAPTIVE,
             assignments: Mutex::new(Arc::new(vec![])),
+            burst: Mutex::new(vec![]),
             assignments_loaded: AtomicBool::new(false),
             published: Mutex::new(HashMap::new()),
             beat: Mutex::new(None),
@@ -594,10 +596,19 @@ impl Runner {
     /// heartbeat pass only at start-up or when the probe's inputs changed. One probe runs at a time (`probe_gate`), and
     /// the config and assignments are read inside the gate: a probe that waited for an earlier one stores only what it
     /// read after that one, so an older read cannot store last. Returns whether the rows changed.
+    fn with_burst(&self, mut candidates: Vec<Value>) -> Vec<Value> {
+        for entry in self.burst.lock().unwrap().iter() {
+            if !candidates.iter().any(|local| local["bot"] == entry["bot"]) {
+                candidates.push(entry.clone());
+            }
+        }
+        candidates
+    }
+
     async fn probe_now(&self) -> bool {
         let _gate = self.probe_gate.lock().await;
         let config = self.config_now();
-        let candidates = readiness_candidates(&self.assignments_seen());
+        let candidates = self.with_burst(readiness_candidates(&self.assignments_seen()));
         let computer_logins = computer_logins_for(&candidates);
         let previous = self.probed.lock().unwrap().rows.clone();
         let (rows, inputs) = readiness::probe_all(
@@ -626,7 +637,7 @@ impl Runner {
     /// The inputs a probe would take now (readiness::probe_inputs over the config and candidates probe_now reads).
     fn inputs_now(&self) -> String {
         let config = self.config_now();
-        let candidates = readiness_candidates(&self.assignments_seen());
+        let candidates = self.with_burst(readiness_candidates(&self.assignments_seen()));
         readiness::probe_inputs(&config, &candidates, computer_logins_for(&candidates))
     }
 
@@ -662,6 +673,18 @@ impl Runner {
             *self.assignments.lock().unwrap() =
                 Arc::new(assignments.as_array().cloned().unwrap_or_default());
             self.assignments_loaded.store(true, Ordering::SeqCst);
+            // The scaler wakes idle Burst workers when eligible work queues.
+            let burst = if crate::follow::feature("burst_preparation") {
+                self.client
+                    .get("runners/assignments?burst=true")
+                    .await
+                    .ok()
+                    .and_then(|entries| entries.as_array().cloned())
+                    .unwrap_or_default()
+            } else {
+                vec![]
+            };
+            *self.burst.lock().unwrap() = burst;
             // Before the grants are read: a bot from before grants keeps the legacy keys it could read.
             if let Err(e) = crate::credential_migration::migrate(
                 &self.config,
@@ -691,7 +714,8 @@ impl Runner {
         let candidates = readiness_candidates(&assignments);
         // A built-in bot is set up from the catalog first; any other (or one whose history is on GitHub) is fetched.
         crate::product_files::bootstrap_missing(&self.config, &candidates).await;
-        self.fetch_missing(&candidates).await;
+        let prepared = self.with_burst(candidates.clone());
+        self.fetch_missing(&prepared).await;
         // A checkout fetched just now is closed to other bots' leased turns before any turn of its own runs.
         let workspace = self.config.projects_dir();
         let _ =
@@ -699,14 +723,14 @@ impl Runner {
                 .await;
         // Profiles as runner.json has them now, so a sign-in made since start is reported and checked.
         let config = self.config_now();
-        let computer_logins = computer_logins_for(&candidates);
+        let computer_logins = computer_logins_for(&prepared);
         // The rows are composed from the last probe; a heartbeat only probes once, at start-up, and when the bots' runtimes,
         // logins or key grants changed. Then the probe runs in this pass, so the payload never carries a row half built
         // from the new inputs. Sign-in, install and credential events ask the probe loop instead.
         let ran_before = self.probed.lock().unwrap().schedule.ran_before();
         let changed = ran_before
             && self.probed.lock().unwrap().inputs
-                != readiness::probe_inputs(&config, &candidates, computer_logins);
+                != readiness::probe_inputs(&config, &prepared, computer_logins);
         if !ran_before || changed {
             self.probe_now().await;
         }
@@ -715,7 +739,7 @@ impl Runner {
             readiness::runtime_report(
                 &config,
                 &self.sign_in,
-                &candidates,
+                &prepared,
                 computer_logins,
                 &probed.rows,
             )
@@ -724,7 +748,7 @@ impl Runner {
         let mut checks = readiness::preflight(
             &config,
             &self.sign_in,
-            &candidates,
+            &prepared,
             &runtimes,
             computer_logins,
         )
@@ -807,7 +831,11 @@ impl Runner {
                 .clone()
                 .filter(|r| !full && r.is_string())
                 .map(|r| text_of(&r));
+            let burst = crate::follow::feature("burst_preparation");
             follower.poll(&self.client, said).await;
+            if burst != crate::follow::feature("burst_preparation") {
+                self.events.ask(&["sync", "claim"]);
+            }
             let restarting = self.restart.lock().unwrap().is_some();
             follower.follow_main(restarting).await;
             follower.fields(&mut body);
@@ -998,6 +1026,7 @@ impl Runner {
         };
         let beat = beat.and_then(decode::<HeartbeatAnswer>);
         if let Ok(reply) = &beat {
+            ask_after_preparation(&self.events, &body["readiness"]["bots"]);
             // A server that took voice_inputs_v1 pushes voice hints; one that refused it leaves voice on its poll.
             let pushes = body["capabilities"]
                 .as_array()
@@ -1105,6 +1134,15 @@ impl Runner {
 
     fn state_bot(&self, aid: &str) -> Option<String> {
         self.attempt_bots.lock().unwrap().get(aid).cloned()
+    }
+}
+
+fn ask_after_preparation(events: &Events, bots: &Value) {
+    if bots.as_object().is_some_and(|rows| {
+        rows.values()
+            .any(|row| row["burst_preparation"].is_string())
+    }) {
+        events.ask(&["claim"]);
     }
 }
 
@@ -2030,6 +2068,15 @@ mod tests {
         );
         assert!(requests[2].contains("start_places"));
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn burst_preparation_heartbeat_wakes_claim() {
+        let events = Events::new();
+        ask_after_preparation(&events, &json!({"ops":{"ready":true}}));
+        assert!(!events.take("claim"));
+        ask_after_preparation(&events, &json!({"ops":{"burst_preparation":"ticket"}}));
+        assert!(events.take("claim"));
     }
 
     #[test]

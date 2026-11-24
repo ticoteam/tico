@@ -451,7 +451,18 @@ impl Runner {
     /// (environment, problem) for talking to this bot's GitHub repository: the bot's scoped token, or the
     /// machine's own git access when no GitHub App is connected.
     pub async fn github_access(&self, bot: &str, entry: &Value) -> Result<Env, String> {
-        let granted = match self.tokens.git(&self.client, bot).await {
+        let burst = entry["burst_preparation"].is_string();
+        let response =
+            if burst {
+                self.client
+                .post("github/token", &serde_json::json!({
+                    "bot": bot, "repository": entry["repository"], "purpose": "burst_checkout",
+                }), None)
+                .await
+            } else {
+                self.tokens.git(&self.client, bot).await
+            };
+        let granted = match response {
             Ok(g) => g,
             Err(e) => {
                 return Err(
@@ -464,6 +475,9 @@ impl Runner {
         };
         let mut env = crate::env::process_environment();
         let token = text_of(&granted["token"]);
+        if burst && token.is_empty() {
+            return Err("No read token for this Burst checkout".into());
+        }
         if truthy(granted.get("configured")) && !token.is_empty() {
             env.extend(crate::repositories::token_env(&token));
             let repository = text_of(&granted["repository"]);
