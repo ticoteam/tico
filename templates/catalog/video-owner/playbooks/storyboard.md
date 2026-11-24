@@ -8,7 +8,7 @@ One image per shot, in one sheet the owner can read in a minute.
    --out projects/<slug>/storyboard/s01.png`.
    The prompt says it is a storyboard sketch, not final art. The sidecar keeps the prompt, model and cost.
 3. Only when the owner wants a choice for a shot, make three (`--count 3`) and ask which:
-   `tico task ask <task> "Which frame for shot 1?" --choice 1 --choice 2 --choice 3`.
+   `tico task ask <id> --to <owner> "Which frame for shot 1?" --choice 1 --choice 2 --choice 3`.
 4. Build the sheet: `projects/<slug>/storyboard/sheet.html`, each frame with its line and length, and "Storyboard, not
    final" at the top.
 5. Put the sheet up for review. The storyboard mover decides it: `python3 software/pipeline.py next projects/<slug>`
