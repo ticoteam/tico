@@ -36,6 +36,11 @@ RUNNER_VERSION = "0.6.2"
 SEED_SHA = "9f2c4e1ab7d3085c6e1f4a2b9d8c7e6f5a4b3c2d"
 
 
+# How long a claim in the build waits for its run header: long enough that no header is ever left behind, short of a
+# lock that never frees (a wait has to be finite; threading refuses an infinite timeout).
+HEADER_WAIT_SECONDS = 600
+
+
 class Clock:
     """`hubdb.now` for the length of a build: reads the moment it was told, one microsecond apart."""
 
@@ -55,9 +60,10 @@ def fixed(clock, namespace=NAMESPACE):
     def digest():
         return hashlib.sha256(f"{namespace}:{next(counter)}".encode()).hexdigest()
 
-    from . import inbound, threads, usage_limits
+    from . import inbound, run_header, threads, usage_limits
 
     saved = (
+        run_header.BUDGET_SECONDS,
         hubdb.now,
         hubdb.new_id,
         hubdb.uuid7,
@@ -75,6 +81,11 @@ def fixed(clock, namespace=NAMESPACE):
     # Spend windows (an hour, a day) are read on the demo's clock too, so two builds of one `now` save the same limits
     # whichever side of an hour the machine's clock is on.
     usage_limits.clock = lambda: clock.at
+    # A computer's claim waits for its run header (backend/run_header.py), which reads this clock. The app gives a header
+    # BUDGET_SECONDS of the machine's time and then answers without it, leaving its build to read the clock beside the
+    # build's next steps: on a slow moment the same build then stamps its rows a microsecond apart. The build waits for
+    # every header instead (HEADER_WAIT_SECONDS), so it reads the clock in the same order whatever the machine's speed.
+    run_header.BUDGET_SECONDS = HEADER_WAIT_SECONDS
     hubdb.new_id = lambda: str(uuid.uuid5(namespace, str(next(counter))))
     # Time-ordered ids (messages, deliveries) and the product's own random ids for threads and calls.
     hubdb.uuid7 = threads.uuid7 = lambda: str(uuid.UUID(hex=digest()[:32]))
@@ -85,6 +96,7 @@ def fixed(clock, namespace=NAMESPACE):
         yield
     finally:
         (
+            run_header.BUDGET_SECONDS,
             hubdb.now,
             hubdb.new_id,
             hubdb.uuid7,
