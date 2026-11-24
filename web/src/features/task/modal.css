@@ -28,6 +28,8 @@
 :where(html[data-layout="cards"]){
   .vw-body>.tmd{display:flex;flex-direction:column}
   .tmd>.tmd-panes{display:flex;justify-content:center;flex:none;padding:0 var(--s-4) var(--s-2)}
+  /* a phone hides every list and chat sheet (styles/parts.css); here they are the modal's own */
+  .tmd>.tmd-chat,.tmd>.tmd-list{display:flex}
   .tmd>.tmd-chat,.tmd>.tmd-task{flex:1;border:0}
   .tmd[data-pane="task"]>.tmd-chat,.tmd[data-pane="chat"]>.tmd-task{display:none}
   .tmd>.tmd-tab{display:none}

@@ -310,7 +310,7 @@ async function phone(browser: Browser, name: string) {
   if (href) {
     await page.locator(`a[href="${href}"]`).first().tap();
     await settle(page, 2500);
-    const over = page.getByRole('dialog');
+    const over = page.locator('.vw:has(.tmd)');
     check((await over.count()) === 1, 'a task opens over its board', `a task: ${await over.count()} dialogs at ${page.url()}`);
     await shot(page, `phone-${name}-task`);
     const chat = over.locator('.tmd-panes').getByRole('button', { name: 'Chat', exact: true });
@@ -370,7 +370,7 @@ async function responsive(browser: Browser) {
   const mobile = await open(browser, true, '/needs-you', true);
   try {
     await mobile.page.locator('main a[href^="/task/"]').first().click();
-    const back = mobile.page.getByRole('dialog').getByRole('button', { name: 'Close', exact: true });
+    const back = mobile.page.locator('.vw:has(.tmd)').getByRole('button', { name: 'Close', exact: true });
     await back.waitFor();
     const fits = await back.evaluate((el) => {
       const rect = el.getBoundingClientRect();

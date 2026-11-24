@@ -70,8 +70,14 @@ async function post<T = unknown>(hub: Seeded, path: string, body: unknown): Prom
   expect(r.ok, `POST ${path}: ${r.status}`).toBe(true);
   return (await r.json()) as T;
 }
-/** The task open over the page (plan: the task modal), by its title. */
-const modal = (page: Page, title?: string) => (title ? page.getByRole('dialog', { name: title, exact: true }) : page.getByRole('dialog'));
+/** The task open over the page (plan: the task modal), by its title. Not by role: a toast is a dialog too, and a layer
+    over the task (a file) hides the task from the accessibility tree while it is open. */
+const modal = (page: Page, title?: string) => {
+  const over = page.locator('.vw:has(.tmd)');
+  return title ? over.filter({ has: page.locator('.vw-title').getByText(title, { exact: true }) }) : over;
+};
+/** The layers open: the task, a file over it. */
+const layers = (page: Page) => page.locator('.vw');
 /** The address's search, as the app wrote it. */
 const searchOf = (page: Page) => Object.fromEntries(new URL(page.url()).searchParams);
 const sql = <T = Record<string, unknown>>(hub: Seeded, query: string) => call<T[]>(hub, `/_e2e/sql?q=${encodeURIComponent(query)}`);
@@ -157,6 +163,8 @@ test('Needs you: open the first case over Tasks and approve it; the next case op
   await decision.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(over).toHaveCount(0);
   await expect(page).toHaveURL(`${hub.url}/tasks`);
+  // the send's toast stays, with its Undo
+  await expect(page.getByRole('button', { name: 'Undo' }).first()).toBeVisible();
   await expect.poll(() => okAt(second!.approval)).not.toBeNull();
   await expect(rows).toHaveCount(0);
   // and the server's sender takes them from the queue: each reaches the (fake) mail provider once
@@ -203,15 +211,15 @@ test("a task's link from outside opens it over Tasks with Needs you as its list;
   form.append('file', new Blob(['Launch on Friday.\n'], { type: 'text/plain' }), 'launch-notes.txt');
   const added = await post<{ file_id: string }>(hub, `tasks/${draft!.id}/files`, form);
   await page.goto(`${hub.url}/tasks/launch/${draft!.number}/details?file=${added.file_id}`);
-  await expect(page.getByRole('dialog')).toHaveCount(2);
+  await expect(layers(page)).toHaveCount(2);
   await expect(modal(page, draft!.title)).toBeAttached();
   expect(searchOf(page)).toMatchObject({ task: String(draft!.number), list: 'launch', 'task.file': added.file_id });
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await expect(layers(page)).toHaveCount(1);
   await expect(modal(page, draft!.title)).toBeVisible();
   expect(searchOf(page)['task.file']).toBeUndefined();
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(layers(page)).toHaveCount(0);
   await expect(page).toHaveURL(`${hub.url}/tasks/launch`);
   clean(page);
 });
@@ -357,12 +365,12 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   await expect(list).toBeHidden();
   // one Back closes it, however many tasks were opened in it
   await page.goBack();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(layers(page)).toHaveCount(0);
   await expect(page).toHaveURL(board);
   await expect(page.locator('a.row.task', { hasText: draft!.title })).toBeVisible();
   await page.locator('a.row.task', { hasText: date!.title }).tap();
   await modal(page, date!.title).getByRole('button', { name: 'Close', exact: true }).tap();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(layers(page)).toHaveCount(0);
   await expect(page).toHaveURL(board);
   clean(page);
 });

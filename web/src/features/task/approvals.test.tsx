@@ -867,7 +867,7 @@ describe('the decision', () => {
       expect([ids(), count()]).toEqual([only ? undefined : ['t9'], 1]); // out at once
       return router;
     };
-    const taken = async (router: { state: { location: { pathname: string } } }) => {
+    const taken = async (router: Parameters<typeof was>[0]) => {
       take();
       await waitFor(() => expect(was(router).pathname).not.toMatch(/^\/tasks\/p1\/12/));
       await act(async () => {});

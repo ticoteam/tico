@@ -23,7 +23,7 @@ describe('a task opened from a page', () => {
     await r.navigate({ to: '/tasks/$pipeline/$task', params: { pipeline: 'eng', task: '7' } } as never);
     expect(r.state.location.pathname).toBe('/team/qa');
     expect(r.state.location.search).toEqual({ tab: 'files', task: 7 });
-    expect((r.state.location.state as Record<string, unknown>)[OVER_PAGE]).toBe(true);
+    expect((r.state.location.state as unknown as Record<string, unknown>)[OVER_PAGE]).toBe(true);
     // another task while one is open takes its place: still one step over the page
     await r.navigate({ href: '/tasks/eng/8/details?v=2' });
     expect(r.state.location.search).toEqual({ tab: 'files', task: 8, 'task.tab': 'details', 'task.v': 2 });
