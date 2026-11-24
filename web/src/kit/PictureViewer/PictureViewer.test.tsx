@@ -44,6 +44,32 @@ describe('PictureViewer', () => {
     expect(screen.getByTestId('at').textContent).toBe('null');
   });
 
+  it('zooms with its buttons, opens the next picture at fit, and swipes only at fit', async () => {
+    render(<Harness />);
+    const front = await screen.findByRole('img', { name: 'Front.png' });
+    const stage = front.parentElement!;
+    expect((screen.getByRole('button', { name: 'Zoom out' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    expect(front.style.transform).toContain('scale(1.5)');
+
+    // zoomed in, a swipe pans instead of walking the set
+    const swipe = (el: Element, dx: number) => {
+      fireEvent.pointerDown(el, { pointerId: 1, pointerType: 'touch', clientX: 200, clientY: 100 });
+      fireEvent.pointerMove(el, { pointerId: 1, pointerType: 'touch', clientX: 200 + dx, clientY: 100 });
+      fireEvent.pointerUp(el, { pointerId: 1, pointerType: 'touch', clientX: 200 + dx, clientY: 100 });
+    };
+    swipe(stage, -120);
+    expect(screen.getByTestId('at').textContent).toBe('0');
+
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowRight' });
+    const back = await screen.findByRole('img', { name: 'Back.png' });
+    expect(back.style.transform).toBe('');
+
+    swipe(back.parentElement!, -120);
+    expect(screen.getByTestId('at').textContent).toBe('0');
+    expect(await screen.findByRole('img', { name: 'Front.png' })).toBeTruthy();
+  });
+
   it('draws nothing while closed', () => {
     render(<Harness start={null} />);
     expect(screen.queryByRole('dialog')).toBeNull();

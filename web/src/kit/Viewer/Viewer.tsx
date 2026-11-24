@@ -1,5 +1,5 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { createContext, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
 import { IconButton } from '@/kit/IconButton';
 import './Viewer.css';
 
@@ -19,6 +19,9 @@ export interface ViewerProps {
   onKeyDown?: (e: KeyboardEvent) => void;
   children?: ReactNode;
 }
+
+/** True inside the layer: what it holds offers no full screen of its own (a PDF's Expand). */
+export const InViewer = createContext(false);
 
 /** A pull this far down the bar on a phone lets it go; less springs it back. */
 const LET_GO = 96;
@@ -67,7 +70,9 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
               {actions}
               <BaseDialog.Close render={<IconButton icon="close" label="Close" />} />
             </div>
-            <div className="vw-body">{children}</div>
+            <div className="vw-body">
+              <InViewer value>{children}</InViewer>
+            </div>
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

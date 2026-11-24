@@ -187,13 +187,27 @@ a.head-name:hover{text-decoration-color:var(--line-strong)}
 .pcard-foot .ico{width:14px;height:14px;flex:none;color:var(--muted)}
 .pcard-foot .ico.end{color:var(--faint);opacity:0;transition:opacity var(--dur-fast) var(--ease)}
 .pcard-hit{position:absolute;inset:0;padding:0;border:0;background:none;cursor:zoom-in;border-radius:var(--r-card)}
-.pcard:hover .pcard-none{position:absolute;inset:0;display:grid;place-items:center;color:var(--faint)}
-.pcard-none .ico{width:28px;height:28px}
-.pcard-none.is-loading{background:var(--well)}
-.pcard-foot{background:var(--hover)}
+.pcard:hover .pcard-foot{background:var(--hover)}
 .pcard:hover .pcard-foot .ico.end{opacity:1}
 .pcard-hit:focus-visible{outline:var(--focus-ring);outline-offset:calc(var(--focus-gap) * -1)}
 @media (hover:none){.pcard-foot .ico.end{opacity:1}}
+/* a PDF: the top of its first page fills the card; a video: its frame letterboxed on the dim, a play mark over it, and
+   the player in the same place once tapped */
+.pcard-view>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:top}
+.pcard-foot em{flex:none;font-style:normal;font-size:var(--t-xs);color:var(--muted)}
+.pcard.is-video .pcard-view{aspect-ratio:16/9;background:var(--scrim);border-bottom:0}
+.pcard.is-video .pcard-view>video,.pcard-play img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}
+.pcard-play{position:absolute;inset:0;display:grid;place-items:center;padding:0;border:0;background:none;cursor:pointer}
+.pcard-play:focus-visible{outline:var(--focus-ring);outline-offset:calc(var(--focus-gap) * -1)}
+.pcard-mark{position:relative;display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:var(--scrim);color:var(--on-scrim);transition:transform var(--dur-fast) var(--ease)}
+.pcard-mark .ico{width:22px;height:22px}
+.pcard-play:hover .pcard-mark{transform:scale(1.08)}
+.pcard.is-video .pcard-foot{padding-right:var(--s-1)}
+
+/* a sound: its name over the browser's own player */
+.maudio{display:grid;gap:var(--s-1);width:min(100%,360px);padding:var(--s-2) var(--s-3);border-radius:var(--r-card);box-shadow:inset 0 0 0 1px var(--line-strong);background:var(--surface)}
+.maudio-name{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:var(--t-sm);color:var(--ink)}
+.maudio audio{display:block;width:100%;height:40px}
 
 /* a long message read full screen (kit/Viewer): the same message, at a reading measure */
 .msg.msg-read{max-width:var(--measure);margin:0 auto;padding:var(--s-6)}

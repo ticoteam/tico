@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query';
-import { createContext, use, useState, type MouseEvent, type ReactNode } from 'react';
+import { createContext, use, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { run } from '@/actions';
 import { useActor } from '@/data';
 import { Icon, type IconName } from '@/kit/Icon';
+import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import type { LinkRender } from '@/kit/Markdown';
 import { Tooltip } from '@/kit/Tooltip';
@@ -12,7 +13,8 @@ import { fileFactsQuery, pageTextQuery } from './queries';
 import type { Attachment, ChatMessage } from './types';
 
 /* What a message holds besides its words, drawn so it reads at a glance (thread-content.html): a link is a chip with
-   what it points at, a page shows small and live, pictures show as pictures. A click goes where it points: a page of
+   what it points at, a page shows small and live, pictures show as pictures, a video plays where it is, a sound is a
+   player bar, a PDF shows its first page. A click goes where it points: a page of
    the app opens beside the thread, a place on the web opens there in a new tab, a file opens full screen over
    everything (`files.preview`). Nothing here loads from outside the app while it is drawn. */
 
@@ -213,19 +215,124 @@ const attachmentType = (f: Attachment) => {
   return (end ?? f.content_type?.split('/')[1] ?? '').toUpperCase();
 };
 export const isPicture = (f: Attachment) => fileKind(f.content_type, f.name) === 'image';
-/** A file's thumbnail on the server's own route (`/api/v2/files/<id>/thumb`, `?v=` kept), which checks its reader as the
-    file does and answers 404 until the picture's thumbnail is made. */
-const thumbOf = (href: string) => {
+/** A file's small copy on the server's own route (`/api/v2/files/<id>/thumb` for a picture or a PDF's first page,
+    `/poster` for a video's frame, `?v=` kept), which checks its reader as the file does and answers 404 until the
+    copy is made, or when it never is. */
+const previewOf = (href: string, kind: 'thumb' | 'poster') => {
   const m = /^(\/api\/v2\/files\/[^/?#]+)(\?v=\d+)?$/.exec(href);
-  return m ? `${m[1]}/thumb${m[2] ?? ''}` : undefined;
+  return m ? `${m[1]}/${kind}${m[2] ?? ''}` : undefined;
 };
+const heldOf = (f: Attachment) => ({ url: attachmentHref(f), mime: f.content_type ?? '', name: attachmentLabel(f), ...(typeof f.size === 'number' && { size: f.size }) });
 
-/** A message's own file that is not a picture: a page small and live, anything else its chip. */
+/** How a message's own file shows under its words, from its type alone: nothing about it is read to choose. */
+type Face = 'picture' | 'video' | 'audio' | 'pdf' | 'page' | 'file';
+function faceOf(f: Attachment): Face {
+  const kind = fileKind(f.content_type, f.name);
+  if (kind === 'image') return 'picture';
+  if (kind === 'video' || kind === 'audio' || kind === 'pdf') return kind;
+  return isPage(f.content_type) ? 'page' : 'file';
+}
+
+/** A file that will not play here, offered to save instead. */
+function DownloadChip({ f }: { f: Attachment }) {
+  const name = attachmentLabel(f);
+  return (
+    <a className="file" href={attachmentHref(f)} download={name}>
+      <Icon name="download" />
+      <span>{name}</span>
+      {attachmentType(f) && <em>{attachmentType(f)}</em>}
+    </a>
+  );
+}
+
+/**
+ * A video: its frame with a play mark (the poster, else a plain card), playing in place on a tap. The player is made
+ * only then, and reads the video from its address as it plays; Expand pauses it and opens it full screen.
+ */
+function VideoCard({ f }: { f: Attachment }) {
+  const url = attachmentHref(f);
+  const name = attachmentLabel(f);
+  const poster = previewOf(url, 'poster');
+  const [face, setFace] = useState<'poster' | 'card' | 'playing' | 'failed'>(poster ? 'poster' : 'card');
+  const player = useRef<HTMLVideoElement>(null);
+  if (face === 'failed') return <DownloadChip f={f} />;
+  const expand = () => {
+    player.current?.pause();
+    preview(f.id, undefined, heldOf(f));
+  };
+  return (
+    <div className="pcard is-video">
+      <span className="pcard-view">
+        {face === 'playing' ? (
+          <video ref={player} src={url} controls autoPlay playsInline aria-label={name} onError={() => setFace('failed')} />
+        ) : (
+          <button type="button" className="pcard-play" aria-label={name} onClick={() => setFace('playing')}>
+            {face === 'poster' && <img src={poster} alt="" loading="lazy" onError={() => setFace('card')} />}
+            <span className="pcard-mark">
+              <Icon name="play" />
+            </span>
+          </button>
+        )}
+      </span>
+      <span className="pcard-foot">
+        <Icon name="video" />
+        <span>{name}</span>
+        <IconButton icon="expand" label="Expand" size="sm" quiet onClick={expand} />
+      </span>
+    </div>
+  );
+}
+
+/** A sound: the browser's own compact player under its name, reading the file from its address as it plays. */
+function AudioBar({ f }: { f: Attachment }) {
+  const [failed, setFailed] = useState(false);
+  const name = attachmentLabel(f);
+  if (failed) return <DownloadChip f={f} />;
+  return (
+    <div className="maudio">
+      <span className="maudio-name">{name}</span>
+      <audio src={attachmentHref(f)} controls preload="metadata" aria-label={name} onError={() => setFailed(true)} />
+    </div>
+  );
+}
+
+/** A PDF: its first page small (the file's /thumb, else a plain card) over its name; the card opens it full screen. */
+function PdfCard({ f }: { f: Attachment }) {
+  const url = attachmentHref(f);
+  const name = attachmentLabel(f);
+  const thumb = previewOf(url, 'thumb');
+  const [lost, setLost] = useState(!thumb);
+  return (
+    <div className="pcard is-pdf">
+      <span className="pcard-view" aria-hidden="true">
+        {lost ? (
+          <span className="pcard-none">
+            <Icon name="file" />
+          </span>
+        ) : (
+          <img src={thumb} alt="" loading="lazy" onError={() => setLost(true)} />
+        )}
+      </span>
+      <span className="pcard-foot">
+        <Icon name="file" />
+        <span>{name}</span>
+        <em>PDF</em>
+      </span>
+      <button type="button" className="pcard-hit" aria-label={name} onClick={() => preview(f.id, undefined, heldOf(f))} />
+    </div>
+  );
+}
+
+/** A message's own file that is not a picture: a video, a sound, a PDF or a page by its face, anything else its chip. */
 function AttachedFile({ f }: { f: Attachment }) {
   const url = attachmentHref(f);
   const name = attachmentLabel(f);
-  const held = { url, mime: f.content_type ?? '', name, ...(typeof f.size === 'number' && { size: f.size }) };
-  if (isPage(f.content_type)) return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
+  const held = heldOf(f);
+  const face = faceOf(f);
+  if (face === 'video') return <VideoCard f={f} />;
+  if (face === 'audio') return <AudioBar f={f} />;
+  if (face === 'pdf') return <PdfCard f={f} />;
+  if (face === 'page') return <PageCard src={url} title={name} onOpen={() => preview(f.id, undefined, held)} />;
   const open = (e: MouseEvent) => {
     if (!plainClick(e)) return;
     e.preventDefault();
@@ -257,7 +364,7 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
   const pictures = files.filter(isPicture).map((f): Shown => {
     const src = attachmentHref(f);
     // only a photo (JPEG) uses the thumbnail: thumbnails are JPEGs, so a PNG would lose its transparency and a GIF its motion
-    const thumb = /^image\/jpe?g$/i.test(f.content_type ?? '') ? thumbOf(src) : undefined;
+    const thumb = /^image\/jpe?g$/i.test(f.content_type ?? '') ? previewOf(src, 'thumb') : undefined;
     return { src, name: attachmentLabel(f), ...(thumb && { thumb }) };
   });
   const others = files.filter((f) => !isPicture(f));

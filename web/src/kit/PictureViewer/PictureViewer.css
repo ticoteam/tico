@@ -1,3 +1,8 @@
 /* A picture full size, bare on the full-screen layer's dim (kit/Viewer): as large as the layer lets it be, never
-   larger than itself. */
-.pv-img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r-block)}
+   larger than itself, until it is zoomed. The picture area takes every touch itself (a pinch, a pan, a swipe), so the
+   page never zooms or scrolls under it; the bar above keeps its own pull-down. */
+.pv-stage{place-self:stretch;display:grid;grid-template:minmax(0,1fr)/minmax(0,1fr);place-items:center;min-width:0;min-height:0;overflow:hidden;touch-action:none;user-select:none;-webkit-user-select:none}
+.pv-img{display:block;max-width:100%;max-height:100%;object-fit:contain;border-radius:var(--r-block);cursor:zoom-in;transition:transform var(--dur-fast) var(--ease);-webkit-user-drag:none}
+.pv-stage[data-zoomed] .pv-img{cursor:grab;border-radius:0}
+.pv-stage[data-zoomed][data-moving] .pv-img{cursor:grabbing}
+.pv-stage[data-moving] .pv-img{transition:none}
