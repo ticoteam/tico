@@ -122,6 +122,9 @@ describe('a read that failed', () => {
     restartLive();
     vi.advanceTimersByTime(30);
     FakeEventSource.last.feed(opening(905, 900));
+    // its "who is this" answered (the same person) and it is live, as it was
+    for (let i = 0; i < 10; i++) await new Promise((done) => setImmediate(done));
+    expect(retry).not.toHaveBeenCalled();
     // then a real drop and return, which does read again: once, so the reconnect before it did not
     FakeEventSource.last.fail();
     vi.advanceTimersByTime(250);

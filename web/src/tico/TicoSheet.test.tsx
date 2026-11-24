@@ -66,10 +66,11 @@ describe("Tico's sheet when its read fails", () => {
   const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
   /** GET /api/v2/assistant fails as a restart does until `back` is set, then answers `info`. */
   function assistant(info: object) {
-    const server = { back: false, asked: 0 };
+    const server: { back: boolean; asked: number; held: Promise<void> | null } = { back: false, asked: 0, held: null };
     vi.stubGlobal('fetch', async (url: string) => {
       if (String(url) !== '/api/v2/assistant') return json(404, { error: { code: 'not_found', detail: 'No.' } });
       server.asked++;
+      await server.held;
       return server.back
         ? json(200, { bot: 'assistant', room_id: null, ...info })
         : json(503, { error: { code: 'starting', detail: 'Restarting.' } });
@@ -89,8 +90,14 @@ describe("Tico's sheet when its read fails", () => {
     expect(warn).toHaveBeenCalledTimes(1);
     // the stream is back before the server is: the read goes out again with no click, fails again, and is the same
     // fault (not logged again)
+    let answer = () => {};
+    server.held = new Promise((done) => (answer = done));
     act(() => FakeEventSource.last.feed(opening(1)));
     await waitFor(() => expect(server.asked).toBe(2));
+    // while it is on its way, Tico shows loading, not the fault
+    await waitFor(() => expect(screen.queryByText(/didn't load/)).toBeNull());
+    server.held = null;
+    answer();
     expect(await screen.findByText("Tico didn't load · server restarting")).toBeTruthy();
     expect(warn).toHaveBeenCalledTimes(1);
     // the server is back: the stream drops and returns, and the read goes out again
