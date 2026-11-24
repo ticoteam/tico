@@ -1591,12 +1591,16 @@ describe('Needs you’s read, from the menu', () => {
     // fetching but still draws on the next, so it is quiet only after a whole turn that fetches nothing and draws nothing
     const drawn = () => act(() => new Promise<void>((done) => setTimeout(done, 0)));
     const fetching = () => queryClient.isFetching({ predicate: (q) => q.queryKey[0] !== 'directory' });
-    let seen: number;
-    do {
+    // a shell that never goes quiet (a render loop) fails here by name, not as the test's timeout
+    const quiet = async () => {
       await waitFor(() => expect(fetching()).toBe(0));
-      seen = shellDraws.n;
+      const seen = shellDraws.n;
       await drawn();
-    } while (fetching() > 0 || shellDraws.n !== seen);
+      return fetching() === 0 && shellDraws.n === seen;
+    };
+    let settled = false;
+    for (let turn = 0; turn < 20 && !settled; turn++) settled = await quiet();
+    expect(settled, 'the shell drew or read something in each of 20 timer turns').toBe(true);
     const before = shellDraws.n;
     // a new read, and the row the person is on in Needs you on Tasks
     for (let i = 1; i <= 3; i++) act(() => void queryClient.setQueryData(['flow'], { count: i, items: [], task_ids: [`t${i}`] }));

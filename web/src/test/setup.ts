@@ -1,9 +1,11 @@
 import { cleanup, configure } from '@testing-library/react';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 
-// findBy/waitFor wait up to 5s: a whole-suite run on a busy machine can take over the default 1s to draw a lazy page.
-// Nothing waits that long when the code is right; it only stops false failures under load.
-configure({ asyncUtilTimeout: 5000 });
+// findBy/waitFor wait up to 4s: a whole-suite run on a busy machine can take over the default 1s to draw a lazy page.
+// Nothing waits that long when the code is right; it only stops false failures under load. It stays under vitest's 5s
+// test timeout so a wait that never comes true fails with its own message and the page it saw. At 5s the test timeout
+// won the race and a real bug read as a flaky "Test timed out in 5000ms" (root.test.tsx's failed read by priority, #5170).
+configure({ asyncUtilTimeout: 4000 });
 
 // A laptop's window. At jsdom's own 1024 sheets tuck to their edges (shell/layout.ts, Layers), out of reach of a test
 // that reads them; a test that wants another width resizes.
