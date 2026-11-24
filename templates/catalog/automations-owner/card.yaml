@@ -27,3 +27,4 @@ recommend_when: [always]
 base_skip: [knowledge/README.md, playbooks/README.md]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up

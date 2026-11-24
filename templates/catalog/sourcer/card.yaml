@@ -57,4 +57,5 @@ reasoning_effort: medium
 recommend_when: [uses_email, small_team]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/fill-a-role

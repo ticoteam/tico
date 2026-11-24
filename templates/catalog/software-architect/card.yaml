@@ -60,4 +60,5 @@ shared_files:
   - .claude/skills/plan-before-coding
   - .claude/skills/review-code
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/turn-corrections-into-gates

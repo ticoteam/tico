@@ -61,4 +61,5 @@ reasoning_effort: medium
 recommend_when: [sells_products, sells_to_consumers, sells_software]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/build-a-partnership

@@ -55,3 +55,4 @@ recommend_when: [publishes_content, sells_software, sells_to_consumers]
 base_skip: [knowledge/README.md, playbooks/README.md]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up

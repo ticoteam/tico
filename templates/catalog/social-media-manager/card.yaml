@@ -55,4 +55,5 @@ reasoning_effort: low
 recommend_when: [tracks_mentions, publishes_content, sells_to_consumers]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/handle-press-and-a-crisis
