@@ -563,3 +563,35 @@ def test_task_flow_open_tasks_query_uses_covering_partial_index(api):
             )
         ]
     assert any("COVERING INDEX tasks_open_owner_flow" in line for line in plan), plan
+
+
+def test_task_flow_counts_a_bots_turn_from_its_open_wait_span(api):
+    """A bot's `waiting` count is its readable open tasks whose open wait span is its own turn (backend/wait_spans.py),
+    the headline each engine write keeps and each never-stuck pass checks: a task waiting on a person is not counted
+    until the person's answer reaches its span, and the count agrees with the waits worked out in full."""
+    from backend import never_stuck
+    from backend import task_engine as E
+    from backend import waiting_on as W
+    from backend.tests.helpers import engine as X
+
+    store = api.app.state.store
+    with store.transaction() as c:
+        bot = X.bot(c, "w1")
+        X.pipeline(c)
+        mine = X.new_task(c, X.ANA, "Its turn", assignee=bot)
+        asked = X.ok_ask(c, X.new_task(c, X.ANA, "Waits on Ana", assignee=bot)["id"], bot, X.ANA, "OK the plan")
+        X.settled(c)
+
+    def flow():
+        return {row["slug"]: row for row in T.get(api, "bots", token="ana-test")}["w1"]["task_flow"]
+
+    def worked_out():
+        with store.read() as c:
+            waits = W.waiting_on_many(c, [mine["id"], asked["id"]])
+        return sum(1 for found in waits.values() if found and found[0].state == W.BOT and found[0].who == bot)
+
+    assert flow() == {"going": 0, "waiting": 1} and worked_out() == 1
+    with store.transaction() as c:
+        X.answer(c, E.task(c, asked["id"]), asked["requirement_id"], "ok", X.ANA)  # a row no engine write synced
+        never_stuck.check(c)
+    assert flow() == {"going": 0, "waiting": 2} and worked_out() == 2

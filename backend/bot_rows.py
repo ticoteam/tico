@@ -147,8 +147,13 @@ def _live_runs(c, slugs):
 def task_flow(c, tasks_by_bot, who=None):
     """{bot: {"going", "waiting"}} over each bot's open tasks the reader may see: `going` has a live run, `waiting` is
     the bot's turn with nothing running (it is woken by the never-stuck check). A task that waits on a person,
-    another task or room counts in neither. What a task waits on is read only for the tasks it decides: the readable
-    ones with no live run, on the engine (one off it waits on nothing, waiting_on_many), not every open task."""
+    another task or room counts in neither. Whose turn a task is comes from its open wait span (backend/wait_spans.py:
+    its headline wait, kept by every engine write and checked by each never-stuck pass), one read for every task,
+    rather than working out each task's waits again on every list (TIDY, Nov 24: most of GET /api/v2/bots)."""
+    import json
+
+    from . import waiting_on as W
+
     live = _live_runs(c, list(tasks_by_bot))
     going, pending = {}, {}
     for bot, tasks in tasks_by_bot.items():
@@ -161,17 +166,23 @@ def task_flow(c, tasks_by_bot, who=None):
                 going[bot] += 1
             elif row.get("pipeline_id"):
                 pending[bot].append(row["id"])
-    every = [tid for ids in pending.values() for tid in ids]
-    waits = H.task_waits(c, every) if every else {}
-    out = {}
-    for bot in tasks_by_bot:
-        waiting = 0
-        for tid in pending[bot]:
-            first = (waits.get(tid) or [None])[0]
-            if first is not None and first.state == "bot" and first.who == "bot:" + bot:
-                waiting += 1
-        out[bot] = {"going": going[bot], "waiting": waiting}
-    return out
+    every = sorted({tid for ids in pending.values() for tid in ids})
+    turn = (
+        {
+            str(task_id): actor
+            for task_id, actor in c.execute(
+                "SELECT task_id, who FROM task_wait_spans WHERE closed_at IS NULL AND kind=? "
+                "AND task_id IN (SELECT value FROM json_each(?))",
+                (W.BOT, json.dumps(every)),
+            )
+        }
+        if every
+        else {}
+    )
+    return {
+        bot: {"going": going[bot], "waiting": sum(1 for tid in pending[bot] if turn.get(tid) == "bot:" + bot)}
+        for bot in tasks_by_bot
+    }
 
 
 class BotRows:
@@ -227,8 +238,6 @@ class BotRows:
                 tasks = {}
                 for task in map(dict, stored):
                     tasks.setdefault(H.actor_id(task["owner_id"]), []).append(task)
-                # Prime only the slim wait cache (never SELECT *), so waiting_on_many reuses these rows directly.
-                W.prime_slim_tasks(c, stored)
                 self.task_flow = task_flow(c, {slug: tasks.get(slug, []) for slug in read}, who)
             if self.wants("claim_scoped", "claim_task"):
                 self.scopes = {
