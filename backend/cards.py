@@ -36,6 +36,7 @@ import json
 import re
 import time
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 from fastapi import Request
 from pydantic import Field
@@ -417,7 +418,7 @@ def tasks_by_stage(ctx, s):
         "snoozed": "hide",
         "owner": H.bot_actor(s["agent"]) if s["agent"] else None,
     }
-    counts = H.tasks(c, per_stage=True, match=[("pipeline_id=?", [pipeline["id"]])], **select)
+    counts = cast(dict, H.tasks(c, per_stage=True, match=[("pipeline_id=?", [pipeline["id"]])], **select))
     stages = []
     for stage in c.execute(
         "SELECT id, name FROM stages WHERE pipeline_id=? AND retired_at IS NULL ORDER BY position", (pipeline["id"],)
