@@ -7552,7 +7552,10 @@ if os.path.exists(os.path.join(folder, "agy-forget-%d" % n)):
         for (what, kept) in [
             ("events", said),
             ("stderr", ran.stderr.join("\n")),
-            ("completions", serde_json::to_string(&ran.completions).unwrap()),
+            (
+                "completions",
+                serde_json::to_string(&ran.completions).unwrap(),
+            ),
         ] {
             let at = kept.find("synthetic-refreshed-mid-turn");
             assert!(
