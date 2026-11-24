@@ -1113,9 +1113,16 @@ def _suite_key(suite, run):
     return ("suite:" + slug[:150] + (f"#{suite['id']}" if suite.get("id") else ""))[:200]
 
 
-def _check_state(result):
-    """One check's result as the link keeps it: passing, skipped, pending, cancelled or failing. A cancelled (or stale)
-    run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand."""
+def _check_state(result, description=""):
+    """One check's result as the link keeps it: passing, skipped, pending, approval, cancelled or failing. A cancelled
+    (or stale) run failed nothing: GitHub cancels the older duplicate of a concurrency group, or someone did by hand. A
+    run waiting for an approval, one that ended `action_required`, and a pending status whose `description` says so
+    (item_sources.github.says_approval) wait for someone to approve them: approval, never "Checks failed", which would
+    send the owner hunting for a bug, and never a finished head (`_finish`); Checks pass says it needs approval."""
+    from .item_sources.github import says_approval
+
+    if result in ("waiting", "action_required") or (result == "pending" and says_approval(str(description or ""))):
+        return "approval"
     return (
         "passing"
         if result in ("success", "neutral")
@@ -1123,7 +1130,7 @@ def _check_state(result):
         if result == "skipped"
         else "cancelled"
         if result in ("cancelled", "stale")
-        else ("pending" if result in ("pending", "queued", "in_progress", "requested", "waiting") else "failing")
+        else ("pending" if result in ("pending", "queued", "in_progress", "requested") else "failing")
     )
 
 
@@ -1177,7 +1184,8 @@ def _counted(checks, suite_runs=None):
 
 
 def _overall(checks, suite_runs=None):
-    """A head's checks as one state: failing if any failed, else pending if any is still going, else cancelled if one
+    """A head's checks as one state: failing if any failed, else approval if one waits for someone to approve it, else
+    pending if any is still going, else cancelled if one
     was cancelled with no newer run of its workflow after it (`_counted`), else passing. A head whose every check was
     skipped has not been checked (a draft pull request's run skips every job, and nothing on main requires a check), so
     it reads pending: an all-skipped head never reads green."""
@@ -1185,6 +1193,8 @@ def _overall(checks, suite_runs=None):
     return (
         "failing"
         if "failing" in states
+        else "approval"
+        if "approval" in states
         else "pending"
         if "pending" in states or states <= {"skipped"}
         else "cancelled"
@@ -1260,7 +1270,7 @@ def _kept(checks):
         return dict(checks)
     keys = list(checks)
     chosen = set()
-    for want in ("failing", "pending", None):
+    for want in ("failing", "approval", "pending", None):
         for k in reversed(keys):
             if len(chosen) >= CHECKS_KEPT:
                 break
@@ -1276,12 +1286,12 @@ def _dropped(checks, kept):
     gone = [
         state for key, state in checks.items() if key not in kept and state not in ("passing", "skipped", "cancelled")
     ]
-    return "failing" if "failing" in gone else "pending" if gone else None
+    return _worst(*gone) if gone else None
 
 
 def _with_dropped(state, dropped):
     """A head's state as a webhook reads it from the stored copy: the copy's state, or the dropped check's if worse."""
-    return "failing" if "failing" in (state, dropped) else "pending" if "pending" in (state, dropped) else state
+    return _worst(state, dropped) or state
 
 
 def _set_suite_runs(detail, suite_runs):
@@ -1294,8 +1304,10 @@ def _set_suite_runs(detail, suite_runs):
         detail.pop(SUITE_RUNS, None)
 
 
-def _worst(a, b):
-    return "failing" if "failing" in (a, b) else "pending" if "pending" in (a, b) else None
+def _worst(*states):
+    """The worst unfinished-or-failed state among `states`: failing, then approval (it never finishes by itself),
+    then pending; None when none of them is one."""
+    return next((s for s in ("failing", "approval", "pending") if s in states), None)
 
 
 # Whether a check the stored copy leaves out was still going: `checks_dropped` keeps only the worst state, so a running
@@ -1318,11 +1330,13 @@ def _set_dropped(detail, dropped, pending=False):
         detail.pop(DROPPED_PENDING, None)
 
 
-def _still_going(detail):
+def _still_going(detail, *also):
     """Whether the stored copy says a check on the head was still going: one it kept, or one it left out. Tico's own
-    gate is not a check that is going (`_counted`)."""
+    gate is not a check that is going (`_counted`). `also`: kept states that count as going too (a read afresh takes
+    one waiting for approval, as the periodic read does)."""
+    kept = _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
     return (
-        "pending" in _counted(detail.get("checks") or {}, detail.get(SUITE_RUNS)).values()
+        any(state in kept for state in ("pending", *also))
         or detail.get("checks_dropped") == "pending"
         or bool(detail.get(DROPPED_PENDING))
     )
@@ -1343,6 +1357,10 @@ def _finish(c, task, link, detail, full, checks):
         )
 
     failed, cancelled = named("failing"), named("cancelled")
+    if named("approval") and not failed:
+        # Not finished: a check waits for someone to approve it. Checks pass says so and tells the owner
+        # (item_sources.github.approval_news); a failure beside it still finishes the head as failed.
+        return full, "approval"
     outcome = "fail" if failed else "cancelled" if cancelled else "pass"
     finished = detail.get("checks_done", [])
     if f"{full}:{outcome}" in finished and not detail.get("wake_once"):
@@ -1421,7 +1439,9 @@ def read_checks(service, headers, repo, head):
         if (run.get("check_suite") or {}).get("id"):
             _add_suite_run(suite_runs, _suite_key(run["check_suite"], run), name)
     for status in statuses:
-        checks[str(status.get("context") or "Checks")[:200]] = _check_state(status.get("state") or "pending")
+        checks[str(status.get("context") or "Checks")[:200]] = _check_state(
+            status.get("state") or "pending", status.get("description")
+        )
     return ReadChecks(checks, suite_runs) if checks else None
 
 
@@ -1441,7 +1461,9 @@ def refresh_pending_checks(service):
     on open pull requests of active tasks: each is rebuilt from GitHub's current lists (`read_checks`, `apply_checks`),
     so a suite that never started stops holding a green head (Dev 646). A failed head whose stored copy still has a
     pending check is read too: a failure outranks pending, so such a link reads "failing", but the pending suite keeps
-    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A link whose stored
+    the webhook from finishing the head, and its failed-check hand-off never came (Nov 8, PR 3055). A check waiting
+    for approval is unfinished the same way: the read keeps it at approval while it waits, and a missed webhook after
+    the approval cannot leave it there. A link whose stored
     copy dropped a non-passing check (`checks_dropped`) is read the same way, so the copy's green cannot stand. Reads outside the write, and applies
     a read only to a link nothing wrote while it ran (a webhook's newer check stands); the longest-quiet links first.
     Returns the ids of pending links that left pending."""
@@ -1455,9 +1477,10 @@ def refresh_pending_checks(service):
                 "SELECT l.id,l.repo,l.number,l.updated_at,l.checks,json_extract(l.detail,'$.head_sha') AS head "
                 "FROM task_links l "
                 "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
-                "WHERE l.kind='pr' AND l.state='open' AND (l.checks='pending' "
+                "WHERE l.kind='pr' AND l.state='open' AND (l.checks IN ('pending','approval') "
                 "OR json_extract(l.detail,'$.checks_dropped') IS NOT NULL "
-                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') WHERE value='pending')) "
+                "OR l.checks='failing' AND EXISTS (SELECT 1 FROM json_each(l.detail,'$.checks') "
+                "WHERE value IN ('pending','approval'))) "
                 "AND l.number IS NOT NULL AND r.reachable=1 "
                 f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated_at,l.created_at)<? "
                 "ORDER BY coalesce(l.updated_at,l.created_at),l.id LIMIT 200",
@@ -1601,7 +1624,14 @@ def pr_signal(c, event, payload):
         if event in ("check_run", "check_suite", "status", "workflow_run"):
             if signal.get("head_sha") and detail.get("head_sha") and signal["head_sha"] != detail["head_sha"]:
                 continue
-            state = _check_state(signal.get("conclusion") or signal.get("state") or "pending")
+            state = _check_state(
+                # A run waiting for approval has no conclusion yet: its `status` says so.
+                signal.get("conclusion")
+                or ("waiting" if signal.get("status") == "waiting" else "")
+                or signal.get("state")
+                or "pending",
+                signal.get("description") if event == "status" else "",
+            )
             checks = detail.get("checks", {})
             name = (
                 _suite_key(signal, signal)
@@ -1610,7 +1640,8 @@ def pr_signal(c, event, payload):
                 if event == "workflow_run"
                 else str(signal.get("name") or signal.get("context") or "Checks")[:200]
             )
-            left_pending = checks.get(name) == "pending" and state != "pending"
+            # Approval is unfinished too: approved and then green is a finish like pending then green.
+            left_pending = checks.get(name) in ("pending", "approval") and state not in ("pending", "approval")
             checks[name] = state
             own = (signal.get("check_suite") or {}) if event == "check_run" else {}
             if (
@@ -1813,12 +1844,17 @@ def refresh_task_prs(service, task_id):
                         # no webhook (Dev 646), and a dropped check's own webhook cannot say the others are green. So is
                         # a failing link that still holds a running check: this refresh moves the link's updated_at, so
                         # task reads every few minutes would keep refresh_pending_checks from ever reading it (PR 3055).
+                        # A check waiting for approval is read the same way, for the same reason.
                         checks = None
                         stored = H._json(link.get("detail"), {}) or {}
                         dropped = stored.get("checks_dropped")
                         if (
                             head
-                            and (link.get("checks") == "pending" or dropped or _still_going(stored))
+                            and (
+                                link.get("checks") in ("pending", "approval")
+                                or dropped
+                                or _still_going(stored, "approval")
+                            )
                             and pr.get("state") == "open"
                         ):
                             try:

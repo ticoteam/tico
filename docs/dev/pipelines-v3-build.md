@@ -622,14 +622,22 @@ pr_open       no PR linked                               not_met  owner   No PR 
               every PR closed without merging            not_met  owner   <ref> was closed without merging
               an open or merged PR                       met              PR open
 checks_pass   a check failed                             not_met  owner   Checks failed on <ref>: <names>
+              a check needs approval (waiting run,       not_met  owner   Checks need approval on <ref>: <names>. ...
+                action_required, status "approval
+                required"); owner bot woken once/commit
               running < 2 hours                          waiting  github  Checks running
               running >= 2 hours                         not_met  owner   Checks still running after 2 hours
               no checks, < 10 min since head seen        waiting  github  Waiting for checks
-              no checks after 10 min (C13)               met              No checks on this repo
+              no checks after 10 min (C13), draft or     met              No checks on this repo
+                a repo that never ran checks
+              no checks, ready PR, repo runs checks,     not_met  owner   No checks started on <ref> after 15 minutes
+                >= 15 min since head seen
               all pass                                   met              Checks pass
 pr_merged     effect owed                                waiting  github  Queuing the PR
               queued / auto-merge on                     waiting  github  In the merge queue
               GitHub refused the queue call 3 times      not_met  owner   GitHub refused the merge: <reason>
+              checks need approval at the pinned head    not_met  owner   The checks on <ref> need approval
+                (not queued, no tico/merge-ok posted)
               removed from the queue                     not_met  owner   Dropped from the merge queue: <reason>
                                                                           (<failing check> when known)
               every PR merged                            met              Merged

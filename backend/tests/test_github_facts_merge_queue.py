@@ -125,8 +125,8 @@ def test_no_checks_counts_as_met_only_on_a_draft_or_a_repo_that_runs_none(c):
     assert line(c, task_id, "checks_pass") == (R.MET, None, "No checks on this repo")  # a draft runs nothing
     F.save_pr(c, REPO, 2, {"draft": False}, 2)  # marked ready: its checks start now
     assert line(c, task_id, "checks_pass") == (R.WAITING, "github", "Waiting for checks")
-    age(c, "head_seen_at", H.shift(H.now(), hours=-3), 2)
-    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "No checks on acme/app#2 after 2 hours")
+    age(c, "head_seen_at", H.shift(H.now(), minutes=-16), 2)
+    assert line(c, task_id, "checks_pass") == (R.NOT_MET, B, "No checks started on acme/app#2 after 15 minutes")
     other = X.new_task(c, X.ANA, "Ship it elsewhere", "eng")["id"]  # a repo none of whose PRs ran checks
     H.task_link(c, X.ANA, other, "https://github.com/acme/no_ci/pull/7")
     F.save_pr(c, "acme/no_ci", 7, {"state": "open", "head_sha": "c"}, 1)
@@ -222,8 +222,8 @@ CANCELLED = (
 
 def test_a_cancelled_or_stale_run_is_not_a_failure_and_a_failed_or_timed_out_one_is():
     """Nov 12 stress run, I38: a run GitHub cancelled (a concurrency group's duplicate) read as a failed check."""
-    states = ("cancelled", "stale", "failure", "timed_out", "action_required", "startup_failure")
-    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 4
+    states = ("cancelled", "stale", "failure", "timed_out", "startup_failure")
+    assert [F.check_state("completed", r) for r in states] == ["cancelled", "cancelled"] + ["failure"] * 3
 
 
 @pytest.mark.parametrize(
@@ -1175,7 +1175,8 @@ def test_a_pr_someone_else_queued_first_still_gets_tico_s_check_so_it_does_not_s
         assert line(c, task_id, "pr_merged") == (R.WAITING, "github", "In the merge queue")
     gh.calls.clear()
     assert MQ.run(company, gh) == 1
-    assert [call[0] for call in gh.calls] == ["ready", "post_check", "enqueue"]  # GitHub answers ok: already queued
+    # GitHub answers ok: already queued
+    assert [call[0] for call in gh.calls] == ["read_checks", "ready", "post_check", "enqueue"]
     assert gh.merge_ok_on(REPO, head) is True
     with company.transaction() as c:
         assert effects(c, task_id) == [("act", "done")]

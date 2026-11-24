@@ -315,6 +315,40 @@ def test_background_refresh_keeps_newer_webhook_state(api, monkeypatch):
         assert H.task_links(c, task['id'])[0]['state'] == 'merged'
 
 
+def test_a_task_read_reads_a_link_waiting_for_approval_afresh(api, monkeypatch):
+    """The task-read refresh moves the link's updated_at, so the periodic read never reaches a link it touches: it must
+    read a link waiting for approval afresh itself, or a missed webhook after the approval leaves it there."""
+    import threading
+
+    task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait for approval', 'body': 'x', 'links': [PR]})
+    service = api.app.state.github_app
+    with service.store.transaction() as c:
+        c.execute(
+            "INSERT INTO repositories(full_name,reachable,enabled,added_by,updated_at) VALUES(?,1,1,?,?)",
+            ('ticoteam/tico', 'human:ana', H.now()),
+        )
+        c.execute(
+            "UPDATE task_links SET checks='approval', detail=? WHERE task_id=? AND kind='pr'",
+            (json.dumps({'head_sha': 'h1', 'checks': {'build': 'approval'}}), task['id']),
+        )
+    monkeypatch.setattr(service, 'row', lambda c=None: {'slug': 'test-app', 'org': 'ticoteam'})
+    monkeypatch.setattr(service, 'mint', lambda *args: ('test-token', 'later'))
+    monkeypatch.setattr(
+        service,
+        '_call',
+        lambda method, path, **kw: SimpleNamespace(
+            status_code=200, json=lambda: {'state': 'open', 'head': {'sha': 'h1'}}
+        ),
+    )
+    read = []
+    monkeypatch.setattr(G, '_fresh_checks', lambda service, repo, head: read.append(head) or {'build': 'passing'})
+    G.refresh_task_prs(service, task['id'])
+    for worker in threading.enumerate():
+        if worker.name == 'tico-pr-refresh':
+            worker.join(2)
+    assert read == ['h1']
+
+
 def test_new_head_clears_stale_conflict_and_deduplicates_per_head(api):
     from backend.repositories import metadata
 
