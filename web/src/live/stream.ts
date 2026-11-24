@@ -6,14 +6,15 @@ import { clearHeld, connectionChanged } from '@/data/held';
 import { keys } from '@/data/keys';
 import { refetchQuiet } from '@/data/optimistic';
 import { queryClient } from '@/data/query-client';
+import { sawBuild } from '@/lib/build';
 import { tabId } from '@/lib/tab';
 import { dropFrame, push, setSink } from './frame';
 import { installNotices } from './notices';
 import { dispatch, installPatchers, resetPatchState } from './patch';
 
 // One EventSource for the whole app on GET /api/v2/events (backend/events.py). Frames are `id: <seq>`,
-// `event: <topic>`, `data: {seq, actor, at, ...}`; control frames are `ready` (no id), `cursor` and `reset` (with an
-// id), `expired` (no id, `{}`), and a `: keepalive` comment. The server ends each stream after about 15 minutes;
+// `event: <topic>`, `data: {seq, actor, at, ...}`; control frames are `ready` (no id; it names the server's build for
+// lib/build.ts), `cursor` and `reset` (with an id), `expired` (no id, `{}`), and a `: keepalive` comment. The server ends each stream after about 15 minutes;
 // this reconnects from the newest change number it has seen, so nothing is missed, and backs off while it fails.
 
 export const TOPICS = [
@@ -160,12 +161,14 @@ function connect(): void {
   source.addEventListener('ready', (e) => {
     if (!mine()) return;
     clearOffline();
+    const d = parse(e);
+    sawBuild(d?.build);
     if (after == null) {
       // A first stream starts from now and reads nothing again: the page's reads went out with it, and reading a
       // board's whole list twice cost more than the rare change between the two (a reconnect after a gap still reads
       // the quiet areas again, isLive). Follows that changed while it opened reconnect from its number, so the
       // stream runs on without a gap.
-      after = seqOf(parse(e));
+      after = seqOf(d);
       isLive();
       if (heldRestart) {
         heldRestart = false;

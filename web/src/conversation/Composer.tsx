@@ -270,7 +270,8 @@ export function Composer({ id, me, to, onSend, fill, label: own, attach = true, 
           {files.map((f, i) => {
             const thumb = PICTURE.test(f.type) || VIDEO.test(f.type);
             return (
-              <button key={`${f.name}:${i}`} type="button" className={thumb ? 'composer-thumb' : 'file composer-file'} aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`} disabled={sending}
+              // a file picked and not sent: a reload would lose it (features/notices/recovery.ts), unlike the words
+              <button key={`${f.name}:${i}`} type="button" className={thumb ? 'composer-thumb' : 'file composer-file'} data-unsent="" aria-label={`Remove ${f.name}`} title={`Remove ${f.name}`} disabled={sending}
                 onClick={() => setFiles(files.filter((_, j) => j !== i))}>
                 {thumb ? <Thumb file={f} /> : <Icon name="file" />}
                 {thumb ? <Icon name="close" /> : <span>{f.name}</span>}

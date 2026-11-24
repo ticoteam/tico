@@ -64,6 +64,7 @@ from . import bot_settings as BS
 from . import runs
 from . import read_cache
 from . import visuals as V
+from . import web_routes
 from .store import H, Problem, encode
 from .api_contract import api_v2, ref as schema_ref
 
@@ -3831,7 +3832,7 @@ EVENTS_DESCRIPTION = (
     "Assistant asks this person's open app to do (`done`: the change is made, only show it); to that person's own "
     "streams only, and only while the Assistant waits. One tab does it and reports on "
     "`POST /api/v2/screen-actions/{id}/result`.\n"
-    "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
+    "Also `event: ready` (`seq`: where the log stands; `build`: the web app's build served), `event: cursor` (the change number to resume from, past changes "
     "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
     "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
@@ -3991,6 +3992,7 @@ def install(app, store, auth, task_views, task_view):
                         "after": cursor,
                         "topics": list(wanted),
                         **({"needs_version": held["version"]} if held else {}),
+                        **({"build": build} if (build := web_routes.build_name(store.settings)) else {}),
                     },
                 )
                 deadline = time.monotonic() + LIFETIME_SECONDS

@@ -314,7 +314,8 @@ data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot_id": "ops", "o
   Codex do not report tools, so their pieces are all `reply`). `text` joins the bot's messages with a blank line and leaves
   the tool labels out.
 - **Resume.** The stream ends after about fifteen minutes by design; `event: ready`
-  opens each one with where the log stands. Reconnect with `after` set to the last `id` you saw (or let `EventSource` send
+  opens each one with where the log stands, and, when the server has a web build, `build`: the path of the build's entry
+  script (`/next/assets/index-<hash>.js`). Tico's own app loads its next page whole once that differs from its own. Reconnect with `after` set to the last `id` you saw (or let `EventSource` send
   `Last-Event-ID`); `event: cursor` moves it past changes you were not sent. Back off (0.5 s, 1 s, 2 s ... up to 15 s)
   while the network is down.
 - **`event: reset`** means you were further behind than the server keeps (a day, or more than 5,000 changes): read your page in full, then carry on

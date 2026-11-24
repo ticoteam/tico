@@ -7,7 +7,7 @@ import { ticoRoomQuery } from '@/conversation';
 import { configQuery, meQuery, pageOwnersQuery, recordVisit, useActor, useDirectory, useHeldCount, type Actor, type Directory } from '@/data';
 import { callQuery, isCallActive, ringingQuery, useCall } from '@/features/calls/routing';
 import { useFileOpen } from '@/features/library/routing';
-import { AssetRecovery, DesktopMove, PlanLock } from '@/features/notices/exports';
+import { DesktopMove, PlanLock } from '@/features/notices/exports';
 import { StartScreen, useSetupOwed, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
@@ -156,7 +156,6 @@ function CallWindow() {
       </div>
       <ActionsRoot dot={dotEl} fold={foldSheet} />
       <Toasts />
-      <AssetRecovery />
     </>
   );
 }
@@ -377,9 +376,8 @@ function App() {
       <Later on={ringing}>
         <RingCard />
       </Later>
-      {/* over every page: a locked plan; the app's own files failing to load after a release */}
+      {/* over every page: a locked plan (the app's own files failing: main.tsx) */}
       <PlanLock />
-      <AssetRecovery />
     </>
   );
 }

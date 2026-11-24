@@ -5,6 +5,8 @@ import { createRoot } from 'react-dom/client';
 import { queryClient } from '@/data/query-client';
 import { setLinkComponent, type LinkProps } from '@/kit/Link';
 import { appHref, router } from '@/router';
+// after the router, so the modules load in the order the router's own imports give them
+import { AssetRecovery, startRecovery } from '@/features/notices/exports';
 import { markDesktop } from '@/shell';
 import '@/styles/index.css';
 
@@ -25,6 +27,9 @@ setLinkComponent(AppLink);
 // the desktop preload marks the page before the first paint; a page it marked late is marked here
 markDesktop();
 
+// before anything draws: the app's own files failing (a release) are recovered here, whatever part fails
+startRecovery(router);
+
 const root = document.getElementById('root');
 if (!root) throw new Error('index.html has no #root');
 
@@ -32,6 +37,7 @@ createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      <AssetRecovery />
     </QueryClientProvider>
   </StrictMode>,
 );
