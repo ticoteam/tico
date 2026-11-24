@@ -143,6 +143,32 @@ def sandbox_files(root: Path) -> frozenset[str]:
     return found
 
 
+# The build's name, by manifest, while its size and modified time stay the same.
+_BUILDS: dict[Path, tuple[tuple[int, int], str]] = {}
+
+
+def build_name(settings: Settings) -> str:
+    """The build served, named by its page's entry script (`/next/assets/index-<hash>.js`, from the manifest): the live
+    stream's `ready` carries it, so a tab whose page loaded another build makes its next page change a full load
+    (web/src/lib/build.ts). Empty without a build."""
+    manifest = Path(settings.web_dir).resolve() / ".vite" / "manifest.json"
+    try:
+        stat = manifest.stat()
+    except OSError:
+        return ""
+    key = (stat.st_mtime_ns, stat.st_size)
+    entry = _BUILDS.get(manifest)
+    if entry and entry[0] == key:
+        return entry[1]
+    try:
+        file = _object(_object(json.loads(manifest.read_bytes())).get("index.html")).get("file")
+    except (OSError, ValueError):
+        file = None
+    name = OLD_PREFIX + "/" + file if isinstance(file, str) and file else ""
+    _BUILDS[manifest] = (key, name)
+    return name
+
+
 def sandboxed(settings: Settings, path: str) -> bool:
     """Whether `path` (as requested) is one of the diagram frame's files, which pass without sign-in."""
     prefix = OLD_PREFIX + "/"

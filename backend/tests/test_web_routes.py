@@ -6,6 +6,7 @@ import json
 import pytest
 
 from backend import web_routes
+from backend.tests.helpers.events import live, topic  # noqa: F401
 
 AUTH = {"Authorization": "Bearer ana-test"}
 PAGE = '<!doctype html><title>Tico</title><script type="module" src="/next/assets/index-1a2b3c.js"></script>'
@@ -150,3 +151,26 @@ def test_the_diagram_frame_s_files_alone_pass_without_sign_in_under_their_own_po
     (root / ".vite" / "manifest.json").write_text(json.dumps(manifest) + " ")
     assert web.get("/next/mermaid-sandbox.html").status_code == 401
     assert web.get("/next/assets/flow-2.js").status_code == 401
+
+
+def test_the_build_served_is_named_by_its_page_s_entry_script(web):
+    settings = web.app.state.store.settings
+    manifest = settings.web_dir / ".vite" / "manifest.json"
+    assert web_routes.build_name(settings) == ""
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps({"index.html": {"file": "assets/index-1a2b3c.js"}}))
+    assert web_routes.build_name(settings) == "/next/assets/index-1a2b3c.js"
+    # A release writes a new build: it is named at once.
+    manifest.write_text(json.dumps({"index.html": {"file": "assets/index-4d5e6f7.js"}}))
+    assert web_routes.build_name(settings) == "/next/assets/index-4d5e6f7.js"
+    manifest.write_text("{}")
+    assert web_routes.build_name(settings) == ""
+
+
+@pytest.mark.slow
+def test_each_live_stream_names_the_build_served_so_an_older_tab_loads_its_next_page_whole(web, live):
+    assert "build" not in live().until(topic("ready"))["data"]
+    manifest = web.app.state.store.settings.web_dir / ".vite" / "manifest.json"
+    manifest.parent.mkdir()
+    manifest.write_text(json.dumps({"index.html": {"file": "assets/index-1a2b3c.js"}}))
+    assert live().until(topic("ready"))["data"]["build"] == "/next/assets/index-1a2b3c.js"

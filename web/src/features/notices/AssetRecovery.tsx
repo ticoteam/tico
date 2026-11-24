@@ -1,25 +1,22 @@
-import { useEffect, useState } from 'react';
-import { run } from '@/actions';
 import { Button } from '@/kit/Button';
 import { CenteredCard } from '@/pagekinds';
 import { Cover } from './Cover';
 import { SUPPORT_URL } from './queries';
-import { watchAssets } from './recovery';
+import { useAssetsFailed } from './recovery';
 
-/** For the shell, on every page: when one of the app's own files does not load (most often a release replaced it),
-    a card over the app whose one way on is Reload. Nothing otherwise. */
+/** Beside the router (main.tsx), outside any part that can fail: the card over the app whose one way on is Reload, once
+    recovery (recovery.ts startRecovery) cannot reload on its own. Nothing otherwise. */
 export function AssetRecovery() {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => watchAssets(() => setFailed(true)), []);
-  if (!failed) return null;
+  if (!useAssetsFailed()) return null;
   return (
     <Cover label="Tico couldn't finish loading">
       <CenteredCard
         title="Tico couldn't finish loading"
         path="/reload"
         fault="alert"
+        // not through the actions: they are not there when the shell is not (start, boot, a fault)
         actions={
-          <Button variant="primary" onClick={() => run('notices.reload', {}, { via: 'click' })}>
+          <Button variant="primary" onClick={() => location.reload()}>
             Reload
           </Button>
         }

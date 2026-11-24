@@ -137,3 +137,15 @@ export function downloadHref(answer: DesktopDownload | undefined): string {
   const url = answer?.available && answer.app_kind === 'generic' ? answer.url : undefined;
   return url && /^https:\/\/\S+$/.test(url) ? url : RELEASES_URL;
 }
+
+/** Who is signed in, asked once after one of the app's files failed (they need a session too): false when the session
+    ended, true when the server answered, null when it did not. */
+export async function signedIn(): Promise<boolean | null> {
+  try {
+    // no answer in 10 s is no answer
+    await api.get('/api/v2/me', { once: true, signal: AbortSignal.timeout(10_000) });
+    return true;
+  } catch (err) {
+    return err instanceof ApiError && err.status === 401 ? false : null;
+  }
+}

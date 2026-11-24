@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApiError } from '@/api/client';
 import { clearHeld, heldCount, hold } from '@/data/held';
 import { queryClient } from '@/data/query-client';
+import { behind, resetBuild } from '@/lib/build';
 import { FakeEventSource, frame, opening, task, taskFrame } from './fake-stream';
 import { flushFrame } from './frame';
 import { follow, resetFollows } from './follow';
@@ -22,6 +23,7 @@ afterEach(() => {
   stopLive();
   clearHeld();
   resetFollows();
+  resetBuild();
   queryClient.clear();
   expect(vi.getTimerCount()).toBe(0);
   vi.useRealTimers();
@@ -49,6 +51,17 @@ describe('the stream', () => {
     vi.advanceTimersByTime(250);
     expect(FakeEventSource.all).toHaveLength(2);
     expect(FakeEventSource.last.params.get('after')).toBe('905');
+  });
+
+  it('hears from each ready which build the server serves', () => {
+    const entry = Object.assign(document.createElement('script'), { type: 'module', src: '/next/assets/index-a1.js' });
+    document.head.append(entry);
+    startLive();
+    FakeEventSource.last.feed('retry: 1000\n\n' + frame(null, 'ready', { seq: 900, after: 900, topics: [], build: '/next/assets/index-b2.js' }));
+    expect(behind()).toBe(true);
+    entry.src = '/next/assets/index-b2.js';
+    expect(behind()).toBe(false);
+    entry.remove();
   });
 
   it('drops a frame it has already applied, and keeps frames that carry no change number', () => {
