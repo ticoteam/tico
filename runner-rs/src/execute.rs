@@ -3108,7 +3108,7 @@ impl Runner {
             let compacted_first = session.as_ref().is_some_and(|s| s.why == Some(crate::continuity::COMPACTED));
             attempt["_repo_rules_changed"] = json!(!digest.is_empty() && (refresh || compacted_first || self.state.repo_rules(&th, None)?.as_deref() != Some(digest.as_str())));
             let names = self.names().await;
-            let after = if told { self.state.cursor(&th, None)? } else { since.clone() };
+            let after = if told { self.state.cursor(left.as_deref().unwrap_or(&th), None)? } else { since.clone() };
             attempt["_stale_playbook"] = json!(crate::playbook::note(&crate::readiness::local_path(&self.config, &bot), &attempt));
             // The tools this turn calls through the Tico proxy, for their prompt line (crate::prompt `proxied_tools`).
             attempt["_proxied_tools"] = json!(vault.tools.iter().map(|t| json!({"name": t.name, "env": t.env, "url_env": t.url_env})).collect::<Vec<_>>());

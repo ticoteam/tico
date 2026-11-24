@@ -313,7 +313,18 @@ def read_soon(c: Any, sid: str) -> None:
     """A new login's usage is read now, not on a computer's next 5-minute poll: each computer that can read it is told
     (a plan never read is due at once, `_wanted`)."""
     sub = _MS().row(c, sid)
-    _tell(c, [r["id"] for r, _ in _computers(c, sub, plan_exits.routed(c, sub)) if takes_turns(r) and _online(r)])
+    route = plan_exits.routed(c, sub)
+    codex = sub and sub["kind"] == plan_exits.CODEX_KIND
+    if codex and not route:
+        return
+    _tell(
+        c,
+        [
+            r["id"]
+            for r, _ in _computers(c, sub, route)
+            if (plan_exits.CODEX_CAPABILITY in _caps(r) if codex else takes_turns(r)) and _online(r)
+        ],
+    )
 
 
 def pushed(c: Any, sid: str) -> None:
@@ -376,7 +387,7 @@ def _put_lease(c: Any, sid: str, **fields: Any) -> None:
     )
 
 
-def stamp_codex(c: Any, sid: str, value: str, now: str) -> None:
+def stamp_codex(c: Any, sid: str, value: str, now: str | None = None) -> None:
     _put_lease(c, sid, access_expires_at=_MS().codex_access_expires(value), refreshed_at=now)
 
 
@@ -698,7 +709,7 @@ PARKED_SQL = (
 
 
 def paid_parks(c: Any, bots: list[str], job: str | None = None) -> set[tuple[str, str]]:
-    """Queued jobs whose current Claude plan is still waiting for its refresh."""
+    """Queued jobs whose current plan is still waiting for its login refresh."""
     scope = "j.id=?" if job else f"j.bot_id IN ({','.join('?' * len(bots))})"
     return {
         (r[0], r[1])

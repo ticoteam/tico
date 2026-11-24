@@ -444,10 +444,10 @@ def _given_rows(c, runner_ids=None):
     only = f" AND g.runner_id IN ({','.join('?' * len(runner_ids))})" if runner_ids is not None else ""
     for r in c.execute(
         "SELECT g.runner_id AS runner_id,g.runtime AS runtime,g.person AS person,s.id,s.name,s.kind,s.revision,"
-        "s.status,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only + " ORDER BY g.rowid",
+        "s.status,s.owner_id,l.access_expires_at AS access_expires_at " + _GIVEN_FROM + only + " ORDER BY g.rowid",
         list(runner_ids or ()),
     ):
-        sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "access_expires_at")}
+        sub = {k: r[k] for k in ("id", "name", "kind", "revision", "status", "owner_id", "access_expires_at")}
         if r["person"]:
             sub = {**{k: v or "" for k, v in sub.items()}, "person": r["person"], "members": []}
             people.add(r["person"])
@@ -519,17 +519,27 @@ def _hold_end(c, sid, runtime, loads=None):
     return login_holds.get(c, "", login_holds.subscription_login(sid), runtime, loads).get("until") or ""
 
 
-def available(c, sub, runtime, loads=None):
-    """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
-    of that runtime, and, for a full Claude login, with an access token that has not run out (its refresh is late)."""
+def _expired(c, sub, runtime, exits=None):
     from . import claude_login
 
+    codex = runtime == "codex" and plan_exits.enabled(c)
+    if not claude_login.expired(sub, codex=codex):
+        return False
+    if codex:
+        selected = plan_exits.selected(c, sub, exits)
+        return bool(selected and selected["id"])
+    return True
+
+
+def available(c, sub, runtime, loads=None, *, exits=None):
+    """Whether a plan can sign a turn in now: not waiting to be reconnected, not held at its usage limit until a reset,
+    of that runtime, with a current access token for logins whose refresh is managed by Tico."""
     return (
         bool(sub)
         and bool(sub.get("id"))
         and sub["status"] != "needs_reconnect"
         and KINDS.get(sub["kind"], {}).get("runtime") == runtime
-        and not claude_login.expired(sub, codex=runtime == "codex" and plan_exits.enabled(c))
+        and not _expired(c, sub, runtime, exits)
         and not _held(c, sub["id"], runtime, loads)
     )
 
@@ -753,7 +763,6 @@ def plan_hold(c, runner_id, runtime, loads=None):
     {"person", "name"} for the plan owner's plans in turn when the owner has another plan for the runtime with usage
     left (the computer moves between them by itself, `settle`), {"plan", "name"} for another plan with usage left, or
     None when no plan has any."""
-    from . import claude_login
     from . import login_holds
 
     given = loads.given if loads is not None else _given(c)
@@ -772,7 +781,7 @@ def plan_hold(c, runner_id, runtime, loads=None):
         if not sub.get("id") or sub.get("status") == "needs_reconnect" or not _held(c, sub["id"], runtime, loads):
             return None
         first, owner, mine = sub, (row(c, sub["id"]) or {}).get("owner_id") or "", {sub["id"]}
-        stuck = [sub] if claude_login.expired(sub) else []
+        stuck = [sub] if _expired(c, sub, runtime) else []
     hold = login_holds.get(c, "", login_holds.subscription_login(first["id"]), runtime, loads)
     kind = login_holds.window(hold.get("error") or "")
     others = [
@@ -1428,6 +1437,7 @@ def view(c, sub, ctx=None):
 
     ctx = _listing(c, sub["id"]) if ctx is None else ctx
     spec = KINDS.get(sub["kind"]) or {}
+    runtime = spec.get("runtime", "")
     computers = [g["runner_id"] for g in ctx["grants"].get(sub["id"], [])]
     added = _person(c, ctx, sub["added_by"])
     owner = _person(c, ctx, sub["owner_id"]) if sub.get("owner_id") else {}
@@ -1436,7 +1446,7 @@ def view(c, sub, ctx=None):
         "name": sub["name"],
         "kind": sub["kind"],
         **({"max_live_turns": sub["max_live_turns"]} if owned(sub["kind"]) else {}),
-        "runtime": spec.get("runtime", ""),
+        "runtime": runtime,
         "label": spec.get("label", sub["kind"]),
         "status": sub["status"],
         "status_detail": sub["status_detail"],
@@ -1447,8 +1457,8 @@ def view(c, sub, ctx=None):
         "computers": list(dict.fromkeys(computers)),
         "usage": _usage(c, sub, ctx),
         "usage_refresh": SR.plan_view(ctx["meta"].get(SR.plan_key(sub["id"]))),
-        "available": available(c, sub, spec.get("runtime", ""), SimpleNamespace(holds=ctx["holds"])),
-        "expired": claude_login.expired(sub),
+        "available": available(c, sub, runtime, SimpleNamespace(holds=ctx["holds"]), exits=ctx["exits"]),
+        "expired": _expired(c, sub, runtime, ctx["exits"]),
         # A full login runs out about a month after its sign-in: when to reconnect, shown a few days before.
         "reconnect_by": claude_login.reconnect_by(sub),
         "added_by": sub["added_by"],
@@ -2152,15 +2162,18 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
                 drop_credential(c, retired)
             # A new value may be another account, or no longer a full login: the old one's account, times and lease go.
             claude_login.drop(c, sid)
+            codex_upkeep = kind == plan_exits.CODEX_KIND and plan_exits.enabled(c)
             if kind == "claude_login":
                 claude_login.stamp(c, sid, value)
+            elif codex_upkeep:
+                claude_login.stamp_codex(c, sid, value)
             # A replacement may be another account. Release its usage hold for a probe and restart its own runs.
             from . import login_holds
 
             login_holds.try_now(c, "", login_holds.subscription_login(sid), KINDS[sub["kind"]]["runtime"])
             stopped = sum(quarantine_stops.restart(c, a, f"{sub['name']} was reconnected") for a in paid_attempts)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
-            if kind == "claude_login":
+            if kind == "claude_login" or codex_upkeep:
                 claude_login.read_soon(c, sid)
             _follow(c, settings, who.actor, sub["owner_id"])
             return view(c, row(c, sid))
@@ -2195,12 +2208,15 @@ def save(c, vault, settings, auth, who, body, sid=None, *, completing_login_id=N
         from .plan_exits import ensure_default
 
         ensure_default(c, H.actor_id(owner))
+    codex_upkeep = body.kind == plan_exits.CODEX_KIND and plan_exits.enabled(c)
     if body.kind == "claude_login":
         claude_login.stamp(c, sid, value)
+    elif codex_upkeep:
+        claude_login.stamp_codex(c, sid, value)
     H.event(c, who.actor, "subscription.created", sid, {"kind": body.kind})
     if admin:
         _tick_provider(c, settings, who.actor, body.kind)
-    if body.kind == "claude_login":
+    if body.kind == "claude_login" or codex_upkeep:
         claude_login.read_soon(c, sid)
     _follow(c, settings, who.actor, owner)
     return view(c, row(c, sid))
@@ -3190,7 +3206,7 @@ def connect(c, settings, auth, who, body):
     owner = sub["owner_id"] if sub else _default_owner(c, auth, who, body)
     if sub and body.owner_id is not None and owner_of(c, body.owner_id) != owner:
         raise Problem("owner", "A provider keeps its owner", 422)
-    route = plan_exits.for_connect(c, sub or {"owner_id": owner, "kind": kind}, sid)
+    route = plan_exits.routed(c, sub or {"owner_id": owner, "kind": kind})
     if route and route.runner_id is None:
         raise Problem(
             "offline", f"The plan's exit needs to be online with {RUNTIME_LABELS[spec['runtime']]} installed", 409
@@ -3351,7 +3367,7 @@ def connected(c, vault, settings, auth, who, login_id, body):
             owner_id=(target["owner_id"] or None) if not target["subscription_id"] else None,
         )
         sub = row(c, target["subscription_id"]) if target["subscription_id"] else target
-        route = plan_exits.for_connect(c, sub, target["subscription_id"], connect_kind=target["kind"])
+        route = plan_exits.routed(c, sub, connect_kind=target["kind"])
         if route and route.runner_id is None:
             raise Problem("offline", model_login.EXIT_NOT_READY, 503, retryable=True)
         try:

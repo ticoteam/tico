@@ -297,7 +297,16 @@ def read(c: Connection, bots: list[str], job: str | None = None) -> Inputs:
             (*batch, *batch, PLAN_PREFIX),
         ):
             result.candidates.setdefault((row["bot"], row["runtime"]), []).append(dict(row))
-        if any(row["kind"] == "claude_login" for bot in batch for row in result.candidates.get((bot, "claude"), [])):
+        if any(
+            row["kind"] == "claude_login" for bot in batch for row in result.candidates.get((bot, "claude"), [])
+        ) or (
+            plan_exits.enabled(c)
+            and any(
+                row["kind"] == plan_exits.CODEX_KIND
+                for bot in batch
+                for row in result.candidates.get((bot, "codex"), [])
+            )
+        ):
             result.parked.update(claude_login.paid_parks(c, batch, job))
     return result
 

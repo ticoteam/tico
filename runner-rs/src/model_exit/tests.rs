@@ -490,6 +490,7 @@ fn only_allowed_provider_response_headers_are_forwarded() {
         ("request-id", "req-claude"),
         ("anthropic-ratelimit-unified-status", "rejected"),
         ("x-codex-primary-used-percent", "100"),
+        ("x-codex-turn-state", "turn-state"),
         ("x-request-id", "req-codex"),
         ("openai-request-id", "req-openai"),
         ("x-openai-request-id", "req-x-openai"),
@@ -571,7 +572,7 @@ async fn model_exit_rechecks_wire_authority_path_method_and_framing_at_the_exit(
 fn model_exit_replaces_credentials_only_in_the_provider_request() {
     let address = "127.0.0.1:5555";
     let head = format!(
-        "POST /backend-api/codex/responses HTTP/1.1\r\nHost: {address}\r\nContent-Length: 2\r\nAuthorization: Bearer placeholder\r\nChatGPT-Account-ID: placeholder\r\nX-Api-Key: placeholder\r\nAccept: text/event-stream"
+        "POST /backend-api/codex/responses HTTP/1.1\r\nHost: {address}\r\nContent-Length: 2\r\nAuthorization: Bearer placeholder\r\nChatGPT-Account-ID: placeholder\r\nX-Api-Key: placeholder\r\nAccept: text/event-stream\r\nX-Codex-Turn-State: turn-state"
     );
     let req = Request::parse(head.as_bytes(), Provider::Codex, address).unwrap();
     assert!(Request::parse(head.as_bytes(), Provider::Codex, CODEX).is_none());
@@ -594,6 +595,7 @@ fn model_exit_replaces_credentials_only_in_the_provider_request() {
         format!("Bearer {SECRET}")
     );
     assert_eq!(provider.headers()["chatgpt-account-id"], ACCOUNT);
+    assert_eq!(provider.headers()["x-codex-turn-state"], "turn-state");
     assert_eq!(provider.headers()["accept"], "text/event-stream");
     assert!(!provider.headers().contains_key("x-api-key"));
     assert_eq!(provider.body().unwrap().as_bytes(), Some(b"{}".as_slice()));

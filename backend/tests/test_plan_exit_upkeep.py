@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from backend import agent_subscriptions
+from backend import agent_subscriptions, login_holds
 from backend import claude_login, model_subscriptions as MS, plan_exits, runner_states, subscription_refresh as SR
 from backend.repositories import metadata, save_metadata
 from backend.store import H
@@ -750,6 +750,93 @@ def codex_value(n, minutes):
     claims = base64.urlsafe_b64encode(json.dumps({"exp": exp, "nonce": n}).encode()).decode().rstrip("=")
     auth["tokens"]["access_token"] = f"h.{claims}.s"
     return json.dumps(auth)
+
+
+def test_codex_owner_without_an_exit_keeps_direct_claims_connect_and_usage(api, computers):
+    e, a = computers
+    sid = add(api, "codex_login", codex_value(1, -30))["id"]
+    store = api.app.state.store
+    with store.transaction() as c:
+        c.execute("DELETE FROM plan_exits WHERE person_id='ana'")
+        sub = MS.row(c, sid)
+        assert plan_exits.routed(c, sub) is None
+        assert plan_exits.for_turn(c, sub, e["runner_id"]) is None
+        assert MS.available(c, sub, "codex")
+    assert poll(api, e, sid) == EMPTY
+    assert post(api, f"model-subscriptions/{sid}/usage-refresh", {}, expected=409)["error"]["code"] == "unavailable"
+    login = post(api, CONNECT, {"subscription": sid})
+    assert login["runner_id"] in (e["runner_id"], a["runner_id"])
+
+
+def test_codex_paid_job_waits_for_its_in_flight_exit_refresh(api, computers):
+    e, _ = computers
+    sid = add(api, "codex_login", codex_value(1, 30))["id"]
+    select(api, e)
+    on(api, "ops", "codex", "")
+    assign(api, e, "ops")
+    heartbeat(api, e, "ops", tool="codex")
+    pick(api, "ops", "codex", sid)
+    attempt = turn(api, e, "ops")
+    [job] = poll(api, e, sid)["refreshes"]
+    post(api, f"attempts/{attempt}/started", {"thread_id": "codex-park"}, e["token"])
+    post(
+        api,
+        f"attempts/{attempt}/complete",
+        {"outcome": "failed", "last_seq": 0, "auth_rejected": {"runtime": "codex", "reason": "Access token revoked"}},
+        e["token"],
+    )
+    assert claim(api, e) is None
+    result = {"lease": job["lease"], "revision": 1, "state": "succeeded", "value": codex_value(2, 360)}
+    post(api, f"runner-claude-logins/{sid}/refreshed", result, e["token"])
+    assert claim(api, e)["attempt_credential"]["revision"] == 2
+
+
+def test_expired_codex_exit_login_is_reported_in_providers_and_plan_holds(api, computers):
+    e, _ = computers
+    plan = add(api, "codex_login", codex_value(1, -30))
+    sid = plan["id"]
+    assert plan["expired"] and not plan["available"]
+    legacy_give(api, {"runner_id": e["runner_id"], "runtime": "codex", "subscription": sid})
+    with api.app.state.store.transaction() as c:
+        login_holds._save(
+            c,
+            {
+                "runner_id": "",
+                "profile": login_holds.subscription_login(sid),
+                "runtime": "codex",
+                "until": H.shift(H.now(), hours=1),
+                "since": H.now(),
+                "error": "Weekly usage limit reached",
+            },
+        )
+        assert MS.plan_hold(c, e["runner_id"], "codex")["reconnect"] == [plan["name"]]
+
+
+def test_codex_add_and_reconnect_stamp_expiry_and_wake_the_exit(api, monkeypatch):
+    setup(api)
+    company(api)
+    e = computer(api, "Codex exit")
+    heartbeat(api, e, full_login=False)
+    store = api.app.state.store
+    monkeypatch.setattr(store.screen_sessions, "healthy", True)
+    put(api, "settings/plan-exit-routing", {"enabled": True})
+
+    def wakes(c):
+        return c.execute(
+            "SELECT count(*) FROM changes WHERE kind='subscription_refresh' AND subject_id=?", (e["runner_id"],)
+        ).fetchone()[0]
+
+    first = codex_value(1, 360)
+    sid = add(api, "codex_login", first)["id"]
+    with store.read() as c:
+        assert MS.row(c, sid)["access_expires_at"] == MS.codex_access_expires(first)
+        after_add = wakes(c)
+        assert after_add == 1
+    second = codex_value(2, 720)
+    post(api, f"model-subscriptions/{sid}", {"secret": second})
+    with store.read() as c:
+        assert MS.row(c, sid)["access_expires_at"] == MS.codex_access_expires(second)
+        assert wakes(c) == after_add + 1
 
 
 def test_codex_exit_owns_refresh_and_usage_even_with_a_local_turn(api, computers):

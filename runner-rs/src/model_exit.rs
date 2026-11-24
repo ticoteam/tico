@@ -324,7 +324,13 @@ impl<'a> Request<'a> {
     fn protocol_headers(&self, provider: Provider) -> HeaderMap {
         let names: &[&str] = match provider {
             Provider::Claude => &["anthropic-version", "anthropic-beta"],
-            Provider::Codex => &["openai-beta", "originator", "session_id", "conversation_id"],
+            Provider::Codex => &[
+                "openai-beta",
+                "originator",
+                "session_id",
+                "conversation_id",
+                "x-codex-turn-state",
+            ],
         };
         ["content-type", "accept"]
             .into_iter()

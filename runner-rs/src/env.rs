@@ -263,6 +263,7 @@ impl Vault {
             return Ok(());
         };
         if exit.provider == crate::model_exit::Provider::Codex {
+            bypass_loopback_proxy(env);
             return Ok(()); // Codex uses its per-attempt subscription home (hosts/codex.rs).
         }
         let home = crate::model_subscriptions::ClaudeConfig::new(state, env)?;
@@ -274,21 +275,7 @@ impl Vault {
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
             "1".into(),
         );
-        let inherited = env
-            .get("NO_PROXY")
-            .or_else(|| env.get("no_proxy"))
-            .cloned()
-            .unwrap_or_default();
-        for key in ["NO_PROXY", "no_proxy"] {
-            let bypass = env.entry(key.into()).or_insert_with(|| inherited.clone());
-            if bypass.trim() == "*" {
-                continue;
-            }
-            if !bypass.is_empty() {
-                bypass.push(',');
-            }
-            bypass.push_str("127.0.0.1,localhost,::1");
-        }
+        bypass_loopback_proxy(env);
         self.model_exit_home = Some(home);
         Ok(())
     }
@@ -453,11 +440,26 @@ fn competing_claude_env(key: &str) -> bool {
         )
 }
 
+fn bypass_loopback_proxy(env: &mut Env) {
+    let inherited = env
+        .get("NO_PROXY")
+        .or_else(|| env.get("no_proxy"))
+        .cloned()
+        .unwrap_or_default();
+    for key in ["NO_PROXY", "no_proxy"] {
+        let bypass = env.entry(key.into()).or_insert_with(|| inherited.clone());
+        if bypass.trim() == "*" {
+            continue;
+        }
+        if !bypass.is_empty() {
+            bypass.push(',');
+        }
+        bypass.push_str("127.0.0.1,localhost,::1");
+    }
+}
+
 pub(crate) fn competing_codex_env(key: &str) -> bool {
-    key.starts_with("OPENAI_")
-        || key.starts_with("CODEX_")
-        || key.starts_with("CHATGPT_")
-        || key.to_ascii_lowercase().ends_with("_proxy")
+    key.starts_with("OPENAI_") || key.starts_with("CODEX_") || key.starts_with("CHATGPT_")
 }
 
 fn matching_credential(

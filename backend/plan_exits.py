@@ -103,10 +103,7 @@ def selected(c: Connection, sub: Any, exits: Row | None = None) -> Any:
     person = sub["owner_id"].removeprefix("human:")
     if not enabled(c):
         return None
-    row = one(c, _SELECTIONS + " WHERE e.person_id=?", (person,)) if exits is None else exits.get(person)
-    if row is None and sub["kind"] == CODEX_KIND:
-        return {"id": None, "generation": 0}
-    return row
+    return one(c, _SELECTIONS + " WHERE e.person_id=?", (person,)) if exits is None else exits.get(person)
 
 
 def routed(
@@ -137,14 +134,6 @@ def routed(
     runtimes: Row = ready.get("runtimes") or {}
     runtime: Row = runtimes.get(provider(sub)) or {}
     return Route(runner_id if runtime.get("installed") else None, generation)
-
-
-def for_connect(
-    c: Connection, sub: Any, subscription_id: str, *, require_ready: bool = True, connect_kind: str | None = None
-) -> Route | None:
-    route = routed(c, sub, require_ready=require_ready, connect_kind=connect_kind)
-    # A person's first Connect can choose a computer before its new plan has an exit.
-    return None if not subscription_id and route == Route(None, 0) else route
 
 
 def matches(route: Route | None, runner_id: str | None, generation: int | None) -> bool:
@@ -268,7 +257,7 @@ def _fence(c: Connection, person_id: str, *, disabling: bool = False) -> None:
             turn_route = _turn_route(c, route, attempt["runner_id"])
             remote = bool(turn_route and turn_route.runner_id != attempt["runner_id"])
             if (
-                (sub["kind"] == CODEX_KIND and attempt["delivery"] == "shell" and not disabling)
+                (sub["kind"] == CODEX_KIND and attempt["delivery"] == "shell" and turn_route is not None)
                 or remote != (attempt["delivery"] == "model_exit")
                 or ((turn_route.generation if turn_route else None) != attempt["exit_generation"])
             ):
@@ -413,8 +402,9 @@ def initialize(c: Connection) -> None:
         for attempt in c.execute(
             "SELECT a.* FROM attempts a JOIN runners r ON r.id=a.runner_id "
             "JOIN attempt_subscriptions s ON s.attempt_id=a.id JOIN model_subscriptions p ON p.id=s.subscription_id "
+            "JOIN plan_exits x ON p.owner_id='human:'||x.person_id "
             "LEFT JOIN plan_exit_bindings e ON e.kind='attempt' AND e.ref_id=a.id AND s.delivery<>'shell' "
-            "WHERE p.kind='codex_login' AND p.owner_id GLOB 'human:*' AND e.ref_id IS NULL "
+            "WHERE p.kind='codex_login' AND e.ref_id IS NULL "
             "AND a.state IN ('leased','running') AND a.stop_requested_at IS NULL AND " + PERSONAL_RUNNER
         ).fetchall():
             quarantine_stops.restart(c, attempt, "The plan exit route changed")

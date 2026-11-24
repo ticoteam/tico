@@ -110,7 +110,7 @@
         "subscription_accounts": {"type": "boolean"},
         "subscription_usage_sources": {"type": "boolean", "x-note": "The server reads a usage window's origin and subscription_id (backend/model_subscriptions.py provenance); absent from older servers, so the runner sends neither (runner-rs profiles.rs for_server)."},
         "subscription_usage_attempts": {"type": "boolean", "x-note": "The server reads the attempt_id of a subscription usage window."},
-        "model_exit": {"type": "boolean", "x-note": "The runner holds the model link open while this is true. With plan exit routing enabled, the hub sends it only to a runner advertising model_exit_v1 and supervised for a selected Claude plan. Claude setup tokens qualify on any platform; full Claude logins qualify where they can be refreshed from a file (outside the Mac keychain). Codex plans do not qualify."},
+        "model_exit": {"type": "boolean", "x-note": "The runner holds the model link open while this is true. With plan exit routing enabled, the hub sends it only to a runner advertising model_exit_v1 and supervising a selected plan. Claude setup tokens qualify on any platform; full Claude logins qualify where they can be refreshed from a file (outside the Mac keychain). Codex exits advertise model_exit_codex_v1 and need Codex 0.170.0 or newer to carry turns."},
         "worktree_record_stamp": {"type": "boolean"},
         "worktree_actions": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "worktree_actions_skipped": {"type": "integer", "minimum": 1},

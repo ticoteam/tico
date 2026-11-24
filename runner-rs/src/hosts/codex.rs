@@ -229,25 +229,31 @@ type Reply = Result<Value, Value>;
 
 struct PlanLogin {
     params: Value,
-    route: Option<(PathBuf, Vec<String>)>,
+    cwd: PathBuf,
+    config: Vec<String>,
+    provider: &'static str,
 }
 
 pub(crate) fn external_login(token: &Value, account: &Value) -> Value {
     json!({"type": "chatgptAuthTokens", "accessToken": token, "chatgptAccountId": account})
 }
 
-fn exit_config(url: &str, cwd: &std::path::Path) -> Vec<String> {
+fn plan_config(provider: &str, route: Option<&str>, cwd: &std::path::Path) -> Vec<String> {
     let checkout = json!(cwd.display().to_string());
-    let chat = json!(format!("{url}/backend-api"));
-    let api = json!(format!("{url}/backend-api/codex"));
-    vec![
-        r#"model_provider="tico_exit""#.into(),
+    let base_url = route.unwrap_or("https://chatgpt.com");
+    let chat = json!(format!("{base_url}/backend-api"));
+    let mut config = vec![
+        format!("model_provider={}", json!(provider)),
         format!("chatgpt_base_url={chat}"),
         r#"cli_auth_credentials_store="ephemeral""#.into(),
+        format!(r#"projects={{ {checkout}={{ trust_level="untrusted" }} }}"#),
+    ];
+    let Some(url) = route else { return config };
+    let api = json!(format!("{url}/backend-api/codex"));
+    config.extend([
         format!(
             r#"model_providers={{ tico_exit={{ name="Tico exit", base_url={api}, wire_api="responses", requires_openai_auth=true, supports_websockets=false, request_max_retries=0, stream_max_retries=0 }} }}"#
         ),
-        format!(r#"projects={{ {checkout}={{ trust_level="untrusted" }} }}"#),
         "features.plugins=false".into(),
         "features.remote_plugin=false".into(),
         "features.apps=false".into(),
@@ -258,7 +264,8 @@ fn exit_config(url: &str, cwd: &std::path::Path) -> Vec<String> {
         "features.unbounded_connection_retries=false".into(),
         "analytics.enabled=false".into(),
         "check_for_update_on_startup=false".into(),
-    ]
+    ]);
+    config
 }
 
 struct Shared {
@@ -338,27 +345,31 @@ impl CodexHost {
     ) -> Result<Self, HostError> {
         let shared =
             Arc::get_mut(&mut self.0).ok_or_else(|| failed("Codex host already started"))?;
-        let route = if let Some(url) = url {
+        let cwd = cwd
+            .canonicalize()
+            .map_err(|_| failed("Cannot resolve Codex checkout"))?;
+        let provider = if url.is_some() {
+            crate::model_exit::CODEX_PROVIDER
+        } else {
+            "openai"
+        };
+        let config = plan_config(provider, url, &cwd);
+        if url.is_some() {
             let home = shared
                 .env
                 .get("CODEX_HOME")
                 .ok_or_else(|| failed("Missing Codex turn home"))?;
-            let cwd = cwd
-                .canonicalize()
-                .map_err(|_| failed("Cannot resolve Codex checkout"))?;
-            let config = exit_config(url, &cwd);
             crate::model_subscriptions::write_private(
                 &PathBuf::from(home).join("config.toml"),
                 &config.join("\n"),
             )
             .map_err(failed)?;
-            Some((cwd, config))
-        } else {
-            None
-        };
+        }
         shared.plan = Some(PlanLogin {
             params: external_login(&tokens["access_token"], &tokens["account_id"]),
-            route,
+            cwd,
+            config,
+            provider,
         });
         Ok(self)
     }
@@ -367,7 +378,7 @@ impl CodexHost {
         self.0
             .plan
             .as_ref()
-            .is_some_and(|plan| plan.route.is_some())
+            .is_some_and(|plan| plan.provider == crate::model_exit::CODEX_PROVIDER)
     }
 
     fn emit(&self, ev: Value) {
@@ -410,14 +421,11 @@ impl CodexHost {
             .env_clear()
             .envs(&self.0.env);
         if let Some(plan) = &self.0.plan {
-            command.args(["--listen", "stdio://"]);
-            if let Some((cwd, config)) = &plan.route {
-                command.current_dir(cwd);
-                for setting in config {
-                    command.args(["-c", setting]);
-                }
-            } else {
-                command.args(["-c", r#"cli_auth_credentials_store="ephemeral""#]);
+            command
+                .args(["--listen", "stdio://"])
+                .current_dir(&plan.cwd);
+            for setting in &plan.config {
+                command.args(["-c", setting]);
             }
         }
         super::new_group(&mut command);
@@ -1248,8 +1256,8 @@ impl CodexHost {
         if let Some(m) = settings.model.as_ref().filter(|m| !m.is_empty()) {
             params["model"] = json!(m);
         }
-        if self.routed() {
-            params["modelProvider"] = json!(crate::model_exit::CODEX_PROVIDER);
+        if let Some(plan) = &self.0.plan {
+            params["modelProvider"] = json!(plan.provider);
         }
         params["config"] = Value::Object(cfg);
         params
@@ -1298,11 +1306,7 @@ impl CodexHost {
         let mut params = self.thread_params(settings);
         params["threadId"] = json!(thread_id);
         params["excludeTurns"] = json!(true);
-        let target = if self.routed() {
-            crate::model_exit::CODEX_PROVIDER
-        } else {
-            "openai"
-        };
+        let target = self.0.plan.as_ref().map_or("openai", |plan| plan.provider);
         let previous_provider = if self.routed() {
             self.request(
                 "thread/read",
@@ -1335,8 +1339,11 @@ impl CodexHost {
                 }),
             Err(err) => {
                 let detail = err.to_string();
-                detail.to_ascii_lowercase().contains("model provider")
-                    && (self.routed() || detail.contains(crate::model_exit::CODEX_PROVIDER))
+                if self.routed() {
+                    detail.to_ascii_lowercase().contains("model provider")
+                } else {
+                    detail.contains(crate::model_exit::CODEX_PROVIDER)
+                }
             }
         };
         let res = if mismatch && !settings.require_existing_session {
