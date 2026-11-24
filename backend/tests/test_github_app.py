@@ -757,7 +757,7 @@ def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_rec
         "visibility": "private",
         "auto_init": False,
         "installation_access": "available",
-        "note": "Created as a private empty repository. Tico will refresh its repository inventory; no bot access was granted.",
+        "note": "Created as a private empty repository. Tico will refresh its repository inventory and put it In use if it can, so bots on All repos in use reach it.",
     }
     creation = next(call for call in gh.calls if call[0] == "POST" and call[1] == "/orgs/Acme/repos")
     assert creation[2] == {

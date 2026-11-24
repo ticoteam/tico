@@ -7,6 +7,7 @@ import threading
 import logging
 import sqlite3
 import uuid
+from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import Request
@@ -146,6 +147,7 @@ def mark_reachable(store, names):
 # Tico uses a repository as a bot's own only when this company may: the App reaches it, and nothing says another
 # company made it. These remember what GitHub told us.
 SELECTION = 'installation-selection'  # {"selection": "all" | "selected"}: what the App is installed on
+SEEN_IDS = 'repositories-seen-github-ids'  # {GitHub id: when}: ids a row held before another repository took its name
 CREATED_ON_GITHUB = 'repositories-created'  # {owner/name lowercased: GitHub's created_at}, from the listing
 MADE = 'bot-repositories-made'  # {owner/name lowercased: when}: bot repositories this company's App created
 CHOSEN = 'bot-repositories-chosen'  # {owner/name lowercased: when}: a person pointed a bot at it
@@ -1100,7 +1102,8 @@ def _sync(service):
     if service.repository_stop.is_set():
         return 'stopped'
     row = service.row()
-    if not row or not service.installation():
+    installation = service.installation() if row else None
+    if not installation:
         return 'not_installed'
     if service.repository_stop.is_set():
         return 'stopped'
@@ -1129,14 +1132,15 @@ def _sync(service):
 
         own = {str(repo_of(r[0], row['org']) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
         previous = {r['full_name'].lower(): dict(r) for r in c.execute('SELECT * FROM repositories')}
-        overrides = {name for name, r in previous.items() if r['setup_source'] == 'settings'}
-    picked = picked_on_github(repos, previous, own, chosen)
+        seen = metadata(c, SEEN_IDS)
+    # A first guess from this snapshot, so setup files are read only for the ones to tick; settled in the write below.
+    soon = to_tick(repos, previous, own, chosen, row['created_at'], seen)
     for repo in repos:
         if service.repository_stop.is_set():
             return 'stopped'
         old = previous.get(repo['full_name'].lower(), {})
         repo['setup_command'], repo['setup_source'] = old.get('setup_command'), old.get('setup_source')
-        if not (old.get('enabled') or repo['full_name'].lower() in picked) or repo['full_name'].lower() in overrides:
+        if not (old.get('enabled') or repo['full_name'].lower() in soon) or old.get('setup_source') == 'settings':
             continue
         absent_files = 0
         for filename in ('tico.json', 'conductor.json'):
@@ -1172,19 +1176,54 @@ def _sync(service):
     if service.repository_stop.is_set():
         return 'stopped'
     with service.store.transaction() as c:
+        from .github_app import repo_of
+
+        # The App and its installation as stored now: a reconnect while GitHub answered makes this listing another's.
+        now = c.execute("SELECT app_id,org,installation_id,created_at FROM github_app WHERE id='app'").fetchone()
+        if not now or (now['app_id'], now['org'].lower(), now['installation_id'], now['created_at']) != (
+            row['app_id'],
+            row['org'].lower(),
+            installation,
+            row['created_at'],
+        ):
+            return 'replaced'
+        # Settled now, not from the snapshot: a row written meanwhile (a product repository's receipt, a person's
+        # untick) is not new, and who owns each repository is as it stands now, for the ticks and the cap alike. Only
+        # the first plan's are ticked (their setup files were read), first in line for the cap; one that became
+        # eligible only now is left for the next sync, unwritten, so it is still first sight then.
+        own = {str(repo_of(r[0], row['org']) or '').lower() for r in c.execute('SELECT repo FROM bot_config')}
+        ticks = to_tick(
+            sorted(repos, key=lambda r: r['full_name'].lower() not in soon),
+            {r['full_name'].lower(): dict(r) for r in c.execute('SELECT * FROM repositories')},
+            own,
+            chosen,
+            row['created_at'],
+            metadata(c, SEEN_IDS),
+        )
+        later = {name for name in ticks if name not in soon}
+        seen = metadata(c, SEEN_IDS)
         c.execute('UPDATE repositories SET reachable=0')
         for repo in repos:
             name = repo['full_name']
+            if name.lower() in later:
+                continue
+            bot_repo = _bot_repo(name.lower(), own)
+            reason = ticks.pop(name.lower(), None)  # once, should GitHub list it twice
+            _replaced(c, name, repo.get('id'), seen)
             c.execute(
-                'INSERT INTO repositories(id,full_name,bot_repo,default_branch,setup_command,setup_source,reachable,last_seen_at,updated_at) '
-                'VALUES(?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
+                'INSERT INTO repositories(id,full_name,github_id,bot_repo,enabled,default_branch,setup_command,'
+                'setup_source,reachable,last_seen_at,updated_at) '
+                'VALUES(?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(full_name) DO UPDATE SET bot_repo=excluded.bot_repo,'
+                'github_id=COALESCE(excluded.github_id,repositories.github_id),'
                 'default_branch=excluded.default_branch,reachable=1,last_seen_at=excluded.last_seen_at,updated_at=excluded.updated_at,'
                 "setup_command=CASE WHEN repositories.setup_source='settings' THEN repositories.setup_command ELSE excluded.setup_command END,"
                 "setup_source=CASE WHEN repositories.setup_source='settings' THEN 'settings' ELSE excluded.setup_source END",
                 (
                     uuid.uuid4().hex,
                     name,
-                    int(name.split('/')[1].lower().startswith('bot-') or name.lower() in own),
+                    repo.get('id'),
+                    bot_repo,
+                    int(bool(reason)),
                     repo.get('default_branch'),
                     repo['setup_command'],
                     repo['setup_source'],
@@ -1192,7 +1231,12 @@ def _sync(service):
                     H.now(),
                 ),
             )
-        _tick_picked(c, picked)
+            if reason:
+                after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
+                H.event(
+                    c, 'system', 'repositories.changed', name, {'before': {'enabled': 0}, 'after': after, reason: True}
+                )
+        save_metadata(c, SEEN_IDS, seen)
         save_metadata(c, 'repositories-reachability-verified', {'done': True})
         save_metadata(
             c,
@@ -1216,34 +1260,70 @@ def _sync(service):
     return 'synced'
 
 
-def picked_on_github(repos, previous, own, chosen):
-    """The repositories to put In use because a person picked them on GitHub: with the App installed on selected
-    repositories, each product repository Tico sees for the first time. Only on first sight, so one a person later takes
-    out of use stays out. Never a bot's repository (a `bot-` name or a bot's own), never an archived one. With an "All
-    repositories" install, none: a person picks in Settings > General › Repositories."""
-    if chosen != 'selected':
-        return set()
-    return {
-        repo['full_name'].lower()
-        for repo in repos
-        if repo['full_name'].lower() not in previous
-        and not repo.get('archived')
-        and not repo['full_name'].split('/')[1].lower().startswith('bot-')
-        and repo['full_name'].lower() not in own
-    }
+# GitHub names at most 500 repositories in one token: past this many In use, a new one starts out of use.
+AUTO_TICK_CAP = 400
 
 
-def _tick_picked(c, names):
-    """Put the repositories `picked_on_github` names In use, audited as `repositories.changed` by the system. A seat's
-    bot on All repos in use reaches each at once (`seat_default`)."""
-    for name in sorted(names):
-        before = c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone()
-        if not before:
-            continue
-        c.execute('UPDATE repositories SET enabled=1, updated_at=? WHERE full_name=?', (H.now(), name))
+def _instant(text):
+    """GitHub's or Tico's ISO time as an aware UTC datetime, or None when there is none to read."""
+    try:
+        when = datetime.fromisoformat(str(text or '').replace('Z', '+00:00'))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _bot_repo(name, own):
+    """Whether lowercase `name` is a bot's repository as the `bot_repo` column keeps it: a `bot-` name or a bot's own."""
+    return int(name.split('/')[1].startswith('bot-') or name in own)
+
+
+def _replaced(c, name, github_id, seen):
+    """Another repository now holds `name` on GitHub (the one there before was renamed, moved or deleted): its row's GitHub id
+    goes to `seen` (still known, should it come back under another name), and a tick it had is taken off, audited as
+    `repositories.changed` by the system. The new one starts out of use, as a renamed one does."""
+    stored = c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone()
+    if not (stored and stored['github_id'] and github_id and stored['github_id'] != github_id):
+        return
+    seen[str(stored['github_id'])] = H.now()
+    if stored['enabled']:
+        c.execute('UPDATE repositories SET enabled=0, updated_at=? WHERE full_name=?', (H.now(), name))
         after = dict(c.execute('SELECT * FROM repositories WHERE full_name=?', (name,)).fetchone())
-        detail = {'before': dict(before), 'after': after, 'picked_on_github': True}
+        detail = {'before': dict(stored), 'after': after, 'replaced_on_github': True}
         H.event(c, 'system', 'repositories.changed', after['full_name'], detail)
+
+
+def to_tick(repos, rows, own, chosen, connected, seen=()):
+    """{lowercase name: audit reason} of the product repositories to put In use on first sight, audited as
+    `repositories.changed` by the system. First sight: no row under its name or its GitHub id (`rows`, by lowercase
+    name), so a repository renamed or moved starts out of use under its new name, as an old one does. With the App installed on selected repositories, each one a
+    person picked there (`picked_on_github`); otherwise each one created on GitHub after this company's App was
+    connected (`github_app.created_at`, `new_on_github`). Never one created before (an old repository renamed or moved
+    in included), one whose listing or App has no time, a bot's (a `bot-` or `emp-` name, or a bot's own) or an
+    archived one, and none past AUTO_TICK_CAP In use, counted with `own` as it now stands. One a person later takes out
+    of use stays out."""
+    since = _instant(connected)
+    listed = {repo['full_name'].lower() for repo in repos}
+    ids = {r['github_id'] for r in rows.values() if r.get('github_id')} | {int(i) for i in seen}
+    ticked = sum(  # shared ones only: a bot's name (`bot-`, `emp-`) takes no place, its tick kept as it is
+        1
+        for name, r in rows.items()
+        if r['enabled']
+        and not (_bot_repo(name, own) if name in listed else r['bot_repo'])
+        and not name.split('/')[1].startswith(('bot-', 'emp-'))
+    )
+    out = {}
+    for repo in repos:
+        name = repo['full_name'].lower()
+        if name in rows or name in out or (repo.get('id') and repo['id'] in ids) or ticked >= AUTO_TICK_CAP:
+            continue
+        if name in own or repo.get('archived') or name.split('/')[1].startswith(('bot-', 'emp-')):
+            continue
+        created = _instant(repo.get('created_at'))
+        if chosen == 'selected' or (since and created and created > since):
+            out[name] = 'picked_on_github' if chosen == 'selected' else 'new_on_github'
+            ticked += 1
+    return out
 
 
 def repository_health(service):
