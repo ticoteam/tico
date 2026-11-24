@@ -282,6 +282,7 @@ class Refused(Exception):
         # The detail and extra as kept on record (the audit, a stored response), when they are not what the caller is
         # told: {"detail", "extra"}. A refusal said to someone who may read a private task it names keeps it off.
         self.stored = None
+        self.private = False  # refused on a private task: kept on record as "Private task write refused"
 
 
 # ----------------------------------------------------------------------------- basics
@@ -669,6 +670,20 @@ def refusal_task(task_id):
         yield
     finally:
         REFUSAL_TASK.reset(token)
+
+
+@contextmanager
+def private_write(private):
+    """A write already known to be on a private task (a create the route decided is private): its refusals keep only
+    what was refused, as private_task_write keeps them for a write on an existing private task."""
+    token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or bool(private))
+    try:
+        yield
+    except Refused as exc:
+        exc.private = exc.private or PRIVATE_WRITE.get()
+        raise
+    finally:
+        PRIVATE_WRITE.reset(token)
 
 
 def private_task_write(fn):

@@ -252,3 +252,29 @@ def test_the_route_knows_a_private_pipeline_makes_it_private_before_it_files(api
     assert "participant of the private task" in str(refused)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks").fetchone()[0] == before
+
+
+def test_a_refusal_filing_a_task_private_by_its_default_keeps_none_of_its_words(api, monkeypatch):
+    """The route decides a create is private (here by a General Counsel's default) before the store files it: a
+    refusal while filing it is kept as "Private task write refused", never with the title it quoted."""
+    from backend.tests.helpers.groups_leads import as_bot
+
+    assert _template(api, "general-counsel")
+    monkeypatch.setattr(H, "TITLE_LINT", "refuse")
+    as_bot(api, "ops", "ops-test")
+    post(api, "tasks", {"owner": "ops", "title": "Read the ZEPHYRCO NDA", "body": "x"}, "ops-test", expected=422)
+    with api.app.state.store.read() as c:
+        kept = [str(x[0]) for x in c.execute("SELECT detail FROM refusals").fetchall()]
+    assert any("Private task write refused" in d for d in kept), kept
+    assert not [d for d in kept if "ZEPHYRCO" in d], kept
+
+
+def test_a_public_sub_task_lists_no_private_parent_under_its_relations(api):
+    parent = _private_parent(api)
+    child = post(
+        api, "tasks", {"owner": "ops", "title": "Collect the totals", "body": "x", "parent": parent["id"]}, "ben-test"
+    )
+    assert child["private"] is False
+    seen = get(api, f"tasks/{child['id']}", "cara-test")["task"]
+    assert seen["parent_id"] is None
+    assert parent["id"] not in str(seen["relations"]) and "payroll" not in str(seen["relations"])

@@ -801,41 +801,43 @@ def register_core(
         asks_person = not routed and ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
         # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
         holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
-        row = H.task_create(
-            c,
-            who.actor,
-            body.title,
-            body.body,
-            holder,
-            body.due,
-            parent_id,
-            requester_actor=requester_actor,
-            requester_said=bool(body.for_actor),
-            visibility=body.visibility,
-            public_title=body.public_title,
-            public_summary=body.public_summary,
-            public_warning=public_warning,
-            private=private,
-            conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
-            lane=body.lane,
-            labels=body.labels,
-            top=body.top,
-            lint=lint,
-            goal_id=body.goal_id,
-            pipeline=body.pipeline,
-            number=body.number,
-            mover=mover(c, who) or None,
-            same=same,
-            follow=body.follow,
-            # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
-            # everyone who will.
-            readers=body.readers or (),
-            readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
-            unassigned=unassigned,
-            wake_refs=wake_refs,
-            asks=owner if asks_person and holder != owner else None,
-            entity_id=entity_id,
-        )
+        # Decided private (a sensitive default included): a refusal while filing it keeps none of its words.
+        with H.private_write(private):
+            row = H.task_create(
+                c,
+                who.actor,
+                body.title,
+                body.body,
+                holder,
+                body.due,
+                parent_id,
+                requester_actor=requester_actor,
+                requester_said=bool(body.for_actor),
+                visibility=body.visibility,
+                public_title=body.public_title,
+                public_summary=body.public_summary,
+                public_warning=public_warning,
+                private=private,
+                conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
+                lane=body.lane,
+                labels=body.labels,
+                top=body.top,
+                lint=lint,
+                goal_id=body.goal_id,
+                pipeline=body.pipeline,
+                number=body.number,
+                mover=mover(c, who) or None,
+                same=same,
+                follow=body.follow,
+                # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
+                # everyone who will.
+                readers=body.readers or (),
+                readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
+                unassigned=unassigned,
+                wake_refs=wake_refs,
+                asks=owner if asks_person and holder != owner else None,
+                entity_id=entity_id,
+            )
         if routed and not (H.task(c, row["id"]) or {}).get("owner_id"):
             # A stage rule held its person out: routed work always has a named owner, so nothing is filed.
             raise Problem("route", "The stage's rules held it; routed work needs a named owner", 422)
