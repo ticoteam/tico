@@ -700,17 +700,13 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        # A hand-off to Agent Ops, or the Assistant's to a helper, quotes the person's cited message (below): a copy of
-        # private words is private.
+        # A copy of private words is private. A hand-off to Agent Ops quotes the person's cited message (below): private
+        # when a task it belongs to is. The Assistant's to a helper quotes the person's own Assistant chat
+        # (assistant.instruction), private by its audience.
         carried = carried_request(c, who, body.request_id) if handoff and owner == "bot:" + AGENT_OPS else None
-        quoted = (
-            H.message(c, carried["message_id"])
-            if carried and carried["lends"]
-            else assistant_mod.cited_message(c, asked_agent_ops["cited"])
-            if asked_agent_ops
-            else None
-        )
-        if privacy.copies_private(c, quoted):
+        if asked_agent_ops or (
+            carried and carried["lends"] and privacy.copies_private(c, H.message(c, carried["message_id"]))
+        ):
             body = body.model_copy(update={"private": True})
         private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
