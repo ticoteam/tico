@@ -539,6 +539,86 @@ def test_a_reply_in_a_shared_chat_resumes_the_task_whose_mark_it_cleared(c, gene
     assert not E.task(c, task["id"]).get("snooze")
 
 
+def _shared_chat_ask(c, *members):
+    """A chat of Ana's with `members` (Builder first) holding a task filed there; Reviewer asked her a ❓ on it."""
+    from backend import threads
+
+    room = threads.dm(c, ANA, list(members), title="Launch")["id"] if len(members) > 1 else None
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.", conversation_id=room)
+    task = H.task_create(
+        c,
+        ANA,
+        "Write the launch note",
+        "Draft the note.",
+        BUILDER,
+        conversation_id=said["conversation_id"],
+        own_room=False,
+        lint=False,
+    )
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    return said["conversation_id"], _ask(c, task["id"], bot="bot:reviewer")
+
+
+def _reviewer_jobs(c, message_id):
+    return c.execute(
+        "SELECT j.message_id FROM jobs j JOIN message_deliveries d ON d.carrier_id=j.message_id "
+        "WHERE d.message_id=? AND d.recipient='bot:reviewer' AND j.bot_id='reviewer' AND j.state='queued'",
+        (message_id,),
+    ).fetchall()
+
+
+def test_a_reply_in_a_shared_chat_reaches_every_asker_whose_mark_it_clears(c, general):
+    """Reviewer is in Ana's chat with Builder: her plain reply to Builder clears Reviewer's ❓ there too, and reaches
+    Reviewer, one carrier and one job: no ❓ closes without its answer reaching the asker."""
+    room, mark = _shared_chat_ask(c, BUILDER, "bot:reviewer")
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=room)
+    assert Q.get(c, mark["id"])["cleared_message_id"] == reply["id"]
+    reached = c.execute(
+        "SELECT state, carrier_id FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'",
+        (reply["id"],),
+    ).fetchall()
+    assert [(r[0], bool(r[1])) for r in reached] == [("pending", True)], "one live delivery, carried"
+    assert len(_reviewer_jobs(c, reply["id"])) == 1, "and one job"
+
+
+def test_an_asker_following_a_chat_at_digest_gets_the_answer_carried_once(c, general):
+    """Reviewer follows Ana's team chat at digest: her reply there clears its ❓, so it is addressed, one carrier and
+    one job, not left to its digest."""
+    from backend import threads
+
+    room = threads.create(c, ANA, title="Launch", audience="members", members=[BUILDER, "bot:reviewer"])["id"]
+    said = H.say(c, ANA, BUILDER, "Please help with the launch.", conversation_id=room)
+    task = H.task_create(
+        c, ANA, "Write the launch note", "Draft the note.", BUILDER, conversation_id=room, own_room=False, lint=False
+    )
+    c.execute("UPDATE jobs SET state='completed' WHERE state='queued'")
+    mark = _ask(c, task["id"], bot="bot:reviewer")
+    c.execute(
+        "INSERT OR REPLACE INTO thread_followers(thread_id, actor, following, notify, reason, created_at, updated_at) "
+        "VALUES(?, 'bot:reviewer', 1, 'digest', 'mentioned', ?, ?)",
+        (room, H.now(), H.now()),
+    )
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=said["conversation_id"])
+    assert Q.get(c, mark["id"])["cleared_message_id"] == reply["id"]
+    reached = c.execute(
+        "SELECT mode, state, carrier_id FROM message_deliveries WHERE message_id=? AND recipient='bot:reviewer'",
+        (reply["id"],),
+    ).fetchall()
+    assert [(r[0] in ("steer", "queue"), r[1], bool(r[2])) for r in reached] == [(True, "pending", True)], [
+        tuple(r) for r in reached
+    ]
+    assert len(_reviewer_jobs(c, reply["id"])) == 1
+
+
+def test_a_reply_its_asker_may_not_read_leaves_the_question_open(c, general):
+    """Ana's chat with Builder alone: Reviewer, outside it, may not read her reply, so its ❓ stays open, not cleared
+    by an answer it never gets."""
+    room, mark = _shared_chat_ask(c, BUILDER)
+    reply = H.say(c, ANA, BUILDER, "Friday is fine.", conversation_id=room)
+    assert Q.get(c, mark["id"])["cleared_at"] is None
+    assert _reviewer_jobs(c, reply["id"]) == []
+
+
 def test_a_question_for_someone_who_left_clears_and_hands_the_task_back(c, general):
     task_id = X.new_task(c, ANA, "Write the launch note", assignee=BUILDER)["id"]
     mark = _ask(c, task_id, person="human:ben")

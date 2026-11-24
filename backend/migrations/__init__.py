@@ -56,6 +56,8 @@ CUTOVER_PREREQUISITES = {
     ),
     # `messages` columns in one order whichever runs first: outside_intake adds four, this one adds one after them.
     "20261123191939_messages_session_agent": ("20261122133157_outside_intake.sql",),
+    # An index on question_marks: on a company at the floor, run newest first, the table is made first.
+    "20261124054917_question_marks_cleared_message": ("20261117033356_question_marks.sql",),
 }
 RETIRED_LIST = "retired.txt"
 # Older releases recorded their pre-file history as `legacy_user_version_<N>` and `legacy_cloud_<N>` rows with this

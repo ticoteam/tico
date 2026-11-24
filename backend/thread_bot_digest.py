@@ -54,7 +54,7 @@ def wake_bot(c, bot):
     ).fetchall():
         message = H.message(c, d["message_id"])
         thread = threads.thread_row(c, d["thread_id"]) if message else None
-        if thread is None or not threads._source_readable(c, thread, message, bot):
+        if thread is None or not threads.source_readable(c, thread, message, bot):
             c.execute("UPDATE message_deliveries SET state='moot', updated_at=? WHERE id=?", (H.now(), d["id"]))
             continue
         if d["thread_id"] not in counts and len(counts) >= MAX_THREADS:

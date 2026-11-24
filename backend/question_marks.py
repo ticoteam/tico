@@ -868,13 +868,13 @@ def give(conn: sqlite3.Connection, mid: str, to: str, by: str) -> Row:
     return {**found, "person_id": target, "given_by_id": by, "given_at": at}
 
 
-def cleared_askers(conn: sqlite3.Connection, task_id: str, message_id: str) -> list[str]:
-    """The agents whose ❓ on this task this message cleared (`replied`), each once."""
+def cleared_askers(conn: sqlite3.Connection, message_id: str) -> list[str]:
+    """The agents whose ❓ this message cleared (`replied`), each once, whatever task or chat each was asked on: the
+    same marks the write cleared."""
     return [
         str(r[0])
         for r in conn.execute(
-            "SELECT DISTINCT bot_id FROM question_marks WHERE task_id=? AND cleared_message_id=? ORDER BY bot_id",
-            (task_id, message_id),
+            "SELECT DISTINCT bot_id FROM question_marks WHERE cleared_message_id=? ORDER BY bot_id", (message_id,)
         )
     ]
 
@@ -883,7 +883,8 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
     """A person's message just written: it clears each open ❓ for them in that chat. Their own hand, their token or
     their Assistant on their word (`REPLY_VIA`); Agent Ops or an automation writing as them do not. A message in one
     agent's session (`session_agent_id`) clears only that agent's, and the pinned answer to one ❓ (`ANSWERS` in its
-    refs, POST .../comments with `ask`) only that one. Whatever it clears reaches each asking agent (threads.deliver).
+    refs, POST .../comments with `ask`) only that one. Whatever it clears reaches each asking agent (threads.deliver);
+    a ❓ whose agent may not read the message stays open.
     A reply counts as progress on the task (task_engine.progress_mark). Returns the tasks of the marks it cleared, each
     once ('' for a direct chat's): a shared chat can hold marks for several tasks, and the reply itself need not name
     any."""
@@ -912,6 +913,17 @@ def replied(conn: sqlite3.Connection, message: Mapping[str, Any], conv: Mapping[
             + mine,
             (room_of(conv), sender, *args),
         ).fetchall()
+    if found:
+        # Only an answer its asker may read clears its ❓ (threads.deliver then carries it to that agent): one the agent
+        # could never receive, in a chat it is not in, leaves the ❓ open rather than closed with no answer.
+        from . import threads as _threads
+
+        threads = cast(Any, _threads)
+        thread = threads.thread_row(conn, message["conversation_id"])
+        readable = {
+            bot: bool(threads.source_readable(conn, thread, dict(message), bot)) for bot in {str(r[1]) for r in found}
+        }
+        found = [r for r in found if readable[str(r[1])]]
     if not found:
         return []
     ids = [str(r[0]) for r in found]
