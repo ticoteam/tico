@@ -3,6 +3,7 @@
 The bot files the check for itself, so the reply's target is the bot: before Nov 18 nothing was posted, the check was
 done, and the parent's turn found an empty room (a codex review on TIDY, run 8bb398b9)."""
 
+from backend import execution
 from backend.tests.helpers.api import claim, post  # noqa: F401  (api is a fixture)
 from backend.tests.helpers.check_models import GROK, parent_turn, start
 
@@ -89,3 +90,13 @@ def test_a_check_that_ends_with_no_reply_says_why_in_its_room(api):
     assert len(notes) == 1, room(api, sub)
     assert notes[0]["recipient_id"] == "bot:ops"
     assert "grok:grok-4.6" in notes[0]["body"] and "no final message" in notes[0]["body"]
+
+
+def test_a_checks_done_note_counts_as_writing_only_where_its_reply_is_not_asked_for(api):
+    # The done note is a task comment since #5060: it still counts for the end-of-turn text, not as the check's reply.
+    machine, sub, check = filed_check(api)
+    start(api, machine, check)
+    finish_check(api, check, sub)()
+    with api.app.state.store.read() as c:
+        assert execution.turn_wrote(c, check["id"], sub["conversation_id"], "bot:ops")
+        assert not execution.turn_wrote(c, check["id"], sub["conversation_id"], "bot:ops", done_note=False)
