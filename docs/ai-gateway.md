@@ -301,10 +301,10 @@ curl https://updates.tico.team/v1/gateway/search -H "Authorization: Bearer <key>
 
 `tico gateway image PROMPT --out PATH` makes an image through the Gateway and saves it. Pick the model with `--model`:
 
-- **low** (the default): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or WebP, 2 MiB each).
-  Good for frames and quick pictures.
-- **high**: `--category photo` (the default), `graphic` (best for text and layout) or `character` (keeps a person or
-  character from the `--ref` files).
+- **low** (the default, Nano Banana 2.1): fast, and keeps people and places from `--ref` images (up to 4, PNG, JPEG or
+  WebP, 2 MiB each). Good for quick pictures and drafts.
+- **high** (GPT Image 2.6 Sunburst): `--category photo` (the default), `graphic` (best for text and layout) or
+  `character` (keeps a person or character from the `--ref` files).
 - **svg**: a vector image, scalable without loss, saved as `.svg`. `--quality standard` (the default) or `pro`. It takes no
   `--ref` and no `--size`. HQ strips scripts and event handlers from the SVG before it
   reaches the computer, and anything in the app that shows an SVG does it as a picture (`<img>`), never inline.
@@ -318,6 +318,10 @@ Each image is billed at what the image model costs plus 25%, from the same cap a
 varies with the model and size, so it is not one number. The catalog lists the services (`tico gateway catalog images`
 and `tico gateway catalog svg`). Bots use the same thing with the `tico_gateway_image` tool, which runs on the computer and
 answers the saved paths, never the image bytes.
+
+Agents on Codex make raster images with Codex's own built-in image generation (GPT Image 2.6) instead, on the owner's
+ChatGPT plan with no Gateway charge: the gateway skill tells them to, and to copy the file from
+`$CODEX_HOME/generated_images/` into their work folder. They still use the Gateway for SVG.
 
 ## Videos
 

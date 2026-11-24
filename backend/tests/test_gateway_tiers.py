@@ -483,6 +483,15 @@ def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
     ]
 
 
+def test_the_image_tiers_name_the_current_leaders():
+    """Images Low is Nano Banana 2.1 and High is GPT Image 2.6 Sunburst (OpenRouter's google/gemini-nano-banana-2.1 and
+    openai/gpt-image-2.6-sunburst, read 2026-11-24), in the release's copy and on the Gateway card it feeds."""
+    images = next(row for row in T.validate(T.SNAPSHOT)["services"] if row["id"] == "images")
+    tiers = {d["label"]: d["value"] for d in images["details"]}
+    assert (tiers["Low"], tiers["High"]) == ("Nano Banana 2.1", "GPT Image 2.6 Sunburst")
+    assert images["tools"] == ["tico_gateway_image"]
+
+
 def test_settings_gateway_models_leave_out_a_tier_that_runs_the_held_model():
     from backend import gateway_page
 

@@ -70,8 +70,10 @@ the video, and the final goes back on your sub-task for the Design Owner's brand
 - Every made file gets a sidecar `<file>.json` beside it: `{"stage", "kind", "prompt", "model", "cost_usd", "parents",
   "tool", "at"}`. `parents` lists the files it was made from as `path@version`. Write the real `cost_usd`, and leave the
   field out when the cost is not known.
-- Gateway images: `tico gateway image PROMPT --category storyboard|character|photo|graphic`. It writes its own sidecar
-  next to the image; keep it.
+- Images: storyboard frames and characters use the best image model, GPT Image 2.6. On Codex, make them with your
+  own built-in image generation (it runs on the ChatGPT plan), copy each file into the project folder and write its
+  sidecar. Otherwise use `tico gateway image PROMPT --model high --category photo|character|graphic`, which writes its
+  own sidecar next to the image; keep it. `--model low` only for throwaway drafts.
 - Before the next stage uses an OK'd file, `python3 software/pipeline.py gate <file>` must exit 0.
 
 ## Publishing
