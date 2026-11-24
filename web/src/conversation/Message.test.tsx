@@ -244,6 +244,31 @@ describe('Who said it, when the message names no one', () => {
   });
 });
 
+describe('Your own messages', () => {
+  it('say "You" and the time, and who wrote one for you; a run of yours names you once', async () => {
+    serve();
+    show([
+      msg(1, ANA, 'Shipping Friday'),
+      msg(2, ME, 'Great'),
+      msg(3, ME, 'Thanks'),
+      msg(4, ME, 'Filed the bug', { refs: { via: 'assistant' } }),
+      msg(5, ME, 'Weekly report', { refs: { via: 'automation:a1' } }),
+      msg(6, ME, 'Daily report', { refs: { via: 'automation:a2' } }),
+    ]);
+    const mine = await screen.findByText('Great');
+    const first = mine.closest('.msg')!;
+    expect(within(first as HTMLElement).getByText('You')).toBeTruthy();
+    expect(first.querySelector('time')?.getAttribute('dateTime')).toBe(at(2));
+    expect(within(screen.getByText('Thanks').closest('.msg') as HTMLElement).queryByText('You')).toBeNull();
+    const done = screen.getByText('Filed the bug').closest('.msg') as HTMLElement;
+    expect(within(done).getByText('You')).toBeTruthy();
+    expect(within(done).getByText('via Assistant')).toBeTruthy();
+    // two automations are two writers: each names itself
+    expect(within(screen.getByText('Daily report').closest('.msg') as HTMLElement).getByText('via automation')).toBeTruthy();
+    expect(screen.getAllByText(/^via /)).toHaveLength(3);
+  });
+});
+
 describe('Reply with quote @s157', () => {
   it('Tico may reply for the person', async () => {
     serve((url, method) =>

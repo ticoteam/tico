@@ -57,6 +57,14 @@ export function whoOf(m: Pick<ChatMessage, 'sender_id' | 'sender_name'>, variant
   return { name: m.sender_name || known || 'Person', kind: 'person', hue: hueOf(actor) };
 }
 
+/** Who wrote a person's message for them (refs.via, backend/hubdb.py add_message): none when they wrote it themselves. */
+const VIA: Record<string, string> = { assistant: 'Assistant', botops: 'Agent Ops', 'tools-owner': 'Tools Owner', token: 'API' };
+export function viaOf(m: Pick<ChatMessage, 'refs'>): string | null {
+  const via = m.refs?.via;
+  if (typeof via !== 'string' || !via) return null;
+  return Object.hasOwn(VIA, via) ? VIA[via]! : via.startsWith('automation:') ? 'automation' : null;
+}
+
 /* ---------------------------------------------------------------- parts inside a message */
 
 const MD_PICTURE = /!\[([^\]]*)\]\((\/api\/[^()\s]+)\)/g;
@@ -331,7 +339,8 @@ function Acts({ reply, read }: { reply: (() => void) | null; read: (() => void) 
   );
 }
 
-/** What someone said. Yours sits in a bubble at the right; a failed send says so and offers Retry. */
+/** What someone said. Yours sits in a bubble at the right under "You" (and who wrote it for you, if not you); a failed
+    send says so and offers Retry. */
 export function Message({ m, variant, me, cont, onRetry, card, below, onReply, quote, onQuote }: MessageProps) {
   const [reading, setReading] = useState(false);
   const [full, setFull] = useState(false);
@@ -357,12 +366,20 @@ export function Message({ m, variant, me, cont, onRetry, card, below, onReply, q
   );
   if (m.pending || (me && m.sender_id === me)) {
     const failed = m.pending === 'failed' || m.pending === 'held';
+    const via = viaOf(m);
     return (
       <>
         <Held text={words} reply={reply} read={read}>
           <div className={['msg', 'is-mine', cont && 'is-cont', failed && 'is-failed'].filter(Boolean).join(' ')} data-target={`message:${m.id}`}>
             <Acts reply={reply} read={read} />
             <div className="mine-col" onClick={pics.onClick}>
+              {!cont && (
+                <div className="msg-meta">
+                  <b>You</b>
+                  {via && <span className="msg-via">via {via}</span>}
+                  {m.created_at && <time dateTime={m.created_at}>{clock(m.created_at)}</time>}
+                </div>
+              )}
               {quoted}
               {shown ??
                 (text && (
