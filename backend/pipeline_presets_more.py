@@ -82,8 +82,7 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
         "by_hand": False,
         "requests_move_on": False,  # a by-hand stage here holds every task until someone moves it
         "task_limit": None,
-        "expected_minutes": minutes,
-        "expected_bots_only": True,
+        "late_minutes": minutes,  # its Late rule (pipeline_settings.save)
         "on_enter": {},
         "requirements": requirements,
         **more,

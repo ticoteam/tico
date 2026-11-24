@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from backend import never_stuck as NS
+from backend import stage_rule_timers
 from backend import task_engine as E
 from backend import waiting_on as W
 from backend.item_sources import github as F
@@ -26,7 +27,7 @@ BUILD = (
     {
         "name": "Build",
         "owner": BUILDER,
-        "expected_minutes": 1440,
+        "late_minutes": 1440,
         "requirements": [X.github("pr_open"), X.github("checks_pass")],
     },
 )
@@ -82,7 +83,8 @@ def test_nobody_is_woken_or_offered_a_snooze_while_it_waits(c, eng, later):
         assert X.wakes(c, task_id) == []  # not on entry
         assert W.turns(c, E.task(c, task_id)) == set() and W.turn(c, E.task(c, task_id), paused=True) is None
     assert later(seconds=10) == {}
-    assert later(days=5) == {"late": 2}  # Late is the label only: the manager bot has no move here
+    assert later(days=5) == {}  # nobody's turn: Late, on the bot's turn only, passes it by
+    assert stage_rule_timers.caught(c, [first, second]) == {}
     for task_id in (first, second):
         assert X.wakes(c, task_id) == []
         assert dict(H._one(c, "SELECT level, tries FROM visits WHERE task_id=?", (task_id,))) == {
@@ -146,10 +148,10 @@ def test_with_github_installed_but_no_repository_in_use_the_builder_is_woken_tol
 
 
 def test_a_task_held_days_on_connect_github_is_not_handed_up_once_github_is_connected(c, eng, later):
-    """Review of #588: a Connect GitHub hold keeps its Late label, and connecting wakes the bot, nothing more: no
-    manager hand-off, no "stuck" question for a person."""
+    """Review of #588: connecting after a Connect GitHub hold wakes the bot, nothing more: no manager hand-off, no
+    "stuck" question for a person."""
     task_id = X.new_task(c, ANA, "Add a login page", "eng")["id"]
-    assert later(days=5) == {"late": 1}
+    assert later(days=5) == {}
     X.github_installed(c)
     assert later(seconds=10) == {"woken": 1}
     assert later(hours=1).get("to_manager") is None and later(days=1).get("to_person") is None

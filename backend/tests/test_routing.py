@@ -94,7 +94,7 @@ def test_a_routed_task_is_filed_as_its_persons_on_the_support_pipeline(app):
         assert "reassign" not in kinds
         assert not c.execute("SELECT 1 FROM messages WHERE body LIKE '%has no owner%'").fetchone()
         rules = {r[0] for r in c.execute("SELECT id FROM stage_rules WHERE pipeline_id=?", (row["pipeline_id"],))}
-        assert rules == {"sr_support_waits", "sr_urgent_support"}
+        assert rules == {"sr_late_support-open", "sr_support_waits", "sr_urgent_support"}
     assert "names no owner" in str(_route(app, expected=422, owner="ops"))
     assert "goes to Support" in json.dumps(_route(app, expected=422, pipeline="general"))
     with _db(app) as c:  # Support has a manager to wake even with no General Manager bot: the company's person
@@ -245,17 +245,6 @@ def test_both_support_timers_on_one_task_give_its_manager_one_wake(app, time_mac
     assert len(wakes) == 1 and wakes[0].count(_title(app, task_id)) == 1
 
 
-def test_a_due_date_late_label_does_not_quiet_the_support_timers(app, time_machine):
-    _support(app, manager_id="bot:ops")
-    task_id = _route(app, labels=["urgent"], private=False, due="2030-01-07T12:00:00Z")
-    time_machine.move_to(START + timedelta(hours=25), tick=False)
-    with _db(app) as c:  # Late by its due date: a person's task gets the label alone, and wakes nobody
-        c.execute("UPDATE visits SET late_told_at=? WHERE task_id=? AND left_at IS NULL", (H.now(), task_id))
-        T.sweep(c)
-    wakes = _wakes(app, "bot:ops")
-    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
-
-
 def test_the_dry_run_reports_a_filed_item_as_found_without_routing(app, jira):
     link = f"jira:issue:PROJ-78@{jira.tools['acme.atlassian.net']}"
     first = _create(app, link)
@@ -270,7 +259,9 @@ def test_a_private_support_pipeline_refuses_routing(app):
     assert "Private tasks aren't routed" in json.dumps(_route(app, expected=422))
 
 
-def test_a_support_manager_who_owns_the_task_is_still_told(app, time_machine):
+def test_a_support_manager_who_is_a_person_is_never_messaged_by_a_timer(app, time_machine):
+    """Timers are for agents only: a person who manages Support, and owns the task, gets no message; the rule records
+    that no manager bot heard."""
     _set(app, "off", "ana", "ben", "cara")
     _support(app, manager_id="human:ana")
     task_id = _route(app, private=False)
@@ -278,8 +269,8 @@ def test_a_support_manager_who_owns_the_task_is_still_told(app, time_machine):
     time_machine.move_to(START + timedelta(hours=25), tick=False)
     with _db(app) as c:
         T.sweep(c)
-    wakes = _wakes(app, "human:ana")
-    assert len(wakes) == 1 and _title(app, task_id) in wakes[0]
+        outcomes = {r[0] for r in c.execute("SELECT outcome FROM stage_rule_marks WHERE task_id=?", (task_id,))}
+    assert _wakes(app, "human:ana") == [] and "no_manager" in outcomes and "told" not in outcomes
 
 
 def test_one_urgent_quiet_period_wakes_the_manager_once(app, time_machine):

@@ -52,7 +52,8 @@ def test_a_card_run_starts_from_where_the_card_stands_now(api, monkeypatch):
     assert header.startswith(run_header.HEAD), header
     assert "Card now: Ship the launch note is in To do (General)" in header
     assert "Whose turn: " in header and "Missing to leave this stage:" in header
-    assert "Rules on this stage:\n- Bots own the work: Only an agent takes this stage's work" in header
+    # The stage's own Late rule first, seen before the task is late; then the pipeline's and the company's.
+    assert "Rules on this stage:\n- Late: 24 h in To do on the bot's turn\n- Bots own the work: Only an agent" in header
     assert len(header) <= run_header.MAX_CHARS
 
 

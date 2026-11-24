@@ -85,12 +85,12 @@ def test_a_task_the_ladder_could_take_no_further_stays_with_its_bot_and_the_quie
     assert T._matches(c, rule, {"id": stuck["id"]})
 
 
-def test_a_change_takes_a_task_the_late_ladder_rested_back_to_its_owner(c):
+def test_a_change_takes_a_task_the_ladder_rested_back_to_its_owner(c):
     X.pipeline(c, manager="bot:manager")
     late = X.new_task(c, ANA, "Fix the footer", assignee="bot:builder")
     c.execute(
-        "UPDATE visits SET level='person', person_id=?, late_told_at=?, late_person_at=? WHERE id=?",
-        (ANA, H.now(), H.now(), late["visit"]["id"]),
+        "UPDATE visits SET level='person', person_id=? WHERE id=?",
+        (ANA, late["visit"]["id"]),
     )
     E.changed(c, late["id"], "bot:builder")
     visit = E.task(c, late["id"])["visit"]

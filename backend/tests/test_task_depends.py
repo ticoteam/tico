@@ -1,7 +1,8 @@
 """A task that depends on another one ("Blocked by #304", backend/task_depends.py). Nov 13: 10 of 13 snoozed Engineering
 tasks were really waiting on another task (#304, #311, #264, the fix for a red main) and slept to a guessed date, several
 past the moment their blocker cleared. A dependency is a relation with no date: the task shows Blocked by the task, it is
-nobody's turn, holds no slot, is never Late, and its owner is woken once, the moment its last open dependency ends."""
+nobody's turn, holds no slot, and its owner is woken once, the moment its last open dependency ends. The stage's
+Late rule catches it only when its blockers have gone quiet too (backend/stage_rule_timers.py)."""
 
 import pytest
 
@@ -46,7 +47,7 @@ def build(c, limit=None, minutes=None, release=None):
             "name": "Build",
             "owner": B,
             "task_limit": limit,
-            "expected_minutes": minutes,
+            "late_minutes": minutes,
             "requirements": [{"kind": "owner_done"}],
         },
         {"name": "Review", "owner": B, "requirements": [{"kind": "owner_done"}]},
@@ -192,8 +193,8 @@ def later(minutes):
     return H.shift(H.now(), minutes=minutes)
 
 
-def test_a_blocked_task_holds_no_slot_is_never_late_and_is_not_handed_on(c):
-    build(c, limit=2, minutes=60)
+def test_a_blocked_task_holds_no_slot_and_is_not_handed_on(c):
+    build(c, limit=2)
     blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
     stage = E.task(c, blocker)["stage_id"]
     assert not E.has_room(c, E.stage(c, stage))  # both hold Build's two slots
@@ -204,7 +205,7 @@ def test_a_blocked_task_holds_no_slot_is_never_late_and_is_not_handed_on(c):
     entered = X.wakes(c, blocked)
     NS.check(c, later(180))
     NS.check(c, later(300))
-    assert "late" not in X.events(c, blocked) and X.wakes(c, blocked) == entered
+    assert X.wakes(c, blocked) == entered
     assert (E.task(c, blocked)["visit"].get("level") or "owner") == "owner"
 
 
@@ -220,13 +221,6 @@ def test_a_blocked_task_leaves_its_person_owners_plate(c):
     assert not any(item.get("task_id") == mine for item in W.needs(c, X.ANA, own_work=True))
 
 
-def test_blocked_time_does_not_count_toward_late():
-    """A task blocked for five and a half hours of its six in Build (two dependencies that overlap) spent half an hour
-    there: each blocked moment is counted once."""
-    spans = [("2026-11-13T00:00:00Z", "2026-11-13T05:00:00Z"), ("2026-11-13T04:00:00Z", "2026-11-13T05:30:00Z")]
-    assert NS._covered(spans, "2026-11-13T00:00:00Z", "2026-11-13T06:00:00Z") == pytest.approx(5.5 * 3600)
-
-
 def blocked_since(c, task_id, minutes):
     """The task entered its stage and its dependency was written `minutes` ago."""
     at = H.shift(H.now(), minutes=-minutes)
@@ -236,27 +230,6 @@ def blocked_since(c, task_id, minutes):
         "UPDATE history_events SET created_at=? WHERE subject_type='task' AND subject_id=? AND kind='depends_on'",
         (at, task_id),
     )
-
-
-@pytest.mark.parametrize("how", ["done", "unrelate", "delete"])
-def test_three_hours_blocked_in_a_one_hour_stage_is_not_late_however_the_block_ends(c, how):
-    """Review 1: taking the dependency off, or deleting the blocker, removes the relation row; the blocked time must not
-    count toward Late after that, as it does not when the blocker is done."""
-    from backend import task_delete
-
-    build(c, minutes=60)
-    blocker, blocked = task(c, "Part 1"), task(c, "Part 2")
-    TR.relate(c, X.ANA, blocked, blocker, "depends_on")
-    blocked_since(c, blocked, 180)
-    if how == "done":
-        ended(c, blocker)
-    elif how == "unrelate":
-        TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
-    else:
-        assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
-    assert not D.blocked(c, blocked)
-    NS.check(c, later(1))
-    assert "late" not in X.events(c, blocked) and "ladder" not in X.events(c, blocked)
 
 
 def test_a_deleted_blocker_wakes_the_owner_once(c):
@@ -381,8 +354,9 @@ def test_a_refused_move_of_the_dependent_never_stops_its_blocker_ending(c, monke
 
 
 @pytest.mark.parametrize("how", ["done", "unrelate", "delete"])
-def test_the_late_clock_runs_again_once_the_block_has_ended(c, how):
-    """Review 2: the blocked span must end when the block does, or the task could never be Late again."""
+def test_blocked_time_is_time_in_the_stage_so_late_comes_at_once_however_the_block_ends(c, how):
+    """Taking the dependency off, deleting the blocker or finishing it: the task is its owner bot's again, three hours
+    into a one-hour stage, and the Late rule tells the owner on the next pass."""
     from backend import task_delete
 
     build(c, minutes=60)
@@ -395,8 +369,8 @@ def test_the_late_clock_runs_again_once_the_block_has_ended(c, how):
         TR.relate(c, X.ANA, blocked, blocker, "depends_on", remove=True)
     else:
         assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
-    NS.check(c, later(90))
-    assert "late" in X.events(c, blocked)
+    NS.check(c, later(1))
+    assert "stage_rule" in X.events(c, blocked)
 
 
 def test_a_blocker_restored_from_the_trash_does_not_block_again(c):

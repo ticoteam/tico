@@ -20,6 +20,7 @@ from backend import page_verdicts as V
 from backend import pipeline_presets_more as more
 from backend import pipeline_seats as S
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_calls as TC
 from backend import task_engine as E
 from backend import task_requirements as R
@@ -158,15 +159,16 @@ def test_the_pair_has_its_roles_and_a_start_keeps_it_with_no_product_made_beside
     assert not stages["product-ideas"]["by_hand"] and not stages["engineering-on-deck"]["by_hand"]
     limits = {sid: s["task_limit"] for sid, s in stages.items() if s["task_limit"]}
     assert limits == {"product-spec": 20, "engineering-build": 3}
-    assert [stages[s]["expected_minutes"] for s in ("product-spec", "product-in-development", "product-validate")] == [
-        2880,
-        7200,
-        1440,
+    late = {sid: SR.get(c, f"sr_late_{sid}") for sid in stages}  # each stage's expected time is its Late rule
+    assert [late[s]["timer"]["hours"] for s in ("product-spec", "product-in-development", "product-validate")] == [
+        48,
+        120,
+        24,
     ]
     assert [
-        stages[s]["expected_minutes"]
+        late[s]["timer"]["hours"]
         for s in ("engineering-build", "engineering-review-1", "engineering-qa", "engineering-merge")
-    ] == [1440, 120, 240, 120]
+    ] == [24, 2, 4, 2]
     assert stages["product-in-development"]["on_enter"] == {"file_into": "engineering"}
     assert stages["engineering-merge"]["on_enter"] == {"act": "github.queue"}
     spec = stages["product-spec"]["requirements"][0]
@@ -555,7 +557,6 @@ def test_owner_on_the_team_refuses_a_bot_and_lets_a_person_set_anyway(c):
 def test_owner_on_the_team_once_at_release_clears_the_owners_it_refuses_and_wakes_the_manager_once(c):
     """The release sweep: open Engineering tasks owned outside Engineering lose their owner, and the Engineering
     Manager gets one wake listing them all."""
-    from backend import stage_rules as SR
 
     _engineering_with_teams(c)
     first, second = _owned_by_the_product_owner(c), _owned_by_the_product_owner(c, "Gift cards")
@@ -780,14 +781,14 @@ def test_no_bot_gives_or_pushes_past_a_sign_off_and_late_still_ends_on_the_perso
             A.answer(c, row["id"], rid, bot, "ok", seen_version=E.task(c, row["id"])["version"])
         with pytest.raises(H.Refused, match="task_needs_person"):
             E.move(c, row["id"], E.NEXT, bot, "The person is away", seen_version=E.task(c, row["id"])["version"])
-    # Past the stage's expected time: a person's turn is never Late, no bot is woken, since none can give or push past
+    # Past the stage's Late rule: a person's turn is never Late, no bot is woken, since none can give or push past
     # a people-only OK, and the manager still cannot push past. The task stays the person's, whom it reads.
-    minutes = row["stage"]["expected_minutes"]
+    minutes = int(SR.get(c, f"sr_late_{stage_id}")["timer"]["hours"] * 60)
     X.settled(c)
     time_machine.shift(timedelta(minutes=minutes + 1))
-    assert N.check(c)["late"] == 0
+    N.check(c)
     late = E.task(c, row["id"])
-    assert [who for key, who in X.wakes(c, row["id"]) if key.endswith(":late")] == []
+    assert [who for key, who in X.wakes(c, row["id"]) if ":stage_rule:" in key] == []
     with pytest.raises(H.Refused, match="task_needs_person"):
         E.move(c, row["id"], E.NEXT, manager, "Late: pushing past", seen_version=late["version"])
     time_machine.shift(timedelta(minutes=3 * minutes))
@@ -969,7 +970,7 @@ def test_no_bot_loosens_a_sign_off_in_settings_but_a_person_may_and_bots_change_
     manager = bots[0]
     edit(lambda st, *_: _sign_off_req(st, sid)["settings"].update(rubric="Enough for a person to OK it."), manager)
     edit(lambda st, *_: _sign_off_req(st, sid).update(can_push_past=False), manager)
-    edit(lambda st, *_: st[_at(st, after)].update(expected_minutes=90), manager)
+    edit(lambda st, *_: st[_at(st, after)].update(task_limit=9), manager)
     # A person may make any of them.
     assert edit(LOOSENING["a later stage put before it"], ANA)
     assert edit(LOOSENING["who_oks"], ANA)
@@ -1080,7 +1081,6 @@ def test_owner_on_the_team_holds_a_picked_bot_as_it_holds_a_named_one(c):
 def test_owner_on_the_team_at_release_clears_a_picked_owner_and_its_assignee(c):
     """The release sweep in a stage whose pick becomes the task's owner clears the assignee with the owner, as in a stage
     the assignee owns: a refused bot does not stay the task's owner for life."""
-    from backend import stage_rules as SR
 
     _engineering_with_teams(c)
     _on_deck_picks(c, ["bot:pm"])

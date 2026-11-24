@@ -78,10 +78,11 @@ def test_a_wake_may_start_only_for_a_bot_whose_turn_it_is(c, general):
     assert task_wakes.may_start(c, start) and _state(c, start) == "queued"
     stray = task_wakes.add(c, row, REVIEWER, row["visit"], "Look at this.", wake_key=f"{row['id']}:stray")
     assert not task_wakes.may_start(c, {"message_id": stray}) and _state(c, stray) == "canceled"  # no turn of its own
-    look = task_wakes.add(
-        c, row, MANAGER, row["visit"], "Late: look once.", wake_key=f"{row['id']}:{row['visit']['id']}:late"
-    )
-    assert task_wakes.may_start(c, look)  # Late's one look for the manager bot needs no turn
+    # A stage rule's tell needs no turn only for the task's owner bot (a blocked task's turns are nobody's): the
+    # manager's old Late look is gone, and is held like any other wake.
+    ruled = f"{row['id']}:{row['visit']['id']}:{task_wakes.STAGE_RULE}:sr_late_general-todo:x"
+    look = task_wakes.add(c, row, MANAGER, row["visit"], "Rule Late.", wake_key=ruled)
+    assert not task_wakes.may_start(c, look)
     chat = _chat_run(c, row["conversation_id"], REVIEWER)
     assert task_wakes.may_start(c, chat)  # not a wake about a task: not the engine's to hold
     E.snooze(c, row["id"], ANA)

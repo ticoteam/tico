@@ -29,8 +29,6 @@ SCHEMAS.update(
                 "by_hand": "b",
                 "requests_move_on": "b",
                 "task_limit": {"type": ["integer", "null"]},
-                "expected_minutes": {"type": ["integer", "null"]},
-                "expected_bots_only": "b",
                 "on_enter": "o",
                 "requirements": items("o"),
             }

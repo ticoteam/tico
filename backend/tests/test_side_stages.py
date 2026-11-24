@@ -237,8 +237,6 @@ def _stage(name, **fields):
         "by_hand": False,
         "requests_move_on": False,
         "task_limit": None,
-        "expected_minutes": None,
-        "expected_bots_only": False,
         "on_enter": {},
         "requirements": [],
         **fields,

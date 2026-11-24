@@ -62,8 +62,6 @@ STAGE_FIELDS = (
     "by_hand",
     "requests_move_on",
     "task_limit",
-    "expected_minutes",
-    "expected_bots_only",
     "on_enter",
     "pick",
 )
@@ -108,8 +106,7 @@ PRESETS: dict[str, Row] = {
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": None,
-                "expected_minutes": 1440,
-                "expected_bots_only": True,
+                "late_minutes": 1440,  # its Late rule (`save`)
                 "on_enter": {},
                 "requirements": [{"kind": "owner_done"}],
             }
@@ -130,8 +127,7 @@ def _stage(sid: str, name: str, purpose: str, minutes: int | None, requirements:
         "by_hand": False,
         "requests_move_on": False,
         "task_limit": None,
-        "expected_minutes": minutes,
-        "expected_bots_only": True,
+        "late_minutes": minutes,  # its Late rule (`save`)
         "on_enter": {},
         "requirements": requirements,
         **more,
@@ -685,8 +681,6 @@ def _stage_out(conn: "sqlite3.Connection", row: Row) -> Row:
         "by_hand": bool(row.get("by_hand")),
         "requests_move_on": bool(row.get("requests_move_on")),
         "task_limit": row.get("task_limit"),
-        "expected_minutes": row.get("expected_minutes"),
-        "expected_bots_only": bool(row.get("expected_bots_only")),
         "on_enter": _loads(row.get("on_enter")) or {},
         "requirements": [_requirement_out(r) for r in R.on_stage(conn, row["id"])],
         **_pick_out(conn, row),
@@ -831,6 +825,14 @@ def _stored_people(req: Row) -> str | None:
     return None if people is None else _h()._dump(people)
 
 
+# A stage's expected time is its Late rule (stage_rules.late_rule) since the stall rules became one: a write that still
+# sets it is refused with where it went.
+EXPECTED_MOVED = (
+    "A stage's expected time is its Late rule now: set it on {} in the stage's Rules panel "
+    "(tico rules list --kind stage, then tico rules edit <its id>)."
+)
+
+
 def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
     item = _dict(raw, f"Stage {position + 1} is not a stage.", problems)
     name = _text(item.get("name"), f"Stage {position + 1}'s name", problems)
@@ -838,6 +840,8 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
     side = _flag(item.get("side"), f"Side stage on {label}", problems)
     if side and item.get("kind", "work") != "work":
         problems.append(f"Only a work stage can be a side stage ({label}).")
+    if item.get("expected_minutes"):
+        problems.append(EXPECTED_MOVED.format(label))
     return {
         "id": _ref(item.get("id"), f"The id of {label}", problems),
         "name": name,
@@ -851,13 +855,6 @@ def _stage_in(raw: object, position: int, problems: list[str]) -> Row:
         "task_limit": None
         if side
         else _count(item.get("task_limit"), f"The limit on {label} is a whole number above zero.", problems),
-        "expected_minutes": None
-        if side
-        else _count(
-            item.get("expected_minutes"), f"Expected time on {label} is a whole number of minutes above zero.", problems
-        ),
-        "expected_bots_only": not side
-        and _flag(item.get("expected_bots_only"), f"Expected time for bots only on {label}", problems),
         "on_enter": _dict(
             item.get("on_enter"),
             f"On enter on {label} is nothing, file a linked task into a pipeline, or queue the PRs to merge.",
@@ -1431,8 +1428,6 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             1 if stage["by_hand"] else 0,
             1 if stage["requests_move_on"] else 0,
             stage["task_limit"],
-            stage["expected_minutes"],
-            1 if stage["expected_bots_only"] else 0,
             H._dump(stage["on_enter"]),
             json.dumps(stage["pick"], sort_keys=True) if stage.get("pick") else None,
         )
@@ -1441,7 +1436,7 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
         if old:
             conn.execute(
                 "UPDATE stages SET position=?, name=?, purpose=?, owner=?, side=?, by_hand=?, requests_move_on=?, "
-                "task_limit=?, expected_minutes=?, expected_bots_only=?, on_enter=?, pick=?, updated_at=?, "
+                "task_limit=?, on_enter=?, pick=?, updated_at=?, "
                 "retired_at=NULL WHERE id=?",
                 (*values, ts, sid),
             )
@@ -1452,8 +1447,8 @@ def _write_stages(conn: "sqlite3.Connection", by: str, pid: str, record: Row, ts
             sid = sid or _free_stage_id(conn, f"{pid}-{slugify(stage['name'], fallback='stage')}", taken)
             conn.execute(
                 "INSERT INTO stages (position, name, purpose, owner, side, by_hand, requests_move_on, task_limit, "
-                "expected_minutes, expected_bots_only, on_enter, pick, id, pipeline_id, kind, created_at, updated_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
+                "on_enter, pick, id, pipeline_id, kind, created_at, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'work',?,?)",
                 (*values, sid, pid, ts, ts),
             )
         loosened = _write_requirements(conn, by, sid, stage["requirements"], ts) or loosened
@@ -1674,6 +1669,8 @@ def save(
     ts = _h().now()
     pid = _write_pipeline(conn, parsed, existing, ts)
     loosened = _write_stages(conn, by, pid, parsed, ts)
+    if not existing:
+        _add_late_rules(conn, pid, record)
     if existing and parsed["prefix"] and not existing.get("prefix"):
         # The tasks it already holds are numbered now, oldest first (number_pipeline), as new ones are when made.
         _h().number_pipeline(conn, by, pid, f"Numbered when {parsed['name']} got the prefix {parsed['prefix']}")
@@ -1691,6 +1688,19 @@ def save(
         after = read(conn, pid)
         assert after is not None
     return after
+
+
+def _add_late_rules(conn: "sqlite3.Connection", pipeline_id: str, record: Row) -> None:
+    """A new pipeline's stages that a preset gives an expected time (`late_minutes`) get their Late rule
+    (stage_rules.add_late), by position: a stage's id may be made on the write."""
+    from . import stage_rules as _stage_rules
+
+    stage_rules: Any = _stage_rules  # untyped module
+    raw: list[Any] = list(record.get("stages") or [])
+    for stage, made in zip(raw, task_engine.stages(conn, pipeline_id), strict=False):
+        minutes: Any = cast(Row, stage).get("late_minutes") if isinstance(stage, dict) else None
+        if minutes:
+            stage_rules.add_late(conn, str(made["id"]), str(made["name"]), pipeline_id, int(cast(int, minutes)))
 
 
 def retire(
@@ -2009,6 +2019,11 @@ def _add_qa(conn: "sqlite3.Connection", pipeline_id: str) -> bool:
     before = read(conn, pipeline_id)
     ts = _h().now()
     _write_stages(conn, SYSTEM, pipeline_id, record, ts)
+    if shipped.get("late_minutes"):
+        from . import stage_rules as _stage_rules
+
+        stage_rules: Any = _stage_rules  # untyped module
+        stage_rules.add_late(conn, QA_STAGE, "QA", pipeline_id, int(shipped["late_minutes"]))
     bump = 1 if int(row.get("settings_version") or 1) > 1 else 0
     conn.execute(
         "UPDATE pipelines SET settings_version = settings_version + ?, updated_at=? WHERE id=?", (bump, ts, pipeline_id)

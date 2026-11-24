@@ -704,9 +704,8 @@ def of(
         # The ladder could take the task no further because it waits on someone who may not open it: only a person who
         # reads it can let them in, so it is in that person's list, and the first thing it says is why. Any other task
         # at this level stays with its bot (`holder`), out of every list: the quiet-task rule tells the manager.
-        late = visit.get("late_person_at")
-        line = f"{'Late' if late else 'Stuck'} in {stage['name']}: {_share_line(conn, shut)}"
-        since = late or visit.get("last_change_at") or entered
+        line = f"Stuck in {stage['name']}: {_share_line(conn, shut)}"
+        since = visit.get("last_change_at") or entered
         out.insert(0, Wait(PERSON, person_for(conn, row), line, None, since, share=shut))
     if marks:
         # Any bot with an open ❓ here (the holder, or a reviewer asked for its OK) is not chased for anything on the
@@ -810,13 +809,6 @@ def turn(
     if level == "manager" and is_bot(manager):
         return str(manager)
     return bots[0].who
-
-
-def persons_turn(waits: Sequence[Wait]) -> bool:
-    """Whether all a task waits on is OKs and answers asked of people (a ❓ included). Such a task is never Late: the
-    bot is not behind (never_stuck._late, late_rule.late_of). A cause a person fixes first (`Wait.fix`, Connect GitHub)
-    is not one: its time is not given back when it ends, so it stays Late as before."""
-    return bool(waits) and all(wait.state == PERSON and wait.ask and not wait.fix for wait in waits)
 
 
 def on_person(

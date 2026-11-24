@@ -229,7 +229,7 @@ SCHEMAS.update(
                 "entity_id": "s",
                 "due_at": "n",
                 "turn": {"oneOf": [ref("TaskWait"), {"type": "null"}]},
-                "late": {"oneOf": [obj({"since": "s", "level": {"enum": ["told", "person"]}}), {"type": "null"}]},
+                "late": {"oneOf": [obj({"since": "s", "rule": "s"}), {"type": "null"}]},
                 "stuck": {
                     "type": "boolean",
                     "description": "Present and true when the never-stuck ladder brought it to a person (stuck or late)",

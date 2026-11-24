@@ -355,8 +355,7 @@ SUPPORT_RECORD: Row = {
             "by_hand": False,
             "requests_move_on": False,
             "task_limit": None,
-            "expected_minutes": 1440,
-            "expected_bots_only": False,
+            "late_minutes": 1440,  # its Late rule (pipeline_settings.save)
             "on_enter": {},
             "requirements": [{"kind": "owner_done"}],
         }

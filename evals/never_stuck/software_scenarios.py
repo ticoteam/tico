@@ -511,7 +511,7 @@ def github_refuses_the_merge(r: SoftRig) -> None:
     expect(tried == 3, f"the queue call was tried {tried} times, not 3")
 
 
-@case("github-down-for-days", "GitHub is down for days before the PR is read: Late hands it on, then a person has it")
+@case("github-down-for-days", "GitHub is down for days before the PR is read: Build's Late rule tells the Builder once")
 def github_down_for_days(r: SoftRig) -> None:
     r.preset(ENGINEERING)
     e = r.task(ANA, "Webhook retries", ENGINEERING)
@@ -521,12 +521,15 @@ def github_down_for_days(r: SoftRig) -> None:
     r.at(e, "Build")
     r.says(e, "Reading the PR from GitHub")
     r.settle(3600)
-    expect(not r.wakes(e, EM), f"the manager was told before Build's expected day: {r.wakes(e, EM)}")
+    expect(not r.wakes(e, EM), f"the manager was told before Build's Late day: {r.wakes(e, EM)}")
     r.settle(86400)
-    late = [w for w in r.wakes(e, EM) if w[0].endswith(":late") or w[0].startswith("late") or "Late" in w[2]]
-    expect(late, f"a day in Build waiting on GitHub did not reach the manager: {r.wakes(e)}")
+    late = [w for w in r.wakes(e) if w[2].startswith("Rule Late:")]
+    expect(
+        [w[1] for w in late] == [BUILDER], f"a day in Build waiting on GitHub did not tell the Builder: {r.wakes(e)}"
+    )
     r.settle(2 * 86400 + 60)
-    expect(r.visit(e).get("level") == "person", f"three days on GitHub did not reach a person: {r.visit(e)}")
+    late = [w for w in r.wakes(e) if w[2].startswith("Rule Late:")]
+    expect([w[1] for w in late] == [BUILDER], f"Late told someone more than the Builder once: {late}")
 
 
 @case("closed-task-pr-merged-anyway", "Close a task in Merge after GitHub merged its PR: the manager is told once")
@@ -577,9 +580,13 @@ def checks_run_too_long(r: SoftRig) -> None:
 
 # ----------------------------------------------------------------------------- GitHub never answers
 def _no_expected_time(r: SoftRig, stage: str) -> None:
-    """The stage expects no time, so Late never backs up a GitHub wait there: the wait has to end by itself."""
+    """The stage's Late rule is retired, so Late never backs up a GitHub wait there: the wait has to end by itself."""
     with r.w.tx() as c:
-        c.execute("UPDATE stages SET expected_minutes=NULL WHERE pipeline_id=? AND name=?", (ENGINEERING, stage))
+        c.execute(
+            "UPDATE stage_rules SET retired_at=? WHERE id = 'sr_late_' || "
+            "(SELECT id FROM stages WHERE pipeline_id=? AND name=?)",
+            (S._h().now(), ENGINEERING, stage),
+        )
 
 
 @case(

@@ -23,6 +23,10 @@ other rule.
 The default rules (`DEFAULTS`) are ordinary rows: read, edit, retire. `ensure_defaults` seeds each once by id, so a
 retired one stays retired, and brings a stored default still in words it shipped with before (`EARLIER`), or on a
 pipeline the company retired, up to date.
+Each stage's expected time is its own timer rule, "Late" (`late_rule`, builtin `late`, id `sr_late_<stage id>`): N h in
+the stage on the bot's turn, told to the owner bot. It is made with the stage when a preset makes the pipeline
+(pipeline_settings.save), and at release from the expected time a stage had (the migration
+20261123192023_late_stage_rules); after that it is edited and retired as any rule.
 A bot's new rule or change is `suggested` until a person accepts or skips it.
 """
 
@@ -76,6 +80,7 @@ REAL_WAIT = "sr_real_wait"
 QUIET_BOT_TASKS = "sr_quiet_bot_tasks"
 URGENT_SUPPORT = "sr_urgent_support"
 SUPPORT_WAITS = "sr_support_waits"
+LATE = "late"  # the builtin of each stage's Late rule (`late_rule`)
 # What a bot's snooze that its rules refuse is told: a wait that another task ends is a dependency, and a wait on a
 # person is an ask (the spec "A blocked task shows as Blocked, never Snoozed"). A snooze is only "look again on a date".
 BLOCKED = (
@@ -90,6 +95,7 @@ REAL_WAIT_JEV = (
 # The words a default rule shipped with before, by rule id and column: a stored default still holding one of them is
 # brought up to date at the next start (`ensure_defaults`); one a company edited keeps its own.
 EARLIER: dict[str, dict[str, tuple[str, ...]]] = {
+    QUIET_BOT_TASKS: {"reason": ("6 h quiet on the bot's turn",)},
     REAL_WAIT: {
         "jev": (
             "The bot is blocked, not waiting: it cannot go on because of something it lacks or that it must ask for "
@@ -137,8 +143,9 @@ DEFAULTS: list[dict[str, Any]] = [
         "builtin": REAL_WAIT,
     },
     {
-        # A timer (backend/stage_rule_timers.py): every stage, 6 h quiet, bot-owned and the bot's turn. Snoozed tasks
-        # have no timer. All of a manager's matches in the same hour go in one wake.
+        # A timer (backend/stage_rule_timers.py): every stage, 6 h quiet, bot-owned and the bot's turn; a blocked task
+        # once what it waits on is quiet too. Snoozed tasks have no timer. All of a manager's matches in the same hour
+        # go in one wake.
         "id": QUIET_BOT_TASKS,
         "name": "Quiet bot tasks",
         "pipeline_id": "",
@@ -149,7 +156,7 @@ DEFAULTS: list[dict[str, Any]] = [
         "jev": "",
         "then": "tell_manager",
         "then_params": {},
-        "reason": "6 h quiet on the bot's turn",
+        "reason": "6 h quiet on the bot's turn, blocked tasks included",
         "builtin": QUIET_BOT_TASKS,
     },
     {
@@ -196,11 +203,6 @@ BUILT_IN: list[dict[str, str]] = [
         "where": "backend/task_engine.py snooze",
     },
     {
-        "name": "Late",
-        "what": "A task past its stage's expected time is Late and its manager is told.",
-        "where": "backend/never_stuck.py",
-    },
-    {
         "name": "No owner: the manager picks",
         "what": "A stage with nobody set wakes the pipeline's manager to pick an owner (C25).",
         "where": "backend/task_engine.py _turn_of",
@@ -222,6 +224,36 @@ BUILT_IN: list[dict[str, str]] = [
     },
 ]
 _JSON = ("stages", "timer", "cond", "then_params")
+
+
+def late_rule(stage_id: str, stage_name: str, pipeline_id: str, minutes: int) -> dict[str, Any]:
+    """A stage's Late rule, as a default is written: `minutes` in the stage on the bot's turn tells the owner bot."""
+    hours = round(minutes / 60, 2)
+    return {
+        "id": f"sr_late_{stage_id}",
+        "name": "Late",
+        "pipeline_id": pipeline_id,
+        "stages": [stage_id],
+        "event": "timer",
+        "timer": {"kind": "in_stage", "hours": hours},
+        "cond": {"owner_kind": "bot", "turn": "bot"},
+        "jev": "",
+        "then": "tell_owner",
+        "then_params": {},
+        "reason": f"{hours:g} h in {stage_name} on the bot's turn",
+        "builtin": LATE,
+    }
+
+
+def add_late(conn: Any, stage_id: str, stage_name: str, pipeline_id: str, minutes: int) -> bool:
+    """Write a stage's Late rule once (`late_rule`): never again once it has one, retired included. Whether it did."""
+    if not has_table(conn) or not minutes or minutes <= 0:
+        return False
+    rule = late_rule(stage_id, stage_name, pipeline_id, minutes)
+    if conn.execute("SELECT 1 FROM stage_rules WHERE id=?", (rule["id"],)).fetchone():
+        return False
+    _insert(conn, rule, pipeline_id, rule["stages"])
+    return True
 
 
 def _h() -> Any:
@@ -664,7 +696,6 @@ def ensure_defaults(conn: Any) -> list[str]:
         return []
     made: list[str] = []
     moved = False
-    H = _h()
     for rule in DEFAULTS:
         if conn.execute("SELECT 1 FROM stage_rules WHERE id=?", (rule["id"],)).fetchone():
             moved = _bring_up_to_date(conn, rule) or moved
@@ -675,33 +706,37 @@ def ensure_defaults(conn: Any) -> list[str]:
             if not found:
                 continue
             pipeline_id, stages = found
-        ts = H.now()
-        conn.execute(
-            "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, "
-            "reason, status, builtin, created_by, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)",
-            (
-                rule["id"],
-                rule["name"],
-                pipeline_id,
-                json.dumps(stages),
-                rule["event"],
-                json.dumps(rule["timer"]),
-                json.dumps(rule["cond"]),
-                rule["jev"],
-                rule["then"],
-                json.dumps(rule["then_params"]),
-                rule["reason"],
-                rule["builtin"],
-                _core.TICO_ACTOR,
-                ts,
-                ts,
-            ),
-        )
+        _insert(conn, rule, pipeline_id, stages)
         made.append(rule["id"])
     if OWNER_ON_TEAM in made or moved:
         sweep_owners(conn)
     return made
+
+
+def _insert(conn: Any, rule: dict[str, Any], pipeline_id: str, stages: list[str]) -> None:
+    ts = _h().now()
+    conn.execute(
+        "INSERT INTO stage_rules (id, name, pipeline_id, stages, event, timer, cond, jev, then_do, then_params, "
+        "reason, status, builtin, created_by, created_at, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?)",
+        (
+            rule["id"],
+            rule["name"],
+            pipeline_id,
+            json.dumps(stages),
+            rule["event"],
+            json.dumps(rule["timer"]),
+            json.dumps(rule["cond"]),
+            rule["jev"],
+            rule["then"],
+            json.dumps(rule["then_params"]),
+            rule["reason"],
+            rule["builtin"],
+            _core.TICO_ACTOR,
+            ts,
+            ts,
+        ),
+    )
 
 
 def _on(conn: Any, targets: Any) -> tuple[str, list[str]] | None:

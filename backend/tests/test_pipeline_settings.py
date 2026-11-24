@@ -11,6 +11,7 @@ import pytest
 
 from backend import pipeline_presets_more as more
 from backend import pipeline_settings as PS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend import task_requirements as R
 from backend.store import H
@@ -63,8 +64,6 @@ def _ops(**fields):
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": None,
-                "expected_minutes": 60,
-                "expected_bots_only": True,
                 "on_enter": {},
                 "requirements": [
                     {
@@ -87,8 +86,6 @@ def _ops(**fields):
                 "by_hand": False,
                 "requests_move_on": False,
                 "task_limit": 2,
-                "expected_minutes": None,
-                "expected_bots_only": False,
                 "on_enter": {},
                 "requirements": [
                     {
@@ -128,7 +125,14 @@ def test_general_from_its_preset_has_the_fixed_ids_and_a_task_goes_from_to_do_to
     assert (general["done"]["id"], general["closed"]["id"]) == ("general-done", "general-closed")
     todo = general["stages"][0]
     assert (todo["name"], todo["owner"], todo["task_limit"]) == ("To do", "assignee", None)
-    assert (todo["expected_minutes"], todo["expected_bots_only"]) == (1440, True)
+    assert "expected_minutes" not in todo  # its expected time is its Late rule
+    late = SR.get(c, "sr_late_general-todo")
+    assert (late["name"], late["stages"], late["timer"], late["reason"]) == (
+        "Late",
+        ["general-todo"],
+        {"kind": "in_stage", "hours": 24},
+        "24 h in To do on the bot's turn",
+    )
     assert [r["kind"] for r in todo["requirements"]] == ["owner_done"]
     row = X.new_task(c, ANA, "Write the launch note", assignee="bot:builder")
     assert (row["stage_id"], row["owner_id"]) == ("general-todo", "bot:builder")
@@ -146,16 +150,12 @@ def test_presets_run_on_every_boot_make_general_once_and_never_change_it_again(c
     assert _made(c) == []
     changed = PS.read(c, "general")
     changed["goal"] = "Everything that has no other home"
-    changed["stages"][0]["expected_minutes"] = 600
+    changed["stages"][0]["task_limit"] = None
     PS.save(c, ANA, changed)
     X.bot(c, "general-manager")  # a General Manager that arrives later does not change General either
     assert _made(c) == []
     after = PS.read(c, "general")
-    assert (after["goal"], after["stages"][0]["expected_minutes"], after["manager_id"]) == (
-        "Everything that has no other home",
-        600,
-        None,
-    )
+    assert (after["goal"], after["manager_id"]) == ("Everything that has no other home", None)
     assert c.execute("SELECT COUNT(*) FROM pipelines").fetchone()[0] == 1 + len(more.PRESETS) - len(
         more.PRIVATE
     )  # Legal and Finance wait for their bots
@@ -212,7 +212,10 @@ CASES = {
         "The first stage of a pipeline has no limit (Intake).",
     ),
     "a limit of zero": (lambda r: _stage(r, 1).update(task_limit=0), "The limit on Sign off is a whole number"),
-    "a part of a minute": (lambda r: _stage(r).update(expected_minutes=1.5), "a whole number of minutes above zero"),
+    "an expected time": (
+        lambda r: _stage(r).update(expected_minutes=60),
+        "A stage's expected time is its Late rule now: set it on Intake in the stage's Rules panel",
+    ),
     "a setting a kind lacks": (
         lambda r: _req(r).update(PS.github("checks_pass", rubric="green")),
         "Checks pass has no setting rubric (on Intake).",

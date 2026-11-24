@@ -110,10 +110,10 @@ Close calls that change behavior, C1 to C31. They are part of sign-off A. Text i
 - **C4.** What counts as progress, and resets the 3 tries: a move, a requirement changing state, a new commit, a new
   page version, an ask, a snooze, a sub-task filed. A comment alone does not count, so a bot can't loop on "working on
   it".
-- **C5.** Late has two steps and no extra settings. At the stage's expected time the manager bot gets the task. At 3
-  times that, the ladder rests, once. A person's turn (all the task waits on is people's answers to asks; a Connect
-  GitHub hold is not one) is never Late, and the bot's clock starts again at the person's last answer.
-- **C6.** A task owned by a person is never chased. It shows Late only after its due date.
+- **C5.** Late is a stage rule (Nov 23, 2026): each stage's expected time is its "Late" timer rule, N hours in the
+  stage on the bot's turn, that tells the owner bot once per visit. A person's turn is never Late, and the bot's clock
+  starts again at a person's last answer. A blocked task is Late only when its blockers have gone quiet too.
+- **C6.** A task owned by a person is never chased: a timer never messages a person.
 - **C7.** Asks never expire and tasks never close by themselves. *Today: questions expire after 7 days or go ahead on a
   default answer, and done Engineering tasks close after 24 hours.*
 - **C8.** A bot can't close a person's request by itself. It asks "I can't do this because…" and you pick Reassign or
@@ -618,14 +618,16 @@ the Assistant or Agent Ops writes for a person does not.
 
 ### Late
 
-- A task is Late once it has been in a stage longer than the stage's expected time. Snoozed time doesn't count.
-- Late is a label on the task. It also hands the task to the manager bot, once per visit, on the same 3 tries.
-- A task that waits only on people's answers stays in their lists. The manager bot is woken only when a bot may push
-  past one of those asks, and it is not offered a snooze. When every ask is people only, no bot is woken.
-- Still there at 3 times the expected time: the ladder rests, once (C5): nobody more is woken for it, and, since the
-  manager was told it was Late, a person who reads it is asked what should happen next. If it is already a person's
-  turn, nothing changes.
-- This is the backstop for work that keeps changing but never finishes, and for waits on the outside world.
+- Late is one stage rule per stage, named "Late", in the stage's Rules panel: "Late: 24 h in Build on the bot's turn"
+  (backend/stage_rules.py `late_rule`, run by backend/stage_rule_timers.py). Editing its hours is how a stage's
+  expected time changes; `tico stage update --expected-minutes` refuses and points there.
+- It fires once per visit when a bot owns the task, it is the bot's turn, and the time in the stage, less the time
+  snoozed and counted from a person's last answer, passes its hours. It tells the owner bot ("Rule Late: 24 h in
+  Build."), never the manager and never a person. The wake records the rule's id and name.
+- A task blocked by another is caught once per visit when it and every blocker have had no change for the rule's
+  hours; the wake names the blocker and how long it has been quiet. A live blocker is left alone.
+- The Late label shows while a rule caught the task on this visit and nothing changed since.
+- This is the backstop for work that keeps changing but never finishes.
 
 ### Long work: what 24 hours looks like
 
@@ -639,7 +641,7 @@ cases.
   again 15 minutes later.
 - A day of building can be one run, or several when the bot finishes earlier and is woken again. The row shows a spinner. The task's top line says "Builder working".
 - A run that ends with nothing changed is "stopped early", try 1 of 3.
-- At 1 day the task is Late and the Eng Manager gets it. At 3 days it is in your list.
+- At 1 day Build's Late rule tells the Builder, once.
 
 #### A task waits a day on a sub-task
 
@@ -647,16 +649,16 @@ cases.
 - The parent's top line names what it waits on, as a link: "Waiting on E-214 Build checkout flow".
 - The check does nothing for the parent. E-214 has its own turn and its own check.
 - When E-214 ends, the parent's owner is woken once with how it ended.
-- The parent's own clock still runs. Past its stage's expected time it is Late, and its manager bot looks once.
+- The parent's own clock still runs. Past its stage's Late hours, with the sub-task quiet as long, its owner is told
+  once, the sub-task named.
 
 #### A task waits a day on you
 
 - It sits in your list. Nothing runs and nothing reminds you.
 - Everyone else sees an amber "!" with your picture on the row, and "Waiting on Ana" on the task.
 - It is never Late: the bot is not behind. Past a day, your Needs you row says when it was asked ("Since Nov 16").
-- Past the stage's expected time the manager bot looks once. It can push past with a reason if the requirement allows
-  that. If no bot may push past it (people only), no bot is woken. A bot's snooze never takes it out of your list.
-- Once you answer, the bot has the stage's whole expected time again. It is Late only if it then sits that long.
+- No bot is woken for it. A bot's snooze never takes it out of your list.
+- Once you answer, the bot has the stage's whole Late time again. It is Late only if it then sits that long.
 
 #### Where "what is missing" shows
 
@@ -1287,9 +1289,8 @@ task's assignee and not by hand. Its default rules give overdue waits to its man
 waits (24 h quiet, in the hourly batch) and Urgent support waits (1 h quiet on a task tagged `urgent`: the manager is
 woken in the same pass, in its one wake of that pass: everything waiting when its hour is open, else only the urgent
 tasks, which do not use up its hour). A timer rule with a tag
-condition marks whether the task had the tag, so a tag added to a quiet task is noticed. The dry run names the person routing would pick, or reports a filed item's task as found. A
-Late label from a due date does not quiet the Support timers: only their own marks dedupe them. They tell the manager
-even when the manager owns the task (the company's person can be both), and one urgent quiet period is told once: Support
+condition marks whether the task had the tag, so a tag added to a quiet task is noticed. The dry run names the person routing would pick, or reports a filed item's task as found. They
+tell a manager bot even when it owns the task, and never a person who manages Support; one urgent quiet period is told once: Support
 waits passes over a task Urgent support waits told in the same quiet period. A private Support refuses routed work.
 
 The pick is the first of: the newest person who worked another recent company-visible task of the relationship (its
@@ -1313,7 +1314,7 @@ on. The end is computed at read: nothing rewrites the row.
 - `requirements.py`: the six kinds, on a stage or added to one task. Each one answers met, waiting on what, or not met
   and why.
 - `waiting_on.py`: the one read. Batched for lists and pipeline views.
-- `never_stuck.py`: the check, the ladder, Late, filling open slots.
+- `never_stuck.py`: the check, the ladder, filling open slots. Late is a stage rule (`stage_rule_timers.py`).
 - `item_sources/github.py`: the GitHub source. PR and release metadata, the 5-minute GitHub read, webhook
   intake, its conditions and its one action, queue.
 - `item_sources/jira.py`: Jira issue links, and their state read through a record integration.
@@ -1330,7 +1331,8 @@ on. The end is computed at read: nothing rewrites the row.
 ```text
 pipelines     name, goal, manager, private, factory, settings_version
 stages        pipeline, position, kind (work | done | closed), name, purpose,
-              owner (a bot | a person | 'assignee'), by_hand, limit, expected_minutes, on_enter
+              owner (a bot | a person | 'assignee'), by_hand, limit, on_enter
+              (expected_minutes: unread since Nov 23, 2026, dropped the release after: the Late stage rule)
 requirements  stage or visit, kind, source, condition (on an item), settings, can_push_past, who_oks (none | people_only | people_with_exceptions),
               person, added_by, line, shows (page + version | email | PR | action), withdrawn_at
               on a stage: every task. on a visit: this task, this time. unique (visit, added_by) for a bot
@@ -1338,7 +1340,7 @@ tasks         pipeline, stage, owner, assignee, version, status (open | done | c
               prefix (its label's letters, from the pipeline it was made in; kept when it moves)
 visits        task, stage, entered_at, left_at, how (met | pushed_past | back | closed | reopened | moved), by, why,
               tries, level (owner | manager | person), next_try_at, progress_mark, last_change_at,
-              late_told_at, late_person_at, bot_snoozes
+              bot_snoozes (late_told_at, late_person_at: unread since Nov 23, 2026, dropped the release after)
 answers       visit, requirement, by, answer, notes, page_version, at
 snoozes       task, by, why, until (empty = no end), ended_at
 links         from_task, to_task, visit, kind (sub-task | handoff)
@@ -1510,9 +1512,7 @@ late. Nothing depends on the exact 10 seconds.
   releases" while a task waits on a Release with that needs it. Only a person sets Release with.
   With no way set (the repo releases on its own, or a person cuts each release, as on a repo that tags rcs by hand),
   the task shows "Waiting for the next release of <repo>" and only that release ends it: nobody's turn, no wake, no
-  ladder and no Late for a bot. After a week (or the stage's expected time, when longer) it is Late and a person is
-  asked to cut the release, once. A week, because a weekly stable train is the slowest cadence a repo keeps on purpose; a repo
-  cutting pre-releases several times a day never gets near it.
+  ladder and no Late: Late is on the bot's turn only.
 
 ### What gets deleted
 

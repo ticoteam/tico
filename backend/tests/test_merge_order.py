@@ -7,6 +7,7 @@ import pytest
 
 from backend import merge_order as MO
 from backend import never_stuck as NS
+from backend import stage_rules as SR
 from backend import task_engine as E
 from backend import task_relations as TR
 from backend import task_requirements as R
@@ -102,15 +103,17 @@ def test_a_later_task_builds_side_by_side_and_waits_in_merge_until_the_earlier_o
 
 
 def test_a_task_waiting_on_its_order_is_not_late_and_wakes_nobody(c):
-    """Merge expects an hour; B7 waits three on B6. Late does not hand it to the manager bot: nobody can move it."""
+    """Merge's Late rule is an hour; B7 waits three on B6. It is nobody's turn, so Late passes it by: nobody can move
+    it."""
     gh = FakeGitHub()
     b6, b7 = pair(c)
-    c.execute("UPDATE stages SET expected_minutes=60 WHERE name='Merge'")
+    stage_id, pipeline_id = c.execute("SELECT id, pipeline_id FROM stages WHERE name='Merge'").fetchone()
+    assert SR.add_late(c, stage_id, "Merge", pipeline_id, 60)
     green(c, gh, 2)
     before = X.wakes(c, b7)  # the Builder's, in Build
     NS.check(c, later(180))
     NS.check(c, later(240))
-    assert X.wakes(c, b7) == before and "late" not in X.events(c, b7)
+    assert X.wakes(c, b7) == before and "stage_rule" not in X.events(c, b7)
     assert W.turn(c, E.task(c, b7)) is None
 
 

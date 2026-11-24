@@ -458,6 +458,13 @@ def _confirmed(args, name):
         raise APIError("usage", f"Nothing removed: add --confirm {json.dumps(name)} (its exact name) to remove it")
 
 
+# A stage's expected time is its Late stage rule (backend/stage_rules.py late_rule): the flag only says where it went.
+EXPECTED_MOVED = (
+    "A stage's expected time is its Late rule now: change it in the stage's Rules panel, or find it with "
+    "tico rules list --kind stage --pipeline <id> --stage <stage> and change its hours with tico rules edit <its id>"
+)
+
+
 def _stage_fields(api, args, stage):
     """The stage fields a command line sets, onto `stage`."""
     for arg, field in (("name", "name"), ("purpose", "purpose")):
@@ -473,7 +480,7 @@ def _stage_fields(api, args, stage):
     elif args.get("limit") is not None:
         stage["task_limit"] = args["limit"]
     if args.get("expected_minutes") is not None:
-        stage["expected_minutes"] = args["expected_minutes"] or None
+        raise APIError("usage", EXPECTED_MOVED)
     return stage
 
 
@@ -570,7 +577,11 @@ STAGE_FIELDS = {
         "minimum": 1,
         "description": "At most this many open tasks in it (not the first stage)",
     },
-    "expected_minutes": {"type": "integer", "minimum": 0, "description": "How long a task should take here; 0 clears"},
+    "expected_minutes": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Refused: a stage's expected time is its Late rule, changed in the stage's Rules panel",
+    },
 }
 
 
@@ -714,7 +725,7 @@ def stage_add(api, args):
     "tico_stage_update",
     "Change a stage: its name, purpose, who holds it (one holder, or One of several with `pick_from`, `pick`, "
     "`limit_each`, `prefer` and `owns_task`; only a person changes who a stage picks from), whether tasks leave it "
-    "by hand, whether it is a side stage, its task limit, its expected time. Who may change the pipeline. "
+    "by hand, whether it is a side stage, its task limit. Who may change the pipeline. "
     "Example: tico stage update engineering-review-1 --pick-from reviewer-1 --pick-from reviewer-2 --prefer new",
     {
         "stage": STAGE,
@@ -1229,8 +1240,7 @@ CLI = (
     ),
     Command(
         "stage update",
-        "change a stage: name, purpose, holder or the bots it picks from, by hand, task limit, expected time"
-        + CHANGERS,
+        "change a stage: name, purpose, holder or the bots it picks from, by hand, task limit" + CHANGERS,
         args=(
             _either("side"),
             _either("by_hand"),
