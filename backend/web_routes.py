@@ -25,6 +25,7 @@ sw.js (web/public/sw.js), which shows Web Push.
 import hashlib
 import json
 import mimetypes
+from typing import cast
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -100,7 +101,11 @@ _SANDBOX: dict[Path, tuple[tuple[int, int], frozenset[str]]] = {}
 
 
 def _strings(value: object) -> list[str]:
-    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
+    return [v for v in cast(list[object], value) if isinstance(v, str)] if isinstance(value, list) else []
+
+
+def _object(value: object) -> dict[str, object]:
+    return cast(dict[str, object], value) if isinstance(value, dict) else {}
 
 
 def sandbox_files(root: Path) -> frozenset[str]:
@@ -116,18 +121,16 @@ def sandbox_files(root: Path) -> frozenset[str]:
     if entry and entry[0] == key:
         return entry[1]
     try:
-        chunks = json.loads(manifest.read_bytes())
+        chunks = _object(json.loads(manifest.read_bytes()))
     except (OSError, ValueError):
-        chunks = {}
-    if not isinstance(chunks, dict):
         chunks = {}
     files: set[str] = set()
     seen: set[str] = set()
     todo = [SANDBOX_PAGE]
     while todo:
         name = todo.pop()
-        chunk = chunks.get(name)
-        if name in seen or not isinstance(chunk, dict):
+        chunk = _object(chunks.get(name))
+        if name in seen or not chunk:
             continue
         seen.add(name)
         file = chunk.get("file")
@@ -135,7 +138,7 @@ def sandbox_files(root: Path) -> frozenset[str]:
             files.add(file)
         files.update(_strings(chunk.get("css")) + _strings(chunk.get("assets")))
         todo += _strings(chunk.get("imports")) + _strings(chunk.get("dynamicImports"))
-    found = frozenset(files | {SANDBOX_PAGE}) if SANDBOX_PAGE in seen else frozenset()
+    found: frozenset[str] = frozenset(files | {SANDBOX_PAGE}) if SANDBOX_PAGE in seen else frozenset()
     _SANDBOX[manifest] = (key, found)
     return found
 
