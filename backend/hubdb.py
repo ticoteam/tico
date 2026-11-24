@@ -2923,7 +2923,7 @@ def private_tasks_default(conn, actor, declared=None):
     return config.get("private_tasks_default", config.get("template") in PRIVATE_BY_TEMPLATE) is True
 
 
-def new_task_private(conn, actor, target, private=None, *, bot="", parent=None, pipeline=None):
+def new_task_private(conn, actor, target, private=None, *, bot=None, parent=None, pipeline=None):
     """Whether a task `actor` is about to file for `target` is private: the one rule every create uses (task_create,
     the route's task_privacy.new_task, the private_readers.will_be_private preview). Whoever files it chooses; privacy
     never spreads to it from where it came from, so neither a private parent nor a run on private work makes it
@@ -5022,8 +5022,8 @@ def task_create(
     pipe = task_engine.pipeline(conn, pipeline_id)
     in_private_pipeline = private_pipelines.is_private(pipe)
     # One rule (new_task_private): a private pipeline (its readers are written before it enters) or a stage-held
-    # parent, else the filer's choice, else a sensitive default; never the parent's privacy. `public`: the route already judged its filer's `private: false`
-    # (task_privacy.new_task), so it is a choice here whoever filed it.
+    # parent, else the filer's choice, else a sensitive default; never the parent's privacy. `public`: the route
+    # already judged its filer's `private: false` (task_privacy.new_task), so it is a choice here whoever filed it.
     bot = "" if public else actor if not is_human(actor) else bool(VIA.get())
     chosen = False if public else private
     private = new_task_private(conn, actor, target, chosen, bot=bot, parent=parent, pipeline=pipe)

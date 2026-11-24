@@ -132,19 +132,20 @@ def test_private_defaults_reassignment_and_human_publication(api):
     post(api, 'tasks/' + created['id'], {'version': created['version'], 'private': False}, token=cpo, expected=422)
 
 
-def test_a_private_parent_gives_no_ancestry_bypass_and_its_sub_task_stays_private(api):
+def test_a_private_parent_gives_no_ancestry_bypass_and_its_private_sub_task_stays_private(api):
     parent = post(api, 'tasks', {'owner': 'ben', 'title': 'Review the packet', 'body': 'Review it.', 'private': True})
+    # Filed private by its own choice: a private parent alone makes nothing private (hubdb.new_task_private).
     child = post(
         api,
         'tasks',
-        {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.', 'parent': parent['id']},
+        {'owner': 'priya', 'title': 'Check the packet', 'body': 'Check it.', 'parent': parent['id'], 'private': True},
         token='ben-test',
     )
     assert child['private'] and child['requester_id'] == 'human:ben'
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
-    # Its parent never changes, so a sub-task of a private task stays private.
+    # Under a private parent it cannot be published (task_update: detach it first).
     post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
 
 

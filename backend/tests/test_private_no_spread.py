@@ -10,7 +10,7 @@ import pytest
 from backend import bot_settings as BS, pipeline_settings as PS
 from backend.store import H
 from backend.tests.helpers import engine as X
-from backend.tests.helpers.api import assign, claim, headers, post, ready, runner, unrelated_task_managers
+from backend.tests.helpers.api import assign, claim, post, ready, runner, unrelated_task_managers
 from backend.tests.helpers.thread_api import new_thread
 
 BEN = "human:ben"
@@ -27,13 +27,12 @@ def _private_parent(api, owner="bot:ops"):
         return H.task_create(c, BEN, "Review the payroll packet", "Attached.", owner, private=True, lint=False)
 
 
-def _hire(api, slug, template):
-    """A bot made from `template`'s card, as a person hires one (backend/settings_admin.py create_bot)."""
-    body = {"slug": slug, "display_name": slug.title(), "description": "Legal work", "status": "active"}
-    made = api.post("/api/v2/bots", json={**body, "template": template}, headers=headers())
-    assert made.status_code == 200, made.text
-    with api.app.state.store.read() as c:
-        return H.bot_actor(H.resolve_bot(c, slug)["id"])
+def _template(api, template):
+    """Ops made from `template`, with no privacy setting of its own: its template's default decides
+    (hubdb.PRIVATE_BY_TEMPLATE)."""
+    with api.app.state.store.transaction() as c:
+        BS.update(c, "ops", {"template": template, "private_tasks_default": None})
+        return H.private_tasks_default(c, "bot:ops")
 
 
 def test_a_sub_task_of_a_private_task_filed_without_a_choice_is_not_private(api):
@@ -83,26 +82,26 @@ def test_an_explicit_private_choice_is_kept(api):
 
 
 def test_the_general_counsel_template_default_is_kept(api):
-    counsel = _hire(api, "legal-desk", "general-counsel")
+    assert _template(api, "general-counsel")
     with api.app.state.store.transaction() as c:
-        assert H.private_tasks_default(c, counsel)
-        own = H.task_create(c, counsel, "Read the NDA", "x", counsel, lint=False)
+        own = H.task_create(c, "bot:ops", "Read the NDA", "x", "bot:ops", lint=False)
         assert H.task_private(c, own)
         # A bot's `private: false` never publishes past its sensitive default.
-        asked = H.task_create(c, counsel, "Read the MSA", "x", counsel, private=False, lint=False)
+        asked = H.task_create(c, "bot:ops", "Read the MSA", "x", "bot:ops", private=False, lint=False)
         assert H.task_private(c, asked)
     # A task a person gives it with no choice takes the default; a person's own `private: false` is kept.
-    given = post(api, "tasks", {"owner": "legal-desk", "title": "Read the lease", "body": "x"})
+    given = post(api, "tasks", {"owner": "ops", "title": "Read the lease", "body": "x"}, "ben-test")
     assert given["private"] is True
-    public = post(api, "tasks", {"owner": "legal-desk", "title": "Read the brochure", "body": "x", "private": False})
+    public = post(
+        api, "tasks", {"owner": "ops", "title": "Read the brochure", "body": "x", "private": False}, "ben-test"
+    )
     assert public["private"] is False
 
 
 def test_a_template_without_a_sensitive_default_files_public_work(api):
-    sales = _hire(api, "sales-desk", "inbound-sales-owner")
+    assert not _template(api, "inbound-sales-owner")
     with api.app.state.store.transaction() as c:
-        assert not H.private_tasks_default(c, sales)
-        assert not H.task_private(c, H.task_create(c, sales, "Call the lead", "x", sales, lint=False))
+        assert not H.task_private(c, H.task_create(c, "bot:ops", "Call the lead", "x", "bot:ops", lint=False))
 
 
 def test_a_private_pipeline_still_forces_private(api):

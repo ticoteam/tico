@@ -107,7 +107,7 @@ def test_making_a_parent_private_takes_every_task_below_it(c):
 
 def test_the_bot_owning_a_private_parent_hears_its_subtasks_finished(c):
     parent = _make(c, ANA, "Plan the board pack", CMO, private=True)
-    child = _make(c, CMO, "Collect the revenue numbers", SEO, parent_id=parent["id"])
+    child = _make(c, CMO, "Collect the revenue numbers", SEO, parent_id=parent["id"], private=True)
     assert H.task_private(c, H.task(c, child["id"]))
     H.task_done(c, SEO, child["id"], "Numbers attached", _version(c, child["id"]))
     told = c.execute(
