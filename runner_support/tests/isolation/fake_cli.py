@@ -206,27 +206,30 @@ def gemini():
 
 
 def antigravity():
-    # A resumed conversation (`--conversation <id>`, after a restart) keeps its id, as the real CLI does.
-    resumed = sys.argv[sys.argv.index("--conversation") + 1] if "--conversation" in sys.argv else None
-    conversation = resumed or str(uuid.uuid4())
-    # agy names its conversation before it reads its input; the runner holds a resumed turn's prompt until then.
-    say({"event": "init", "conversation_id": conversation})
+    # `agy acp` speaks ACP (JSON-RPC 2.0, one message per line), as runner-rs/src/hosts/antigravity.rs drives it:
+    # `initialize`, `authenticate`, `session/resume` of the saved conversation (after a restart) or `session/new`,
+    # then `session/prompt`, answered with a message chunk and its stopReason. A resumed conversation keeps its id.
+    session = None
     for msg in lines():
-        if msg.get("event") != "user":
+        method, rid, params = msg.get("method"), msg.get("id"), msg.get("params") or {}
+        if method is None:
             continue
-        text = probe(None)
-        say({"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": text}})
-        say(
-            {
-                "event": "result",
-                "result": {
-                    "status": "SUCCESS",
-                    "response": text,
-                    "conversation_id": conversation,
-                    "usage": {"input_tokens": 1, "output_tokens": 1},
-                },
-            }
-        )
+        if method == "initialize":
+            result = {"protocolVersion": 1, "agentCapabilities": {"sessionCapabilities": {"resume": {}}}}
+        elif method == "session/resume":
+            session = params["sessionId"]
+            result = {}
+        elif method == "session/new":
+            session = str(uuid.uuid4())
+            result = {"sessionId": session}
+        elif method == "session/prompt":
+            text = probe(None)
+            update = {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}
+            say({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": session, "update": update}})
+            result = {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}
+        else:
+            result = {}
+        say({"jsonrpc": "2.0", "id": rid, "result": result})
 
 
 def musecode():
