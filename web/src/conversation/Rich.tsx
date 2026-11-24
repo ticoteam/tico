@@ -256,7 +256,8 @@ export function Shelf({ m, onPicture }: { m: ChatMessage; onPicture: (src: strin
     ));
   const pictures = files.filter(isPicture).map((f): Shown => {
     const src = attachmentHref(f);
-    const thumb = thumbOf(src);
+    // only a photo (JPEG) uses the thumbnail: thumbnails are JPEGs, so a PNG would lose its transparency and a GIF its motion
+    const thumb = /^image\/jpe?g$/i.test(f.content_type ?? '') ? thumbOf(src) : undefined;
     return { src, name: attachmentLabel(f), ...(thumb && { thumb }) };
   });
   const others = files.filter((f) => !isPicture(f));

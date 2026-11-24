@@ -165,6 +165,7 @@ def test_malformed_attachment_refs_never_break_the_live_streams_decoration(api):
         {"file_id": "file-x", "version": 2**70, "kind": "image"},
         {"file_id": "file-x", "version": -1, "kind": "image"},
         {"file_id": "file-x", "version": True, "kind": "image"},
+        {"file_id": "file-x", "version": 1.5, "kind": "image"},
         {"file_id": {"nested": 1}, "kind": "image"},
         "loose",
     ]
@@ -174,5 +175,5 @@ def test_malformed_attachment_refs_never_break_the_live_streams_decoration(api):
         {"id": "m3", "conversation_id": thread["id"], "refs": "{}"},
     ]
     first, second, third = as_reader(api, "human:ben", messages)
-    assert [a.get("removed") for a in first["refs"]["attachments"][:5]] == [True] * 5
-    assert second["refs"]["attachments"] == "not a list" and third["refs"] == "{}"
+    assert [a.get("removed") for a in first["refs"]["attachments"][:6]] == [True] * 6
+    assert "attachments" not in second["refs"] and third["refs"] == "{}"

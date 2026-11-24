@@ -665,6 +665,9 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
                 message.update(shown)
         refs = (message or {}).get("refs")
         items = refs.get("attachments") if isinstance(refs, dict) else None
+        if isinstance(refs, dict) and "attachments" in refs and not isinstance(items, list):
+            message["refs"] = {k: v for k, v in refs.items() if k != "attachments"}  # a malformed list shows none
+            continue
         if not isinstance(items, list) or not any(isinstance(a, dict) and a.get("file_id") for a in items):
             continue
         fresh = []
@@ -743,11 +746,13 @@ def version_of(a):
     """A stored attachment's (file id, version), or None when either is malformed (not a non-empty string id, or not a
     whole number SQLite can hold): such a ref is shown as gone."""
     fid, number = a.get("file_id"), a.get("version")
-    if not isinstance(fid, str) or not fid or isinstance(number, bool):
+    if not isinstance(fid, str) or not fid:
         return None
-    try:
-        number = int(number or 0)
-    except (TypeError, ValueError):
+    if number is None:
+        number = 0
+    elif isinstance(number, str) and number.isascii() and number.isdigit():
+        number = int(number)
+    elif not isinstance(number, int) or isinstance(number, bool):
         return None
     return (fid, number) if 0 <= number < 2**63 else None
 
