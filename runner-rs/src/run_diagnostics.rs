@@ -134,6 +134,8 @@ impl Stderr {
                         _ = kept.3.notified() => Ok(0),
                     }} => {
                         let n = read.unwrap_or(0);
+                        // Held for the whole chunk: a `clear_then` comes before it or after it, never inside.
+                        let mut lines = kept.0.lock().unwrap();
                         if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
                             pending.clear();
                             oversized = false;
@@ -141,12 +143,13 @@ impl Stderr {
                         }
                         if n == 0 {
                             if !pending.is_empty() || oversized {
-                                kept.push(if oversized { "[oversized stderr line omitted]".into() } else {
+                                keep_line(&mut lines, if oversized { "[oversized stderr line omitted]".into() } else {
                                     safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
                                 });
                                 dirty = true;
                             }
-                            if dirty { send(json!({"kind": "diagnostic", "stderr_tail": kept.tail()})); }
+                            if dirty { send_tail(&lines, &send); }
+                            drop(lines);
                             kept.1.store(true, std::sync::atomic::Ordering::SeqCst);
                             kept.2.notify_one();
                             break;
@@ -156,7 +159,7 @@ impl Stderr {
                                 let line = if oversized { "[oversized stderr line omitted]".into() } else {
                                     safe(&String::from_utf8_lossy(&scrub.scrub_bytes(&pending)), &scrub)
                                 };
-                                kept.push(line);
+                                keep_line(&mut lines, line);
                                 pending.clear();
                                 oversized = false;
                                 dirty = true;
@@ -165,13 +168,14 @@ impl Stderr {
                         }
                     }
                     _ = tick.tick() => {
+                        let lines = kept.0.lock().unwrap();
                         if kept.4.swap(false, std::sync::atomic::Ordering::SeqCst) {
                             pending.clear();
                             oversized = false;
                             dirty = false;
                         }
                         if dirty {
-                            send(json!({"kind": "diagnostic", "stderr_tail": kept.tail()}));
+                            send_tail(&lines, &send);
                             dirty = false;
                         }
                     }
@@ -181,12 +185,9 @@ impl Stderr {
         tail
     }
 
+    #[cfg(test)]
     fn push(&self, line: String) {
-        let mut lines = self.0.lock().unwrap();
-        lines.push_back(line);
-        while lines.len() > LINES || lines.iter().map(|l| l.len() + 1).sum::<usize>() > BYTES {
-            lines.pop_front();
-        }
+        keep_line(&mut self.0.lock().unwrap(), line);
     }
 
     /// A reaped process may have unread stderr in its pipe. Background children can keep it open, so bound the drain.
@@ -205,8 +206,16 @@ impl Stderr {
 
     /// Forget what a process kept between turns said in an earlier turn, so a failure carries only its own turn's.
     pub fn clear(&self) {
+        self.clear_then(|| {});
+    }
+
+    /// Forget what a process kept between turns said in an earlier turn, a line it left unfinished too, and then
+    /// `attach` where it says from now on, in one step: a failure carries only its own turn's.
+    pub fn clear_then(&self, attach: impl FnOnce()) {
+        let mut lines = self.0.lock().unwrap();
         self.4.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.0.lock().unwrap().clear();
+        lines.clear();
+        attach();
     }
 
     pub fn tail(&self) -> String {
@@ -217,6 +226,23 @@ impl Stderr {
             .cloned()
             .collect::<Vec<_>>()
             .join("\n")
+    }
+}
+
+fn keep_line(lines: &mut VecDeque<String>, line: String) {
+    lines.push_back(line);
+    while lines.len() > LINES || lines.iter().map(|l| l.len() + 1).sum::<usize>() > BYTES {
+        lines.pop_front();
+    }
+}
+
+/// The tail, sent with its lines held, so no `Stderr::clear_then` comes between reading and sending it. Nothing once
+/// cleared.
+fn send_tail(lines: &VecDeque<String>, send: &impl Fn(serde_json::Value)) {
+    if !lines.is_empty() {
+        send(
+            json!({"kind": "diagnostic", "stderr_tail": lines.iter().cloned().collect::<Vec<_>>().join("\n")}),
+        );
     }
 }
 

@@ -1344,6 +1344,34 @@ impl Drop for KeptHome {
     }
 }
 
+/// The turn goes on in a process kept on an earlier turn's own home (`home`, hosts/codex.rs `take_kept`): its record of
+/// `runtime`'s plan moves there, at this turn's subscription and revision, held as a turn holds it, so what that process
+/// refreshes there is read at this turn's end and sent back (`release`, `send_back`). The home this turn made, unused,
+/// goes now.
+pub fn go_on_in(delivered: &mut [Delivered], runtime: &str, home: &Path) {
+    let Some(d) = delivered
+        .iter_mut()
+        .find(|d| d.runtime == runtime && d.held)
+    else {
+        return;
+    };
+    let (Some(own), Some(file)) = (d.home.clone(), d.file.clone()) else {
+        return;
+    };
+    let (Ok(name), false) = (file.strip_prefix(&own), own == home) else {
+        return;
+    };
+    let mut homes = homes();
+    let Some(live) = homes.live.get_mut(home) else {
+        return;
+    };
+    live.turns += 1;
+    live.revision = d.revision;
+    d.file = Some(home.join(name));
+    d.home = Some(home.to_path_buf());
+    let_go(&mut homes, &d.root, &own);
+}
+
 /// What names the plan a turn's home (TURN_HOMES) signs in with: its subscription (`plan_of`) and the sign-in it was
 /// handed, so a reconnected plan, or another, is another; None for any other home.
 pub fn turn_plan(home: &Path) -> Option<String> {

@@ -2009,6 +2009,25 @@ impl Runner {
         let _ = self.state.append(aid, "diagnostic", &json!({"text": text}));
     }
 
+    /// A kept Codex app-server this turn went on in found gone before the turn's prompt went to it: it is stopped and
+    /// dropped, and the host the turn made for itself (`cold`) is started in its place, as a cold turn's would have
+    /// been, with its own token file already written (CodexHost::take_kept). True when that happened.
+    async fn go_cold(
+        &self,
+        h: &mut Host,
+        cold: &mut Option<Host>,
+        aid: &str,
+    ) -> Result<bool, Fail> {
+        if cold.is_none() || h.alive() {
+            return Ok(false);
+        }
+        let gone = std::mem::replace(h, cold.take().expect("checked above"));
+        self.stop_host(&gone, aid).await;
+        log("codex: the thread's kept app-server is gone; the turn starts its own");
+        h.start().await?;
+        Ok(true)
+    }
+
     async fn stop_host(&self, host: &Host, aid: &str) {
         if let Host::Codex(codex) = host {
             for report in codex.finish_turn().await {
@@ -2288,8 +2307,12 @@ impl Runner {
             )));
         }
         #[cfg(test)]
-        if let Some(env) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
-            return Ok(Host::Codex(CodexHost::on_home(env, tx, None)));
+        if let Some(mut own) = tests::HOST_CODEX.with(|env| env.borrow().clone()) {
+            // The plan home the turn signs in from, as a real host gets it.
+            if let Some(home) = env.get("CODEX_HOME") {
+                own.insert("CODEX_HOME".into(), home.clone());
+            }
+            return Ok(Host::Codex(CodexHost::on_home(own, tx, None)));
         }
         Ok(match runtime {
             "claude" => Host::Claude(ClaudeHost::new(
@@ -3044,17 +3067,25 @@ impl Runner {
                 verbosity: hosts::verbosity(&config),
                 plan_home: crate::model_subscriptions::plan_home(&vault.subscriptions, &runtime),
             };
+            // The host this turn made, kept ready while it goes on in its thread's kept app-server, until its prompt has
+            // gone there: one found gone before then is dropped, and the turn goes on as a cold one (`go_cold`).
+            let mut cold: Option<Host> = None;
             if deferred {
+                let login = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime)
+                    .map(|d| (d.id.as_str(), d.revision));
                 let kept = match &*h {
-                    Host::Codex(c) => c.take_kept(previous.as_deref(), &settings).await,
+                    Host::Codex(c) => c.take_kept(previous.as_deref(), &settings, login).await,
                     _ => None,
                 };
                 match kept {
-                    Some(kept) => *h = Host::Codex(kept),
+                    Some(kept) => cold = Some(std::mem::replace(h, Host::Codex(kept))),
                     None => h.start().await?,
                 }
                 mark("harness_started", &aid);
             }
+            #[cfg(test)]
+            tests::kill_kept_at("taken", h).await;
+            self.go_cold(h, &mut cold, &aid).await?;
             let mut resumed = false;
             let moved_session = previous.is_none() && session_fence.is_some_and(|f| f > 0)
                 && !cleared && !binding_changed && !fresh_chat && !release_run && continuing.is_empty();
@@ -3315,6 +3346,23 @@ impl Runner {
                 tail = format!("{tail}\n\n{line}");
             }
             let prompt = crate::prompt::before_header(&attempt, &built.text, &tail);
+            #[cfg(test)]
+            tests::kill_kept_at("started", h).await;
+            if self.go_cold(h, &mut cold, &aid).await? {
+                // Started already: the thread is resumed in the new process as it would have been, or the turn ends here,
+                // its prompt sent nowhere.
+                match h.resume_thread(&th, &settings).await {
+                    Ok(t) if t == th => {}
+                    _ => return Err(Fail::runtime("The Codex app-server stopped before the turn went to it")),
+                }
+            }
+            // The prompt goes to the kept app-server now: the plan login it refreshes in its own home is this turn's to
+            // send back (model_subscriptions::go_on_in).
+            if let (Some(_), Host::Codex(c)) = (cold.take(), &*h) {
+                if let Some(home) = c.own_home() {
+                    crate::model_subscriptions::go_on_in(&mut vault.subscriptions, &runtime, &home);
+                }
+            }
             // A resumed session that turns out to be missing restarts as a new one under its id (hosts::Host::full_prompt),
             // given what a new session that replaces it is given: the repo rules, the checkpoint, the room since its
             // last turn with its own replies, and the new-session note. A new Antigravity conversation also gets the
@@ -4881,6 +4929,20 @@ mod tests {
         pub(super) static HOST_CLAUDE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
         pub(super) static RUN_SESSION: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
         pub(super) static HOST_CODEX: RefCell<Option<Env>> = const { RefCell::new(None) };
+        /// Where a turn that went on in a kept Codex app-server kills it: "taken" or "started".
+        pub(super) static KILL_KEPT: std::cell::Cell<Option<&'static str>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// Kill the kept app-server `h` went on in, and wait until it has gone, when KILL_KEPT names `stage`.
+    pub(super) async fn kill_kept_at(stage: &str, h: &Host) {
+        if KILL_KEPT.with(|at| at.get()) != Some(stage) {
+            return;
+        }
+        if let Host::Codex(c) = h {
+            if c.warm() {
+                c.die().await;
+            }
+        }
     }
 
     struct RunControls;
@@ -4901,6 +4963,7 @@ mod tests {
             HOST_CLAUDE.with(|claude| claude.set(false));
             RUN_SESSION.with(|on| on.set(None));
             HOST_CODEX.with(|env| env.borrow_mut().take());
+            KILL_KEPT.with(|at| at.set(None));
             MEMORY_RISES_AFTER_ALLOCATION.with(|on| on.set(false));
             MEMORY_OVERRIDE.with(|reading| reading.set(None));
             hosts::TEST_STARTS.with(|starts| starts.set(0));
@@ -8987,7 +9050,8 @@ for line in sys.stdin:
     }
 
     /// A Codex app server stand-in, controlled by `mode.json` in its directory (`resume`: ok | missing | refuse |
-    /// refuse_once; `compact`: ok | fail; `turn`: ok | die), logging each call to `calls.jsonl` with its pid, and with
+    /// refuse_once; `compact`: ok | fail; `turn`: ok | die; `refresh`: what a turn writes to its home's auth.json, as
+    /// Codex does when it refreshes a ChatGPT login), logging each call to `calls.jsonl` with its pid, and with
     /// each turn the token its token file holds then (crate::warm).
     const FAKE_CODEX: &str = r#"#!/usr/bin/env python3
 import json, os, re, sys
@@ -9031,6 +9095,9 @@ for line in sys.stdin:
     elif method == "turn/start":
         if m.get("turn") == "die":
             os._exit(1)
+        if m.get("refresh"):
+            with open(os.path.join(os.environ["CODEX_HOME"], "auth.json"), "w") as f:
+                f.write(m["refresh"])
         t, tid = "t%d" % count("turns"), params["threadId"]
         say({"id": i, "result": {"turn": {"id": t}}})
         say({"method": "turn/started", "params": {"threadId": tid, "turn": {"id": t}}})
@@ -9109,10 +9176,10 @@ for line in sys.stdin:
         ) -> Value {
             std::fs::write(self.dir.join("mode.json"), mode.to_string()).unwrap();
             let mut config = json!({"runtime": "codex", "harness": "codex", "model": "gpt-5.5"});
-            config
-                .as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().cloned().unwrap_or_default());
+            let mut extra = extra.as_object().cloned().unwrap_or_default();
+            // The attempt's own fields (a run token whose grants sign the turn in), not the bot's config.
+            let own = extra.remove("attempt");
+            config.as_object_mut().unwrap().extend(extra.clone());
             let mut attempt = json!({"id": format!("a-codex-{n}"), "job_id": format!("j{n}"), "bot": "ops", "token": "synthetic-turn", "lease_seconds": 120,
                                  "conversation": {"id": "c-watch", "kind": "task"},
                                  "task": {"id": "t-watch", "title": "Watch the Acme release", "requester": "human:ana@acme.example",
@@ -9121,6 +9188,9 @@ for line in sys.stdin:
                                  "history": [], "config": config});
             if let Some(thread) = continuing {
                 attempt["continue_thread"] = json!(thread);
+            }
+            if let Some(Value::Object(own)) = own {
+                attempt.as_object_mut().unwrap().extend(own);
             }
             if let Some(epoch) = extra.get("test_session_epoch") {
                 attempt["session_epoch"] = epoch.clone();
@@ -9304,34 +9374,83 @@ for line in sys.stdin:
         rig.runner.keeper.prune(true).await;
     }
 
-    /// A kept app-server that died between turns: the next turn resumes the thread in a new one, its message sent once.
+    /// A kept app-server that died between turns, after its next turn took it, or after that turn was started and
+    /// before its prompt went to it: the turn resumes the thread in a new app-server of its own, signed in with its own
+    /// token, its message sent once.
     #[tokio::test]
     async fn a_codex_turn_after_its_kept_app_server_died_resumes_cold_and_sends_its_message_once() {
-        let rig = CodexRig::warm().await;
-        rig.turn(0, json!({}), json!({})).await;
-        let pid = rig.turns()[0]["pid"].as_i64().unwrap() as libc::pid_t;
-        // SAFETY: a signal to the fake app-server this test started.
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-        let gone = std::time::Instant::now() + Duration::from_secs(10);
-        // SAFETY: signal 0 only asks whether the (reaped) process is still there.
-        while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < gone {
-            tokio::time::sleep(Duration::from_millis(20)).await;
+        for stage in [None, Some("taken"), Some("started")] {
+            let rig = CodexRig::warm().await;
+            rig.turn(0, json!({}), json!({})).await;
+            if stage.is_none() {
+                let pid = rig.turns()[0]["pid"].as_i64().unwrap() as libc::pid_t;
+                // SAFETY: a signal to the fake app-server this test started.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+                let gone = std::time::Instant::now() + Duration::from_secs(10);
+                // SAFETY: signal 0 only asks whether the (reaped) process is still there.
+                while unsafe { libc::kill(pid, 0) } == 0 && std::time::Instant::now() < gone {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+            KILL_KEPT.with(|at| at.set(stage));
+            let done = rig.turn(1, json!({}), json!({})).await;
+            KILL_KEPT.with(|at| at.set(None));
+            assert_eq!(done["outcome"], "completed", "{stage:?}: {done}");
+            assert_eq!(
+                rig.methods(),
+                ["thread/start", "turn/start", "thread/resume", "turn/start"],
+                "{stage:?}"
+            );
+            let turns = rig.turns();
+            assert_ne!(turns[1]["pid"], turns[0]["pid"], "{stage:?}");
+            assert_eq!(turns[1]["token"], "synthetic-turn", "{stage:?}");
+            assert_eq!(
+                turns
+                    .iter()
+                    .filter(|t| text_of(&t["params"]["input"][0]["text"]).contains("Question 1"))
+                    .count(),
+                1,
+                "{stage:?}"
+            );
+            rig.runner.keeper.prune(true).await;
         }
-        let done = rig.turn(1, json!({}), json!({})).await;
+    }
+
+    /// A ChatGPT login Codex refreshed during a turn that went on in the thread's kept app-server, in the home that
+    /// app-server signs in from, goes back to the hub at that turn's revision.
+    #[tokio::test]
+    async fn a_login_refreshed_in_a_kept_app_server_goes_back_to_the_hub() {
+        let rig = CodexRig::warm().await;
+        let token = format!("run-codex-plan-{}", uuid::Uuid::new_v4().simple());
+        grants().lock().unwrap().insert(
+            token.clone(),
+            json!({"subscriptions": [{
+                "id": "codexplan", "runtime": "codex", "kind": "codex_login", "file": "auth.json", "source": "attempt",
+                "value": r#"{"tokens":{"access_token":"synthetic-handed-access-0123456789"}}"#,
+                "revision": 4, "billing": "subscription"
+            }]}),
+        );
+        let plan = json!({"attempt": {"token": token, "credential_vault": true}});
+        let done = rig.turn(0, json!({}), plan.clone()).await;
         assert_eq!(done["outcome"], "completed", "{done}");
-        assert_eq!(
-            rig.methods(),
-            ["thread/start", "turn/start", "thread/resume", "turn/start"]
-        );
+        let refreshed = r#"{"tokens":{"access_token":"synthetic-refreshed-access-0123456789"}}"#;
+        let done = rig.turn(1, json!({"refresh": refreshed}), plan).await;
+        assert_eq!(done["outcome"], "completed", "{done}");
         let turns = rig.turns();
-        assert_ne!(turns[1]["pid"], turns[0]["pid"]);
-        assert_eq!(
-            turns
-                .iter()
-                .filter(|t| text_of(&t["params"]["input"][0]["text"]).contains("Question 1"))
-                .count(),
-            1
-        );
+        assert_eq!(turns[0]["pid"], turns[1]["pid"], "warm");
+        let sent: Vec<Value> = rig
+            .seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, p, _)| p.ends_with("runner-model-subscription-refresh"))
+            .map(|(_, _, b)| b.clone())
+            .collect();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["attempt"], "a-codex-1");
+        assert_eq!(sent[0]["subscription"], "codexplan");
+        assert_eq!(sent[0]["revision"], 4);
+        assert_eq!(sent[0]["value"], refreshed);
         rig.runner.keeper.prune(true).await;
     }
 
