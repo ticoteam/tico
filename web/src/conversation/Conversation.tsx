@@ -17,7 +17,7 @@ import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
 import { MessageBones } from './Bones';
-import { Composer, readDraft, writeDraft } from './Composer';
+import { addToTray, Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
 import { Face, LiveRow, Message, whoOf } from './Message';
 import { onJump } from './Outline';
@@ -290,7 +290,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const here = useHerePage();
   const at = from === undefined ? here : from;
   // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
-  const [fill, setFill] = useState<{ text: string } | null>(null);
+  const [fill, setFill] = useState<{ text?: string; tray?: boolean } | null>(null);
   // the Agent bar's box keeps its draft by its agent, not by the thread it shows (which may change under it)
   const draftId = toDm ? `dm:${toDm}` : undefined;
   // each view of a task's thread keeps its own draft: words for one agent never wait in another's box, or the comments'
@@ -313,6 +313,30 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const byId = new Map(rows.map((m) => [m.id, m]));
 
   const footRef = useRef<HTMLElement>(null);
+
+  /* ---- files dropped anywhere on the chat (its messages, its foot) go in its box's tray. A box of its own (a reply
+     written in place, the box itself) takes its own drops. The chat's column is the foot's parent in every variant. */
+  const dropsTo = attach && canPost && myId ? boxId : null;
+  useEffect(() => {
+    const zone = footRef.current?.parentElement;
+    if (!zone || !myId || !dropsTo) return;
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files') && !(e.target instanceof Element && e.target.closest('.composer'));
+    const over = (e: DragEvent) => {
+      if (files(e)) e.preventDefault();
+    };
+    const drop = (e: DragEvent) => {
+      if (!files(e)) return;
+      e.preventDefault();
+      addToTray(myId, dropsTo, [...(e.dataTransfer?.files ?? [])]);
+      setFill({ tray: true });
+    };
+    zone.addEventListener('dragover', over);
+    zone.addEventListener('drop', drop);
+    return () => {
+      zone.removeEventListener('dragover', over);
+      zone.removeEventListener('drop', drop);
+    };
+  }, [myId, dropsTo]);
   // An agent's session takes no Reply: a reply reaches its author as a comment does, so it lives in the comments.
   const canReply = canPost && variant !== 'tico' && (!view || comments);
   const startReply = (m: ChatMessage) => {
@@ -394,17 +418,22 @@ export function Conversation({ id, variant, title, actor, session, from, starter
     // kept by the agent (`draftId`), so they stay through the bar reading its DM again; the reason shows; and the
     // quote stays unless the DM changed under it (what it answered is in the other one). Send again sends it.
     // Newer words are never written over: with something typed since, the box keeps it and the toast holds the unsent
-    // words until it is closed, so nothing is lost.
+    // words until it is closed, so nothing is lost. Its files go back in the tray, after any added since.
     let failed = false;
     const onFailed = (e: unknown) => {
       failed = true;
       const why = refusalFor(e, 'Not sent').name;
       const empty = !myId || !draftId || !readDraft(myId, draftId).trim();
+      const tray = !!(files.length && myId && draftId);
+      if (tray) addToTray(myId!, draftId!, files);
       if (empty) {
         if (myId && draftId) writeDraft(myId, draftId, text);
-        setFill({ text });
+        setFill({ text, tray });
         toast({ text: 'Not sent', ...(why && { name: why }), kind: 'failed' });
-      } else toast({ text: why ? `Not sent (${why})` : 'Not sent', name: text, kind: 'failed', timeout: 0 });
+      } else {
+        if (tray) setFill({ tray });
+        toast({ text: why ? `Not sent (${why})` : 'Not sent', ...(text && { name: text, timeout: 0 }), kind: 'failed' });
+      }
       if (replied && !isDmChanged(e)) setReplying({ id, m: replied, inline: false });
       onMoved?.('');
     };
@@ -419,7 +448,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       ...(toDm && { toDm, onMoved, onFailed }),
       ...(task && { task }),
       ...(view && { view }),
-      ...(retry && { retry: retry.id }),
+      ...(retry && { retry: retry.id, key: retry.sendKey }),
       ...(answers && { replyTo: answers, quote }),
     }).then((sent) => {
       // the org rules held it: said, as everywhere a message is held

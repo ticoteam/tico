@@ -315,6 +315,77 @@ describe('Conversation', () => {
     expect((sends()[1]?.body as { refs: unknown }).refs).toEqual({ from_page: { page: 'tasks', label: 'Tasks' } });
   });
 
+  describe('files', () => {
+    let keys: string[] = [];
+    let forms: FormData[] = [];
+    function serveKeyed(reply: () => Reply) {
+      keys = [];
+      forms = [];
+      vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
+        if (init?.method === 'POST' && url.endsWith('/messages')) {
+          keys.push(new Headers(init.headers).get('Idempotency-Key') ?? '');
+          forms.push(init.body as FormData);
+        }
+        const r = await reply();
+        return new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } });
+      });
+    }
+    const box = () => screen.getByRole('textbox', { name: 'Message Ana' });
+    const attach = (...files: File[]) => fireEvent.paste(box(), { clipboardData: { files, types: ['Files'] } });
+    const broke = { status: 500, body: { error: { code: 'boom', detail: 'Broke' } } };
+
+    it('a Retry sends the same files under the same key, so a send that landed unanswered is not written twice', async () => {
+      let reply: Reply = broke;
+      serveKeyed(() => reply);
+      show();
+      attach(new File(['x'], 'notes.txt', { type: 'text/plain' }));
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      expect(await screen.findByText('Not sent')).toBeTruthy();
+      // the server kept this refusal under the key: the same key would only replay it
+      reply = { status: 422, body: { error: { code: 'refused', detail: 'No', idempotency_refused: true } } };
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(keys).toHaveLength(2));
+      expect(await screen.findByText('Not sent')).toBeTruthy();
+      reply = { status: 200, body: msg(3, ME, '') };
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.queryByText('Not sent')).toBeNull());
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).not.toBe(keys[1]);
+      expect(forms.map((f) => (f.get('files') as File).name)).toEqual(['notes.txt', 'notes.txt', 'notes.txt']);
+    });
+
+    it("puts a failed bar send's files back in its tray, and sends them again under the same key", async () => {
+      seed([]);
+      let reply: Reply = broke;
+      serveKeyed(() => reply);
+      render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} toDm="bot:qa" onMoved={() => undefined} />, {
+        wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+      });
+      attach(new File(['x'], 'notes.txt', { type: 'text/plain' }));
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      expect(await screen.findByRole('button', { name: 'Remove notes.txt' })).toBeTruthy();
+      reply = { status: 200, body: msg(3, ME, '') };
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      await waitFor(() => expect(keys).toHaveLength(2));
+      expect(keys[1]).toBe(keys[0]);
+      await waitFor(() => expect(screen.queryByRole('button', { name: 'Remove notes.txt' })).toBeNull());
+    });
+
+    it("one files-only message's echo never takes another's pending row", async () => {
+      serveKeyed(() => new Promise(() => {}));
+      show();
+      attach(new File(['one'], 'image.png', { type: 'text/plain' }));
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      attach(new File(['three'], 'image.png', { type: 'text/plain' }));
+      fireEvent.keyDown(box(), { key: 'Enter' });
+      const pending = () => queryClient.getQueryData<Timeline>(key)!.pages[0]!.messages.filter((m) => m.pending === 'sending');
+      expect(pending()).toHaveLength(2);
+      const real = msg(3, ME, '', { refs: { attachments: [{ id: 'f1', name: 'image.png', size: 5 }] } });
+      emit('messages', [{ id: real.id, conversation_id: T, message: real }]);
+      expect(pending().map((m) => m.refs?.attachments?.[0]?.size)).toEqual([3]);
+    });
+  });
+
   it('follows and reads new messages at the bottom, and waits for the reader to scroll back otherwise', async () => {
     const settle = () => act(async () => {});
     const reads = () => posts.filter((p) => p.url === `/api/v2/threads/${T}/read`).map((p) => p.body);

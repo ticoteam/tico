@@ -36,6 +36,8 @@ export interface Write<T> {
    * and a refusal is said beside them rather than in a row that has gone.
    */
   wait?: boolean;
+  /** The Idempotency-Key, when this is a change sent before (Retry): a first send that landed is not written twice. */
+  idempotencyKey?: string;
 }
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -77,7 +79,7 @@ export async function write<T>(w: Write<T>): Promise<T> {
   const holdable = w.offline === 'hold';
   if (isOffline() && !holdable) throw new NeedsConnection();
   const keys = keysOf(w.key);
-  const idem = newId();
+  const idem = w.idempotencyKey ?? newId();
   const show = (queryKey: QueryKey) => {
     // A read in flight would land over the change: cancel it (the stream or a later read brings it back).
     void queryClient.cancelQueries({ queryKey });
