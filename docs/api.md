@@ -250,6 +250,10 @@ is left out unless asked for by id, by number or with `snoozed`.
 
 ## Task comments
 
+`POST /api/v2/tasks/{tid}/comments` writes one. A plain comment wakes and notifies nobody; an @mention, a Reply
+(`in_reply_to`) or a session message (`to`) reaches someone, as
+[Reach someone](connect-an-agent.md#reach-someone-mentions-replies-and-sessions) shows.
+
 `POST /api/v2/tasks/{tid}/comments/{mid}` with `{"text": "..."}` changes the text of a comment the caller
 wrote; `POST /api/v2/tasks/{tid}/comments/{mid}/delete` with `{}` deletes it. `mid` is the comment's `id` in
 `GET /api/v2/tasks/{tid}`. Both answer as commenting does, `{"comment": {...}, "comments": [...], "woke": false}`

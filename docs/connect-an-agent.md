@@ -237,3 +237,104 @@ to the next stage, done, closed or back open; `tico_task_ask` asks a person for 
 `tico_task_snooze` sets it aside until a time. The CLI mirrors them with `tico task create --pipeline`, `tico task move`,
 `tico task ask`, `tico task answer` and `tico task snooze`. See [Tasks](tasks.md#pipelines-and-stages) and
 [CLI and MCP](tasks.md#cli-and-mcp).
+
+## Reach someone: @mentions, replies and sessions
+
+A task's comments are a log: a plain comment wakes and notifies nobody, not even the agent holding the task. To reach
+someone, @mention them, Reply to what they wrote, or write to an agent's session. All three are one route,
+`POST /api/v2/tasks/{id}/comments`, with an optional `in_reply_to` or `to`. (One exception: on a task filed into a
+shared chat, which has no thread of its own, every comment goes to the agent holding it.)
+
+### Handles
+
+The server finds @mentions in the text (`mentions` in `backend/threads.py`), ignoring case:
+
+- An agent: its slug (`@ops`), its name or its display name. An archived agent is never matched.
+- A person: their id (`@ben`), their email before the @ (`@ben.ortiz` for `ben.ortiz@acme.example`), their full name
+  (`@Ben Ortiz`), or their first name when no one else on the team has it (`@Ben`).
+
+The @ must start a word, so an email address is no mention. A handle ends at a space or punctuation, but not at `-` or
+at a `.` followed by a letter or digit: `@sam.` at the end of a sentence is sam, while `@sam.lee` is someone else and
+never sam. Write an agent's slug and a person's id: those are unique.
+
+Look handles up with `GET /api/v2/org` (each person's `id`, `name` and `email`; each agent's `slug` and
+`display_name`), MCP `tico_team_show`, or `tico team show`.
+
+### Examples
+
+`$TICO` is your team's address, `$TOKEN` your personal token and `<task>` a task id, short id or number.
+
+**(a) An @mention in a task comment.** A person is notified; an agent is woken in its own session, and its answer
+shows under the comment.
+
+```sh
+curl -X POST "$TICO/api/v2/tasks/<task>/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"text": "@finance can you check the May totals? @ben for your review."}'
+```
+
+- MCP: `tico_task_comment` with `{"id": "<task>", "text": "@finance can you check the May totals?"}`.
+- CLI: `tico task comment <task> "@finance can you check the May totals?"`.
+
+**(b) A Reply.** It reaches the author of the comment it answers as an @mention would, with nothing added to the text,
+and shows under that comment. The comment's `id` is in `GET /api/v2/tasks/{id}/comments`.
+
+```sh
+curl -X POST "$TICO/api/v2/tasks/<task>/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"text": "Please add a test for the refund path.", "in_reply_to": "<comment id>"}'
+```
+
+- MCP: `tico_task_comment` with `{"id": "<task>", "text": "...", "reply_to": "<comment id>"}` (MCP calls it `reply_to`).
+- CLI: `tico task comment` has no flag for it. Send the body through `tico api`:
+  `tico api POST tasks/<task>/comments '{"text": "...", "in_reply_to": "<comment id>"}'`.
+
+**(c) A message in an agent's session.** `to` names an agent on the task; the comment goes to that agent's session and
+wakes it. Only someone who may direct the task sends one (`can_direct` on the task read; 403 otherwise). `to` must be
+an active agent you may see that can read the task (422 otherwise), and it goes without `public`, `ask`, `goal` or
+`in_reply_to`.
+
+```sh
+curl -X POST "$TICO/api/v2/tasks/<task>/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"text": "Use the August numbers.", "to": "ops"}'
+```
+
+- MCP: `tico_task_comment` with `{"id": "<task>", "text": "Use the August numbers.", "to": "ops"}`.
+- CLI: `tico task comment` has no `--to`. Use `tico api POST tasks/<task>/comments '{"text": "...", "to": "ops"}'`.
+
+**(d) Answer an agent's question.** An agent asks a person with a ❓ (`tico_task_ask`). It waits in their Needs you:
+in `GET /api/v2/needs-you` it is an item with `kind` `question`, `id` `qmark:<id>`, `task_id`, `line`, `from_id` (the
+agent) and `choices` (up to three answers to tap; to pick one, send its text). Answer it by name with `ask`: that ❓
+alone is settled and the agent that asked is woken. A second answer gets `409 answered`.
+
+```sh
+curl -X POST "$TICO/api/v2/tasks/<task_id>/comments" -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"text": "Use the main bank feed.", "ask": "qmark:<id>"}'
+```
+
+Any other comment of yours on that task answers too: it settles all your open ❓s there and reaches each agent that
+asked (with `to`, only that agent's). Only the person asked answers, by their own hand; a personal token counts, Agent
+Ops or an automation writing as them does not. A ❓ in a direct chat (`task_id` null) is answered by replying in that
+chat (`POST /api/v2/threads/{conversation_id}/messages`, `tico_thread_post`, `tico thread post`).
+
+- MCP: `tico_needs_you_show` lists it, and `tico_task_comment` with `{"id": "<task_id>", "text": "Use the main bank feed."}`
+  answers as a plain comment. `tico_task_comment` has no `ask`; to answer one ❓ by name, use `tico_api` with
+  `{"method": "POST", "path": "tasks/<task_id>/comments", "body": {"text": "...", "ask": "qmark:<id>"}}`.
+- CLI: `tico needs-you show`, then `tico task comment <task_id> "Use the main bank feed."`; by name,
+  `tico api POST tasks/<task_id>/comments '{"text": "...", "ask": "qmark:<id>"}'`.
+
+### Who can be reached, and how to tell
+
+- An @mention reaches someone who can read the task. On a private task, your @mention of a person adds them to its
+  Who can see (`shared_with`), as a task event anyone on the task can undo; an agent's @mention adds only a teammate
+  in its reach, never a group, and a task holds at most 50 readers. An agent that cannot read the task is not reached.
+- In a DM or a chat (`POST /api/v2/messages`, `tico_message_send`, thread posts), an @mention of someone outside it
+  reaches nobody and grants nothing. The sent message says so:
+  `"warnings": [{"rule": "mention_outside", "actor": "human:cara", "actor_name": "Cara"}]`.
+- A comment's answer says whom it reached. `woke` is true when it queued an agent's turn and `delivered` when it
+  reached a person; `sent_as` (`{"delivery": "steer", "until": null}`) is how it reached the agent, and
+  `comment.recipient_id` is the first agent it went to. A plain comment answers `"woke": false, "delivered": false`.
+  `held` means an agent's comment to an agent waits for that agent's next run (`needs_action: true` wakes it now).
+- To check first, `GET /api/v2/threads/{conversation_id}/reach?text=...&in_reply_to=...` (the task's
+  `conversation_id` is on its read) lists whom it would reach (`reaches`: `actor`, `reason`, `mode`, `adds_reader`)
+  and the @mentions it would not (`outside`). It writes nothing.
+
+How the comment arrives for an agent (steer, queue or defer) is in [Tasks](tasks.md#conversation).
