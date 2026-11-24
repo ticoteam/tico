@@ -1,5 +1,5 @@
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { MenuItem } from '@/kit/Menu';
 import { Menu, type MenuNode, type MenuProps } from './Menu';
@@ -59,14 +59,25 @@ describe('Menu', () => {
     expect(within(nav).getByRole('link', { name: 'Engineering Manager' })).toBeTruthy();
   });
 
-  it('counts what waits on you on its own Needs you row, under Tasks, and not on Tasks', async () => {
-    const nav = await show();
-    const needs = within(nav).getByRole('link', { name: /^Needs you/ });
-    expect(needs.getAttribute('href')).toBe('/needs-you');
-    expect(needs.querySelector('.nav-flow')?.textContent).toBe('8');
-    expect(within(nav).getByRole('link', { name: /^Tasks/ }).querySelector('.nav-flow')).toBeNull();
+  it('counts what waits on you on Tasks, where Needs you is on top: no Needs you row of its own', async () => {
+    const nav = await show({ pipelines: [{ id: 'eng', name: 'Engineering', to: '/tasks/eng' }] });
+    expect(within(nav).queryByRole('link', { name: /^Needs you/ })).toBeNull();
+    const tasks = within(nav).getByRole('link', { name: /^Tasks/ });
+    expect(tasks.getAttribute('href')).toBe('/tasks');
+    // the count beside the pipelines' chevron
+    expect(tasks.querySelector('.nav-flow')?.textContent).toBe('8');
+    expect(tasks.querySelector('.nav-chev')).toBeTruthy();
     const rows = [...nav.querySelectorAll('.nav-items > .nav-item .nav-label')].map((x) => x.textContent);
-    expect(rows).toEqual(['Tasks', 'Needs you', 'Calendar', 'Company', 'Library']);
+    expect(rows).toEqual(['Tasks', 'Calendar', 'Company', 'Library']);
+  });
+
+  it('on a view of Needs you (All, Snoozed, Done) marks Tasks, where Needs you is, as the page', async () => {
+    for (const folded of [false, true]) {
+      const nav = await show({ folded, pipelines: [{ id: 'eng', name: 'Engineering', to: '/tasks/eng' }] }, '/needs-you?view=snoozed');
+      expect(within(nav).getByRole('link', { name: /^Tasks/ }).getAttribute('aria-current')).toBe('page');
+      expect(within(nav).getByRole('link', { name: /^Calendar/ }).getAttribute('aria-current')).toBeNull();
+      cleanup();
+    }
   });
 
   it('leaves out pages the person cannot open, the company’s settings too', async () => {
@@ -82,7 +93,8 @@ describe('Menu', () => {
   it('folded, keeps every row as an icon with its name, the company (its one menu) and the "?"; Settings is in the menu', async () => {
     const nav = await show({ folded: true, ...PICK }, '/team/qa');
     // the faces are the rows showing: your direct reports, each folded
-    for (const name of ['Tasks', 'Needs you', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    for (const name of ['Tasks', 'Calendar', 'Company', 'Library', 'Engineering Manager', 'Ops']) expect(within(nav).getByRole('link', { name })).toBeTruthy();
+    expect(within(nav).queryByRole('link', { name: 'Needs you' })).toBeNull();
     expect(within(nav).queryByRole('link', { name: 'QA Owner' })).toBeNull();
     expect(within(nav).queryByRole('link', { name: 'Settings' })).toBeNull();
     expect(within(nav).queryByRole('button', { name: 'Maya' })).toBeNull();

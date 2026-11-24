@@ -362,11 +362,14 @@ describe("An agent's column", () => {
     await waitFor(() => expect(posted('/api/v2/bots/ana/control')?.body).toMatchObject({ action: 'pause' }));
   });
 
-  it('puts what waits on me first, under Waits on you @s607', async () => {
-    serve(tasksOf('open', [task('t3', 'Approve the logo', { turn: { state: 'person', who: pat.id } })]));
+  it('puts what waits on me first, under Waits on you: what Needs you names, not a turn that is only mine @s607', async () => {
+    serve(tasksOf('open', [task('t3', 'Approve the logo'), task('t5', 'Pick a font', { turn: { state: 'person', who: pat.id } })]));
+    queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['t3'] });
     show(<TeamWho who="ana" />, '/team/ana');
     const waits = await screen.findByRole('region', { name: /Waits on you/ });
     expect(within(waits).getByText('Approve the logo')).toBeTruthy();
+    expect(within(waits).queryByText('Pick a font')).toBeNull();
+    expect(screen.queryByText('On Pat Doe')).toBeNull();
   });
 
   it('lists what it waits on from someone else, naming who @s609', async () => {

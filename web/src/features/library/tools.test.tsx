@@ -748,7 +748,7 @@ describe('letters out', () => {
     expect(reads(sent)()).toContain('/api/v2/letters?limit=20&before=R18');
     await options();
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Review' }));
-    await waitFor(() => expect(router.state.location.pathname).toBe('/needs-you'));
+    await waitFor(() => expect(router.state.location.pathname).toBe('/tasks'));
   });
 });
 

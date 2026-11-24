@@ -49,11 +49,11 @@ const humans = {
 const turnedOn = async (who: string) =>
   (await queryClient.ensureQueryData(humans)).find((p) => p.id === who.slice(who.indexOf(':') + 1))?.notify_browser === true;
 
-/** Where a click on an ask goes: its task, else its thread, else Needs you. */
+/** Where a click on an ask goes: its task, else its thread, else Tasks (Needs you on top). */
 function askAddress(it: NeedsYouItem): string {
   if (it.task) return `/task/${it.task.number ?? encodeURIComponent(it.task.id)}`;
   const room = it.root_id || it.conversation_id;
-  return room ? `/threads/${encodeURIComponent(room)}` : '/needs-you';
+  return room ? `/threads/${encodeURIComponent(room)}` : '/tasks';
 }
 const ownAsk = (it: NeedsYouItem, who: string) => it.ask?.asked_by === who || it.from_id === who;
 

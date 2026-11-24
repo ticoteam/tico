@@ -1,4 +1,4 @@
-import { QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState, type ReactNode } from 'react';
@@ -16,7 +16,7 @@ import { useFollow } from '@/live/follow';
 import { dispatch, installPatchers } from '@/live/patch';
 import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
-import { pipelinesQuery } from '@/features/tasks/routing';
+import { flowCountQuery, flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask } from './routing';
 import { TaskChat, TaskPage } from './TaskPage';
@@ -742,6 +742,144 @@ describe('the decision', () => {
     expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
     await act(async () => {});
     expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+  });
+
+  it('Approve stays on the task while Needs you still names it for something else (a paid render to reconcile) @approvals', async () => {
+    approved();
+    const row = { id: 't1', number: 12, pipeline_id: 'p1', title: 'Order' };
+    queryClient.setQueryData(['flow'], { count: 1, items: [row], requests: [], task_ids: ['t1'], waits: { t1: ['r1', 'reconcile:render-1'] } } as never);
+    const router = show(<OnTask />, '/needs-you');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(await ready(await decision()));
+    expect(await screen.findByRole('button', { name: 'Undo' })).toBeTruthy();
+    await act(async () => {});
+    expect(router.state.location.pathname).toMatch(/^\/tasks\/p1\/12/);
+    expect((queryClient.getQueryData(['flow']) as { task_ids: string[] }).task_ids).toEqual(['t1']);
+  });
+
+  describe('Needs you, as the server takes the answer', () => {
+    // Needs you as the server lists it: an OK on task 12 (t1) until it is taken, and one on task 13 (t9)
+    const need = (id: string, n: number, rid: string) => ({
+      kind: 'ask',
+      id: `v1:${rid}`,
+      task_id: id,
+      requirement_id: rid,
+      line: 'Send it?',
+      since: '2026-11-18T09:00:00Z',
+      task: { id, number: n, title: `Task ${n}`, pipeline_id: 'p1' },
+      ask: { kind: 'ok', requirement_id: rid, asked_by: 'bot:lo' },
+    });
+    let open = true;
+    const listed = (): Reply => ({ body: { items: [...(open ? [need('t1', 12, 'r1')] : []), need('t9', 13, 'r9')], next: null } });
+    // the count the server gives: two while task 12 waits, one after; `told` in its place when a test says so
+    let told: number | null = null;
+    const counted = (): Reply => ({ body: { flow_count: told ?? (open ? 2 : 1) } });
+    // a read of the list or the count to hold back (`late`), else what the server says now; how many of each were read
+    const held: { list: Promise<Reply> | null; count: Promise<Reply> | null } = { list: null, count: null };
+    const reads = { list: 0, count: 0 };
+    let take!: () => void;
+    // the answer refused, and Needs you not to be read after it (refusals: nothing tries again)
+    let down = false;
+    const fails: Reply = { status: 422, body: { error: { code: 'ok_refused', detail: 'This OK is no longer asked.' } } };
+    const serveNeeds = () => {
+      open = true;
+      told = null;
+      down = false;
+      held.list = held.count = null;
+      const taken = new Promise<void>((done) => (take = done));
+      reply = (url, method) => {
+        if (method === 'POST' && url.endsWith('/asks/r1/ok'))
+          return taken.then(() => (down ? fails : ((open = false), { body: { task: task({ to_leave: [req({ met: true, may: [] })] }), answer_id: 'a9' } })));
+        const which = method !== 'GET' ? null : url.includes('/needs-you?limit=') ? 'list' : url.includes('/needs-you?count=true') ? 'count' : null;
+        if (!which) return null;
+        reads[which]++;
+        if (down) return fails;
+        const late = held[which];
+        held[which] = null;
+        return late ?? (which === 'list' ? listed() : counted());
+      };
+    };
+    /** As the shell does on a task's page: the list and the menu's count, each read while shown (`count`: the count
+        alone, as on a page that marks no task, a link straight to a task before its list is read). */
+    function Reads({ count }: { count?: boolean }) {
+      useQuery({ ...flowQuery, enabled: !count });
+      useQuery(flowCountQuery);
+      return null;
+    }
+    const count = () => (queryClient.getQueryData(['flow', 'count']) as { count: number } | undefined)?.count;
+    const ids = () => (queryClient.getQueryData(['flow']) as { task_ids: string[] } | undefined)?.task_ids;
+    /** Opened from Needs you with both read, Approve pressed: resolves once it is sent, not yet taken. */
+    const approving = async (only?: 'count') => {
+      serveNeeds();
+      const router = show(
+        <>
+          <Reads count={!!only} />
+          <OnTask />
+        </>,
+        '/needs-you?view=all',
+      );
+      await waitFor(() => expect([ids(), count()]).toEqual([only ? undefined : ['t1', 't9'], 2]));
+      await act(() => router.navigate({ href: '/tasks/p1/12' }));
+      fireEvent.click(await ready(await decision()));
+      await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/asks/r1/ok'));
+      expect([ids(), count()]).toEqual([only ? undefined : ['t9'], 1]); // out at once
+      return router;
+    };
+    const taken = async (router: { state: { location: { pathname: string } } }) => {
+      take();
+      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await act(async () => {});
+    };
+    const readAgain = (key: string[]) => act(() => void queryClient.refetchQueries({ queryKey: key, exact: true }));
+
+    it('once taken, reads the list once and the count once; a read landing while it was sent never brings the row back @approvals', async () => {
+      const router = await approving();
+      await readAgain(['flow']); // the five-minute read lands before the server took the answer: the row is back
+      await waitFor(() => expect(ids()).toEqual(['t1', 't9']));
+      reads.list = reads.count = 0;
+      await taken(router);
+      await waitFor(() => expect([ids(), count()]).toEqual([['t9'], 1]));
+      expect(reads).toEqual({ list: 1, count: 1 });
+    });
+
+    it('with no list read, the count is read again once taken, once @approvals', async () => {
+      const router = await approving('count');
+      told = 4; // more came in meanwhile: the badge says what the server counts now
+      reads.list = reads.count = 0;
+      take();
+      await waitFor(() => expect(router.state.location.pathname).not.toMatch(/^\/tasks\/p1\/12/));
+      await waitFor(() => expect(count()).toBe(4));
+      expect(reads).toEqual({ list: 0, count: 1 });
+    });
+
+    it('an answer never taken, with Needs you not to be read again, leaves the task listed and the count as it was @approvals', async () => {
+      await approving();
+      down = true;
+      reads.list = reads.count = 0;
+      await act(async () => take());
+      await waitFor(() => expect(reads).toEqual({ list: 1, count: 1 })); // read again, and refused
+      await act(async () => {});
+      expect([ids(), count()]).toEqual([['t1', 't9'], 2]);
+    });
+
+    it('reads begun while it is sent, answering after it was taken, never bring the row or the count back @approvals', async () => {
+      const router = await approving();
+      let list!: (r: Reply) => void;
+      let tally!: (r: Reply) => void;
+      held.list = new Promise<Reply>((done) => (list = done));
+      held.count = new Promise<Reply>((done) => (tally = done));
+      await readAgain(['flow']);
+      await readAgain(['flow', 'count']);
+      await taken(router);
+      // what the server said before it took the answer
+      await act(async () => {
+        open = true;
+        list(listed());
+        tally(counted());
+        open = false;
+      });
+      await waitFor(() => expect([ids(), count()]).toEqual([['t9'], 1]));
+    });
   });
 
   it('a question for someone else does not hold the task open @approvals', async () => {

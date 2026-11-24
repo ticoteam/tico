@@ -1,0 +1,143 @@
+import { useQuery, type QueryKey } from '@tanstack/react-query';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { queryClient } from '@/data';
+import { hearPlaces, heldRow, holdRow, keptOrder, type ListRow } from '@/lib';
+import { flowCountQuery, flowQuery, type Flow } from './queries';
+
+/* One dot, one meaning: a task waits on the person when Needs you names it (GET /api/v2/needs-you), never by its turn
+   alone. Every place that marks a task with the Dot reads this one set: a board's cards and column counts, a pipeline's
+   list, the list beside an open task, Roadmap, Tags, a task's own status line, a teammate's tasks, the Company floor's
+   stage and Tico's tracker. The menu's count is Needs you's own rows. */
+
+/** Every task Needs you names: each row's task, and each task a grouped row names (a paused agent's `task_ids`). An
+    array, so a read that names the same tasks keeps the same one (the query's structural sharing) and nothing redraws. */
+export const needsYouIds = (flow: Pick<Flow, 'items' | 'task_ids'>): string[] => flow.task_ids ?? flow.items.map((i) => i.id);
+
+/** The same, as a set. */
+export const needsYouTasks = (flow: Pick<Flow, 'items' | 'task_ids'>): ReadonlySet<string> => new Set(needsYouIds(flow));
+
+const asSet = (ids: readonly string[] | undefined) => (ids ? new Set(ids) : undefined);
+
+/** The tasks waiting on the signed-in person; undefined until Needs you is read (no Dot until then). Reads it when it
+    is not read yet. */
+export function useNeedsYou(): ReadonlySet<string> | undefined {
+  const ids = useQuery({ ...flowQuery, select: needsYouIds }).data;
+  return useMemo(() => asSet(ids), [ids]);
+}
+
+/** The same, from what is already read only (never a read of its own, so a task's page costs nothing more); undefined
+    until the app has read Needs you (the shell reads it once), and so no Dot rather than the turn's. */
+export function useNeedsYouRead(): ReadonlySet<string> | undefined {
+  const ids = useQuery({ ...flowQuery, select: needsYouIds, enabled: false }).data;
+  return useMemo(() => asSet(ids), [ids]);
+}
+
+/** Whether a task waits on the person: Needs you names it. */
+export const waitsOnMe = (t: { id: string }, needs: ReadonlySet<string> | undefined): boolean => !!needs?.has(t.id);
+
+/** Needs you's rows in Tico's order (the server's `order`; requests first, then tasks, from a read that has none). */
+const latestOf = (flow: Pick<Flow, 'items' | 'requests' | 'order'>): string[] =>
+  flow.order ?? [...(flow.requests ?? []), ...flow.items].map((it) => it.id);
+
+/** Needs you's rows (requests and tasks, by id) in the order drawn: Tico's, with the rows down to the one the person is
+    on kept where they were (a sort that lands meanwhile moves only the rows below it). The same order wherever it is
+    drawn (Tasks, beside a task) or read for the row below an answer (the shell's NeedsYouOrder). */
+export function useNeedsYouDrawn(flow: Pick<Flow, 'items' | 'requests' | 'order'> | undefined): string[] {
+  const held = useSyncExternalStore(hearPlaces, heldRow);
+  const order = flow ? keptOrder(flow, () => latestOf(flow), held) : NONE;
+  // the row the person was on left the list: on none now
+  const gone = !!flow && !!held && !order.includes(held);
+  useEffect(() => {
+    if (gone) holdRow(null);
+  }, [gone]);
+  return order;
+}
+const NONE: string[] = [];
+
+/** Needs you's task rows in `order` (useNeedsYouDrawn; Tico's own without it), each with its number as its address
+    names it and its pipeline: the order an answer goes on down, wherever the list is drawn or not (a phone, a tucked
+    list, a row past the cap). A request has no task to open: the row below a task is the next task drawn. */
+export const needsYouRows = (flow: Pick<Flow, 'items' | 'requests' | 'order'>, order: readonly string[] = latestOf(flow)): ListRow[] => {
+  const byId = new Map(flow.items.map((it) => [it.id, it] as const));
+  return order.flatMap((id) => {
+    const it = byId.get(id);
+    return it ? [{ id: it.id, n: String(it.number ?? it.id), pipeline: it.pipeline_id ?? 'all' }] : [];
+  });
+};
+
+/** What else Needs you, as read now, has the person do on `task` once `wait` is answered (null: all of it, as a
+    review decided or an agent released): the other items it names the task by. Read as the person acts, so what the
+    open task does after the answer (stay, or go on) never turns on a read that lands meanwhile (TaskPage). */
+export const needsYouLeft = (task: string, wait: string | null, read: Pick<Flow, 'waits'> | undefined = queryClient.getQueryData(flowQuery.queryKey)): string[] =>
+  wait === null ? [] : (read?.waits?.[task]?.filter((r) => r !== wait) ?? []);
+
+/** Whether a read kept under ['flow'] is Needs you's own: its list (rows and a count), or the menu's count
+    (`wakeAt`); not the snoozed asks or a row's origin. */
+export const isNeedsYouRead = (cur: unknown): boolean => {
+  if (!cur || typeof cur !== 'object') return false;
+  const f = cur as { items?: unknown; count?: unknown };
+  return 'wakeAt' in cur || (Array.isArray(f.items) && typeof f.count === 'number');
+};
+
+/** Needs you with `wait` on `task` answered (null: all of it), as a change to each Needs you read (isNeedsYouRead):
+    one answered of several leaves the task's row, showing what still waits on it; its last takes the row, its
+    approvals, its Dot (`task_ids`), its place (`order`), what it waits on and one from each count. The one change an
+    answer, a hold decided and a release make, so the row and the Dot go everywhere at once. `read`: the list as read
+    before the answer. */
+export function needsYouWithout(task: string, wait: string | null, read: Flow | undefined = queryClient.getQueryData(flowQuery.queryKey)): (cur: unknown) => unknown {
+  const left = needsYouLeft(task, wait, read);
+  const leaves = !left.length;
+  // a task only a grouped row names (a paused agent's) is no row of its own: no count falls
+  const row = read?.items.some((w) => w.id === task) ?? true;
+  return (cur) => {
+    if (!isNeedsYouRead(cur)) return cur;
+    if ('wakeAt' in (cur as object)) {
+      const c = cur as { count?: unknown };
+      return leaves && row && typeof c.count === 'number' ? { ...c, count: Math.max(0, c.count - 1) } : cur;
+    }
+    const f = cur as Flow;
+    const approvals = f.approvals?.filter((a) => !(a.id === task && (wait === null || a.ask.requirement === wait)));
+    if (!leaves) {
+      const next = approvals?.find((a) => a.id === task);
+      const items = f.items.map((w) => (w.id === task && w.ask?.requirement === wait ? (next ?? { ...w, ask: undefined, about: undefined }) : w));
+      return { ...f, items, ...(approvals && { approvals }), ...(f.waits && { waits: { ...f.waits, [task]: left } }) };
+    }
+    const items = f.items.filter((w) => w.id !== task);
+    const waits = f.waits && Object.fromEntries(Object.entries(f.waits).filter(([t]) => t !== task));
+    return {
+      ...f,
+      items,
+      // Needs you's requests (access, key, key-drop) count too: they still wait
+      count: items.length + (f.requests?.length ?? 0),
+      ...(f.task_ids && { task_ids: f.task_ids.filter((t) => t !== task) }),
+      ...(f.order && { order: f.order.filter((t) => t !== task) }),
+      ...(waits && { waits }),
+      ...(approvals && { approvals }),
+    };
+  };
+}
+
+/** Needs you's two reads: the list, and the menu's count. */
+const READS: readonly QueryKey[] = [flowQuery.queryKey, flowCountQuery.queryKey];
+
+/** Stops what Needs you was reading (the revert is synchronous), so no read begun before lands over what follows. */
+const stop = () => READS.forEach((queryKey) => void queryClient.cancelQueries({ queryKey, exact: true }));
+
+/** An answer to `wait` on `task` given (null: all of it): it leaves Needs you's reads now (needsYouWithout). Returns
+    the undo for an answer never taken: each read as it was, unless a newer read landed since. */
+export function leaveNeedsYou(task: string, wait: string | null = null): () => void {
+  stop();
+  const change = needsYouWithout(task, wait);
+  const was = READS.map((key) => queryClient.getQueryData(key));
+  const now = READS.map((key) => queryClient.setQueryData(key, (cur: unknown) => (cur === undefined ? cur : change(cur))));
+  return () => READS.forEach((key, i) => queryClient.getQueryData(key) === now[i] && queryClient.setQueryData(key, was[i]));
+}
+
+/** The answer's reply heard: what was read meanwhile is stopped, what the server took (`gone`) stays out of the list
+    (the count already fell once), and each read is read again once (after a refusal too, which brings back what it
+    took out). The only reads of Needs you after an answer. */
+export function settleNeedsYou(gone?: { task: string; wait: string | null }): void {
+  stop();
+  if (gone) queryClient.setQueryData(flowQuery.queryKey, (cur) => (cur === undefined ? cur : (needsYouWithout(gone.task, gone.wait)(cur) as Flow)));
+  for (const queryKey of READS) void queryClient.invalidateQueries({ queryKey, exact: true, refetchType: gone ? 'active' : 'all' });
+}

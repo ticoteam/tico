@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { Link, Outlet, createRootRouteWithContext, useLocation, useRouter, useRouterState } from '@tanstack/react-router';
-import { Fragment, Suspense, lazy, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react';
 import { ActionsRoot, run } from '@/actions';
 import { reportCallToDesktop, useCallWindow } from '@/desktop';
 import { ticoRoomQuery } from '@/conversation';
@@ -12,7 +12,7 @@ import { StartScreen, useStartGate } from '@/features/start/routing';
 import { SUPPORT_CHAT, supportUnreadQuery } from '@/features/support/routing';
 import { TaskChat } from '@/features/task/exports';
 import { boardOf, CHAT_TAB, useLoadedTask } from '@/features/task/routing';
-import { filtersOf, flowCountQuery, flowQuery, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, validateTasksSearch, type TaskItem } from '@/features/tasks/routing';
+import { filtersOf, flowCountQuery, flowQuery, needsYouRows, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, useFlowCountRefresh, useNeedsYou, useNeedsYouDrawn, validateTasksSearch, waitsOnMe, type FlowItem, type TaskItem } from '@/features/tasks/routing';
 import { teammateAccessQuery, validateTeamSearch, whoHref } from '@/features/team/routing';
 import { ChatSheet, MenuThreads, MessagePick } from '@/features/threads/exports';
 import { asksOf, catchUpQuery, threadListQuery, type Asks } from '@/features/threads/routing';
@@ -29,6 +29,7 @@ import { Placeholder } from '@/kit/placeholder/Placeholder';
 import { FoldButton } from '@/kit/SectionHead';
 import { Segmented } from '@/kit/Segmented';
 import { Toasts } from '@/kit/Toast';
+import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { startLive, useLiveStatus } from '@/live';
 import { useMotionRoot } from '@/motion';
 import { PanelHost, usePagePanelOpen } from '@/pagekinds';
@@ -68,7 +69,7 @@ import { usePhoneCards } from '@/shell/phone';
 import { TicoSheet, useTicoPower } from '@/tico';
 import { dot } from '@/tico/dot';
 import { pageName, usePageName } from '@/tico/pageName';
-import { boardSearch, chatAddress, leaveTask, noteList, notePlace, pressListRow } from '@/lib';
+import { boardSearch, chatAddress, hearPlaces, holdRow, leaveTask, NEEDS_YOU, noteList, notePlace, openedFrom, pressListRow } from '@/lib';
 
 export interface RouterContext {
   queryClient: QueryClient;
@@ -259,10 +260,14 @@ function App() {
   const task = arrangement === 'task' ? (top === 'tasks' ? b : a) : undefined;
   const pipeline = arrangement === 'task' && top === 'tasks' && a && a !== 'all' ? decodeURIComponent(a) : undefined;
   const open = useLoadedTask(task && decodeURIComponent(task));
+  // where the open task was opened from (lib/places): Needs you, or its pipeline's board or list
+  const fromNeeds = useSyncExternalStore(hearPlaces, () => (task && top === 'tasks' ? openedFrom(decodeURIComponent(task)) : null)) === NEEDS_YOU;
   if (arrangement === 'task') {
-    /* Beside the open task, its pipeline's tasks as its board showed them, the task chosen. A task with no pipeline of
-       its own (`all`), or its list closed: the menu stays in its place. */
-    if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
+    /* Beside the open task: Needs you when it was opened from there; else its pipeline's tasks as its board showed
+       them. The task chosen. A task with no pipeline of its own (`all`) not from Needs you, or its list closed: the
+       menu stays in its place. */
+    if (task && fromNeeds && !listShut) list = <NeedsYouSide key={NEEDS_YOU} open={decodeURIComponent(task)} onClose={closeList} />;
+    else if (task && pipeline && !listShut) list = <PipelineList key={pipeline} pipeline={pipeline} open={decodeURIComponent(task)} onClose={closeList} />;
     // opened from a thread (lib besideThread), that thread stays beside it (plan/layers.html); else the task's own chat
     if (!at.chat) chat = task ? (
       <Sheet kind="chat" label="The task's chat">
@@ -316,6 +321,7 @@ function App() {
 
   return (
     <>
+      {task && fromNeeds && <NeedsYouOrder open={decodeURIComponent(task)} />}
       {/* a call on another page shows its bar over the frame; the frame takes the rest of the window */}
       <div className="shell-col">
         <Later on={isCallActive(callNow) || callOut}>
@@ -442,6 +448,9 @@ const some = (n: number | undefined) => (n ? n : undefined);
 /** A menu row's press: the same action Tico would run. */
 const press = (id: string, input: unknown = {}) => () => void run(id, input, { via: 'click' });
 
+/** The pages that mark tasks with the Dot or list Needs you: Tasks and its boards, a task, Roadmap, Tags. */
+const DOTTED = /^(?:\/next)?\/(?:tasks|task|roadmap|tags)(?:\/|$)/;
+
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
   const { data: config } = useQuery(configQuery);
@@ -456,6 +465,10 @@ function AppMenu({ note }: { note: ReactNode }) {
   const [access, setAccess] = useState<MenuTeam | null>(null);
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowCountQuery);
+  // Needs you's tasks, read once where its Dots or its list show (Tasks, a board, Roadmap, Tags, a task): the Dot on a
+  // task's own page reads it, never reading it itself. Elsewhere the menu reads only its count.
+  const dotted = useLocation({ select: (l) => DOTTED.test(l.pathname) });
+  useQuery({ ...flowQuery, enabled: badgesEnabled && dotted, select: () => null });
   const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });
   const companies = useCompanies();
   const [calling, setCalling] = useState(false);
@@ -751,7 +764,7 @@ function ListFace({ id }: { id: string | null }) {
    its board was last shown with, the open task chosen. The pick goes to another pipeline's board, and Close folds the
    list to the menu's icons. */
 function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: string; onClose: () => void }) {
-  const me = useQuery(meQuery).data?.id;
+  const needs = useNeedsYou();
   const { data: pipes } = useQuery(pipelinesQuery);
   const p = pipes?.find((x) => x.id === pipeline);
   const { data: page } = useQuery({ ...pipelineTasksQuery(pipeline, filtersOf(validateTasksSearch(boardSearch(pipeline)))), enabled: !!p });
@@ -795,7 +808,7 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
                 <FoldButton name={g.name} count={g.items.length} open={!shut.has(g.id)} onToggle={() => flip(g.id)} />
               </h2>
             </div>
-            {shut.has(g.id) ? null : g.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} me={me} />)}
+            {shut.has(g.id) ? null : g.items.map((t) => <PipelineRow key={t.id} t={t} pipeline={pipeline} open={open} waits={waitsOnMe(t, needs)} />)}
           </Fragment>
         ))}
       </div>
@@ -803,9 +816,8 @@ function PipelineList({ pipeline, open, onClose }: { pipeline: string; open: str
   );
 }
 
-function PipelineRow({ t, pipeline, open, me }: { t: TaskItem; pipeline: string; open: string; me: string | undefined }) {
+function PipelineRow({ t, pipeline, open, waits }: { t: TaskItem; pipeline: string; open: string; waits: boolean }) {
   const n = String(t.number ?? t.id);
-  const waits = !!me && t.turn?.state === 'person' && t.turn.who === me;
   return (
     <Link
       to="/tasks/$pipeline/$task"
@@ -823,6 +835,108 @@ function PipelineRow({ t, pipeline, open, me }: { t: TaskItem; pipeline: string;
       <span className="li-who">
         <ListFace id={t.owner_id} />
         <Ago at={t.stage_since ?? t.updated_at} className="row-age" />
+      </span>
+    </Link>
+  );
+}
+
+/* A task opened from Needs you: Needs you's task rows in the order drawn (useNeedsYouDrawn: Tico's, the rows down to
+   the open task kept in place if a sort lands meanwhile), read from what is read rather than from what a list draws,
+   so an answer that leaves nothing on the task for the person opens the row below (TaskPage) on a phone, with the
+   list tucked away, and past a row's cap alike. The open task is the row the person is on. Drawn only while such a
+   task is open, so Needs you's reads and the held row redraw nothing else on other pages; left (Back, a link, ×; not a
+   step to another task from Needs you), the row and the list go with it, so Tasks draws Tico's order again. */
+function NeedsYouOrder({ open }: { open: string }) {
+  const { data: flow } = useQuery(flowQuery);
+  const order = useNeedsYouDrawn(flow);
+  const rows = useMemo(() => (flow ? needsYouRows(flow, order) : undefined), [flow, order]);
+  const id = flow?.items.find((it) => String(it.number ?? it.id) === open || it.id === open)?.id;
+  useEffect(() => {
+    if (id) holdRow(id);
+  }, [id]);
+  useEffect(() => {
+    if (rows) noteList({ pipeline: NEEDS_YOU, open, rows });
+  }, [open, rows]);
+  useEffect(
+    () => () => {
+      holdRow(null);
+      noteList(null);
+    },
+    [],
+  );
+  return null;
+}
+
+/* Beside a task opened from Needs you, in the menu's place: Needs you's tasks, title only as a pipeline's list draws
+   them, in its own order, the open task chosen. Close folds the list to the menu's icons. Tucked away it draws no rows;
+   past SIDE_LONG it draws only what is on screen. Its order is the one Tasks draws (useNeedsYouDrawn). */
+const SIDE_LONG = 50;
+const SIDE_ROW_H = 34;
+function NeedsYouSide({ open, onClose }: { open: string; onClose: () => void }) {
+  const { data: flow } = useQuery(flowQuery);
+  const order = useNeedsYouDrawn(flow);
+  const items = useMemo(() => {
+    const byId = new Map((flow?.items ?? []).map((it) => [it.id, it] as const));
+    return flow && order.flatMap((id) => byId.get(id) ?? []);
+  }, [flow, order]);
+  const sheet = useSheet();
+  const shows = sheet.state === 'open' || sheet.peek;
+  const long = useRef<VirtualListHandle>(null);
+  const at = items?.find((it) => String(it.number ?? it.id) === open || it.id === open)?.id;
+  const many = !!items && items.length > SIDE_LONG;
+  useEffect(() => {
+    if (shows && many && at) long.current?.scrollToKey(at);
+  }, [shows, many, at]);
+  return (
+    <Sheet kind="list" label="Needs you">
+      <header className="li-head">
+        <ListUp />
+        <span className="li-pick">Needs you</span>
+        <span className="grow" />
+        <IconButton icon="close" label="Close the list" quiet onClick={onClose} />
+      </header>
+      <div className="nav-scroll li-body">
+        {items && !items.length ? <Empty title="Nothing waits on you" /> : null}
+        {!shows || !items ? null : many ? (
+          <VirtualList
+            ref={long}
+            items={items}
+            getKey={(it) => it.id}
+            estimateSize={SIDE_ROW_H}
+            measure
+            scrollParent=".li-body"
+            renderItem={(it) => <NeedsYouRow it={it} open={open} />}
+          />
+        ) : (
+          items.map((it) => <NeedsYouRow key={it.id} it={it} open={open} />)
+        )}
+      </div>
+    </Sheet>
+  );
+}
+
+function NeedsYouRow({ it, open }: { it: FlowItem; open: string }) {
+  const n = String(it.number ?? it.id);
+  const pipeline = it.pipeline_id ?? 'all';
+  return (
+    <Link
+      to="/tasks/$pipeline/$task"
+      params={{ pipeline, task: n }}
+      className={n === open || it.id === open ? 'li is-on' : 'li'}
+      title={it.about || it.title}
+      data-target={`task:${n}`}
+      onClick={(e) => pressListRow(pipeline, n, e, NEEDS_YOU)}
+    >
+      <span className="li-mark">
+        <FlowMark size={10} />
+      </span>
+      <span className="li-main">
+        <span className="li-title">{it.about || it.title}</span>
+        {it.late ? <LatePill /> : null}
+      </span>
+      <span className="li-who">
+        <ListFace id={it.owner_id} />
+        <Ago at={it.since} className="row-age" />
       </span>
     </Link>
   );

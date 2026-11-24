@@ -297,7 +297,13 @@ async function phone(browser: Browser, name: string) {
   // a task: Agent and Task come out, Agent is its chat, Company goes back to the list and they leave
   await page.goto(`${APP}/tasks`);
   await settle(page, 2500);
-  const list = new URL(page.url()).pathname; // Tasks lands on a pipeline's board
+  // Tasks lists the pipelines under Needs you: the first one's board
+  const board = await page.evaluate(() => [...document.querySelectorAll('section[aria-label="Pipelines"] a[href]')].map((a) => a.getAttribute('href') ?? '')[0]);
+  if (board) {
+    await page.goto(`${APP}${board}`);
+    await settle(page, 2500);
+  }
+  const list = new URL(page.url()).pathname;
   const href = await page.evaluate(() =>
     [...document.querySelectorAll('a[href]')].map((a) => a.getAttribute('href') ?? '').find((h) => /^\/tasks\/[^/]+\/[^/]+/.test(h) && !h.endsWith('/edit')),
   );

@@ -11,6 +11,7 @@ import { Link } from '@/kit/Link';
 import { Row, TaskRow } from '@/kit/Row';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { FiguresStrip, Record as RecordPage, Section } from '@/pagekinds';
+import { useNeedsYou } from '@/features/tasks/routing';
 import { bareId, slackTitle, startOfMonth, teamOf } from './model';
 import { AccessDialog, GiveTaskDialog, PasswordDialog } from './dialogs';
 import { AllTasks, ConfirmDialog, EditDialog, Foot, Fold, MateRow, OwnRow, OwnRows, PickLine, SecLink, waitsOn } from './parts';
@@ -78,7 +79,6 @@ type Head = {
 };
 
 function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: Head }) {
-  const { data: me } = useQuery(meQuery);
   const actors = useActors();
   const roster = useQuery(agentsQuery);
   const people = useQuery(peopleQuery);
@@ -88,8 +88,9 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
   const done = useQuery(doneTasksQuery(actor.id, since));
   const [giving, setGiving] = useState(false);
   const tasks = open.tasks;
-  const waits = tasks.filter((t) => waitsOn(t, me?.id));
-  const rest = tasks.filter((t) => !waitsOn(t, me?.id));
+  const needs = useNeedsYou();
+  const waits = tasks.filter((t) => waitsOn(t, needs));
+  const rest = tasks.filter((t) => !waitsOn(t, needs));
   const reports = new Set([
     ...(roster.data ?? []).filter((r) => r.reports_to === id).map((r) => r.id),
     ...(people.data ?? []).filter((p) => p.reports_to === id).map((p) => p.id),
@@ -115,7 +116,7 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
           {waits.length > 0 && (
             <Section name="Waits on you" count={waits.length}>
               {waits.map((t) => (
-                <OwnRow key={t.id} task={t} me={me?.id} />
+                <OwnRow key={t.id} task={t} waits />
               ))}
             </Section>
           )}
@@ -139,10 +140,10 @@ function PersonWidgets({ actor, id, head }: { actor: Actor; id: string; head: He
               </>
             }
           >
-            <OwnRows tasks={rest} me={me?.id} label="Open tasks" />
+            <OwnRows tasks={rest} needs={needs} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this month`}>
-                <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
+                <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" />
               </Fold>
             )}
             {giving && <GiveTaskDialog open onOpenChange={setGiving} person={id} name={actor.name} />}

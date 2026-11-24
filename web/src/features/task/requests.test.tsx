@@ -2,7 +2,7 @@ import { QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { queryClient } from '@/data';
-import { flowQuery, type FlowItem, type FlowRequest } from '@/features/tasks/routing';
+import { flowQuery, type ApprovalItem, type Flow, type FlowItem, type FlowRequest } from '@/features/tasks/routing';
 import { Toasts } from '@/kit/Toast';
 import { answerAsk } from './queries';
 import { RequestCard } from './Requests';
@@ -214,6 +214,49 @@ describe('Flow’s count', () => {
     const answered = answerAsk('t1', 'q1', 'ok');
     expect(queryClient.getQueryData<{ count: number }>(flowQuery.queryKey)?.count).toBe(1);
     await answered.catch(() => undefined);
+  });
+
+  it('takes the answered task out of the tasks Needs you names too, so its Dot leaves with its row', async () => {
+    queryClient.setQueryData(flowQuery.queryKey, { count: 2, items: [{ id: 't1' } as FlowItem, { id: 't2' } as FlowItem], requests: [], task_ids: ['t1', 't2'] });
+    const answered = answerAsk('t1', 'q1', 'ok');
+    expect(queryClient.getQueryData<{ task_ids: string[] }>(flowQuery.queryKey)?.task_ids).toEqual(['t2']);
+    await answered.catch(() => undefined);
+  });
+
+  it('an answer to one of a task’s two asks leaves the task waiting on the other; the last one takes it, and the menu’s count, out', async () => {
+    const ok = (rid: string, line: string): ApprovalItem => ({
+      ...{ id: 't1', number: 1, title: 'Ship the export', pipeline_id: 'eng', stage_id: 's1', owner_id: 'bot:qa', late: false, stuck: false, since: '2026-11-20T09:00:00Z' },
+      ask: { kind: 'ok', by: null, shows: [], line, requirement: rid },
+    });
+    const seed = (waits: string[]) => {
+      queryClient.setQueryData(flowQuery.queryKey, {
+        count: 2,
+        items: [ok(waits[0]!, waits[0] === 'r1' ? 'Copy OK?' : 'Price OK?'), { id: 't2' } as FlowItem],
+        requests: [],
+        task_ids: ['t1', 't2'],
+        waits: { t1: waits, t2: ['t2'] },
+        approvals: [ok('r1', 'Copy OK?'), ok('r2', 'Price OK?')].filter((a) => waits.includes(a.ask.requirement)),
+      });
+      queryClient.setQueryData(['flow', 'count'], { count: 2, wakeAt: null });
+    };
+    const flow = () => queryClient.getQueryData<Flow>(flowQuery.queryKey);
+    const menu = () => queryClient.getQueryData<{ count: number }>(['flow', 'count'])?.count;
+
+    seed(['r1', 'r2']);
+    const first = answerAsk('t1', 'r1', 'ok');
+    expect(flow()?.task_ids).toEqual(['t1', 't2']);
+    expect(flow()?.items.map((w) => [w.id, w.ask?.line])).toEqual([['t1', 'Price OK?'], ['t2', undefined]]);
+    expect(flow()?.count).toBe(2);
+    expect(menu()).toBe(2);
+    await first.catch(() => undefined);
+
+    seed(['r2']);
+    const last = answerAsk('t1', 'r2', 'ok');
+    expect(flow()?.task_ids).toEqual(['t2']);
+    expect(flow()?.items.map((w) => w.id)).toEqual(['t2']);
+    expect(flow()?.count).toBe(1);
+    expect(menu()).toBe(1);
+    await last.catch(() => undefined);
   });
 });
 

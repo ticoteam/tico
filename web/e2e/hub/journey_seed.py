@@ -3,7 +3,8 @@
 - Dana's inbox, dana@acme.example, on her own Connect Google grant (the `connected_inbox` seed) and read from a fake
   Gmail (backend/tests/helpers/fake_gmail.py): three letters in it, and the Engineering Lead may write from it.
 - An email the Engineering Lead wrote and is holding for Dana's OK (email_sending.enqueue under the company's "ask
-  first" policy): its case is in her Needs you, and its card in the lead's chat with her.
+  first" policy): its case is in her Needs you, and its card in the lead's chat with her. A second one from the Release
+  Manager waits too, so an answer in Needs you has a next case to go on to.
 - A Launch pipeline (Plan, Build, Ship) with two tasks in Plan, for the board.
 - Anthropic and OpenAI on as the company's providers, as onboarding leaves them, so Settings > Models has models.
 - A thread Dana opened with Omar.
@@ -17,12 +18,14 @@ from email.message import EmailMessage
 
 from fastapi.responses import JSONResponse
 
-from evals.redesign.harness import DANA, DANA_ID, LEAD_ID
+from evals.redesign.harness import DANA, DANA_ID, LEAD_ID, RELEASE_ID
 from evals.redesign.seeds import SEEDS
 
 BOX = "dana@acme.example"
 VENDOR = "orders@northwind.example"
 SUBJECT = "Order 1042 is on its way"
+BILLING = "billing@cloud.example"
+SUBJECT_2 = "November invoice paid"
 
 
 def _ok(reply, what):
@@ -78,6 +81,7 @@ def mail(world):
     with world.store.transaction() as c:
         row = MA.ensure_mailbox(c, BOX, person_id=DANA_ID, created_by="human:" + DANA_ID)
         MA.grant(c, "human:" + DANA_ID, row["id"], "bot", LEAD_ID, "read_write")
+        MA.grant(c, "human:" + DANA_ID, row["id"], "bot", RELEASE_ID, "read_write")
         # no undo window and no pacing, so one pass of the queue sends an approved email
         S.update_policy(c, owner, "company", S.PolicyUpdate(undo_seconds=0, pacing_seconds=0))
         held = S.enqueue(
@@ -90,8 +94,16 @@ def mail(world):
             ),
             {"legal_or_money": False, "status": "classified"},
         )
-    if held["state"] != "waiting_approval":
-        raise RuntimeError(f"the lead's email is not held for an OK: {held['state']}")
+        later = S.enqueue(
+            c,
+            world.app.state.auth,
+            "bot:" + RELEASE_ID,
+            S.Enqueue(mailbox=BOX, raw=_mime(BILLING, SUBJECT_2, "Hi, the November invoice is paid.\n\nDana")),
+            {"legal_or_money": False, "status": "classified"},
+        )
+    for what, row in (("the lead's", held), ("the release manager's", later)):
+        if row["state"] != "waiting_approval":
+            raise RuntimeError(f"{what} email is not held for an OK: {row['state']}")
 
     store, auth = world.store, world.app.state.auth
 
@@ -105,7 +117,13 @@ def mail(world):
 
     _route(world, "/_e2e/drain", drain, ["POST"])
     _route(world, "/_e2e/sent", sent, ["GET"])
-    return {"send": held["id"], "approval": held["approval_id"], "subject": SUBJECT, "mailbox": BOX}
+    return {
+        "send": held["id"],
+        "approval": held["approval_id"],
+        "subject": SUBJECT,
+        "mailbox": BOX,
+        "next": {"send": later["id"], "approval": later["approval_id"], "subject": SUBJECT_2},
+    }
 
 
 def board(world):

@@ -1,6 +1,6 @@
 import { QueryClientProvider } from '@tanstack/react-query';
-import { createMemoryHistory, createRootRoute, createRouter, RouterProvider } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, useLocation } from '@tanstack/react-router';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
@@ -9,7 +9,13 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { forgetPlaces, notePlace } from '@/lib';
 import type { TaskData } from './queries';
-import { TaskChat } from './TaskPage';
+import { TaskChat, TaskPage } from './TaskPage';
+
+/** The task, drawn only while the address is the task's: the list it was opened from is another page. */
+function OnTask() {
+  const path = useLocation({ select: (l) => l.pathname });
+  return path.startsWith('/tasks/p1/12') ? <TaskPage task="12" pipeline="p1" /> : null;
+}
 
 /* A stopped agent's notice (backend/bot_stops.py): the task read names the agent when the person may release it, and
    the decision box offers Release in place (POST /api/v2/bots/<id>/release). Made-up rows only; every answer is stubbed. */
@@ -124,6 +130,23 @@ describe("a stopped agent's notice", () => {
     fireEvent.click(within(await decision()).getByRole('button', { name: 'Release' }));
     await waitFor(() => expect(sent.map((s) => s.url)).toEqual(['/api/v2/bots/b-sales/release']));
     await waitFor(() => expect(screen.queryByRole('region', { name: 'The decision' })).toBeNull());
+  });
+
+  it('on the task opened from Needs you, Release goes on, and the notice leaves Needs you with its Dot', async () => {
+    reply = (url, method) => {
+      if (method === 'POST' && url.endsWith('/api/v2/bots/b-sales/release')) {
+        released = true;
+        return { body: { bot: 'b-sales', released: { run_hold: true, budget: false, claim: 0 } } };
+      }
+      return null;
+    };
+    const row = { id: 't1', number: 12, pipeline_id: 'p1', title: 'Sales Owner stopped after 5 failed runs in a row' };
+    queryClient.setQueryData(['flow'], { count: 1, items: [row], requests: [], task_ids: ['t1'], order: ['t1'], waits: { t1: ['n1'] } } as never);
+    const router = show(<OnTask />, '/needs-you?view=all');
+    await act(() => router.navigate({ href: '/tasks/p1/12' }));
+    fireEvent.click(within(await decision()).getByRole('button', { name: 'Release' }));
+    await waitFor(() => expect(router.state.location.href).toBe('/needs-you?view=all'));
+    expect((queryClient.getQueryData(['flow']) as { task_ids: string[] } | undefined)?.task_ids ?? []).toEqual([]);
   });
 
   it('a refusal is said in the box, and Release stays', async () => {

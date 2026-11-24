@@ -67,6 +67,11 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
       if (top === 'tasks' && a && a !== 'all') add(n.pipelines?.find((p) => p.id === a)?.name ?? '', at('tasks', a));
       if (top === 'tasks' && b === 'edit') add('Edit', at('tasks', a!, 'edit'));
       break;
+    case 'needs-you':
+      // Needs you is the top of Tasks; its views (All, Snoozed, Done) are under it, by their own name
+      add('Tasks', '/tasks');
+      add('Needs you', '/tasks');
+      break;
     case 'roadmap':
       add('Tasks', '/tasks');
       add('Roadmap', '/roadmap');
@@ -109,7 +114,7 @@ export function trailOf(path: string, n: TrailNames): TrailPart[] {
 }
 
 /* addresses that only pass on to another page: nothing to go back up to */
-const HOPS = new Set(['/', '/tasks', '/library']);
+const HOPS = new Set(['/', '/library']);
 
 /** Where a phone's Back goes: up the trail one step, unless that step is a section that only passes on, or Team. */
 export function upOf(parts: readonly TrailPart[]): Required<TrailPart> | undefined {

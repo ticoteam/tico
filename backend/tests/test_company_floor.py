@@ -60,12 +60,30 @@ def test_each_stage_counts_its_open_tasks_by_holder_and_what_waits_on_the_reader
         {"actor": "human:ana", "count": 1, "needs_you": 1},
     ]
     assert spec["needs_you"] == 1 and spec["more"] == {"owners": 0, "count": 0}
-    assert build["owners"] == [{"actor": "bot:ops", "count": 1, "needs_you": 0}] and build["needs_you"] == 0
+    # Ops cannot run here (no computer): Ana's Needs you holds its task up as a paused agent's, so it counts as hers too
+    assert build["owners"] == [{"actor": "bot:ops", "count": 1, "needs_you": 1}] and build["needs_you"] == 1
     # Ben's Needs you holds his three, not Ana's.
     assert find(floor(api, "ben-test"), "product")["stages"][0]["needs_you"] == 3
     # Done leaves the stage's count.
     post(api, f"tasks/{mine['id']}/move", {"to": "done", "why": "Shipped"})
     assert find(floor(api), "product")["stages"][0]["count"] == 3
+
+
+def test_a_stage_counts_the_tasks_a_paused_agent_holds_up_for_the_reader_as_the_dot_marks_them(api):
+    """A bot Paused on Connect GitHub holds up each task in its stage: one Needs you row names them all (`task_ids`), and
+    the app dots each one, so the stage counts each one too."""
+    from backend.item_sources import github as F
+    from backend.tests.helpers import engine as X
+
+    stage = {"name": "Build", "owner": "bot:builder", "requirements": [X.github("pr_open")]}
+    with api.app.state.store.transaction() as c:
+        X.bot(c, "builder")
+        X.pipeline(c, "eng", "Engineering", (stage,))
+        held = [X.new_task(c, X.ANA, title, "eng")["id"] for title in ("Add a login page", "Fix the footer")]
+    [row] = [i for i in get(api, "needs-you")["items"] if i["kind"] == "paused"]
+    assert row["line"] == F.CONNECT and sorted(row["task_ids"]) == sorted(held)
+    [build] = find(floor(api), "eng")["stages"]
+    assert (build["count"], build["needs_you"]) == (2, 2)
 
 
 def test_a_stage_lists_its_twelve_most_loaded_holders_and_sums_the_rest(api):
@@ -81,7 +99,8 @@ def test_a_stage_lists_its_twelve_most_loaded_holders_and_sums_the_rest(api):
         c.execute("UPDATE task_move_guards SET open=0, task_id=NULL WHERE id=1")
     [stage] = find(floor(api), "help")["stages"]
     assert stage["count"] == 17
-    assert len(stage["owners"]) == 12 and stage["owners"][0] == {"actor": "bot:big", "count": 3, "needs_you": 0}
+    # none of these agents can run here: each task is in the reader's Needs you, held up by a paused agent
+    assert len(stage["owners"]) == 12 and stage["owners"][0] == {"actor": "bot:big", "count": 3, "needs_you": 3}
     assert [o["actor"] for o in stage["owners"][1:]] == [f"bot:b{n:02d}" for n in range(11)]
     assert stage["more"] == {"owners": 3, "count": 3}
 

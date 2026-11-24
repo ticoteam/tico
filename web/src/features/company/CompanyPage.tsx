@@ -2,7 +2,7 @@ import { useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import { useAction } from '@/actions';
-import { meQuery, useActor, useDirectory } from '@/data';
+import { useActor, useDirectory } from '@/data';
 import { Button } from '@/kit/Button';
 import { Sparkline } from '@/kit/Chart';
 import { FlowMark } from '@/kit/FlowMark';
@@ -14,6 +14,7 @@ import { Dashboard, FiguresStrip, PageMore, SidePanel, type Figure } from '@/pag
 import { Face, Go, NameOf, PanelLink, usd } from './parts';
 import { floorQuery, loadMoreStageTasks, revenueQuery, spendQuery, stageTasksQuery, type Pipeline, type Stage } from './queries';
 import './company.css';
+import { useNeedsYou, waitsOnMe } from '@/features/tasks/routing';
 
 /* Company (pages/3-company/company.js companyPage): a Dashboard, Floor variant. Figures across the top, each from its
    own area and linking to its page; then one hall per team with its pipelines, every stage a stack of tasks per owner.
@@ -188,8 +189,10 @@ function StagePanel({ pipeline, stage, onClose }: { pipeline: Pipeline; stage: S
   const tasks = useQuery(stageTasksQuery(pipeline.id, stage.id));
   const more = useMutation({ mutationFn: (after: string) => loadMoreStageTasks(pipeline.id, stage.id, after) });
   const next = tasks.data?.next_after;
-  const me = useQuery(meQuery).data?.id;
-  const mine = (t: { turn: { state: string; who: string | null } | null }) => t.turn?.state === 'person' && t.turn.who === me;
+  // the Dot's one meaning: Needs you names the task, a paused agent's too, as the stage's own count reads Needs you
+  // (backend/company_floor.py)
+  const needs = useNeedsYou();
+  const mine = (t: { id: string }) => waitsOnMe(t, needs);
   const list = [...(tasks.data?.tasks ?? [])].sort((a, b) => Number(mine(b)) - Number(mine(a)));
   // The stage's owner (old company-floor.ts cfCardHead): the one holding the most tasks, and how many more there are.
   const lead = [...stage.owners].sort((a, b) => b.count - a.count)[0];

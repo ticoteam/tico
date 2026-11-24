@@ -5,7 +5,7 @@ import { newAddressFor, ROWS, rowFor } from './map';
 const CASES: [old: string, now: string | null][] = [
   ['#/file/f_7k2?v=3&task=41', '/library/files?file=f_7k2&v=3'],
   ['#/settings?recruit=%7B%22title%22%3A%22QA%22%2C%22brief%22%3A%22x%22%7D', '/settings/agents'],
-  ['#/decide', '/needs-you'],
+  ['#/decide', '/tasks'],
   ['#/decide?task=41', '/task/41'],
   ['#/goals', '/company/strategy/goals'],
   ['#/goals/g_12', '/company/strategy/goals?panel=goal:g_12'],
@@ -117,7 +117,7 @@ const CASES: [old: string, now: string | null][] = [
   ['#/person/h_3', '/team/h_3'],
   ['#/person/h_3/settings', '/team/h_3?tab=settings'],
   ['#/tasks', '/tasks'],
-  ['#/tasks?view=foryou', '/needs-you'],
+  ['#/tasks?view=foryou', '/tasks'],
   ['#/tasks?owner=bot:qa&tag=bug', '/tasks'],
   ['#/updates', '/updates'],
   ['#/updates?kind=weekly&update=u_1', '/updates/weekly?open=u_1'],

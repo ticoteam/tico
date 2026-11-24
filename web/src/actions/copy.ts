@@ -28,7 +28,6 @@ export const sheetName: Record<string, string> = {
 /** The menu's pages, for search rows and did lines: [path, name]. */
 export const pages: ReadonlyArray<readonly [string, string]> = [
   ['/tasks', 'Tasks'],
-  ['/needs-you', 'Needs you'],
   ['/calendar', 'Calendar'],
   ['/threads', 'Threads'],
   ['/updates', 'Updates'],

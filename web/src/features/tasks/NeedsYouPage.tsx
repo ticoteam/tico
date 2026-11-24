@@ -1,7 +1,7 @@
 import { useInfiniteQuery, useMutation, useQuery, useSuspenseQuery } from '@tanstack/react-query';
 import { Link, useLocation } from '@tanstack/react-router';
-import { useEffect, useRef, useState, type SyntheticEvent } from 'react';
-import { meQuery } from '@/data';
+import { useEffect, useRef, useSyncExternalStore, type SyntheticEvent } from 'react';
+import { hearPlaces, heldRow, holdRow } from '@/lib';
 import { RequestCard } from '@/features/task/exports';
 import { Button, FillContext } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -11,37 +11,27 @@ import { TaskRow } from '@/kit/Row';
 import { useFollow } from '@/live/follow';
 import { List, Section } from '@/pagekinds';
 import { Capped, LIST_CAP, LIST_SHOW, PHONE_ROW_H, RowMore, ROW_H } from './capped';
+import { useNeedsYouDrawn } from './needs';
 import { Blocks, Face } from './parts';
 import { flowListParams, flowListQuery, flowOriginQuery, flowQuery, flowSnoozedAsksQuery, flowTask, unsnoozeFlowAsk, useContactNames, useFlowGroups, useNeedsYouSort, type Flow, type FlowItem, type FlowRequest } from './queries';
 import './tasks.css';
 
-const TABS = [{ label: 'Mine', to: '/needs-you' }, { label: 'All', to: '/needs-you', search: { view: 'all' } }] as const;
-
 /** How many rows stay live while Tico sorts the list (backend/needs_order.py); the rest wait for the new order. */
 const LIVE = 5;
-
-/** `next`, with the rows from the top of `shown` down to the row the person is on (`held`) kept where they are: a new
-    order moves only the rows below it. Rows that left the list are gone from the top part too. */
-function keepTop(shown: readonly string[], next: readonly string[], held: string | null): string[] {
-  const at = held ? shown.indexOf(held) : -1;
-  if (!held || at < 0 || !next.includes(held)) return [...next];
-  const still = new Set(next);
-  const top = shown.slice(0, at + 1).filter((id) => still.has(id));
-  const kept = new Set(top);
-  return [...top, ...next.filter((id) => !kept.has(id))];
-}
 
 /** A row of Mine: a request's card or a task's row. */
 type MineRow = { id: string; request: FlowRequest; task?: undefined } | { id: string; task: FlowItem; request?: undefined };
 
 /** Mine as one list in Tico's order, the rows down to the one the person is on kept in place: the last one they
     clicked or focused, until they pick another, click or focus anything outside the rows (a row's own popover is
-    inside it, as React passes its events up), or it leaves the list. `on(id)` goes on each row. */
+    inside it, as React passes its events up), or it leaves the list; the task open from it, beside it (the shell).
+    The order is useNeedsYouDrawn's, the same the list beside a task draws and an answer goes on down. `on(id)` goes on
+    each row. */
 function useTicoOrder(flow: Flow) {
-  const [held, hold] = useState<string | null>(null);
+  const held = useSyncExternalStore(hearPlaces, heldRow);
   const inside = useRef<Event | null>(null);
   useEffect(() => {
-    const away = (e: Event) => { if (e !== inside.current) hold(null); };
+    const away = (e: Event) => { if (e !== inside.current) holdRow(null); };
     document.addEventListener('pointerdown', away);
     document.addEventListener('focusin', away);
     return () => {
@@ -51,20 +41,9 @@ function useTicoOrder(flow: Flow) {
   }, []);
   const on = (id: string) => (e: SyntheticEvent) => {
     inside.current = e.nativeEvent;
-    hold(id);
+    holdRow(id);
   };
-  const [kept, keep] = useState<{ from?: Flow; order: string[]; latest: string[]; held?: string | null }>({ order: [], latest: [] });
-  let order = kept.order;
-  if (kept.from !== flow) {
-    const latest = flow.order ?? [...(flow.requests ?? []), ...flow.items].map((it) => it.id);
-    order = held ? keepTop(kept.order, latest, held) : latest;
-    keep({ from: flow, order, latest, held });
-    if (held && !latest.includes(held)) hold(null);
-  } else if (held !== kept.held) {
-    // The person moved: the rows down to the new one stay, the rest take the latest order (all of it, let go).
-    order = held ? keepTop(order, kept.latest, held) : kept.latest;
-    keep({ ...kept, order, held });
-  }
+  const order = useNeedsYouDrawn(flow);
   const byId = new Map<string, MineRow>([
     ...(flow.requests ?? []).map((it) => [it.id, { id: it.id, request: it }] as const),
     ...flow.items.map((it) => [it.id, { id: it.id, task: it }] as const),
@@ -189,7 +168,7 @@ function SnoozedAsks() {
 
 /** What waits on you, as one list in Tico's order: requests' cards and tasks' rows, each task with its relationship's
     name. While Tico sorts it, rows past the top LIVE wait, dimmed. */
-function Mine({ sorting }: { sorting: boolean }) {
+function Mine({ sorting, bare = false }: { sorting: boolean; bare?: boolean }) {
   const flow = useSuspenseQuery(flowQuery).data;
   const { rows, on, held } = useTicoOrder(flow);
   const names = useContactNames([flow.items]);
@@ -205,60 +184,55 @@ function Mine({ sorting }: { sorting: boolean }) {
         : <FlowRow it={row.task} mine contact={row.task.entity_id ? names.get(row.task.entity_id) : undefined} />}
     </div>
   );
+  // `bare`: inside a section of its own (Tasks' Needs you), with its head
+  const list = (
+    <Capped list={rows} cap={Math.max(LIST_CAP, shownTo)} show={Math.max(LIST_SHOW, shownTo)} height={cards ? PHONE_ROW_H : ROW_H} measure more={undefined} draw={draw}
+      moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
+  );
   return (
     <>
-      {rows.length > 0 && (
+      {rows.length > 0 && (bare ? list : (
         <section className="stage pk-sec flow-mine" aria-label="Needs you">
-          <Capped list={rows} cap={Math.max(LIST_CAP, shownTo)} show={Math.max(LIST_SHOW, shownTo)} height={cards ? PHONE_ROW_H : ROW_H} measure more={undefined} draw={draw}
-            moreRow={(n, open) => <RowMore key="more" n={n} onClick={open} />} />
+          {list}
         </section>
-      )}
-      {!flow.count && <Empty title="Nothing waits on you"><Link to="/tasks" className="btn">Open Tasks</Link></Empty>}
+      ))}
+      {!flow.count && !bare && <Empty title="Nothing waits on you"><Link to="/tasks" className="btn">Open Tasks</Link></Empty>}
     </>
   );
 }
 
-/** Needs you: what waits on you (Mine), or every task anyone could claim (All). A row opens the task, and closing it
-    comes back here. */
+/** Mine's ask for Tico to sort it, sent where Mine shows (`on`): this page's Mine, and Needs you on top of Tasks, never
+    the list beside a task. Whether its rows past the top LIVE wait for the new order. */
+function useMineSort(on: boolean): boolean {
+  const flow = useQuery({ ...flowQuery, enabled: on });
+  const sorting = useNeedsYouSort(on ? flow.data : undefined);
+  return sorting && (flow.data?.count ?? 0) > LIVE;
+}
+
+/** Needs you as a page of its own: what waits on you (Mine), or, from the All link in its head on Tasks (`?view=all`),
+    every task anyone could claim. The link picks the view, so no tabs; Snoozed and Done are the head's other links. A
+    row opens the task, and closing it comes back here. */
 export function NeedsYouPage() {
   useFollow({ allTasks: true });
   const all = useLocation({ select: (l) => (l.search as { view?: string }).view === 'all' });
-  const me = useQuery(meQuery).data?.id;
   const read = useFlowList(undefined, 'open', all);
-  const [hideArchive, setHideArchive] = useState(false);
-  const flow = useQuery({ ...flowQuery, enabled: !all });
-  const sorting = useNeedsYouSort(all ? undefined : flow.data);
-  const waiting = sorting && (flow.data?.count ?? 0) > LIVE;
+  const waiting = useMineSort(!all);
 
   return (
     <List
-      title="Needs you"
+      title={all ? 'All' : 'Needs you'}
       path="/needs-you"
-      tabs={TABS}
-      tabsAfter={<>
-        {/* Always here, the same height either way: the rows never shift when it clears. */}
-        {!all && <span className="flow-sorting" role="status">{waiting ? 'Tico is sorting…' : ''}</span>}
-        <Button variant="quiet" onClick={() => setHideArchive(!hideArchive)}>{hideArchive ? 'Show archive' : 'Hide archive'}</Button>
-      </>}
+      // Always here, the same height either way: the rows never shift when it clears.
+      after={all ? undefined : <span className="flow-sorting" role="status">{waiting ? 'Tico is sorting…' : ''}</span>}
       state={all && read.isPending ? 'loading' : all && read.isLoadingError ? 'fault' : 'ready'}
       onRetry={() => void read.refetch()}
       className="tasks-page"
-      sections={
-        <>
-          {all
-            ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} /> : <Empty title="No work to claim" />
-            : <Mine sorting={waiting} />}
-          {!hideArchive && (all || me) && (
-            <div key={all ? 'all' : 'mine'} className="flow-archive">
-              <Section name="Snoozed" defaultOpen={false}>
-                {!all && <SnoozedAsks />}
-                <FlowShelf owner={all ? undefined : me} shelf="snoozed" />
-              </Section>
-              <Section name="Done" defaultOpen={false}><FlowShelf owner={all ? undefined : me} shelf="done" /></Section>
-            </div>
-          )}
-        </>
-      }
+      sections={all
+        ? read.data?.pages[0]?.tasks.length ? <TaskSections read={read} /> : <Empty title="No work to claim" />
+        : <Mine sorting={waiting} />}
     />
   );
 }
+
+/** What waits on you as a list (Mine): Tasks draws it on top, and beside a task opened from it (NeedsYouList). */
+export { Mine as NeedsYouRows, FlowShelf as NeedsYouShelf, SnoozedAsks as NeedsYouSnoozedAsks, useMineSort as useNeedsYouSorting };

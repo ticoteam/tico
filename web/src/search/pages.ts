@@ -7,7 +7,6 @@ import { matches } from './results';
 
 const ICONS: Record<string, IconName> = {
   tasks: 'tasks',
-  'needs-you': 'inbox',
   calendar: 'calendar',
   threads: 'threads',
   updates: 'updates',

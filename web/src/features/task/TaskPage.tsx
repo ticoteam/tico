@@ -171,7 +171,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: TaskSearch) => prev) as never, replace: true });
   }, [known, chatCard, unresolved, first, opened, t, navigate]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
-     the task stays as it is; once nothing does, opened from its board or the list beside it, the task below it in that
+     the task stays as it is; once nothing does, opened from its board, Needs you or the list beside it, the task below it in that
      list opens, as a press on its row does; else it closes, back to the board, list or page it was opened from (its
      board, while there is one, when nothing is behind it). */
   const router = useRouter();
@@ -185,15 +185,17 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const sought = useRef(0);
   useEffect(
     () =>
-      onAnswered(() => {
+      onAnswered((given) => {
         const waits = waitsNow(client, t.id, me);
         if (waits === 'ask') return setSeek((n) => n + 1);
         if (waits) return;
+        // Needs you, as read when the person answered, has them do more here (paid shots to reconcile, say): it stays
+        if (given?.task === t.id && given.more) return;
         const next = nextInList(t.id);
         if (!next) return close();
         leaving.current = true;
-        pressListRow(next.pipeline, next.task);
-        void navigate({ to: '/tasks/$pipeline/$task', params: next });
+        pressListRow(next.pipeline, next.task, undefined, next.list);
+        void navigate({ to: '/tasks/$pipeline/$task', params: { pipeline: next.pipeline, task: next.task } });
       }),
     [t.id, me, client, close, navigate],
   );

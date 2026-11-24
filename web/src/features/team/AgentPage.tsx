@@ -13,6 +13,7 @@ import { Menu, MenuItem, MenuRule } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { fmtMoney } from '@/lib';
 import { FiguresStrip, PageMore, Record as RecordPage, Section } from '@/pagekinds';
+import { useNeedsYou } from '@/features/tasks/routing';
 import type { Tab } from './actions';
 import { ComputerPage } from './ComputerPage';
 import { bareId, historyOf, modelLine, runFigures, startOfWeek, teamOf, type HistLine } from './model';
@@ -204,9 +205,10 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const nowId = detail.data?.status?.task_id;
   const working = actor.working ? tasks.filter((t) => t.id === nowId) : [];
   const mine = tasks.filter((t) => !working.includes(t));
-  const waits = mine.filter((t) => waitsOn(t, me?.id));
+  const needs = useNeedsYou();
+  const waits = mine.filter((t) => waitsOn(t, needs));
   // Stuck on someone else (ui bot-tasks blocked): who it waits on is the row's note.
-  const waiting = mine.filter((t) => !waitsOn(t, me?.id) && t.turn?.state === 'person' && !!t.turn.who);
+  const waiting = mine.filter((t) => !waitsOn(t, needs) && t.turn?.state === 'person' && !!t.turn.who && t.turn.who !== me?.id);
   const rest = mine.filter((t) => !waits.includes(t) && !waiting.includes(t));
   const nameOf = (id: string) => actors.find((a) => a.id === id)?.name ?? 'someone';
   const { turns, spend } = runFigures(runs.data ?? [], new Date());
@@ -238,7 +240,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           {actor.working && (
             <Section name="Working" count={working.length || undefined}>
               {working.map((t) => (
-                <OwnRow key={t.id} task={t} me={me?.id} />
+                <OwnRow key={t.id} task={t} waits={waitsOn(t, needs)} />
               ))}
               {actor.status && (
                 <p className="now-step">
@@ -255,14 +257,14 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           {waits.length > 0 && (
             <Section name="Waits on you" count={waits.length}>
               {waits.map((t) => (
-                <OwnRow key={t.id} task={t} me={me?.id} />
+                <OwnRow key={t.id} task={t} waits />
               ))}
             </Section>
           )}
           {waiting.length > 0 && (
             <Section name="Waiting" count={waiting.length}>
               {waiting.map((t) => (
-                <OwnRow key={t.id} task={t} me={me?.id} sub={`On ${nameOf(t.turn?.who ?? '')}`} />
+                <OwnRow key={t.id} task={t} waits={false} sub={`On ${nameOf(t.turn?.who ?? '')}`} />
               ))}
             </Section>
           )}
@@ -277,14 +279,14 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
           )}
           <DreamSection slug={slug} actorId={actor.id} />
           <Section name="Tasks" actions={<AllTasks owner={actor.id} />}>
-            <OwnRows tasks={rest} me={me?.id} label="Open tasks" />
+            <OwnRows tasks={rest} needs={needs} label="Open tasks" />
             {doneN > 0 && (
               <Fold label="Done" text={`${doneN} this week`}>
-                <OwnRows tasks={done.data?.tasks ?? []} me={me?.id} label="Done tasks" />
+                <OwnRows tasks={done.data?.tasks ?? []} needs={needs} label="Done tasks" />
               </Fold>
             )}
           </Section>
-          <ListSections slug={slug} me={me?.id} />
+          <ListSections slug={slug} needs={needs} />
           <FilesSection slug={slug} />
           <CopiesSection slug={slug} botId={bareId(actor.id)} actors={actors} />
         </>

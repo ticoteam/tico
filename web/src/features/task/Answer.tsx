@@ -139,7 +139,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   }, [asking, onAsking]);
 
   const onApprove = async () => {
-    start();
+    start(t.id, r.requirement_id);
     setSeen(key);
     hold?.(r, true);
     const drawn = answerKey(r, t.visit_id); // the version and visit this card shows, never newer ones read since
@@ -170,7 +170,7 @@ export function Answer({ t, r, onAsking, hold }: AnswerProps) {
   };
 
   const onSend = async () => {
-    start();
+    start(t.id, r.requirement_id);
     hold?.(r, true);
     const res = await request.run({ task: t.id, requirement: r.requirement_id, note, ...(askedOn && { key: askedOn }) });
     hold?.(res.ok ? null : r);

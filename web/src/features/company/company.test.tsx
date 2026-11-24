@@ -95,13 +95,15 @@ describe('Company @s248 @s250', () => {
   });
 
   it('opens a stage with its owner and its tasks, the ones waiting on you first @s270', async () => {
+    // what waits on you is what Needs you names (an ask past the agent's turn), not a turn that is only yours
     const tasks = {
       tasks: [
-        { id: 't1', number: 4, title: 'Check the gift notes', turn: null, late: null, stage_since: null },
-        { id: 't2', number: 5, title: 'Approve the spring kit', turn: { state: 'person', who: 'human:me' }, late: null, stage_since: null },
+        { id: 't1', number: 4, title: 'Check the gift notes', turn: { state: 'person', who: 'human:me' }, late: null, stage_since: null },
+        { id: 't2', number: 5, title: 'Approve the spring kit', turn: { state: 'bot', who: 'bot:builder' }, late: null, stage_since: null },
       ],
       cursor: '',
     };
+    queryClient.setQueryData(['flow'], { count: 1, items: [], task_ids: ['t2'] });
     serve((url) => (url.startsWith('/api/v2/tasks?') ? { status: 200, body: tasks } : nothing()));
     queryClient.setQueryData(['directory'], { actors: [], byId: { 'bot:builder': { id: 'bot:builder', kind: 'agent', name: 'Builder' } } });
     queryClient.setQueryData(floorQuery.queryKey, floor);
@@ -110,6 +112,7 @@ describe('Company @s248 @s250', () => {
     expect(within(panel).getByText('Owner').nextElementSibling?.textContent).toContain('Builder');
     const rows = await within(panel).findAllByRole('link', { name: /Check the gift notes|Approve the spring kit/ });
     expect(rows.map((r) => r.textContent)).toEqual(['Approve the spring kit', 'Check the gift notes']);
+    expect(rows.map((r) => !!r.querySelector('.pt-mark .flow'))).toEqual([true, false]);
     expect(href(within(panel).getByRole('link', { name: 'Open in Tasks' }))).toBe('/tasks/p1');
   });
 

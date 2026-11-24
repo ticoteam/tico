@@ -18,19 +18,21 @@ import { VirtualList } from '@/kit/VirtualList';
 import { whoHref } from './model';
 import type { OwnTask } from './queries';
 
-export const waitsOn = (t: Pick<OwnTask, 'turn'>, me: string | undefined) => !!me && t.turn?.state === 'person' && t.turn.who === me;
+/** Whether a task waits on you: Needs you names it (the Dot's one meaning, features/tasks/needs.ts). */
+export const waitsOn = (t: Pick<OwnTask, 'id'>, needs: ReadonlySet<string> | undefined) => !!needs?.has(t.id);
 export const taskHref = (t: Pick<OwnTask, 'pipeline_id' | 'number' | 'id'>) =>
   t.pipeline_id && t.number ? `/tasks/${encodeURIComponent(t.pipeline_id)}/${t.number}` : `/task/${encodeURIComponent(t.id)}`;
 
 /** A task on its owner's page: no face, since every row here is theirs (mates.js ownRow). Only an open task is
-    Late, as in the old app (ui/app/task-row.ts taskLate): a done one keeps its grey row. */
-export function OwnRow({ task, me, sub }: { task: OwnTask; me: string | undefined; sub?: string }) {
+    Late, as in the old app (ui/app/task-row.ts taskLate): a done one keeps its grey row. `waits`: Needs you names it
+    (its Dot), read once by the list, not by each row. */
+export function OwnRow({ task, waits, sub }: { task: OwnTask; waits: boolean; sub?: string }) {
   return (
     <TaskRow
       title={task.title ?? ''}
       href={taskHref(task)}
       target={`task:${task.number ?? task.id}`}
-      mark={waitsOn(task, me) ? <FlowMark /> : undefined}
+      mark={waits ? <FlowMark /> : undefined}
       late={task.status === 'open' && !!task.late}
       pills={sub ? <span className="row-stage">{sub}</span> : undefined}
       at={task.updated_at ?? new Date(0).toISOString()}
@@ -42,9 +44,20 @@ export function OwnRow({ task, me, sub }: { task: OwnTask; me: string | undefine
 export const LONG_LIST = 100;
 
 /** A teammate's tasks as OwnRows. Past LONG_LIST rows, only those on screen are drawn, in a scroller twelve rows high;
-    `onEnd` reads the next page when its last row comes into view. */
-export function OwnRows({ tasks, me, label, onEnd }: { tasks: readonly OwnTask[]; me: string | undefined; label: string; onEnd?: () => void }) {
-  if (tasks.length <= LONG_LIST) return tasks.map((t) => <OwnRow key={t.id} task={t} me={me} />);
+    `onEnd` reads the next page when its last row comes into view. `needs`: what Needs you names (useNeedsYou, read by
+    the page once). */
+export function OwnRows({
+  tasks,
+  needs,
+  label,
+  onEnd,
+}: {
+  tasks: readonly OwnTask[];
+  needs: ReadonlySet<string> | undefined;
+  label: string;
+  onEnd?: () => void;
+}) {
+  if (tasks.length <= LONG_LIST) return tasks.map((t) => <OwnRow key={t.id} task={t} waits={waitsOn(t, needs)} />);
   return (
     <VirtualList
       className="tm-long"
@@ -54,7 +67,7 @@ export function OwnRows({ tasks, me, label, onEnd }: { tasks: readonly OwnTask[]
       estimateSize={34}
       measure
       onReachEnd={onEnd}
-      renderItem={(t) => <OwnRow task={t} me={me} />}
+      renderItem={(t) => <OwnRow task={t} waits={waitsOn(t, needs)} />}
     />
   );
 }

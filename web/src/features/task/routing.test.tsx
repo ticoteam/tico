@@ -10,7 +10,8 @@ import { Route as taskIndex } from '@/routes/tasks.$pipeline.$task.index';
 import { taskDetailQuery, taskFilesQuery, taskRefQuery, type TaskData } from './queries';
 import { TaskById } from './TaskPage';
 
-/* Flow is gone: its old links land on Needs you and on the task's own address, with what they carried. Made-up rows. */
+/* Flow is gone: its old links land on Tasks (Needs you on top) and on the task's own address, with what they carried.
+   Made-up rows. */
 
 const task = { id: 't1', number: 12, pipeline_id: 'p1', title: 'Ship it', documents: [{ file_id: 'd1', name: 'Spec', kind: 'markdown', version: 1 }], to_leave: [], children: [], relations: {}, conversation_id: null, turn: null } as unknown as TaskData;
 
@@ -27,6 +28,7 @@ function at(href: string) {
     taskById.update({ getParentRoute: () => root, id: '/task/$task', path: '/task/$task', component: () => null } as never),
     taskIndex.update({ getParentRoute: () => root, id: '/tasks/$pipeline/$task/', path: '/tasks/$pipeline/$task/', component: () => null } as never),
     page('/needs-you'),
+    page('/tasks/'),
     page('/tasks/$pipeline/$task/$tab'),
   ]);
   return createRouter({ routeTree, context: { queryClient }, history: createMemoryHistory({ initialEntries: [href] }) });
@@ -42,11 +44,14 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('an old Flow link', () => {
-  it('/flow opens Needs you, keeping its view', async () => {
-    const router = at('/flow?view=all');
+  it('/flow opens Tasks, where Needs you is on top; /flow?view=all opens All, keeping its view', async () => {
+    const router = at('/flow');
     await router.load();
-    expect(router.state.location.pathname).toBe('/needs-you');
-    expect(router.state.location.search).toEqual({ view: 'all' });
+    expect(router.state.location.pathname).toBe('/tasks');
+    const all = at('/flow?view=all');
+    await all.load();
+    expect(all.state.location.pathname).toBe('/needs-you');
+    expect(all.state.location.search).toEqual({ view: 'all' });
   });
 
   it('/flow/<n> opens the task on the tab it named, keeping its ask, version and chat', async () => {

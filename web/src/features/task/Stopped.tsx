@@ -15,7 +15,7 @@ export function StoppedDecision({ t, dock = false }: { t: TaskData; dock?: boole
   if (!agent) return null;
 
   const go = async () => {
-    start();
+    start(t.id, null);
     const res = await release.run({ task: t.id, agent: agent.id });
     if (!res.ok) return refused(res);
     toast({ text: 'Released', name: agent.name });

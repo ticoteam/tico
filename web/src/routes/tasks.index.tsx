@@ -1,12 +1,14 @@
-import { createFileRoute, redirect } from '@tanstack/react-router';
-import { Empty } from '@/kit/Empty';
-import { firstPipeline, pipelinesQuery } from '@/features/tasks/routing';
+import { createFileRoute } from '@tanstack/react-router';
+import { TasksHome, TasksHomePending } from '@/features/tasks/exports';
+import { flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 
-/** Tasks lands on the pipeline opened last, else the first; replace, so Back skips this hop. */
+/** Tasks: Needs you on top, then the pipelines. The pipelines are waited for; Needs you's read starts here and its
+    section shows it as it comes (or fails), never holding the page. */
 export const Route = createFileRoute('/tasks/')({
-  loader: async ({ context }) => {
-    const pipeline = firstPipeline(await context.queryClient.ensureQueryData(pipelinesQuery));
-    if (pipeline) throw redirect({ to: '/tasks/$pipeline', params: { pipeline }, replace: true });
+  loader: ({ context: { queryClient } }) => {
+    void queryClient.prefetchQuery(flowQuery);
+    return queryClient.ensureQueryData(pipelinesQuery);
   },
-  component: () => <Empty title="No pipelines yet" />,
+  pendingComponent: TasksHomePending,
+  component: TasksHome,
 });
