@@ -215,17 +215,23 @@ def readable_history(c, auth, who, history, visible_sql):
     ]
     named = sorted({str(e[k]) for e in history for k in ("old", "new") if e.get(k)})
     if named:
-        from .task_delete import READABLE
-
-        # The named tasks the reader may not read, in one statement each: those that exist, and those in the trash by
-        # the audience they had (a deleted blocker's id stays in the history of the task it blocked); a purged one never.
+        # The named tasks that exist and that the reader may not read, in one statement.
         hidden = {
             r[0]
-            for table, gone in (("tasks", "0"), (READABLE, "purged_at IS NOT NULL"))
             for r in c.execute(
-                f"SELECT id FROM {table} WHERE id IN (SELECT value FROM json_each(?)) AND ({gone} OR NOT coalesce(("
+                "SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND NOT coalesce(("
                 + visible_sql
-                + "),0))",
+                + "),0)",
+                (json.dumps(named),),
+            )
+        }
+        # A deleted one (a blocker's id stays in the history of the task it blocked) as kept words name it: only if it
+        # was not private and is not purged. The reader's rule may name columns the trash does not keep.
+        hidden |= {
+            r[0]
+            for r in c.execute(
+                "SELECT task_id FROM task_trash WHERE task_id IN (SELECT value FROM json_each(?)) "
+                "AND (purged_at IS NOT NULL OR coalesce(private, 1) != 0)",
                 (json.dumps(named),),
             )
         }

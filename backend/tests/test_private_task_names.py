@@ -171,23 +171,24 @@ def test_a_wake_folded_into_another_keeps_no_key_naming_a_private_blocker(c):
     assert len(json.loads(c.execute("SELECT refs FROM messages WHERE wake_key=?", (key,)).fetchone()[0])["parts"]) == 1
 
 
-def test_a_deleted_private_blocker_stays_hidden_in_the_history_of_the_task_it_blocked(c):
+@pytest.mark.parametrize("hide", [True, False])
+def test_a_deleted_blocker_is_named_in_the_history_of_the_task_it_blocked_only_while_not_private_or_purged(c, hide):
     from backend import task_delete, task_reads
 
-    blocker, blocked = blocked_on(c, hide=True)
+    blocker, blocked = blocked_on(c, hide=hide)
     assert task_delete.delete_tasks(c, [blocker], apply=True, actor=X.ANA, keep_work=True)["applied"]
     (body,) = unblocked(c, blocked)
-    assert "A private task was deleted" in body and not told(body, blocker, "#304")
+    assert ("A private task was deleted" in body) == hide
+
+    def named(history):
+        return any(blocker in (e.get("old"), e.get("new")) for e in history)
+
     history = H.task_history(c, blocked)
-    assert any(blocker in (e.get("old"), e.get("new")) for e in history)  # kept: the read decides
-    # Ben opens company tasks only (the rule as SQL over `tasks`, which the trash is read as too).
-    shown = task_reads.readable_history(c, None, SimpleNamespace(actor="human:ben"), history, "tasks.private = 0")
-    assert not any(blocker in (e.get("old"), e.get("new")) for e in shown)
-    assert any(e.get("field") == "depends_on" for e in task_reads.readable_history(c, None, ana(), history, "1"))
-    # Purged, it is hidden from everyone: no audience is left to read it by.
+    assert named(history)  # kept: the read decides
+    # Even Ana, who opened it, reads no private trashed task: a deleted task is read as kept words name a task.
+    assert named(task_reads.readable_history(c, None, ana(), history, "1")) != hide
     c.execute("UPDATE task_trash SET purged_at=? WHERE task_id=?", (H.now(), blocker))
-    shown = task_reads.readable_history(c, None, ana(), history, "1")
-    assert not any(blocker in (e.get("old"), e.get("new")) for e in shown)
+    assert not named(task_reads.readable_history(c, None, ana(), history, "1"))
 
 
 def test_a_blocker_whose_release_production_runs_is_not_named_when_private(c):
