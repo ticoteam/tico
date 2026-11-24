@@ -333,12 +333,18 @@ chat (`POST /api/v2/threads/{conversation_id}/messages`, `tico_thread_post`, `ti
 
 ### Who can be reached, and how to tell
 
-- An @mention reaches someone who can read the task. On a private task, your @mention of a person or an agent adds
+- An @mention reaches someone who can read the task. A person's @mention reaches an agent only if they have Write on
+  it, as any message to that agent needs: one they may see but not send requests to is not woken (no delivery, no
+  run), the comment still posts, and the answer says so:
+  `"warnings": [{"rule": "mention_no_write", "actor": "bot:finance", "detail": "You can see finance but not send it
+  requests. Ask the person who runs it for Write access."}]`. An agent's @mention of an agent keeps its own rules.
+  On a private task, your @mention of a person or an agent adds
   them to its Who can see (`shared_with`), as a task event anyone on the task can undo; an agent's @mention adds only
   a teammate in its reach, never a group, and a task holds at most 50 readers. Someone it cannot add is not reached.
 - In a DM or a chat (`POST /api/v2/messages`, `tico_message_send`, thread posts), an @mention of someone outside it
   reaches nobody and grants nothing. The sent message says so:
-  `"warnings": [{"rule": "mention_outside", "actor": "human:cara"}]`.
+  `"warnings": [{"rule": "mention_outside", "actor": "human:cara"}]`. The same Write rule holds there, with the
+  same `mention_no_write` warning.
 - A comment's answer says whom it reached. `woke` is true when it queued an agent's turn and `delivered` when it
   reached a person; `sent_as` (`{"delivery": "steer", "until": null}`) is how it reached the agent, and
   `comment.recipient_id` is the first agent it was addressed to (it can be null when an @mention woke one). A plain
@@ -346,6 +352,6 @@ chat (`POST /api/v2/threads/{conversation_id}/messages`, `tico_thread_post`, `ti
   `held` means an agent's comment to an agent waits for that agent's next run (`needs_action: true` wakes it now).
 - To check first, `GET /api/v2/threads/{conversation_id}/reach?text=...&in_reply_to=...` (the task's
   `conversation_id` is on its read) lists whom it would reach (`reaches`: `actor`, `reason`, `mode`, `adds_reader`)
-  and the @mentions it would not (`outside`). It writes nothing.
+  and the @mentions it would not (`outside`, an agent without your Write on it included). It writes nothing.
 
 How the comment arrives for an agent (steer, queue or defer) is in [Tasks](tasks.md#conversation).

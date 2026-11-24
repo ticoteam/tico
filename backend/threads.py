@@ -1390,10 +1390,10 @@ def _record(c, message, conv):
     author = message.get("sender_id") or ""
     # A generated notice (refs.no_mentions, a task roundup) names people in its text as data: it makes no mention.
     named = "@" in str(message.get("body") or "") and not refs.get("no_mentions")
-    found = mentions(c, thread, message.get("body") or "", author=author) if named else []
+    warnings, in_audience = [], []
+    found = mentions(c, thread, message.get("body") or "", author=author, refused=warnings) if named else []
     if not refs.get("no_mentions"):
         found = with_reply_mention(c, thread, author, message.get("in_reply_to"), found)
-    warnings, in_audience = [], []
     now = _now()
     root = root_of(c, thread) if found else None
     for actor, kind in found:
@@ -1415,6 +1415,10 @@ def _record(c, message, conv):
     # Every write fans out the same way (contract §4.3), legacy writers (runner replies, old routes) included: its
     # addressed and its followers (`plan`), under the same loop guard. Posting follows nobody (D4).
     woken = deliver(c, thread, message, in_audience, posting, warnings)
+    # An agent the post reached all the same (it is written to, or a Reply answers it: the reply-back) was no refused
+    # @mention: only one left unreached is told.
+    reached = {message.get("recipient_id")} | {d.get("recipient") for d in woken or [] if d.get("state") != "moot"}
+    warnings[:] = [w for w in warnings if not (w["rule"] == "mention_no_write" and w["actor"] in reached)]
     if woken and not message.get("recipient_id") and not _is_backfill(refs):
         # Addressed to someone (a group DM's members): the counter says so.
         c.execute(
@@ -1487,7 +1491,8 @@ def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=N
     (`adds_reader`). Writes nothing. Someone not in the thread is told only of the teammates they may see."""
     thread = require(c, v, thread_id)
     root = root_of(c, thread)
-    found, outside, adds = mentions(c, thread, text, author=v.actor), [], []
+    refused = []
+    found, outside, adds = mentions(c, thread, text, author=v.actor, refused=refused), [r["actor"] for r in refused], []
     found = with_reply_mention(c, thread, v.actor, in_reply_to, found)
     inside = []
     for actor, kind in found:
@@ -1510,6 +1515,9 @@ def reaches(c, v, thread_id, text="", *, way=None, defer_for=None, in_reply_to=N
         unseen = known.unseen_of([r["actor"] for r in rows] + outside)
         rows = [r for r in rows if r["actor"] not in unseen]
         outside = [a for a in outside if a not in unseen]
+    # A Reply reaches the author it answers (the reply-back, `with_reply_mention`): never listed as outside too.
+    reached = {r["actor"] for r in rows}
+    outside = [a for a in outside if a not in reached]
     return {"thread_id": thread["id"], "way": way or "steer", "reaches": rows, "outside": outside}
 
 
@@ -1543,9 +1551,10 @@ def _follow(c, thread_id, actor, reason, seq=None, root=None):
     )
 
 
-def mentions(c, thread, body, *, author=None):
+def mentions(c, thread, body, *, author=None, refused=None):
     """[(actor, kind)] the text @mentions, in order, never the author: bots by slug or name, people by id, the part of
-    their email before the @, their full name, or a first name no one else shares."""
+    their email before the @, their full name, or a first name no one else shares. A person's @mention of an agent
+    counts only with Write on it (`_writable`): one left out is added to `refused` as a warning when given."""
     text = str(body or "")
     if "@" not in text:
         return []
@@ -1579,7 +1588,68 @@ def mentions(c, thread, body, *, author=None):
     for _, actor in sorted(found):
         if actor != author and actor not in [a for a, _ in out]:
             out.append((actor, "mention"))
-    return out
+    return _writable(c, author, out, refused) if str(author or "").startswith("human:") else out
+
+
+def _writable(c, author, found, refused=None):
+    """A person's @mentions that may reach the agents they name: an agent only with Write on it, as any message to it
+    needs (recipients.require_recipient, task_comments_routes.session_target), so an @mention never wakes an agent its
+    writer may not send requests to. One they may see is named in `refused` (rule `mention_no_write`, the 403's words);
+    one they may not see is left out unnamed. An agent's @mentions keep their own rules (bot_to_bot)."""
+    bots = [a for a, _ in found if a.startswith("bot:")]
+    if not bots:
+        return found
+    from . import teammate_access
+    from .auth import no_write
+
+    viewer = teammate_access._viewer_for(c, author)
+    if viewer is None:  # no person to check: no agent is woken by their name (fails closed)
+        return [(a, k) for a, k in found if not a.startswith("bot:")]
+    levels = teammate_access.levels_many(c, viewer, bots)
+    kept = []
+    for actor, kind in found:
+        level = levels.get(actor)
+        if level is not None and level["write"]:
+            kept.append((actor, kind))
+        elif level is None and not actor.startswith("bot:"):
+            kept.append((actor, kind))
+        elif level is not None and level["see"] and refused is not None:
+            refused.append({"rule": "mention_no_write", "actor": actor, "detail": no_write(agent_handle(c, actor))})
+    return kept
+
+
+def _named_recipient(c, v, thread, actor, to_actor):
+    """Whom a post names in `to`: 404 `Unknown recipient` for one that does not exist or, unless they are in `thread`
+    together, one the poster may not see (addressing is an answer about who exists, so both answer the same)."""
+    target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(DELIVERY_PREFIXES) else None)
+    if not target:
+        raise Problem("not_found", "Unknown recipient", 404)
+    together = thread is not None and _in_it_together(c, thread, actor, target)
+    if v is not None and not together and not _may_see(c, v, target):
+        raise Problem("not_found", "Unknown recipient", 404)
+    return target
+
+
+def _require_agent_write(c, v, actor, target, in_reply_to=None, asker=None):
+    """A person's post `to` an agent is a request to it: Write on it, as any message to an agent needs
+    (recipients.require_recipient), with the same 403. Solicited ones go: a Reply to that agent's own message (the
+    reply-back), and the answer to its ❓ (`asker`, the card's agent). A DM's own agent, inferred rather than named, is
+    not checked here."""
+    if v is None or not str(actor).startswith("human:") or not str(target).startswith("bot:") or target == asker:
+        return
+    if in_reply_to and (H.message(c, in_reply_to) or {}).get("sender_id") == target:
+        return
+    from . import teammate_access
+    from .auth import no_write
+
+    if not teammate_access.levels_for(c, v.who, target, auth=v.auth)["write"]:
+        raise Problem("forbidden", no_write(agent_handle(c, target)), 403)
+
+
+def agent_handle(c, actor):
+    """An agent as people name it in words: its slug, else its name, else its id."""
+    found = H.bot(c, H.actor_id(actor)) or {}
+    return found.get("slug") or found.get("name") or H.actor_id(actor)
 
 
 def mentioned_people(c, body, author=None):
@@ -2783,6 +2853,11 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
             "via": args.get("via"),
             "origin": args.get("origin"),
             "attachments": args.get("attachments"),
+            # Every post argument Send anyway replays (THREAD_REPLAY), as an in-thread hold stores them. No caller
+            # holds a start or a sub-thread's first message with these today (the routes refuse `in_reply_to` beside
+            # `parent_message_id`, and `_post` refuses `ask` with either); stored so a new caller loses none.
+            "in_reply_to": args.get("in_reply_to"),
+            "ask": args.get("ask"),
             "start": start,
         }
         gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
@@ -2920,6 +2995,11 @@ def _post(
         parent_message_id
         and not c.execute("SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()
     ):
+        if to_actor and not ask and not str(to_actor).startswith("ext:"):
+            # Before a hold can be made for it, the same checks as any post `to` someone: See (an unknown or unseen
+            # recipient is the same 404), then Write on an agent.
+            target = _named_recipient(c, v, thread_row(c, thread_id) if thread_id else None, actor, to_actor)
+            _require_agent_write(c, v, actor, target, in_reply_to)
         made = _post_making(
             c,
             principal,
@@ -2928,7 +3008,16 @@ def _post(
             start,
             parent_message_id,
             checked,
-            dict(kind=kind, refs=refs, recipient_id=to_actor, via=via, origin=origin, attachments=attachments),
+            dict(
+                kind=kind,
+                refs=refs,
+                recipient_id=to_actor,
+                via=via,
+                origin=origin,
+                attachments=attachments,
+                in_reply_to=in_reply_to,
+                ask=ask,
+            ),
         )
         if made.get("held") is not None:
             return made["held"]
@@ -2983,14 +3072,10 @@ def _post(
     if to_actor:
         if str(to_actor).startswith("ext:"):
             raise Problem("recipient", "An outside author cannot receive a thread post", 422)
-        target = H.resolve_actor(c, to_actor) or (to_actor if str(to_actor).startswith(DELIVERY_PREFIXES) else None)
-        if not target:
-            raise Problem("not_found", "Unknown recipient", 404)
-        # Addressing is an answer about who exists: anyone not in the thread with the author takes the See gate.
-        if v is not None and not _in_it_together(c, thread, actor, target) and not _may_see(c, v, target):
-            raise Problem("not_found", "Unknown recipient", 404)
+        target = _named_recipient(c, v, thread, actor, to_actor)
         if not str(target).startswith(OUTSIDE_PREFIXES) and not audience_has(c, thread, target):
             raise Problem("forbidden", "That teammate cannot read this thread. Add them first.", 403)
+        _require_agent_write(c, v, actor, target, in_reply_to, asker)
     elif audience_of(root_of(c, thread)) in ("personal", "participants") and not thread.get("parent_id"):
         others = [a for a in _dm_members(c, root_of(c, thread)) if a != actor]
         target = others[0] if len(others) == 1 else None
@@ -4684,7 +4769,8 @@ def _remention(c, message, now):
     c.execute("DELETE FROM message_mentions WHERE message_id=?", (message["id"],))
     named, added, warnings = set(), [], []
     generated = _refs_of(message).get("no_mentions")  # a generated notice's edit names no one, as its post did not
-    for actor, kind in [] if generated else mentions(c, thread, message["body"], author=message.get("sender_id")):
+    found = [] if generated else mentions(c, thread, message["body"], author=message.get("sender_id"), refused=warnings)
+    for actor, kind in found:
         inside = audience_has(c, thread, actor)
         named.add(actor)
         c.execute(

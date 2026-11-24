@@ -579,3 +579,206 @@ def test_a_collapsed_branch_in_a_session_view_is_unread_only_for_what_that_view_
 
     assert collapsed()["unread"] is True, "unfiltered, Ben's comment is unread"
     assert collapsed(session="bot:ops")["unread"] is False, "Ops's session leaves Ben's comment out"
+
+
+def _cara_on_a_ticket(api, write):
+    """Cara files a ticket (she is on it); she may see and read Finance, and send it requests only with `write`."""
+    from backend.tests.helpers.api import restrict
+
+    row = post(api, "tasks", {"owner": "ops", "title": "Close the month", "body": "Reconcile May."}, token="cara-test")
+    settle(api)
+    writers = ["ana", "cara"] if write else ["ana"]
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": writers}
+        )
+    return row
+
+
+@pytest.mark.parametrize("write", [False, True])
+def test_a_persons_mention_wakes_an_agent_only_with_write_on_it(api, write):
+    row = _cara_on_a_ticket(api, write)
+    sent = comment(api, row["id"], "@finance can you check the May totals?", token="cara-test")
+    said = rows(api, "SELECT id FROM messages WHERE body LIKE '@finance can you check%'")
+    assert len(said) == 1, "the comment posts either way"
+    warned = [w for w in sent.get("warnings") or [] if w.get("rule") == "mention_no_write"]
+    from backend import threads
+
+    with api.app.state.store.read() as c:  # what the org rules' audience and the reach read (task_comments_routes)
+        named = threads.mentions(c, threads.thread_row(c, row["conversation_id"]), "@finance", author="human:cara")
+    assert named == ([("bot:finance", "mention")] if write else [])
+    if write:
+        assert jobs(api, "finance") == [said[0]["id"]] and warned == []
+    else:
+        assert jobs(api, "finance") == [], "no job"
+        assert rows(api, "SELECT 1 FROM message_deliveries WHERE recipient='bot:finance'") == [], "no delivery"
+        assert [(w["actor"], w["detail"]) for w in warned] == [
+            (
+                "bot:finance",
+                "You can see finance but not send it requests. Ask the person who runs it for Write access.",
+            )
+        ]
+        reach = api.get(
+            f"/api/v2/threads/{row['conversation_id']}/reach",
+            params={"text": "@finance check it"},
+            headers=headers("cara-test"),
+        ).json()
+        assert reach["outside"] == ["bot:finance"] and reach["reaches"] == [], reach
+
+
+def test_a_persons_mention_in_a_thread_post_needs_write_too(api):
+    row = _cara_on_a_ticket(api, write=False)
+    r = api.post(
+        f"/api/v2/threads/{row['conversation_id']}/messages",
+        json={"text": "@finance the totals, please."},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert [w["rule"] for w in r.json().get("warnings") or []] == ["mention_no_write"], r.text
+    assert jobs(api, "finance") == []
+
+
+def test_a_denied_mention_is_told_on_a_public_comment_an_edit_and_never_doubles_a_reply(api, monkeypatch):
+    from backend import roadmaps
+
+    row = _cara_on_a_ticket(api, write=False)
+    finance = "You can see finance but not send it requests. Ask the person who runs it for Write access."
+    monkeypatch.setattr(roadmaps, "check_public_comment", lambda *_, **__: None)  # its approval is not what is tested
+    with api.app.state.store.transaction() as c:  # a public comment is reloaded for its flag: its warnings stay
+        public = H.task_comment(c, "human:cara", row["id"], "@finance the totals are public now.", public=True)
+    assert [w["detail"] for w in public.get("warnings") or []] == [finance]
+    # A task comment's edit wakes nobody, whoever it names: it warns of nothing.
+    plain = comment(api, row["id"], "The totals.", token="cara-test")["comment"]
+    r = api.post(
+        f"/api/v2/tasks/{row['id']}/comments/{plain['id']}",
+        json={"text": "@finance the totals."},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert "warnings" not in r.json() and jobs(api, "finance") == []
+    # A Reply to Finance's own comment reaches it (it wrote first): the preview lists it once, as reached.
+    said = agent_says(api, "bot:finance", row["id"], "Totals checked.")
+    reach = api.get(
+        f"/api/v2/threads/{row['conversation_id']}/reach",
+        params={"text": "@finance which totals?", "in_reply_to": said["id"]},
+        headers=headers("cara-test"),
+    ).json()
+    assert [r["actor"] for r in reach["reaches"]] == ["bot:finance"] and reach["outside"] == [], reach
+
+
+def test_a_reply_to_an_agent_that_also_names_it_reaches_it_without_a_warning(api):
+    """Cara answers Finance's own comment and names it too: the Reply reaches Finance (it wrote first), so the answer
+    says it woke and warns of nothing."""
+    row = _cara_on_a_ticket(api, write=False)
+    said = agent_says(api, "bot:finance", row["id"], "Totals checked.")
+    sent = comment(api, row["id"], "@finance which totals?", token="cara-test", in_reply_to=said["id"])
+    assert sent["woke"] is True and "warnings" not in sent, sent
+
+
+def test_a_persons_post_to_an_agent_needs_write_unless_it_answers_that_agent(api):
+    """In a team thread with Finance, Cara (See and Read on Finance, no Write) may not send Finance a request, but may
+    answer Finance's own message; her edit that adds an @finance is told so and wakes nothing."""
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.thread_api import new_thread
+
+    thread = new_thread(api, "Totals", members=("human:cara", "bot:finance"))["id"]
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+    words = "You can see finance but not send it requests. Ask the person who runs it for Write access."
+    r = api.post(
+        f"/api/v2/threads/{thread}/messages",
+        json={"text": "Check May.", "to": "bot:finance"},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 403 and r.json()["error"]["detail"] == words, r.text
+    with api.app.state.store.transaction() as c:
+        asked = H.say(c, "bot:finance", "human:cara", "Which month?", conversation_id=thread)
+    r = api.post(
+        f"/api/v2/threads/{thread}/messages",
+        json={"text": "May.", "to": "bot:finance", "in_reply_to": asked["id"]},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+    plain = api.post(f"/api/v2/threads/{thread}/messages", json={"text": "Noted."}, headers=headers("cara-test")).json()
+    settle(api)
+    r = api.patch(f"/api/v2/messages/{plain['id']}", json={"text": "@finance noted."}, headers=headers("cara-test"))
+    assert r.status_code == 200, r.text
+    assert [(w["rule"], w["detail"]) for w in r.json().get("warnings") or []] == [("mention_no_write", words)]
+    assert jobs(api, "finance") == []
+
+
+def test_a_mention_by_no_known_person_wakes_no_agent(api):
+    from backend import threads
+
+    row = ticket(api)
+    with api.app.state.store.read() as c:
+        thread = threads.thread_row(c, row["conversation_id"])
+        assert threads.mentions(c, thread, "@finance @ana look", author="human:nobody") == [("human:ana", "mention")]
+
+
+def _team_thread_with_finance(api):
+    """A team thread of Ana's with Cara and Finance; Cara may see and read Finance but not send it requests."""
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.thread_api import new_thread
+
+    thread = new_thread(api, "Totals", members=("human:cara", "bot:finance"))["id"]
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+    return thread
+
+
+def test_a_reply_in_a_team_thread_to_an_agent_that_names_it_has_no_warning(api):
+    thread = _team_thread_with_finance(api)
+    with api.app.state.store.transaction() as c:
+        said = H.say(c, "bot:finance", "human:cara", "Which month?", conversation_id=thread)
+    r = api.post(
+        f"/api/v2/threads/{thread}/messages",
+        json={"text": "@finance May.", "in_reply_to": said["id"]},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+    assert [w for w in r.json().get("warnings") or [] if w["rule"] == "mention_no_write"] == [], r.text
+
+
+def test_a_card_answer_to_the_asking_agent_needs_no_write(api):
+    """Finance asked Cara a ❓ in their chat: her card answer goes `to` Finance, as it would without `to`."""
+    from backend import question_marks as Q
+    from backend.tests.helpers.api import restrict
+
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+        said = H.say(c, "bot:finance", "human:cara", "Which month should I close?")
+        mark = Q.mark(c, "bot:finance", said["id"], "human:cara")
+    r = api.post(
+        f"/api/v2/threads/{said['conversation_id']}/messages",
+        json={"text": "May.", "to": "bot:finance", "ask": "qmark:" + mark["id"]},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_a_sub_threads_first_message_to_a_hidden_agent_is_the_same_404_as_an_unknown_one(api):
+    """Cara may not see Finance: her post `to` it under a message with no sub-thread yet is told it does not exist, as
+    a made-up name is, never the 403 that would say it does."""
+    from backend.tests.helpers.api import restrict
+    from backend.tests.helpers.thread_api import new_thread
+
+    thread = new_thread(api, "Totals", members=("human:cara",))["id"]
+    with api.app.state.store.transaction() as c:
+        restrict(c, "finance", people=["ana"])
+    first = api.post(f"/api/v2/threads/{thread}/messages", json={"text": "Totals."}, headers=headers("cara-test"))
+    answers = []
+    for name in ("bot:finance", "bot:no-such-agent"):
+        r = api.post(
+            f"/api/v2/threads/{thread}/messages",
+            json={"text": "Check May.", "to": name, "parent_message_id": first.json()["id"]},
+            headers=headers("cara-test"),
+        )
+        answers.append((r.status_code, r.json()["error"]["detail"]))
+    assert answers == [(404, "Unknown recipient")] * 2, answers

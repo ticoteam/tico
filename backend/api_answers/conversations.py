@@ -50,6 +50,16 @@ class ReviewTextAnswer(TypedDict):
 ReviewAnswer = TypeAliasType("ReviewAnswer", Annotated[ReviewAskAnswer | ReviewTextAnswer, ONE_OF])
 
 
+# What a post's answer tells its writer (threads.record): an @mention that reached nobody (someone outside the thread,
+# or an agent the writer may see but has no Write on: `detail`, the 403's words), or a person past the unsolicited cap.
+@answer
+class PostWarning(TypedDict):
+    rule: Literal["mention_outside", "mention_no_write", "unsolicited_cap"]
+    actor: str
+    actor_name: NotRequired[str]
+    detail: NotRequired[str]
+
+
 # The way a send went (backend/delivery.py): steer, queue or defer, and a defer's deadline (null: none).
 @answer
 class SentAs(TypedDict):
@@ -101,6 +111,9 @@ class Message(TypedDict):
     """On a send: a bot's message to a bot held for that bot's next run, and how to wake it now (backend/bot_to_bot.py)"""
     sent_as: NotRequired[SentAs]
     """On a send to a bot: the way it went (steer, queue or defer) and a defer's deadline (backend/delivery.py)"""
+    warnings: NotRequired[list[Annotated[str | PostWarning, ONE_OF]]]
+    """On a send: the @mentions it reached nobody by and anyone past the unsolicited cap (objects), and a person's
+    writing problems (rule 7's style lint, plain words)"""
     source: NotRequired[MessageSource]
 
 

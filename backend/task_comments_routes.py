@@ -323,6 +323,8 @@ def register(
                 "UPDATE task_file_reviews SET comment_id=coalesce(comment_id,?) WHERE file_id=? AND version=?",
                 (msg["id"], item["id"], item["version"]),
             )
+        # The @mentions it reached nobody by (threads.mentions: outside the thread, or an agent without Write on it).
+        unmet = [w for w in msg.get("warnings") or [] if w.get("rule") in ("mention_outside", "mention_no_write")]
         comments = visual_view(c, who, H.task_comments(c, task_id, actor=privacy.actor(reader)))
         msg = next(m for m in comments if m["id"] == msg["id"])
         held = H.held_note(c, msg.get("recipient_id"))
@@ -342,6 +344,7 @@ def register(
             **({"held": waits} if waits else {}),
             **({"visuals": report} if report else {}),
             **({"goal": goal} if goal else {}),
+            **({"warnings": unmet} if unmet else {}),
             **org_rule_check.answer(rule),
         }
 

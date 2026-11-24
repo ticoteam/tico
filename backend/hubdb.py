@@ -4339,7 +4339,8 @@ def task_comment(
         task_engine.person_spoke(conn, task_id, actor)  # the owner bot's run on it is the first of a new count
     if public:
         conn.execute('UPDATE messages SET public=1 WHERE id=?', (msg['id'],))
-        msg = message(conn, msg['id'])
+        # Reloaded for its public flag, it keeps the post's warnings (an @mention that reached nobody).
+        msg = {**message(conn, msg['id']), **({"warnings": msg["warnings"]} if msg.get("warnings") else {})}
     if is_human(actor):
         from . import ask_ingest
 

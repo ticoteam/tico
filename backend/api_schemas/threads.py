@@ -234,6 +234,12 @@ SCHEMAS.update(
                     "description": "Who routing asked to answer this message (`to` empty: nobody); "
                     "null when routing never looked at it",
                 },
+                "warnings": {
+                    "type": "array",
+                    "items": {"oneOf": [ref("PostWarning"), {"type": "string"}]},
+                    "description": "On the answer to a post: the @mentions it reached nobody by and anyone past "
+                    "the unsolicited cap (objects), and writing problems (rule 7's style lint, plain words)",
+                },
             },
             required=["id", "seq", "thread_id"],
         ),
