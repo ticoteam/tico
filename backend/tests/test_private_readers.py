@@ -145,19 +145,20 @@ def test_only_github_says_so_without_naming_any_bot(c):
 
 
 def test_will_be_private_follows_the_create(c):
-    """The preview decides as the create does: asked, a private parent, or a bot's default; a bot cannot ask for
-    company-visible."""
+    """The preview decides as the create does (hubdb.new_task_private): asked, or a bot's default; a private parent
+    alone does not make it private (privacy does not spread)."""
     _engineering(c)
     parent = H.task(c, _file(c)["id"])
-    assert PR.will_be_private(c, "human:ana", B1, None, parent, "eng")
+    assert not PR.will_be_private(c, "human:ana", B1, None, parent, "eng")
     assert PR.will_be_private(c, "human:ana", B1, True, None, "eng")
     assert not PR.will_be_private(c, "human:ana", B1, None, None, "eng")
     assert not PR.will_be_private(c, RULES, B1, False, None, "eng")
 
 
 def test_the_app_and_the_dry_run_say_it_before_anything_is_filed(api):
-    """Criteria 1, 2, 5 and 6 through the API: the new-task window's read for a sub-task of a private task, the same
-    read for a task that will not be private, a team task's Visible to, and the dry run, which files nothing."""
+    """Criteria 1, 2, 5 and 6 through the API: the new-task window's read for a sub-task of a private task (not
+    private: privacy does not spread), the same read for a task that will not be private, a team task's Visible to,
+    and the dry run of a private task, which files nothing."""
     with api.app.state.store.transaction() as c:
         _bots(c)
         _engineering(c)
@@ -168,10 +169,10 @@ def test_the_app_and_the_dry_run_say_it_before_anything_is_filed(api):
     ana = headers("ana-test")
     url = "/api/v2/pipelines/eng/private-readers"
     got = api.get(url, params={"owner": B1, "parent": parent}, headers=ana).json()
-    assert got["private"] and "Reviewer" not in got["line"] and "reviewer-1 or reviewer-2" in got["line"]
+    assert got == {"private": False, "line": None}
     assert api.get(url, params={"owner": B1}, headers=ana).json() == {"private": False, "line": None}
     plain = api.get("/api/v2/pipelines/plain/private-readers", params={"owner": B1, "parent": parent}, headers=ana)
-    assert plain.json() == {"private": True, "line": None}
+    assert plain.json() == {"private": False, "line": None}
     assert "reviewer-1" in api.get(url, params={"task": team}, headers=ana).json()["line"]
     assert api.get("/api/v2/pipelines/nope/private-readers", headers=ana).status_code == 404
     dry = api.post(
@@ -179,7 +180,7 @@ def test_the_app_and_the_dry_run_say_it_before_anything_is_filed(api):
         headers=ana,
         json={"title": "Fix it", "body": "Rounds pay.", "owner": B1, "pipeline": "eng", "private": True},
     ).json()
-    assert "reviewer-1 or reviewer-2" in dry["private_readers"]
+    assert "Reviewer" not in dry["private_readers"] and "reviewer-1 or reviewer-2" in dry["private_readers"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM tasks").fetchone()[0] == before
     # The create a bot's command really makes: its reply carries the same line.

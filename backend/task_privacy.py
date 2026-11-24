@@ -48,22 +48,14 @@ def as_the_person(who):
 
 
 def new_task(c, who, body, owner, parent, actual_bot):
-    """(body, public, private) for a task about to be filed (app.task_create): its explicit choice, the filer's and
-    owner's defaults, and a private parent. Delegation retains the bot's sensitive default and cannot use a person's
-    explicit-public choice to override either creator or assignee defaults."""
-    asked_public = body.private is False
-    if actual_bot and body.private is False:
-        body = body.model_copy(update={"private": None})
-    if actual_bot and H.private_tasks_default(c, actual_bot):
-        body = body.model_copy(update={"private": True})
-    defaults = H.private_tasks_default(c, who.actor) or H.private_tasks_default(c, owner)
-    # `private: false` is company-visible under a private parent too, unless a sensitive default keeps a bot's
-    # task private; the parent stays its readers' alone (task_relations shows it as "a private task").
-    public = asked_public and body.private is not True and not (actual_bot and defaults)
-    private = not public and bool(
-        (body.private if body.private is not None else defaults) or parent and H.task_private(c, parent)
-    )
-    return body, public, private
+    """Whether a task about to be filed (app.task_create) is private, by the one create rule (hubdb.new_task_private):
+    its pipeline, its filer's choice, else a sensitive default (the filer's, the acting bot's, which a delegation
+    keeps, or the owner's). Nothing spreads to it: a private parent stays its readers' alone (task_relations shows it
+    as "a private task")."""
+    from . import task_engine
+
+    pipe = task_engine.pipeline(c, str(getattr(body, "pipeline", None) or H.GENERAL_PIPELINE))
+    return bool(H.new_task_private(c, who.actor, owner, body.private, bot=actual_bot, parent=parent, pipeline=pipe))
 
 
 def actor(who):
@@ -1255,14 +1247,21 @@ def private_meetings(c, ids):
 
 def private_execution(c, who):
     """Whether a run carries a private task. It narrows nothing the run may do: it keeps a refusal's record
-    content-free (hubdb.PRIVATE_WRITE) and makes a task the run files private unless the run asks otherwise
-    (app.task_create)."""
+    content-free (hubdb.PRIVATE_WRITE). A task the run files is not made private by it: its filer chooses
+    (hubdb.new_task_private)."""
     return bool(who.attempt_id and any(H.task_private(c, _task(c, tid)) for tid in attempt_tasks(c, who.attempt_id)))
 
 
+def copies_private(c, message):
+    """Whether the words of `message`, which a new task quotes, are a private task's: a task it belongs to is private
+    (a bot's run on one does not count). A copy of private words stays private; a company task's comment does not."""
+    return bool(message) and bool(private_tasks(c, set(message_tasks(c, message, include_run=False))))
+
+
 def reach_for(c, who, person, parent):
-    """(parent id, person) when a bot's hand-off to `person` under `parent`, a private task with no person on it that
-    the bot owns, makes them its reader (hubdb.task_reach); None otherwise.
+    """(parent id, person) when a bot's private hand-off to `person` under `parent`, a private task with no person on
+    it that the bot owns, makes them its reader (hubdb.task_reach); None otherwise. A company-visible hand-off grants
+    nothing: the caller checks the sub-task is private (app.task_create).
 
     The hand-off is a subtask for them; waiting on them is hubdb's. A hand-off the reach rules do not widen the parent
     for (hubdb.task_reach_refusal) goes on without a reader: the person gets the subtask alone."""

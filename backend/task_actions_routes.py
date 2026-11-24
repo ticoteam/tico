@@ -551,9 +551,6 @@ def register_core(
         if body.from_private:
             # Older clients' name for `private: false` from a private task's run.
             body = body.model_copy(update={"private": False, "from_private": False})
-        elif body.private is None and privacy.private_execution(c, who):
-            # What a run on private work files is private unless it asks for company-visible (`private: false`).
-            body = body.model_copy(update={"private": True})
         request_id = body.request_id
         handoff = who.role == "bot" and who.actor != "bot:" + AGENT_OPS and not who.via
         if request_id and handoff:
@@ -703,7 +700,15 @@ def register_core(
         for other, _ in others:
             auth.task(c, who, other)
         parent = H.task(c, parent_id) if parent_id else None
-        body, public, private = privacy.new_task(c, who, body, owner, parent, actual_bot)
+        # A copy of private words is private. A hand-off to Agent Ops quotes the person's cited message (below): private
+        # when a task it belongs to is. The Assistant's to a helper quotes the person's own Assistant chat
+        # (assistant.instruction), private by its audience.
+        carried = carried_request(c, who, body.request_id) if handoff and owner == "bot:" + AGENT_OPS else None
+        if asked_agent_ops or (
+            carried and carried["lends"] and privacy.copies_private(c, H.message(c, carried["message_id"]))
+        ):
+            body = body.model_copy(update={"private": True})
+        private = privacy.new_task(c, who, body, owner, parent, actual_bot)
         if body.due and (not (parsed := H.parse_ts(body.due)) or parsed.tzinfo is None):
             raise Problem("date", "due must be an ISO-8601 date/time with a timezone", 422)
         # The org rule check (backend/org_rule_check.py), judged before the write: held, nothing is filed.
@@ -788,7 +793,7 @@ def register_core(
         person = privacy.as_the_person(who) if private else None
         if private and actual_bot and not person and actual_bot not in (requester_actor or who.actor, owner):
             raise Problem("privacy", "The acting bot must be a current participant of the private task", 403)
-        if reach_to:
+        if reach_to and private:  # a company-visible hand-off brings nobody into the private task above it
             H.task_reach(c, who.actor, parent, owner)
         # A bot's task for a person is the bot's own task with its question to them (backend/person_asks.py): Needs you
         # holds only what is asked of a person, so a plain task handed to them would reach no list they are told of.
@@ -796,42 +801,43 @@ def register_core(
         asks_person = not routed and ask_ingest.gated(who, settings.assistant_bot) and H.is_human(owner)
         # The bot holds it when the person may read its work; else the task stays the person's, with the bot's question.
         holder = who.actor if asks_person and reads_bot(c, owner, who.actor) else owner
-        row = H.task_create(
-            c,
-            who.actor,
-            body.title,
-            body.body,
-            holder,
-            body.due,
-            parent_id,
-            requester_actor=requester_actor,
-            requester_said=bool(body.for_actor),
-            visibility=body.visibility,
-            public_title=body.public_title,
-            public_summary=body.public_summary,
-            public_warning=public_warning,
-            private=private,
-            conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
-            lane=body.lane,
-            labels=body.labels,
-            top=body.top,
-            lint=lint,
-            goal_id=body.goal_id,
-            pipeline=body.pipeline,
-            number=body.number,
-            mover=mover(c, who) or None,
-            public=public,
-            same=same,
-            follow=body.follow,
-            # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
-            # everyone who will.
-            readers=body.readers or (),
-            readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
-            unassigned=unassigned,
-            wake_refs=wake_refs,
-            asks=owner if asks_person and holder != owner else None,
-            entity_id=entity_id,
-        )
+        # Decided private (a sensitive default included): a refusal while filing it keeps none of its words.
+        with H.private_write(private):
+            row = H.task_create(
+                c,
+                who.actor,
+                body.title,
+                body.body,
+                holder,
+                body.due,
+                parent_id,
+                requester_actor=requester_actor,
+                requester_said=bool(body.for_actor),
+                visibility=body.visibility,
+                public_title=body.public_title,
+                public_summary=body.public_summary,
+                public_warning=public_warning,
+                private=private,
+                conversation_id=rooms.task_conversation_id(c, auth, holder, who.actor),
+                lane=body.lane,
+                labels=body.labels,
+                top=body.top,
+                lint=lint,
+                goal_id=body.goal_id,
+                pipeline=body.pipeline,
+                number=body.number,
+                mover=mover(c, who) or None,
+                same=same,
+                follow=body.follow,
+                # Who else sees it, before it enters its first stage and before a meeting's audience is checked against
+                # everyone who will.
+                readers=body.readers or (),
+                readers_check=lambda task_id, added: privacy.require_readers(c, who, task_id, added, shared=parent_id),
+                unassigned=unassigned,
+                wake_refs=wake_refs,
+                asks=owner if asks_person and holder != owner else None,
+                entity_id=entity_id,
+            )
         if routed and not (H.task(c, row["id"]) or {}).get("owner_id"):
             # A stage rule held its person out: routed work always has a named owner, so nothing is filed.
             raise Problem("route", "The stage's rules held it; routed work needs a named owner", 422)
@@ -862,7 +868,6 @@ def register_core(
         elif body.check_model is None and body.check_role is None and unchecked:
             H._task_event(c, row["id"], who.actor, "check_model", None, None, unchecked)
         if handoff and owner == "bot:" + AGENT_OPS:
-            carried = carried_request(c, who, body.request_id)
             if carried:
                 H.event(c, who.actor, "botops.request_carried", row["id"], carried)
                 if carried["lends"]:
@@ -921,9 +926,13 @@ def register_core(
                 None,
                 None,
             )
+        # A private parent's request is its own: a company-visible child does not carry that message's id.
         inherited_request = (
             parent.get("request_id")
-            if parent and H.is_human(who.actor) and who.actor == parent["requester_id"]
+            if parent
+            and H.is_human(who.actor)
+            and who.actor == parent["requester_id"]
+            and (private or not H.task_private(c, parent))
             else None
         )
         if request_id in ("turn", "default"):

@@ -282,6 +282,7 @@ class Refused(Exception):
         # The detail and extra as kept on record (the audit, a stored response), when they are not what the caller is
         # told: {"detail", "extra"}. A refusal said to someone who may read a private task it names keeps it off.
         self.stored = None
+        self.private = False  # refused on a private task: kept on record as "Private task write refused"
 
 
 # ----------------------------------------------------------------------------- basics
@@ -671,6 +672,20 @@ def refusal_task(task_id):
         REFUSAL_TASK.reset(token)
 
 
+@contextmanager
+def private_write(private):
+    """A write already known to be on a private task (a create the route decided is private): its refusals keep only
+    what was refused, as private_task_write keeps them for a write on an existing private task."""
+    token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or bool(private))
+    try:
+        yield
+    except Refused as exc:
+        exc.private = exc.private or PRIVATE_WRITE.get()
+        raise
+    finally:
+        PRIVATE_WRITE.reset(token)
+
+
 def private_task_write(fn):
     """Keep refusal audit/escalation content-free for a private domain write, including local runners."""
     import functools
@@ -681,23 +696,9 @@ def private_task_write(fn):
     @functools.wraps(fn)
     def guarded(*args, **kwargs):
         values = signature.bind_partial(*args, **kwargs).arguments
-        conn, actor = values['conn'], values['actor']
+        conn = values['conn']
         row = task(conn, values.get('task_id')) if values.get('task_id') else None
         private = bool(row and task_private(conn, row) or values.get('private'))
-        if fn.__name__ == 'task_create':
-            if values.get('private') is False and (not is_human(actor) or VIA.get()):
-                values['private'] = None
-            target = resolve_actor(conn, values.get('owner_id'))
-            parent = task(conn, values.get('parent_id')) if values.get('parent_id') else None
-            private = bool(
-                (
-                    values.get('private')
-                    if values.get('private') is not None
-                    else private_tasks_default(conn, actor) or private_tasks_default(conn, target)
-                )
-                or parent
-                and task_private(conn, parent)
-            )
         token = PRIVATE_WRITE.set(PRIVATE_WRITE.get() or private)
         task_token = REFUSAL_TASK.set((row or {}).get('id') or REFUSAL_TASK.get())
         from . import task_trigger_rules
@@ -706,11 +707,7 @@ def private_task_write(fn):
             with task_trigger_rules.pending(conn):
                 result = fn(*args, **kwargs)
             # Actions may have changed the task after the original write completed.
-            if (
-                fn.__name__ in ('task_create', 'task_update', 'task_close')
-                and isinstance(result, dict)
-                and result.get('id')
-            ):
+            if fn.__name__ == 'task_update' and isinstance(result, dict) and result.get('id'):
                 result = {**result, **(task(conn, result['id']) or {})}
             return result
         except Refused as exc:
@@ -2926,6 +2923,36 @@ def private_tasks_default(conn, actor, declared=None):
     return config.get("private_tasks_default", config.get("template") in PRIVATE_BY_TEMPLATE) is True
 
 
+def new_task_private(conn, actor, target, private=None, *, bot=None, parent=None, pipeline=None):
+    """Whether a task `actor` is about to file for `target` is private: the one rule every create uses (task_create,
+    the route's task_privacy.new_task, the private_readers.will_be_private preview). Whoever files it chooses; privacy
+    never spreads to it from where it came from, so neither a private parent nor a run on private work makes it
+    private. In order:
+
+    1. a container that holds it privately wins whatever was asked: a private `pipeline` (backend/private_pipelines.py),
+       or a `parent` its filer reads only by holding that parent's stage (`stage_read_held`; task_create seals it);
+    2. an explicit choice (`private` True or False) wins, except that a bot's `false` never publishes past a sensitive
+       default;
+    3. else a sensitive default: the filer's, the acting `bot`'s or the owner's template (`private_tasks_default`);
+    4. else it is not private.
+
+    `bot` is the bot filing it, itself or for a person (any truthy value when it is not named): its `false` is no
+    choice against a sensitive default. A thread's or a meeting's narrower audience is its caller's choice of
+    `private=True` (thread_tasks.private, meeting_items.push_task)."""
+    from . import private_pipelines
+
+    if private_pipelines.is_private(pipeline) or (parent and stage_read_held(conn, actor, parent)):
+        return True
+    sensitive = (
+        private_tasks_default(conn, actor)
+        or bool(target and private_tasks_default(conn, target))
+        or bool(isinstance(bot, str) and bot and private_tasks_default(conn, bot))
+    )
+    if private is not None and not (private is False and bot and sensitive):
+        return bool(private)
+    return sensitive
+
+
 # The templates whose tasks are private unless their config says otherwise: a general counsel's, and the Rules Owner's (a
 # document's text and a can-I question are a company's own, so a teammate who cannot read the source cannot read them).
 PRIVATE_BY_TEMPLATE = ("general-counsel", "rules-owner")
@@ -4215,8 +4242,9 @@ CHECK_MODEL_SQL = (
 
 
 def _made_private(conn, actor, task_id):
-    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups. Never
-    one the shared Assistant owns or reads (refuse_shared_assistant)."""
+    """A company-visible task goes private (its new owner's private default, a private pipeline it comes back into):
+    the flag, its record, and the follow-ups. Never one the shared Assistant owns or reads (refuse_shared_assistant).
+    The tasks under it keep their own privacy."""
     row = task(conn, task_id) or {}
     refuse_shared_assistant(conn, actor, *task_parties(row), task=task_id)
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
@@ -4911,7 +4939,6 @@ def task_create(
     reconcile_related=True,
     trigger=None,
     trigger_source=None,
-    public=False,
     routine=False,
     routine_for=None,
     same=None,
@@ -4991,15 +5018,13 @@ def task_create(
 
     # Whoever files a subtask asked for it: it shows them as asking and their notices reach them.
     requester = actor
-    if private is False and (not is_human(actor) or VIA.get()):
-        private = None  # a bot cannot override a sensitive default to publish
-    # `public`: its filer asked for it company-visible (app.task_create, `private: false`), so a private parent does not
-    # make it private; the parent stays its own readers'.
-    private = not public and bool(
-        (private if private is not None else private_tasks_default(conn, actor) or private_tasks_default(conn, target))
-        or parent
-        and task_private(conn, parent)
-    )
+    pipeline_id = str(pipeline or GENERAL_PIPELINE)
+    pipe = task_engine.pipeline(conn, pipeline_id)
+    in_private_pipeline = private_pipelines.is_private(pipe)
+    # One rule (new_task_private): a private pipeline (its readers are written before it enters) or a stage-held
+    # parent, else the filer's choice, else a sensitive default; never the parent's privacy.
+    bot = actor if not is_human(actor) else bool(VIA.get())
+    private = new_task_private(conn, actor, target, private, bot=bot, parent=parent, pipeline=pipe)
     sealed = stage_read_held(conn, actor, parent) if parent else None
     if sealed:
         # A bot that reads the parent only while it holds its stage shares it with nobody: what it files from it is
@@ -5009,16 +5034,7 @@ def task_create(
             target and target != actor and not task_private_readable(conn, target, parent)
         ):
             refuse_stage_reader(conn, actor, parent)
-        private, readers = True, shared
-    # A private pipeline's task is private whatever was asked, `public` too; its readers are written before it
-    # enters (backend/private_pipelines.py).
-    pipeline_id = str(pipeline or GENERAL_PIPELINE)
-    pipe = task_engine.pipeline(conn, pipeline_id)
-    in_private_pipeline = private_pipelines.is_private(pipe)
-    if in_private_pipeline:
-        private = True
-    if private:
-        requester = actor
+        readers = shared
     from .roadmaps import settings as roadmap_settings
 
     # Bots (and Assistant/Agent Ops acting for a person) publish only through an approved publication.
@@ -5348,7 +5364,13 @@ def task_create(
             conn,
             "task.created",
             row["id"],
-            lambda: _task_facts(conn, row["id"], actor, parent_id=parent_id),
+            # A company task under a private parent names no parent: its id is the private task's.
+            lambda: _task_facts(
+                conn,
+                row["id"],
+                actor,
+                parent_id=None if parent and not private and task_private(conn, parent) else parent_id,
+            ),
             actor,
             revision=0,
         )
@@ -5519,10 +5541,7 @@ def task_update(
             refuse(conn, actor, "private", "Only the requester, assignee or their managers can change task privacy")
         if not private and (actor != row["requester_id"] or not is_human(actor) or VIA.get()):
             refuse(conn, actor, "private", "Only the human requester can publish a private task")
-        parent = task(conn, TR.parent_of(conn, task_id) or "")
-        if not private and parent:
-            if task_private(conn, parent):
-                refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
+        # A private parent does not keep it private: privacy does not spread (new_task_private).
         from . import private_pipelines
 
         if not private and private_pipelines.of_task(conn, task_id):
@@ -5781,12 +5800,6 @@ def task_update(
         after = isolate_private_task(conn, task(conn, task_id) or row)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
-        if task_private(conn, after) and not task_private(conn, row):
-            # A task under a private parent is private: every task below this one goes private with it, or a
-            # colleague could read a sub-task of a parent they cannot see.
-            for below in descendants(conn, task_id):
-                if not task_private(conn, below):
-                    _made_private(conn, actor, below["id"])
         if note is not None and note != row.get("note") and not quiet and status is None:
             _mirror_task_note(conn, actor, after, note)
         recount(conn, [after["owner_id"], after["requester_id"]])

@@ -354,7 +354,8 @@ def test_a_private_task_is_never_the_shared_assistants_as_owner_or_reader(api):
 
 
 def test_making_a_task_private_never_carries_down_to_a_task_the_shared_assistant_owns(api):
-    """A task's subtasks go private with it; one the shared Assistant owns refuses the whole change, which writes nothing."""
+    """A task goes private alone: its subtasks keep their own privacy (it does not spread), so one the shared Assistant
+    owns stays company-visible and the change goes through."""
     parent = post(api, "tasks", {"owner": "ops", "title": "Launch", "body": "Plan.", "private": False})
     child = post(
         api,
@@ -363,9 +364,9 @@ def test_making_a_task_private_never_carries_down_to_a_task_the_shared_assistant
     )
     version = get(api, "tasks/" + parent["id"])["task"]["version"]
     answer = api.post("/api/v2/tasks/" + parent["id"], json={"private": True, "version": version}, headers=headers())
-    assert answer.status_code >= 400 and "shared Assistant" in answer.json()["error"]["detail"], answer.text
+    assert answer.status_code == 200, answer.text
     with api.app.state.store.read() as c:
-        assert not H.task_private(c, H.task(c, parent["id"])) and not H.task_private(c, H.task(c, child["id"]))
+        assert H.task_private(c, H.task(c, parent["id"])) and not H.task_private(c, H.task(c, child["id"]))
 
 
 def test_the_shared_assistant_is_no_requester_or_assignee_and_reads_no_private_task_through_a_group_or_report(api):

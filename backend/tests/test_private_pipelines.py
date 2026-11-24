@@ -133,8 +133,8 @@ def test_a_task_filed_into_it_is_private_with_its_readers(c):
 
 
 def test_an_asked_public_task_and_a_bot_filing_are_forced_too(c):
-    """`public` (`private: false` asked from private work) does not make a Legal task public."""
-    made = _file(c, title="Is our NDA mutual", public=True)
+    """`private: false` does not make a Legal task public."""
+    made = _file(c, title="Is our NDA mutual", private=False)
     assert H.task_private(c, H.task(c, made["id"]))
     made = H.task_create(c, "bot:ops", "Check the DPA", "Attached.", "bot:ops", pipeline="legal", lint=False)
     row = H.task(c, made["id"])
@@ -148,12 +148,20 @@ def test_it_cannot_be_made_public(c):
     assert H.task_private(c, H.task(c, made["id"]))
 
 
-def test_a_child_of_a_private_pipeline_task_is_private(c):
+def test_a_child_of_a_private_pipeline_task_outside_it_is_private_only_by_its_filers_default(c):
+    """The pipeline holds its own tasks privately; a child filed into General takes nothing from it (privacy does not
+    spread, hubdb.new_task_private). The Legal Owner its card makes keeps its tasks private by default."""
     parent = _file(c)
     child = H.task_create(
         c, LEGAL_BOT, "Rule check: the reseller contract", "Facts.", "bot:ops", parent_id=parent["id"], lint=False
     )
     row = H.task(c, child["id"])
+    assert row["pipeline_id"] == "general" and not H.task_private(c, row)
+    BS.update(c, "legal-owner", {"private_tasks_default": True})  # as its card declares (templates/catalog)
+    kept = H.task_create(
+        c, LEGAL_BOT, "Rule check: the reseller NDA", "Facts.", "bot:ops", parent_id=parent["id"], lint=False
+    )
+    row = H.task(c, kept["id"])
     assert row["pipeline_id"] == "general" and H.task_private(c, row)
     assert not H.task_private_readable(c, BEN, row)
 

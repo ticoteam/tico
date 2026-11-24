@@ -37,7 +37,9 @@ def run_on(api, bot="ops"):
 
 
 def subtask(parent, owner, **extra):
-    return {"owner": owner, **ASK, "parent": parent, **extra}
+    """The owning bot's private hand-off under `parent`: filed private by its choice, as a private parent alone makes
+    nothing private (hubdb.new_task_private)."""
+    return {"owner": owner, **ASK, "parent": parent, "private": True, **extra}
 
 
 def dry_run(api, body, token):

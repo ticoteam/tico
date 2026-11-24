@@ -156,7 +156,7 @@ def readers_of(args):
 
 def private_readers_line(args, body):
     """A dry run into a pipeline prints first, as the create does, who else reads the task if it is private
-    (backend/private_readers.py). Only the server knows whether it will be private (a private parent, a bot's default)
+    (backend/private_readers.py). Only the server knows whether it will be private (a bot's default, a private pipeline)
     and who holds each stage, so this one read asks its dry run; it files nothing. A notice only: when the server
     cannot be asked, the local answer stands. Conflicting --reader and --share-with are refused first, pipeline or
     not, as the create would refuse them."""
@@ -711,8 +711,8 @@ def parser():
         dest="private",
         action="store_false",
         default=None,
-        help="company-visible, also from a run on a private task (whose tasks are private unless you say so) or under "
-        "a private parent; a bot's private-by-default setting still keeps its tasks private",
+        help="company-visible (left out, a task is private only by its owner's or your private-by-default setting or "
+        "where it is filed); a bot's private-by-default setting still keeps its tasks private",
     )
     s.add_argument(
         "--owner",

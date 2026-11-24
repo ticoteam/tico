@@ -89,8 +89,6 @@ def why_not(conn: Any, a: Row, b: Row, choice: str) -> str | None:
         return "A task cannot be dropped on itself."
     if a.get("status") != "open" or b.get("status") != "open":
         return f"{_num(a if a.get('status') != 'open' else b)} has ended."
-    if bool(H.task_private(conn, a)) != bool(H.task_private(conn, b)):
-        return "One is private and the other is not."
     if b["id"] == TR.parent_of(conn, a["id"]) and choice == SUBTASK:
         return f"{_num(a)} is already a subtask of {_num(b)}."
     if TR.is_descendant(conn, a["id"], b["id"]):
@@ -99,6 +97,9 @@ def why_not(conn: Any, a: Row, b: Row, choice: str) -> str | None:
         if E.depth(conn, b["id"]) + 1 + _height(conn, a["id"]) > E.MAX_DEPTH:
             return f"Subtasks nest at most {E.MAX_DEPTH} deep."
         return None
+    # A merge copies one task's content into the other; a new parent shares nothing (privacy does not spread).
+    if bool(H.task_private(conn, a)) != bool(H.task_private(conn, b)):
+        return "One is private and the other is not."
     if a.get("pipeline_id") != b.get("pipeline_id"):
         return "Both tasks must be in the same pipeline to merge."
     if _open_pr(conn, a["id"]):

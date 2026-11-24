@@ -179,8 +179,8 @@ def grouped(conn, task_ids, visible_sql="1"):
             out[row["here"]].setdefault(row["kind"], []).append(entry)
         if visible_sql == "1":
             continue
-        # A company-visible task filed under a private parent (`private: false`, app.task_create) that the reader
-        # cannot open: the parent is there, as "a private task", with nothing of it but that.
+        # A company-visible task under a private parent (privacy does not spread, hubdb.new_task_private) that the
+        # reader cannot open: the parent is there, as "a private task", with nothing of it but that.
         for row in conn.execute(
             "SELECT r.from_task FROM task_relations r INDEXED BY task_relations_from "
             "JOIN tasks c ON c.id=r.from_task JOIN tasks p ON p.id=r.to_task "

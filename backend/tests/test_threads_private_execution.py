@@ -299,18 +299,28 @@ def test_a_private_run_writes_on_every_route_into_a_company_thread(api):
     assert timeline.status_code == 200 and "Shared" in timeline.text, timeline.text
 
 
-def test_a_private_run_files_private_subtasks_for_their_assignee_or_public_tasks_when_asked(api):
+def test_a_private_run_files_private_subtasks_for_their_assignee_when_asked_or_public_ones(api):
     row, attempt = private_run(api)
     ask = {"title": "Check the vendor terms", "body": "Read the terms and say what they cost."}
-    # Left out, `private` is the private task's: the assignee reads it, the rest of the company does not.
+    # `private: true`: the assignee reads it, the rest of the company does not.
     child = api.post(
-        "/api/v2/tasks", json={"owner": "ana", **ask, "parent": row["id"]}, headers=headers(attempt["token"])
+        "/api/v2/tasks",
+        json={"owner": "ana", **ask, "parent": row["id"], "private": True},
+        headers=headers(attempt["token"]),
     )
     assert child.status_code == 200, child.text
     child = child.json()["task"]
     assert child["private"] is True
     assert api.get(f"/api/v2/tasks/{child['id']}", headers=headers("ana-test")).status_code == 200
     assert api.get(f"/api/v2/tasks/{child['id']}", headers=headers("cara-test")).status_code == 404
+    # Left out, it is not private: the run's private work does not spread to it (hubdb.new_task_private).
+    plain = api.post(
+        "/api/v2/tasks",
+        json={"owner": "ana", **ask, "title": "Compare the vendor quotes", "parent": row["id"]},
+        headers=headers(attempt["token"]),
+    )
+    assert plain.status_code == 200, plain.text
+    assert plain.json()["task"]["private"] is False
     # `private: false` files it company-visible, under the private task too.
     for parent in ({}, {"parent": row["id"]}):
         public = api.post(

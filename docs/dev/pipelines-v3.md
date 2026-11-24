@@ -1281,8 +1281,8 @@ rule; file it without route or assign someone"), so Send anyway never picks some
 that would route a create the check judged for nobody (a primary link's claim gone meanwhile) is refused 409, send it
 again. A saved retry's answer comes back without routing; a primary link a readable task already holds returns that
 task before anything is routed. Refused (422): with an owner, with a live meeting, private work
-(explicitly, under a private parent even with `private: false`, in a private pipeline or by the filer's private
-default: "Private tasks aren't routed; assign someone who can see it"), in any pipeline but Support ("Routed work goes to Support"), with Support retired or changed so its first stage is
+(explicitly, in a private pipeline or by the filer's private
+default; a private parent alone does not make it private: "Private tasks aren't routed; assign someone who can see it"), in any pipeline but Support ("Routed work goes to Support"), with Support retired or changed so its first stage is
 not the task's assignee's or is moved by hand, when nobody
 can sign in, or when a stage rule holds the person out on entry (nothing is filed). It goes on the company's Support pipeline (preset `support`), made the first time a routed task is filed: one work stage, Open, held by the
 task's assignee and not by hand. Its default rules give overdue waits to its manager (the General Manager, else the company's person): Support

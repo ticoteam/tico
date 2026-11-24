@@ -187,7 +187,8 @@ def test_drops_that_loop_nest_too_deep_mix_privacy_or_have_an_open_pr_say_why(ap
 
     secret = task(api, "Secret", owner="cara", private=True)
     seen = get(api, f"tasks/{secret['id']}/merge?into={loose['id']}")
-    assert seen["subtask"] == seen["merge"] == "One is private and the other is not."
+    # A merge copies content across, so mixed privacy is refused; a new parent shares nothing (it does not spread).
+    assert seen["merge"] == "One is private and the other is not." and seen["subtask"] is None
 
     pr = task(api, "Has a PR")
     write(

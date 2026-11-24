@@ -742,6 +742,7 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
                     "Do it.",
                     "bot:ops",
                     parent_id=(hidden if n % 2 else shared)["id"],
+                    private=bool(n % 2),  # filed private: a private parent alone makes nothing private
                     lint=False,
                 )
 
@@ -758,7 +759,7 @@ def test_task_list_reads_a_fixed_number_of_statements_and_hides_private_tasks(ap
                 for t in ben["tasks"]
                 if t["title"].startswith("Step ")
             }
-            assert under == {0: "human:ana"}  # a sub-task of a private task is private too
+            assert under == {0: "human:ana"}  # the private sub-tasks stay off Ben's list
             assert all(t["turn"] for t in ben["tasks"] if t["title"].startswith("Step "))
     for key in ("ben", "cara"):
         for brief in ("&brief=true", ""):

@@ -787,7 +787,7 @@ def readers(auth):
             if parent and c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({rule})", (parent,)).fetchone()
             else None
         )
-        value["relations"] = TR.grouped(c, [row["id"]], visible_sql)[row["id"]]
+        value["relations"] = TR.grouped(c, [row["id"]], rule)[row["id"]]
         value["roles"] = TRo.roles_of(c, row["id"])
         from .roadmaps import stats, EMPTY_STATS
 

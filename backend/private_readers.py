@@ -131,23 +131,20 @@ def will_be_private(
     parent: Row | None,
     pipeline_id: str,
 ) -> bool:
-    """Whether a task `actor` is about to file would be private, as hubdb.task_create decides it: asked for, else the
-    filer's or the owner's private default; under a private parent; or in a private pipeline. A preview only: the
-    create decides again, and its history line says what it found."""
-    from . import hubdb, private_pipelines, task_engine
+    """Whether a task `actor` is about to file would be private, by the rule hubdb.task_create decides it with
+    (hubdb.new_task_private): a private pipeline or a stage-held parent, else asked for, else the filer's or the
+    owner's sensitive default. A private parent alone does not make it private. A preview only: the create decides
+    again, and its history line says what it found."""
+    from . import hubdb, task_engine
 
     H: Any = hubdb  # untyped module
 
-    if private is False and not H.is_human(actor):
-        private = None  # a bot cannot override a sensitive default to publish
-    chosen = (
-        private
-        if private is not None
-        else H.private_tasks_default(conn, actor) or bool(target and H.private_tasks_default(conn, target))
+    bot = "" if H.is_human(actor) else actor
+    return bool(
+        H.new_task_private(
+            conn, actor, target, private, bot=bot, parent=parent, pipeline=task_engine.pipeline(conn, pipeline_id)
+        )
     )
-    if chosen or (parent and H.task_private(conn, parent)):
-        return True
-    return bool(private_pipelines.is_private(task_engine.pipeline(conn, pipeline_id)))
 
 
 def told(conn: "sqlite3.Connection", task_id: str, by: str) -> str | None:
