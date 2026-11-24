@@ -962,28 +962,9 @@ impl Pool {
         }
     }
 
-    /// A new folder for one process's token file: the bot may traverse it, never write it (crate::warm).
+    /// A new folder for one process's token file (crate::warm).
     fn home(&self) -> Result<PathBuf, String> {
-        use std::os::unix::fs::PermissionsExt;
-        let home = self.dir.join(uuid::Uuid::new_v4().simple().to_string());
-        std::fs::create_dir_all(&home)
-            .map_err(|e| format!("could not make pi's token folder: {e}"))?;
-        let mode = if crate::isolation::enabled() {
-            0o711
-        } else {
-            0o700
-        };
-        for path in [&self.dir, &home] {
-            if !std::fs::symlink_metadata(path)
-                .map_err(|e| e.to_string())?
-                .is_dir()
-            {
-                return Err("pi's token folders must not be symbolic links".into());
-            }
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-                .map_err(|e| format!("could not prepare pi's token folder: {e}"))?;
-        }
-        Ok(home)
+        crate::warm::folder(&self.dir)
     }
 }
 
@@ -991,6 +972,9 @@ impl Pool {
 struct Proc {
     /// What it was started with (`fingerprint`): a turn that would start it differently starts a new one.
     key: String,
+    /// The scope it was started in where turns are limited (crate::turn_limits::launch_unit): the attempt that
+    /// started it names that scope, and a later attempt that takes it asks by this.
+    unit: Option<String>,
     stdin: mpsc::UnboundedSender<String>,
     stopper: super::Stopper,
     exited: watch::Receiver<bool>,
@@ -1240,8 +1224,8 @@ impl Drop for Proc {
     }
 }
 
-/// What a process for this turn would be started with, its effort aside: its command line, environment (HUB_TOKEN
-/// aside, which is the token file's), user, groups and folder, and what its agent directory holds.
+/// What a process for this turn would be started with, its effort aside: its command line, environment (the token file
+/// and scope stem aside, crate::warm::PER_ATTEMPT), user, groups and folder, and what its agent directory holds.
 fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     let mut argv = argv.to_vec();
     if let Some(at) = argv.iter().position(|a| a == "--thinking") {
@@ -1249,7 +1233,7 @@ fn fingerprint(argv: &[String], env: &Env, s: &Settings) -> String {
     }
     let rest: Env = env
         .iter()
-        .filter(|(k, _)| *k != "HUB_TOKEN")
+        .filter(|(k, _)| !crate::warm::PER_ATTEMPT.contains(&k.as_str()))
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     // A leased user's checkout groups are its process's from the start (crate::checkout_groups).
@@ -1312,6 +1296,16 @@ impl PiHost {
             pool,
             inner: Mutex::new(Inner::default()),
         }))
+    }
+
+    /// The scopes of the processes this attempt holds (crate::turn_limits::launch_unit): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner()
+            .procs
+            .values()
+            .filter_map(|p| p.unit.clone())
+            .collect()
     }
 
     fn inner(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -1478,6 +1472,7 @@ impl PiHost {
     ) -> std::io::Result<Arc<Proc>> {
         let mut child = self.command(argv, settings, env)?.spawn()?;
         self.0.allocation.mark();
+        let unit = crate::turn_limits::launch_unit(env, child.id());
         let sink: Arc<Mutex<Option<Events>>> = Arc::default();
         let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
@@ -1513,6 +1508,7 @@ impl PiHost {
         };
         let proc = Arc::new(Proc {
             key,
+            unit,
             stdin: lines,
             stopper,
             exited: dead,
@@ -3108,6 +3104,7 @@ mod tests {
         let leased = host.0.pool.home().unwrap();
         let proc = Proc {
             key: String::new(),
+            unit: None,
             stdin: mpsc::unbounded_channel().0,
             stopper: super::super::Stopper(mpsc::unbounded_channel().0),
             exited: watch::channel(false).1,

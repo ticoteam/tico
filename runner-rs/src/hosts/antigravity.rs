@@ -1,17 +1,26 @@
-//! The Antigravity host: each turn starts its own `agy acp` and reaps it when the turn ends. It speaks ACP (JSON-RPC 2.0
-//! over stdio) as T3 Code does: `initialize`, `authenticate` with the sign-in's method (`auth_method`), `session/resume` of the
-//! thread's saved conversation (`session/load` on an agy without resume) or `session/new`, the model and thinking level
-//! as the session's config options, then `session/prompt`, whose `session/update`s are the turn's events. Its
-//! `--gemini-dir` is the turn's home: a plan's own (model_subscriptions.rs TURN_HOMES), else the bot's `~/.gemini`,
-//! where the computer's own sign-in is. The conversation id is saved beside the stable thread id
-//! (`<home>/<thread>.json`, supervisor-only), so the next turn resumes it on any model or effort. A failed or
-//! interrupted turn is never replayed. `agy` runs in a process group of its own, owned by the shared process owner: a
-//! stop reaches the group, and whatever of it is left when `agy` exits goes too. The prompt goes only once agy has
-//! resumed the saved conversation or begun the turn's own: a turn that must continue the saved one is never sent into
-//! another, and stops instead. On any other turn a conversation agy could not resume gives way to a new one in the same
-//! process, given the whole prompt with the conversation's history when there is one (`full_prompt`); the thread moves
-//! to it only once the model has worked there, its record asking that the next turn be told everything again
-//! (`needs_history`) unless this one was and succeeded.
+//! The Antigravity host: `agy acp`, speaking ACP (JSON-RPC 2.0 over stdio) as T3 Code does: `initialize`,
+//! `authenticate` with the sign-in's method (`auth_method`), `session/resume` of the thread's saved conversation
+//! (`session/load` on an agy without resume) or `session/new`, the model and thinking level as the session's config
+//! options, then `session/prompt`, whose `session/update`s are the turn's events. Its `--gemini-dir` is the turn's home:
+//! a plan's own (model_subscriptions.rs TURN_HOMES), else the bot's `~/.gemini`, where the computer's own sign-in is.
+//! The conversation id is saved beside the stable thread id (`<home>/<thread>.json`, supervisor-only), so the next turn
+//! resumes it on any model or effort. A failed or interrupted turn is never replayed.
+//!
+//! The process stays up after a turn that completed or was stopped (crate::keeper, as T3 Code keeps it), holding
+//! the thread's conversation open: the thread's next turn sets only the model and thinking level it asks for and sends
+//! its prompt there. A turn that would start agy differently (another home, environment, folder or MCP servers), a
+//! conversation the process does not hold, or a process that has exited gets a new one, which resumes the saved
+//! conversation; a kept process that is gone before the prompt went is replaced so, never after. A plan turn's is kept
+//! too, for the thread's next turn on the same plan and sign-in, its home held until it goes
+//! (model_subscriptions::keep_home). A stop of the turn is `session/cancel`, which keeps the process when
+//! agy ends the prompt as cancelled in time. `agy` runs in a process group of its own, owned by the shared process
+//! owner: a stop reaches the group, and whatever of it is left when `agy` exits goes too.
+//!
+//! The prompt goes only once agy has resumed the saved conversation or begun the turn's own: a turn that must continue
+//! the saved one is never sent into another, and stops instead. On any other turn a conversation agy could not resume
+//! gives way to a new one in the same process, given the whole prompt with the conversation's history when there is one
+//! (`full_prompt`); the thread moves to it only once the model has worked there, its record asking that the next turn
+//! be told everything again (`needs_history`) unless this one was and succeeded.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,10 +30,11 @@ use std::time::Duration;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{ChildStdin, ChildStdout};
-use tokio::sync::watch;
+use tokio::sync::{oneshot, watch};
 
 use super::{event, failed, is_limit, Events, HostError, Settings};
 use crate::env::Env;
+use crate::keeper::{Held, Inputs, Keeper, Session};
 use crate::util::{log, py_dumps, text_of, truthy};
 
 pub const DEFAULT_MODEL: &str = "gemini-4-neon";
@@ -47,6 +57,8 @@ const AUTH_LINK: &str = "Open the following link to authenticate the ACP server:
 const STOP_GRACE: Duration = Duration::from_secs(if cfg!(test) { 1 } else { 5 });
 /// How long `agy` has to exit on its own once its input closes after the turn, before it is stopped.
 const EXIT_WAIT: Duration = Duration::from_secs(1);
+/// How long agy has to end a prompt as cancelled after `session/cancel` before its process is stopped (T3 Code's).
+const CANCEL_WAIT: Duration = crate::keeper::INTERRUPT_WAIT;
 /// How long `initialize` may take: agy unpacks its runtime on every start before it answers.
 const START_WAIT: Duration = Duration::from_secs(if cfg!(test) { 10 } else { 120 });
 /// How long any other request before the prompt may take.
@@ -503,18 +515,157 @@ impl Proc {
     }
 }
 
+/// agy's input, which a stop of the turn writes to as well as its reader.
+type Stdin = Arc<tokio::sync::Mutex<Option<ChildStdin>>>;
+
 /// The two ends of agy's protocol stream.
 struct Io {
-    stdin: Option<ChildStdin>,
+    stdin: Stdin,
     stdout: Lines<BufReader<ChildStdout>>,
     next: i64,
 }
 
-/// What the turn's reader holds of its process.
-struct Running {
+/// Where a process's stderr goes: the events of the host holding it, none while it is kept between turns.
+type Sink = Arc<Mutex<Option<Events>>>;
+
+/// A running `agy acp`: its stream, its stderr, and what a later turn needs to go on in it.
+struct Agent {
+    proc: Proc,
     io: Io,
     stderr: crate::run_diagnostics::Stderr,
-    exited: watch::Receiver<Option<i32>>,
+    sink: Sink,
+    /// What it was started with (`fingerprint`); None when it is not to be kept (a plan whose home it cannot hold).
+    key: Option<Inputs>,
+    /// Its `--gemini-dir`, and a plan's home held while it runs.
+    home: String,
+    _plan: Option<crate::model_subscriptions::KeptHome>,
+    /// The folder of the token file it reads HUB_TOKEN from (crate::warm).
+    tokens: PathBuf,
+    /// The scope it was launched in where turns are limited (crate::turn_limits::launch_unit).
+    unit: Option<String>,
+    /// The conversation it holds open, and that session's config options as they now stand.
+    session: Option<String>,
+    options: Value,
+    /// Its output ended.
+    closed: bool,
+}
+
+impl Agent {
+    fn attach(&self, tx: Option<Events>) {
+        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = tx;
+    }
+}
+
+/// agy's adapter for the session keeper (crate::keeper): kept with its token blanked and its stderr going nowhere, what
+/// it says meanwhile read by `between`. It has no background work of its own to report (as T3's ACP adapter).
+impl Session for Agent {
+    fn alive(&self) -> bool {
+        !self.closed && self.proc.exited.borrow().is_none()
+    }
+
+    fn lend(&self, token: &str) -> bool {
+        crate::warm::write_token_for(&self.tokens.join("lease-token"), token, None)
+    }
+
+    fn park(self: Box<Self>, wanted: oneshot::Receiver<()>) -> crate::keeper::Parked {
+        self.attach(None);
+        Box::pin(async move { Box::new(between(*self, wanted).await) as Box<dyn Session> })
+    }
+
+    /// Its input closed, then reaped (Proc::reap).
+    fn stop(&self) -> crate::keeper::Stopping<'_> {
+        Box::pin(async move {
+            drop(self.io.stdin.lock().await.take());
+            self.proc.reap().await;
+        })
+    }
+
+    /// SIGKILL to its group now (no grace), then until it has gone.
+    fn kill(&self) -> crate::keeper::Kill {
+        let proc = self.proc.clone();
+        Arc::new(move || {
+            proc.stopper.terminate(Duration::ZERO);
+            let mut exited = proc.exited.clone();
+            Box::pin(async move {
+                let _ = exited.wait_for(|e| e.is_some()).await;
+            })
+        })
+    }
+
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any + Send> {
+        self
+    }
+}
+
+impl Drop for Agent {
+    fn drop(&mut self) {
+        if self.proc.exited.borrow().is_none() {
+            self.proc.stopper.terminate(STOP_GRACE);
+        }
+        let _ = std::fs::remove_dir_all(&self.tokens);
+    }
+}
+
+/// How long a kept agy is given to read an answer to what it asked between turns.
+const REPLY_WAIT: Duration = Duration::from_secs(5);
+
+/// What a kept agy says between turns, until it is wanted back or its output ends: what it asks is answered, a tool's
+/// permission refused as no turn runs, and the rest dropped, so the next turn reads only its own.
+async fn between(mut agent: Agent, mut wanted: oneshot::Receiver<()>) -> Agent {
+    loop {
+        let line = tokio::select! {
+            _ = &mut wanted => return agent,
+            line = agent.io.stdout.next_line() => line,
+        };
+        let Ok(Some(line)) = line else {
+            agent.closed = true;
+            return agent;
+        };
+        let Ok(msg) = serde_json::from_str::<Value>(line.trim()) else {
+            continue;
+        };
+        if let (Some(id), Some(method)) = (
+            msg.get("id").filter(|i| !i.is_null()),
+            msg["method"].as_str(),
+        ) {
+            let reply = if method == "session/request_permission" {
+                json!({"jsonrpc": "2.0", "id": id, "result": {"outcome": {"outcome": "cancelled"}}})
+            } else {
+                json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": "unsupported client request"}})
+            };
+            // agy may have stopped reading: the write is given up when the agent is wanted back or after a while, and
+            // a stream left mid-line is not used again.
+            let sent = tokio::select! {
+                _ = &mut wanted => None,
+                sent = tokio::time::timeout(REPLY_WAIT, write(&agent.io, &reply)) => sent.ok(),
+            };
+            if !matches!(sent, Some(Ok(()))) {
+                agent.closed = true;
+                return agent;
+            }
+        }
+    }
+}
+
+/// What a process for this turn would be started with, the turn's own token and memory scope aside: its command line
+/// (its home among it, a plan's named by the plan), environment, folder, records and MCP servers. The model and effort
+/// are set in the session.
+fn fingerprint(argv: &[String], env: &Env, settings: &Settings, records: &Path) -> Inputs {
+    let mut inputs = Inputs::default();
+    inputs.add("argv", &json!(argv).to_string());
+    inputs.env(env, &["GEMINI_HOME"]);
+    inputs.add("folder", &settings.cwd);
+    // The folder itself as well as its name: a kept agy never goes on in a folder made again in its place
+    // (crate::sessions::PersonalCopy::make).
+    let folder = {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::metadata(&settings.cwd)
+            .map_or(String::new(), |m| format!("{}:{}", m.dev(), m.ino()))
+    };
+    inputs.add("folder_id", &folder);
+    inputs.add("records", &records.display().to_string());
+    inputs.add("mcp_servers", &json!(settings.mcp_servers).to_string());
+    inputs
 }
 
 /// One turn's stream as the reader sees it.
@@ -576,9 +727,9 @@ fn refused(method: &str, answer: Answer, scrub: &crate::redact::Redactor) -> Str
 struct Conv<'a> {
     tid: &'a str,
     turn: &'a str,
-    io: &'a mut Io,
+    agent: &'a mut Agent,
     stream: &'a mut Stream,
-    scrub: crate::redact::Redactor,
+    scrub: &'a crate::redact::Redactor,
     /// `authenticate` names the Google account: a sign-in link agy prints ends the turn, as no person is there to open
     /// it. On a key or Google Cloud sign-in it is only skipped.
     oauth: bool,
@@ -598,8 +749,17 @@ struct Inner {
     /// What a new conversation begun in place of the saved one is given instead of the turn's prompt.
     full_prompt: Option<String>,
     turn: Option<String>,
+    /// The running turn's process, which a stop reaps while its reader holds it.
     proc: Option<Proc>,
     reader: Option<tokio::task::JoinHandle<()>>,
+    /// The process between this attempt's turns, holding the thread's conversation open (`release`).
+    agent: Option<Agent>,
+    /// The prompt in flight: where `session/cancel` goes, and for which session.
+    live: Option<(Stdin, String)>,
+    /// The attempt's first process was a kept one already running (its timings' `warm`): set once.
+    warm: Option<bool>,
+    /// The launch scopes of the processes this attempt went on in (`scopes`).
+    units: Vec<String>,
     tx: Events,
 }
 
@@ -609,6 +769,7 @@ struct Shared {
     allocation: super::Allocation,
     home: PathBuf,
     cmd: Vec<String>,
+    keeper: Arc<Keeper>,
     inner: Mutex<Inner>,
 }
 
@@ -616,12 +777,13 @@ struct Shared {
 pub struct AntigravityHost(Arc<Shared>);
 
 impl AntigravityHost {
-    pub fn new(home: &Path, cmd: Vec<String>, tx: Events) -> AntigravityHost {
+    pub fn new(home: &Path, cmd: Vec<String>, tx: Events, keeper: Arc<Keeper>) -> AntigravityHost {
         AntigravityHost(Arc::new(Shared {
             gate: tokio::sync::Mutex::new(()),
             allocation: super::Allocation::default(),
             home: home.to_path_buf(),
             cmd,
+            keeper,
             inner: Mutex::new(Inner {
                 up: false,
                 thread: None,
@@ -634,6 +796,10 @@ impl AntigravityHost {
                 turn: None,
                 proc: None,
                 reader: None,
+                agent: None,
+                live: None,
+                warm: None,
+                units: vec![],
                 tx,
             }),
         }))
@@ -668,9 +834,20 @@ impl AntigravityHost {
         self.0.allocation.track(turn);
     }
 
-    /// Whether this host takes turns: each starts its own process.
+    /// Whether this host takes turns.
     pub fn alive(&self) -> bool {
         self.inner().up
+    }
+
+    /// Whether this attempt's first process was a kept one already running.
+    pub fn warm(&self) -> bool {
+        self.inner().warm.unwrap_or(false)
+    }
+
+    /// The launch scopes of the processes this attempt went on in (Host::kept_scopes): a kept one is still in the
+    /// scope of the attempt that started it.
+    pub fn scopes(&self) -> Vec<String> {
+        self.inner().units.clone()
     }
 
     fn path(&self, thread: &str) -> Option<PathBuf> {
@@ -790,13 +967,14 @@ impl AntigravityHost {
         Ok(())
     }
 
-    /// `agy acp` for a turn on `home` with `tmp` as its TMPDIR, in a process group of its own, so a stop reaches the
-    /// tools it started too.
+    /// `agy acp` for a turn on `home` with `tmp` as its TMPDIR, reading HUB_TOKEN from `token` when given (crate::warm),
+    /// in a process group of its own, so a stop reaches the tools it started too.
     fn command(
         &self,
         settings: &Settings,
         home: &str,
         tmp: &Path,
+        token: Option<&Path>,
     ) -> Result<tokio::process::Command, HostError> {
         // A plan's turn (model_subscriptions.rs TURN_HOMES): its sign-in is the file in its own home, and nothing else
         // may sign it in. Without that file in place agy is not started at all, so it never runs on the computer's own
@@ -808,7 +986,10 @@ impl AntigravityHost {
                 .map_err(failed)?;
         }
         let argv = acp_argv(&self.0.cmd, home);
-        let env = env_of(settings);
+        let mut env = env_of(settings);
+        if let (Some(file), true) = (token, env.contains_key("HUB_TOKEN")) {
+            env.insert("HUB_TOKEN".into(), format!("tico-file:{}", file.display()));
+        }
         let mut command = super::harness_command(None, &argv[0]);
         command
             .args(&argv[1..])
@@ -822,32 +1003,49 @@ impl AntigravityHost {
         Ok(command)
     }
 
-    /// Start the turn's `agy acp`, with a TMPDIR of its own (it unpacks its runtime there on every start), removed once
-    /// it and its group have gone.
-    fn spawn(&self, settings: &Settings) -> Result<(Proc, Running), HostError> {
-        let home = home_for(settings)?;
+    /// Start a new `agy acp` for `settings` on `home`, reading HUB_TOKEN from a token file of its own, with a TMPDIR of
+    /// its own (it unpacks its runtime there on every start), removed once it and its group have gone.
+    fn spawn(
+        &self,
+        settings: &Settings,
+        home: &str,
+        key: Option<Inputs>,
+    ) -> Result<Agent, HostError> {
+        // A plan's home stays while the process runs, or it is not kept.
+        let plan = match &settings.plan_home {
+            Some(home) => crate::model_subscriptions::keep_home(Path::new(home)),
+            None => None,
+        };
+        let key = key.filter(|_| settings.plan_home.is_none() || plan.is_some());
+        let tokens = self.0.keeper.folder().map_err(failed)?;
+        let env = env_of(settings);
+        let file = lease_file(&tokens, env.get("HUB_TOKEN").map_or("", String::as_str))?;
         let tmp = std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
-        crate::isolation::mkdir(&tmp, 0o700)
-            .map_err(|e| failed(format!("could not make Antigravity's TMPDIR: {e}")))?;
-        let started = self.command(settings, &home, &tmp).and_then(|mut c| {
-            c.spawn()
-                .map_err(|e| failed(format!("could not start agy: {e}")))
-        });
+        let made = crate::isolation::mkdir(&tmp, 0o700)
+            .map_err(|e| failed(format!("could not make Antigravity's TMPDIR: {e}")));
+        let started = made
+            .and_then(|_| self.command(settings, home, &tmp, Some(&file)))
+            .and_then(|mut c| {
+                c.spawn()
+                    .map_err(|e| failed(format!("could not start agy: {e}")))
+            });
         let mut child = match started {
             Ok(child) => child,
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&tmp);
+                let _ = std::fs::remove_dir_all(&tokens);
                 return Err(e);
             }
         };
         self.0.allocation.mark();
-        let host = self.clone();
+        let unit = crate::turn_limits::launch_unit(&env_of(settings), child.id());
+        let sink: Sink = Arc::new(Mutex::new(Some(self.inner().tx.clone())));
+        let to = sink.clone();
         let stderr = crate::run_diagnostics::Stderr::capture_with(
             &mut child,
             move |value| {
-                let inner = host.inner();
-                if inner.turn.is_some() {
-                    let _ = inner.tx.send(value);
+                if let Some(tx) = to.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
+                    let _ = tx.send(value);
                 }
             },
             &settings.env,
@@ -862,7 +1060,7 @@ impl AntigravityHost {
             .ok_or_else(|| failed("agy has no stdout"))?;
         let stdin = child.stdin.take();
         // Whatever is left of its group when agy exits, however it exits, goes with it: a tool it started never outlives
-        // the turn. Sent before agy is reaped, so the group's number is still its own.
+        // the process. Sent before agy is reaped, so the group's number is still its own.
         let group = child.id().map(|p| p as i32);
         let sweep = move || {
             if let Some(g) = group {
@@ -880,46 +1078,123 @@ impl AntigravityHost {
             let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&tmp)).await;
             let _ = done.send(Some(code));
         });
-        Ok((
-            Proc {
-                stopper,
-                exited: exited.clone(),
+        Ok(Agent {
+            proc: Proc { stopper, exited },
+            io: Io {
+                stdin: Arc::new(tokio::sync::Mutex::new(stdin)),
+                stdout: BufReader::new(stdout).lines(),
+                next: 0,
             },
-            Running {
-                io: Io {
-                    stdin,
-                    stdout: BufReader::new(stdout).lines(),
-                    next: 0,
-                },
-                stderr,
-                exited,
-            },
-        ))
+            stderr,
+            sink,
+            key,
+            home: home.to_string(),
+            _plan: plan,
+            tokens,
+            unit,
+            session: None,
+            options: Value::Null,
+            closed: false,
+        })
     }
 
-    pub fn start_turn(
+    /// The process for this turn on `thread`, and whether it was already running: the one this attempt or the keeper
+    /// holds when it was started as this turn would start it and holds the thread's saved conversation open, else a
+    /// new one. A plan's is named by the plan and the sign-in this turn was handed, so a turn no longer handed it
+    /// never goes on in its process.
+    async fn agent(&self, thread: &str, settings: &Settings) -> Result<(Agent, bool), HostError> {
+        let home = home_for(settings)?;
+        let named = match &settings.plan_home {
+            Some(plan) => {
+                crate::model_subscriptions::turn_plan(Path::new(plan)).map(|p| format!("plan:{p}"))
+            }
+            None => Some(home.clone()),
+        };
+        let key = named.map(|named| {
+            fingerprint(
+                &acp_argv(&self.0.cmd, &named),
+                &env_of(settings),
+                settings,
+                &self.0.home,
+            )
+        });
+        let env = env_of(settings);
+        let token = env.get("HUB_TOKEN").map_or("", String::as_str);
+        let held = self.inner().agent.take();
+        let (held, pooled) = match (held, &key) {
+            (Some(agent), _) => (Some(agent), false),
+            (None, Some(key)) => {
+                let agent = self.0.keeper.take::<Agent>(thread, key, token).await;
+                let pooled = agent.is_some();
+                (agent, pooled)
+            }
+            (None, None) => {
+                self.0.keeper.release(thread).await;
+                (None, false)
+            }
+        };
+        if let Some(agent) = held {
+            let saved = self.inner().provider.clone();
+            if key.is_some()
+                && agent.key == key
+                && agent.alive()
+                && agent.session.is_some()
+                && agent.session == saved
+                && (pooled || agent.lend(token))
+            {
+                agent.stderr.clear();
+                agent.attach(Some(self.inner().tx.clone()));
+                if let Some(plan) = &agent._plan {
+                    plan.hide_current();
+                }
+                self.0.allocation.mark();
+                let mut inner = self.inner();
+                inner.warm.get_or_insert(pooled);
+                inner.units.extend(agent.unit.clone());
+                drop(inner);
+                return Ok((agent, true));
+            }
+            agent.stop().await;
+        }
+        let agent = self.spawn(settings, &home, key)?;
+        self.inner().warm.get_or_insert(false);
+        Ok((agent, false))
+    }
+
+    pub async fn start_turn(
         &self,
         thread_id: &str,
         text: &str,
         effort: Option<&str>,
     ) -> Result<String, HostError> {
         let turn = uuid::Uuid::new_v4().to_string();
-        let mut inner = self.inner();
-        if !inner.up || inner.thread.as_deref() != Some(thread_id) || inner.turn.is_some() {
-            return Err(failed(
-                "Antigravity is unavailable or already running a turn",
-            ));
-        }
-        let settings = inner.settings.clone().unwrap_or_default();
+        let busy = || failed("Antigravity is unavailable or already running a turn");
+        let settings = {
+            let inner = self.inner();
+            if !inner.up || inner.thread.as_deref() != Some(thread_id) || inner.turn.is_some() {
+                return Err(busy());
+            }
+            inner.settings.clone().unwrap_or_default()
+        };
         let (model, effort) = model_effort(&settings, effort)?;
+        let (agent, warm) = self.agent(thread_id, &settings).await?;
+        let taken = {
+            let inner = self.inner();
+            !inner.up || inner.turn.is_some()
+        };
+        if taken {
+            agent.stop().await;
+            return Err(busy());
+        }
+        let mut inner = self.inner();
         inner.flagged = false;
-        let (proc, running) = self.spawn(&settings)?;
-        inner.proc = Some(proc);
+        inner.proc = Some(agent.proc.clone());
         inner.turn = Some(turn.clone());
         let host = self.clone();
         let (tid, id, text) = (thread_id.to_string(), turn.clone(), text.to_string());
         inner.reader = Some(tokio::spawn(async move {
-            host.run(&tid, &id, &text, (&model, &effort), running).await
+            host.run(&tid, &id, &text, (&model, &effort), agent, warm)
+                .await
         }));
         let _ = inner.tx.send(event(
             "status",
@@ -937,54 +1212,108 @@ impl AntigravityHost {
         turn: &str,
         text: &str,
         (model, effort): (&str, &str),
-        mut running: Running,
+        mut agent: Agent,
+        mut warm: bool,
     ) {
         let mut stream = Stream::default();
-        let scrub = {
-            let inner = self.inner();
-            let env = inner
-                .settings
-                .as_ref()
-                .map(|s| s.env.clone())
-                .unwrap_or_default();
-            crate::redact::Redactor::new(&crate::redact::env_secrets(&env))
-        };
-        let oauth = {
-            let inner = self.inner();
-            let settings = inner.settings.clone().unwrap_or_default();
-            auth_method(&env_of(&settings), settings.plan_home.is_some()) == AUTH_METHOD
-        };
-        let end = {
-            let mut c = Conv {
-                tid,
-                turn,
-                io: &mut running.io,
-                stream: &mut stream,
-                scrub,
-                oauth,
+        let settings = self.inner().settings.clone().unwrap_or_default();
+        let scrub = crate::redact::Redactor::new(&crate::redact::env_secrets(&settings.env));
+        let oauth = auth_method(&env_of(&settings), settings.plan_home.is_some()) == AUTH_METHOD;
+        let end = loop {
+            let end = {
+                let mut c = Conv {
+                    tid,
+                    turn,
+                    agent: &mut agent,
+                    stream: &mut stream,
+                    scrub: &scrub,
+                    oauth,
+                };
+                self.converse(&mut c, text, model, effort, warm).await
             };
-            self.converse(&mut c, text, model, effort).await
+            // A kept process gone before the prompt went: a new one resumes the saved conversation instead. Once the
+            // prompt went, nothing is sent again.
+            if !(warm && matches!(end, End::Closed(_)) && !stream.prompting && self.inner().up) {
+                break end;
+            }
+            warm = false;
+            agent.stop().await;
+            // A stop while the old one went owns the host now: no new process it would never reap.
+            let ours = |inner: &Inner| inner.up && inner.turn.as_deref() == Some(turn);
+            if !ours(&self.inner()) {
+                break end;
+            }
+            let key = agent.key.clone();
+            let respawned = home_for(&settings).and_then(|home| self.spawn(&settings, &home, key));
+            match respawned {
+                Ok(new) => {
+                    agent = new;
+                    let stored = {
+                        let mut inner = self.inner();
+                        ours(&inner) && {
+                            inner.proc = Some(agent.proc.clone());
+                            true
+                        }
+                    };
+                    if !stored {
+                        agent.stop().await;
+                        break end;
+                    }
+                    stream = Stream::default();
+                }
+                Err(e) => break End::Failed(e.to_string()),
+            }
         };
-        // Its input closes, whatever the end: agy takes that as the end of its work and exits.
-        drop(running.io.stdin.take());
-        // A stopped turn says nothing more, so nothing waits for its code.
-        let code = if self.inner().up {
-            let wait = if matches!(end, End::Closed(_)) {
-                STOP_GRACE
-            } else {
-                EXIT_WAIT
+        self.inner().live = None;
+        // agy answered the prompt cleanly and goes on: it stays for the thread's next turn (`release`). A failed answer
+        // (a step error, a refusal, a cut-off) ends it like any failure, its stderr read for the turn's error.
+        let clean = matches!(&end, End::Result(result, None)
+            if stopped(result["stopReason"].as_str().unwrap_or("end_turn")).is_none());
+        let healthy = clean && agent.alive();
+        let kept = healthy && {
+            let mut inner = self.inner();
+            inner.up && inner.turn.as_deref() == Some(turn) && {
+                inner.proc = None;
+                true
+            }
+        };
+        let mut code = None;
+        if !kept {
+            // Its input closes: agy takes that as the end of its work and exits.
+            drop(agent.io.stdin.lock().await.take());
+            // A stopped turn says nothing more, so nothing waits for its code.
+            if self.inner().up {
+                let wait = if matches!(end, End::Closed(_)) {
+                    STOP_GRACE
+                } else {
+                    EXIT_WAIT
+                };
+                let mut exited = agent.proc.exited.clone();
+                code = tokio::time::timeout(wait, exited.wait_for(|e| e.is_some()))
+                    .await
+                    .ok()
+                    .and_then(|e| e.ok().and_then(|e| *e));
+            }
+            // Gone, its group with it, before the turn ends: the next turn is never admitted beside it.
+            agent.proc.reap().await;
+            agent.stderr.drained().await;
+        }
+        let stderr = agent.stderr.tail();
+        if kept {
+            // Held before the turn ends, so the next turn finds it; a stop meanwhile stops it here.
+            let left = {
+                let mut inner = self.inner();
+                if inner.up {
+                    inner.agent = Some(agent);
+                    None
+                } else {
+                    Some(agent)
+                }
             };
-            tokio::time::timeout(wait, running.exited.wait_for(|e| e.is_some()))
-                .await
-                .ok()
-                .and_then(|e| e.ok().and_then(|e| *e))
-        } else {
-            None
-        };
-        // Gone, its group with it, before the turn ends: the next turn is never admitted beside it.
-        self.reap_current().await;
-        running.stderr.drained().await;
-        let stderr = running.stderr.tail();
+            if let Some(agent) = left {
+                agent.stop().await;
+            }
+        }
         match end {
             End::Result(result, failure) => {
                 self.finish(tid, turn, &result, failure, &stream, &stderr)
@@ -1010,19 +1339,58 @@ impl AntigravityHost {
         }
     }
 
-    /// The turn's whole conversation with agy, from `initialize` to the prompt's answer.
-    async fn converse(&self, c: &mut Conv<'_>, text: &str, model: &str, effort: &str) -> End {
+    /// The turn's whole conversation with agy, from `initialize` (in a process already running, from the model and
+    /// effort) to the prompt's answer.
+    async fn converse(
+        &self,
+        c: &mut Conv<'_>,
+        text: &str,
+        model: &str,
+        effort: &str,
+        warm: bool,
+    ) -> End {
         let settings = self.inner().settings.clone().unwrap_or_default();
+        let opened = match (warm, c.agent.session.clone()) {
+            (true, Some(session)) => Ok((session, c.agent.options.clone())),
+            _ => self.open(c, &settings).await,
+        };
+        let (session, mut options) = match opened {
+            Ok(opened) => opened,
+            Err(end) => return end,
+        };
+        c.stream.session = session.clone();
+        c.agent.session = Some(session.clone());
+        c.agent.options = options.clone();
+        match model_value(&options, model, effort) {
+            Err(e) => return End::Failed(e),
+            Ok(Some(value)) => match self.set(c, &session, &options, "model", &value).await {
+                Ok(now) => options = now,
+                Err(end) => return end,
+            },
+            Ok(None) => {}
+        }
+        if let Some(id) = effort_option(&options, effort) {
+            match self.set(c, &session, &options, &id, effort).await {
+                Ok(now) => options = now,
+                Err(end) => return end,
+            }
+        }
+        c.agent.options = options;
+        self.prompt(c, &session, text).await
+    }
+
+    /// `initialize`, `authenticate` and the thread's conversation resumed or begun: its id and config options.
+    async fn open(&self, c: &mut Conv<'_>, settings: &Settings) -> Result<(String, Value), End> {
         let plan = settings.plan_home.is_some();
         let init = match self
             .call(c, "initialize", initialize_params(), Some(START_WAIT))
             .await
         {
             Ok(Answer::Ok(v)) => v,
-            Ok(a) => return End::Failed(refused("initialize", a, &c.scrub)),
-            Err(why) => return End::Closed(why),
+            Ok(a) => return Err(End::Failed(refused("initialize", a, c.scrub))),
+            Err(why) => return Err(End::Closed(why)),
         };
-        let method = auth_method(&env_of(&settings), plan);
+        let method = auth_method(&env_of(settings), plan);
         match self
             .call(
                 c,
@@ -1033,15 +1401,15 @@ impl AntigravityHost {
             .await
         {
             Ok(Answer::Ok(_)) => {}
-            Ok(a) if plan => return End::Failed(refused("authenticate", a, &c.scrub)),
+            Ok(a) if plan => return Err(End::Failed(refused("authenticate", a, c.scrub))),
             // The session says whether the computer's own sign-in holds at all.
             Ok(a) => log(&format!(
                 "Antigravity: {}",
-                refused("authenticate", a, &c.scrub)
+                refused("authenticate", a, c.scrub)
             )),
-            Err(why) => return End::Closed(why),
+            Err(why) => return Err(End::Closed(why)),
         }
-        let servers = servers(&settings, &init);
+        let servers = servers(settings, &init);
         let saved = self.inner().provider.clone();
         let mut resumed = None;
         if let Some(saved) = saved {
@@ -1061,17 +1429,19 @@ impl AntigravityHost {
                     json!({"sessionId": saved, "cwd": settings.cwd, "mcpServers": servers});
                 match self.call(c, method, params, Some(REQUEST_WAIT)).await {
                     Ok(a) => a,
-                    Err(why) => return End::Closed(why),
+                    Err(why) => return Err(End::Closed(why)),
                 }
             };
             match answer {
                 Answer::Ok(v) => resumed = Some((saved, v)),
                 Answer::Err(e) if signed_out(&e) => {
-                    return End::Failed(refused(method, Answer::Err(e), &c.scrub))
+                    return Err(End::Failed(refused(method, Answer::Err(e), c.scrub)))
                 }
-                Answer::Err(_) if settings.require_existing_session => return End::Mismatch(LOST),
+                Answer::Err(_) if settings.require_existing_session => {
+                    return Err(End::Mismatch(LOST))
+                }
                 Answer::Late if settings.require_existing_session => {
-                    return End::Mismatch(UNCONFIRMED)
+                    return Err(End::Mismatch(UNCONFIRMED))
                 }
                 // agy could not resume it: a new conversation takes its place, given everything when that is to hand.
                 _ => c.stream.restored = true,
@@ -1086,8 +1456,8 @@ impl AntigravityHost {
                     .await
                 {
                     Ok(Answer::Ok(v)) => v,
-                    Ok(a) => return End::Failed(refused("session/new", a, &c.scrub)),
-                    Err(why) => return End::Closed(why),
+                    Ok(a) => return Err(End::Failed(refused("session/new", a, c.scrub))),
+                    Err(why) => return Err(End::Closed(why)),
                 };
                 // Kept as agy named it, which its updates name it by too.
                 let Some(id) = v["sessionId"]
@@ -1095,28 +1465,19 @@ impl AntigravityHost {
                     .filter(|id| conversation(id).is_some())
                     .map(String::from)
                 else {
-                    return End::Failed("Antigravity session/new named no conversation".into());
+                    return Err(End::Failed(
+                        "Antigravity session/new named no conversation".into(),
+                    ));
                 };
                 c.stream.staged = Some(id.clone());
                 (id, v)
             }
         };
-        c.stream.session = session.clone();
-        let mut options = setup["configOptions"].clone();
-        match model_value(&options, model, effort) {
-            Err(e) => return End::Failed(e),
-            Ok(Some(value)) => match self.set(c, &session, "model", &value).await {
-                Ok(Some(now)) => options = now,
-                Ok(None) => {}
-                Err(end) => return end,
-            },
-            Ok(None) => {}
-        }
-        if let Some(id) = effort_option(&options, effort) {
-            if let Err(end) = self.set(c, &session, &id, effort).await {
-                return end;
-            }
-        }
+        Ok((session, setup["configOptions"].clone()))
+    }
+
+    /// The turn's prompt in `session`, and how agy answered it.
+    async fn prompt(&self, c: &mut Conv<'_>, session: &str, text: &str) -> End {
         let full = if c.stream.restored {
             self.inner().full_prompt.take()
         } else {
@@ -1136,9 +1497,7 @@ impl AntigravityHost {
             None => text.to_string(),
         };
         // Where the session log stands before the prompt, so only the steps it adds are read after.
-        let native = home_for(&settings)
-            .map(|home| session_log(&home, &session))
-            .ok();
+        let native = Some(session_log(&c.agent.home, session));
         let before = match native.clone() {
             Some(log) => tokio::task::spawn_blocking(move || last_step(&log))
                 .await
@@ -1146,7 +1505,6 @@ impl AntigravityHost {
                 .flatten(),
             None => None,
         };
-        c.stream.prompting = true;
         let params = json!({"sessionId": session, "prompt": [{"type": "text", "text": prompt}]});
         let answer = match self.call(c, "session/prompt", params, None).await {
             // An answer with neither a result nor an error is no answer.
@@ -1165,7 +1523,7 @@ impl AntigravityHost {
                     .await
                     .ok()
                     .flatten()
-                    .map(|text| step_failure(&text, &c.scrub))
+                    .map(|text| step_failure(&text, c.scrub))
             }
             _ => None,
         };
@@ -1204,30 +1562,44 @@ impl AntigravityHost {
                         return End::Closed(Some(e));
                     }
                 }
-                End::Failed(said(&e, &c.scrub))
+                End::Failed(said(&e, c.scrub))
             }
             Answer::Late => End::Closed(None),
         }
     }
 
-    /// Set the session's config option `id` to `value`: the session's options as they are now, when it says them.
+    /// Set the session's config option `id` to `value`: the session's options as they are now, as agy says them, else
+    /// `options` with that value current.
     async fn set(
         &self,
         c: &mut Conv<'_>,
         session: &str,
+        options: &Value,
         id: &str,
         value: &str,
-    ) -> Result<Option<Value>, End> {
+    ) -> Result<Value, End> {
         let params = json!({"sessionId": session, "configId": id, "value": value});
         match self
             .call(c, "session/set_config_option", params, Some(REQUEST_WAIT))
             .await
         {
-            Ok(Answer::Ok(v)) => Ok(v.get("configOptions").filter(|o| o.is_array()).cloned()),
+            Ok(Answer::Ok(v)) => Ok(match v.get("configOptions").filter(|o| o.is_array()) {
+                Some(now) => now.clone(),
+                None => {
+                    let mut now = options.clone();
+                    if let Some(o) = now
+                        .as_array_mut()
+                        .and_then(|all| all.iter_mut().find(|o| o["id"] == id))
+                    {
+                        o["currentValue"] = json!(value);
+                    }
+                    now
+                }
+            }),
             Ok(a) => Err(End::Failed(refused(
                 "session/set_config_option",
                 a,
-                &c.scrub,
+                c.scrub,
             ))),
             Err(why) => Err(End::Closed(why)),
         }
@@ -1243,8 +1615,8 @@ impl AntigravityHost {
         params: Value,
         wait: Option<Duration>,
     ) -> Result<Answer, Option<String>> {
-        c.io.next += 1;
-        let id = c.io.next;
+        c.agent.io.next += 1;
+        let id = c.agent.io.next;
         let gate = match method {
             "session/prompt" => Some(self.0.gate.lock().await),
             _ => None,
@@ -1252,20 +1624,29 @@ impl AntigravityHost {
         if gate.is_some() && !self.inner().up {
             return Err(None);
         }
+        let prompted = (method == "session/prompt").then(|| text_of(&params["sessionId"]));
         write(
-            c.io,
+            &c.agent.io,
             &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
         )
         .await?;
+        // The prompt went: updates from here on are the turn's, and a stop of the turn is agy's `session/cancel`, which
+        // agy reads only after the prompt.
+        if let Some(session) = prompted {
+            c.stream.prompting = true;
+            self.inner().live = Some((c.agent.io.stdin.clone(), session));
+        }
         drop(gate);
         let by = wait.map(|w| tokio::time::Instant::now() + w);
         loop {
             let next = match by {
-                Some(by) => match tokio::time::timeout_at(by, c.io.stdout.next_line()).await {
-                    Ok(next) => next,
-                    Err(_) => return Ok(Answer::Late),
-                },
-                None => c.io.stdout.next_line().await,
+                Some(by) => {
+                    match tokio::time::timeout_at(by, c.agent.io.stdout.next_line()).await {
+                        Ok(next) => next,
+                        Err(_) => return Ok(Answer::Late),
+                    }
+                }
+                None => c.agent.io.stdout.next_line().await,
             };
             let line = match next {
                 Ok(Some(l)) => l,
@@ -1293,7 +1674,7 @@ impl AntigravityHost {
                     if stream.skipped_count > SKIP_MAX {
                         return Err(Some("too many lines that are not JSON".into()));
                     }
-                    let kept = crate::run_diagnostics::safe(&line, &c.scrub);
+                    let kept = crate::run_diagnostics::safe(&line, c.scrub);
                     stream
                         .skipped
                         .push(kept.trim().chars().take(KEPT_CHARS).collect());
@@ -1324,7 +1705,7 @@ impl AntigravityHost {
                     } else {
                         json!({"jsonrpc": "2.0", "id": asked, "error": {"code": -32601, "message": "unsupported client request"}})
                     };
-                    write(c.io, &reply).await?;
+                    write(&c.agent.io, &reply).await?;
                 }
                 (None, Some("session/update")) => {
                     let p = &msg["params"];
@@ -1421,15 +1802,6 @@ impl AntigravityHost {
             self.commit(inner, stream)?;
         }
         Ok(())
-    }
-
-    /// Stop the turn's process if it is still running and wait until it and its group are gone. It stays on the host
-    /// meanwhile, so a stop waits for it too.
-    async fn reap_current(&self) {
-        let proc = self.inner().proc.clone();
-        if let Some(p) = proc {
-            p.reap().await;
-        }
     }
 
     /// The turn's events from the prompt's answer.
@@ -1579,24 +1951,72 @@ impl AntigravityHost {
         Err(failed("Antigravity steering is not enabled"))
     }
 
-    /// Interrupting a turn stops its process: the next turn starts a new one on the saved conversation.
+    /// A stop of the running turn (T3 Code's): once its prompt went, agy is told `session/cancel` and ends the prompt
+    /// as cancelled, and the process stays for the thread's next turn; one that does not within CANCEL_WAIT, or a turn
+    /// not yet prompting, is stopped. With no turn running there is nothing to stop.
     pub async fn interrupt(&self) {
+        let (running, live) = {
+            let inner = self.inner();
+            (inner.turn.is_some(), inner.live.clone())
+        };
+        if !running {
+            return;
+        }
+        if let Some((stdin, session)) = live {
+            let cancel = json!({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": session}});
+            // One deadline for the cancel and the prompt's end: agy may have stopped reading while the reader's own
+            // write holds its input.
+            let by = tokio::time::Instant::now() + CANCEL_WAIT;
+            let sent = tokio::time::timeout_at(by, write_to(&stdin, &cancel)).await;
+            if matches!(sent, Ok(Ok(()))) {
+                // Lent while waited on, and given back however the wait ends (this future dropped too), so `stop`
+                // still joins it.
+                let mut lent = Lent(self, self.inner().reader.take());
+                if let Some(reader) = lent.1.as_mut() {
+                    if tokio::time::timeout_at(by, reader).await.is_ok() {
+                        lent.1 = None;
+                        return;
+                    }
+                }
+            }
+        }
         self.stop().await;
     }
 
-    /// Stop the turn's process (Proc::reap) and its reader.
+    /// The attempt is over: with `keep`, a process holding the thread's conversation goes to the keeper with its token
+    /// blanked, for the thread's next turn, with `held` (what its folder needs while it is kept, crate::keeper::Held);
+    /// any other is stopped.
+    pub async fn release(&self, keep: bool, held: Option<Held>) {
+        let (agent, thread) = {
+            let mut inner = self.inner();
+            (inner.agent.take(), inner.thread.clone())
+        };
+        let Some(agent) = agent else { return };
+        match (thread, agent.key.clone()) {
+            (Some(thread), Some(key)) if keep && agent.alive() => {
+                self.0.keeper.put(&thread, key, agent, held).await
+            }
+            _ => agent.stop().await,
+        }
+    }
+
+    /// Stop the turn's process (Proc::reap), its reader, and the process this attempt holds.
     pub async fn stop(&self) {
         // A prompt being written finishes first, unless agy has stopped reading it: its stop ends that write.
         let gate = tokio::time::timeout(STOP_GRACE, self.0.gate.lock()).await;
-        let (proc, reader) = {
+        let (proc, reader, agent) = {
             let mut inner = self.inner();
             inner.up = false;
             inner.turn = None;
-            (inner.proc.take(), inner.reader.take())
+            inner.live = None;
+            (inner.proc.take(), inner.reader.take(), inner.agent.take())
         };
         drop(gate);
         if let Some(p) = proc {
             p.reap().await;
+        }
+        if let Some(agent) = agent {
+            agent.stop().await;
         }
         if let Some(r) = reader {
             let _ = tokio::time::timeout(Duration::from_secs(2), r).await;
@@ -1604,14 +2024,41 @@ impl AntigravityHost {
     }
 }
 
+/// The turn's reader taken from the host by `interrupt`, back in its place when dropped.
+struct Lent<'a>(&'a AntigravityHost, Option<tokio::task::JoinHandle<()>>);
+
+impl Drop for Lent<'_> {
+    fn drop(&mut self) {
+        if let Some(reader) = self.1.take() {
+            self.0.inner().reader.get_or_insert(reader);
+        }
+    }
+}
+
 /// One protocol line to agy. A write that fails is agy gone: its exit says why.
-async fn write(io: &mut Io, msg: &Value) -> Result<(), Option<String>> {
-    let Some(s) = io.stdin.as_mut() else {
+async fn write(io: &Io, msg: &Value) -> Result<(), Option<String>> {
+    write_to(&io.stdin, msg).await
+}
+
+async fn write_to(stdin: &Stdin, msg: &Value) -> Result<(), Option<String>> {
+    let mut stdin = stdin.lock().await;
+    let Some(s) = stdin.as_mut() else {
         return Err(None);
     };
     let line = msg.to_string() + "\n";
     s.write_all(line.as_bytes()).await.map_err(|_| None)?;
     s.flush().await.map_err(|_| None)
+}
+
+/// `tokens`' lease-token file holding `token`; when it cannot be written, `tokens` goes and agy does not start, as
+/// it would have no hub credential.
+fn lease_file(tokens: &Path, token: &str) -> Result<PathBuf, HostError> {
+    let file = tokens.join("lease-token");
+    if crate::warm::write_token_for(&file, token, None) {
+        return Ok(file);
+    }
+    let _ = std::fs::remove_dir_all(tokens);
+    Err(failed("could not write Antigravity's lease token"))
 }
 
 #[cfg(test)]
@@ -1634,11 +2081,12 @@ mod tests {
             &f.root.join("agy/acme"),
             f.argv(),
             mpsc::unbounded_channel().0,
+            Arc::new(Keeper::new(f.root.join("agy-warm"), 4)),
         );
         let home = home_for(&settings).unwrap();
         let tmp = f.root.join("tmp");
         super::super::isolationtests::prefix(
-            &host.command(&settings, &home, &tmp).unwrap(),
+            &host.command(&settings, &home, &tmp, None).unwrap(),
             &acp_argv(&f.argv(), &home),
         );
         if !f.actual() {
@@ -1651,8 +2099,12 @@ mod tests {
         settings
             .env
             .insert("TEST_PRIVATE".into(), record.display().to_string());
-        f.run(host.command(&settings, &home, &tmp).unwrap(), &[], &[])
-            .await;
+        f.run(
+            host.command(&settings, &home, &tmp, None).unwrap(),
+            &[],
+            &[],
+        )
+        .await;
         use std::os::unix::fs::MetadataExt;
         assert_eq!(
             record.metadata().unwrap().uid(),
@@ -1668,7 +2120,9 @@ mod tests {
     /// `session/new` begins `$NEW` (else SAVED). A resume is refused with `$LOSE`, never answered with `$NOINIT`. With
     /// `$REFUSE_FRESH` a prompt in a conversation it began is refused; with `$SIGNED_OUT` it has no sign-in; with `$LINK`
     /// it prints a sign-in link on `authenticate` and has no Google sign-in. A prompt adds a `$STEP` step (`$STEP_TEXT`)
-    /// to the conversation's session log. With `$STUCK`
+    /// to the conversation's session log, and logs the token its HUB_TOKEN file holds (`.tokens`). A prompt `hang` is
+    /// answered only by `session/cancel`, as cancelled; a prompt `wait` streams `early`, then ` late` once `.go` is
+    /// there. With `$STUCK`
     /// it ignores SIGTERM (then writes `.ready`) and never answers; with `$ORPHAN` it leaves a tool that ignores SIGTERM
     /// in its group. It exits when its input closes.
     fn fake_agy(dir: &Path) -> String {
@@ -1691,7 +2145,11 @@ if env("ORPHAN"):
     open(log + ".orphan", "w").write(str(tool.pid))
 INIT = {"protocolVersion": 1, "agentCapabilities": {"loadSession": True, "promptCapabilities": {"image": True, "audio": False, "embeddedContext": True}, "sessionCapabilities": {"resume": {}, "close": {}, "load": {}, "list": {}, "additionalDirectories": {}}, "auth": {"logout": {}}, "_meta": {"antigravity": {"tier": True, "systemPrompt": {"append": True}}}}, "agentInfo": {"name": "Antigravity ACP Server", "version": "1.5.16"}, "authMethods": [{"id": "oauth-personal", "name": "Log in with Google", "description": "Log in with your Google account"}]}
 NO_BROWSER = "@NO_BROWSER@"
-model, level, sid, fresh = "gemini-4-neon", "high", None, False
+model, level, sid, fresh, hung = "gemini-4-neon", "high", None, False, None
+hub = env("HUB_TOKEN") or ""
+open(log + ".hub", "w").write(hub)
+def chunk(text):
+    send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 def options():
     return [{"id": "model", "name": "Model", "category": "model", "type": "select", "currentValue": model,
              "options": [{"value": "gemini-4-neon", "name": "Gemini 4 Neon"}, {"value": "gemini-4-hydrogen", "name": "Gemini 4 Hydrogen"}]},
@@ -1714,7 +2172,11 @@ for line in sys.stdin:
         continue
     if method != "initialize":
         open(log + ".calls", "a").write(method + " " + json.dumps(p, sort_keys=True) + "\n")
-    if method == "initialize":
+    if method == "session/cancel":
+        if hung is not None:
+            answer(hung, {"stopReason": "cancelled"})
+            hung = None
+    elif method == "initialize":
         answer(i, INIT)
     elif method == "authenticate":
         if env("LINK"):
@@ -1746,6 +2208,8 @@ for line in sys.stdin:
     elif method == "session/prompt":
         text = p["prompt"][0]["text"]
         open(log + ".prompts", "a").write(text + "\n")
+        if hub.startswith("tico-file:"):
+            open(log + ".tokens", "a").write(open(hub[len("tico-file:"):]).read() + "\n")
         if env("STEP"):
             import sqlite3
             home = sys.argv[sys.argv.index("--gemini-dir") + 1]
@@ -1769,6 +2233,16 @@ for line in sys.stdin:
                 sys.exit(1)
         elif env("REFUSE_FRESH") and fresh:
             refuse(i, -32603, "no")
+        elif text == "hang":
+            hung = i
+        elif text == "wait":
+            chunk("early")
+            for _ in range(500):
+                if os.path.exists(log + ".go"):
+                    break
+                time.sleep(0.02)
+            chunk(" late")
+            answer(i, {"stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 2}})
         else:
             send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
             answer(i, {"stopReason": "end_turn", "usage": {"inputTokens": 10, "outputTokens": 2}})
@@ -1779,6 +2253,23 @@ for line in sys.stdin:
             .replace("@NO_BROWSER@", NO_BROWSER),
         );
         path.display().to_string()
+    }
+
+    #[test]
+    fn agy_never_starts_when_its_lease_token_cannot_be_written() {
+        let tokens =
+            std::env::temp_dir().join(format!("tico-lease-{}", uuid::Uuid::new_v4().simple()));
+        // A folder where the token file goes: the write fails, whoever runs it.
+        std::fs::create_dir_all(tokens.join("lease-token/in-the-way")).unwrap();
+        assert!(lease_file(&tokens, "hub-token").is_err());
+        assert!(
+            !tokens.exists(),
+            "the token folder goes with the failed start"
+        );
+        std::fs::create_dir_all(&tokens).unwrap();
+        let file = lease_file(&tokens, "hub-token").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hub-token");
+        let _ = std::fs::remove_dir_all(&tokens);
     }
 
     #[test]
@@ -1816,7 +2307,7 @@ for line in sys.stdin:
             };
             let (host, _rx) = rig.host();
             let home = home_for(&settings).unwrap();
-            host.command(&settings, &home, &rig.dir.join("tmp"))
+            host.command(&settings, &home, &rig.dir.join("tmp"), None)
                 .map(|command| {
                     let command = command.as_std();
                     let args: Vec<String> = command
@@ -1910,6 +2401,7 @@ for line in sys.stdin:
     struct Rig {
         dir: PathBuf,
         cmd: String,
+        pool: Arc<Keeper>,
     }
 
     impl Rig {
@@ -1918,7 +2410,8 @@ for line in sys.stdin:
                 std::env::temp_dir().join(format!("fake-agy-{}", uuid::Uuid::new_v4().simple()));
             std::fs::create_dir_all(&dir).unwrap();
             let cmd = fake_agy(&dir);
-            Rig { dir, cmd }
+            let pool = Arc::new(Keeper::new(dir.join("agy-warm"), 4));
+            Rig { dir, cmd, pool }
         }
 
         fn settings(&self, vars: &[(&str, String)]) -> Settings {
@@ -1941,10 +2434,19 @@ for line in sys.stdin:
         }
 
         fn host(&self) -> (AntigravityHost, mpsc::UnboundedReceiver<Value>) {
+            self.host_on(self.pool.clone())
+        }
+
+        fn host_on(&self, pool: Arc<Keeper>) -> (AntigravityHost, mpsc::UnboundedReceiver<Value>) {
             let (tx, rx) = mpsc::unbounded_channel();
-            let host = AntigravityHost::new(&self.dir.join("agy/acme"), vec![self.cmd.clone()], tx);
+            let host =
+                AntigravityHost::new(&self.dir.join("agy/acme"), vec![self.cmd.clone()], tx, pool);
             host.start().unwrap();
             (host, rx)
+        }
+
+        fn pid(&self) -> i32 {
+            self.read(".pid").trim().parse().unwrap()
         }
 
         fn read(&self, what: &str) -> String {
@@ -1969,7 +2471,7 @@ for line in sys.stdin:
             let (host, mut rx) = rig.host();
             let s = rig.settings(&[("FIXTURE", path.display().to_string())]);
             let thread = host.start_thread(&s);
-            host.start_turn(&thread, "hello", None).unwrap();
+            host.start_turn(&thread, "hello", None).await.unwrap();
             assert_eq!(turn_events(&mut rx).await, expected, "{}", path.display());
             host.stop().await;
         }
@@ -1982,12 +2484,14 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn each_turn_is_its_own_process_and_resumes_the_conversation_on_any_effort() {
+    async fn a_new_process_resumes_the_conversation_on_any_effort() {
         let rig = Rig::new();
         let s = rig.settings(&[]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "one", Some("medium")).unwrap();
+        host.start_turn(&thread, "one", Some("medium"))
+            .await
+            .unwrap();
         let first = turn_events(&mut rx).await;
         assert!(
             first.contains(&json!({"kind": "message", "text": "one", "final": true})),
@@ -2003,7 +2507,9 @@ for line in sys.stdin:
                 .to_string()
         ));
         cold.resume_thread(&thread, &s).unwrap();
-        cold.start_turn(&thread, "two", Some("xhigh")).unwrap();
+        cold.start_turn(&thread, "two", Some("xhigh"))
+            .await
+            .unwrap();
         assert!(turn_events(&mut rx)
             .await
             .contains(&json!({"kind": "message", "text": "two", "final": true})));
@@ -2052,7 +2558,7 @@ for line in sys.stdin:
         let s = rig.settings(&[("SIGNED_OUT", "1".into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
         let error = text_of(&failed["error"]);
@@ -2102,7 +2608,7 @@ for line in sys.stdin:
             let s = rig.settings(&[(var, "1".into()), ("LINK", "1".into())]);
             let (host, mut rx) = rig.host();
             let thread = host.start_thread(&s);
-            host.start_turn(&thread, "hi", None).unwrap();
+            host.start_turn(&thread, "hi", None).await.unwrap();
             let events = turn_events(&mut rx).await;
             assert!(
                 events.iter().any(|e| e["kind"] == "turn_completed"),
@@ -2124,7 +2630,7 @@ for line in sys.stdin:
         let s = rig.settings(&[("LINK", "1".into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
         assert!(super::super::is_auth_rejected_on(
@@ -2153,7 +2659,7 @@ for line in sys.stdin:
                 None => host.start_thread(&s),
             };
             async move {
-                host.start_turn(&thread, "hi", None).unwrap();
+                host.start_turn(&thread, "hi", None).await.unwrap();
                 let events = turn_events(&mut rx).await;
                 host.stop().await;
                 (thread, events)
@@ -2213,7 +2719,7 @@ for line in sys.stdin:
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "short", None).unwrap();
+        host.start_turn(&thread, "short", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         let message = events.iter().find(|e| e["kind"] == "message").unwrap();
         assert_eq!(message["text"], "short");
@@ -2235,7 +2741,7 @@ for line in sys.stdin:
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
         host.full_prompt(&thread, Some("everything".into()));
-        host.start_turn(&thread, "short", None).unwrap();
+        host.start_turn(&thread, "short", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         let message = events.iter().find(|e| e["kind"] == "message").unwrap();
         assert_eq!(message["text"], "everything");
@@ -2268,7 +2774,7 @@ for line in sys.stdin:
         host.save(&mut host.inner(), SAVED, true).unwrap();
         let before = std::fs::read_to_string(host.path(&thread).unwrap()).unwrap();
         host.full_prompt(&thread, Some("everything".into()));
-        host.start_turn(&thread, "short", None).unwrap();
+        host.start_turn(&thread, "short", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         assert!(
             events.iter().any(|e| e["kind"] == "turn_failed"),
@@ -2325,7 +2831,7 @@ for line in sys.stdin:
         if let Some(cid) = saved {
             host.save(&mut host.inner(), cid, false).unwrap();
         }
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         (host, thread, events)
     }
@@ -2392,7 +2898,7 @@ for line in sys.stdin:
         ]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         assert!(turn_events(&mut rx)
             .await
             .contains(&json!({"kind": "message", "text": "partial", "final": true})));
@@ -2430,7 +2936,7 @@ for line in sys.stdin:
         let s = rig.settings(&[("ORPHAN", "1".into())]);
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         assert!(turn_events(&mut rx)
             .await
             .iter()
@@ -2453,7 +2959,7 @@ for line in sys.stdin:
             let (host, mut rx) = rig.host();
             let thread = host.start_thread(&s);
             host.save(&mut host.inner(), SAVED, false).unwrap();
-            host.start_turn(&thread, "go on", None).unwrap();
+            host.start_turn(&thread, "go on", None).await.unwrap();
             let events = turn_events(&mut rx).await;
             let failed = events.iter().find(|e| e["kind"] == "turn_failed").unwrap();
             assert_eq!(failed["error"], error);
@@ -2479,7 +2985,7 @@ for line in sys.stdin:
         let (host, mut rx) = rig.host();
         let thread = host.start_thread(&s);
         host.save(&mut host.inner(), SAVED, false).unwrap();
-        host.start_turn(&thread, "hello", None).unwrap();
+        host.start_turn(&thread, "hello", None).await.unwrap();
         let events = turn_events(&mut rx).await;
         assert!(
             events.iter().any(|e| e["kind"] == "turn_completed"),
@@ -2495,7 +3001,7 @@ for line in sys.stdin:
         let s = rig.settings(&[("STUCK", "1".into())]);
         let (host, _rx) = rig.host();
         let thread = host.start_thread(&s);
-        host.start_turn(&thread, "hi", None).unwrap();
+        host.start_turn(&thread, "hi", None).await.unwrap();
         // Its SIGTERM is ignored once it says it is ready, so the stop must escalate.
         let ready = rig.dir.join("args.log.ready");
         let by = std::time::Instant::now() + Duration::from_secs(10);
@@ -2583,5 +3089,284 @@ for line in sys.stdin:
             http,
             json!([{"type": "http", "name": "docs", "url": "https://docs.acme.example/mcp", "headers": []}])
         );
+    }
+
+    /// Whether process `pid` has gone (a stop reaps it at once; a kill is reaped by its owner soon after).
+    async fn gone(pid: i32) -> bool {
+        for _ in 0..100 {
+            if unsafe { libc::kill(pid, 0) } == -1 {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    fn methods(calls: &str) -> Vec<&str> {
+        calls.lines().filter_map(|l| l.split(' ').next()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_threads_next_turn_goes_on_in_the_process_kept_for_it_holding_no_token_between() {
+        let rig = Rig::new();
+        // On a computer with turn limits each attempt names its own scope (execute.rs): not a start input.
+        let scope = crate::turn_limits::SCOPE_ENV;
+        let first = crate::turn_limits::scope_key("attempt-one");
+        let mut s = rig.settings(&[("HUB_TOKEN", "attempt-one".into()), (scope, first.clone())]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", Some("medium"))
+            .await
+            .unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "one", "final": true})));
+        assert!(!host.warm());
+        host.release(true, None).await;
+        // Kept, its token file blank.
+        let file = rig.read(".hub");
+        let file = file.strip_prefix("tico-file:").unwrap();
+        assert_eq!(std::fs::read_to_string(file).unwrap(), "");
+        let pid = rig.pid();
+        // The next attempt's host on the thread: the same process and conversation, with no handshake again; only
+        // the new effort is set, in the live session.
+        s.env.insert("HUB_TOKEN".into(), "attempt-two".into());
+        s.env
+            .insert(scope.into(), crate::turn_limits::scope_key("attempt-two"));
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &s).unwrap();
+        let before = methods(&rig.read(".calls")).len();
+        next.start_turn(&thread, "two", Some("xhigh"))
+            .await
+            .unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "two", "final": true})));
+        assert!(next.warm());
+        assert_eq!(rig.runs().len(), 1, "one process");
+        assert_eq!(
+            methods(&rig.read(".calls"))[before..],
+            ["session/set_config_option", "session/prompt"]
+        );
+        assert!(rig.read(".calls").contains(r#""value": "xhigh""#));
+        assert_eq!(rig.read(".prompts"), "one\ntwo\n", "each prompt once");
+        assert_eq!(rig.read(".tokens"), "attempt-one\nattempt-two\n");
+        // It is still in the first attempt's scope: a memory kill now is this attempt's (turn_limits::oom_failure).
+        assert_eq!(next.scopes(), vec![format!("{first}-{pid}.scope")]);
+        next.release(true, None).await;
+        rig.pool.prune(true).await;
+        assert!(gone(pid).await, "the runner stopping stops it");
+    }
+
+    #[tokio::test]
+    async fn a_kept_process_goes_when_idle_and_another_home_gets_its_own() {
+        let rig = Rig::new();
+        let s = rig.settings(&[]);
+        // Unused for T3's two minutes: stopped (as of then: the keeper's clock is its caller's).
+        let idle = Arc::new(Keeper::new(rig.dir.join("idle"), 4));
+        let (host, mut rx) = rig.host_on(idle.clone());
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true, None).await;
+        let pid = rig.pid();
+        let kept = std::time::Instant::now();
+        idle.prune_at(kept + crate::keeper::IDLE - Duration::from_secs(5), false)
+            .await;
+        assert_eq!(
+            unsafe { libc::kill(pid, 0) },
+            0,
+            "kept within the two minutes"
+        );
+        idle.prune_at(kept + crate::keeper::IDLE, false).await;
+        assert!(gone(pid).await, "evicted once idle");
+        // Another home: a process of its own, the kept one stopped.
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true, None).await;
+        let kept = rig.pid();
+        let mut other = s.clone();
+        other
+            .env
+            .insert("HOME".into(), rig.dir.join("other").display().to_string());
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &other).unwrap();
+        next.start_turn(&thread, "two", None).await.unwrap();
+        turn_events(&mut rx).await;
+        assert!(!next.warm() && gone(kept).await);
+        assert!(rig.runs()[2].contains(&rig.dir.join("other/.gemini").display().to_string()));
+        next.stop().await;
+    }
+
+    #[tokio::test]
+    async fn a_kept_process_that_died_is_replaced_by_one_that_resumes_and_nothing_is_sent_twice() {
+        let rig = Rig::new();
+        let s = rig.settings(&[]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true, None).await;
+        let pid = rig.pid();
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        assert!(gone(pid).await);
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &s).unwrap();
+        next.start_turn(&thread, "two", None).await.unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "two", "final": true})));
+        assert!(!next.warm());
+        next.stop().await;
+        assert_eq!(rig.runs().len(), 2);
+        assert!(rig.read(".calls").contains(&format!(
+            r#"session/resume {{"cwd": "{}", "mcpServers": [], "sessionId": "{SAVED}"}}"#,
+            rig.dir.display()
+        )));
+        assert_eq!(rig.read(".prompts"), "one\ntwo\n");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_is_cancelled_in_agy_and_its_process_kept() {
+        let rig = Rig::new();
+        let s = rig.settings(&[]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "hang", None).await.unwrap();
+        let by = std::time::Instant::now() + Duration::from_secs(10);
+        while !rig.read(".prompts").contains("hang") {
+            assert!(std::time::Instant::now() < by, "the prompt never went");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        host.interrupt().await;
+        let events = turn_events(&mut rx).await;
+        assert!(
+            events.contains(&json!({"kind": "turn_completed", "status": "interrupted"})),
+            "{events:?}"
+        );
+        assert!(rig.read(".calls").contains("session/cancel"));
+        // Nothing runs now, so a second stop leaves it.
+        host.interrupt().await;
+        assert!(host.alive());
+        host.release(true, None).await;
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &s).unwrap();
+        next.start_turn(&thread, "two", None).await.unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .iter()
+            .any(|e| e["kind"] == "turn_completed"));
+        assert!(next.warm() && rig.runs().len() == 1);
+        next.stop().await;
+    }
+
+    #[tokio::test]
+    async fn the_reply_streams_as_agy_sends_it() {
+        let rig = Rig::new();
+        let s = rig.settings(&[]);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "wait", None).await.unwrap();
+        // agy holds the rest of its answer back until told: its first words are passed on before it.
+        let first = loop {
+            let ev = tokio::time::timeout(Duration::from_secs(10), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(
+                ev["kind"] != "message" && ev["kind"] != "turn_completed",
+                "{ev}"
+            );
+            if ev["kind"] == "delta" {
+                break ev;
+            }
+        };
+        assert_eq!(
+            (&first["text"], &first["delta_kind"]),
+            (&json!("early"), &json!("text"))
+        );
+        std::fs::write(rig.dir.join("args.log.go"), "").unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "early late", "final": true})));
+        host.stop().await;
+    }
+
+    /// A turn on the plan `items` hand: its home made and held as a turn's, the settings that run on it, and the home.
+    fn plan_turn(
+        rig: &Rig,
+        items: &Value,
+    ) -> (
+        Settings,
+        Vec<crate::model_subscriptions::Delivered>,
+        PathBuf,
+    ) {
+        use crate::model_subscriptions as subs;
+        let mut env = rig.settings(&[]).env;
+        let mut got = subs::apply(
+            &rig.dir,
+            items,
+            &mut env,
+            &mut vec![],
+            &mut Default::default(),
+        );
+        subs::start(&mut got, "antigravity", &mut env).unwrap();
+        let home = subs::plan_home(&got, "antigravity").unwrap();
+        let settings = Settings {
+            env,
+            plan_home: Some(home.clone()),
+            ..rig.settings(&[])
+        };
+        (settings, got, PathBuf::from(home))
+    }
+
+    #[tokio::test]
+    async fn a_plan_turns_agy_goes_on_for_the_same_plan_and_its_home_goes_with_it() {
+        use crate::model_subscriptions as subs;
+        let rig = Rig::new();
+        let items = json!([{"id": "agyplan", "runtime": "antigravity", "kind": "antigravity_login",
+                            "file": subs::AGY_TOKEN, "revision": 1, "billing": "subscription",
+                            "value": r#"{"token":{"access_token":"ya29.synthetic-plan-token-0123456789"}}"#}]);
+        let (s, mut got, first) = plan_turn(&rig, &items);
+        let (host, mut rx) = rig.host();
+        let thread = host.start_thread(&s);
+        host.start_turn(&thread, "one", None).await.unwrap();
+        turn_events(&mut rx).await;
+        host.release(true, None).await;
+        subs::finish(&mut got);
+        // The turn is over, its process kept: the home and its sign-in stay while it runs.
+        assert!(first.join(subs::AGY_TOKEN).exists());
+        let pid = rig.pid();
+        // The next turn on the same plan, handed a home of its own, goes on in that process.
+        let (s, mut got, second) = plan_turn(&rig, &items);
+        assert_ne!(first, second);
+        let (next, mut rx) = rig.host();
+        next.resume_thread(&thread, &s).unwrap();
+        next.start_turn(&thread, "two", None).await.unwrap();
+        assert!(turn_events(&mut rx)
+            .await
+            .contains(&json!({"kind": "message", "text": "two", "final": true})));
+        assert!(next.warm());
+        assert_eq!(rig.runs().len(), 1, "one process");
+        next.release(true, None).await;
+        subs::finish(&mut got);
+        assert!(!second.exists() && first.join(subs::AGY_TOKEN).exists());
+        // Released after two minutes unused: its home and sign-in go with it.
+        rig.pool
+            .prune_at(std::time::Instant::now() + crate::keeper::IDLE, false)
+            .await;
+        assert!(gone(pid).await);
+        assert!(!first.exists(), "no copy left behind");
+        // A turn no longer handed the plan gets a process of its own.
+        let own = rig.settings(&[]);
+        let (last, mut rx) = rig.host();
+        last.resume_thread(&thread, &own).unwrap();
+        last.start_turn(&thread, "three", None).await.unwrap();
+        turn_events(&mut rx).await;
+        assert!(!last.warm());
+        assert_eq!(rig.runs().len(), 2);
+        last.stop().await;
     }
 }

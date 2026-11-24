@@ -12,7 +12,8 @@
 //!
 //! When the scope is OOM-killed, systemd stops the whole scope (OOMPolicy=stop) and keeps the unit failed with
 //! Result=oom-kill. The turn's attempt id names its scopes (`SCOPE_ENV`), so the drive loop can tell its failed turn
-//! was the limit (`oom_failure`) and say so.
+//! was the limit (`oom_failure`) and say so. A process kept between attempts (pi, Antigravity) stays in the scope of
+//! the attempt that started it, so a later attempt also asks by that process's launch scope (`launch_unit`).
 //!
 //! Anywhere else (a Mac, a Docker runner, a Linux computer that is not a cloud machine, or one whose scope probe
 //! fails) turns run exactly as before. `TICO_TURN_LIMITS=0` turns this off, `=1` turns it on for a non-cloud Linux
@@ -309,6 +310,13 @@ pub fn active() -> bool {
     setup().is_some()
 }
 
+/// The scope unit harness process `pid` was started in, from the environment it was started with (its `SCOPE_ENV`),
+/// or None when that names no scope. A process kept between attempts (crate::warm, hosts/pi.rs Pool) stays in the
+/// scope of the attempt that started it: this names it for a later attempt's `oom_failure`.
+pub fn launch_unit(env: &crate::env::Env, pid: Option<u32>) -> Option<String> {
+    Some(scope_name(Some(env.get(SCOPE_ENV)?), pid?))
+}
+
 /// The cgroup directory of the scope harness process `pid` gets under the stem `stem` (its `SCOPE_ENV`), or None
 /// where this runner does not limit turns. It is there while any process of the scope is left.
 pub fn scope_dir(stem: Option<&str>, pid: u32) -> Option<PathBuf> {
@@ -451,37 +459,55 @@ fn systemctl(s: &Setup, args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// The failure text for attempt `aid` when one of its harness scopes was OOM-killed at its limit, else None. Reads
-/// a live scope's memory.events, then the failed units systemd keeps (and clears them).
-pub async fn oom_failure(aid: &str) -> Option<String> {
+/// The scope units that are attempt `aid`'s, as systemd unit patterns: every scope under its own stem, and the
+/// launch scope of each process it took from an earlier attempt (`kept`, `launch_unit`).
+fn turn_units(aid: &str, kept: &[String]) -> Vec<String> {
+    let mut units = vec![format!("{}-*.scope", scope_key(aid))];
+    for unit in kept {
+        if !units.contains(unit) {
+            units.push(unit.clone());
+        }
+    }
+    units
+}
+
+/// Whether scope `name` is one of `units` (`turn_units`).
+fn is_turn_unit(units: &[String], name: &str) -> bool {
+    name.ends_with(".scope")
+        && units.iter().any(|u| match u.strip_suffix("*.scope") {
+            Some(stem) => name.starts_with(stem),
+            None => name == u.as_str(),
+        })
+}
+
+/// The failure text for attempt `aid` when one of its harness scopes was OOM-killed at its limit, else None. Its
+/// scopes are those under its own stem and `kept`, the launch units of the processes it reused (`launch_unit`).
+/// Reads a live scope's memory.events, then the failed units systemd keeps (and clears them).
+pub async fn oom_failure(aid: &str, kept: &[String]) -> Option<String> {
     let s = setup()?;
-    let stem = format!("{}-", scope_key(aid));
+    let patterns = turn_units(aid, kept);
     let live = std::fs::read_dir(&s.slice).ok().is_some_and(|dir| {
         dir.flatten().any(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
-            name.starts_with(&stem)
-                && name.ends_with(".scope")
+            is_turn_unit(&patterns, &name)
                 && std::fs::read_to_string(e.path().join("memory.events"))
                     .is_ok_and(|t| oom_kills(&t) > 0)
         })
     });
-    let pattern = format!("{stem}*.scope");
     let failed = tokio::task::spawn_blocking(move || {
-        let listed = systemctl(
-            s,
-            &[
-                "list-units",
-                "--all",
-                "--plain",
-                "--no-legend",
-                "--state=failed",
-                &pattern,
-            ],
-        )?;
+        let mut args = vec![
+            "list-units",
+            "--all",
+            "--plain",
+            "--no-legend",
+            "--state=failed",
+        ];
+        args.extend(patterns.iter().map(String::as_str));
+        let listed = systemctl(s, &args)?;
         let units: Vec<String> = listed
             .lines()
             .filter_map(|l| l.split_whitespace().next())
-            .filter(|u| u.starts_with(STEM))
+            .filter(|u| u.starts_with(STEM) && is_turn_unit(&patterns, u))
             .map(String::from)
             .collect();
         let oom = units.iter().any(|u| {
@@ -577,6 +603,28 @@ mod tests {
         assert_eq!(scope_name(Some("other.service"), 42), "tico-turn-42.scope");
         assert_eq!(scope_name(Some("tico-turn-x;rm"), 42), "tico-turn-42.scope");
         assert_eq!(scope_name(None, 7), "tico-turn-7.scope");
+    }
+
+    #[test]
+    fn a_reused_process_is_looked_up_by_the_scope_it_was_started_in() {
+        let mut env = crate::env::Env::new();
+        env.insert(SCOPE_ENV.into(), scope_key("attempt-1"));
+        let kept = launch_unit(&env, Some(4242)).unwrap();
+        assert_eq!(kept, "tico-turn-attempt1-4242.scope");
+        let units = turn_units("attempt-2", std::slice::from_ref(&kept));
+        assert!(
+            is_turn_unit(&units, "tico-turn-attempt2-77.scope"),
+            "its own"
+        );
+        assert!(is_turn_unit(&units, &kept), "the process it reused");
+        // Not another process of the attempt that started it, nor an attempt whose id merely begins the same.
+        assert!(!is_turn_unit(&units, "tico-turn-attempt1-5000.scope"));
+        assert!(!is_turn_unit(&units, "tico-turn-attempt22-1.scope"));
+        assert!(!is_turn_unit(&units, "tico-turn-attempt2-77.service"));
+        // By its own stem alone, a memory kill of the reused process was blamed on nothing.
+        assert!(!is_turn_unit(&turn_units("attempt-2", &[]), &kept));
+        assert_eq!(launch_unit(&crate::env::Env::new(), Some(1)), None);
+        assert_eq!(launch_unit(&env, None), None);
     }
 
     #[test]

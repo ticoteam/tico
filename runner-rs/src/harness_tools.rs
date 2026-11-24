@@ -2604,7 +2604,7 @@ mod tests {
             .collect();
         assert_eq!(steers, vec!["claude-code", "codex", "pi"]);
         assert!(all["pi"].capabilities.persistent_session && all["pi"].capabilities.compaction);
-        // Antigravity is a runtime of its own, run cold, installed by its script from Google's updater.
+        // Antigravity is a runtime of its own, kept between turns, installed by its script from Google's updater.
         let agy = &all["antigravity"];
         assert_eq!(
             (
@@ -2622,7 +2622,7 @@ mod tests {
             sha256_hex(include_bytes!("../harnesses/antigravity-install-v1.sh"))
         );
         assert!(
-            !agy.capabilities.persistent_session
+            agy.capabilities.persistent_session
                 && agy.capabilities.readiness
                 // A plan signs in per turn (model_subscriptions.rs TURN_HOMES); no profile has a home of its own.
                 && !agy.capabilities.subscription_profiles

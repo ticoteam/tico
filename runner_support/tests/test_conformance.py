@@ -228,10 +228,10 @@ def test_a_chat_turn_streams_completes_and_resumes_its_own_thread_only(api, comp
         assert calls[1]["argv"][calls[1]["argv"].index("--resume") + 1] == session
         assert "--resume" not in calls[-1]["argv"] and session not in calls[-1]["argv"]
     elif computer.harness == "antigravity":
-        # Each turn is its own agy: the follow-up resumes the first turn's conversation, another thread begins its own.
-        assert len({c["pid"] for c in calls}) == 3 and calls[0]["resumed"] is None
-        assert calls[1]["resumed"] == calls[0]["conversation"]
-        assert calls[-1]["resumed"] is None
+        # The follow-up goes on in the agy kept for the thread, in its conversation; another thread begins its own.
+        assert calls[0]["resumed"] is None and calls[1]["pid"] == calls[0]["pid"]
+        assert calls[1]["conversation"] == calls[0]["conversation"]
+        assert calls[-1]["pid"] != calls[0]["pid"] and calls[-1]["resumed"] is None
         assert (calls[-1]["model"], calls[-1]["level"]) == ("gemini-4-neon", "high")
     elif computer.harness in ("pi", "cursor"):
         # Pi's session id and Cursor's chat id are the thread: its turns name the first one, another thread its own.
@@ -447,7 +447,8 @@ def test_a_person_clearing_the_chat_starts_a_new_provider_thread_and_without_one
         assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start"]
     elif computer.harness == "antigravity":
         # A new epoch is a new thread: its turn begins a conversation of its own, not a resume of the old.
-        assert calls[1]["resumed"] and calls[-1]["resumed"] is None
+        assert calls[1]["conversation"] == calls[0]["conversation"] != calls[-1]["conversation"]
+        assert calls[-1]["resumed"] is None
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
@@ -535,9 +536,8 @@ def test_a_second_message_resumes_the_session(api, computer):
     tokens = {a["id"]: a for a in computer.attempts()}
     assert [a["result"]["outcome"] for a in tokens.values()] == ["completed", "completed"]
     if computer.harness == "antigravity":
-        # Each turn starts its own agy on the saved conversation, with its own attempt token and its own usage.
-        assert len({c["pid"] for c in calls}) == 2
-        assert calls[1]["resumed"] == calls[0]["conversation"]
+        # The second turn goes on in the agy kept for the thread, reading its own attempt's token, with its own usage.
+        assert calls[1]["pid"] == calls[0]["pid"] and calls[1]["conversation"] == calls[0]["conversation"]
         assert calls[0]["token"] and calls[1]["token"] and calls[0]["token"] != calls[1]["token"]
         assert [a["result"]["usage"]["output_tokens"] for a in tokens.values()] == [2, 2]
         assert "reply with the word ok" not in calls[1]["prompt"] and "and once more" in calls[1]["prompt"]

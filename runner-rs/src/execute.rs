@@ -2273,7 +2273,12 @@ impl Runner {
             }
             if runtime == "antigravity" {
                 let home = self.state.directory.join("agy").join(bot);
-                return Ok(Host::Antigravity(AntigravityHost::new(&home, command, tx)));
+                return Ok(Host::Antigravity(AntigravityHost::new(
+                    &home,
+                    command,
+                    tx,
+                    self.keeper.clone(),
+                )));
             }
             return Ok(Host::Pi(crate::hosts::pi::PiHost::new(
                 bot,
@@ -2306,11 +2311,12 @@ impl Runner {
                 vec!["gemini".into()],
                 tx,
             )),
-            // Its conversation records only: each turn starts its own `agy` (hosts/antigravity.rs).
+            // Its conversation records, and the `agy` kept between the bot's turns (crate::keeper).
             "antigravity" => Host::Antigravity(AntigravityHost::new(
                 &self.state.directory.join("agy").join(bot),
                 vec![crate::harness_tools::executable_for("antigravity")],
                 tx,
+                self.keeper.clone(),
             )),
             "musecode" => Host::MuseCode(crate::hosts::musecode::MuseCodeHost::on_config(
                 bot,
@@ -2492,8 +2498,8 @@ impl Runner {
             && attempt["message"]["refs"]["live_meeting"]["voice_call"].is_string();
         let voice_reply = voice_call || config["voice_requires_subscription"] == true;
         let fresh_chat = voice_call || stateless_chat(&attempt);
-        // A person's own Assistant chat runs in a copy removed when it ends (crate::sessions::PersonalCopy), so no process
-        // is kept for it: one would outlive the folder it works in.
+        // A person's own Assistant chat runs in a copy of its own (crate::sessions::PersonalCopy): only an agy kept for
+        // the room holds it past the turn (below, at release).
         let relationship = crate::sessions::relationship_claim(&attempt);
         let personal_claim = crate::sessions::personal_claim(&attempt) || relationship;
         let personal = personal_claim && !attempt["make_page"]["task"].is_object();
@@ -2725,6 +2731,11 @@ impl Runner {
                 drove.retryable = !why.contains("(not_isolated)");
                 return Err(Fail::runtime(why));
             }
+            if crate::turn_limits::active() {
+                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
+                // Before base_env: a fallback hop's harness is this attempt's too.
+                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
+            }
             base_env = Some(env.clone());
             let turn_identity = vault.for_model(&mut env, model.as_deref(), isolated).map_err(Fail::runtime)?;
             vault.model_exit_environment(&self.state.directory, &mut env).map_err(Fail::runtime)?;
@@ -2947,16 +2958,13 @@ impl Runner {
             } else {
                 self.during_drain(&aid, self.wait_start_place(&attempt, &flags)).await?;
             }
-            if crate::turn_limits::active() {
-                // Names this attempt's harness scopes, so a kill at the limit is told as such (crate::turn_limits).
-                env.insert(crate::turn_limits::SCOPE_ENV.into(), crate::turn_limits::scope_key(&aid));
-            }
             // A relationship turn keeps its Antigravity conversation records with its execution, removed with it.
             let made = if runtime == "antigravity" && relationship {
                 Host::Antigravity(AntigravityHost::new(
                     &execution_path.join(".antigravity"),
                     vec![crate::harness_tools::executable_for("antigravity")],
                     tx,
+                    self.keeper.clone(),
                 ))
             } else {
                 self.make_host(&bot, &runtime, &env, selected.as_ref(), tx)?
@@ -3555,6 +3563,8 @@ impl Runner {
         let mut acked = false;
         // Whether that fallback's start was refused (start_refusal) before it acknowledged the turn.
         let mut start_refused = false;
+        // Whether the last fallback's turn failed: its agy is never kept (below).
+        let mut hop_failed = false;
         while let (Some(hop), true, Some(base)) = (pending.take(), prepared, base_env.clone()) {
             tried.push(crate::fallback::slot(&hop.runtime, &hop.model));
             uses.push(hop.runtime.clone());
@@ -3863,6 +3873,7 @@ impl Runner {
                 Ok(())
             }.await;
             start_refused = matches!(&hopped, Err(e) if !acked && start_refusal(e));
+            hop_failed = hopped.is_err();
             if let Err(e) = hopped {
                 if self.drain.returning(&aid) {
                     // The regular settlement below saves and hands the continuation back.
@@ -4042,11 +4053,38 @@ impl Runner {
                     let _ = h.interrupt(th, t).await;
                 }
             }
-            // A host that keeps its process between turns gives it back below, after a turn that completed; a fresh
-            // stateless chat turn keeps none (crate::continuity::stateless).
-            let keeps = !fresh_chat && !personal && matches!(h, Host::Pi(_));
-            if !keeps || drove.outcome != "completed" {
+            // A host that keeps its process between turns gives it back below, after a turn that completed (Antigravity's
+            // after one a person's Stop or a drain cancelled too, which leaves its process running; never after a
+            // timeout, a lost lease or an error); a fresh stateless chat turn, a relationship turn and a one-off thread
+            // (saved nowhere, so never looked up) keep none (crate::continuity::stateless).
+            // A person's own Assistant chat keeps its agy with a hold on the room's copy, which goes when the keeper lets
+            // the agy go (crate::sessions::PersonalCopy::hold); pi keeps its sessions in the copy, so it keeps none.
+            let copy = if matches!(h, Host::Antigravity(_)) && personal {
+                place.as_ref().and_then(|p| p.hold_copy())
+            } else {
+                None
+            };
+            let keeps = !fresh_chat
+                && match h {
+                    Host::Pi(_) => !personal,
+                    Host::Antigravity(_) => {
+                        !relationship && !one_off && (!personal || copy.is_some())
+                    }
+                    _ => false,
+                };
+            // Never once the lease was lost: a final answer can still come in while the turn is salvaged (drive.rs).
+            let ended = !flags.lost.load(Ordering::SeqCst)
+                && (drove.outcome == "completed"
+                    || (drove.outcome == "interrupted"
+                        && matches!(h, Host::Antigravity(_))
+                        && ran.is_ok()
+                        && !hop_failed));
+            if !keeps || !ended {
                 self.stop_host(h, &aid).await;
+            }
+            if let Host::Antigravity(agy) = h {
+                let held = copy.map(|c| Box::new(c) as crate::keeper::Held);
+                agy.release(keeps && ended, held).await;
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
@@ -4058,13 +4096,7 @@ impl Runner {
                 } else {
                     Default::default()
                 };
-                let back = pi
-                    .release(
-                        drove.outcome == "completed" && !fresh_chat && !personal,
-                        &owner,
-                        held,
-                    )
-                    .await;
+                let back = pi.release(keeps && ended, &owner, held).await;
                 vault.turn_user = vault.turn_user.take().or(back.user);
                 vault.relay = vault.relay.take().or(back.relay);
             }
@@ -7036,6 +7068,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("tico-session-{run}"));
         std::fs::create_dir_all(dir.join("projects/bot-ops")).unwrap(); // the bot's checkout, where its harness starts
         std::fs::write(dir.join("projects/bot-ops/AGENT.md"), "# Ops\n").unwrap();
+        if turns
+            .iter()
+            .any(|(_, _, extra)| extra["attempt"]["personal"] == true)
+        {
+            // A person's own chat runs in a copy of the bot's checkout (crate::sessions::PersonalCopy): a repository.
+            let main = dir.join("projects/bot-ops");
+            repo_git(&main, &["init", "-q"]);
+            repo_git(&main, &["add", "-A"]);
+            repo_git(&main, &["commit", "-qm", "start"]);
+        }
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pi/turn.jsonl");
         HOST_COMMAND.with(|command| {
             *command.borrow_mut() = Some(crate::hosts::pi::testing::fake(&dir, &fixture))
@@ -7193,6 +7235,7 @@ mod tests {
             })
             .unwrap_or_default();
         runner.pi.prune(true).await;
+        runner.keeper.prune(true).await;
         std::fs::remove_dir_all(&dir).ok();
         Ran {
             sessions,
@@ -7667,15 +7710,18 @@ mod tests {
         );
     }
 
-    /// An `agy acp` for execute's tests (argv: this script, its folder). It resumes the conversation it is asked to,
-    /// unless `agy-lose-<n>` is there (then it refuses, and the turn begins a new one). It keeps each prompt as
-    /// `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of its conversations are gone once the turn
-    /// ends (as on a computer that lost them).
+    /// An `agy acp` for execute's tests (argv: this script, its folder), counting turns `<n>` by the prompts it was
+    /// sent. It resumes the conversation it is asked to, unless `agy-lose-<n>` is there (then it refuses, and the turn
+    /// begins a new one). It keeps each prompt as `agy-prompt-<n>`; with `agy-forget-<n>` there, the runner's records of
+    /// its conversations are gone once the runner saved them, before it answers (as on a computer that lost them). With
+    /// `agy-exit-<n>` it exits once it answered, so the next turn starts a new one.
     const FAKE_AGY: &str = r#"#!/usr/bin/env python3
-import json, os, sys, uuid
+import json, os, sys, time, uuid
 folder = sys.argv[1]
-n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
+n = 0
 def flag(name):
+    global n
+    n = len([f for f in os.listdir(folder) if f.startswith("agy-prompt-")])
     return os.path.exists(os.path.join(folder, "%s-%d" % (name, n)))
 def send(m):
     print(json.dumps(m), flush=True)
@@ -7693,28 +7739,51 @@ for line in sys.stdin:
         sid = p.get("sessionId") or str(uuid.uuid4())
         send({"jsonrpc": "2.0", "id": i, "result": {"sessionId": sid}})
     elif method == "session/prompt":
-        open(os.path.join(folder, "agy-prompt-%d" % n), "w").write(p["prompt"][0]["text"])
+        forget, leave = flag("agy-forget"), flag("agy-exit")
+        refresh, crash = flag("agy-refresh"), flag("agy-crash")
+        k = n
+        open(os.path.join(folder, "agy-prompt-%d" % k), "w").write(p["prompt"][0]["text"])
+        if os.path.exists(os.path.join(folder, "agy-litter")):
+            # Where it ran: its pid, its folder and that folder's inode, and whether the last turn's file, local branch
+            # and local git config are still there; then it leaves them.
+            import subprocess
+            def git(*args):
+                return subprocess.run(["git"] + list(args), capture_output=True, text=True).stdout.strip()
+            left = (os.path.exists("litter.txt"), bool(git("branch", "--list", "turn-left")), bool(git("config", "--local", "tico.left")))
+            at = "%d %s %d %s %s %s" % ((os.getpid(), os.getcwd(), os.stat(".").st_ino) + left)
+            open(os.path.join(folder, "agy-at-%d" % k), "w").write(at)
+            open("litter.txt", "w").write("left by a turn")
+            git("branch", "turn-left")
+            git("config", "--local", "tico.left", "yes")
         said = "Done."
-        if flag("agy-refresh"):
+        if refresh:
             # A plan turn's agy refreshes its access token in its sign-in file, then says it (with `agy-crash-<n>`: on
             # its stderr as it fails).
-            fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % n
+            fresh = "ya29.synthetic-refreshed-mid-turn-%d-0123456789" % k
             token = os.path.join(os.environ["GEMINI_HOME"], "antigravity-cli", "antigravity-oauth-token")
             open(token, "w").write(json.dumps({"token": {"access_token": fresh}}))
             said = "Done. " + fresh
-            if flag("agy-crash"):
+            if crash:
                 sys.stderr.write("refresh went wrong with " + fresh + "\n")
                 sys.stderr.flush()
                 sys.exit(3)
         send({"jsonrpc": "2.0", "method": "session/update", "params": {"sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": said}}}})
+        if forget:
+            # The runner saves the conversation once the model worked in it: gone once it is there.
+            records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
+            saved = []
+            for _ in range(500):
+                saved = [os.path.join(r, f) for r, _, fs in os.walk(records) for f in fs if f.endswith(".json")]
+                if saved:
+                    break
+                time.sleep(0.02)
+            for path in saved:
+                os.remove(path)
         send({"jsonrpc": "2.0", "id": i, "result": {"stopReason": "end_turn", "usage": {"inputTokens": 1, "outputTokens": 1}}})
+        if leave:
+            sys.exit(0)
     else:
         send({"jsonrpc": "2.0", "id": i, "result": {}})
-if flag("agy-forget"):
-    records = os.path.join(os.getcwd(), "..", "..", "state", "agy")
-    for root, _, files in os.walk(records):
-        for name in files:
-            os.remove(os.path.join(root, name))
 "#;
 
     fn fake_agy_in(folder: &Path) {
@@ -7726,6 +7795,44 @@ if flag("agy-forget"):
                 vec![fake.display().to_string(), folder.display().to_string()],
             )
         });
+    }
+
+    #[tokio::test]
+    async fn a_persons_own_assistant_chat_keeps_its_agy_and_its_copy_until_the_keeper_lets_it_go() {
+        let folder =
+            std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("agy-litter"), "").unwrap();
+        fake_agy_in(&folder);
+        let agy = json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon",
+                         "attempt": {"personal": true}});
+        let ran = session_turns(
+            false,
+            true,
+            &[("m1", json!({}), agy.clone()), ("m4", json!({}), agy)],
+        )
+        .await;
+        for (n, c) in ran.completions.iter().enumerate() {
+            assert_eq!(c["outcome"], "completed", "turn {n}: {c}");
+        }
+        let at = |n: usize| -> Vec<String> {
+            std::fs::read_to_string(folder.join(format!("agy-at-{n}")))
+                .unwrap()
+                .split(' ')
+                .map(String::from)
+                .collect()
+        };
+        let (first, second) = (at(0), at(1));
+        // One process (warm) in one folder, the room's copy, still there: cloned again in it, so what the first turn
+        // left (a file, a local branch, local git config) is gone.
+        assert_eq!(first[..3], second[..3], "{first:?} {second:?}");
+        assert!(first[1].contains("tico-personal-"), "{first:?}");
+        for at in [&first, &second] {
+            assert_eq!(at[3..], ["False", "False", "False"], "{at:?}");
+        }
+        // The keeper let the agy go (the runner stopped): the copy went with it.
+        assert!(!Path::new(&first[1]).exists(), "{first:?}");
+        let _ = std::fs::remove_dir_all(&folder);
     }
 
     #[tokio::test]
@@ -7836,7 +7943,10 @@ if flag("agy-forget"):
         let folder =
             std::env::temp_dir().join(format!("tico-agy-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&folder).unwrap();
-        std::fs::write(folder.join("agy-lose-1"), "").unwrap();
+        // Turn 0's agy exits after it answered, so turn 1's starts again and must resume.
+        for name in ["agy-exit-0", "agy-lose-1"] {
+            std::fs::write(folder.join(name), "").unwrap();
+        }
         fake_agy_in(&folder);
         let agy =
             json!({"runtime": "antigravity", "harness": "antigravity", "model": "gemini-4-neon"});

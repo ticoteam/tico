@@ -122,6 +122,8 @@ pub struct Runner {
     shutdown: Mutex<Option<Instant>>,
     /// pi processes kept between a thread's turns (hosts/pi.rs Pool).
     pub pi: Arc<crate::hosts::pi::Pool>,
+    /// Harness sessions kept between a thread's turns (crate::keeper): Antigravity's now.
+    pub keeper: Arc<crate::keeper::Keeper>,
     /// What each bot's bot.yaml adds: tools, MCP servers, watchers, memory history (crate::perbot).
     pub perbot: crate::perbot::PerBot,
 }
@@ -236,6 +238,10 @@ impl Runner {
             shutdown: Mutex::new(None),
             pi: Arc::new(crate::hosts::pi::Pool::new(
                 state.directory.join("pi"),
+                capacity.max(8),
+            )),
+            keeper: Arc::new(crate::keeper::Keeper::new(
+                state.directory.join("kept"),
                 capacity.max(8),
             )),
             state,
@@ -1359,6 +1365,15 @@ impl Clock {
 }
 
 impl Runner {
+    /// Kept harness sessions past their time are released every crate::keeper::PRUNE_EVERY, however the claim loop
+    /// backs off.
+    async fn keeper_loop(self: Arc<Self>) {
+        while !self.stopping() {
+            tokio::time::sleep(crate::keeper::PRUNE_EVERY).await;
+            self.keeper.prune_later();
+        }
+    }
+
     pub async fn run(self: Arc<Self>) {
         if let Err(e) = tokio::task::spawn_blocking(crate::turn_users::initialize)
             .await
@@ -1376,6 +1391,8 @@ impl Runner {
             }
             crate::checkout_groups::initialize(&state);
             crate::checkout_groups::gate_workspace(&workspace);
+            // No turn runs yet: a chat's copy a kept session held when the runner stopped goes.
+            crate::sessions::PersonalCopy::sweep(&state);
         })
         .await;
         let names = self.names().await;
@@ -1389,6 +1406,7 @@ impl Runner {
         tokio::spawn(self.clone().probe_loop());
         tokio::spawn(crate::afterwatch::run_loop(self.clone()));
         tokio::spawn(crate::fetch_fresh::run_loop(self.clone()));
+        let keeper_task = tokio::spawn(self.clone().keeper_loop());
         let mut clock = Clock {
             polled: [None; crate::events::CHANNELS.len()],
             next_claim: None,
@@ -1459,7 +1477,11 @@ impl Runner {
         if let Some(m) = maintenance {
             m.abort();
         }
+        // No periodic prune sets off a stop after the last one is joined.
+        keeper_task.abort();
+        let _ = keeper_task.await;
         self.pi.prune(true).await;
+        self.keeper.prune(true).await;
         // Git the runner started for mirrors, checkouts and worktrees goes with it, credential helpers included.
         crate::gitrun::stop_all();
         self.worktrees.settle().await;
