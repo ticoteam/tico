@@ -15,7 +15,8 @@ review below.
 
 The headline number is **input-equivalent tokens per merged PR** from the engineering bots: Builder, Builder 2,
 Reviewer 1, Reviewer 2, Engineering Manager, QA Owner and Release Owner. Per-run numbers alone mislead, because fewer,
-larger runs are the point.
+larger runs are the point. Product owners now build their own features, so read **all-bot tokens per merged PR**
+beside it: the engineering-bot ratio alone falls when work moves to owners.
 
 **Track alongside it:**
 
@@ -122,7 +123,8 @@ Tracked as Tico tasks:
 - Done since Nov 14: **37d4ed7b** (Models Owner, Gateway turns load Tico tools on demand), **729e445c** (Performance
   Owner, the usage-limit fallback resumes its side session). Closed: **c99a4b8c** (UI Owner, read-once rule and
   subagents line in custom bots' AGENTS.md).
-- **28434211** (Performance Owner): owns this page and the weekly review routine.
+- The Performance Owner keeps this page; its routine "Weekly token-efficiency review" runs the review below every
+  Monday (setup task 28434211 is done).
 - **Cache audit:** measure cache writes on back-to-back warm resumes, including an effort change.
 
 ## First post-change read: Nov 14 09:30Z to Nov 15 02:13Z
@@ -187,6 +189,39 @@ window, Nov 14 02:13Z to Nov 16 00:00Z (45.8 h), against the baseline above.
   half of the runs were keep-warm pings (for example 33 of 66 runs on one task).
 - Guard, open-to-merge time of merged PRs (ticoteam/tico): median 1.3 h, p90 26.7 h this week vs 0.7 h and 11.2 h the
   week before, with Builders paused for the last two days. Review rounds and QA bounces are not in the turns feed.
+
+## Week 2 read: Nov 16–23 (Monday 00:00Z to Monday 00:00Z)
+
+The first full week of turns after the changes. The week before holds turns from Nov 12 only, so its totals are not
+compared; the same-source baseline (Nov 13 09:30Z–Nov 14 02:13Z) is.
+
+| | Baseline, Nov 13 09:30Z–Nov 14 02:13Z | Nov 9–16 (turns from Nov 12) | Nov 16–23 |
+|---|---|---|---|
+| All-bot tokens per merged PR | 2.10M (91 PRs) | not valid | **1.01M** (793 PRs) |
+| Engineering-bot tokens per merged PR | 1.52M | not valid | 0.49M (engineering bots 49% of spend, 72% in the baseline) |
+| Input-equivalent tokens per hour / per run | 11.5M / 240k | 4.1M / 246k | 4.8M / 183k |
+| Est. cost per hour | $24 | $9.3 | $11.0 |
+| Cost split: cache reads / writes / output / fresh | 55% / 26% / 13% / 7% | 55% / 26% / 14% / 5% | 48% / 35% / 14% / 3% |
+| Context per call, median / p90 | 89k / 213k | 77k / 179k | 68k / 154k |
+| New sessions | 68% of runs | 54% | 48% |
+| Did nothing | 12.0% of runs, 7.1% of spend | 5.3%, 3.1% | 6.0%, 7.1% |
+| Fallback runs | 272 | 286 | 0 |
+| Runs over compact limit +10% | 15 | 33 (all before Nov 14) | 0 (max 266k) |
+| Model mix | Opus 82% | Opus 94% | Opus 88%, Gateway and ChatGPT 11%, Haiku 1% |
+
+- **Holding:** compaction, warm resumes within the hour (median write 10.5k vs 18.8k, n=804), fallback, reviews
+  from the diff (Reviewer context median 102k, 269k per run vs 97k and 294k).
+- **Cache writes rose to 35%** because keep warm stopped on Nov 16 at 12:46Z: 218 resumes after 1–8 h idle wrote a
+  median 91k and 163 after more than 8 h wrote 79k. This is the expected cost of removing it; no change proposed.
+- **Did nothing is over 5%** of runs and spend. Most of it is runs cut off before acting (computer lost, drain pauses,
+  handed back), concentrated on Nov 18, plus reviewer passes that write nothing. Watched next week.
+- **Costliest tasks** are Product and Engineering tasks run end to end in one session (12.4M at most, 55 runs); on
+  Nov 16 a quarter to a third of their runs were the last keep-warm pings. No task looped on PR checks (6 wakes at
+  most) or fallbacks.
+- Builders had no turns all week, so Builder context is not read; the Engineering Manager (145M) and the reviewers
+  (93M, 78M) were the costliest bots.
+- Guard, open-to-merge time of merged PRs (ticoteam/tico): median 0.5 h, p90 5.8 h vs 1.3 h and 26.7 h the week
+  before. Review rounds and QA bounces are not in the turns feed.
 
 ## Weekly review (Performance Owner)
 
