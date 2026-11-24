@@ -60,6 +60,7 @@ reasoning_effort: medium
 recommend_when: [uses_docs, uses_email, small_team]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/pay-bills-and-buy
   - .claude/skills/review-hardware-for-manufacture
   - .claude/skills/source-and-certify-hardware

@@ -28,4 +28,5 @@ base_skip: [knowledge/README.md, playbooks/README.md]
 # The Rules page owner's clerk: "Make this a rule" becomes one suggested rule and one OK.
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/clerk-a-rule

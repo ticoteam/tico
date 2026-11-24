@@ -22,4 +22,5 @@ reasoning_effort: high
 recommend_when: [always]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/fill-a-role

@@ -57,3 +57,4 @@ reasoning_effort: medium
 recommend_when: [onsite_jobs, sells_to_consumers, small_team]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up

@@ -26,3 +26,4 @@ reasoning_effort: medium
 recommend_when: [always]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up

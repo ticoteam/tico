@@ -59,5 +59,6 @@ reasoning_effort: medium
 recommend_when: [uses_crm, has_pipeline, sells_to_businesses]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/run-a-sales-deal
   - .claude/skills/set-and-test-prices

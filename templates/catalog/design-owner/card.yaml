@@ -58,4 +58,5 @@ reasoning_effort: medium
 recommend_when: [publishes_content, sells_to_consumers, sells_to_businesses]
 shared_files:
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
   - .claude/skills/build-the-brand-guide

@@ -59,3 +59,4 @@ shared_files:
   - .claude/skills/brainstorm-a-feature
   - .claude/skills/learn-from-customers
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up

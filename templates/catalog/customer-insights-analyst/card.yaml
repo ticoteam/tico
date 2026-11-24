@@ -64,3 +64,4 @@ when: "A team whose customers talk in many places and whose product team hears l
 shared_files:
   - .claude/skills/learn-from-customers
   - .claude/skills/build-the-page
+  - .claude/skills/catch-up
