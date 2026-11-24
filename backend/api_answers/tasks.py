@@ -10,7 +10,7 @@ from pydantic import Field
 from ..hubdb import LinkKind
 from ..task_documents import NAMES as DOCUMENT_NAMES
 from ._base import DateTime, answer
-from .conversations import Message, MessageSource, ReviewAnswer, SentAs, TaskReviewAskView
+from .conversations import Message, MessageSource, PostWarning, ReviewAnswer, SentAs, TaskReviewAskView
 from .pages import PageLinkView, PageWriter
 from .risk import Matter
 from .tags import Tag
@@ -727,6 +727,7 @@ class CommentResult(TypedDict):
     held: NotRequired[str]
     goal: NotRequired[dict[str, Any]]
     sent_as: NotRequired[SentAs]
+    warnings: NotRequired[list[PostWarning]]
 
 
 @answer

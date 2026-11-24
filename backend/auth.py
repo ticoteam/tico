@@ -358,6 +358,12 @@ def as_of_assignee(visible_sql, assignee):
     return _ASSIGNEE_CLAUSE.sub(lambda found: "1" if found.group(1) == mine else "0", visible_sql)
 
 
+def no_write(slug):
+    """The words for a teammate who may see a bot but not send it requests: the 403 of every send, and the warning on an
+    @mention that reaches no agent for it (threads.mentions)."""
+    return f"You can see {slug} but not send it requests. Ask the person who runs it for Write access."
+
+
 class Auth:
     def __init__(self, store):
         self.store = store
@@ -1070,7 +1076,7 @@ class Auth:
                 "forbidden",
                 {
                     "read": f"You can see {slug} but not read its activity. Ask the person who runs it for Read access.",
-                    "write": f"You can see {slug} but not send it requests. Ask the person who runs it for Write access.",
+                    "write": no_write(slug),
                 }[level],
                 403,
             )

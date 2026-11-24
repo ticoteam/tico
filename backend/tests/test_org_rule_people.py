@@ -737,3 +737,27 @@ def test_a_message_to_an_agent_in_a_tasks_thread_is_its_session_message(ruled):
     assert sql(api, "SELECT session_agent_id FROM messages WHERE id=?", (sent["id"],)) == [
         {"session_agent_id": "bot:ops"}
     ]
+
+
+def test_a_sub_threads_first_message_to_an_agent_without_write_is_refused_before_any_hold(ruled):
+    """A rule would hold Cara's post; it is `to` Finance, which she may not send requests to: the 403 comes first, so
+    no hold is made for a post that could never be sent."""
+    from backend.tests.helpers.api import restrict
+
+    api, judge = ruled
+    block_everyone(api)
+    judge.needles[COLOR] = "gold"
+    thread = new_thread(api, "Totals", members=("human:cara", "bot:finance"))["id"]
+    first = say(api, thread, "The totals are in.")
+    with api.app.state.store.transaction() as c:
+        restrict(
+            c, "finance", see={"people": ["ana", "cara"]}, read={"people": ["ana", "cara"]}, write={"people": ["ana"]}
+        )
+    r = api.post(
+        f"/api/v2/threads/{thread}/messages",
+        json={"text": "Our favorite color is gold.", "to": "bot:finance", "parent_message_id": first["id"]},
+        headers=headers("cara-test"),
+    )
+    assert r.status_code == 403 and "Write access" in r.text, r.text
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM org_rule_holds").fetchone()[0] == 0

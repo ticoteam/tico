@@ -1527,6 +1527,8 @@ def install(app, store, auth, mutate, rule_check):
                 return posted
             message = _thread_message(H.message(c, posted["id"]))
             assert message is not None  # the message just posted
+            if posted.get("warnings"):
+                message["warnings"] = posted["warnings"]  # the reload keeps what the post told its writer
             message["reply_to"] = threads.reply_quotes(c, v, [message]).get(message["id"])
             if way:
                 message = {**message, "sent_as": _sent_as(c, way, posted)}
@@ -1648,6 +1650,7 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
                 )
         from .chat_goals import current as current_chat_goal
 
+        said = message.get("warnings")  # what the send told its writer, kept across the reloads below
         goal = current_chat_goal(c, message["conversation_id"])
         # Added to the stored references, so the marks H.say set (a bot_to_bot hold, quiet) stay (Dev 328).
         if goal and goal["status"] == "active":
@@ -1668,6 +1671,8 @@ def message_sender(app, auth, may_reference, routed_message, visual_view):
             message = {**visual_view(c, who, [H.message(c, message["id"])])[0], "visuals": report}
         if (goal and goal["status"] == "active") or body.attachments:
             H.held_queue_recheck(c, message["id"])
+            if said:
+                message = {**message, "warnings": said}
         # An onboarding bot starts only a person's message or its manager's; anyone else's waits for it to be Active.
         if note := (
             H.held_note(c, to)
