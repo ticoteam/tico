@@ -669,7 +669,14 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
     from .counsel import is_counsel
 
     plain = is_counsel(who)
-    from .files import prime_page_references, prime_visible, readable_page_refs, restricted_page_rows, version_refusal
+    from .files import (
+        page_identities,
+        prime_page_references,
+        prime_visible,
+        readable_page_refs,
+        restricted_page_rows,
+        version_refusal,
+    )
 
     prime_page_references(c, [message for message in messages if message])
     # Every file and version these messages name, read together: a page of history is one query per table, not
@@ -685,6 +692,9 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None, later=N
     if rows:
         restricted_page_rows(c, sorted(rows))  # kept for this snapshot: each attachment's check below reads it
         prime_visible(c, [row for row in rows.values() if row])
+    # The pages each version's bytes belong to, for its blob check (version_refusal, page_blob_visible): one batch.
+    if blobs := sorted({v["blob_id"] for v in versions.values() if v and v["blob_id"]}):
+        page_identities(c, blobs)
     waiting = []
     for message in messages:
         if message:

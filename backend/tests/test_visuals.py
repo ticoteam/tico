@@ -14,7 +14,7 @@ from backend.tests.helpers.files import publish, turn
 from backend.tests.helpers.events import live  # noqa: F401  (fixture)
 from backend.tests.helpers.visuals import PNG, VISUALS, bot_reply, media_settled, task_with_file, visual_on_task, wav
 
-PER_PAGE = 99  # statements one more page attachment may add to a timeline read (its read check)
+PER_PAGE = 1  # statements one more page attachment may add to a timeline read: its checks read what was batched
 DOT = "data:image/png;base64," + base64.b64encode(PNG).decode()
 
 
@@ -85,7 +85,7 @@ def test_thread_history_and_the_file_info_carry_a_pages_address_for_a_reader_who
 def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api, monkeypatch):
     """The timeline decorates every visual on a page of messages (up to 50): its files, versions and page audiences
     are read one query per table, not one each per attachment (review of #5198: 50 page attachments took ~766
-    statements). What is left per attachment is its own read check, a few statements."""
+    statements). Each attachment's read check then answers from what was read."""
     _, attempt = turn(api)
     seen, real = [], V.decorate
 
@@ -101,6 +101,7 @@ def test_a_page_of_history_reads_its_files_together_not_once_per_attachment(api,
         "SELECT * FROM bot_files WHERE id=",
         "SELECT * FROM bot_file_versions WHERE file_id=",
         "SELECT audience FROM pages",
+        "SELECT f.id,f.id FROM bot_files f JOIN pages p",  # the pages a version's blob belongs to
     )
     counts, conversation = [], None
     for done, total in ((0, 2), (2, 12)):
