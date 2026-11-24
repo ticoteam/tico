@@ -137,6 +137,13 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 "into): only the tasks for it. One you cannot see is refused (422 entity)",
                 "assignee": "Who the tasks are for (a person or a bot; `me` is the caller), which a stage move does not "
                 "change, where owner is who has it now. Empty, or one that names nobody, answers 422",
+                "sort": "queue (the default: each owner's queue), finished (most recently finished first), or "
+                "priority, with stage: the stage's tasks in the reader's order from Tico (POST "
+                "/api/v2/stages/{stage_id}/sort), each task that order does not hold placed by a quick rule: the "
+                "reader's own (they have it) first, then due within two days, above it; the rest below it, newest "
+                "first. A priority read is whole, one answer of up to `limit` (500) rows with `truncated: true` past "
+                "them, never paged (not with after, offset or changed_after: 422), and adds `sorting` and "
+                "`sorting_until`",
                 "claimable": "The person's team work and public Support work with no assignee or an off assignee. "
                 "Use a full read because team membership and availability can change independently of tasks",
             },
@@ -203,8 +210,15 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("limit", "limit is between 1 and 500", 422)
             if offset < 0:
                 raise Problem("offset", "offset is zero or greater", 422)
-            if sort not in ("queue", "finished"):
-                raise Problem("sort", "sort is queue or finished", 422)
+            if sort not in ("queue", "finished", "priority"):
+                raise Problem("sort", "sort is queue, finished or priority", 422)
+            if sort == "priority" and stage is None:
+                raise Problem("sort", "sort=priority is a stage's order: pass stage", 422)
+            if sort == "priority" and (changed_after is not None or after is not None or offset):
+                # One answer holds the whole order: a page or a delta of it could skip or repeat a row it moved.
+                raise Problem("sort", "sort=priority is read whole: not with after, offset or changed_after", 422)
+            # Priority is ordered here, in Python (backend/stage_order.py), over the rows the queue order selects.
+            order = "queue" if sort == "priority" else sort
             if counts not in (None, "stage"):
                 raise Problem("counts", "counts is stage", 422)
             if counts and changed_after is not None:
@@ -237,7 +251,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 typed, found = task_idents(c, who, ids, visible_sql)
                 if changed_after is not None:
                     raise Problem("ids", "ids and changed_after are separate reads", 422)
-            filters.update(order=sort, visible_sql=visible_sql, q=q)
+            filters.update(order=order, visible_sql=visible_sql, q=q)
             if typed is not None:
                 filters["ids"] = [tid for tid in found.values() if tid]
             narrow = narrowing(c, pipeline, stage, pushed_past)
@@ -294,7 +308,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                     owner=owner,
                     requester=requester,
                     limit=None,
-                    order=sort,
+                    order=order,
                     visible=f"({visible_sql}) AND ({narrow})" if narrow else visible_sql,
                     keys_only=True,
                     **kw,
@@ -359,8 +373,16 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 kept = matched()
                 if kept is not None:
                     filters["ids"] = [t for t in filters["ids"] if t in set(kept)] if "ids" in filters else kept
-                rows, last = visible_tasks(c, who, owner, requester, limit=limit, offset=offset, keyset=True, **filters)
-                next_offset = offset + limit if last is not None else None
+                sorting = None
+                if sort == "priority":
+                    stage_id = stage_row(c, pipeline, stage)["id"]
+                    rows, sorting = priority_list(c, who, owner, requester, stage_id, filters, limit)
+                    last = next_offset = None
+                else:
+                    rows, last = visible_tasks(
+                        c, who, owner, requester, limit=limit, offset=offset, keyset=True, **filters
+                    )
+                    next_offset = offset + limit if last is not None else None
                 next_after = keyset_token(last) if last is not None else None
                 brief_rows(rows)
                 # The same call as the rows' with the same filters, grouped: the counts and the list cannot select
@@ -377,7 +399,13 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 # The validator is the answer itself and the reader's access. A change this reader cannot read (a
                 # hidden ticket, another team's) leaves it as it was, so it sends no new ETag for identical data.
                 tag = reads.etag(
-                    "tasks", rows, next_offset, next_after, *reader, *([tallies] if tallies is not None else [])
+                    "tasks",
+                    rows,
+                    next_offset,
+                    next_after,
+                    *reader,
+                    *([tallies] if tallies is not None else []),
+                    *([sorting] if sorting is not None else []),
                 )
                 if reads.fresh(request, tag):
                     return reads.not_modified(tag)
@@ -390,6 +418,8 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 }
                 if tallies is not None:
                     result["counts"] = tallies
+                if sorting is not None:
+                    result.update(sorting)
                 if typed is not None:
                     # What was asked for and is not here: unknown, ambiguous, outside the filters or not readable.
                     returned = {row["id"] for row in rows}
@@ -445,6 +475,44 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
             raise Problem("after", "after is a page's next_after, in the same sort", 422)
         return key
 
+    def stage_row(c, pipeline, stage):
+        """The list's stage (its rowid and id), by id, or by its name within `pipeline`; 422 `stage` for none."""
+        found = c.execute("SELECT rowid, id FROM stages WHERE id=?", (stage,)).fetchone()
+        if not found and pipeline is not None:
+            # A stage by its name within the pipeline, as a move takes it (`tico task move <id> Slipping`): a bot
+            # that lists "Watching" by name is not refused (Initech, Nov 11).
+            found = c.execute(
+                "SELECT rowid, id FROM stages WHERE pipeline_id=? AND lower(name)=lower(?) AND retired_at IS NULL",
+                (pipeline, str(stage).strip()),
+            ).fetchone()
+        if not found:
+            raise Problem(
+                "stage",
+                "No such stage in this pipeline"
+                if pipeline is not None
+                else "No such stage. Give its id, or its name with the pipeline",
+                422,
+            )
+        return found
+
+    def priority_list(c, who, owner, requester, stage_id, filters, limit):
+        """A stage's list in the reader's priority order (backend/stage_order.py), whole in one answer: every row the
+        filters select, by id, arranged by the reader's saved order (the person's own only: a delegated read, an
+        agent's or a view's has none, and gets the quick rule) and the quick rule, then its first `limit` rows (at most
+        500, as a pipeline page). (rows, {sorting, sorting_until, truncated when rows were left out})."""
+        from . import needs_order, stage_order
+
+        selected = visible_tasks(c, who, owner, requester, ids_only=True, **filters)
+        held = stage_order.saved(c, who, stage_id) if needs_order.person_of(who) else None
+        ordered = stage_order.arrange(c, str(who.actor), selected, held)
+        page = ordered[:limit]
+        found = visible_tasks(c, who, owner, requester, limit=len(page), **{**filters, "ids": page})[0] if page else []
+        by_id = {row["id"]: row for row in found}
+        state = needs_order.state(held)
+        if len(ordered) > len(page):
+            state["truncated"] = True
+        return [by_id[t] for t in page if t in by_id], state
+
     def narrowing(c, pipeline, stage, pushed_past):
         """The list's pipeline, stage and pushed-past filters as one WHERE fragment over the task's own columns, or
         None. A pipeline or stage is matched by its rowid, so nothing a caller typed is ever part of the SQL."""
@@ -455,23 +523,7 @@ def register(app, auth, mutate, rule_check, rule_target, store, task_filters, ta
                 raise Problem("pipeline", "No such pipeline", 422)
             parts.append(f"pipeline_id=(SELECT id FROM pipelines WHERE rowid={int(found[0])})")
         if stage is not None:
-            found = c.execute("SELECT rowid FROM stages WHERE id=?", (stage,)).fetchone()
-            if not found and pipeline is not None:
-                # A stage by its name within the pipeline, as a move takes it (`tico task move <id> Slipping`): a bot
-                # that lists "Watching" by name is not refused (Initech, Nov 11).
-                found = c.execute(
-                    "SELECT rowid FROM stages WHERE pipeline_id=? AND lower(name)=lower(?) AND retired_at IS NULL",
-                    (pipeline, str(stage).strip()),
-                ).fetchone()
-            if not found:
-                raise Problem(
-                    "stage",
-                    "No such stage in this pipeline"
-                    if pipeline is not None
-                    else "No such stage. Give its id, or its name with the pipeline",
-                    422,
-                )
-            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(found[0])})")
+            parts.append(f"stage_id=(SELECT id FROM stages WHERE rowid={int(stage_row(c, pipeline, stage)['rowid'])})")
         if pushed_past is not None:
             parts.append(
                 ("" if pushed_past else "NOT ")
@@ -960,6 +1012,7 @@ def readers(auth):
         narrow=None,
         keyset=False,
         per_stage=False,
+        ids_only=False,
         **more,
     ):
         """A page of the tasks `who` may read. `narrow` is a further WHERE fragment over the task's own columns (a
@@ -967,7 +1020,8 @@ def readers(auth):
         rows are still read with the reader's own visibility. With `keyset`, the second value is the last row's sort
         key when there is more (the next page's `after`), not an offset. With `per_stage`, the answer is instead
         {stage_id: count} of every task the same filters select, across all pages, from one grouped read
-        (H.tasks per_stage): a list's counts go through here so they never select differently from its rows."""
+        (H.tasks per_stage): a list's counts go through here so they never select differently from its rows. With
+        `ids_only`, the ids of every task they select, in queue order (a priority list's, ordered in Python)."""
         auth.domain(who)
         visible_sql = visible_sql or auth.task_sql(c, who)
         selection: dict[str, Any] = dict(
@@ -982,6 +1036,8 @@ def readers(auth):
         )
         if per_stage:
             return H.tasks(c, per_stage=True, **selection)
+        if ids_only:
+            return [row[0] for row in H.tasks(c, limit=None, keys_only=True, **selection)]
         rows = H.tasks(c, limit=limit + 1, offset=offset, **selection)
         page, has_more = rows[:limit], len(rows) > limit
         if keyset:

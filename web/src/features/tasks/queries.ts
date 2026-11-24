@@ -868,6 +868,44 @@ export function useNeedsYouSort(flow: Flow | undefined): boolean {
   return !!until && over !== until;
 }
 
+/** A stage's list read by priority (`GET /api/v2/tasks?stage=<id>&sort=priority`, backend/stage_order.py): its key's
+    params hold `stage` and `sort: 'priority'`, which this prefix matches, so a sort that lands (a `setup` event, area
+    `stage_order`, live/patch.ts) or starts reads it again. */
+export const stagePriorityKey = (stage: string) => keys.tasks.list({ stage, sort: 'priority' });
+
+/** The list's ask for Tico to sort the stage when it is due (`POST /api/v2/stages/{id}/sort` with the ids it shows),
+    once as it opens and again when the set of what it shows changes. Its own key, so no other read asks. */
+const stageSortQuery = (stage: string, set: string) => queryOptions({
+  queryKey: ['stage-sort', stage, set] as const,
+  queryFn: async ({ signal }) => {
+    const r = await api.post<NeedsYouSort>(`/api/v2/stages/${encodeURIComponent(stage)}/sort`, { ids: set ? set.split(',') : [] }, { signal });
+    if (r.sorting) void queryClient.invalidateQueries({ queryKey: stagePriorityKey(stage) });
+    return r;
+  },
+  staleTime: Infinity,
+  gcTime: 0,
+});
+
+/** For a stage list shown by priority (`stage` null when it is not): asks for the sort, and whether Tico is sorting it
+    now, from the list's newest read (`sorting`, `sorting_until`). One timer at `sorting_until` shows it live again and
+    reads it again, so a sort whose server went away ends there. Wiring note: the live task patcher appends new tasks to
+    list caches; a priority list must read again instead (it is read whole: no next page, no changed_after). */
+export function useStageSort(stage: string | null, page: { tasks: { id: string }[]; sorting?: boolean; sorting_until?: string | null } | undefined): boolean {
+  const set = stage && page ? page.tasks.map((t) => t.id).filter((id) => !id.startsWith('tmp:')).sort().join(',') : '';
+  useQuery({ ...stageSortQuery(stage ?? '', set), enabled: !!stage && set.includes(',') }); // one task has one order
+  const [over, end] = useState<string | null>(null);
+  const until = stage && page?.sorting ? page.sorting_until ?? null : null;
+  useEffect(() => {
+    if (!until || !stage) return;
+    const timer = setTimeout(() => {
+      end(until);
+      void queryClient.invalidateQueries({ queryKey: stagePriorityKey(stage) });
+    }, Math.max(0, Date.parse(until) - Date.now()));
+    return () => clearTimeout(timer);
+  }, [until, stage]);
+  return !!until && over !== until;
+}
+
 /** A ❓ item as its task's row carries it. */
 const questionOf = (it: NeedsYouItem): FlowQuestion => ({
   id: it.id,

@@ -644,6 +644,8 @@ KEEP = (
             "ask_snoozes",
             # Tico's order of each person's Needs you (backend/needs_order.py): kept with its tasks.
             "needs_you_orders",
+            # Tico's order of a stage's tasks for each person (backend/stage_order.py): kept with its tasks.
+            "stage_orders",
             # Flow's suggested rules (removed): the old rows, read by nothing, kept with their pipelines.
             "flow_suggestions",
             "flow_suggestion_runs",
