@@ -295,8 +295,6 @@ def prepare(
         raise Problem("route", PRIVATE_REFUSAL, 422)  # a private Support makes every task in it private
     parent: Row | None = H.task(conn, parent_id) if parent_id else None
     task_privacy: Any = _task_privacy  # untyped module
-    if parent and H.task_private(conn, parent):
-        raise Problem("route", PRIVATE_REFUSAL, 422)  # its owner would read the private task above it
     if getattr(body, "from_private", False):  # older clients' name for `private: false` (app.task_create)
         body = body.model_copy(update={"private": False, "from_private": False})
     if task_privacy.new_task(conn, who, body, None, parent, actual_bot)[1]:

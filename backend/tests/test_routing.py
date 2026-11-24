@@ -164,16 +164,19 @@ def test_help_older_than_two_days_does_not_count(app, time_machine):
     assert _held(app, _route(app, entity=acme))[0] == "human:ben"
 
 
-def test_private_work_is_not_routed(app):
+def test_private_work_is_not_routed_but_work_under_a_private_task_is(app):
     bot(app, "ops")
     refused = _route(app, token="ops-test", expected=422, private=True, readers=["human:ana"])
     assert "Private tasks aren't routed" in json.dumps(refused)
-    made = post(app, "tasks", {"title": "Contract review for Acme", "owner": "ben", "private": True})
-    parent = (made.get("task") or made)["id"]
-    under = _route(app, expected=422, parent=parent, private=False)  # its owner would read the private parent
-    assert "Private tasks aren't routed" in json.dumps(under)
     with _db(app) as c:
         assert not c.execute("SELECT 1 FROM pipelines WHERE preset='support'").fetchone()  # nothing was made
+    # A routed task under a private task follows the one create rule (hubdb.new_task_private): not private, routed.
+    made = post(app, "tasks", {"title": "Contract review for Acme", "owner": "ben", "private": True})
+    parent = (made.get("task") or made)["id"]
+    under = _route(app, parent=parent)
+    with _db(app) as c:
+        assert not H.task_private(c, H.task(c, under))
+        assert H.task_private(c, H.task(c, parent))
 
 
 def test_a_stage_rule_that_holds_the_person_out_files_nothing(app):

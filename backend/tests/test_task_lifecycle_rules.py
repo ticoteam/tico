@@ -93,16 +93,21 @@ def test_the_caller_says_when_a_person_moves_tasks(c):
 
 
 # ----------------------------------------------------------------------------- private parent
-def test_making_a_parent_private_takes_every_task_below_it(c):
+def test_making_a_parent_private_leaves_the_tasks_below_it_as_they_are(c):
+    """Privacy does not spread on an edit: the parent goes private, its sub-tasks keep their own privacy, and a private
+    sub-task under a private parent can still be published by its person requester."""
     parent = _make(c, ANA, "Plan the board pack", CMO)
     child = _make(c, CMO, "Collect the revenue numbers", SEO, parent_id=parent["id"])
     grandchild = _make(c, SEO, "Export the revenue table", LEGAL, parent_id=child["id"])
     H.task_update(c, ANA, parent["id"], private=True)
+    assert H.task_private(c, H.task(c, parent["id"]))
     for tid in (child["id"], grandchild["id"]):
         row = H.task(c, tid)
-        assert H.task_private(c, row)
-        assert row["visibility"] == "private"
-        assert not H.task_private_readable(c, BEN, row)
+        assert not H.task_private(c, row)
+        assert H.task_private_readable(c, BEN, row)
+    private_child = _make(c, ANA, "Draft the board letter", CMO, parent_id=parent["id"], private=True)
+    H.task_update(c, ANA, private_child["id"], private=False)
+    assert not H.task_private(c, H.task(c, private_child["id"]))
 
 
 def test_the_bot_owning_a_private_parent_hears_its_subtasks_finished(c):

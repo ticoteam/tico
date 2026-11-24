@@ -145,8 +145,9 @@ def test_a_private_parent_gives_no_ancestry_bypass_and_its_private_sub_task_stay
     get(api, 'tasks/' + child['id'], expected=404)
     detail = get(api, 'tasks/' + parent['id'])
     assert not detail['children'] and detail['task']['parts']['total'] == 0
-    # Under a private parent it cannot be published (task_update: detach it first).
-    post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test', expected=422)
+    # Its requester may publish it under the private parent: privacy does not spread, and the parent stays hidden.
+    published = post(api, 'tasks/' + child['id'], {'version': child['version'], 'private': False}, token='ben-test')
+    assert (published.get('task') or published)['private'] is False
 
 
 def test_cached_comment_response_cannot_bypass_reassignment(api):

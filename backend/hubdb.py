@@ -4242,8 +4242,9 @@ CHECK_MODEL_SQL = (
 
 
 def _made_private(conn, actor, task_id):
-    """A company-visible task goes private because the task above it is: the flag, its record, and the follow-ups. Never
-    one the shared Assistant owns or reads (refuse_shared_assistant)."""
+    """A company-visible task goes private (its new owner's private default, a private pipeline it comes back into):
+    the flag, its record, and the follow-ups. Never one the shared Assistant owns or reads (refuse_shared_assistant).
+    The tasks under it keep their own privacy."""
     row = task(conn, task_id) or {}
     refuse_shared_assistant(conn, actor, *task_parties(row), task=task_id)
     conn.execute("UPDATE tasks SET private=1,visibility='private' WHERE id=?", (task_id,))
@@ -5539,10 +5540,7 @@ def task_update(
             refuse(conn, actor, "private", "Only the requester, assignee or their managers can change task privacy")
         if not private and (actor != row["requester_id"] or not is_human(actor) or VIA.get()):
             refuse(conn, actor, "private", "Only the human requester can publish a private task")
-        parent = task(conn, TR.parent_of(conn, task_id) or "")
-        if not private and parent:
-            if task_private(conn, parent):
-                refuse(conn, actor, "private", "Detach this task from its private parent before publishing")
+        # A private parent does not keep it private: privacy does not spread (new_task_private).
         from . import private_pipelines
 
         if not private and private_pipelines.of_task(conn, task_id):
@@ -5801,12 +5799,6 @@ def task_update(
         after = isolate_private_task(conn, task(conn, task_id) or row)
         if private is not None or task_private(conn, after) != task_private(conn, row):
             conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
-        if task_private(conn, after) and not task_private(conn, row):
-            # A task under a private parent is private: every task below this one goes private with it, or a
-            # colleague could read a sub-task of a parent they cannot see.
-            for below in descendants(conn, task_id):
-                if not task_private(conn, below):
-                    _made_private(conn, actor, below["id"])
         if note is not None and note != row.get("note") and not quiet and status is None:
             _mirror_task_note(conn, actor, after, note)
         recount(conn, [after["owner_id"], after["requester_id"]])

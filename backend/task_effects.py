@@ -415,15 +415,9 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
     old, new = before.get("owner_id"), after.get("owner_id")
     from . import question_marks, reconnects, task_run_models
 
-    made_private = bool(new and H.private_tasks_default(conn, new) and not H.task_private(conn, before))
-    closed_to: list[str] = []  # the tasks under it this change makes private
-    if made_private:
-        # A bot whose tasks are private by default: this one is now, and every task under it with it.
+    if new and H.private_tasks_default(conn, new) and not H.task_private(conn, before):
+        # A bot whose tasks are private by default: this one is now. The tasks under it keep their own privacy.
         H._made_private(conn, actor, task_id)
-        for below in H.descendants(conn, task_id):
-            if not H.task_private(conn, below):
-                H._made_private(conn, actor, below["id"])
-                closed_to.append(str(below["id"]))
     # Rights lent on the task were lent by the owner it had.
     conn.execute("DELETE FROM task_delegations WHERE task_id=?", (task_id,))
     if H.is_bot(old):
@@ -447,9 +441,8 @@ def _follow_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: st
     reconnects_: Any = reconnects
     reconnects_.moved(conn, task_id, "owner", old, new)
     # Last, once the owner, the assignee and the privacy are all as they will be: a person who can no longer read the
-    # task, or a task under it this made private, has their open ❓ there cleared, and the agent that asked is woken.
-    for tid in (task_id, *closed_to):
-        question_marks.clear_gone(conn, tid)
+    # task has their open ❓ there cleared, and the agent that asked is woken.
+    question_marks.clear_gone(conn, task_id)
 
 
 def _publish_owner(conn: "sqlite3.Connection", before: Row, after: Row, actor: str, revision: str | None) -> None:

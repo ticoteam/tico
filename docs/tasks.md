@@ -574,7 +574,9 @@ a private task of its own, of the inbox's approver alone.
   it or it is a sub-task of a private task; the private parent stays hidden. It is private with no choice only when
   the filer's or its owner's template keeps tasks private (a General Counsel's, the Rules Owner's), when it goes in a
   private pipeline, or when it comes from a narrower audience (a DM or a thread that isn't company-wide, a meeting
-  that isn't the team's). A bot's `--public` never publishes past its template's private default.
+  that isn't the team's). A bot's `--public` never publishes past its template's private default. Edits don't
+  spread either: making a task private, or giving it to a bot that keeps its tasks private, leaves the tasks under
+  it as they are, and a sub-task of a private task can be published.
 - A sub-task for a person under a private task with no person on it, filed by its owning bot, makes the first such
   person a reader of that task only. Anyone after that gets the sub-task alone.
 
