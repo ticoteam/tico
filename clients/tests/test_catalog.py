@@ -629,12 +629,12 @@ class ShippedLayers(unittest.TestCase):
             if not text.startswith("---\n"):
                 continue
             try:
-                meta = yaml.safe_load(text.split("---\n")[1]) or {}
+                yaml.safe_load(text.split("---\n")[1])
             except yaml.YAMLError as error:
                 bad.append(f"{path.relative_to(self.directory)}: {str(error).splitlines()[0]}")
                 continue
             library = skills.frontmatter(text)
-            if not library.get("description"):
+            if not library.get("description") or library["description"][:1] in "|>":
                 bad.append(f"{path.relative_to(self.directory)}: the library reads no description")
             elif len(library["description"]) > skills.MAX_DESCRIPTION:
                 bad.append(f"{path.relative_to(self.directory)}: description over {skills.MAX_DESCRIPTION} characters")
