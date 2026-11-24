@@ -1181,7 +1181,7 @@ pub async fn preflight(
         if let Some(ticket) = entry["burst_preparation"].as_str() {
             if repository_present
                 && configuration_valid
-                && burst_checkout_matches(&path, &text_of(&entry["repository"])).await
+                && burst_checkout_ready(&path, &text_of(&entry["repository"])).await
             {
                 row.insert("burst_preparation".into(), json!(ticket));
             }
@@ -1189,6 +1189,22 @@ pub async fn preflight(
         rows.push(row);
     }
     rows
+}
+
+/// A checkout a Burst turn may start on: the right repository, a clean tree and no commit that origin lacks. A turn
+/// that stopped part way can leave unscanned local commits; such a checkout is never prepared or started, so the
+/// work stays on Base and the commits wait for recovery instead of riding out with a later turn's push.
+pub async fn burst_checkout_ready(path: &Path, repository: &str) -> bool {
+    burst_checkout_matches(path, repository).await
+        && git(path, &["status", "--porcelain"])
+            .await
+            .is_some_and(|(ok, out)| ok && out.trim().is_empty())
+        && git(
+            path,
+            &["rev-list", "--count", "HEAD", "--not", "--remotes=origin"],
+        )
+        .await
+        .is_some_and(|(ok, out)| ok && out.trim() == "0")
 }
 
 pub async fn burst_checkout_matches(path: &Path, repository: &str) -> bool {

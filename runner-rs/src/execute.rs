@@ -2587,7 +2587,7 @@ impl Runner {
                 self.enter_lanes(&attempt, &flags.lost).await.map_err(Fail::runtime)
             })).await?;
             if let Some(repository) = &burst_repository {
-                if !crate::readiness::burst_checkout_matches(&lanes.main_path, repository).await {
+                if !crate::readiness::burst_checkout_ready(&lanes.main_path, repository).await {
                     burst_checkout = Some("mismatch");
                     self.events.ask(&["heartbeat"]);
                     return Err(Fail::runtime("The prepared Burst checkout is no longer available"));
@@ -10103,6 +10103,28 @@ for line in sys.stdin:
                 .publish_burst_checkout(&path, "acme/bot", &env, true)
                 .await
         );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn burst_turns_start_only_on_a_checkout_with_nothing_unpushed() {
+        let (runner, dir) = runner_at("http://127.0.0.1:1", "burst-ready");
+        let path = dir.join("checkout");
+        burst_checkout_fixture(&dir, &path);
+        let ready = || crate::readiness::burst_checkout_ready(&path, "acme/bot");
+        assert!(ready().await);
+        assert!(!crate::readiness::burst_checkout_ready(&path, "acme/other").await);
+        std::fs::write(path.join("AGENT.md"), "# Left by a stopped turn\n").unwrap();
+        assert!(!ready().await, "a dirty tree is not started on");
+        repo_git(&path, &["commit", "-qam", "unscanned"]);
+        assert!(!ready().await, "a commit origin lacks is not started on");
+        let env = crate::env::process_environment();
+        assert!(
+            runner
+                .publish_burst_checkout(&path, "acme/bot", &env, true)
+                .await
+        );
+        assert!(ready().await, "once published, the checkout is ready again");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
