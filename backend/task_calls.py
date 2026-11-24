@@ -1059,7 +1059,8 @@ def _teammates(conn: "sqlite3.Connection") -> set[str]:
     H = _h()
     roster: Row = cast(Any, views).roster(conn, shared=True)
     bots = {f"bot:{b['id']}" for b in H.bots(conn) if b.get("state") != "archived"}
-    return bots | {f"human:{p['id']}" for p in roster.get("people") or [] if p.get("id")}
+    people: list[Row] = roster.get("people") or []
+    return bots | {f"human:{p['id']}" for p in people if p.get("id")}
 
 
 def named(
