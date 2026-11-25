@@ -2178,6 +2178,7 @@ describe('the tools registry', () => {
 
   it('never adds a built tool over one whose name is taken: it says so under Name until the name changes', async () => {
     const sent = serve((url) => (url === '/api/v2/tool-guides/raygun' ? detailOf(guideRow()) : url === '/api/v2/tool-guides/raygun-crashes' ? refused(404, 'not_found') : undefined));
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
     open('');
     await addKind('Built here');
     const dialog = await screen.findByRole('dialog', { name: 'Built here' });
