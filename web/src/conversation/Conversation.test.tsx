@@ -544,6 +544,20 @@ describe('the page it sits beside', () => {
     expect(box.value).toBe('Hide Files please');
     expect(sends()).toHaveLength(0);
   });
+
+  it("a starter's words stay in the chat they were pressed in: another chat shown in its place starts empty", async () => {
+    seed([]);
+    queryClient.setQueryData(['thread', 't2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
+    serve(() => ({ status: 200, body: {} }));
+    const starters = ['Add a widget showing…'];
+    const { rerender } = render(<Conversation id={T} variant="side" title="Ana" actor="bot:qa" from={FROM} starters={starters} />, {
+      wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+    });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a widget showing…' }));
+    expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('Add a widget showing ');
+    rerender(<Conversation id="t2" variant="side" title="Bob" actor="bot:bob" from={FROM} />);
+    expect(((await screen.findByRole('textbox', { name: 'Message Bob' })) as HTMLTextAreaElement).value).toBe('');
+  });
 });
 
 describe('scrolled up', () => {

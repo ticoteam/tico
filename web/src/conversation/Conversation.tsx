@@ -290,12 +290,14 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
   const here = useHerePage();
   const at = from === undefined ? here : from;
-  // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run
-  const [fill, setFill] = useState<{ text: string; blank?: boolean } | null>(null);
   // the Agent bar's box keeps its draft by its agent, not by the thread it shows (which may change under it)
   const draftId = toDm ? `dm:${toDm}` : undefined;
   // each view of a task's thread keeps its own draft: words for one agent never wait in another's box, or the comments'
   const boxId = draftId ?? (!view ? id : 'session' in view ? `${id}:session:${view.session}` : `${id}:comments`);
+  // a starter puts its words in the box; opening the chat never sends anything, so it never starts a run. Only in the
+  // box it was pressed for: another chat shown here (another agent's page) never takes them.
+  const [filling, setFill] = useState<{ text: string; blank?: boolean; box: string } | null>(null);
+  const fill = filling?.box === boxId ? filling : null;
   // a file goes as a thread message, which carries no session (the task's comment route has no upload yet)
   const attach = !task?.to;
   const empty = !!starters?.length && !!timeline.data && !rows.some((m) => !m.hidden) && !live.length;
@@ -403,7 +405,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       const empty = !myId || !draftId || !readDraft(myId, draftId).trim();
       if (empty) {
         if (myId && draftId) writeDraft(myId, draftId, text);
-        setFill({ text });
+        setFill({ text, box: boxId }); // the box it was sent from, which holds its draft
         toast({ text: 'Not sent', ...(why && { name: why }), kind: 'failed' });
       } else toast({ text: why ? `Not sent (${why})` : 'Not sent', name: text, kind: 'failed', timeout: 0 });
       if (replied && !isDmChanged(e)) setReplying({ id, m: replied, inline: false });
@@ -510,7 +512,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
       {myId && canPost && empty && (
         <div className="qchips">
           {starters!.map((words) => (
-            <button key={words} type="button" className="qchip" onClick={() => setFill({ text: words.replace(/…$/, ' '), blank: true })}>
+            <button key={words} type="button" className="qchip" onClick={() => setFill({ text: words.replace(/…$/, ' '), blank: true, box: boxId })}>
               {words}
             </button>
           ))}

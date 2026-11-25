@@ -8,6 +8,10 @@ import { dmQuery } from './queries';
 
 /** Words an agent's empty chat offers to start with: they fill the box, never send. */
 export const AGENT_STARTERS = ['Add a widget showing…', 'What did you make this week?'] as const;
+/** The templates whose card leaves out the sidebar skill (`base_skip: [.claude/skills/arrange-your-sidebar]` in
+    templates/catalog/<template>/card.yaml; TeammateChat.test.tsx checks they match): they are not asked for a widget. */
+export const NO_SIDEBAR_SKILL: ReadonlySet<string> = new Set(['agent-ops', 'assistant']);
+const startersFor = (template: string | undefined) => (template && NO_SIDEBAR_SKILL.has(template) ? AGENT_STARTERS.slice(1) : AGENT_STARTERS);
 
 /**
  * The chat with a teammate, the wide sheet of their page: the direct thread with them (made the first time). Only the
@@ -29,7 +33,7 @@ export function TeammateChat({ who }: { who: string }) {
   if (dm.isError) return <Empty icon="alert" title="The chat did not load" />;
   if (!dm.data) return null;
   // A direct chat's @ reaches only its two members (the server refuses anyone else): the list offers just them.
-  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? AGENT_STARTERS : undefined} mentionOnly={[actor.id]} />;
+  return <Conversation id={dm.data} variant="page" title={actor.name} actor={actor.id} card={approvalCard} extra={approvals} foot={agent && <ChatQuestions thread={dm.data} agent={agent} />} starters={agent ? startersFor(actor.template) : undefined} mentionOnly={[actor.id]} />;
 }
 
 /** An agent's chat, by its slug. */
