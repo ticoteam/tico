@@ -16,7 +16,8 @@ SCRIPT = pathlib.Path(V.__file__).with_name("visual-reporter.js")
 
 # Runs the page's own script against a small stub document: argv is the script, then the page as JSON
 # ({hash, html, body: {css, kids}}, each kid {tag, css, text, kids, hidden, view, throws}). Colours inherit as in a
-# browser; a kid with `view` shows only in that view (card CSS keyed on the data-tico-view the script sets); a style
+# browser; a kid with `view` shows only in that view (card CSS keyed on the data-tico-view the script sets, the full view
+# until it sets one); a style
 # the script sets on <html> is read back the way getComputedStyle reports it. Prints <html>'s style and attributes,
 # the listeners the script added and how many times it asked for a computed style.
 HARNESS = r"""
@@ -34,7 +35,7 @@ const make = (spec, parent) => {
   e.firstChild = nodes[0] || null;
   e.kids = nodes.filter((n) => n.nodeType !== 3);
   e.getClientRects = () => {
-    const shown = !spec.hidden && (!spec.view || attrs['data-tico-view'] === spec.view);
+    const shown = !spec.hidden && (!spec.view || (attrs['data-tico-view'] || 'full') === spec.view);
     return shown && (parent === html || parent.getClientRects().length) ? [{}] : [];
   };
   e.getElementsByTagName = () => { const all = []; const walk = (x) => x.kids.forEach((k) => { all.push(k); walk(k); }); walk(e); return all; };
@@ -193,6 +194,9 @@ def test_the_card_view_is_marked_before_the_text_is_read(tmp_path):
     out = run(page, tmp_path)
     assert out["attrs"] == {"data-tico-view": "card", "data-tico-size": "small"}
     assert out["style"] == DARK
+    # The same page at full size shows only its dark heading: it goes light. Read before the view is marked, the card
+    # above would have been read as this one.
+    assert run({**page, "hash": ""}, tmp_path)["style"] == LIGHT_PAGE
 
 
 def test_a_colour_it_cannot_read_or_a_failing_style_never_stops_the_rest_of_the_script(tmp_path):
@@ -200,14 +204,17 @@ def test_a_colour_it_cannot_read_or_a_failing_style_never_stops_the_rest_of_the_
         "body": {
             "kids": [
                 {"tag": "p", "css": {"color": "oklch(none none none)"}, "text": "x" * 50},
-                {"tag": "p", "css": {"color": "rgb(1e-05, 0, 0)"}, "text": "tiny"},
+                {"tag": "p", "css": {"color": "oklch(none 0.1 120 / 0.5)"}, "text": "y" * 50},
+                {"tag": "p", "css": {"color": "color(srgb 1e-05 0 0)"}, "text": "tiny dark"},
                 {"tag": "p", "css": {"color": "oklch(0.95 0.01 120)"}, "text": "reads well"},
                 {"tag": "p", "css": {"color": "lab(10 0 0)"}, "text": "no"},
             ]
         }
     }
     out = run(odd, tmp_path)
-    assert out["style"] == DARK  # 6 characters do not read, 10 do; the colour it cannot read is left out
+    # The colours it cannot read are left out and the walk goes on past them: 11 characters do not read (the exponent
+    # read as near-black), 10 do, so the page goes light. A throw or a misread exponent would leave it dark.
+    assert out["style"] == LIGHT_PAGE
     broken = run({"body": {"kids": [{"tag": "p", "throws": True, "text": "x"}]}}, tmp_path)
     assert broken["attrs"]["data-tico-view"] == "full"
     assert set(broken["listeners"]) == {"hashchange", "load", "resize", "keydown"}

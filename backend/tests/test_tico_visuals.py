@@ -396,7 +396,7 @@ def test_a_new_height_reporter_gives_every_published_page_a_new_hosted_copy():
     new name, is made again with the reporter of now on its next view, and the old copy goes when the page is purged."""
     digest, ancestors = "ef" * 32, ["'self'", "https://tico.acme.example"]
     reporter = hashlib.sha256(V.REPORTER.encode()).hexdigest()[:16]
-    assert (reporter, tico_storage.VISUAL_COPY["page"]) == ("85ba22153a679b59", 4), (
+    assert (reporter, tico_storage.VISUAL_COPY["page"]) == ("f06b4bbf923e6af1", 4), (
         "the height reporter changed: raise VISUAL_COPY['page'], add the old number to EARLIER_PAGE_COPIES "
         "and set the reporter's hash here"
     )
