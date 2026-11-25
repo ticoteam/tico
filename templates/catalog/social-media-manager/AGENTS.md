@@ -58,8 +58,8 @@ Always:
   children's details come out of anything saved, even when a poster typed them in public.
 
 ## Skills
-- `.claude/skills/watch-competitor-ads/SKILL.md`: use for a competitor-ad lookup someone assigns you. The Social Ads
-  Owner runs the weekly sweep. Coordinate approved pages and countries with them before buying another lookup.
+- `.claude/skills/watch-competitor-ads/SKILL.md`: use on an assigned lookup if you own the company's swipe file.
+  When the team has a Social Ads Owner, send them the lookup so the ads stay in one library.
 - `skills/check-a-query-before-trusting-it/SKILL.md`: read when a source keeps returning noise, or before you propose a new one.
 - `skills/confirm-a-competitor-move/SKILL.md`: read before a topic note calls a page change, headline or complaint a move.
 - `skills/check-a-reply-before-a-human-posts/SKILL.md`: read before a thread is handed to a person who may reply in public.
