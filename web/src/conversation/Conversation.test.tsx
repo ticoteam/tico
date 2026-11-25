@@ -545,7 +545,7 @@ describe('the page it sits beside', () => {
     expect(sends()).toHaveLength(0);
   });
 
-  it("a starter's words stay in the chat they were pressed in: another chat shown in its place starts empty", async () => {
+  it("a starter's words stay in the chat they were pressed in: another chat shown in its place neither takes them nor the focus", async () => {
     seed([]);
     queryClient.setQueryData(['thread', 't2', 'timeline'], { pages: [{ messages: [], next_cursor: null, read_marks: {} }], pageParams: [null] });
     serve(() => ({ status: 200, body: {} }));
@@ -555,8 +555,11 @@ describe('the page it sits beside', () => {
     });
     fireEvent.click(await screen.findByRole('button', { name: 'Add a widget showing…' }));
     expect((screen.getByRole('textbox', { name: 'Message Ana' }) as HTMLTextAreaElement).value).toBe('Add a widget showing ');
+    (document.activeElement as HTMLElement).blur();
     rerender(<Conversation id="t2" variant="side" title="Bob" actor="bot:bob" from={FROM} />);
-    expect(((await screen.findByRole('textbox', { name: 'Message Bob' })) as HTMLTextAreaElement).value).toBe('');
+    const bob = (await screen.findByRole('textbox', { name: 'Message Bob' })) as HTMLTextAreaElement;
+    expect(bob.value).toBe('');
+    expect(document.activeElement).not.toBe(bob);
   });
 });
 
