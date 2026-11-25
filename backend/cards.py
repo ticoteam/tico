@@ -327,7 +327,7 @@ def clean_settings(ctx, template, given, kept=frozenset()):
     for key, kind in fields.items():
         value = given.get(key)
 
-        def unknown(word, value, key=key):
+        def missing(word, value, key=key):
             return bad(f"Its saved {word} is gone: pick another" if key in kept else f"Unknown {word}: {value}")
 
         if kind == "agent" and key in kept:
@@ -336,7 +336,7 @@ def clean_settings(ctx, template, given, kept=frozenset()):
         if kind == "team":
             value = str(value or "").strip()
             if value and value not in ctx.groups:
-                raise unknown("team", value)
+                raise missing("team", value)
         elif kind == "kpi":
             value = str(value or "").strip()
             if not value:
@@ -352,14 +352,14 @@ def clean_settings(ctx, template, given, kept=frozenset()):
                 (value, value, value, value),
             ).fetchone()
             if not found:
-                raise bad("Pick a pipeline") if not value else unknown("pipeline", value)
+                raise bad("Pick a pipeline") if not value else missing("pipeline", value)
             value = found["id"]
         elif kind == "agent":
             value = str(value or "").strip()
             if value:
                 found = H.resolve_bot(ctx.c, value)
                 if not found or not ctx.sees_bot(found["id"]):  # a hidden agent is as unknown as a missing one
-                    raise unknown("agent", value)
+                    raise missing("agent", value)
                 value = found["id"]
         elif kind == "metric":
             value = str(value or "").strip()
@@ -370,7 +370,7 @@ def clean_settings(ctx, template, given, kept=frozenset()):
 
             value = str(value or "").strip()
             if value and value not in {ch["slug"] for ch in G.channels(ctx.c)}:
-                raise unknown("channel", value)
+                raise missing("channel", value)
         else:
             low, high, default = kind
             value = default if value is None else value
@@ -1995,7 +1995,9 @@ def edit_card(ctx, cid, title=None, settings=None):
     if settings is not None:
         saved = json.loads(row["settings"])
         merged = {**saved, **settings}
-        fields["settings"] = json.dumps(clean_settings(ctx, row["template"], merged, kept=set(saved) - set(settings)))
+        fields["settings"] = json.dumps(
+            clean_settings(ctx, row["template"], merged, kept=frozenset(saved) - frozenset(settings))
+        )
     if fields:
         fields.update(updated_at=H.now(), updated_by_id=ctx.who.actor)
         ctx.c.execute("UPDATE cards SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?", (*fields.values(), cid))

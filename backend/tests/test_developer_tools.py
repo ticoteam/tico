@@ -112,7 +112,7 @@ def test_every_kept_gap_is_still_named_there_and_still_not_offered():
         named_tools(template, kept)
     assert not SHARED_GAPS - kept, f"No longer named there, so drop them from SHARED_GAPS: {sorted(SHARED_GAPS - kept)}"
     offered = {t["name"] for t in hubtools.listing(True, "bot")}
-    listed = {t: hubtools.FEATURE_TOOLS if t in FEATURE_TEMPLATES else hubtools.DEVELOPER_TOOLS for t in kept}
+    listed = {t: hubtools.FEATURE_TOOLS if t in FEATURE_TEMPLATES else hubtools.DEVELOPER_TOOLS for t, _, _ in kept}
     fixed = sorted(g for g in SHARED_GAPS if g[2] not in offered or g[2] in listed[g[0]])
     assert not fixed, f"No longer a gap, so drop them from SHARED_GAPS: {fixed}"
 
