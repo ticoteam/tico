@@ -226,6 +226,15 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 .tools .trow .row-title{margin-left:0}
 .tools .trow.is-off{color:var(--ink-2)}
 .tools .trow.is-off .kind{background:none;color:var(--muted)}
+.tools .trow .trow-sum{padding-right:0}
+.tools .trow>.row-fig{color:var(--muted);font-size:var(--t-sm)}
+/* a tool's guide: its summary, instructions, guidance and learnings as text on the facts' edge */
+.tools .tool-read{padding:0 var(--s-2) var(--s-2)}
+.tools .tool-read .read-lead{margin:0 0 var(--s-2)}
+.tools .tool-none{margin:0;padding:0 var(--s-2);color:var(--muted);font-size:var(--t-sm)}
+.tools .tool-edit{display:grid;gap:var(--s-2);padding:0 var(--s-2) var(--s-2)}
+.tools .tool-edit-foot{display:flex;justify-content:flex-end;gap:var(--s-2)}
+.modal.tool-guide-edit .field textarea{min-height:160px}
 .tools .tool{flex:1;min-height:0;display:flex;flex-direction:column}
 .tools .tool-head{gap:var(--s-2)}
 .tools .tool-head .kind{margin-right:var(--s-0)}

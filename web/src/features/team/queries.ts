@@ -742,6 +742,62 @@ export const agentFilesQuery = (slug: string, find = '') =>
     getNextPageParam: (last) => (last.has_more && last.next_cursor) || undefined,
   });
 
+/* ---------------------------------------------------------------- its tools */
+
+/** A tool on its Tools section (GET /api/v2/bots/{bot}/tool-guides): one it lists, a vendor it may use, or one it used
+    in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none).
+    TODO: these shapes follow the plan (reports/2026-11-24-tools-registry); switch to `@/api/schema` once the routes land. */
+export interface AgentTool {
+  slug: string;
+  name: string;
+  origin: 'vendor' | 'built';
+  category: string | null;
+  note: string | null;
+  /** On its list, rather than only granted or used. */
+  listed: boolean;
+  access: 'proxy' | 'key' | 'none';
+  uses: number;
+  last_used_at: string | null;
+  /** Built by this agent. */
+  built_by_bot: boolean;
+}
+export const agentToolsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'tools', slug] as const,
+    queryFn: ({ signal }) => api.get<{ rows?: AgentTool[] }>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.rows ?? []),
+  });
+
+/** The company's tools matching the words (GET /api/v2/tool-guides?q=), for Add tool: the first few the server finds. */
+export interface FoundTool {
+  slug: string;
+  name: string;
+  origin: 'vendor' | 'built';
+  summary: string | null;
+}
+export const findToolsQuery = (words: string) =>
+  queryOptions({
+    queryKey: ['team', 'tool-find', words] as const,
+    queryFn: ({ signal }) => api.get<{ rows?: FoundTool[] }>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.rows ?? []),
+  });
+
+/** List a tool on it, with what it uses it for; the row shows once the server has it. */
+export const listTool = (slug: string, tool: string, note: string) =>
+  write({
+    key: agentToolsQuery(slug).queryKey,
+    wait: true,
+    optimistic: (cur: AgentTool[] | undefined) => cur,
+    send: (idempotencyKey) => api.put<unknown>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, note ? { note } : {}, { idempotencyKey }),
+  });
+
+/** Take a tool off its list; the row stays, busy, until the server agrees (a tool it is granted or used stays listed). */
+export const unlistTool = (slug: string, tool: string) =>
+  write({
+    key: agentToolsQuery(slug).queryKey,
+    wait: true,
+    optimistic: (cur: AgentTool[] | undefined) => cur,
+    send: (idempotencyKey) => api.delete<unknown>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, { idempotencyKey }),
+  });
+
 /* ---------------------------------------------------------------- its last run */
 
 /** Why its last run ended without finishing (backend/execution.py last_stop). Not in the generated schema. */

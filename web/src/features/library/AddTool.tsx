@@ -12,14 +12,14 @@ import { toast } from '@/kit/Toast';
 import { newId } from '@/lib/ids';
 import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
-import { addApiTool, catalogQuery, probeMcp, type CatalogService, type LoginAdd, type McpProbe } from './queries';
+import { addApiTool, catalogQuery, probeMcp, slugOf, type CatalogService, type LoginAdd, type McpProbe, type ToolNeed } from './queries';
 import { useAdmin } from './ToolShell';
 
 /* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
    the vendor, Paste key, Use website); any other tool by its kind, one click away (the old app's
    tools-api, tools-mcp and tools-website dialogs). Secrets typed here are only sent: nothing typed comes back. */
 
-export type Adding = 'api' | 'mcp' | 'website' | 'webhook' | 'mailbox' | 'tico' | 'number' | 'address';
+export type Adding = 'api' | 'mcp' | 'website' | 'webhook' | 'mailbox' | 'tico' | 'number' | 'address' | 'built';
 
 /** The kinds, in the mock's order; each with the glyph its tool shows. */
 const ADD: Array<[Adding, string, string]> = [
@@ -31,6 +31,7 @@ const ADD: Array<[Adding, string, string]> = [
   ['tico', 'Tico address', 'mailbox'],
   ['number', 'Phone number', 'number'],
   ['address', 'Mailing address', 'address'],
+  ['built', 'Built here', 'built'],
 ];
 
 /** What only an owner or admin adds, as in the old app: a company mailbox, a paid number, a paid address. */
@@ -147,7 +148,60 @@ export function AddDialog({ adding, onClose }: { adding: Adding; onClose: () => 
   if (adding === 'tico') return <NewAddressDialog onClose={onClose} />;
   if (adding === 'number') return <RequestNumberDialog onClose={onClose} />;
   if (adding === 'address') return <MailingAddressDialog onClose={onClose} />;
+  if (adding === 'built') return <BuiltDialog onClose={onClose} />;
   return <AddWebsite onClose={onClose} />;
+}
+
+/* ---------------------------------------------------------------- a tool built here */
+
+/** `stripe:read gh:write`, or names alone (read): what a built tool needs from the company's other tools. */
+export const needsOf = (text: string): ToolNeed[] =>
+  text
+    .split(/[\s,]+/)
+    .filter(Boolean)
+    .map((w) => {
+      const [tool = '', level] = w.toLowerCase().split(':');
+      return { tool, level: level === 'write' ? ('write' as const) : ('read' as const) };
+    })
+    .filter((n) => !!n.tool);
+
+/** Add tool › Built here: a script, a small MCP server or a report built in-house, with how to use it. */
+export function BuiltDialog({ onClose }: { onClose: () => void }) {
+  const [name, setName] = useState('');
+  const [summary, setSummary] = useState('');
+  const [instructions, setInstructions] = useState('');
+  const [source, setSource] = useState('');
+  const [needs, setNeeds] = useState('');
+  const [busy, setBusy] = useState(false);
+  const slug = slugOf(name);
+  const ready = !!slug && !!summary.trim() && !!instructions.trim();
+  const add = async () => {
+    setBusy(true);
+    const ok = await press(
+      'tools.writeGuide',
+      { slug, origin: 'built', name: name.trim(), summary: summary.trim(), instructions: instructions.trim(), source: trimmed(source), needs: needsOf(needs) },
+      'Not added',
+    );
+    setBusy(false);
+    if (!ok) return;
+    onClose();
+    void press('tools.open', { tool: `built:${slug}` });
+  };
+  return (
+    <Dialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title="Built here"
+      className="tool-guide-edit"
+      actions={<Foot onClose={onClose} label="Add" busy={busy} ready={ready} onGo={() => void add()} />}
+    >
+      <Field label="Name" value={name} onValueChange={setName} placeholder="Weekly churn report" autoFocus />
+      <Field label="Summary" value={summary} onValueChange={setSummary} placeholder="One line" />
+      <Field label="Instructions" area value={instructions} onValueChange={setInstructions} placeholder="What it is for and how to run it" />
+      <Field label="Source" value={source} onValueChange={setSource} placeholder="acme/tools scripts/churn.py" />
+      <Field label="Needs" value={needs} onValueChange={setNeeds} placeholder="stripe:read" />
+    </Dialog>
+  );
 }
 
 /* ---------------------------------------------------------------- an API */

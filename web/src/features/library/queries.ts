@@ -667,6 +667,121 @@ export const catalogQuery = queryOptions({
   staleTime: Infinity,
 });
 
+/* The registry (GET /api/v2/tool-guides): every tool the company knows, a vendor's (its id is the vendor's) or one built
+   here, with what it is for, how to use it, the company's guidance and who uses it. Under the tools root, so whatever
+   reads Tools again reads it too.
+   TODO: these shapes follow the plan (reports/2026-11-24-tools-registry); switch to `@/api/schema` once the routes land. */
+
+export type ToolOrigin = 'vendor' | 'built';
+export interface ToolGuideRow {
+  slug: string;
+  name: string;
+  origin: ToolOrigin;
+  category: string | null;
+  summary: string | null;
+  /** Connections on the vendor the reader may see. */
+  connections: number;
+  /** Agents that list it or used it in the last 30 days. */
+  used_by: number;
+  last_used_at: string | null;
+  /** False for a vendor in the Tools index with no guide yet. */
+  guide: boolean;
+}
+/** One connection on the tool's vendor as the reader holds it: how it reaches a run (a variable's name, never a value),
+    and the command that asks for it where the reader has none. */
+export interface ToolGuideAccess {
+  id: string;
+  name: string;
+  kind: string;
+  level: 'none' | 'read' | 'write';
+  env: string | null;
+  request: string | null;
+}
+export interface ToolGuideUser {
+  bot: string;
+  name: string;
+  listed: boolean;
+  note: string | null;
+  uses: number;
+  last_used_at: string | null;
+}
+export interface ToolNeed {
+  tool: string;
+  level: 'read' | 'write';
+}
+export interface ToolGuide extends ToolGuideRow {
+  instructions: string | null;
+  guidance: string | null;
+  commands: string[];
+  source: string | null;
+  needs: ToolNeed[];
+  owner: string | null;
+  updated_at: string | null;
+  access: ToolGuideAccess[];
+  users: ToolGuideUser[];
+  /** Its integration page's learnings, markdown. */
+  learnings: string | null;
+}
+export type ToolGuideChange = Partial<Pick<ToolGuide, 'name' | 'origin' | 'category' | 'summary' | 'instructions' | 'guidance' | 'source' | 'needs' | 'commands'>>;
+
+export const toolGuidesQuery = queryOptions({
+  queryKey: ['tools', 'guides'],
+  queryFn: async (): Promise<ToolGuideRow[]> => {
+    let page = await api.get<{ rows?: ToolGuideRow[]; next?: string | null }>('/api/v2/tool-guides?limit=200');
+    let rows = page.rows ?? [];
+    for (let n = 0; page.next && n < INDEX_PAGES; n++) {
+      page = await api.get<{ rows?: ToolGuideRow[]; next?: string | null }>(`/api/v2/tool-guides?limit=200&cursor=${enc(page.next)}`);
+      rows = [...rows, ...(page.rows ?? [])];
+    }
+    return rows;
+  },
+});
+export const toolGuideQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['tools', 'guide', slug],
+    queryFn: () => api.get<ToolGuide>(`/api/v2/tool-guides/${enc(slug)}`),
+  });
+
+/** A guide written or changed (any teammate may): the tool and the list read again once the server agrees. */
+export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
+  write<ToolGuide>({
+    key: ['tools', 'guide', slug],
+    wait: true,
+    optimistic: (cur: ToolGuide | undefined) => cur && { ...cur, ...change },
+    send: (idempotencyKey) => api.put<ToolGuide>(`/api/v2/tool-guides/${enc(slug)}`, change, { idempotencyKey }),
+  }).then(async (saved) => {
+    await queryClient.invalidateQueries({ queryKey: toolGuidesQuery.queryKey });
+    return saved;
+  });
+
+/** A built tool's slug from its name: `Weekly churn report` is `weekly-churn-report`. */
+export const slugOf = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80);
+
+/** The job functions skills and tools are filed under (clients/skills.py FUNCTIONS), in the menu's order. */
+export const FUNCTIONS = [
+  'tico',
+  'legal',
+  'marketing',
+  'growth',
+  'sales',
+  'customers',
+  'finance',
+  'product',
+  'engineering',
+  'people',
+  'operations',
+  'hardware',
+  'data',
+  'security',
+] as const;
+export const functionLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
+
 /** A person asks for an agent's level on a tool: granted at once when it can be, else a card to whoever can grant it. */
 export const requestAccess = (body: { resource: string; level: 'read' | 'read_write'; for_bot: string; why?: string }) =>
   api.post<{ state?: string }>('/api/v2/access-requests', body);

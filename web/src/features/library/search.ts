@@ -86,6 +86,10 @@ export interface ToolsSearch {
   github?: GithubReturn | 'other';
   /** Who has access: a team (`group:<id>`) or a teammate (`human:<id>`, `bot:<id>`). */
   who?: string;
+  /** Vendors' tools, or the tools built here. */
+  origin?: 'vendor' | 'built';
+  /** One job function (`finance`...), lower case, as skills are filed. */
+  category?: string;
 }
 export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
   clean({
@@ -95,6 +99,8 @@ export const toolsSearch = (raw: Record<string, unknown>): ToolsSearch =>
     needs: flag(raw.needs),
     github: raw.github === undefined ? undefined : (GITHUB_RETURNS.find((w) => w === raw.github) ?? ('other' as const)),
     who: str(raw.who),
+    origin: raw.origin === 'vendor' || raw.origin === 'built' ? (raw.origin as 'vendor' | 'built') : undefined,
+    category: str(raw.category)?.trim().toLowerCase() || undefined,
   });
 
 /** `type`: person, organization, place...; `link`: only those with that link to us (customer_of...); `panel`: the

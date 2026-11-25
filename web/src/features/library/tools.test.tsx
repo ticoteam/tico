@@ -2005,3 +2005,119 @@ describe('the Tools index', () => {
     expect(index.rows.map((r) => r.id)).toEqual(['api:a', 'api:b']);
   });
 });
+
+describe('the tools registry', () => {
+  const guideRow = (o: Record<string, unknown> = {}) => ({
+    slug: 'raygun',
+    name: 'Raygun',
+    origin: 'vendor',
+    category: 'engineering',
+    summary: 'Crash reports',
+    connections: 1,
+    used_by: 2,
+    last_used_at: null,
+    guide: true,
+    ...o,
+  });
+  const built = guideRow({ slug: 'churn-report', name: 'Churn report', origin: 'built', category: 'growth', summary: 'Weekly churn by plan', connections: 0, used_by: 0 });
+  const registry = (url: string) => (url === '/api/v2/tool-guides?limit=200' ? { rows: [guideRow(), built], next: null } : undefined);
+  const rg = indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', who_total: 1 });
+
+  it('lists vendors with their summary and tools built here, narrowed by origin and category', async () => {
+    serve(registry);
+    tools([rg]);
+    open('');
+    expect(await screen.findByText('Crash reports')).toBeTruthy(); // the connection's row carries its vendor's summary
+    expect(screen.getByText('Churn report').closest('a')?.getAttribute('href')).toBe('/library/tools?tool=built%3Achurn-report');
+    expect(screen.queryByText('Raygun')).toBeNull(); // a vendor the list already has is not a second row
+    cleanup();
+    serve(registry);
+    tools([rg]);
+    at('/library/tools?origin=built', <ToolsPage search={{ origin: 'built' }} />);
+    expect(await screen.findByText('Churn report')).toBeTruthy();
+    expect(screen.queryByText('Raygun API')).toBeNull();
+    cleanup();
+    serve(registry);
+    tools([rg]);
+    const router = at('/library/tools?category=engineering', <ToolsPage search={{ category: 'engineering' }} />);
+    expect(await screen.findByText('Raygun API')).toBeTruthy();
+    expect(screen.queryByText('Churn report')).toBeNull();
+    await pick('Filter tools', 'Built here');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ origin: 'built', category: 'engineering' }));
+  });
+
+  it('opens a vendor on its guide: about, guidance written in place, its connections, who uses it and what they learned', async () => {
+    const guide = {
+      ...guideRow(),
+      instructions: 'Read **crashes** first.',
+      guidance: '',
+      commands: [],
+      source: null,
+      needs: [],
+      owner: null,
+      updated_at: null,
+      access: [],
+      users: [{ bot: 'b1', name: 'Clerk', listed: true, note: 'Triage', uses: 4, last_used_at: null }],
+      learnings: 'The rate limit is low.',
+    };
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-guides/raygun'
+        ? method === 'PUT'
+          ? { ...guide, guidance: 'Ask first' }
+          : guide
+        : url === '/api/v2/tool-vendors/raygun'
+          ? { vendor: 'raygun', name: 'Raygun', rows: [{ ...rg, mcp: false, access_total: 0, access: [] }] }
+          : undefined,
+    );
+    open('vendor:raygun');
+    const vendor = await page('Raygun');
+    const about = within(vendor).getByRole('region', { name: /^About/ });
+    expect(within(about).getByText('Crash reports')).toBeTruthy();
+    expect(within(about).getByText('crashes')).toBeTruthy();
+    expect(await within(vendor).findByRole('region', { name: /^Raygun API/ })).toBeTruthy(); // its access, as before
+    const used = within(vendor).getByRole('region', { name: /^Used by/ });
+    expect(within(used).getByText('Clerk').closest('a')?.getAttribute('href')).toBe('/team/b1');
+    expect(within(within(vendor).getByRole('region', { name: /^Learnings/ })).getByText('The rate limit is low.')).toBeTruthy();
+    const guidance = within(vendor).getByRole('region', { name: /^Company guidance/ });
+    fireEvent.click(within(guidance).getByRole('button', { name: 'Edit guidance' }));
+    fireEvent.change(within(guidance).getByRole('textbox', { name: 'Guidance' }), { target: { value: 'Ask first' } });
+    fireEvent.click(within(guidance).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/tool-guides/raygun', method: 'PUT', body: { origin: 'vendor', guidance: 'Ask first' } }]));
+    expect(await within(guidance).findByText('Ask first')).toBeTruthy();
+  });
+
+  it('adds a tool built here with how to use it and what it needs, then opens it', async () => {
+    const sent = serve((url, method) => (method === 'PUT' && url === '/api/v2/tool-guides/churn-report' ? { ...built, instructions: 'Run it on Mondays' } : undefined));
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    const router = open('');
+    await addKind('Built here');
+    const dialog = await screen.findByRole('dialog', { name: 'Built here' });
+    const type = (label: string, value: string) => fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+    type('Name', 'Churn report');
+    type('Summary', 'Weekly churn by plan');
+    type('Instructions', 'Run it on Mondays');
+    type('Source', 'acme/tools scripts/churn.py');
+    type('Needs', 'stripe:read gh:write');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(writes(sent)).toEqual([
+        {
+          url: '/api/v2/tool-guides/churn-report',
+          method: 'PUT',
+          body: {
+            origin: 'built',
+            name: 'Churn report',
+            summary: 'Weekly churn by plan',
+            instructions: 'Run it on Mondays',
+            source: 'acme/tools scripts/churn.py',
+            needs: [
+              { tool: 'stripe', level: 'read' },
+              { tool: 'gh', level: 'write' },
+            ],
+          },
+        },
+      ]),
+    );
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tool: 'built:churn-report' }));
+  });
+});

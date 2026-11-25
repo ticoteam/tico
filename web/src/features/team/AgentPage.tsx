@@ -26,12 +26,14 @@ import { ArchiveDialog, CredentialDialog, WorksForDialog } from './dialogs';
 import { FilesSection } from './Files';
 import { LastRun } from './LastRun';
 import { DecisionsSection, DreamSection } from './Learnings';
+import { AddToolDialog, ToolsSection } from './Tools';
 import { ListEditor, ListSections, useLists } from './Lists';
 import { AllTasks, EditDialog, Foot, Fold, OwnRow, OwnRows, PickLine, waitsOn } from './parts';
 import {
   agentFilesQuery,
   agentQuery,
   agentsQuery,
+  agentToolsQuery,
   changesQuery,
   computersQuery,
   doneTasksQuery,
@@ -135,6 +137,7 @@ function AgentHead({
   const rename = useAction('agents.rename');
   const [archiving, setArchiving] = useState(false);
   const [listing, setListing] = useState(false);
+  const [addingTool, setAddingTool] = useState(false);
   const [stopOpen, setStopOpen] = useState(false);
   const [copying, setCopying] = useState(false);
   const canCopy = useCanMakeCopy(slug);
@@ -179,12 +182,14 @@ function AgentHead({
           <MenuItem label="Dream" icon="asleep" onSelect={() => void dream.run({ slug })} />
           {stop && <MenuItem label="Last run" icon="clock" onSelect={() => setStopOpen(true)} />}
           {canEdit && !settings && <MenuItem label="New list" icon="list" onSelect={() => setListing(true)} />}
+          {row?.can_manage !== false && !settings && <MenuItem label="Add tool" icon="plus" onSelect={() => setAddingTool(true)} />}
           {canCopy && <MenuItem label="Make my copy" icon="plus" onSelect={() => setCopying(true)} />}
           <MenuRule />
           <MenuItem label={`Archive ${actor.name}`} icon="archive" disabled={row?.can_manage === false} onSelect={() => setArchiving(true)} />
         </PageMore>
         {archiving && <ArchiveDialog open onOpenChange={setArchiving} slug={slug} name={actor.name} row={row} />}
         {listing && <ListEditor open onOpenChange={setListing} slug={slug} />}
+        {addingTool && <AddToolDialog slug={slug} name={actor.name} onClose={() => setAddingTool(false)} />}
       </>
     ),
   };
@@ -206,6 +211,8 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const { lists } = useLists(slug);
   const files = useInfiniteQuery(agentFilesQuery(slug));
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
+  const toolN = useQuery(agentToolsQuery(slug)).data?.length ?? 0;
+  const manage = useQuery(agentsQuery).data?.find((r) => r.slug === slug)?.can_manage !== false;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
   const layout = useQuery(taskTabsQuery(slug)); // the loader starts it, never waits for it
   const widgets = sidebarOf(readable(layout)?.widgets); // refused: the defaults
@@ -266,6 +273,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
         </>
       );
     if (id === 'files') return fileN > 0 ? <FilesSection slug={slug} /> : null;
+    if (id === 'tools') return toolN > 0 ? <ToolsSection slug={slug} name={actor.name} manage={manage} /> : null;
     const pin = pinOf.get(id);
     return pinShows(pin) ? <PinnedItem pin={pin} live={livePages.has(id)} /> : null;
   };
@@ -279,6 +287,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     !(on('updates') && (lines.length || dream.data)) &&
     !(on('tasks') && (rest.length || doneN || lists.length)) &&
     !(on('files') && fileN) &&
+    !(on('tools') && toolN) &&
     !shownPins.length &&
     !(pinned && pins.isPending);
   // Its pins could not be read (not refused) and it has nothing else: a fault to try again, never "Nothing yet".
