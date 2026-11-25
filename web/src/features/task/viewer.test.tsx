@@ -282,7 +282,7 @@ describe('a Word file that did not read', () => {
 
   it('that is not Word (no word/document.xml) is the app’s error, not the connection’s', async () => {
     const zip = await zipOf('other.xml', '<x/>');
-    vi.stubGlobal('fetch', async () => new Response(zip, { status: 200 }));
+    vi.stubGlobal('fetch', async () => new Response(zip as Uint8Array<ArrayBuffer>, { status: 200 }));
     const err = await read('/api/v2/files/w8').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(ApiError);

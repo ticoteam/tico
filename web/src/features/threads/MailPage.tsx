@@ -68,8 +68,9 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
           : rows.length === 0 && !letterId && !agent && !pick && !narrowed
             ? 'empty'
             : 'ready';
+  // Reaching the end reads the next page; one that failed is read again only by Load more, never by scrolling on.
   const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+    if (list.hasNextPage && !list.isFetchingNextPage && !list.isFetchNextPageError) void list.fetchNextPage();
   };
   return (
     <ListAndItem
@@ -118,6 +119,7 @@ export function MailPage({ box, open, view, q: words }: MailPageProps) {
             onReachEnd={more}
             renderItem={(r) => <MailRow r={r} box={current} keep={keep} selected={!reading && r.letter.thread_id === letterId} />}
           />
+          {list.isFetchNextPageError && <OlderAgain list={list} />}
         </>
       }
       open={!!letterId || !!reading}
@@ -302,8 +304,9 @@ export function MessagingPage({ open }: MessagingPageProps) {
   const find = words.toLowerCase();
   const messages = list.data?.pages.flatMap((p) => p.messages) ?? [];
   const contacts = contactsOf(find ? messages.filter((t) => (t.from ?? '').toLowerCase().includes(find)) : messages);
+  // Reaching the end reads the next page; one that failed is read again only by Load more, never by scrolling on.
   const more = () => {
-    if (list.hasNextPage && !list.isFetchingNextPage) void list.fetchNextPage();
+    if (list.hasNextPage && !list.isFetchingNextPage && !list.isFetchNextPageError) void list.fetchNextPage();
   };
   return (
     <ListAndItem
@@ -315,15 +318,18 @@ export function MessagingPage({ open }: MessagingPageProps) {
         contacts.length === 0 && words ? (
           <Empty icon="search" title="No matches" />
         ) : (
-          <VirtualList
-            className="tl-vl"
-            label="Messaging"
-            items={contacts}
-            getKey={(t) => t.from ?? t.message_id}
-            estimateSize={35}
-            onReachEnd={more}
-            renderItem={(t) => <ContactRow t={t} selected={t.from === open} />}
-          />
+          <>
+            <VirtualList
+              className="tl-vl"
+              label="Messaging"
+              items={contacts}
+              getKey={(t) => t.from ?? t.message_id}
+              estimateSize={35}
+              onReachEnd={more}
+              renderItem={(t) => <ContactRow t={t} selected={t.from === open} />}
+            />
+            {list.isFetchNextPageError && <OlderAgain list={list} />}
+          </>
         )
       }
       open={!!open}
@@ -345,6 +351,15 @@ export function MessagingPage({ open }: MessagingPageProps) {
           }
         : {})}
     />
+  );
+}
+
+/** Under a list whose next page failed: the press that reads it again (that page alone). */
+function OlderAgain({ list }: { list: { fetchNextPage: () => Promise<unknown>; isFetchingNextPage: boolean } }) {
+  return (
+    <Button onClick={() => list.fetchNextPage()} busy={list.isFetchingNextPage}>
+      Load more
+    </Button>
   );
 }
 

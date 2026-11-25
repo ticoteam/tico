@@ -377,6 +377,8 @@ describe('Messaging @s160', () => {
     serve((url) => {
       if (url.includes('/inbound/messages/x1')) return ok({ text: 'Is Friday fine for the visit?', message_id: 'x1' });
       if (!url.includes('/inbound/messages?')) return undefined;
+      // the contacts list has one page; the contact's texts have an older one
+      if (!url.includes('from=')) return ok({ messages: [{ message_id: 'x1', received_at: ago(3), from, preview: 'Is Friday' }], next: null });
       return url.includes('before=9')
         ? { status: 400, body: { error: { code: 'bad_cursor', detail: 'No.' } } }
         : ok({ messages: [{ message_id: 'x1', received_at: ago(3), from, preview: 'Is Friday' }], next: 9 });
@@ -393,6 +395,26 @@ describe('Messaging @s160', () => {
     await waitFor(() => expect(calls.filter((c) => c.url.includes('before=9'))).toHaveLength(2));
     // the retry is the older page alone, never every page again
     expect(calls.filter((c) => c.url.includes('/inbound/messages?') && !c.url.includes('before='))).toHaveLength(firstPages);
+  });
+
+  it('a next page of contacts that fails is not read again by scrolling on: Load more reads it, that page alone', async () => {
+    serve((url) => {
+      if (!url.includes('/inbound/messages?')) return undefined;
+      return url.includes('before=9')
+        ? { status: 400, body: { error: { code: 'bad_cursor', detail: 'No.' } } }
+        : ok({ messages: [{ message_id: 'x1', received_at: ago(3), from: '+1 555 0100', preview: 'Hi' }], next: 9 });
+    });
+    show(<MessagingPage />, '/threads/messaging');
+    expect(await screen.findByTitle('+1 555 0100')).toBeTruthy();
+    const again = await screen.findByRole('button', { name: 'Load more' });
+    const older = () => calls.filter((c) => c.url.includes('before=9')).length;
+    expect(older()).toBe(1);
+    expect(screen.getByTitle('+1 555 0100')).toBeTruthy();
+    expect(screen.queryByText(/didn't load/)).toBeNull();
+    fireEvent.click(again);
+    await waitFor(() => expect(older()).toBe(2));
+    await new Promise((r) => setTimeout(r, 300));
+    expect(older()).toBe(2);
   });
 
   it("opens no chat when the person opened another mail before the agent's box send came back @4882-S8", async () => {
