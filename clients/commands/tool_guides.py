@@ -15,6 +15,7 @@ from clients.commands._requester import _as_person
 from clients.commands._schemas import _key, _s
 
 SLUG = _s("The tool: a vendor (stripe, github), a command (gh, psql) or a built tool's slug")
+EXACT = _s("The tool's exact slug (stripe, github, a built tool's): `tico tool find` lists them")
 BOT = _s("The agent (id or slug); yours when you are one")
 TEXT = ("name", "category", "summary", "instructions", "guidance", "source", "origin", "commands", "needs")
 
@@ -67,7 +68,7 @@ def tool_guide(api, args):
     "tico_tool_guide_write",
     "Write or change a tool's guide; only what is sent changes. A built tool needs summary and instructions. No keys.",
     {
-        "slug": SLUG,
+        "slug": EXACT,
         "name": _s("Its name"),
         "origin": _s("built: a script or program made here", enum=["vendor", "built"]),
         "category": _s("data, finance, engineering, marketing, operations, ..."),
@@ -98,7 +99,7 @@ def tool_guide_write(api, args):
 @tool(
     "tico_tool_guide_archive",
     "Archive a tool's guide (its owner, the Tools Owner or a credential admin).",
-    {"slug": SLUG},
+    {"slug": EXACT},
     required=("slug",),
     writes=True,
 )
@@ -114,7 +115,7 @@ def tool_mine(api, args):
 @tool(
     "tico_tool_mine_add",
     "Put a tool on an agent's list, with what it uses it for.",
-    {"slug": SLUG, "note": _s("What you use it for"), "bot": BOT},
+    {"slug": EXACT, "note": _s("What you use it for"), "bot": BOT},
     required=("slug",),
     writes=True,
 )
@@ -126,7 +127,7 @@ def tool_mine_add(api, args):
 @tool(
     "tico_tool_mine_remove",
     "Take a tool off an agent's list.",
-    {"slug": SLUG, "bot": BOT},
+    {"slug": EXACT, "bot": BOT},
     required=("slug",),
     writes=True,
 )
