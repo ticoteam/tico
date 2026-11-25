@@ -9493,10 +9493,11 @@ for line in sys.stdin:
             .await;
         assert_eq!(done["outcome"], "completed", "{done}");
         assert_eq!(rig.saved().as_deref(), Some(first.as_str()));
-        assert_eq!(
-            rig.methods(),
-            ["thread/start", "turn/start", "thread/resume", "turn/start"]
-        );
+        // The first turn and its five busy-model retries in the thread (drive.rs OVERLOAD_TRIES), then the continuation.
+        let mut methods = vec!["thread/start"];
+        methods.extend(["turn/start"; 6]);
+        methods.extend(["thread/resume", "turn/start"]);
+        assert_eq!(rig.methods(), methods);
         let turns: Vec<Value> = rig
             .calls()
             .into_iter()
@@ -9528,7 +9529,8 @@ for line in sys.stdin:
             );
             assert_eq!(
                 rig.methods().iter().filter(|m| *m == "turn/start").count(),
-                1
+                6,
+                "the first turn and its busy-model retries only"
             );
         }
     }
@@ -9547,7 +9549,10 @@ for line in sys.stdin:
             rig.saved().is_none(),
             "Clear must survive continuation settlement"
         );
-        assert_eq!(rig.methods(), ["thread/start", "turn/start"]);
+        assert_eq!(
+            rig.methods(),
+            [&["thread/start"][..], &["turn/start"; 6][..]].concat()
+        );
         assert_eq!(posted(&rig.seen, "/attempts/a-codex-1/started"), 1);
     }
 
