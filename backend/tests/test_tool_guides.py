@@ -122,6 +122,7 @@ def test_the_callers_access_names_variables_and_the_ask_never_a_value(api):
     # A vendor Tico ships no guide for, known to the agent only by an Everyone tool's name: still listed, with the ask.
     close = tool(api)["id"]
     key(api, close, SECRET)
+    explicit_only(api)  # its "Everyone can read" off too
     vendor = next(r["vendor"] for r in get(api, "tool-index")["rows"] if r["id"] == "api:" + close)
     assert vendor in rows(api, bot)
     (row,) = get(api, "tool-guides/" + vendor, bot)["access"]
