@@ -3,6 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { holdToasts, toast, Toasts, useTopLayer } from '@/kit/Toast';
 import { Viewer } from './Viewer';
 
+// Read with node's fs (tests load no CSS), and web's types leave node out.
+const fs = (await import(/* @vite-ignore */ 'node:' + 'fs')) as { readFileSync(file: URL, encoding: 'utf8'): string };
+const here = import.meta.url;
+
 describe('Viewer', () => {
   it('names itself, shows its controls and closes on Escape and Close', async () => {
     const onClose = vi.fn();
@@ -80,6 +84,24 @@ describe('Viewer', () => {
     act(() => void (again = holdToasts(screen.getByRole('dialog', { name: 'Task, renamed', hidden: true }).querySelector('.vw-toasts')!)));
     expect(screen.getByTestId('top').dataset.name).toBe('Spec v2');
     act(again);
+  });
+
+  it('a layer open over another hides the lower one’s bar, so one title shows; closed, the lower bar is back', async () => {
+    const layers = (file: boolean) => (
+      <Viewer open onClose={() => {}} title="Beach clean promo">
+        <Viewer open={file} onClose={() => {}} title="beach-cut.mp4" />
+      </Viewer>
+    );
+    const { rerender } = render(layers(true));
+    await screen.findByRole('dialog', { name: 'beach-cut.mp4' });
+    const task = () => screen.getByRole('dialog', { name: 'Beach clean promo', hidden: true });
+    await waitFor(() => expect(task().hasAttribute('data-covered')).toBe(true));
+    expect(screen.getByRole('dialog', { name: 'beach-cut.mp4' }).hasAttribute('data-covered')).toBe(false);
+    // the style that hides it (tests load no CSS)
+    const css = fs.readFileSync(new URL('./Viewer.css', here), 'utf8');
+    expect(css).toContain('.vw[data-covered]>.vw-bar{visibility:hidden}');
+    rerender(layers(false));
+    await waitFor(() => expect(task().hasAttribute('data-covered')).toBe(false));
   });
 
   it('passes the Escape that closes it, for what else it may be for', async () => {

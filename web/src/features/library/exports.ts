@@ -6,7 +6,7 @@ export { FilesPage } from './FilesPage';
 // A file anywhere: `files.view` shows a picture over the page (FileViewerHost, mounted once at the root) and opens any
 // other file as its page; FilePreview draws one in place (a task's Details), FileFrame one whose type is known (a
 // task's file at a version, an email's attachment).
-export { FileFrame, FilePreview, FileViewerHost } from './FileViewer';
+export { FileFrame, FilePreview, FileViewerHost, posterOf } from './FileViewer';
 // A file's record by its id (its name for a task's tab when the file is another task's), read under the file's own rule.
 export { fileQuery } from './queries';
 // "Signed by Ana Example · Nov 20, 5:40 AM", for a version a person's signing made (a task's file bar).

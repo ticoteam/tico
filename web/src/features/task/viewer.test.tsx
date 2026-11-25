@@ -5,7 +5,7 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot } from '@/actions';
 import { queryClient } from '@/data';
-import { FileFrame } from '@/features/library/exports';
+import { FileFrame, posterOf } from '@/features/library/exports';
 import { openTasksOver } from '@/lib';
 import { fakePdf } from '@/test/fakePdf';
 import type { TaskData } from './queries';
@@ -277,6 +277,17 @@ describe('the file viewer, by type', () => {
   it('plays a video with its controls', async () => {
     at({ mime: 'video/mp4' });
     expect((await screen.findByLabelText('Thing')).hasAttribute('controls')).toBe(true);
+  });
+
+  it('shows a video’s still until it plays', async () => {
+    at({ mime: 'video/mp4', poster: '/api/v2/files/f1/poster?v=1' });
+    expect((await screen.findByLabelText('Thing')).getAttribute('poster')).toBe('/api/v2/files/f1/poster?v=1');
+  });
+
+  it('a video file at its current version takes its still from its poster; an older version, or none, has no still', () => {
+    expect(posterOf({ poster_blob_id: 'b1' }, 'f 1', 3)).toBe('/api/v2/files/f%201/poster?v=3');
+    expect(posterOf({ poster_blob_id: 'b1' }, 'f1', 2, true)).toBeUndefined();
+    expect(posterOf({ poster_blob_id: null }, 'f1', 1)).toBeUndefined();
   });
 
   it('plays a sound with its controls', async () => {

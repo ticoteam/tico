@@ -261,6 +261,11 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   await expect(layers(page)).toHaveCount(2);
   expect(searchOf(page)).toMatchObject({ 'task.file': made.video });
   expect(searchOf(page)['task.tab']).toBe(tab);
+  // one title over the dim, the video's: the task's bar stays under the layer over it
+  await expect(page.locator('.vw-title:visible')).toHaveCount(1);
+  await expect(page.locator('.vw-title:visible')).not.toHaveText(made.title);
+  // the video shows its still until it plays
+  await expect(page.locator('video.fv-img')).toHaveAttribute('poster', /\/poster\?v=1$/);
   // the layer's way in finished (its title no longer crossing the task's)
   await page.waitForFunction(() => document.getAnimations().every((a) => a.playState !== 'running' || a.effect?.getComputedTiming().endTime === Infinity));
   await page.screenshot({ path: test.info().outputPath('made-video-1440.png') });

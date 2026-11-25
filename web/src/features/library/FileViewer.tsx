@@ -78,7 +78,13 @@ export interface PreviewProps {
   streams?: boolean;
   /** A task's PDF at its current version, shown to a person: it offers Sign (PdfSign.tsx). */
   signable?: boolean;
+  /** A video's still, shown until it plays. */
+  poster?: string | null;
 }
+/** A file's video still at its current version (its `poster_blob_id`), when it has one; none for an older version. */
+export const posterOf = (f: { poster_blob_id?: string | null } | undefined, id: string, n: number, older = false): string | undefined =>
+  !older && f?.poster_blob_id ? `/api/v2/files/${encodeURIComponent(id)}/poster?v=${n}` : undefined;
+
 /** Where a linked file lives (file-review.ts frvLink): only a web address, so a link never runs anything here. */
 export function linkOf(f: { locator?: string; open?: Record<string, unknown> | null } | undefined): string {
   const url = f?.locator === 'remote_link' && f.open?.type === 'external' ? f.open.url : undefined;
@@ -116,7 +122,7 @@ export function FileGet({ url, link }: { url: string; link: string }) {
 }
 
 /** One file's face, by its type, else its name. */
-export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false, streams = false, signable = false }: PreviewProps) {
+export function Preview({ id = '', version = 0, mime, kind, title, url, name, size: bytes, link, held = false, streams = false, signable = false, poster }: PreviewProps) {
   const view = viewOf(mime, kind, name ?? title);
   const asText = AS_TEXT.has(view);
   const shows = view !== 'office' && view !== 'none';
@@ -156,7 +162,7 @@ export function Preview({ id = '', version = 0, mime, kind, title, url, name, si
   if (view === 'video')
     return (
       <div className="fv-desk">
-        <video className="fv-img" src={src} controls aria-label={title} />
+        <video className="fv-img" src={src} poster={poster ?? undefined} controls aria-label={title} />
       </div>
     );
   if (view === 'audio')
@@ -272,6 +278,7 @@ export function FilePreview({ file, version }: { file: string; version?: number 
       name={shown?.name ?? (older ? '' : f.data.name)}
       size={shown?.size ?? (older ? undefined : f.data.size)}
       link={linkOf(f.data)}
+      poster={posterOf(f.data, file, n ?? 1, older)}
     />
   );
 }

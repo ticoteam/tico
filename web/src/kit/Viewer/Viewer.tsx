@@ -1,5 +1,5 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { createContext, useCallback, useContext, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
 import { IconButton } from '@/kit/IconButton';
 import { holdToasts } from '@/kit/Toast';
 import './Viewer.css';
@@ -32,6 +32,10 @@ export const InViewer = createContext(false);
 /** How many layers this one is opened from: 1 over the page, 2 from a layer (a file from a task's), and so on. */
 const Depth = createContext(0);
 
+/** The layer this one opens over, told while this one is open: its bar (title, controls) stays under this one's,
+    not drawn through the dim beside it. */
+const Cover = createContext<((on: boolean) => void) | null>(null);
+
 /** A pull this far down the bar on a phone lets it go; less springs it back. */
 const LET_GO = 96;
 
@@ -47,6 +51,14 @@ export function Viewer({ open, onClose, onClosed, title, meta, actions, look = '
   const depth = useContext(Depth) + 1;
   const hold = useCallback((el: HTMLDivElement | null) => (el ? holdToasts(el, depth) : undefined), [depth]);
   const from = useRef<number | null>(null);
+  const [covers, setCovers] = useState(0);
+  const cover = useCallback((on: boolean) => setCovers((n) => n + (on ? 1 : -1)), []);
+  const under = useContext(Cover);
+  useEffect(() => {
+    if (!open || !under) return;
+    under(true);
+    return () => under(false);
+  }, [open, under]);
   const down = (e: PointerEvent<HTMLDivElement>) => {
     // a mouse drags nothing here; a finger or pen pulls the layer down from its bar
     if (e.pointerType === 'mouse' || (e.target as Element).closest('button, a')) return;
@@ -76,6 +88,7 @@ export function Viewer({ open, onClose, onClosed, title, meta, actions, look = '
             aria-label={title}
             onKeyDown={onKeyDown}
             data-pulled={pull > 0 || undefined}
+            data-covered={covers > 0 || undefined}
             style={pull ? { transform: `translateY(${pull}px)` } : undefined}
           >
             <div className="vw-bar" onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
@@ -88,7 +101,9 @@ export function Viewer({ open, onClose, onClosed, title, meta, actions, look = '
             </div>
             <div className="vw-body">
               <InViewer value>
-                <Depth value={depth}>{children}</Depth>
+                <Depth value={depth}>
+                  <Cover value={cover}>{children}</Cover>
+                </Depth>
               </InViewer>
             </div>
             {/* the toasts while it is open: an Undo stays in reach, inside its focus trap */}

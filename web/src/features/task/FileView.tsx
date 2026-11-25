@@ -100,7 +100,7 @@ export function FileTab({ task, f, version }: { task: string; f: TaskFileView; v
       </>
     );
   // At its current version a person may sign it here as in its file view; an older version pinned by an ask is read only.
-  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} signable={isPerson && v === now} />;
+  const file = <FileFrame id={f.id} version={v.n} mime={v.mime} title={name} url={v.url} name={stored} size={v.size} poster={v.poster_url} signable={isPerson && v === now} />;
   return <PageOrFile task={task} id={f.id} title={name} page={v.mime.startsWith('text/html')} pin={version} file={file} />;
 }
 
@@ -132,7 +132,7 @@ function Body({ f, v, onPicture, signable = false }: { f: TaskFileView; v: FileV
   // Each version keeps the name it was stored under: an older draft opens and saves as it was named then.
   const stored = v.name || f.name;
   if (isWord(stored, v.mime)) return <WordPages url={v.url} name={`${name}, v${v.n}`} />;
-  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} signable={signable} />;
+  return <FileFrame id={f.id} version={v.n} mime={v.mime} title={`${name}, v${v.n}`} url={v.url} name={stored} size={v.size} poster={v.poster_url} signable={signable} />;
 }
 
 /** A file open one layer over the task (more.js fileBar): back to the tab under it, its name, which of the task's files
