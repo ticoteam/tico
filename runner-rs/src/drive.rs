@@ -209,6 +209,8 @@ impl Runner {
         };
         let chat_goal = goal.chat_goal.clone();
         let mut goal_running = chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
+        // Sticky: a run that had a goal keeps the goal's own lifecycle once the goal pauses or is met (no overload retry).
+        let mut goal_run = goal_running;
         let revision = chat_goal
             .as_ref()
             .map_or(Value::Null, |g| g["updated_at"].clone());
@@ -547,6 +549,7 @@ impl Runner {
                         row["revision"] = revision.clone();
                         self.state.append(aid, "goal", &row)?;
                         goal_running = event["status"] == "active" && pausing.is_none();
+                        goal_run |= goal_running;
                     }
                     let record_key = text_of(&record);
                     if continued && (record.is_null() || !tried.contains(&record_key)) {
@@ -567,7 +570,7 @@ impl Runner {
                     && overloads < OVERLOAD_TRIES
                     && matches!(host, Host::Codex(_))
                     && !clearing
-                    && !goal_running
+                    && !goal_run
                     && pausing.is_none()
                     && salvage.is_none()
                     && truthy(event.get("limit"))
@@ -800,6 +803,8 @@ impl Runner {
                 break;
             }
             if retry.as_ref().is_some_and(|(at, _)| Instant::now() >= *at)
+                && Instant::now() < d.limit
+                && !self.stopping()
                 && !d.flags.stopped.load(Ordering::SeqCst)
                 && !d.flags.lost.load(Ordering::SeqCst)
             {
@@ -812,6 +817,13 @@ impl Runner {
                         if matches!(host, Host::Codex(c) if c.turn_sent()) {
                             tool_ran = true;
                             d.flags.tool_ran.store(true, Ordering::SeqCst);
+                            // Not worded as a busy model: the hub then settles the run as a failure, never as a
+                            // capacity wait whose next turn sends the prompt again (execution.py busy).
+                            rows.push((
+                                "error".into(),
+                                json!({"error": "Retry start uncertain: the turn may have run, so it is not run again"})
+                                    .to_string(),
+                            ));
                         }
                         overloads = OVERLOAD_TRIES;
                         queue.push(failed);
