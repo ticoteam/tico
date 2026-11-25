@@ -337,10 +337,10 @@ class PageApps:
             raise Problem("writer_gone", "This app's writer no longer keeps this page's data", 403)
 
     def call(self, who: Any, fid: str, body: AppCall) -> dict[str, Any]:
-        if body.op not in OPS:
-            raise Problem("validation", "op is one of " + ", ".join(OPS), 422)
         if who.view and body.op not in READ_OPS:  # a bot's read-only view (backend/app_view.py) runs only the reads
             raise Problem(app_view.CODE, app_view.REFUSED, 403)
+        if body.op not in OPS:
+            raise Problem("validation", "op is one of " + ", ".join(OPS), 422)
         # One snapshot: the version checked current is the one whose data the op reads.
         with self.store.read_transaction() as c:
             decl, writer, row = self.check_open(c, who, fid, body.version, body.nonce)

@@ -3,11 +3,13 @@ bot opens it from inside a run and reads as itself; every write is refused and c
 goes off, when it expires and when the run ends; each turn and each view is in the audit log."""
 
 import pytest
+from fastapi import Request
 
 from backend import app_view, page_apps, visuals
 from backend.store import H, Problem
 from backend.tests.helpers.api import expire, get, headers, post, setup_attempt
 from backend.tests.helpers.files import turn
+from backend.tests.helpers.member_bots import agent_ops, turn as agent_ops_turn  # noqa: F401  (fixture)
 from backend.tests.helpers.pages import page
 
 
@@ -257,3 +259,25 @@ def test_a_view_runs_its_own_page_apps_reads_and_none_of_its_writes(api):
     assert [r[0] for r in rows] == ["n1"]
     said = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
     assert "From a view" not in {m["body"] for m in said}
+
+
+def test_a_view_never_acts_for_the_person_who_asked(api, agent_ops):
+    """Agent Ops' view, with the on-behalf header, still reads as Agent Ops: a view is never anyone else's."""
+    attempt = agent_ops_turn(api, agent_ops, person="ana-test")
+    turned_on(api, bot="botops")
+    token = opened(api, attempt)["token"]
+
+    def identity(request: Request, fid: str):
+        who = request.state.identity
+        return {"actor": who.actor, "view": who.view}
+
+    api.app.add_api_route("/api/v2/pages/{fid}/app", identity, methods=["POST"])
+    api.app.router.routes.insert(0, api.app.router.routes.pop())  # ahead of the real one: whose rights the call has
+    for cite in ({}, {"X-Tico-On-Behalf-Of": "turn"}, {"X-Tico-On-Behalf-Of": "default"}):
+        r = api.post("/api/v2/pages/file-x/app", json={}, headers={**headers(token), **cite})
+        assert r.status_code == 200 and r.json()["actor"] == "bot:botops" and r.json()["view"], (cite, r.text)
+    # The run's own token is delegated as before, so the view is what keeps it its own.
+    lent = api.post(
+        "/api/v2/pages/file-x/app", json={}, headers={**headers(attempt["token"]), "X-Tico-On-Behalf-Of": "turn"}
+    )
+    assert lent.status_code == 200 and lent.json()["actor"] == "human:ana", lent.text
