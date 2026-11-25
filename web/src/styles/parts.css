@@ -255,7 +255,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .rail-sec h3+.rail-row{margin-top:-4px}
 
 /* ---------- task view: list, standing line, tabs, frame, answer ---------- */
-.app-task,.app-flow{grid-template-columns:var(--tlist-w) minmax(0,1fr) var(--ask-w)}
 .page-wide{grid-column:2/-1}
 
 /* the list sheet, where navigation was */
@@ -263,12 +262,7 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-pick{height:var(--ctl);border:0;background:none;border-radius:var(--r-ctl);padding:0 6px 0 10px;display:inline-flex;align-items:center;gap:4px;font-weight:var(--w-title);font-size:var(--t-nav-name);
   transition:background var(--dur-fast) var(--ease)}
 .li-pick .ico{color:var(--muted)}
-/* the head as a crumb (__root ListUp): Tasks, a quiet chevron, then the picker; the picker's own padding sits after it */
-.li-up{height:var(--ctl);display:inline-flex;align-items:center;padding:0 4px 0 10px;border-radius:var(--r-ctl);color:var(--muted);font-size:var(--t-nav-name);text-decoration:none;flex:none;
-  transition:background var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
-.li-up:hover{background:var(--well-2);color:var(--ink)}
 .li-sep{color:var(--faint);flex:none}
-.li-up~.li-pick{padding-left:4px;min-width:0}
 .li-pick:hover{background:var(--well-2)}
 /* a pipeline's list (__root PipelineList): the pipeline, quiet, › its stage shown and that stage's count, one picker;
    short of room the pipeline's name gives way first */
@@ -282,8 +276,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 .li-head~.filter-row{padding:0 10px 8px}
 .li-more{width:100%;border:0;background:none;text-align:left;color:var(--muted)}
 
-.li-run{flex:none;display:flex;align-items:center;gap:2px;height:30px;padding:0 10px 4px 16px;font-size:var(--t-sm);color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
-.li-run b{color:var(--ink)}
 .li-body{padding:0 8px 28px;display:grid;grid-template-columns:minmax(0,1fr);align-content:start;gap:1px}
 .li-stage{height:34px;display:flex;align-items:flex-end;padding:0 8px 6px;font-size:var(--t-xs);font-weight:var(--w-text);color:var(--muted)}
 .li-stage:first-child{height:22px}
@@ -411,7 +403,6 @@ time{font-size:var(--t-xs);color:var(--muted);white-space:nowrap;font-variant-nu
 
   /* a task on a phone: one column. Back and the place in the run, the title, where it stands, then one row of tabs.
      The answer is one slim row docked above the bar. */
-  .app-task,.app-flow{display:block}
   .tv-head{padding:0 16px}
   .tv-more{right:4px;top:2px}
   .tv-title{order:1;margin-top:2px;font-size:20px;line-height:1.2;max-width:none}

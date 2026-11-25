@@ -912,8 +912,8 @@ describe('Needs you’s read, from the menu', () => {
     expect(shellDraws.n).toBe(before);
   });
 
-  it('is read once where tasks carry the Dot: a task, a board', async () => {
-    for (const at of ['/task/x1', '/tasks/eng']) {
+  it('is read once where tasks carry the Dot: Tasks with a task over it, a board', async () => {
+    for (const at of ['/tasks?task=x1', '/tasks/eng']) {
       queryClient.removeQueries({ queryKey: ['flow'], exact: true });
       show(at);
       await waitFor(() => expect(reads()).toBeGreaterThan(0));

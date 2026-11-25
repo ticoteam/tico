@@ -1,12 +1,16 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { createContext, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react';
+import { createContext, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
 import { IconButton } from '@/kit/IconButton';
+import { holdToasts } from '@/kit/Toast';
 import './Viewer.css';
 
 export interface ViewerProps {
   /** Shown, or closed (null content is fine: nothing draws while closed). */
   open: boolean;
-  onClose: () => void;
+  /** `esc`: the Escape that asks it, to leave to whatever else it is for (a drawer of its own, another layer). */
+  onClose: (esc?: KeyboardEvent) => void;
+  /** Once it has gone (its fade done): what it drew can be let go. */
+  onClosed?: () => void;
   /** What it is, by its name: a file's title, a page's, a picture's. Read aloud as the dialog's name. */
   title: string;
   /** Beside the title, quieter: the kind ("PDF"), or where you are in a set ("2 of 5"). */
@@ -16,7 +20,7 @@ export interface ViewerProps {
   /** `sheet`: the thing sits on a sheet of its own (a page, a PDF, a table, text). `bare`: on the dim itself, centred
       (a picture). */
   look?: 'sheet' | 'bare';
-  onKeyDown?: (e: KeyboardEvent) => void;
+  onKeyDown?: (e: KeyEvent) => void;
   /** Its own size beside the look (a live page's dialog). */
   className?: string;
   children?: ReactNode;
@@ -34,7 +38,7 @@ const LET_GO = 96;
  * fills the rest. Escape, Close or a click on the dim closes it; on a phone it fills the screen and a pull down on its
  * bar closes it. Focus stays inside while it is open and goes back after.
  */
-export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
+export function Viewer({ open, onClose, onClosed, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
   const [pull, setPull] = useState(0);
   const from = useRef<number | null>(null);
   const down = (e: PointerEvent<HTMLDivElement>) => {
@@ -53,7 +57,11 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
     setPull(0);
   };
   return (
-    <BaseDialog.Root open={open} onOpenChange={(next) => !next && onClose()}>
+    <BaseDialog.Root
+      open={open}
+      onOpenChange={(next, d) => !next && onClose(d.reason === 'escape-key' ? (d.event as KeyboardEvent) : undefined)}
+      onOpenChangeComplete={(now) => !now && onClosed?.()}
+    >
       <BaseDialog.Portal>
         <BaseDialog.Backdrop className="scrim kit-scrim vw-scrim" />
         <BaseDialog.Viewport className="scrim kit-viewport vw-viewport" onClick={(e) => e.target === e.currentTarget && onClose()}>
@@ -75,6 +83,8 @@ export function Viewer({ open, onClose, title, meta, actions, look = 'sheet', on
             <div className="vw-body">
               <InViewer value>{children}</InViewer>
             </div>
+            {/* the toasts while it is open: an Undo stays in reach, inside its focus trap */}
+            <div className="vw-toasts" ref={(el) => (el ? holdToasts(el) : undefined)} />
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

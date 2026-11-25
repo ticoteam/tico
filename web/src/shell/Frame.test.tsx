@@ -84,6 +84,19 @@ describe('Frame', () => {
     expect(handle('Tico').getAttribute('aria-valuenow')).toBe('300');
   });
 
+  it('folds nothing for a key pressed in a layer over the sheets (a task open over the page)', () => {
+    resize(1440);
+    render(<Frame {...slots} arrangement="page" />);
+    const layer = document.body.appendChild(document.createElement('div'));
+    layer.className = 'vw';
+    const inside = layer.appendChild(document.createElement('button'));
+    fireEvent.keyDown(inside, { key: '[' });
+    fireEvent.keyDown(inside, { key: 'j', metaKey: true });
+    layer.remove();
+    expect(screen.queryByRole('button', { name: 'Open the menu' })).toBeNull();
+    expect(localStorage.getItem(KEY)).toBeNull();
+  });
+
   it('folds the menu by hand with [, and it stays folded on a deeper page (a panel, a teammate)', () => {
     resize(1440);
     const { rerender } = render(<Frame {...slots} arrangement="page" />);

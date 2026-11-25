@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as z from 'zod/mini';
 import { keyHandler, shortcutsOf, type Shortcut } from './keys';
-import { defineAction, type AnyAction } from './types';
+import { defineAction, type AnyAction, type Ctx } from './types';
 
 // the real module, so feature actions that set up their queries on load still find what they use
 vi.mock('@/data', async (real) => ({ ...(await real<object>()), queryClient: {} }));
@@ -66,5 +66,17 @@ describe('shortcuts', () => {
   it('refuses keys the browser keeps and the same key twice', () => {
     expect(() => table(act('a.b', { 'mod+w': {} }))).toThrow(/kept by the browser/);
     expect(() => table(act('a.b', { '[': {} }), act('c.d', { '[': {} }))).toThrow(/on both a.b and c.d/);
+  });
+});
+
+describe('with a task open over the page', () => {
+  it('[, ] and Cmd+J fold nothing behind it; with none open they fold the sheets', async () => {
+    const { fold } = await import('./base');
+    const at = (search: object) => ({ router: { state: { location: { search } } } }) as unknown as Ctx;
+    const keys = fold.keys as Record<string, (ctx: Ctx) => unknown>;
+    for (const k of ['[', ']', 'mod+j']) {
+      expect(keys[k]!(at({ task: 12, list: 'eng' }))).toBeNull();
+      expect(keys[k]!(at({ view: 'list' }))).toHaveProperty('sheet');
+    }
   });
 });

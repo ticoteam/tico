@@ -256,6 +256,8 @@ function Drawn(p: FrameProps & { arr: Arrangement; win: ReturnType<typeof useWin
   /* shortcuts (layout.md 5.1): Cmd/Ctrl+J Tico, [ the menu, ] widgets or a call's side, Escape */
   const onKey = useEffectEvent((e: globalThis.KeyboardEvent) => {
     if (mode === 'cards' || L.mode !== 'sheets') return;
+    // a layer over the sheets (a task, a file) holds the keys: nothing behind it folds or takes the focus
+    if (e.target instanceof Element && e.target.closest('.vw')) return;
     const ticoEl = places.current.get('tico');
     if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === 'j') {
       e.preventDefault();

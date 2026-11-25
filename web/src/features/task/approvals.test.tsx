@@ -18,7 +18,7 @@ import { fakePdf } from '@/test/fakePdf';
 import { decisionName, effectOf, sendTitle } from './model';
 import { flowCountQuery, flowQuery, pipelinesQuery } from '@/features/tasks/routing';
 import { taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
-import { loadTask } from './routing';
+import { loadTask, openCold } from './routing';
 import { TaskChat, TaskPage } from './TaskPage';
 
 /* The decision (plan/approvals.html): the thing asked about is the first tab, one box decides it, Approve is bound to
@@ -950,6 +950,16 @@ describe('the decision', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ url: '/api/v2/tasks/t1/comments', body: { text: 'UPS', ask: 'qmark:m1' } }));
     await waitFor(() => expect(openOf(router.state.location.search as Record<string, unknown>)?.task).toBe('13'));
+  });
+
+  it('a link to a task whose pipeline is retired opens over Tasks, Needs you beside it, never a board that is gone @approvals', async () => {
+    queryClient.setQueryData(pipelinesQuery.queryKey, [{ id: 'p9', name: 'Ops', stages: [] }] as never);
+    const at = (pathname: string) =>
+      openCold({ location: { pathname, search: { chat: 'agent:lo' } }, context: { queryClient } }).catch((r: { options: { to: string; search: Record<string, unknown> } }) => r.options);
+    expect(await at('/tasks/p1/12/email')).toMatchObject({ to: '/tasks', search: { chat: 'agent:lo', task: 12, 'task.tab': 'email' } });
+    expect((await at('/tasks/p1/12')).search).not.toHaveProperty('list');
+    // a pipeline still there: its board, its list beside the task
+    expect(await at('/tasks/p9/12')).toMatchObject({ to: '/tasks/p9', search: { task: 12, list: 'p9' } });
   });
 
   it('Back closes the task: to the list it was opened from, else its board @approvals', async () => {

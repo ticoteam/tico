@@ -1,17 +1,22 @@
 /* The phone: the page, three cards that can stand over it (Tico, the menu, an open chat) and one bar of icons at the
-   bottom: Search · Tico · Company · Agent · Task. Company is the page you are on (on a task, the way back to where it
-   was opened from); Agent is the open chat, there only while one is; Task is the open task. Which card is up is device
-   state: a tap on the bar changes it and adds nothing to the history, so Back is navigation only. */
+   bottom: Search · Tico · Company · Agent. Company is the page you are on; Agent is the open chat, there only while one
+   is. A task opens over all of it (the task modal). Which card is up is device state: a tap on the bar changes it and
+   adds nothing to the history, so Back is navigation only. */
 import { useRouter } from '@tanstack/react-router';
 import { createContext, use, useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
 import { DockSlot } from '@/kit/Dock';
 import { Icon } from '@/kit/Icon';
+import { coldOf, openOf, stuckToBottom, watchKeyboard, type Keys } from '@/lib';
 import { Dot } from '@/tico/dot';
 import { TICO_MARK } from '@/shell/layout';
-import { watchKeyboard, stuckToBottom } from './keyboard';
-import type { Keys } from './keyboard';
 import './phone.css';
+
+/** A link that opens a task over the page (`?task=`, or a task's own address), not a page of its own. */
+const opensTask = (a: HTMLAnchorElement): boolean => {
+  const search = Object.fromEntries(new URLSearchParams(a.search));
+  return !!(openOf(search) ?? coldOf(a.pathname, search));
+};
 
 export type PhoneCard = 'none' | 'tico' | 'menu' | 'chat';
 type Slot = Exclude<PhoneCard, 'none'>;
@@ -202,11 +207,13 @@ export function PhoneCards({ page, tico, menu, chat, faces = {}, labels = {}, tu
     }
   };
 
-  // a page opened from a card (a place in the menu, an approval card in a chat, a tracked task in Tico's): the card
-  // goes down and the page comes forward. A link marked `data-stay` changes what the card holds, so it stays up.
+  // a page opened from a card (a place in the menu, a page linked in a chat): the card goes down and the page comes
+  // forward. A task (an approval card, a tracked task in Tico's) opens over everything, the card left as it is for its
+  // Close; a link marked `data-stay` changes what the card holds, so it stays up too.
   const onCardClick = (e: MouseEvent<HTMLElement>) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href]');
     if (!a || a.target || a.origin !== location.origin || a.closest('[data-stay]')) return;
+    if (opensTask(a)) return;
     tuck();
   };
 

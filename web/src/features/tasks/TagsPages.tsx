@@ -24,12 +24,18 @@ import './tasks.css';
 
 /** What narrows Tags or a tag's page, as the address holds it (`tags.filter`). */
 function useNarrow() {
-  const search = useLocation({ select: (l) => l.search }) as Record<string, unknown>;
-  return {
-    q: typeof search.q === 'string' ? search.q : '',
-    owner: typeof search.owner === 'string' ? search.owner : '',
-    late: search.late === true || search.late === 'true',
-  };
+  // the three words alone: a task opened over the page draws nothing here
+  return useLocation({
+    select: (l) => {
+      const search = l.search as Record<string, unknown>;
+      return {
+        q: typeof search.q === 'string' ? search.q : '',
+        owner: typeof search.owner === 'string' ? search.owner : '',
+        late: search.late === true || search.late === 'true',
+      };
+    },
+    structuralSharing: true,
+  });
 }
 
 /** The head's search field: typing narrows the page after a short pause, and the address keeps it. */

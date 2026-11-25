@@ -428,8 +428,9 @@ const some = (n: number | undefined) => (n ? n : undefined);
 /** A menu row's press: the same action Tico would run. */
 const press = (id: string, input: unknown = {}) => () => void run(id, input, { via: 'click' });
 
-/** The pages that mark tasks with the Dot or list Needs you: Tasks and its boards, a task, Roadmap, Tags. */
-const DOTTED = /^(?:\/next)?\/(?:tasks|task|roadmap|tags)(?:\/|$)/;
+/** The pages that mark tasks with the Dot or list Needs you: Tasks and its boards, Roadmap, Tags. (A task opens over
+    a page; its list beside it reads what it shows.) */
+const DOTTED = /^(?:\/next)?\/(?:tasks|roadmap|tags)(?:\/|$)/;
 
 function AppMenu({ note }: { note: ReactNode }) {
   const { data: me } = useQuery(meQuery);
@@ -445,8 +446,8 @@ function AppMenu({ note }: { note: ReactNode }) {
   const [access, setAccess] = useState<MenuTeam | null>(null);
   const { data: pipelines } = useQuery(pipelinesQuery);
   const { data: flow } = useQuery(flowCountQuery);
-  // Needs you's tasks, read once where its Dots or its list show (Tasks, a board, Roadmap, Tags, a task): the Dot on a
-  // task's own page reads it, never reading it itself. Elsewhere the menu reads only its count.
+  // Needs you's tasks, read once where its Dots or its list show (Tasks, a board, Roadmap, Tags). Elsewhere the menu
+  // reads only its count.
   const dotted = useLocation({ select: (l) => DOTTED.test(l.pathname) });
   useQuery({ ...flowQuery, enabled: badgesEnabled && dotted, select: () => null });
   const { data: support } = useQuery({ ...supportUnreadQuery, enabled: badgesEnabled });

@@ -188,21 +188,29 @@ describe('the phone’s chat card', () => {
     expect(up()).toBe('none');
   });
 
-  it('a page opened from the chat (an approval card) puts it away; a link marked to stay changes the card in place', () => {
+  it('a task opened from the chat (an approval card) opens over it, the card left up for its Close; a page puts it away', () => {
     const chat = (
       <>
         <a href="/next/tasks/p1/12?chat=agent%3Agm&via=thread" onClick={(e) => e.preventDefault()}>
           Approve
         </a>
-        <a href="/next/tasks/p1/12" data-stay onClick={(e) => e.preventDefault()}>
-          Task chat
+        <a href="/next/people?task=12&list=p1" onClick={(e) => e.preventDefault()}>
+          Over
+        </a>
+        <a href="/next/tasks/p1" data-stay onClick={(e) => e.preventDefault()}>
+          Board
+        </a>
+        <a href="/next/people/ana" onClick={(e) => e.preventDefault()}>
+          Ana
         </a>
       </>
     );
     render(cards({ chat }));
-    fireEvent.click(screen.getByRole('link', { name: 'Task chat' }));
-    expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
-    fireEvent.click(screen.getByRole('link', { name: 'Approve' }));
+    for (const name of ['Approve', 'Over', 'Board']) {
+      fireEvent.click(screen.getByRole('link', { name }));
+      expect(screen.getByRole('dialog', { name: 'Finance Owner' })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('link', { name: 'Ana' }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

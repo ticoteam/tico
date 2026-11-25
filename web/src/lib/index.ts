@@ -13,3 +13,4 @@ export { FRAME_POLICY, safeFrame } from './safeFrame';
 export { decodeWords, firstLines, parseEml, parseIcs, parseVcf, stripAnsi, type Contact, type Invite, type Mail } from './smallFiles';
 export { isFolder, zipEnd, zipEntries, ZIP_DIR_MAX, ZIP_TAIL, type ZipEnd, type ZipEntry } from './zip';
 export { hearListClicks, openTasksOver } from './openOver';
+export { stuckToBottom, watchKeyboard, type Keys } from './keyboard';

@@ -28,16 +28,19 @@
 }
 
 :where(html[data-layout="cards"]){
-  .vw-body>.tmd{display:flex;flex-direction:column}
+  /* --kb: the phone's keyboard, while something in the modal is typed in (TaskModal) */
+  .vw-body>.tmd{display:flex;flex-direction:column;padding-bottom:var(--kb,0px)}
+  /* fields are 16px on touch so iOS does not zoom on focus (platforms.md 2.4), as on the phone's cards */
+  .tmd :is(input,textarea,select,[contenteditable]){font-size:max(16px,1em)}
   .tmd>.tmd-panes{display:flex;justify-content:center;flex:none;padding:0 var(--s-4) var(--s-2)}
   /* a phone hides every list and chat sheet (styles/parts.css); here they are the modal's own */
   .tmd>.tmd-chat,.tmd>.tmd-list{display:flex}
   .tmd>.tmd-chat,.tmd>.tmd-task{flex:1;border:0}
-  .tmd[data-pane="task"]>.tmd-chat,.tmd[data-pane="chat"]>.tmd-task{display:none}
+  .tmd:not([data-pane="chat"])>.tmd-chat,.tmd:not([data-pane="task"])>.tmd-task{display:none}
   .tmd>.tmd-tab{display:none}
   .tmd>.tmd-dock{flex:none}
   .tmd>.tmd-dock>.dock{display:flex;padding-bottom:var(--s-2)}
-  .tmd>.tmd-more{display:flex;align-items:center;justify-content:center;gap:var(--s-1);flex:none;height:44px;padding:0 0 calc(env(safe-area-inset-bottom));border:0;border-top:1px solid var(--line);background:var(--raised);color:var(--muted);font-size:var(--t-sm);cursor:pointer}
+  .tmd>.tmd-more{display:flex;align-items:center;justify-content:center;gap:var(--s-1);flex:none;height:44px;padding:0;border:0;border-top:1px solid var(--line);background:var(--raised);color:var(--muted);font-size:var(--t-sm);cursor:pointer}
   .tmd>.tmd-list{position:absolute;inset:auto 0 0;width:auto;height:70%;z-index:var(--z-pop);border:0;border-radius:0;border-top-left-radius:var(--r-pane);border-top-right-radius:var(--r-pane);box-shadow:var(--lift-3);transform:translateY(100%);visibility:hidden}
   .tmd.is-list-up>.tmd-list{transform:none;visibility:visible}
   .tmd .tv{height:auto}

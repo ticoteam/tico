@@ -1,11 +1,11 @@
 import type { AnyRouter } from '@tanstack/react-router';
 import * as z from 'zod/mini';
-import { withOpen } from '@/lib';
+import { openOf, withOpen } from '@/lib';
 import { openSearch } from '@/search';
 import { resetSheetSizes } from '@/shell';
 import { bound } from './bind';
 import * as copy from './copy';
-import { defineAction } from './types';
+import { defineAction, type Ctx } from './types';
 
 /* The base set every page shares. Navigation pushes (Back undoes Tico's moves); filters replace (architecture.md 3). */
 
@@ -56,6 +56,11 @@ export const closeChat = defineAction({
 
 const sheet = z.enum(['tico', 'menu', 'list', 'widgets', 'side'] as const);
 
+const behind =
+  <T>(input: T) =>
+  (ctx: Ctx): T | null =>
+    openOf(ctx.router.state.location.search as Record<string, unknown>) ? null : input;
+
 /** `folded` left out flips it, which is what the keys do. Never touches history. */
 export const fold = defineAction({
   id: 'shell.fold',
@@ -68,7 +73,8 @@ export const fold = defineAction({
   },
   did: ({ sheet, folded }) => copy.didFold(copy.sheetName[sheet] ?? sheet, folded),
   target: ({ sheet }) => ({ kind: 'sheet', id: sheet }),
-  keys: { '[': { sheet: 'menu' }, ']': { sheet: 'widgets' }, 'mod+j': { sheet: 'tico' } },
+  // none while a task is open over the page: the sheets behind it stay as they are
+  keys: { '[': behind({ sheet: 'menu' }), ']': behind({ sheet: 'widgets' }), 'mod+j': behind({ sheet: 'tico' }) },
 });
 
 /** Forgets this device's sheet widths and folds; every open window follows. */

@@ -1,4 +1,6 @@
 import { Toast } from '@base-ui/react/toast';
+import { useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
 import { Icon } from '@/kit/Icon';
 import './Toast.css';
 
@@ -53,13 +55,38 @@ export function closeToast(id: string) {
   manager.close(id);
 }
 
+/* Where the toasts stand: at the page's foot, or in the layer open over it (a Viewer), whose focus trap and dim would
+   leave them, and an Undo, out of reach. The last layer opened holds them. */
+const hosts: HTMLElement[] = [];
+const heard = new Set<() => void>();
+const hear = (on: () => void) => {
+  heard.add(on);
+  return () => void heard.delete(on);
+};
+const host = () => hosts.at(-1) ?? null;
+
+/** A layer over the page holds the toasts while it is open; the returned function gives them back. */
+export function holdToasts(el: HTMLElement): () => void {
+  hosts.push(el);
+  heard.forEach((on) => on());
+  return () => {
+    const at = hosts.lastIndexOf(el);
+    if (at >= 0) hosts.splice(at, 1);
+    heard.forEach((on) => on());
+  };
+}
+
 /** Where toasts show. The shell mounts this once. */
 export function Toasts() {
+  const over = useSyncExternalStore(hear, host, () => null);
+  const viewport = (
+    <Toast.Viewport className="toasts">
+      <List />
+    </Toast.Viewport>
+  );
   return (
     <Toast.Provider toastManager={manager} timeout={5000} limit={3}>
-      <Toast.Viewport className="toasts">
-        <List />
-      </Toast.Viewport>
+      {over ? createPortal(viewport, over) : viewport}
     </Toast.Provider>
   );
 }

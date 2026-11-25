@@ -2,6 +2,7 @@ import type { QueryClient } from '@tanstack/react-query';
 import { redirect, useRouterState } from '@tanstack/react-router';
 import { useMemo } from 'react';
 import { timelineQuery } from '@/conversation';
+import { pipelinesQuery } from '@/features/tasks/routing';
 import { threadQuery } from '@/features/threads/routing';
 import { coldOf, coldPage, openOf, type TaskWords } from '@/lib';
 import { decisionOf, isPage, tabsOf, targetOf } from './model';
@@ -56,8 +57,13 @@ export function useTaskWords(): TaskWords & { list?: string } {
 }
 
 /** A task's own address loaded with nothing on screen (a link, a bookmark, a reload, a new tab): the task over the page
-    it belongs on, its board or Tasks (lib coldPage). In the app its links open over the page they are on (router.tsx). */
-export function openCold({ location }: { location: { pathname: string; search: unknown } }): never {
-  const cold = coldOf(location.pathname.replace(/^\/next(?=\/|$)/, ''), location.search as Record<string, unknown>);
-  throw redirect({ ...(cold ? coldPage(cold, location.search as Record<string, unknown>) : { to: '/tasks' }), replace: true } as never);
+    it belongs on, its board or Tasks (lib coldPage); a pipeline that is gone (retired) has no board, so Tasks, with
+    Needs you beside it. In the app its links open over the page they are on (router.tsx). */
+export async function openCold({ location, context }: { location: { pathname: string; search: unknown }; context: { queryClient: QueryClient } }): Promise<never> {
+  const search = location.search as Record<string, unknown>;
+  const cold = coldOf(location.pathname.replace(/^\/next(?=\/|$)/, ''), search);
+  const p = cold?.pipeline;
+  // a read that fails keeps the board the link names
+  const known = !p || p === 'all' || (await context.queryClient.ensureQueryData(pipelinesQuery).then((ps) => ps.some((x) => x.id === p), () => true));
+  throw redirect({ ...(cold ? coldPage(known ? cold : { ...cold, pipeline: undefined }, search) : { to: '/tasks' }), replace: true } as never);
 }

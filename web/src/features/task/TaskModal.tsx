@@ -9,7 +9,7 @@ import { IconButton } from '@/kit/IconButton';
 import { useCards } from '@/kit/Popover';
 import { Segmented } from '@/kit/Segmented';
 import { Viewer } from '@/kit/Viewer';
-import { closeTask, hearPlaces, openOf, othersListed, type Steps } from '@/lib';
+import { closeTask, hearPlaces, openOf, othersListed, watchKeyboard, type Steps } from '@/lib';
 import { CHAT } from './model';
 import { taskDetailQuery, taskRefQuery } from './queries';
 import { loadTask } from './routing';
@@ -41,8 +41,10 @@ export function TaskModal() {
   if (open && open !== last) setLast(open);
   const shown = open ?? last;
   const task = shown?.task ?? '';
-  const id = useQuery({ ...taskRefQuery(task), enabled: !!task }).data;
-  const t = useQuery({ ...taskDetailQuery(id), enabled: false }).data;
+  const ref = useQuery({ ...taskRefQuery(task), enabled: !!task });
+  const id = ref.data;
+  const read = useQuery({ ...taskDetailQuery(id), enabled: false });
+  const t = read.data;
   const me = useQuery(meQuery).data?.id;
   const client = useQueryClient();
   const cards = useCards();
@@ -57,17 +59,21 @@ export function TaskModal() {
 
   // each task opened goes to the person's page history, by its own name
   const title = t?.title;
+  const visit = open?.task;
   useEffect(() => {
-    if (!open || !title) return;
-    const at = setTimeout(() => recordVisit(`/task/${open.task}`, title), 400);
+    if (!visit || !title) return;
+    const at = setTimeout(() => recordVisit(`/task/${visit}`, title), 400);
     return () => clearTimeout(at);
-  }, [open?.task, title, open]);
+  }, [visit, title]);
 
-  // a phone shows the task or its chat: the chat when the address names it or a ❓ in it waits on the person
-  const asked = !!t && questionsFor(t, me).length > 0;
-  const [pane, setPane] = useState<{ task: string; pane: Pane } | null>(null);
-  const first: Pane = words?.tab === CHAT || asked ? 'chat' : 'task';
-  const on = pane?.task === task ? pane.pane : first;
+  // a phone shows the task or its chat, chosen once the task is read (never flipped after): the chat when the address
+  // names it or a ❓ in it waits on the person; a session picked later (Details) raises the chat
+  const [pane, setPane] = useState<{ task: string; pane: Pane; session?: string } | null>(null);
+  const session = words?.session;
+  if (task && pane?.task !== task && (t || read.isError || ref.isError))
+    setPane({ task, session, pane: words?.tab === CHAT || session || (t && questionsFor(t, me).length) ? 'chat' : 'task' });
+  else if (pane?.task === task && session && session !== pane.session) setPane({ task, session, pane: 'chat' });
+  const on = pane?.task === task ? pane.pane : undefined;
   // the list pulled up (a phone) or out (a narrow window) for this task: a task picked from it folds it again
   const [upFor, setUpFor] = useState<string | null>(null);
   const listUp = upFor === task;
@@ -75,18 +81,41 @@ export function TaskModal() {
   const others = useSyncExternalStore(hearPlaces, othersListed);
   const [dock, setDock] = useState<HTMLElement | null>(null);
 
-  const close = () => {
-    if (!fileOpen) closeTask(router as unknown as Steps);
+  // the phone's keyboard: the modal sits on a layer of its own, outside the phone's cards, so it rides the keys itself,
+  // its bottom kept above them while something in it is typed in (lib keyboard)
+  const [box, setBox] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!cards || !box) return;
+    const stop = watchKeyboard((k) => {
+      const typing = k.up && box.contains(document.activeElement);
+      box.style.setProperty('--kb', `${typing ? Math.max(0, k.kb - k.top) : 0}px`);
+    });
+    return () => {
+      stop();
+      box.style.removeProperty('--kb');
+    };
+  }, [cards, box]);
+
+  /* Esc, after what sits over or in the task takes its own: another layer (Cmd+K's search, a file opened from it, whose
+     Esc closes that), a field that keeps it (a title being edited), the list pulled out over it; then the task. */
+  const close = (esc?: KeyboardEvent) => {
+    if (fileOpen) return;
+    if (esc) {
+      const layer = box?.closest('.vw');
+      if (esc.defaultPrevented || !layer || !(esc.target instanceof Node && layer.contains(esc.target))) return;
+      if (listUp) return setListUp(false);
+    }
+    closeTask(router as unknown as Steps);
   };
   const fold = <IconButton icon="close" label="Close the list" quiet className="tmd-fold" onClick={() => setListUp(false)} />;
   return (
-    <Viewer open={!!open} onClose={close} title={title ?? 'Task'} look="sheet">
+    <Viewer open={!!open} onClose={close} onClosed={() => setLast(null)} title={title ?? 'Task'} look="sheet">
       {shown ? (
         <DockSlot value={cards ? dock : null}>
-          <div className={['tmd', listUp && 'is-list-up'].filter(Boolean).join(' ')} data-pane={on}>
+          <div ref={setBox} className={['tmd', listUp && 'is-list-up'].filter(Boolean).join(' ')} data-pane={on}>
             {cards ? (
               <div className="tmd-panes">
-                <Segmented label="Show" options={PANES} value={on} onValueChange={(p) => setPane({ task, pane: p })} />
+                <Segmented label="Show" options={PANES} value={on ?? 'task'} onValueChange={(p) => setPane({ task, session, pane: p })} />
               </div>
             ) : (
               <button type="button" className="tmd-tab" aria-label="Show the list" title="Show the list" onClick={() => setListUp(true)}>
