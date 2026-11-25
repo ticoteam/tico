@@ -103,7 +103,7 @@ view (`html[data-tico-view=card]`) show one stat or one chart and hide the rest 
 `tico_pin_add`: place `bot:<your slug>`, item `page:<file id>`, position 0 (arrange-your-sidebar has the rest).
 
 `page.py kit <page>.html` names a tag or attribute the kit does not know; `check` shows the same hints. Neither
-fails on them.
+fails on them. A widget is not a report: check it with `kit` alone, then publish and pin it (Steps 5 and 6 below).
 
 ## Steps
 

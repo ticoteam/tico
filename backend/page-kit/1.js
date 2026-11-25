@@ -229,14 +229,19 @@
   var FIGURE = /^[-+−]?[$€£]?\d[\d,]*(\.\d+)?\s*[%kKmM]?$/;
   function figures(t) {
     Array.prototype.forEach.call(t.querySelectorAll('td,th'), function (c) {
-      if (FIGURE.test(c.textContent.trim())) c.setAttribute('data-tico-num', '');
+      c.toggleAttribute('data-tico-num', c.tagName === 'TD' && FIGURE.test(c.textContent.trim()));
     });
+    // A heading sits over its figures: a column whose body cells are all figures (or empty).
     Array.prototype.forEach.call(t.querySelectorAll('th'), function (th) {
       var col = th.cellIndex,
         table = th.closest('table');
-      var cells = table ? Array.prototype.filter.call(table.querySelectorAll('tbody tr'), function (r) { return r.cells[col]; }) : [];
-      if (cells.length && cells.every(function (r) { return r.cells[col].hasAttribute('data-tico-num') || !r.cells[col].textContent.trim(); }))
-        th.setAttribute('data-tico-num', '');
+      var cells = table
+        ? Array.prototype.filter.call(table.querySelectorAll('tr'), function (r) { return r.cells[col] && r.cells[col].tagName === 'TD'; })
+        : [];
+      th.toggleAttribute(
+        'data-tico-num',
+        cells.length > 0 && cells.every(function (r) { return r.cells[col].hasAttribute('data-tico-num') || !r.cells[col].textContent.trim(); })
+      );
     });
   }
   customElements.define(

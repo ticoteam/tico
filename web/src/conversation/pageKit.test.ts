@@ -32,6 +32,16 @@ describe('The page kit', () => {
     expect([...loss.querySelectorAll('.n')].map((n) => n.textContent)).toEqual(['Gain', 'Loss']);
   });
 
+  it('sets a table\'s figures at the right, and follows a cell that stops being one', async () => {
+    document.body.innerHTML =
+      '<tico-table><table><tr><th>Ad</th><th>Spend</th></tr><tr><td>Price</td><td>$1,020</td></tr><tr><td>Speed</td><td>880</td></tr></table></tico-table>';
+    const marked = () => [...document.querySelectorAll('[data-tico-num]')].map((c) => c.textContent);
+    expect(marked()).toEqual(['Spend', '$1,020', '880']);
+    document.querySelectorAll('td')[3].textContent = 'Pending';
+    await new Promise((r) => setTimeout(r));
+    expect(marked()).toEqual(['$1,020']);
+  });
+
   it('keeps a one-point line inside its chart', () => {
     const line = shadow('<tico-chart kind="line" data="W1 $3,100"></tico-chart>');
     const now = line.querySelector('text.now')!;

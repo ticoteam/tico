@@ -425,8 +425,10 @@ def kit_hints(text):
             allowed = KIT_VALUES.get((tag, name))
             if allowed and value not in allowed:
                 out.append(f'<{tag} {name}="{value}">: {name} is ' + " or ".join(allowed))
-        inside = re.split(r"</tico-chart", text[m.end() :], maxsplit=1, flags=re.I)[0]
-        if tag == "tico-chart" and "data" not in given and not re.search(r"<li\b", inside, re.I):
+        if tag != "tico-chart" or "data" in given:
+            continue
+        end = text.lower().find("</tico-chart", m.end())
+        if not re.search(r"<li\b", text[m.end() : end if end >= 0 else len(text)], re.I):
             out.append('<tico-chart> has no rows: data="Label 10, Label 20" or a list of "Label 10" items inside it')
     return out
 
