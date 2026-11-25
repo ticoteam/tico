@@ -478,6 +478,10 @@ The view sees only what that bot already reads, never another person's view, and
 "Read-only view": a button, a form, marking something read. Reads that make or show a token, key or credential are
 refused too. Each view, and each time the setting changes, is a line in the audit log.
 
+A [page app](pages.md#apps) runs its reads in a view (`tico.me`, `query`, `thumb`, `open` and `store` get and list), as
+the bot, so the bot can check its own app pages. Its writes (`store` set and rm, `act`) are refused with "Read-only
+view".
+
 The page a view shows offers nothing that writes, so a screenshot never suggests the bot could act: New task, Follow,
 the page + and answer buttons are not shown, the message box is a grey "Read-only view" line, and other controls that
 change something show greyed out. Tasks lists the bot's own open tasks by stage (Needs you is a person's list), and

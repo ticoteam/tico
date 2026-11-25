@@ -4,9 +4,11 @@ goes off, when it expires and when the run ends; each turn and each view is in t
 
 import pytest
 
-from backend import app_view
+from backend import app_view, page_apps, visuals
 from backend.store import H, Problem
 from backend.tests.helpers.api import expire, get, headers, post, setup_attempt
+from backend.tests.helpers.files import turn
+from backend.tests.helpers.pages import page
 
 
 def bearer(token):
@@ -193,3 +195,65 @@ def test_a_views_home_is_one_card_of_the_bots_own_tasks(api):
     # A person's own page is as before: its default cards.
     mine = get(api, "places/person:me")
     assert len(mine["pins"]) > 1 and mine["pins"][0]["card"]["template"] != "my_tasks"
+
+
+def test_a_view_runs_its_own_page_apps_reads_and_none_of_its_writes(api):
+    """The bot checks its own app page in a view: the app's reads answer as the bot; every write op is refused."""
+    tid = post(api, "tasks", {"title": "Refresh the summer ads", "owner": "ops"})["id"]
+    _, attempt = turn(api)
+    made = page(api, attempt, app="reads=tasks,store writes=comment,store:notes", task=tid)
+    assert made.status_code == 200, made.text
+    fid, version = made.json()["page"]["file_id"], made.json()["page"]["version"]
+    seeded = api.put(
+        f"/api/v2/pages/{fid}/data/notes/n1", json={"data": {"text": "Keep"}}, headers=headers(attempt["token"])
+    )
+    assert seeded.status_code == 200, seeded.text
+    turned_on(api)
+    token = opened(api, attempt)["token"]
+    actor = api.get("/api/v2/me", headers=bearer(token)).json()["actor"]
+    key = page_apps.nonce(visuals.key_for(api.app, api.app.state.store.settings), actor, fid, version)
+
+    def call(op, **args):
+        body = {"version": version, "nonce": key, "op": op, "args": args}
+        return api.post(f"/api/v2/pages/{fid}/app", json=body, headers=headers(token))
+
+    me = call("me")
+    assert me.status_code == 200 and me.json()["result"]["actor"] == actor, me.text
+    assert call("store.get", collection="notes", id="n1").json()["result"]["row"]["data"] == {"text": "Keep"}
+    assert [r["id"] for r in call("store.list", collection="notes").json()["result"]["rows"]] == ["n1"]
+    assert tid in {t["id"] for t in call("query", kind="tasks").json()["result"]["rows"]}
+
+    act = {"actions": [{"kind": "comment", "payload": {"task": tid, "text": "From a view"}}]}
+    for op, args in (
+        ("store.set", {"collection": "notes", "id": "n2", "data": 1}),
+        ("store.rm", {"collection": "notes", "id": "n1"}),
+        ("act", act),
+    ):
+        r = call(op, **args)
+        assert r.status_code == 403, (op, r.text)
+        assert (r.json()["error"]["code"], r.json()["error"]["detail"]) == ("read_only_view", app_view.REFUSED)
+    # The page's other writes, and every other POST, stay refused before any route runs.
+    for method, path, body in (
+        ("POST", f"/api/v2/pages/{fid}/app/act", {"key": "x" * 20, "confirm": True}),
+        ("PUT", f"/api/v2/pages/{fid}/data/notes/n2", {"data": 1}),
+        ("DELETE", f"/api/v2/pages/{fid}/data/notes/n1", None),
+        ("PUT", f"/api/v2/pages/{fid}/app", {}),
+        ("POST", f"/api/v2/pages/{fid}/app/", {}),
+        ("POST", f"/api/v2/pages/{fid}", {}),
+        ("POST", f"/api/v2/tasks/{tid}/comments", {"body": "From a view"}),
+    ):
+        r = api.request(method, path, json=body, headers=headers(token))
+        assert r.status_code == 403 and r.json()["error"]["code"] == "read_only_view", (method, path, r.text)
+    for path in (
+        "/api/v2/pages/%2e%2e/app",
+        "/api/v2/pages/a/b/app",
+        "/api/v2/pages/a/../b/app",
+        "/api/v2/tasks/a/app",
+    ):
+        with pytest.raises(Problem):
+            app_view.gate(path, "POST")
+    with api.app.state.store.read() as c:
+        rows = c.execute("SELECT row_id FROM page_app_rows WHERE page_id=?", (fid,)).fetchall()
+    assert [r[0] for r in rows] == ["n1"]
+    said = api.get(f"/api/v2/tasks/{tid}/comments", headers=headers("ben-test")).json()["comments"]
+    assert "From a view" not in {m["body"] for m in said}
