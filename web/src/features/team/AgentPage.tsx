@@ -207,7 +207,8 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const files = useInfiniteQuery(agentFilesQuery(slug));
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
-  const widgets = sidebarOf(readable(useQuery(taskTabsQuery(slug)))?.widgets); // refused: the defaults
+  const layout = useQuery(taskTabsQuery(slug)); // the loader starts it, never waits for it
+  const widgets = sidebarOf(readable(layout)?.widgets); // refused: the defaults
   const pinned = showsPins(widgets);
   const pins = useQuery({ ...sidebarPinsQuery(slug), enabled: pinned });
   const pinOf = new Map(pinsOf(pins).map((p) => [p.item, p]));
@@ -269,8 +270,9 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
     return pinShows(pin) ? <PinnedItem pin={pin} live={livePages.has(id)} /> : null;
   };
   const on = (id: string) => shown.some((w) => w.id === id);
-  // Nothing yet only when nothing it shows this reader has anything, and never while its pins are still coming.
+  // Nothing yet only when nothing it shows this reader has anything, and never while its layout or pins are coming.
   const quiet =
+    !layout.isPending &&
     !actor.working &&
     !waits.length &&
     !waiting.length &&

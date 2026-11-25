@@ -240,6 +240,14 @@ describe("An agent's own sidebar", () => {
     expect(await screen.findByText('Nothing yet')).toBeTruthy();
   });
 
+  it('never says Nothing yet while its layout is still coming', async () => {
+    const empty = (u: string) => (u.includes('/api/v2/updates') ? { body: { updates: [] } } : u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined);
+    open(undefined, (u) => (u.endsWith('/bots/ana/task-tabs') ? new Promise<never>(() => {}) : empty(u)));
+    await settled(['team', 'files', 'ana']);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(screen.queryByText('Nothing yet')).toBeNull();
+  });
+
   it('says its page did not load, with Try again, when its pins could not be read and it has nothing else', async () => {
     const empty = (u: string) => (u.includes('/api/v2/updates') ? { body: { updates: [] } } : u.includes('/bots/ana/files') ? { body: { files: [], total: 0 } } : undefined);
     let down = true;
