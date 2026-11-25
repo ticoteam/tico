@@ -563,7 +563,9 @@ impl Runner {
                     && hosts::is_capacity(&text_of(&event["error"]))
                 {
                     overloads += 1;
-                    let note = format!("Model busy, retrying ({overloads}/{OVERLOAD_TRIES})");
+                    // Worded as a busy model (backend login_holds.capacity): the hub reads every error row of a run
+                    // that fails, and only all-capacity errors keep its capacity continuation (execution.py busy).
+                    let note = format!("Model overloaded, retrying ({overloads}/{OVERLOAD_TRIES})");
                     rows.push(("error".into(), json!({"error": note}).to_string()));
                     retry = Some((Instant::now() + overload_wait(overloads), event));
                     continue;
@@ -795,6 +797,11 @@ impl Runner {
                 match host.start_turn(thread, "", d.effort).await {
                     Ok(t) => turn = t,
                     Err(_) => {
+                        // A start Codex may have read may have begun a turn there: no fallback may take it again.
+                        if matches!(host, Host::Codex(c) if c.turn_sent()) {
+                            tool_ran = true;
+                            d.flags.tool_ran.store(true, Ordering::SeqCst);
+                        }
                         overloads = OVERLOAD_TRIES;
                         queue.push(failed);
                     }
@@ -2052,9 +2059,13 @@ mod tests {
             assert_eq!(inputs[0], json!([{"type": "text", "text": text}]), "{text}");
             assert_eq!(inputs[1..], vec![json!([]); retries][..], "{text}");
             let retrying: Vec<String> = (1..=retries)
-                .map(|n| format!("Model busy, retrying ({n}/5)"))
+                .map(|n| format!("Model overloaded, retrying ({n}/5)"))
                 .collect();
             assert_eq!(errors[..retries], retrying[..], "{text}");
+            assert!(
+                errors.iter().all(|e| crate::hosts::is_capacity(e)) || text == "QUOTA",
+                "every error row of a busy run reads as capacity: {errors:?}"
+            );
             assert_eq!(drove.outcome, outcome, "{text}");
             // The last failure decides as it always has: a busy model is the short capacity hold, a quota is not.
             assert_eq!(
@@ -2077,7 +2088,47 @@ mod tests {
         let (drove, inputs, errors) = busy_codex_turn("BUSY1", true).await;
         assert_eq!(drove.outcome, "interrupted");
         assert_eq!(inputs, [json!([{"type": "text", "text": "BUSY1"}])]);
-        assert_eq!(errors, ["Model busy, retrying (1/5)"]);
+        assert_eq!(errors, ["Model overloaded, retrying (1/5)"]);
+    }
+
+    /// An input a turn refused is carried to the turn after it; the hub hands it over again until it is acknowledged,
+    /// and a turn that would take a steer by then (a busy-model retry) does not get it too.
+    #[tokio::test]
+    async fn an_input_carried_once_is_never_steered_into_a_later_turn() {
+        let (url, seen) = quiet_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (fake, env) = crate::hosts::codex::tests::kept_rig("codex-carried");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let codex = crate::hosts::codex::CodexHost::on_home(env, tx, None);
+        codex.start().await.unwrap();
+        let th = codex
+            .start_thread("acme", &crate::hosts::Settings::default())
+            .await
+            .unwrap();
+        let turn = codex.start_turn(&th, "LONG", None).await.unwrap();
+        let host = Host::Codex(codex.clone());
+        runner
+            .state
+            .input_phase("acme-late", "m-1", Some("carried"))
+            .unwrap();
+        let message = json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"});
+        let mut carried = BTreeMap::new();
+        runner
+            .steer_inputs("acme-late", &host, &th, &turn, &mut carried, &[message])
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(carried.keys().collect::<Vec<_>>(), ["m-1"]);
+        assert!(!crate::hosts::codex::tests::calls(&fake)
+            .iter()
+            .any(|c| c["method"] == "turn/steer"));
+        assert!(
+            !seen.lock().unwrap().iter().any(|p| p.contains("/inputs")),
+            "not acknowledged: the carried turn still owes it"
+        );
+        let _ = host.interrupt(&th, &turn).await;
+        codex.finish_turn().await;
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(fake).ok();
     }
 
     /// The outbox rows of `aid` in seq order, as (seq, kind, payload).
