@@ -143,8 +143,9 @@ class Rate:
         self.seen: dict[str, deque[float]] = {}
 
     def take(self, key: str, now: float | None = None) -> bool:
-        now = time.monotonic() if now is None else now
         with self.lock:
+            # read under the lock, so each key's calls stay in time order (expiry reads only the oldest)
+            now = time.monotonic() if now is None else now
             calls = self.seen.get(key)
             if calls is None:
                 if len(self.seen) >= self.keep:
@@ -337,7 +338,7 @@ class PageApps:
                 raise Problem("writer_gone", "This app's writer no longer keeps this page's data", 403)
             if op == "store.get":
                 return {"row": data_get(c, fid, args.get("collection"), args.get("id"))}
-            return data_list(c, fid, args.get("collection"), args.get("after") or "", args.get("limit") or 50)
+            return data_list(c, fid, args.get("collection"), args.get("after") or "", _limit(args))
         kind = str(args.get("kind") or "")
         need(reads, kind if kind in READS and kind != "store" else "")
         return getattr(self, "query_" + kind)(c, who, writer, args)

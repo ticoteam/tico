@@ -55,6 +55,8 @@ function PageOrFile({ task, id, title, page, file, pin }: { task: string; id: st
   const mount = app ? `${id}@${app.version}` : '';
   const [held, setHeld] = useState({ mount: '', src: '' });
   if (app && p?.src && held.mount !== mount) setHeld({ mount, src: p.src });
+  // with no app drawn, nothing is held: the next one starts from the address read now (an old one may have expired)
+  if (!app && held.mount) setHeld({ mount: '', src: '' });
   const src = app && held.mount === mount ? held.src : p?.src;
   if (!page || shown.isError) return <div className="frame fv">{file}</div>;
   if (text.isError) return <Empty icon="alert" title={`${title} did not load`} />;

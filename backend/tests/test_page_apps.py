@@ -41,7 +41,7 @@ def call(api, fid, version, key, op, who="ben-test", **args):
     )
 
 
-def test_an_app_is_its_own_version_served_sealed_with_a_key_only_while_current(api):
+def test_an_app_is_its_own_version_served_sealed_with_a_key_only_while_current(api, monkeypatch):
     _, attempt = turn(api)
     plain = page(api, attempt).json()["page"]
     fid = plain["file_id"]
@@ -68,6 +68,15 @@ def test_an_app_is_its_own_version_served_sealed_with_a_key_only_while_current(a
     old = api.get(VISUALS + "/visuals/" + V.mint(key, viewer, fid, 2))
     assert old.status_code == 200 and b"data-tico-app" not in old.content
     assert "allow-same-origin" not in old.headers["content-security-policy"]
+    # With a shared hosted copy ready, a plain page is sent there; an app version never is.
+    from backend import tico_storage
+
+    with monkeypatch.context() as m:
+        m.setattr(tico_storage, "visual_link", lambda *a, **k: "https://files.acme.test/copy")
+        hosted = api.get(VISUALS + "/visuals/" + V.mint(key, viewer, fid, 3), follow_redirects=False)
+        assert hosted.status_code == 302 and hosted.headers["location"] == "https://files.acme.test/copy"
+        sealed = api.get(VISUALS + "/visuals/" + V.mint(key, viewer, fid, 2), follow_redirects=False)
+        assert sealed.status_code == 200 and "allow-same-origin" not in sealed.headers["content-security-policy"]
     # An app's live tags are never filled for its viewer: it reads only through the bridge, cut to its writer's reach.
     tagged = HTML.replace(b"</body>", b'<tico-tasks waiting-on="viewer"></tico-tasks></body>')
     page(api, attempt, data=tagged, app="reads=tasks")
@@ -217,6 +226,8 @@ def test_page_data_is_its_writers_to_keep_the_app_reads_it_and_it_goes_with_the_
         len(call(api, fid, version, key, "store.list", who="ana-test", collection="spend").json()["result"]["rows"])
         == 2
     )
+    odd = call(api, fid, version, key, "store.list", who="ana-test", collection="spend", limit="many")
+    assert odd.status_code == 200 and len(odd.json()["result"]["rows"]) == 2  # an odd limit is the default one
 
     with monkeypatch.context() as m:
         m.setattr(A.page_links, "may_write", lambda c, auth, who, row: not who.actor.startswith("bot:"))

@@ -20,13 +20,15 @@ interface Call {
   args?: unknown;
 }
 
-const go = (href: string) => {
-  // the router imports most of the app: loaded when an app first opens something
-  void import('@/router').then(({ router }) => router.navigate({ href }));
+const go = (href: string, live: () => boolean) => {
+  // the router imports most of the app: loaded when an app first opens something; a frame gone meanwhile goes nowhere
+  void import('@/router').then(({ router }) => {
+    if (live()) return router.navigate({ href });
+  });
 };
 
 /** Listens for `frame`'s handshake and serves its calls; returns the cleanup. `onOpen` takes the app to an address. */
-export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: string) => void = go): () => void {
+export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: string, live: () => boolean) => void = go): () => void {
   let port: MessagePort | null = null;
   let done = false;
   const close = () => {
@@ -59,7 +61,7 @@ export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: st
         .post<{ result: Record<string, unknown> }>(`/api/v2/pages/${encodeURIComponent(app.page)}/app`, { version: app.version, nonce, op: call.op, args }, { once: true })
         .then((r) => {
           if (done) return;
-          if (call.op === 'open' && typeof r.result.href === 'string') onOpen(r.result.href);
+          if (call.op === 'open' && typeof r.result.href === 'string') onOpen(r.result.href, () => !done);
           port?.postMessage({ id: call.id, result: r.result });
         })
         .catch((err: unknown) => {

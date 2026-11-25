@@ -1,7 +1,7 @@
 """`tico page data` and `--app`: the CLI and its MCP twins send a page app's data rows and declaration as the API takes
 them (docs/pages.md#apps)."""
 
-from clients import hubcli
+from clients import hubcli, hubtools
 from clients.cli_spec import NULL
 from clients.commands import _access
 from clients.commands.content import _page_fields, pages_data_get, pages_data_list, pages_data_rm, pages_data_set
@@ -44,5 +44,9 @@ def test_page_data_commands_send_each_row_by_collection_and_id():
     }
     # a JSON null is a value to send, not a flag left out
     assert hubcli.parser().parse_args(["page", "data", "set", "p1", "spend", "x", "null"]).data is NULL
-    for name in ("tico_page_data_list", "tico_page_data_get", "tico_page_data_set", "tico_page_data_rm"):
+    tools = (pages_data_list, pages_data_get, pages_data_set, pages_data_rm)
+    for name, fn in zip(
+        ("tico_page_data_list", "tico_page_data_get", "tico_page_data_set", "tico_page_data_rm"), tools
+    ):
         assert name in _access.AUDIENCE
+        assert hubtools.BY_NAME[name]["fn"] is fn  # the tool runs its own handler, never a helper beside it
