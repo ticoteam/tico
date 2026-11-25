@@ -3,6 +3,7 @@ import { api, ApiError } from '@/api/client';
 import type {
   AgentSubscriptionList,
   BotDreamView,
+  BotSidebar,
   BotRepositories,
   BotFileList,
   BrowserControl,
@@ -27,6 +28,7 @@ import type {
   SeatCanceled,
   SeatList,
   SetBotSubscriptionsBody,
+  Place,
   Task,
   TeammateAccessView,
 } from '@/api/schema';
@@ -597,34 +599,46 @@ export const doneTasksQuery = (actor: string, since: string) => {
 
 /* ---------------------------------------------------------------- its own lists (task tabs) */
 
-/**
- * One row of a list's filter (backend/bot_task_tabs.py FIELDS): a task must match every row; a list value is "any of".
- * Not in the generated schema: the route answers a plain dict.
- */
-export interface ListRow {
-  field: string;
-  value: number | string | string[];
-}
-/** A list on an agent's page: a default (`builtin`) or one of its own, a saved filter. */
-export interface TaskTab {
-  builtin?: 'needs' | 'active' | 'blocked' | 'done' | null;
-  name: string;
-  show_count?: boolean;
-  conditions?: ListRow[];
-}
-export interface TaskTabs {
-  bot: string;
-  tabs: TaskTab[];
-  can_edit: boolean;
-  personal?: boolean;
-}
+/** One row of a list's filter (backend/bot_task_tabs.py FIELDS): a task must match every row; a list value is "any of". */
+export type ListRow = NonNullable<BotSidebar['tabs'][number]['conditions']>[number];
+/** A list on an agent's page: a default (`builtin`) or one of its own, a saved filter. A list being made has no
+    `show_count` yet. */
+export type TaskTab = Omit<BotSidebar['tabs'][number], 'show_count'> & { show_count?: boolean };
+export type TaskTabs = Omit<BotSidebar, 'tabs'> & { tabs: TaskTab[] };
+/** One thing on its sidebar, in its order: a built-in (`updates`, `tasks`, `files`), `page:<file id>` or `card:<id>`. */
+export type SidebarWidget = BotSidebar['widgets'][number];
 
-/** Its lists in order (GET /api/v2/bots/{bot}/task-tabs). A list's key is its builtin name, else `c<place>`. */
+/** Its sidebar and its lists in order (GET /api/v2/bots/{bot}/task-tabs). A list's key is its builtin name, else
+    `c<place>`. */
 export const taskTabsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'tabs', slug] as const,
     queryFn: ({ signal }) => api.get<TaskTabs>(`/api/v2/bots/${at(slug)}/task-tabs`, { signal }),
   });
+
+/** What its pinned pages and cards show the viewer (GET /api/v2/places/bot:<slug>): each pin by its `item`, a card
+    with what it shows this reader. */
+export const sidebarPinsQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['team', 'pins', slug] as const,
+    queryFn: ({ signal }) => api.get<Place>(`/api/v2/places/${at(`bot:${slug}`)}`, { signal }),
+  });
+
+/** A read refused (signed out, no Read, gone): what it showed before is shown no more. */
+const REFUSED = new Set([401, 403, 404]);
+
+/** A read's data as this reader may see it now: none once a read of it is refused (the last answer is kept by the cache
+    after a failed read), else the last read's. */
+export const readable = <T>(read: { data?: T; error: unknown }): T | undefined => (refused(read.error) ? undefined : read.data);
+
+/** Whether a read failed because the reader may not have it (not because it could not be made). */
+export const refused = (error: unknown) => error instanceof ApiError && REFUSED.has(error.status);
+
+/** A pinned page or card, not a built-in. */
+export const isPinned = (id: string) => id.startsWith('page:') || id.startsWith('card:');
+
+/** Whether its sidebar shows any pinned page or card (its pins are read only then). */
+export const showsPins = (widgets: SidebarWidget[] | undefined) => !!widgets?.some((w) => !w.hidden && isPinned(w.id));
 
 export const listKey = (tabs: TaskTab[], i: number) => tabs[i]?.builtin ?? `c${i}`;
 

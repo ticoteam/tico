@@ -358,6 +358,39 @@ describe('read-again topics', () => {
     }
   });
 
+  it("reads agents' sidebars and their pins again when a task leaves the reader", () => {
+    const held = [['team', 'tabs', 'ops'], ['team', 'pins', 'ops'], ['team', 'pins', 'sales']];
+    for (const key of held) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
+    flushFrame();
+    expect(held.map((key) => queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, true, true]);
+  });
+
+  it("reads agents' pins again when a task's file or page changes, not their sidebars", () => {
+    const held = [['team', 'tabs', 'ops'], ['team', 'pins', 'ops']];
+    for (const key of held) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(950, 'tasks', { seq: 950, actor: 'bot:ops', at: AT, task_id: 't1', kinds: ['files'] }));
+    flushFrame();
+    expect(held.map((key) => !!queryClient.getQueryState(key)?.isInvalidated)).toEqual([false, true]);
+  });
+
+  it("reads an agent's pins again after a read already in flight when a task leaves the reader", async () => {
+    const key = ['team', 'pins', 'ops'];
+    const reads: (() => void)[] = [];
+    const read = () => new Promise((done) => reads.push(() => done({ pins: [] })));
+    const seen = new QueryObserver(queryClient, { queryKey: key, queryFn: read, staleTime: Infinity });
+    const stop = seen.subscribe(() => {});
+    try {
+      await vi.waitFor(() => expect(reads).toHaveLength(1)); // a read from before the change, in flight
+      FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
+      flushFrame();
+      reads[0]?.();
+      await vi.waitFor(() => expect(reads).toHaveLength(2));
+    } finally {
+      stop();
+    }
+  });
+
   it('mark the letters list stale on a letters event', () => {
     queryClient.setQueryData(['letters'], []);
     FakeEventSource.last.feed(frame(901, 'letters', { seq: 901, actor: 'human:p1', at: AT }));

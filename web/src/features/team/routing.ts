@@ -3,7 +3,7 @@ import { redirect } from '@tanstack/react-router';
 import { directoryQuery } from '@/data';
 import { ADD_STEPS, TABS, type AddStep, type Tab } from './actions';
 import { bareId, resolveWho, SEAT_PREFIX } from './model';
-import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQuery, peopleQuery, seatAgentQuery, slackQuery } from './queries';
+import { agentsQuery, computersQuery, groupsQuery, instructionsQuery, openTasksQuery, peopleQuery, seatAgentQuery, showsPins, sidebarPinsQuery, slackQuery, taskTabsQuery } from './queries';
 
 // What the routes, the shell and other features use before a teammate's page loads: the address check, the reads and
 // a teammate's address. No components here: the first load imports this file, and a page comes through exports.ts.
@@ -41,6 +41,14 @@ export async function loadWho(qc: QueryClient, who: string, tab: Tab | undefined
     if (tab === 'computer' || tab === 'screen') return qc.ensureQueryData(computersQuery);
     if (tab === 'instructions') return qc.ensureQueryData(instructionsQuery(found.actor.slug ?? found.actor.id.slice(4)));
     if (tab === 'settings' || tab === 'model') return qc.ensureQueryData(agentsQuery);
+    // Its sidebar, then its pins when a read of it shows any, started with its tasks but never waited for: a slow one
+    // never holds the page (a failed read: the default, and no pins).
+    const slug = found.actor.slug ?? found.actor.id.slice(4);
+    const key = taskTabsQuery(slug).queryKey;
+    void qc.prefetchQuery(taskTabsQuery(slug)).then(() =>
+      qc.getQueryState(key)?.status === 'success' && showsPins(qc.getQueryData(key)?.widgets) ? qc.prefetchQuery(sidebarPinsQuery(slug)) : undefined,
+    );
+    return qc.ensureQueryData(openTasksQuery(found.actor.id));
   }
   if (found?.kind === 'person' && tab === 'settings') return qc.ensureQueryData(peopleQuery);
   if (found?.kind === 'person' && tab === 'slack') return qc.ensureQueryData(slackQuery(bareId(found.actor.id)));

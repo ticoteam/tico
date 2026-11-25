@@ -132,9 +132,9 @@ function filesIn(text: string): Extract<Pointer, { kind: 'file' }>[] {
 /**
  * A page, small and live: its own drawing scaled down to the card, in a sandbox (no scripts, no app origin, nothing it
  * can press) under lib/safeFrame's policy (nothing it can load). A page too long for a card, or one safeFrame refuses,
- * is its chip. The card opens it full screen.
+ * is its chip. The card opens it full screen. An agent's sidebar draws its pinned pages with it too.
  */
-function PageCard({ src, title, onOpen }: { src: `/api/${string}`; title: string; onOpen: () => void }) {
+export function PageCard({ src, title, onOpen }: { src: `/api/${string}`; title: string; onOpen: () => void }) {
   const read = useQuery(pageTextQuery(src));
   if (read.data === null)
     return (

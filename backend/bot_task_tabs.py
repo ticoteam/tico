@@ -3,8 +3,9 @@ tall each may grow, and the tabs over its task list, with their names, their ord
 
 A layout belongs to the bot, not to whoever looks: everyone who opens the bot's page sees the same sidebar, and
 changing one bot's never moves another's. The Assistant is the exception, since its list is each person's own: there
-every person keeps a layout of their own. A bot without a saved layout shows Tasks, Updates, Files and Routines in that
-order with the four default tabs (Needs you, Open, Waiting, Assigned to others).
+every person keeps a layout of their own. A bot without a saved layout shows Updates, Tasks and Files in that order (as
+the web's agent page draws them, under what waits on the viewer) with the four default tabs (Needs you, Open, Waiting,
+Assigned to others).
 
 Needs you, Open and Waiting are editable filters with default conditions. Their built-in key preserves identity
 for Reset to default. Done recently keeps its own view. What a task waits on is read from the engine
@@ -23,6 +24,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Request
 
 from . import models as M
+from .api_contract import api_v2
 from .store import H, Problem
 
 ACTIVE = ["open"]
@@ -52,7 +54,8 @@ DEFAULT = [
         ],
     },
 ]
-WIDGETS = ("tasks", "updates", "files")  # an old saved "routines" is dropped: they are automations
+# In the order the agent page draws them when nothing is saved; an old saved "routines" is dropped: they are automations.
+WIDGETS = ("updates", "tasks", "files")
 DEFAULT_WIDGETS = [{"id": w, "hidden": False, "height": None} for w in WIDGETS]
 # Pages and cards pinned to the sidebar (backend/cards.py): any number, beside or instead of the built-ins.
 ITEM = re.compile(r"(page|card):[A-Za-z0-9_.-]{1,100}")
@@ -149,6 +152,10 @@ def read(c, settings, who, bot, ctx=None):
     if ctx is not None:
         from . import cards
 
+        # Its pages read and checked a chunk at a time (as a place's pins are), not one by one in the loop.
+        pages = [{"item": w["id"]} for w in widgets if w["id"].startswith("page:")]
+        if pages:
+            cards.prime_pins(ctx, pages, views=False)
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
     return {
         "bot": bot,
@@ -159,6 +166,22 @@ def read(c, settings, who, bot, ctx=None):
         "updated_at": row["updated_at"] if row else None,
         "updated_by": row["updated_by"] if row else None,
     }
+
+
+def layout(c, auth, settings, who, bot, ctx=None):
+    """The bot's sidebar as the caller may know it, and whether they may read the bot: its saved one when they may,
+    else the defaults, none of its saved lists, pages or cards (as GET /api/v2/bots/{bot})."""
+    if auth.require_see(c, who, bot)["read"]:
+        return read(c, settings, who, bot, ctx), True
+    return {
+        "bot": bot,
+        "tabs": [legacy(t) for t in DEFAULT],
+        "widgets": [dict(w) for w in DEFAULT_WIDGETS],
+        "saved": False,
+        "personal": personal(settings, bot),
+        "updated_at": None,
+        "updated_by": None,
+    }, False
 
 
 def bad(message):
@@ -462,20 +485,27 @@ BRIEF = (
 def install(app, store, auth, mutate, settings, task_views=None):
     from .cards import Ctx
 
-    @app.get("/api/v2/bots/{bot}/task-tabs")
+    @app.get(
+        "/api/v2/bots/{bot}/task-tabs",
+        **api_v2(
+            "Bots",
+            "getBotSidebar",
+            "A bot's sidebar: its widgets (built-ins, pinned pages and cards) and task tabs in order, as the caller sees it",
+            "BotSidebar",
+        ),
+    )
     def task_tabs(request: Request, bot: str):
         """The bot's sidebar: its widgets in order and its task tabs in order (the defaults until someone saves a
-        layout), and whether the caller may change them. The Assistant's are the caller's own."""
+        layout), and whether the caller may change them. The Assistant's are the caller's own. One who may see the bot
+        but not read it gets the defaults: none of its saved lists, pages or cards (as GET /api/v2/bots/{bot})."""
         who = request.state.identity
-        with store.read() as c:
+        auth.domain(who)
+        with store.read_transaction() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            auth.require_see(c, who, bot)
-            return {
-                **read(c, settings, who, bot, Ctx(c, auth, who, settings)),
-                "can_edit": may_edit(c, auth, settings, who, bot),
-            }
+            out, readable = layout(c, auth, settings, who, bot, Ctx(c, auth, who, settings))
+            return {**out, "can_edit": readable and may_edit(c, auth, settings, who, bot)}
 
     @app.get("/api/v2/bots/{bot}/task-tabs/tasks")
     def task_tabs_tasks(request: Request, bot: str, tab: str = "", before: str = "", match_ids: str = ""):
@@ -493,10 +523,10 @@ def install(app, store, auth, mutate, settings, task_views=None):
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
-            auth.require_see(c, who, bot)
+            tabs = layout(c, auth, settings, who, bot)[0]["tabs"]  # one who only sees the bot: the default lists
             visible = auth.task_sql(c, who)
             out, ids = [], []
-            for at, layout_tab in enumerate(read(c, settings, who, bot)["tabs"]):
+            for at, layout_tab in enumerate(tabs):
                 key = layout_tab.get("builtin") or "c" + str(at)
                 if key == "done" or tab and tab != key:
                     continue

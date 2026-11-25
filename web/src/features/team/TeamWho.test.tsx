@@ -300,13 +300,52 @@ describe('Loading a teammate', () => {
 
   it('reads what the page it opens on draws first, before it draws', async () => {
     queryClient.removeQueries({ queryKey: agentsQuery.queryKey });
-    expect(await read('ana')).toEqual([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open')]);
+    // an agent's page: its open tasks, and its sidebar's order with them
+    const first = await read('ana');
+    await waitFor(() => expect(first).toHaveLength(2));
+    expect(first).toEqual(expect.arrayContaining([expect.stringContaining('/api/v2/tasks?owner=bot%3A0190-ana&status=open'), '/api/v2/bots/ana/task-tabs']));
     expect(await read('ana', 'settings')).toEqual(['/api/employees']);
     expect(await read('p1', 'slack')).toEqual([expect.stringContaining('/humans/p1/slack')]);
     // a team's address reads nothing more: it goes home, the team shown in the menu
     serve();
     await expect(loadWho(queryClient, 'design', undefined)).rejects.toMatchObject({ options: { to: '/', search: { team: 'g1' } } });
     expect(reads).toEqual([]);
+  });
+
+  it("reads an agent's pins with its sidebar when it shows any, so they draw in their places at once", async () => {
+    queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
+    queryClient.removeQueries({ queryKey: ['team', 'pins'] });
+    const sidebar = { bot: '0190-ana', tabs: [], widgets: [{ id: 'page:f1', hidden: false, height: null }], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    serve((u) => (u.endsWith('/bots/ana/task-tabs') ? ok(sidebar) : undefined));
+    await loadWho(queryClient, 'ana', undefined);
+    await waitFor(() => expect(reads).toContain('/api/v2/places/bot%3Aana'));
+  });
+
+  it('opens an agent while a read of its sidebar or pins stalls: neither holds the page', async () => {
+    queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
+    queryClient.removeQueries({ queryKey: ['team', 'pins'] });
+    const sidebar = { bot: '0190-ana', tabs: [], widgets: [{ id: 'page:f1', hidden: false, height: null }], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    const opened = (stall: string) => {
+      serve((u) => (u.includes(stall) ? new Promise<Reply>(() => {}) : u.endsWith('/bots/ana/task-tabs') ? ok(sidebar) : undefined));
+      const late = new Promise((done) => setTimeout(() => done('held'), 500));
+      return Promise.race([loadWho(queryClient, 'ana', undefined).then(() => 'opened'), late]);
+    };
+    expect(await opened('/bots/ana/task-tabs')).toBe('opened');
+    queryClient.removeQueries({ queryKey: ['team', 'tabs'] });
+    expect(await opened('/api/v2/places/')).toBe('opened');
+  });
+
+  it("reads no pins when a read of its sidebar fails, whatever an earlier read held", async () => {
+    queryClient.removeQueries({ queryKey: ['team', 'pins'] });
+    const sidebar = { bot: '0190-ana', tabs: [], widgets: [{ id: 'page:f1', hidden: false, height: null }], saved: true, can_edit: true, personal: false, updated_at: null, updated_by: null };
+    queryClient.setQueryData(['team', 'tabs', 'ana'], sidebar);
+    await queryClient.invalidateQueries({ queryKey: ['team', 'tabs', 'ana'], refetchType: 'none' });
+    serve((u) => (u.endsWith('/bots/ana/task-tabs') ? { status: 403, body: { error: { code: 'forbidden', detail: 'No' } } } : undefined));
+    await loadWho(queryClient, 'ana', undefined);
+    await waitFor(() => expect(queryClient.getQueryState(['team', 'tabs', 'ana'])?.status).toBe('error'));
+    await new Promise((done) => setTimeout(done, 20));
+    expect(reads).toContain('/api/v2/bots/ana/task-tabs');
+    expect(reads).not.toContain('/api/v2/places/bot%3Aana');
   });
 
   it('throws a failed read to the router, which draws the fault', async () => {

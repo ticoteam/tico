@@ -66,7 +66,17 @@ SCHEMAS['Place'] = obj(
                     'size': {'enum': ['small', 'medium', 'large']},
                     'card': ref('Card'),
                     'can_unpin': {'type': 'boolean', 'description': 'Task pins: whether this reader may unlink it'},
-                    'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated_at': 's', 'archived': 'b'}),
+                    'page': obj(
+                        {
+                            'file_id': 's',
+                            'title': 's',
+                            'bot': 's',
+                            'updated_at': 's',
+                            'archived': 'b',
+                            'version': {'type': 'integer', 'description': 'Its current version, when the page is read'},
+                        },
+                        required=['file_id', 'title', 'bot', 'updated_at', 'archived'],
+                    ),
                 },
                 required=['id', 'item', 'position', 'size'],
             )

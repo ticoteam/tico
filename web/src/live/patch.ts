@@ -742,6 +742,12 @@ export function installPatchers(): void {
   // An ask that left it (`removed`) leaves the Agent bar now, before that read.
   onTopic<{ removed?: string[] | null }>('needs', (batch) => asksGone(batch.flatMap((e) => e.removed ?? [])));
   onTopic<BotEvent>('bots', patchDirectory);
+  // A task left the reader (who may read it changed, or it went): a page pinned to an agent's sidebar may have gone
+  // with it, so the sidebars and their pins read again (backend/bot_task_tabs.py, cards.py place_view). A task's file
+  // or page changed (a new version, a pin on it): a pinned one shows its new version. An agent's own page and its
+  // sidebar's pins send no change of their own yet.
+  // A read already in flight answered from before the change: another follows it.
+  onRefetch<TaskEvent>('tasks', (e) => (e.gone ? [['team', 'tabs'], ['team', 'pins']] : e.kinds?.includes('files') ? [['team', 'pins']] : []), true);
   onRefetch<{ bot_id?: string; state?: string }>('runs', (e) => {
     if (!e.bot_id || !e.state) return [];
     const key = [...keys.team.paidBy(), e.bot_id, true];

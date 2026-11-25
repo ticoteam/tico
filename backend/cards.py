@@ -603,20 +603,26 @@ def automation_runs(ctx, s):
             names[row["id"]] = row["name"]
     if not names:
         return {"total": 0, "failed": 0, "running": 0, "runs": []}
-    runs = [
+    # Counted over the whole day; only the five rows shown (failures first, then the newest) are read.
+    window = "FROM automation_runs WHERE started_at>=? AND automation_id IN (SELECT value FROM json_each(?))"
+    args = (ago(hours=24), json.dumps(sorted(names)))
+    total, failed, running = ctx.c.execute(
+        "SELECT count(*), coalesce(sum(status='failed'),0), coalesce(sum(status IN ('queued','running')),0) " + window,
+        args,
+    ).fetchone()
+    shown = [
         dict(r)
         for r in ctx.c.execute(
-            "SELECT id, automation_id, status, started_at, finished_at FROM automation_runs WHERE started_at>=? "
-            "AND automation_id IN (SELECT value FROM json_each(?)) ORDER BY started_at DESC LIMIT 500",
-            (ago(hours=24), json.dumps(sorted(names))),
+            "SELECT id, automation_id, status, started_at, finished_at "
+            + window
+            + " ORDER BY status<>'failed', started_at DESC LIMIT 5",
+            args,
         )
     ]
-    failed = [r for r in runs if r["status"] == "failed"]
-    shown = (failed + [r for r in runs if r["status"] != "failed"])[:5]
     return {
-        "total": len(runs),
-        "failed": len(failed),
-        "running": sum(r["status"] in ("queued", "running") for r in runs),
+        "total": total,
+        "failed": failed,
+        "running": running,
         "runs": [{**r, "name": names[r["automation_id"]]} for r in shown],
     }
 
@@ -1410,9 +1416,10 @@ def card_row(c, cid):
     return dict(row) if row else None
 
 
-def prime_pins(ctx, pins):
+def prime_pins(ctx, pins, views=True):
     """Read the cards and pages `pins` point at, one query a chunk each, and seed read_cache with them, so the per-pin
-    reads in pin_view take no statement of their own. Each row is the one its own lookup would read."""
+    reads in pin_view take no statement of their own. Each row is the one its own lookup would read. `views=False`
+    stops at the page rows and who may read them (all a sidebar's layout asks), not each page's full read."""
     from . import files as F
 
     c = ctx.c
@@ -1440,6 +1447,8 @@ def prime_pins(ctx, pins):
         from . import pages as PG
 
         F.prime_visible(c, list(pages.values()))
+        if not views:
+            return
         PG.prime_views(c, list(pages.values()))
         if ctx.pages is not None:
             found = ctx.pages.rows(c, sorted(pages))

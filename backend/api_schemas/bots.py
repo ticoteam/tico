@@ -407,3 +407,51 @@ SCHEMAS["SlackThread"] = obj({"channel": "s", "thread_ts": "s", "messages": item
 SCHEMAS["SlackPass"] = obj(
     {"id": "s", "created_at": "s", "count": "i", "skipped": "i", "messages": items(ref("SlackMessage"))}
 )
+
+# A bot's sidebar (backend/bot_task_tabs.py read): its widgets and task tabs in order. The Assistant's is the caller's own.
+SCHEMAS["BotSidebar"] = obj(
+    {
+        "bot": "s",
+        "widgets": items(
+            obj(
+                {
+                    "id": {
+                        "type": "string",
+                        "description": "A built-in (updates, tasks, files), a pinned page (page:<file id>) or a card "
+                        "(card:<id>), whose content GET /api/v2/places/bot:<bot> gives the caller",
+                    },
+                    "hidden": "b",
+                    "height": {
+                        "type": ["integer", "null"],
+                        "description": "The most it grows to, in pixels; null is its natural height",
+                    },
+                },
+                required=["id", "hidden", "height"],
+            )
+        ),
+        "tabs": items(
+            obj(
+                {
+                    "builtin": {"enum": ["needs", "active", "blocked", "done", None]},
+                    "name": "s",
+                    "show_count": "b",
+                    "conditions": items(
+                        obj(
+                            {
+                                "field": "s",
+                                "value": {"type": ["integer", "string", "array"], "items": {"type": "string"}},
+                            },
+                            required=["field", "value"],
+                        )
+                    ),
+                },
+                required=["name", "show_count"],
+            )
+        ),
+        "saved": "b",
+        "personal": {"type": "boolean", "description": "The Assistant's: each person keeps their own"},
+        "can_edit": "b",
+        "updated_at": "n",
+        "updated_by": "n",
+    }
+)

@@ -11,6 +11,7 @@ export { DidLine, type DidLineProps } from '@/kit/DidLine';
 export { Outline, jumpTo, type OutlineProps } from './Outline';
 export { activityQuery, dropRun, liveQuery, rowsOf, seedRun, timelineQuery, timelineKey, ticoRoomQuery, readTicoInfo, sendMessage, sendToDm, markRead, type TicoInfo, type TaskSend, type ThreadActivity } from './queries';
 export { tasksIn } from './links';
+export { PageCard } from './Rich';
 export { agentWords } from './Quote';
 export type { Variant, ChatMessage, LiveRun } from './types';
 export type { TimelineView } from '@/live';

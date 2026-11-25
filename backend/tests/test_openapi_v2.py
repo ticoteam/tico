@@ -473,6 +473,7 @@ def test_the_declared_answers_match_the_live_ones(api):
     call("getNeedsYou", "get", "/api/v2/needs-you", params={"count": "true"})
     call("doneTask", "post", "/api/v2/tasks/%s/done" % task["id"], json={"note": "Drafted."})
     call("getPlace", "get", "/api/v2/places/dashboard")
+    call("getBotSidebar", "get", "/api/v2/bots/ops/task-tabs")
     call("savePlace", "put", "/api/v2/places/dashboard", json={})
     call("listCards", "get", "/api/v2/cards")
     call("searchMeetings", "get", "/api/v2/meetings/search")

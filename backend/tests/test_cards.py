@@ -203,7 +203,7 @@ def test_the_pinning_rule(api):
     post(api, "pins", {"place": "bot:cpo", "item": "page:" + own}, bot, expected=403)
     post(api, "pins", {"place": "bot:ops", "item": "page:" + other}, bot, expected=404)  # not its own
     post(api, "pins", {"place": "bot:ops", "item": "page:" + own}, bot)
-    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == ["tasks", "updates", "files", "page:" + own]
+    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]] == ["updates", "tasks", "files", "page:" + own]
     # A bot pins only cards it made; a person who manages the bot pins another bot's page there.
     card = post(api, "cards", {"template": "tasks_by_status"})["card"]
     post(api, "pins", {"place": "bot:ops", "item": "card:" + card["id"]}, bot, expected=403)
@@ -236,6 +236,80 @@ def test_sidebar_pages_and_cards_follow_the_saved_widgets(api):
     assert [p["item"] for p in place(api, "bot:ops")["pins"]] == ["page:" + mail]
     # The Assistant's sidebar is each person's own: no pages there.
     put(api, "bots/assistant/task-tabs", {"tabs": seen["tabs"], "widgets": [{"id": "page:" + ops}]}, expected=422)
+
+
+def test_a_runner_reads_no_sidebar_and_one_who_only_sees_the_bot_gets_its_defaults(api):
+    """GET /bots/{bot}/task-tabs guards as GET /bots/{bot} does: a runner's credential is refused, and one who may see
+    the bot but not read it gets the default lists and built-ins, none of its saved lists, pages or cards."""
+    from backend.tests.helpers.api import runner
+
+    ops = page(api, "ops", "Ops page")
+    card = post(api, "cards", {"template": "tasks_by_status", "place": "bot:ops"})["card"]
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists, "widgets": [{"id": "page:" + ops}, {"id": "card:" + card["id"]}]})
+    get(api, "bots/ops/task-tabs", runner(api)["token"], expected=403)
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    seen = get(api, "bots/ops/task-tabs", "cara-test")
+    assert [w["id"] for w in seen["widgets"]] == ["updates", "tasks", "files"]
+    assert "Launch" not in [t["name"] for t in seen["tabs"]]
+    assert (seen["saved"], seen["can_edit"]) == (False, False)
+    mine = get(api, "bots/ops/task-tabs")
+    assert [w["id"] for w in mine["widgets"]] == ["page:" + ops, "card:" + card["id"], "updates", "tasks", "files"]
+    assert [t["name"] for t in mine["tabs"]] == ["Launch"]
+
+
+def test_one_who_only_sees_the_bot_counts_its_default_lists_not_its_saved_ones(api):
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists})
+    with api.app.state.store.transaction() as c:
+        restrict(c, "ops", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
+    seen = get(api, "bots/ops/task-tabs/tasks", "cara-test")["tabs"]
+    assert "Launch" not in [t["name"] for t in seen] and "c0" not in [t["key"] for t in seen]
+    assert [t["name"] for t in get(api, "bots/ops/task-tabs/tasks")["tabs"]] == ["Launch"]
+
+
+def test_the_sidebar_layout_reads_its_pages_rows_and_access_only(api, monkeypatch):
+    """GET /bots/{bot}/task-tabs checks its pinned pages may be read; it never reads them in full (their versions,
+    links), which only the place's own read draws."""
+    from backend import cards, pages
+
+    ops = page(api, "ops", "Ops page")
+    full, calls = pages.prime_views, []
+    monkeypatch.setattr(pages, "prime_views", lambda c, rows: calls.append(len(rows)) or full(c, rows))
+    real = cards.prime_pins
+    primed = []
+    monkeypatch.setattr(cards, "prime_pins", lambda ctx, pins, **kw: primed.append(pins) or real(ctx, pins, **kw))
+    get(api, "bots/ops/task-tabs")
+    assert primed == []  # nothing pinned, nothing to read
+    lists = [{"name": "Launch", "conditions": [{"field": "stage", "value": ["general-todo"]}]}]
+    put(api, "bots/ops/task-tabs", {"tabs": lists, "widgets": [{"id": "page:" + ops}]})
+    assert [w["id"] for w in get(api, "bots/ops/task-tabs")["widgets"]][0] == "page:" + ops
+    assert primed and all(pins == [{"item": "page:" + ops}] for pins in primed) and calls == []
+
+
+def test_a_pinned_pages_version_is_declared_but_optional():
+    """A page whose full read is not drawn (page_brief) has no version; the contract must not require one."""
+    from backend.api_schemas._base import SCHEMAS
+    import backend.api_schemas.cards_and_pins  # noqa: F401
+
+    page = SCHEMAS["Place"]["properties"]["pins"]["items"]["properties"]["page"]
+    assert "version" in page["properties"] and "version" not in page["required"]
+
+
+def test_automation_runs_count_the_whole_day_not_its_newest_500(api):
+    from backend.cards import ago
+    from backend.tests.helpers.automation_runs import FIND, make
+
+    aid = make(api, [FIND])
+    runs = [("run_early", aid, ago(hours=23), "failed")]
+    runs += [(f"run_{i}", aid, ago(minutes=i + 1), "ok") for i in range(600)]
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO automation_runs(id,automation_id,version,started_at,status) VALUES(?,?,1,?,?)", runs)
+    put(api, "places/dashboard", {})
+    data = post(api, "cards", {"template": "automation_runs", "place": "dashboard"})["card"]["data"]
+    assert (data["total"], data["failed"], data["running"]) == (601, 1, 0)
+    assert data["runs"][0]["id"] == "run_early" and len(data["runs"]) == 5
 
 
 def test_a_team_page_has_its_audience_its_defaults_and_its_leads(api):
