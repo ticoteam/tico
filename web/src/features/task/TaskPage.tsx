@@ -237,10 +237,12 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     return !leaving.current && (open === String(t.number) || open === t.id);
   }, [router, t.id, t.number]);
   useEffect(() => {
-    if (known || chatCard || unresolved || first === null || !stillOpen()) return;
+    if (known || chatCard || unresolved || first === null || leaving.current) return;
+    const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
+    if (open !== String(t.number) && open !== t.id) return;
     // The address's other words (a version, `v`) stay while the tab is named.
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: Record<string, unknown>) => prev) as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate, stillOpen]);
+  }, [known, chatCard, unresolved, first, opened, t, navigate, router]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
      one Back still closes it); at the list's end it closes, back to the page under it. An answer that lands once the

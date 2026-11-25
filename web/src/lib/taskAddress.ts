@@ -52,14 +52,12 @@ function wordsOf(search: Record<string, unknown>, key: (w: string) => string): T
   return out;
 }
 
-/** The page's own search: the address without the open task. */
-export function pageSearch(search: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(search).filter(([k]) => !isTaskKey(k)));
+/** The page's own search: the address without the open task. A page reads it as
+    `Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })`: the same object while only the task
+    over it changes, so the page under the task modal doesn't re-draw as the task opens, moves or closes. */
+export function pageSearch<T extends object>(search: T): T {
+  return Object.fromEntries(Object.entries(search).filter(([k]) => !isTaskKey(k))) as T;
 }
-
-/** `Route.useSearch(PAGE_SEARCH)`: the page's own search, the same object while only the task over it changes, so
-    the page under the task modal doesn't re-draw as the task opens, moves or closes. */
-export const PAGE_SEARCH = { select: <T,>(s: T): T => pageSearch(s as Record<string, unknown>) as T, structuralSharing: true } as const;
 
 /** A list a task opens from: a pipeline's id (no colon), a teammate's id, a search's words, or a list a page drew
     (`rows:…`, lib keepRows); anything else is none (Needs you). */

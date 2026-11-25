@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { ContactsPage } from '@/features/library/exports';
 import { contactsSearch, loadContacts } from '@/features/library/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/library/contacts')({
   validateSearch: contactsSearch,
@@ -11,5 +11,5 @@ export const Route = createFileRoute('/library/contacts')({
 });
 
 function Contacts() {
-  return <ContactsPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <ContactsPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

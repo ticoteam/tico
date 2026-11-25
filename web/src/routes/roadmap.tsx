@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RoadmapPage } from '@/features/tasks/exports';
 import { filtersOf, pipelinesQuery, pipelineTasksQuery, roadmapPipeline, shelfQuery, validateRoadmapSearch } from '@/features/tasks/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 /** Roadmap: the Features pipeline as Now, Next, Later and Shipped. Its filters and `?requesters=<task>` live in the address. */
 export const Route = createFileRoute('/roadmap')({
@@ -15,5 +15,5 @@ export const Route = createFileRoute('/roadmap')({
 });
 
 function Page() {
-  return <RoadmapPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <RoadmapPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { UpdatesPage } from '@/features/threads/exports';
 import { loadUpdates, updatesSearch } from '@/features/threads/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/updates/')({
   validateSearch: updatesSearch,
@@ -11,6 +11,6 @@ export const Route = createFileRoute('/updates/')({
 });
 
 function UpdatesRoute() {
-  const { open } = Route.useSearch(PAGE_SEARCH);
+  const { open } = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return <UpdatesPage tab="all" open={open} />;
 }

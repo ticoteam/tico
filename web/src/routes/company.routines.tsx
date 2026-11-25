@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { RoutinesPage } from '@/features/routines/exports';
 import { loadRoutines, validateRoutinesSearch } from '@/features/routines/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 /** Routines: `?tab=webhooks`; one routine, a built-in one or a webhook opens in `?panel=`. */
 export const Route = createFileRoute('/company/routines')({
@@ -12,5 +12,5 @@ export const Route = createFileRoute('/company/routines')({
 });
 
 function Page() {
-  return <RoutinesPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <RoutinesPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

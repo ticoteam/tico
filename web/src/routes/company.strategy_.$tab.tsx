@@ -1,7 +1,7 @@
 import { createFileRoute, notFound } from '@tanstack/react-router';
 import { StrategyPage } from '@/features/company/exports';
 import { loadStrategy, strategySearch, STRATEGY_TABS, strategyTab } from '@/features/company/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 /* Strategy's other tabs: Market, Org, Goals, Budget, Brand. Strategy itself is /company/strategy. */
 export const Route = createFileRoute('/company/strategy_/$tab')({
@@ -15,5 +15,5 @@ export const Route = createFileRoute('/company/strategy_/$tab')({
 
 function StrategyTabRoute() {
   const { tab } = Route.useParams();
-  return <StrategyPage tab={strategyTab(tab)} search={Route.useSearch(PAGE_SEARCH)} />;
+  return <StrategyPage tab={strategyTab(tab)} search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

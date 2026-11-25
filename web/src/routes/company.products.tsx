@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { ProductsPage } from '@/features/company/exports';
 import { loadProducts, panelSearch } from '@/features/company/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/company/products')({
   validateSearch: panelSearch,
@@ -10,5 +10,5 @@ export const Route = createFileRoute('/company/products')({
 });
 
 function Products() {
-  return <ProductsPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <ProductsPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

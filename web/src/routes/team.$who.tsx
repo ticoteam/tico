@@ -1,6 +1,6 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { TeamWho } from '@/features/team/exports';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 import { loadWho, validateTeamSearch } from '@/features/team/routing';
 
 /* `/team/<who>`: an agent (slug) or a person (id); tabs are `?tab=`. A team's old address (its name, slugified) goes home
@@ -15,6 +15,6 @@ export const Route = createFileRoute('/team/$who')({
 function TeamWhoRoute() {
   const { who } = Route.useParams();
   // the page's own words: a task opened over it draws nothing here
-  const search = Route.useSearch(PAGE_SEARCH);
+  const search = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return <TeamWho who={who} {...search} />;
 }

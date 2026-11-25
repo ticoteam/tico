@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { SkillsPage } from '@/features/library/exports';
 import { loadSkills, skillsSearch } from '@/features/library/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 export const Route = createFileRoute('/library/skills')({
   validateSearch: skillsSearch,
@@ -11,5 +11,5 @@ export const Route = createFileRoute('/library/skills')({
 });
 
 function Skills() {
-  return <SkillsPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <SkillsPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }

@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { MessagingPage } from '@/features/threads/exports';
 import { textListQuery } from '@/features/threads/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 interface MessagingSearch {
   /** The open contact: who the texts came from. */
@@ -15,6 +15,6 @@ export const Route = createFileRoute('/threads/messaging')({
 });
 
 function MessagingRoute() {
-  const { open } = Route.useSearch(PAGE_SEARCH);
+  const { open } = Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true });
   return <MessagingPage open={open} />;
 }

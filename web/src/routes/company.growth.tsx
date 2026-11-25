@@ -1,7 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { GrowthPage } from '@/features/money/exports';
 import { loadGrowth, validateGrowthSearch } from '@/features/money/routing';
-import { PAGE_SEARCH } from '@/lib';
+import { pageSearch } from '@/lib';
 
 /** Growth: `?segment=` picks the scope, `?month=` the month, `?panel=channel:<slug>` opens a channel beside. */
 export const Route = createFileRoute('/company/growth')({
@@ -13,5 +13,5 @@ export const Route = createFileRoute('/company/growth')({
 });
 
 function Page() {
-  return <GrowthPage search={Route.useSearch(PAGE_SEARCH)} />;
+  return <GrowthPage search={Route.useSearch({ select: (s) => pageSearch(s), structuralSharing: true })} />;
 }
