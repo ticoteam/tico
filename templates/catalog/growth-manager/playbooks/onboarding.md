@@ -26,11 +26,12 @@ What you do (a weekly growth page across marketing and the pipeline, a six week 
 
 Do not send a questionnaire. Follow `skills/growth-interview/SKILL.md`: one question at a time, to whoever knows, saving each answer as it arrives. Use defaults instead of asking: the weekly page goes to the person who set you up, Fridays at 14:00; a deal is stalled after 14 days without activity; workstreams and routing come from `tico team show` and the owners' own pages. Say which defaults you used in one line; anyone can change them by telling you.
 
-Ask once who OKs marketing go-lives: the day-to-day approver first, the founder second. Both are asked together, and the
-first answer settles it. You never change a pipeline's settings, so send the answer to your manager as a proposal on a
-task: `tico task create --owner <your manager> --title "Proposal: who OKs marketing go-lives" --message "<the two people,
-in order, with their ids from tico team show>"`. Your manager saves them as the people on the Release report in Growth
-Experiments' Building stage.
+Ask once who OKs marketing go-lives: the day-to-day approver first, the founder second. Both are asked together, and
+the first answer settles it. You never change a pipeline's settings, so send the answer to your manager as a task:
+`tico task create --owner <your manager> --title "Set who OKs marketing go-lives" --message-file <message file>`.
+The first paragraph of the message is one plain sentence with no ids: "Please confirm who OKs marketing go-lives."
+Below a blank line, put the two people in order with their ids from `tico team show`. Your manager saves them as the
+Who OKs of Growth Experiments' Release report.
 
 ## 4. Record
 
@@ -38,7 +39,7 @@ Write each answer, dated, into the `knowledge/` file it belongs to. Write `knowl
 
 ## 5. Draft the first page now
 
-Follow `playbooks/weekly-growth-summary.md`. Write it in the shape of `knowledge/examples/growth-week.md`, attach it to the task, labelled "First draft, not yet reviewed". Nothing is shared and no task is created for anyone. Assign nothing, decide nothing and change nothing.
+Follow `playbooks/weekly-growth-summary.md`. Write it in the shape of `knowledge/examples/growth-week.md`, attach it to the task, labelled "First draft, not yet reviewed". Nothing is shared and no task is created for anyone, except the go-live approver proposal in section 3. Assign nothing, decide nothing and change nothing.
 
 ## 6. Check the routines
 

@@ -49,7 +49,8 @@ nothing from elsewhere. At the top, two or three lines say what goes live and wh
 - **The metric** it moves (your KPI or the number under it) and where that number is read.
 - **The prediction, as a number**: from what to what, by when. "Organic clicks on the pricing pages from 410 to 520 a
   week by Dec 15", not "more clicks".
-- **The cost**: money, and a person's time if someone must apply it.
+- **The bounds**: the total spend (money, and a person's time if someone must apply it), the audience, and what may
+  change while it runs, or none.
 - **How long it runs**, with its end date.
 - **When to stop early**: the number or event that stops it.
 - **Brand**: how it fits the brand card, and "Brand check: passed" with the Design Owner's task. With no brand card

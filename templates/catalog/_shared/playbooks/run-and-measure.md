@@ -31,13 +31,13 @@ run it again, in this run. Say you filed it only once the command printed the ne
 
 The task waits until they say it is done, and that wakes you. Do not snooze it while it waits.
 
-Once it is live, check it is live as OK'd (the page loads, the ad runs, the email has gone out). Then add the
-`idea:live` label, with the live URL in the note, and snooze the task to the end date the Release report names. It wakes
-you then. Do not snooze it before it is live. Use the version you read for the label, then read the task again for the
-snooze:
+Once it is live, check it is live as OK'd (the page loads, the ad runs, the email has gone out). Then add the `idea:live` label and the live URL to the task note, and snooze the task to the end date the Release
+report names. It wakes you then. Do not snooze it before it is live. Use the version you read for each command, and
+read the task again after each one:
 
     tico task label <id> --add idea:live --version N
-    tico task snooze <id> --until <end date> -m "Live since <date> at <live URL>; measure on <end date>" --version N
+    tico task update <id> --note "Live since <date> at <live URL>" --version M
+    tico task snooze <id> --until <end date> -m "Measure on <end date>" --version P
 
 If the stop-early number or event happens before then, stop it the same way it went live, and measure now, from the
 day it went live to the day you stopped it.
