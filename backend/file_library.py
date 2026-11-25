@@ -862,7 +862,8 @@ def backfill_live(store, blobs, after="", limit=20):
         rows = c.execute(
             "SELECT f.id,f.current_version,v.digest FROM pages p JOIN bot_files f ON f.id=p.file_id "
             "JOIN bot_file_versions v ON v.file_id=f.id AND v.version=f.current_version "
-            "WHERE p.live IS NULL AND p.file_id>? AND f.state<>'deleted' ORDER BY p.file_id LIMIT ?",
+            "WHERE (p.live IS NULL OR p.live_version IS NOT f.current_version) "
+            "AND p.file_id>? AND f.state<>'deleted' ORDER BY p.file_id LIMIT ?",
             (after, limit),
         ).fetchall()
     pending = []
@@ -872,11 +873,11 @@ def backfill_live(store, blobs, after="", limit=20):
         except (OSError, Problem):
             LOG.warning("Could not read the HTML to classify page %s", row["id"], exc_info=True)
             continue
-        pending.append((int(live), row["id"], row["current_version"]))
+        pending.append((int(live), row["current_version"], row["id"], row["current_version"]))
     if pending:
         with store.transaction() as c:
             c.executemany(
-                "UPDATE pages SET live=? WHERE file_id=? AND live IS NULL "
+                "UPDATE pages SET live=?,live_version=? WHERE file_id=? "
                 "AND (SELECT current_version FROM bot_files WHERE id=pages.file_id)=?",
                 pending,
             )

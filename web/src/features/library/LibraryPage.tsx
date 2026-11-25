@@ -43,6 +43,7 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
     return { html: frameDoc(doc, count !== undefined), noChanges: count === 0 };
   }, [against, prior.data, text.data]);
   const showLive = current && !against && !page.archived && !!page.src;
+  // Refused rereads can retain cached data in the suspense query.
   if (error instanceof ApiError && [401, 403, 404].includes(error.status)) throw error;
 
   return (
@@ -75,8 +76,8 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
         body={
           <div className="page-body-frame">
             {noChanges && <p className="page-no-change">No text changes</p>}
-            {showLive ? (
-              <iframe key={page.src} src={page.src ?? undefined} sandbox={sandbox} referrerPolicy="no-referrer" title={page.title} />
+            {showLive && page.src ? (
+              <HostedPage key={`${id}@${version}`} src={page.src} title={page.title} />
             ) : text.isError || prior.isError ? (
               <Empty icon="alert" title="This version did not load">
                 <Button onClick={() => Promise.all([text.isError && text.refetch(), prior.isError && prior.refetch()])}>Try again</Button>
@@ -92,6 +93,12 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
       {action && <PageActionDialog key={action} action={action} data={data} onClose={() => setAction(null)} onLeave={leave} onDuplicate={navigateTo} />}
     </>
   );
+}
+
+function HostedPage({ src, title }: { src: string; title: string }) {
+  // Renewing a signed address during a reread keeps the same page running.
+  const [initialSrc] = useState(src);
+  return <iframe src={initialSrc} sandbox={sandbox} referrerPolicy="no-referrer" title={title} />;
 }
 
 function PageMenu({
@@ -121,7 +128,7 @@ function PageMenu({
         </MenuSub>
       )}
       {!page.archived && <MenuItem label="Pin to a sidebar" onSelect={() => onOpen('pin')} />}
-      <MenuItem label="Duplicate" onSelect={() => onOpen('duplicate')} />
+      {page.may_write && <MenuItem label="Duplicate" onSelect={() => onOpen('duplicate')} />}
       {(data.can_manage || page.may_write) && <MenuItem label={page.archived ? 'Restore' : 'Archive'} icon="archive" onSelect={() => onOpen('archive')} />}
       {data.can_delete && (
         <>

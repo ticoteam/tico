@@ -280,9 +280,10 @@ version and **What's changed** compares its text with an earlier one. **Pin to a
 adds or removes the page on an agent's sidebar you can edit. **Archive** moves it out of
 search and the main list. Open it from **Show archived** and choose **Restore** to bring it back.
 
-Tag a page `template` to find it under **Templates**. **Duplicate** starts a new page in the
+Tag a page `template` to find it under **Templates**. Page writers can **Duplicate** it in the
 source's scope with its current HTML, cadence and audience. The file's **Made from** field
-points to the source. The copy starts with one version and an empty page data store.
+points to the source. The copy starts with one version and an empty page data store. App access
+carries over when the original author makes the copy.
 Agents can use `tico page duplicate ID --title "Quarterly plan"` or `tico_page_duplicate`.
 
 ## Archiving

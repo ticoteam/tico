@@ -27,13 +27,13 @@ function fileAt(path: string, search: URLSearchParams): Pointer | null {
 function appAt(to: string): Pointer {
   const u = new URL(to, 'http://app');
   const p = u.pathname;
-  if (p === '/library/files' && u.searchParams.get('file')) {
+  if ((p === '/library/files' || p === '/library/pages') && u.searchParams.get('file')) {
     return { kind: 'file', file: u.searchParams.get('file')!, version: whole(u.searchParams.get('v')) };
   }
   if (/^\/(task|flow)\/[^/]+|^\/tasks\/[^/]+\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'tasks', what: 'task' };
   if (/^\/team\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'people', what: 'teammate' };
   if (/^\/threads\/[^/]+/.test(p)) return { kind: 'app', to, icon: 'threads', what: 'thread' };
-  if (/^\/library\/(?!docs$|files$|skills$|tools$|contacts$)[^/]+$/.test(p)) return { kind: 'app', to, icon: 'library', what: 'doc' };
+  if (/^\/library\/(?!docs$|files$|skills$|tools$|contacts$|pages$)[^/]+$/.test(p)) return { kind: 'app', to, icon: 'library', what: 'doc' };
   return { kind: 'app', to, icon: 'link', what: 'page' };
 }
 

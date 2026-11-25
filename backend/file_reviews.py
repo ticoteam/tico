@@ -337,16 +337,4 @@ def approved_current(c, who, versions):
             (json.dumps(list(subjects)),),
         )
     }
-    seen, approved = set(), set()
-    for row in sorted(
-        _asked(c, [subjects[subject] for subject in grants]), key=lambda r: r["created_at"] or "", reverse=True
-    ):
-        fid = row["file_id"]
-        if fid in seen or not _counts(row["actor"], "human"):
-            continue
-        task = H.task(c, row["task_id"]) if row["task_id"] else None
-        if task and privacy.task_readable(c, who, task):
-            seen.add(fid)
-            if row["verdict"] == "approve":
-                approved.add(fid)
-    return approved
+    return {subjects[subject][0] for subject in grants if _verdict(c, who, [subjects[subject]])["approved"]}

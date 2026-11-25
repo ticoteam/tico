@@ -101,8 +101,8 @@ def page_list_filters(c, *, kind="", stale=False):
         where.append(
             {
                 "app": app,
-                "live": "p.live=1",
-                "static": f"p.live=0 AND NOT COALESCE({app},0)",
+                "live": "p.live=1 AND p.live_version=f.current_version",
+                "static": f"p.live=0 AND p.live_version=f.current_version AND NOT COALESCE({app},0)",
             }[kind]
         )
     if stale:
@@ -134,7 +134,8 @@ def list_marks(c, who, rows):
         version_data.update(
             (v["file_id"], v)
             for v in c.execute(
-                "SELECT v.file_id,v.version,COALESCE(v.source_digest,v.digest) AS digest,v.created_at,p.cadence,p.live,"
+                "SELECT v.file_id,v.version,COALESCE(v.source_digest,v.digest) AS digest,v.created_at,p.cadence,"
+                "CASE WHEN p.live_version=v.version THEN p.live END AS live,"
                 f"{app} AS has_app FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id AND f.current_version=v.version "
                 f"JOIN pages p ON p.file_id=f.id WHERE v.file_id IN ({marks})",
                 part,
@@ -487,9 +488,10 @@ class Pages:
             now = H.now()
             was = c.execute("SELECT archived FROM pages WHERE file_id=?", (row["id"],)).fetchone()
             c.execute(
-                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec,live) VALUES(?,?,?,?,?,?,?) "
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,spec,live,live_version) VALUES(?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(file_id) DO UPDATE SET cadence=COALESCE(?,cadence),as_of=?,updated_at=?,"
-                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END,live=?",
+                "spec=COALESCE(?,spec),archived=CASE WHEN ? THEN 0 ELSE archived END,live=excluded.live,"
+                "live_version=excluded.live_version",
                 (
                     row["id"],
                     cadence or "none",
@@ -498,12 +500,12 @@ class Pages:
                     now,
                     visual_specs.CARD if spec else None,
                     live,
+                    row["current_version"],
                     cadence,
                     as_of,
                     now,
                     visual_specs.CARD if spec else None,
                     int(bool(changed)),
-                    live,
                 ),
             )
             if changed and was and was[0]:
@@ -607,6 +609,8 @@ class Pages:
                 or version_refusal(c, self.auth, who, source, source["current_version"], original)
             ):
                 raise Problem("not_found", "Page not found", 404)
+            if not page_links.may_write(c, self.auth, who, source):
+                raise Problem("forbidden", "Only page writers duplicate this page", 403)
             H._writer(c, who.actor, task_id=source["task_id"], attempt_id=who.attempt_id)
             # A separate blob row lets the source and the copy keep their own access, while storage shares the bytes.
             blob = register(
@@ -617,7 +621,8 @@ class Pages:
                 original["name"],
                 original["mime"],
             )
-            app = {"app": original["app"]} if "app" in original.keys() else {}
+            # Only the original author can carry forward the access they declared for this HTML.
+            app = {"app": original["app"]} if "app" in original.keys() and original["actor"] == who.actor else {}
             row, created, _ = self.files.add_version(
                 c,
                 bot=source["bot_id"],
@@ -625,7 +630,7 @@ class Pages:
                 scope=source["scope"],
                 task=source["task_id"],
                 conversation=source["conversation_id"],
-                attempt=original["attempt_id"],
+                attempt=original["attempt_id"],  # the copied bytes keep the source run's privacy fence
                 identity="page-copy:" + H.new_id(),
                 title=(title.strip() or "Copy of " + source["title"])[:200],
                 name=original["name"],
@@ -634,14 +639,13 @@ class Pages:
                 digest=original["digest"],
                 source_digest=original["source_digest"],
                 size=original["size"],
-                version_actor=original["actor"],
                 **app,
             )
             now = H.now()
             c.execute(
-                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,audience,live)"
-                " SELECT ?,cadence,as_of,?,?,audience,live FROM pages WHERE file_id=?",
-                (row["id"], now, now, fid),
+                "INSERT INTO pages(file_id,cadence,as_of,created_at,updated_at,audience,live,live_version)"
+                " SELECT ?,cadence,as_of,?,?,audience,live,CASE WHEN live_version=? THEN 1 END FROM pages WHERE file_id=?",
+                (row["id"], now, now, original["version"], fid),
             )
             file_details.set_parent(c, self.auth, who, row, fid)
             page_links.link(c, row["id"], who.actor, "writer", who.actor)

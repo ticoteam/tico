@@ -444,8 +444,13 @@ def test_page_library_filters_keep_archived_and_unreadable_pages_out(api):
     live_html = '<tico-tasks waiting-on="viewer"></tico-tasks>'
     match = make("Launch board", public, live_html, stale=True)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE pages SET live=NULL WHERE file_id=?", (match,))
+        c.execute("UPDATE pages SET live_version=0 WHERE file_id=?", (match,))
+    before = api.get("/api/v2/pages", params={"page_kind": "live"}, headers=headers("cara-test"))
+    assert match not in before.text
     file_library.backfill_live(api.app.state.store, api.app.state.blobs)
+    outsider = bot(api, "cpo")
+    assert read(api, match, outsider).status_code == 200
+    assert api.post(f"/api/v2/pages/{match}/duplicate", json={}, headers=headers(outsider)).status_code == 403
     archived = make("Archived board", public, live_html, stale=True, archive=True)
     hidden = make("Private board", private, live_html, stale=True)
     static = make("Static board", public, "", stale=True)
@@ -485,6 +490,7 @@ def test_duplicate_retains_task_scope_and_links_to_the_source(api):
     assert made.status_code == 200, made.text
     copied = made.json()["page"]
     assert copied["file_id"] != source and copied["task_id"] == task and copied["version"] == 1
+    assert copied["updated_by"] == "human:ben"
     assert api.post(url, json=body, headers=once).json() == made.json()
     target = copied["file_id"]
     info = api.get(f"/api/v2/files/{target}/info", headers=headers("ben-test")).json()["file"]

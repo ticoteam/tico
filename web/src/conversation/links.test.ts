@@ -30,6 +30,8 @@ describe('pointerOf', () => {
     expect(at(`${HERE}/api/v2/files/f1?v=3`)).toEqual({ kind: 'file', file: 'f1', version: 3 });
     expect(at('#/page/file-0123456789abcdef')).toMatchObject({ kind: 'file', file: 'file-0123456789abcdef' });
     expect(at('/library/files?file=f2')).toMatchObject({ kind: 'file', file: 'f2' });
+    expect(at('/library/pages?file=f2&v=3')).toEqual({ kind: 'file', file: 'f2', version: 3 });
+    expect(at('/library/pages')).toMatchObject({ kind: 'app', what: 'page' });
   });
 
   it('leaves what is neither alone', () => {
