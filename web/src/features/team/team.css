@@ -408,11 +408,12 @@ html:not([data-layout="cards"]) .rec.is-col .task .av-gap{width:0}
 .tool-row .tool-access{display:inline-grid;place-items:center;flex:none}
 .tool-row .row-age{font-variant-numeric:tabular-nums}
 /* one line like a task: the name takes its width first, the note gets what is left and is cut (a wrapped note ran
-   out of the fixed-height row onto the next one, and squeezed the name to nothing) */
-.tool-row .row-pills{min-width:0}
-.tool-row .row-ctx{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
-html:not([data-layout="cards"]) .rec.is-col .task.tool-row{grid-template-columns:16px minmax(0,max-content) minmax(0,1fr) 0 34px}
+   out of the fixed-height row onto the next one, and squeezed the name to nothing); the note's own width is 0 so the
+   pills' minimum is only the access mark, which never shrinks */
+.tool-row .row-ctx{flex:1;width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+html:not([data-layout="cards"]) .rec.is-col .task.tool-row{grid-template-columns:16px minmax(0,max-content) minmax(auto,1fr) 0 34px}
 html:not([data-layout="cards"]) .rec.is-col .task.tool-row .row-pills{justify-content:flex-end}
+html:not([data-layout="cards"]) .rec.is-col .task.tool-row .row-ctx{text-align:end}
 .tool-pick{display:grid;max-height:240px;overflow:auto;margin:var(--s-2) 0}
 .tool-pick-row{display:flex;align-items:center;gap:var(--s-2);width:100%;min-width:0;border:0;background:none;color:var(--ink);text-align:left;cursor:pointer;border-radius:var(--r-row)}
 .tool-pick-row .row-ctx{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
