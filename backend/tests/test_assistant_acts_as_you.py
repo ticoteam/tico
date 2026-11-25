@@ -626,7 +626,8 @@ def test_the_morning_day_is_the_company_day_in_los_angeles(monkeypatch):
 
 def test_the_morning_message_lands_in_the_persons_assistant_chat(api, monkeypatch):
     monkeypatch.setattr(H, "now", lambda: "2026-11-06T09:00:00.000000Z")  # 01:00 on Nov 6 in Los Angeles
-    coo = setup_attempt(api, "assistant")[2]["token"]  # the Assistant bot's own identity (its background run)
+    run = setup_attempt(api, "assistant")[2]  # the Assistant bot's own identity (its background run)
+    coo = run["token"]
     made = morning(api, coo, body="Close the invoice first.")
     assert made["day"] == "2026-11-06" and made["next_at"] == "2026-11-07T08:00:00.000000Z", made
     assert made["conversation_id"] == api_room(api, "ana-test") and made["conversation_id"] != api_room(api, "ben-test")
@@ -638,7 +639,8 @@ def test_the_morning_message_lands_in_the_persons_assistant_chat(api, monkeypatc
             "SELECT actor FROM events WHERE action='assistant.morning' AND target=?", (made["message_id"],)
         ).fetchone()
     assert (sender, recipient, kind, body) == ("bot:assistant", "human:ana", "say", "Close the invoice first.")
-    assert json.loads(refs) == {"assistant": True, "morning": "2026-11-06"}, refs
+    # the run that posted it is named, as on any post a run makes with its own token (hubdb._write_message)
+    assert json.loads(refs) == {"assistant": True, "morning": "2026-11-06", "by_run": run["id"]}, refs
     assert audit is not None and audit[0] == "human:ana"
 
 

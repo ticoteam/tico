@@ -10,7 +10,7 @@ import { newId } from '@/lib/ids';
 import { chatAddress } from '@/lib/chat';
 import { safeFrame } from '@/lib/safeFrame';
 import type { FromPage } from '@/shell/pageOwner';
-import type { ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
+import type { BotWait, ChatMessage, LiveRun, ReplyQuote, TimelinePage, Variant } from './types';
 
 const PAGE = 50;
 const enc = encodeURIComponent;
@@ -19,6 +19,7 @@ const enc = encodeURIComponent;
     patches by that view's rule (live/patch.ts inView). */
 export const timelineKey = (id: string, view?: TimelineView | null) => (view ? (['thread', id, 'timeline', view] as const) : (['thread', id, 'timeline'] as const));
 export const liveKey = (id: string) => ['thread', id, 'live'] as const;
+export const waitsKey = (id: string) => ['thread', id, 'waits'] as const;
 export const proposalKey = (aid: string) => ['assistant', 'action', aid] as const;
 
 export type TicoInfo = Pick<Assistant, 'available' | 'bot' | 'can_turn_on' | 'state'> & { room_id: string | null };
@@ -58,11 +59,15 @@ const viewParam = (view: TimelineView | null | undefined) => (!view ? '' : 'sess
 export const timelineQuery = (id: string, view?: TimelineView | null) =>
   infiniteQueryOptions({
     queryKey: timelineKey(id, view) as readonly unknown[],
-    queryFn: ({ pageParam, signal }) =>
-      api.get<TimelinePage>(
+    queryFn: async ({ pageParam, signal }) => {
+      const page = await api.get<TimelinePage>(
         `/api/v2/threads/${enc(id)}/timeline?flat=1&limit=${PAGE}${viewParam(view)}${pageParam == null ? '' : `&cursor=${enc(String(pageParam))}`}`,
         { signal },
-      ),
+      );
+      // the first page says which bots the thread waits on: the same read, so a chat opened mid-run shows it
+      if (page.bot_status) setWaits(id, page.bot_status, page.bot_status_version);
+      return page;
+    },
     initialPageParam: null as string | number | null,
     getNextPageParam: (last) => last.next_cursor ?? undefined,
   });
@@ -81,6 +86,45 @@ export const liveQuery = (id: string) =>
     queryKey: liveKey(id),
     queryFn: () => queryClient.getQueryData<LiveRun[]>(liveKey(id)) ?? [],
     initialData: [] as LiveRun[],
+  });
+
+/** How long the bots a thread waits on go without the stream before they are read again: a backstop only. */
+const WAITS_BACKSTOP_MS = 5 * 60_000;
+
+/** The thread's bot status rows as the server last said (replying.ts draws them), with the version of that read. */
+export interface Waits {
+  bots: BotWait[];
+  version?: number;
+}
+
+/** A read's version as a number: 0 (or "") is a read made before the thread's first status change, the oldest there is;
+    none at all is a read that says no version. */
+const versionOf = (v: number | string | null | undefined) => (v === undefined || v === null ? undefined : Number(v) || 0);
+
+/** Whether a read of version `now` is older than the one held (`was`): it landed late, and is dropped. A read with no
+    version is taken. */
+const older = (was: number | undefined, now: number | string | null | undefined) => {
+  const at = versionOf(now);
+  return was !== undefined && at !== undefined && at < was;
+};
+
+/** The bots the thread waits on (replying.ts), as the server last said: the timeline's first page and the `threads`
+    topic's `bot_status` set them, or have them read again where the stream does not carry them (a chat that follows
+    its conversation, not its thread); while any are listed they are read again every few minutes, in case the stream
+    missed their end. */
+export const waitsQuery = (id: string) =>
+  queryOptions({
+    queryKey: waitsKey(id),
+    queryFn: async ({ signal }): Promise<Waits> => {
+      const read = await api.get<Partial<Waits>>(`/api/v2/threads/${enc(id)}/bot-status`, { signal });
+      const was = queryClient.getQueryData<Waits>(waitsKey(id));
+      return was && older(was.version, read.version) ? was : { bots: read.bots ?? [], version: versionOf(read.version) };
+    },
+    initialData: { bots: [] } as Waits,
+    staleTime: Infinity,
+    // a `replied` row ends nothing the stream could miss: its reply is in the chat
+    refetchInterval: (q) => (q.state.data?.bots.some((b) => b.state !== 'replied') ? WAITS_BACKSTOP_MS : false),
+    enabled: !!id,
   });
 
 export interface Proposal {
@@ -335,6 +379,12 @@ interface RunEvent {
   state?: string;
   output?: { kind?: string; compact?: boolean; label?: string; payload?: { text?: string; final?: boolean; delta_kind?: string } };
 }
+interface ThreadEvent {
+  kind?: string;
+  thread_id?: string;
+  bots?: BotWait[];
+  version?: number;
+}
 interface MessageEvent {
   id?: string;
   conversation_id?: string;
@@ -402,6 +452,12 @@ export function stepRun(runs: LiveRun[], d: RunEvent): LiveRun[] {
   return runs.with(i, next);
 }
 
+/** The bots the thread waits on, as the server lists them now (what the chat draws, replying.ts), unless a newer read
+    already landed. */
+export function setWaits(cid: string, bots: BotWait[], version?: number): void {
+  queryClient.setQueryData<Waits>(waitsKey(cid), (was) => (was && older(was.version, version) ? was : { bots, version: versionOf(version) }));
+}
+
 /** What the live row says: its pieces and what is being typed, a blank line between. */
 export const liveText = (r: LiveRun) =>
   [...r.parts, r.typing ?? ''].map((p) => p.trim()).filter(Boolean).join('\n\n');
@@ -432,6 +488,14 @@ export function installConversationLive(): void {
         setTimeout(() => setRuns(cid, (runs) => (runs.some((x) => x.run === run) ? runs.filter((x) => x.run !== run) : runs)), END_WAIT_MS);
     }
   });
+  onTopic<ThreadEvent>('threads', (batch) => {
+    for (const e of batch) {
+      if (e.kind !== 'bot_status' || !e.thread_id) continue;
+      // a stream that follows the conversation, not the thread, is told only that they moved: an open chat reads them
+      if (e.bots) setWaits(e.thread_id, e.bots, e.version);
+      else void queryClient.invalidateQueries({ queryKey: waitsKey(e.thread_id), exact: true, refetchType: 'active' });
+    }
+  });
   onTopic<MessageEvent>('messages', (batch) => {
     const me = meId();
     for (const e of batch) {
@@ -439,8 +503,9 @@ export function installConversationLive(): void {
       const cid = e.conversation_id ?? e.thread_id;
       if (cid) stir(cid, (a) => ({ ...a, messages: a.messages + 1 }));
       if (!m || !cid) continue;
-      // The posted reply takes its live row's place in the same frame.
-      const turn = m.refs?.turn_id;
+      // The posted reply takes its live row's place in the same frame: a run's reply, or a post it made with a tool
+      // (its run in `by_run`, which wins over a `turn_id` its caller wrote, as the server reads them).
+      const turn = m.refs?.by_run || m.refs?.turn_id;
       if (turn) for (const id of new Set([cid, m.thread_id, m.conversation_id])) if (id) setRuns(id, (runs) => (runs.some((r) => r.run === turn) ? runs.filter((r) => r.run !== turn) : runs));
       // My own message echoed before its POST answered: the pending row gives way now, so it never shows twice.
       if (me && m.sender_id === me) {

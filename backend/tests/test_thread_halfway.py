@@ -190,7 +190,10 @@ def test_a_bot_whose_computer_is_offline_cant_reply_with_a_fix(api):
     [row] = bot_status(api, thread["id"])
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"]
     assert row["fix"]["href"] == "#/settings/computers"
-    assert timeline(api, thread["id"])["bot_status"] == [row]
+    page = timeline(api, thread["id"])
+    assert page["bot_status"] == [row]
+    read = api.get(f"/api/v2/threads/{thread['id']}/bot-status", headers=headers()).json()
+    assert read["version"] and page["bot_status_version"] == read["version"]  # nothing moved between the two reads
 
 
 def test_a_refused_claim_says_why_and_where_to_fix_it(api):
@@ -230,13 +233,300 @@ def test_a_working_bot_names_its_run_and_up_next_never_names_a_place_the_viewer_
     assert for_ana["state"] == "up_next" and "Secret plan" in for_ana["detail"]
 
 
-def test_a_bot_that_posted_since_is_no_longer_waited_on(api):
+def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_it_replies(api):
+    """The task's chat draws "got it", then the work, under the comment that woke the agent: the row names it, in the
+    comments' own first page too, until the agent replies."""
+    machine = machine_for(api)
+    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
+    comment = said["comment"]
+    thread = comment["conversation_id"]
+    [row] = bot_status(api, thread)
+    assert row["actor"] == "bot:ops" and row["state"] == "up_next" and row["message_id"] == comment["id"]
+    assert timeline(api, thread, comments="true", flat="1")["bot_status"] == [row]
+    attempt = claim(api, machine)
+    [working] = bot_status(api, thread)
+    assert working["state"] == "working" and working["run_id"] == attempt["id"]
+    assert working["message_id"] == comment["id"]
+    run_post(api, attempt, "bot:ops", thread, "The page loads an old stylesheet.")
+    # its run goes on, but it answered the comment
+    [after] = bot_status(api, thread)
+    assert (after["state"], after["run_id"], after["message_id"]) == ("replied", None, comment["id"])
+
+
+def test_a_comment_a_run_posted_can_be_edited_and_deleted_by_its_bot(api):
+    """A run's post carries `by_run` (hubdb._write_message): it is still a plain comment its author may change. Here a
+    run a chat message started comments on a task it was asked about."""
+    machine = machine_for(api)
+    task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
+    say(api, new_thread(api)["id"], "@ops can you note on the task why this page looks bad?")
+    attempt = claim(api, machine)
+    said = post(api, f"tasks/{task['id']}/comments", {"text": "Old stylesheet."}, token=attempt["token"])["comment"]
+    assert H._json(row_of(api, said["id"])["refs"], {})["by_run"] == attempt["id"]
+    post(api, f"tasks/{task['id']}/comments/{said['id']}", {"text": "An old stylesheet."}, token=attempt["token"])
+    assert row_of(api, said["id"])["edited_at"]
+    post(api, f"tasks/{task['id']}/comments/{said['id']}/delete", {}, token=attempt["token"])
+    assert row_of(api, said["id"])["deleted_at"]
+
+
+def test_another_bots_post_naming_a_run_is_not_that_runs_answer(api):
+    machine = machine_for(api)
+    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    bot_post(api, "bot:cpo", thread["id"], "Checked: all fine.", refs={"turn_id": attempt["id"]})
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("working", attempt["id"], asked["id"])
+
+
+def test_a_run_token_post_naming_another_run_of_its_bot_answers_only_its_own_run(api):
+    machine = machine_for(api)
+    first = new_thread(api)
+    asked = say(api, first["id"], "@ops can you check this?")
+    earlier = claim(api, machine)
+    end_run(api, machine, earlier)
+    other = new_thread(api, title="Elsewhere")
+    say(api, other["id"], "@ops and this one?")
+    later = claim(api, machine)
+    reset = H.RUN.set(later["id"])
+    try:  # the later run's tool post, its caller naming the earlier run
+        made = bot_post(api, "bot:ops", first["id"], "See the other thread.", refs={"turn_id": earlier["id"]})
+    finally:
+        H.RUN.reset(reset)
+    assert H._json(row_of(api, made["id"])["refs"], {})["by_run"] == later["id"]
+    [row] = bot_status(api, first["id"])
+    assert (row["state"], row["message_id"]) == ("no_reply", asked["id"])
+
+
+def test_a_reply_the_reader_cannot_read_does_not_answer_the_wake_for_them(api, monkeypatch):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    reply = run_post(api, attempt, "bot:ops", thread["id"], "Checked: the salary numbers are fine.")
+    real = threads.message_readable
+    monkeypatch.setattr(
+        threads,
+        "message_readable",
+        lambda c, v, m, **kw: (
+            m.get("id") != reply["id"] if getattr(v, "actor", "") == "human:ben" else real(c, v, m, **kw)
+        ),
+    )
+    assert bot_status(api, thread["id"])[0]["state"] == "replied"
+    [row] = bot_status(api, thread["id"], "ben-test")
+    assert (row["state"], row["message_id"]) == ("working", asked["id"])
+
+
+def test_a_wake_whose_job_is_queued_again_waits_whatever_its_last_run_posted(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    run_post(api, attempt, "bot:ops", thread["id"], "Looking at it.")
+    assert bot_status(api, thread["id"])[0]["state"] == "replied"
+    # the run fails and its job goes back to the queue, still naming the run (execution.complete's requeue)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='failed', finished_at=? WHERE id=?", (H.now(), attempt["id"]))
+        c.execute("UPDATE jobs SET state='queued' WHERE attempt_id=?", (attempt["id"],))
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("up_next", None, asked["id"])
+
+
+def test_two_status_changes_in_the_same_millisecond_read_as_two_versions(api):
+    thread = new_thread(api)
+    store, at, seen = api.app.state.store, H.now(), []
+    for _ in range(2):
+        with store.transaction() as c:
+            c.execute(
+                "INSERT INTO changes(topic,kind,subject_id,conversation_id,created_at) "
+                "VALUES('threads','bot_status',?1,?1,?2)",
+                (thread["id"], at),
+            )
+        with store.read() as c:
+            seen.append(thread_bot_status.version(c, thread["id"]))
+    assert isinstance(seen[0], int) and seen[0] < seen[1]
+
+
+def run_post(api, attempt, bot, thread_id, text):
+    """A post the run makes itself, as a tool call: the run's token sets H.RUN for its requests (app.py)."""
+    reset = H.RUN.set(attempt["id"])
+    try:
+        return bot_post(api, bot, thread_id, text)
+    finally:
+        H.RUN.reset(reset)
+
+
+def end_run(api, machine, attempt):
+    """The run ends done, with no reply."""
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t-" + attempt["id"]}, token=machine["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=machine["token"])
+
+
+def test_wakes_made_in_the_same_instant_keep_the_order_of_their_messages(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    first = say(api, thread["id"], "@ops is the launch date set?")
+    attempt = claim(api, machine)
+    run_post(api, attempt, "bot:ops", thread["id"], "Friday, on the board.")
+    end_run(api, machine, attempt)
+    second = say(api, thread["id"], "@ops and the budget?")
+    end_run(api, machine, claim(api, machine))
+    # one clock tick for both (a frozen clock, or the same microsecond), and ids that sort either way round
+    for low, high in ((second, first), (first, second)):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE message_deliveries SET created_at=? WHERE recipient='bot:ops'", (H.now(),))
+            for message, mark in ((low, "0"), (high, "z")):
+                c.execute(
+                    "UPDATE message_deliveries SET id=? WHERE message_id=? AND recipient='bot:ops'",
+                    (mark + message["id"], message["id"]),
+                )
+        rows = bot_status(api, thread["id"])
+        # the newest ending first: a chat draws an agent's first row, so the later message's ending is the one said
+        assert [(r["state"], r["message_id"]) for r in rows] == [("no_reply", second["id"]), ("replied", first["id"])]
+
+
+def test_a_post_the_run_makes_itself_answers_its_wake_while_the_run_goes_on(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"]) == ("working", attempt["id"])
+    # a tool call: its token's request writes the post, recorded as the run's
+    reply = say(api, thread["id"], "Checked: all fine.", token=attempt["token"])
+    assert H._json(row_of(api, reply["id"])["refs"], {})["by_run"] == attempt["id"]
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("replied", None, asked["id"])
+
+
+def test_a_later_post_of_the_bots_that_no_run_of_the_wake_made_leaves_its_row_and_ending(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    attempt = claim(api, machine)
+    bot_post(api, "bot:ops", thread["id"], "Unrelated: the nightly report is out.")
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["run_id"], row["message_id"]) == ("working", attempt["id"], asked["id"])
+    end_run(api, machine, attempt)
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["message_id"]) == ("no_reply", asked["id"])
+
+
+def test_a_run_from_a_hidden_carrier_that_ends_between_reads_says_so_on_the_message_that_woke_it(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?")
+    assert delivery(api, asked["id"], "bot:ops")["carrier_id"]  # its run starts from a carrier no timeline shows
+    end_run(api, machine, claim(api, machine))
+    [row] = bot_status(api, thread["id"])
+    assert (row["state"], row["message_id"], row["run_id"]) == ("no_reply", asked["id"], None)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='ops'", (H.shift(H.now(), seconds=-61),))
+    assert bot_status(api, thread["id"]) == []  # a minute on, the ending is said no more
+
+
+def test_a_wake_in_a_sub_thread_the_reader_cannot_open_says_nothing_of_the_bot(api):
     machine_for(api)
     thread = new_thread(api)
-    say(api, thread["id"], "@ops can you check this?")
+    top = say(api, thread["id"], "Topic")
+    side = sub_thread(api, top["id"])
+    say(api, side["id"], "@ops can you check this?")
+    with api.app.state.store.transaction() as c:
+        # the side thread now belongs to Ana's private task: Ben reads the root, not this
+        secret = H.task_create(c, "human:ana", "Plan the launch", "Private.", "human:ana", private=True, lint=False)
+        c.execute("UPDATE conversations SET task_id=? WHERE id=?", (secret["id"], side["id"]))
+    assert [r["actor"] for r in bot_status(api, thread["id"])] == ["bot:ops"]
+    assert bot_status(api, thread["id"], "ben-test") == []
+    assert timeline(api, thread["id"], "ben-test")["bot_status"] == []
+
+
+def test_a_bots_post_in_a_sub_thread_the_reader_cannot_open_leaves_their_wake(api):
+    machine_for(api)
+    thread = new_thread(api)
+    asked = say(api, thread["id"], "@ops can you check this?", token="ben-test")
+    side = sub_thread(api, say(api, thread["id"], "Topic")["id"])
+    bot_post(api, "bot:ops", side["id"], "Checked the launch plan.")
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Plan the launch", "Private.", "human:ana", private=True, lint=False)
+        c.execute("UPDATE conversations SET task_id=? WHERE id=?", (secret["id"], side["id"]))
+    [row] = bot_status(api, thread["id"], "ben-test")
+    assert (row["state"], row["message_id"]) == ("up_next", asked["id"])
+
+
+def test_a_run_whose_waking_message_the_reader_cannot_read_is_never_named_to_them(api):
+    """Nothing of a run (no row, run id, step or time) to a reader who does not read the message it took: here a
+    message of a migrated Home's old shared history, which only its old readers read (threads.legacy_hidden)."""
+    machine = machine_for(api)
+    thread = new_thread(api)
+    with api.app.state.store.read() as c:
+        after = E.latest(c)
+    asked = say(api, thread["id"], "@ops the old budget, please")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET legacy_audience='shared:gone' WHERE id=?", (asked["id"],))
+    attempt = claim(api, machine)
+    assert attempt
+    assert bot_status(api, thread["id"], "ben-test") == []
+    assert timeline(api, thread["id"], "ben-test")["bot_status"] == []
+    sent = [
+        d
+        for _, topic, d in read_as(api, who(api, "ben-test"), after, ("threads",), (thread["id"],))
+        if d.get("kind") == "bot_status"
+    ]
+    assert all(d["bots"] == [] for d in sent) and attempt["id"] not in str(sent)
+
+
+def test_a_restricted_wake_or_run_is_never_shown_to_a_reader_who_cannot_read_it(api, monkeypatch):
+    from backend import task_privacy
+
+    machine = machine_for(api)
+    thread = new_thread(api)
+    secret = say(api, thread["id"], "@ops the salary numbers, please")
+    real = threads.message_readable
+    monkeypatch.setattr(
+        threads,
+        "message_readable",
+        lambda c, v, m, **kw: (
+            m.get("id") != secret["id"] if getattr(v, "actor", "") == "human:ben" else real(c, v, m, **kw)
+        ),
+    )
+    assert bot_status(api, thread["id"], "ben-test") == []
+    monkeypatch.setattr(threads, "message_readable", real)
+    attempt = claim(api, machine)
+    real_run = task_privacy.attempt_readable
+    monkeypatch.setattr(
+        task_privacy,
+        "attempt_readable",
+        lambda c, actor, aid, *a, **kw: False if "ben" in str(actor) else real_run(c, actor, aid, *a, **kw),
+    )
+    [for_ben] = bot_status(api, thread["id"], "ben-test")
+    # the wake is Ben's to see, the run is not: no run id, step or start time
+    assert (for_ben["state"], for_ben["run_id"], for_ben["detail"]) == ("working", None, "")
+    assert for_ben["since"] == delivery(api, secret["id"], "bot:ops")["created_at"]
+    assert for_ben["message_id"] == secret["id"]
+    [for_ana] = bot_status(api, thread["id"])
+    assert for_ana["run_id"] == attempt["id"]
+
+
+def test_a_deleted_waking_message_says_nothing_of_the_bot(api):
+    machine_for(api)
+    thread = new_thread(api)
+    said = say(api, thread["id"], "@ops can you check this?")
     assert bot_status(api, thread["id"])
-    bot_post(api, "bot:ops", thread["id"], "Checked.")
+    # gone while its wake is still open: nobody reads it any more
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET deleted_at=? WHERE id=?", (H.now(), said["id"]))
     assert bot_status(api, thread["id"]) == []
+
+
+def test_a_queued_mention_is_its_own_row_beside_the_bots_other_run_here(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    say(api, thread["id"], "@ops draft it")
+    attempt = claim(api, machine)
+    later = say(api, thread["id"], "@ops and check the totals")
+    rows = bot_status(api, thread["id"])
+    assert [(r["state"], r["run_id"]) for r in rows] == [("working", attempt["id"]), ("up_next", None)]
+    assert rows[1]["message_id"] == later["id"] and rows[0]["message_id"] != later["id"]
 
 
 def test_a_run_step_moves_the_status_line_again_one_second_after_its_last_change(api):
@@ -301,6 +591,7 @@ def test_bot_status_goes_live_only_to_the_roots_readers(api):
 
     ben = sent("ben-test")
     assert ben and ben[-1]["thread_id"] == thread["id"] and ben[-1]["bots"][0]["actor"] == "bot:ops"
+    assert ben[-1]["version"]
     assert sent("cara-test") == []
 
 
@@ -344,19 +635,38 @@ def test_a_message_to_one_bot_that_names_another_is_only_the_first_bots_input(ap
         c.execute(
             "INSERT OR REPLACE INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (attempt["id"], both["id"])
         )
+        # as execution folds a queued message into a running turn: its job is that turn's input
+        c.execute(
+            "UPDATE jobs SET state='input', attempt_id=?1 WHERE message_id=(SELECT carrier_id FROM message_deliveries "
+            "WHERE message_id=?2 AND recipient='bot:ops')",
+            (attempt["id"], both["id"]),
+        )
     rows = {r["actor"]: r for r in bot_status(api, thread["id"])}
     assert rows["bot:ops"]["run_id"] == attempt["id"]
     assert rows["bot:cpo"]["run_id"] != attempt["id"] and rows["bot:cpo"]["state"] != "working"
 
 
-def test_one_bots_many_old_wakes_never_crowd_out_another_bot(api, monkeypatch):
-    machine_for(api, ("ops", "cpo"))
-    thread = new_thread(api, members=("human:ben", "bot:ops", "bot:cpo"))
-    for n in range(3):
-        say(api, thread["id"], f"@ops note {n}")
-    say(api, thread["id"], "@cpo please look")
-    monkeypatch.setattr(thread_bot_status, "OPEN_PER_BOT", 1)
-    assert {r["actor"] for r in bot_status(api, thread["id"])} == {"bot:ops", "bot:cpo"}
+def test_fifty_newer_wakes_the_reader_cannot_read_never_hide_one_they_can(api, monkeypatch):
+    machine_for(api)
+    thread = new_thread(api)
+    public = say(api, thread["id"], "@ops can you check this?")
+    hidden = say(api, thread["id"], "@ops and the salary numbers")
+    with api.app.state.store.transaction() as c:
+        clone_wakes(c, hidden["id"], 50, "p")
+    real = threads.message_readable
+    monkeypatch.setattr(
+        threads,
+        "message_readable",
+        lambda c, v, m, **kw: (
+            not str(m.get("id")).startswith(hidden["id"])
+            if getattr(v, "actor", "") == "human:ben"
+            else real(c, v, m, **kw)
+        ),
+    )
+    [row] = bot_status(api, thread["id"], "ben-test")
+    assert (row["state"], row["message_id"]) == ("up_next", public["id"])
+    [row] = bot_status(api, thread["id"])
+    assert row["message_id"].startswith(hidden["id"])  # Ana reads them all: her row names the newest
 
 
 def test_an_offline_outside_agent_is_waited_on_without_a_job(api, monkeypatch):
@@ -367,7 +677,8 @@ def test_an_offline_outside_agent_is_waited_on_without_a_job(api, monkeypatch):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE bot_id='ops'")
     assert bot_status(api, thread["id"]) == []  # a bot here: its turn ended, nothing waits
-    monkeypatch.setattr(agents, "external_harness", lambda c, bot, *a, **kw: "acme-agent" if bot == "ops" else None)
+    with api.app.state.store.transaction() as c:
+        assert c.execute("UPDATE bot_settings SET harness='hermes' WHERE bot_id='ops'").rowcount == 1
     monkeypatch.setattr(agents, "presence", lambda c, bot, *a, **kw: {"online": False} if bot == "ops" else None)
     [row] = bot_status(api, thread["id"])
     assert row["actor"] == "bot:ops" and row["state"] == "cant_reply" and row["detail"] == thread_bot_status.OFFLINE
@@ -392,6 +703,9 @@ def clone_wakes(c, message_id, count, tag):
             "FROM message_deliveries WHERE message_id=?",
             (new + ":", new, message_id),
         )
+    # a copy shares its source's origin, which marks it restricted (threads_messages_stamp): the backlog is of plain
+    # messages, as people's are
+    c.execute("UPDATE messages SET restricted=0 WHERE id LIKE ?", (f"{message_id}-{tag}-%",))
 
 
 def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_statements(api):
@@ -399,35 +713,103 @@ def test_a_thousand_open_wakes_for_one_bot_are_read_in_a_bounded_number_of_state
     thread = new_thread(api)
     first = say(api, thread["id"], "@ops can you check this?")
     store = api.app.state.store
+    ana = who(api, "ana-test")
     with store.transaction() as c:
         clone_wakes(c, first["id"], 1000, "a")
 
     def read():
-        seen, steps = [], [0]
+        seen = []
+        viewer = threads.viewer(None, ana)  # fresh: its per-read caches start empty each time
         with store.read() as c:
             c.set_trace_callback(seen.append)
-            found = thread_bot_status.candidates(c, thread["id"])
+            found = thread_bot_status.candidates(c, viewer, thread["id"])
             c.set_trace_callback(None)
-            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 100)
-            c.execute(thread_bot_status._OPEN_SQL, (thread["id"], thread_bot_status.OPEN_PER_BOT)).fetchall()
-            c.set_progress_handler(None, 100)
-        return found, len(seen), steps[0]
+        return found, len(seen)
 
-    found, statements, steps = read()
-    assert set(found) == {"bot:ops"}
-    assert statements <= 10
+    found, statements = read()
+    assert {w["recipient"] for w in found} == {"bot:ops"} and len(found) == 1001
+    # the bots, the wakes with their jobs and runs, their messages (checked as a timeline checks them)
+    assert statements <= 16, statements
     with store.transaction() as c:
         clone_wakes(c, first["id"], 1000, "b")
-    found, more_statements, more_steps = read()
-    assert set(found) == {"bot:ops"} and more_statements == statements
-    assert more_steps < 3 * steps  # each bot's latest post is read once, not once per wake
+    found, more_statements = read()
+    assert len(found) == 2001 and more_statements == statements
 
-    bot_post(api, "bot:ops", thread["id"], "Checked.")
-    with store.read() as c:
-        assert thread_bot_status.candidates(c, thread["id"]) == {}
-    say(api, thread["id"], "@ops and this one?")
-    with store.read() as c:
-        assert set(thread_bot_status.candidates(c, thread["id"])) == {"bot:ops"}
+
+def test_a_long_history_of_closed_wakes_is_never_read_again(api):
+    """Five hundred wakes whose runs ended long ago, an outside agent's among them that it read: a status read reads none
+    of them, in SQL or in Python."""
+    machine = machine_for(api)
+    thread = new_thread(api)
+    first = say(api, thread["id"], "@ops can you check this?")
+    end_run(api, machine, claim(api, machine))
+    store = api.app.state.store
+    ana = who(api, "ana-test")
+    with store.transaction() as c:
+        c.execute("UPDATE attempts SET finished_at=? WHERE bot_id='ops'", (H.shift(H.now(), seconds=-3600),))
+        # now an outside agent's, which read every carrier it got
+        assert c.execute("UPDATE bot_settings SET harness='hermes' WHERE bot_id='ops'").rowcount == 1
+        c.execute("UPDATE messages SET delivered_at=?1, read_at=?1 WHERE recipient_id='bot:ops'", (H.now(),))
+
+    def read():
+        steps, statements = [0], []
+        viewer = threads.viewer(None, ana)
+        with store.read() as c:
+            c.set_trace_callback(statements.append)
+            c.set_progress_handler(lambda: steps.__setitem__(0, steps[0] + 1), 100)
+            try:
+                return thread_bot_status.status(c, viewer, thread["id"]), steps[0], len(statements)
+            finally:
+                c.set_progress_handler(None, 0)
+                c.set_trace_callback(None)
+
+    rows, steps, statements = read()
+    assert rows == []
+    with store.transaction() as c:
+        clone_wakes(c, first["id"], 500, "old")
+    rows, more_steps, more_statements = read()
+    assert rows == [] and more_statements == statements
+    assert more_steps - steps <= 5, (steps, more_steps)  # each step is 100 SQLite instructions
+
+
+def test_an_sse_status_read_with_several_runs_going_reads_a_fixed_number_of_statements(api, monkeypatch):
+    """The `threads` stream's status for an authenticated reader: one access map and one provenance read for every
+    run, then one step read per run shown."""
+    bots = ("ops", "cpo", "finance")
+    machine = machine_for(api, bots)
+    thread = new_thread(api, members=("human:ben", *("bot:" + b for b in bots)))
+    with api.app.state.store.read() as c:
+        after = E.latest(c)
+    counts, real = [], thread_bot_status.status
+
+    def counted(c, v, root):
+        seen = []
+        c.set_trace_callback(seen.append)
+        try:
+            return real(c, v, root)
+        finally:
+            c.set_trace_callback(None)
+            counts.append(len(seen))
+
+    monkeypatch.setattr(thread_bot_status, "status", counted)
+
+    def sent():
+        return [
+            d
+            for _, topic, d in read_as(api, who(api, "ben-test"), after, ("threads",), (thread["id"],))
+            if d.get("kind") == "bot_status"
+        ][-1]["bots"]
+
+    per = []
+    for n, bot in enumerate(bots, 1):
+        say(api, thread["id"], f"@{bot} please look")
+        assert claim(api, machine, bot)
+        counts.clear()
+        rows = sent()
+        assert [(r["state"], bool(r["run_id"])) for r in rows] == [("working", True)] * n
+        per.append(counts[-1])
+    # each run adds at most its bot's outside-agent check and its step, never a re-read of the others (measured: 20, 21, 23)
+    assert per[0] <= 22 and all(b - a <= 2 for a, b in zip(per, per[1:])), per
 
 
 def test_a_thought_after_a_tool_reads_as_thinking():

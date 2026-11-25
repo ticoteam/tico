@@ -260,7 +260,12 @@ SCHEMAS.update(
             {
                 "actor": "s",
                 "name": "s",
-                "state": {"type": "string", "enum": ["working", "up_next", "cant_reply"]},
+                "state": {
+                    "type": "string",
+                    "enum": ["up_next", "cant_reply", "working", "replied", "no_reply", "stopped"],
+                    "description": "What became of the wake: waiting, stopped by something (`fix`), its run going, "
+                    "or how that run ended (kept a minute)",
+                },
                 "detail": "s",
                 "since": "s",
                 "run_id": "n",
@@ -268,10 +273,25 @@ SCHEMAS.update(
                     "oneOf": [obj({"label": "s", "href": "s"}, required=["label", "href"]), {"type": "null"}],
                     "description": "Where to fix what stops it (cant_reply only)",
                 },
+                "message_id": {
+                    "type": "string",
+                    "description": "The person's message here that woke it: the newest its run took, or the newest "
+                    "one waiting for a run",
+                },
             },
-            required=["actor", "name", "state", "detail", "since", "run_id", "fix"],
+            required=["actor", "name", "state", "detail", "since", "run_id", "fix", "message_id"],
         ),
-        "ThreadBotStatus": obj({"bots": items(ref("ThreadBotStatusRow"))}, required=["bots"]),
+        "ThreadBotStatus": obj(
+            {
+                "bots": items(ref("ThreadBotStatusRow")),
+                "version": {
+                    "type": "integer",
+                    "description": "The seq of the root's newest status change when read (0 before any): a client "
+                    "drops a read older than the rows it holds",
+                },
+            },
+            required=["bots", "version"],
+        ),
         "ThreadReach": obj(
             {
                 "thread_id": "s",
@@ -311,6 +331,7 @@ SCHEMAS.update(
                     "items": ref("ThreadBotStatusRow"),
                     "description": "First page only: the bots the root waits on, as `GET .../bot-status` gives them",
                 },
+                "bot_status_version": {"type": "integer", "description": "First page only: `bot_status`'s `version`"},
                 "read_marks": {
                     "type": "object",
                     "additionalProperties": {"type": "integer"},

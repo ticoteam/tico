@@ -146,7 +146,8 @@ request is deleted, its messages read as ordinary messages again.
 - A message that names nobody reaches the bots following the thread at All; a bot follows a chat at Mentions unless
   someone sets it to All, so @mention a bot to reach it. A DM with a bot and a bot's Home always reach that bot.
 - Under the messages, a thread shows the bots it is waiting on: working (with what it is doing now), up next (finishing
-  other work first) or can't reply (why, with a Fix link). `tico thread bot-status <thread>` lists the same.
+  other work first) or can't reply (why, with a Fix link), and for a minute a run that ended without replying.
+  `tico thread bot-status <thread>` lists the same.
 - A bot that follows a thread on digest gets one run an hour for all its threads with new messages.
 - A bot acknowledges a request with a one-word `✅` in its thread.
 - A bot's open asks to people go in its Home.

@@ -435,6 +435,68 @@ test('board: drag a card to another stage, and Move to does the same', async ({ 
   clean(page);
 });
 
+test("an agent answering: an @mention in a task's comments shows it got it, its reply being written, then the reply, on every page open on it; its own chat shows the same row", async ({ browser, hub }) => {
+  const [draft] = hub.facts.board.tasks;
+  const page = await open(browser, hub, `/task/${draft!.number}`);
+  const chat = modal(page, draft!.title).locator('aside[aria-label="Chat"]');
+  // the same task open on a phone: what it shows comes pushed, not from the click
+  const phone = await open(browser, hub, `/task/${draft!.number}`, PHONE);
+  const over = modal(phone, draft!.title);
+  await over.locator('.tmd-panes').getByRole('button', { name: 'Chat', exact: true }).tap();
+  const small = over.locator('aside[aria-label="Chat"]');
+  const both = [chat, small];
+
+  const box = chat.getByRole('textbox', { name: 'Add a comment' });
+  await box.fill('@engineering-manager can you check the launch note reads well?');
+  await box.press('Enter');
+  await expect(chat.locator('.msg', { hasText: 'can you check the launch note reads well?' }).first()).toBeVisible();
+  for (const c of both) await expect(c.locator('.msg.is-live')).toContainText('Got it');
+  await page.screenshot({ path: test.info().outputPath('chat-working-task-got-1440.png') });
+
+  const started = await call<{ attempt: string }>(hub, `/_e2e/turn?step=start&bot=engineering-manager&text=${encodeURIComponent('Reading the launch note now')}`, 'POST');
+  for (const c of both) {
+    await expect(c.locator('.msg.is-live')).toHaveCount(1);
+    await expect(c.locator('.msg.is-live')).toContainText('Reading the launch note now');
+  }
+  await page.screenshot({ path: test.info().outputPath('chat-working-task-1440.png') });
+  await phone.screenshot({ path: test.info().outputPath('chat-working-task-390.png') });
+
+  const reply = 'The launch note reads well; one typo fixed in the second line.';
+  await call(hub, `/_e2e/turn?step=done&attempt=${started.attempt}&text=${encodeURIComponent(reply)}`, 'POST');
+  for (const c of both) {
+    await expect(c.locator('.msg', { hasText: reply })).toBeVisible();
+    await expect(c.locator('.msg.is-live')).toHaveCount(0);
+  }
+  clean(page);
+  clean(phone);
+
+  // the agent's own chat draws the same row
+  const dm = await open(browser, hub, '/team/engineering-manager');
+  const own = dm.locator('[role="log"]');
+  const say = dm.getByRole('textbox', { name: /^Message (?!Tico$)/ });
+  await say.fill('Is the launch date set?');
+  await say.press('Enter');
+  await expect(own.locator('.msg', { hasText: 'Is the launch date set?' }).first()).toBeVisible();
+  await expect(own.locator('.msg.is-live')).toContainText('Got it');
+  const next = await call<{ attempt: string }>(hub, `/_e2e/turn?step=start&bot=engineering-manager&text=${encodeURIComponent('Checking the board')}`, 'POST');
+  await expect(own.locator('.msg.is-live')).toContainText('Checking the board');
+  await dm.screenshot({ path: test.info().outputPath('chat-working-dm-1440.png') });
+  await call(hub, `/_e2e/turn?step=done&attempt=${next.attempt}&text=${encodeURIComponent('Friday, on the board.')}`, 'POST');
+  await expect(own.locator('.msg', { hasText: 'Friday, on the board.' })).toBeVisible();
+  await expect(own.locator('.msg.is-live')).toHaveCount(0);
+
+  // a run that ends with no reply leaves one line that says so
+  await say.fill('And the budget?');
+  await say.press('Enter');
+  await expect(own.locator('.msg.is-live')).toContainText('Got it');
+  const quiet = await call<{ attempt: string }>(hub, '/_e2e/turn?step=start&bot=engineering-manager&text=', 'POST');
+  await call(hub, `/_e2e/turn?step=done&attempt=${quiet.attempt}&text=`, 'POST');
+  await expect(own.getByText(/finished without replying/)).toBeVisible();
+  await expect(own.locator('.msg.is-live')).toHaveCount(0);
+  await dm.screenshot({ path: test.info().outputPath('chat-working-dm-ended-1440.png') });
+  clean(dm);
+});
+
 test('a thread: send a message; archive a mail row', async ({ browser, hub }) => {
   const page = await open(browser, hub, `/threads/${hub.facts.thread}`);
   const box = page.getByRole('textbox', { name: 'Message Omar' });

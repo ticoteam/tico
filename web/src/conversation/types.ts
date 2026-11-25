@@ -78,6 +78,9 @@ export interface TimelinePage {
   messages: ChatMessage[];
   next_cursor?: string | number | null;
   read_marks?: Record<string, number>;
+  /** First page only: the bots the thread waits on, and the version of that read (a later read is never older). */
+  bot_status?: BotWait[];
+  bot_status_version?: number;
 }
 
 /** A reply being written, from the `runs` topic (compact output). */
@@ -87,9 +90,28 @@ export interface LiveRun {
   bot: string;
   parts: string[];
   typing: string | null;
-  /** The last thing it did: 'think' before any output, 'work' on a tool step, 'type' while text streams. */
-  doing: 'think' | 'work' | 'type';
-  /** Its newest tool call in a few words ("Reading Finance"), from the `runs` topic's step `label`. */
+  /** The last thing it did: 'think' before any output, 'work' on a tool step, 'type' while text streams; 'wait': it
+      got the message and its run has not started (replying.ts draws it from the thread's bot status). */
+  doing: 'think' | 'work' | 'type' | 'wait';
+  /** Its newest tool call in a few words ("Reading Finance"), from the `runs` topic's step `label`; while it waits, what
+      it finishes first ("Busy with other work"). */
   label?: string;
   ended: boolean;
+}
+
+/** A person's message that woke a bot here, and what became of it (GET /api/v2/threads/{id}/bot-status,
+    backend/thread_bot_status.py): the timeline's first page brings them and the `threads` topic's `bot_status` keeps
+    them current. */
+export interface BotWait {
+  actor: string;
+  name: string;
+  /** 'up_next': it got the message and finishes other work first; 'cant_reply': something stops it (`detail` says
+      what); 'working': a run took it; 'replied', 'no_reply', 'stopped': how that run ended, for a minute. */
+  state: 'up_next' | 'cant_reply' | 'working' | 'replied' | 'no_reply' | 'stopped';
+  detail: string;
+  since: string;
+  /** The run, while it works and the reader reads it. */
+  run_id: string | null;
+  /** The message that woke it (the newest, when several did). */
+  message_id: string;
 }

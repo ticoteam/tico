@@ -144,8 +144,9 @@ def test_sender_items_leave_room_for_other_senders_and_count_bot_notices(queue, 
 def test_concurrent_admission_cannot_overshoot_on_independent_connections(queue, monkeypatch, setting):
     api, _, _ = queue
     hold(api)
-    # Measure this exact stored notice; every candidate below has the same byte size.
-    send(queue, text='界🙂9', kind='notice')
+    # Measure this exact stored notice, written the way the candidates below are (a run token would add `by_run`).
+    with api.app.state.store.transaction() as c:
+        H.say(c, 'bot:ops', 'bot:finance', '界🙂9', kind='notice', refs={'needs_action': True})
     charge = retained(pending(api))
     monkeypatch.setattr(H, setting, 3 if setting.endswith('ITEMS') else 3 * charge)
     barrier = Barrier(8)

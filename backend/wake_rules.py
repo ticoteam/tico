@@ -81,6 +81,7 @@ NEWS_REFS = frozenset(
         "files",
         "unsolicited",
         "turn_id",
+        "by_run",
         "warnings",
         "via",
         FLAG,

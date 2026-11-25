@@ -18,14 +18,15 @@ import { ReadFault } from '@/pagekinds';
 import { MessageBones } from './Bones';
 import { Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
-import { Face, LiveRow, Message, whoOf } from './Message';
+import { Face, LiveRow, Message, ReplyLine, whoOf } from './Message';
 import { onJump } from './Outline';
 import { ChatPlace } from './Rich';
 import { quoteFrom, quoteOf, Replying } from './Quote';
 import { SessionLine, type Session } from './Session';
-import { installConversationLive, isDmChanged, liveQuery, liveText, markRead, rowsOf, sendMessage, timelineQuery, type TaskSend } from './queries';
+import { installConversationLive, isDmChanged, markRead, rowsOf, sendMessage, timelineQuery, type TaskSend } from './queries';
+import { useReplying, type Answering, type ShownIn } from './replying';
 import { ReplyBox } from './ReplyBox';
-import type { ChatMessage, LiveRun, Variant } from './types';
+import type { ChatMessage, Variant } from './types';
 
 /** Within this many pixels of the end counts as "at the bottom": what comes in is read, and the asks over the box come back. */
 const READ_PX = 24;
@@ -92,7 +93,7 @@ type Item =
   | { k: 'day'; key: string; label: string; isNew: boolean }
   | { k: 'did'; key: string; text: string; fault: boolean }
   | { k: 'msg'; key: string; m: ChatMessage; cont: boolean; under?: string }
-  | { k: 'live'; key: string; r: LiveRun; text: string }
+  | Answering
   | { k: 'reply'; key: string; m: ChatMessage };
 
 /** A message that is someone's (a person's or an agent's), not a Tico line: what Reply answers in a task's comments. */
@@ -127,9 +128,10 @@ const didsOf = (m: ChatMessage): string[] => {
   return (Array.isArray(d) ? d : d ? [d] : []).filter((x): x is string => typeof x === 'string' && !!x.trim());
 };
 
-/** The list as it reads, oldest first: day breaks, the "New" line, what Tico did, messages, and replies being written.
-    `nested`: a task's comments, each reply under its comment (`nest`), and the Reply being written there (`replying`). */
-function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, id: string, marks: Map<string, number> | null, nested = false, replying: ChatMessage | null = null): Item[] {
+/** The list as it reads, oldest first: day breaks, the "New" line, what Tico did, messages, and the agents answering
+    (replying.ts). `nested`: a task's comments, each reply under its comment (`nest`), and the Reply being written there
+    (`replying`). */
+function itemsOf(rows: ChatMessage[], answering: Answering[], me: string | undefined, id: string, marks: Map<string, number> | null, nested = false, replying: ChatMessage | null = null): Item[] {
   const out: Item[] = [];
   let day = '';
   let newShown = false;
@@ -176,7 +178,7 @@ function itemsOf(rows: ChatMessage[], live: LiveRun[], me: string | undefined, i
     out.push({ k: 'msg', key: m.id, m, cont });
     last = m;
   }
-  for (const r of live) out.push({ k: 'live', key: `live:${r.run}`, r, text: liveText(r) });
+  out.push(...answering);
   if (replying) {
     // under the comment and its replies, or under the reply itself when its comment is not loaded
     const top = ordered.find((x) => x.m.id === replying.id)?.under ?? replying.id;
@@ -196,10 +198,19 @@ function newSince(items: Item[], seen: string, me: string | undefined): number {
 }
 
 /** What the Dot shows while Tico answers in its own chat. */
-function dotFor(rows: ChatMessage[], live: LiveRun[]): DotState | null {
-  const r = live.find((x) => !x.ended);
-  if (r) return r.doing;
+function dotFor(rows: ChatMessage[], answering: Answering[]): DotState | null {
+  const r = answering.find((x) => x.k === 'live' && !x.r.ended);
+  if (r?.k === 'live') return r.r.doing === 'wait' ? 'think' : r.r.doing;
   return rows.some((m) => m.pending === 'sending') ? 'think' : null;
+}
+
+/** Which agents' answers a view of a task's thread draws: a session, its agent's; the comments, those to a comment
+    loaded here; any other chat, all of them. */
+function shownIn(view: TimelineView | undefined, rows: ChatMessage[]): ShownIn | undefined {
+  if (!view) return undefined;
+  if ('session' in view) return (bot) => bot === view.session;
+  const ids = new Set(rows.map((m) => m.id));
+  return (_bot, message) => ids.has(message);
 }
 
 /** A teammate's page, `/team/<agent slug or id>` as features/team's whoHref writes it; none for Tico or no one. */
@@ -255,12 +266,12 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const { data: me } = useQuery(meQuery);
   const myId = me?.id;
   const timeline = useInfiniteQuery(timelineQuery(id, view));
-  const { data: runs = [] } = useQuery(liveQuery(id));
-  // A session shows its agent's reply being written; the comments, none (each agent's work is in its session).
-  const live = !view ? runs : 'session' in view ? runs.filter((r) => r.bot === view.session) : [];
   const comments = !!view && 'comments' in view;
   // the Agent bar's rows that failed when its DM changed under them, kept by its agent, for Retry here
   const own = rowsOf(timeline.data);
+  // Every agent answering, the same row in every chat: a session shows its own agent's, and every run of its here; the
+  // comments, each agent's answer to a comment shown here (its work for anything else is in its session).
+  const answering = useReplying(id, shownIn(view, own), view && 'session' in view ? view.session : undefined);
   const rows = withExtra(own, extra, !!timeline.hasNextPage);
   const extraIds = new Set(extra?.map((m) => m.id));
 
@@ -283,7 +294,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const replyTo = shownReply && !shownReply.inline ? shownReply.m : null;
   const inline = shownReply?.inline ? shownReply.m : null;
 
-  const items = itemsOf(rows, live, myId, id, marks, comments, inline);
+  const items = itemsOf(rows, answering, myId, id, marks, comments, inline);
   const mate = useActor(actor);
   // never a stand-in word for someone: their name, else what they are
   const name = variant === 'tico' ? 'Tico' : (title ?? mate?.name ?? (actor?.startsWith('bot:') ? 'Agent' : 'Person'));
@@ -299,7 +310,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   const fill = filling?.box === boxId ? filling : null;
   // a file goes as a thread message, which carries no session (the task's comment route has no upload yet)
   const attach = !task?.to;
-  const empty = !!starters?.length && !!timeline.data && !rows.some((m) => !m.hidden) && !live.length;
+  const empty = !!starters?.length && !!timeline.data && !rows.some((m) => !m.hidden) && !answering.length;
 
   /* VirtualList follows the end while the person is at it (a new row, a reply growing) and keeps their place
      otherwise, and when older pages load above. */
@@ -377,7 +388,7 @@ export function Conversation({ id, variant, title, actor, session, from, starter
   useEffect(() => readOnMessage(), [id, timeline.data]);
 
   /* ---- the Dot, for Tico's own chat only */
-  const doing = variant === 'tico' ? dotFor(rows, live) : null;
+  const doing = variant === 'tico' ? dotFor(rows, answering) : null;
   useEffect(() => {
     if (!doing) return;
     return dot.set(doing);
@@ -458,6 +469,8 @@ export function Conversation({ id, variant, title, actor, session, from, starter
             );
           if (it.k === 'did') return <DidLine text={it.text} fault={it.fault} />;
           if (it.k === 'live') return <LiveRow r={it.r} variant={variant} text={it.text} />;
+          if (it.k === 'stuck') return <ReplyLine bot={it.bot} name={it.name} variant={variant} why="stuck" detail={it.detail} />;
+          if (it.k === 'quiet') return <ReplyLine bot={it.bot} variant={variant} why={it.why} />;
           if (it.k === 'reply')
             return myId ? (
               <ReplyBox thread={it.m.thread_id || id} m={it.m} me={myId} draft={`${id}:reply:${it.m.id}`} canSend={canSend} mentionFirst={mentionFirst}

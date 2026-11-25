@@ -366,9 +366,16 @@ describe("an agent's session", () => {
   it('shows only its own agent’s reply being written', async () => {
     show({ session: 'bot:qa' });
     await screen.findByText('Running the checks');
-    act(() => dispatch('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'build', state: 'running' }]));
+    const working = (bot: string, run: string) => ({ actor: bot, name: bot, state: 'working', detail: 'Thinking', since: '', run_id: run, fix: null, message_id: 'm1' });
+    act(() => {
+      dispatch('runs', [{ run_id: 'r1', conversation_id: T, bot_id: 'build', state: 'running' }]);
+      dispatch('threads', [{ kind: 'bot_status', thread_id: T, bots: [working('bot:build', 'r1')] }]);
+    });
     expect(document.querySelector('.msg.is-live')).toBeNull();
-    act(() => dispatch('runs', [{ run_id: 'r2', conversation_id: T, bot_id: 'qa', state: 'running' }]));
+    act(() => {
+      dispatch('runs', [{ run_id: 'r2', conversation_id: T, bot_id: 'qa', state: 'running' }]);
+      dispatch('threads', [{ kind: 'bot_status', thread_id: T, bots: [working('bot:build', 'r1'), working('bot:qa', 'r2')] }]);
+    });
     expect(document.querySelector('.msg.is-live')).toBeTruthy();
   });
 

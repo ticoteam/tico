@@ -32,6 +32,18 @@ def test_news_about_a_parked_task_waits_and_is_logged(api):
         }
 
 
+def test_a_callers_by_run_mark_never_gets_news_past_the_rules(api):
+    """`by_run` is the server's mark of a run's own post (hubdb._write_message): a caller's is dropped before the rules
+    read the refs, so it never turns news into something they cannot hold."""
+    setup(api)
+    with api.app.state.store.transaction() as c:
+        task, _ = parked_task(c)
+        with as_cause("bot:ops"):
+            msg = news(c, task, refs={"by_run": "made-up"})
+        assert jobs(c, "cpo") == 0
+        assert msg["refs"][W.MARK] == "parked" and "by_run" not in msg["refs"]
+
+
 def test_t2_a_comment_on_a_related_task_does_not_wake_the_parked_tasks_bot(api):
     setup(api)
     with api.app.state.store.transaction() as c:

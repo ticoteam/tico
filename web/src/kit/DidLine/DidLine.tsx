@@ -12,14 +12,16 @@ export type DidLineProps = {
   face?: ReactNode;
   /** It could not be done: the fault mark, the words in ink. */
   fault?: boolean;
+  /** Its words are a status a screen reader says when the line comes (`role="status"`, polite). */
+  status?: boolean;
 };
 
 /** One quiet line for each thing done (shell.css `.did`). No Undo in the first build. */
-export function DidLine({ text, icon = 'check', face, fault = false }: DidLineProps) {
+export function DidLine({ text, icon = 'check', face, fault = false, status = false }: DidLineProps) {
   return (
     <div className={fault ? 'did is-fault' : 'did'}>
       {face && !fault ? face : <span className="did-ico">{fault ? <Fault label="Could not do it" /> : <Icon name={icon} />}</span>}
-      <span>{text}</span>
+      <span role={status ? 'status' : undefined}>{text}</span>
     </div>
   );
 }
