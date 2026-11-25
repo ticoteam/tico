@@ -99,8 +99,8 @@ Without the kit a tag shows what is inside it, so put the figure inside too.
 
 **Widgets.** A widget is a page pinned to your sidebar; it shows the page's card view, as a chat card does. In the card
 view (`html[data-tico-view=card]`) show one stat or one chart and hide the rest (`[data-tico-view=card] .full
-{display:none}`); the card's Expand opens the full page. `examples/widget.html` is one. Pin it at the top:
-`tico pin add bot:<your slug> page:<file id> --position 0` (arrange-your-sidebar has the rest).
+{display:none}`); the card's Expand opens the full page. `examples/widget.html` is one. Pin it at the top with
+`tico_pin_add`: place `bot:<your slug>`, item `page:<file id>`, position 0 (arrange-your-sidebar has the rest).
 
 `page.py kit <page>.html` names a tag or attribute the kit does not know; `check` shows the same hints. Neither
 fails on them.
