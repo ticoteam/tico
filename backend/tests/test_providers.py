@@ -203,16 +203,161 @@ def test_the_gateway_still_holds_terra_so_a_live_hq_tier_for_it_stays_hidden(mon
     assert P.gateway_tiers.live_row(tier) is None
 
 
-def test_mercury_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
+def test_minimax_on_openrouter_is_offered_only_as_a_meeting_model_and_priced():
     from clients import openrouter
 
-    assert P.OPENROUTER_MEETING_MODEL == "mercury-3"
-    assert "mercury-3" in [row["id"] for row in P.provider_models("openrouter", meeting=True)]
-    assert "mercury-3" not in [row["id"] for row in P.provider_models("openrouter")]
-    row = P.MODEL_BY_ID["mercury-3"]
+    assert P.OPENROUTER_MEETING_MODEL == "minimax-m3.1-flash"
+    assert "minimax-m3.1-flash" in [row["id"] for row in P.provider_models("openrouter", meeting=True)]
+    assert "minimax-m3.1-flash" not in [row["id"] for row in P.provider_models("openrouter")]
+    row = P.MODEL_BY_ID["minimax-m3.1-flash"]
     assert (row["runtime"], row["default_effort"], row["efforts"][0]) == ("pi", "low", "low")
-    assert P.PRICES["mercury-3"] == (0.20, 0.02, 0.70)
-    assert openrouter.MODELS["mercury-3"] == "inception/mercury-3"
+    assert P.maker("minimax-m3.1-flash") == "minimax"
+    # OpenRouter's list price, as HQ's meeting row reads it (ticoteam/tico-services#377).
+    assert P.PRICES["minimax-m3.1-flash"] == (0.15, 0.015, 0.60)
+    assert openrouter.MODELS["minimax-m3.1-flash"] == "minimax/minimax-m3.1-flash"
+    # OpenRouter withdrew Mercury 3: nothing offers or maps it any more.
+    assert "mercury-3" not in [row["id"] for row in P.MODEL_CATALOG]
+    assert "mercury-3" not in openrouter.MODELS
+
+
+def test_a_mercury_3_run_that_completes_after_the_upgrade_is_still_priced():
+    # 1M uncached input and 1M output at Mercury 3's list price, as the run's completion prices it (execution.py).
+    assert P.estimate_cost("mercury-3", 1_000_000, 0, 1_000_000) == pytest.approx(0.90)
+
+
+OLD, MINIMAX = "mercury-3", "minimax-m3.1-flash"
+
+
+def _saved_company(**saved):
+    return P._record({"enabled": ["openrouter"], **saved})
+
+
+def _entry_points():
+    """Every place a saved or requested `mercury-3` is read: (what, what it resolves to)."""
+    from types import SimpleNamespace
+
+    from backend import check_models, harnesses, task_models, task_run_models
+
+    seed = SimpleNamespace(enabled_providers=["openrouter"], default_runtime="", default_model=OLD, models_preset="")
+    company = _saved_company(runtime="pi", model=OLD)
+    return {
+        "company default": lambda: company["model"],
+        "company default from the environment": lambda: P.env_seed(seed)["model"],
+        "company default fallback list": lambda: [row["model"] for row in P.default_fallbacks(company)][0],
+        "company meeting model": lambda: _saved_company(meeting_model=OLD)["meeting_model"],
+        "company check order": lambda: _saved_company(check_models=["pi:" + OLD, OLD])["check_models"],
+        "check order as saved (PUT providers)": lambda: P.normalize_check_models([OLD], company),
+        "meeting model requested": lambda: P.meeting_choice({"enabled": ["openrouter"]}, OLD),
+        "catalog lookup (bot model, fallback and task model setters)": lambda: P.MODEL_BY_ID[OLD]["id"],
+        "bot model": lambda: P.resolve(company, {"model": OLD})[1],
+        "bot fallback at the claim": lambda: P.fill(company, {"fallback": {"harness": "pi", "model": OLD}})["fallback"][
+            "model"
+        ],
+        "bot fallback as shown": lambda: harnesses.normalize_fallback({"harness": "pi", "model": OLD})["model"],
+        "bot task model": lambda: task_models.stored({"task_model": {"model": OLD}})["model"],
+        "task model requested": lambda: task_models.choice_of(OLD, "low")["model"],
+        "routine step stamp": lambda: task_run_models.stamped(OLD)["model"],
+        "check model requested": lambda: P.complete_choice(["openrouter"], *check_models.parse(OLD))[1],
+    }
+
+
+@pytest.mark.parametrize(
+    "where",
+    [
+        "company default",
+        "company default from the environment",
+        "company default fallback list",
+        "company meeting model",
+        "company check order",
+        "check order as saved (PUT providers)",
+        "meeting model requested",
+        "catalog lookup (bot model, fallback and task model setters)",
+        "bot model",
+        "bot fallback at the claim",
+        "bot fallback as shown",
+        "bot task model",
+        "task model requested",
+        "routine step stamp",
+        "check model requested",
+    ],
+)
+def test_a_saved_or_requested_mercury_3_resolves_to_minimax(where):
+    got = _entry_points()[where]()
+    if where == "company check order":
+        assert got == ["pi:" + MINIMAX, MINIMAX]
+    elif where == "check order as saved (PUT providers)":
+        assert got == [MINIMAX]
+    else:
+        assert got == MINIMAX
+
+
+def test_a_saved_mercury_3_never_reaches_the_runner_and_setters_save_minimax(api):
+    import json
+
+    from backend import check_models, task_run_models
+    from backend.store import H, encode
+    from backend.tests.helpers.api import claim, get, post
+    from backend.tests.helpers.task_models import ops_on_sonnet, revision, set_task_model
+
+    machine = ops_on_sonnet(api)
+    settings = api.app.state.store.settings
+    # The company and ops as a release before OpenRouter withdrew Mercury 3 saved them.
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "UPDATE registry_metadata SET value=? WHERE key='providers'",
+            (encode({"revision": 1, "enabled": ["anthropic", "xai", "openrouter"], "runtime": "pi", "model": OLD}),),
+        )
+        config = BS.read(c, "ops")
+        config["fallback"] = {"harness": "pi", "model": OLD}
+        BS.write(c, "ops", config)
+    task = post(api, "tasks", {"owner": "ops", "title": "Tidy the changelog", "body": "Sort the entries."})
+    with api.app.state.store.transaction() as c:
+        c.execute(
+            "INSERT INTO task_run_models(task_id,runtime,model,harness,effort,compact_at,set_by,set_at) "
+            "VALUES(?,'pi',?,'pi','low',NULL,'human:ana',?)",
+            (task["id"], OLD, H.now()),
+        )
+    with api.app.state.store.read() as c:
+        assert task_run_models.of(c, task["id"])["model"] == MINIMAX
+    turn = claim(api, machine)
+    assert turn["task"]["id"] == task["id"]
+    assert turn["config"]["fallback"]["model"] == MINIMAX
+    assert OLD not in json.dumps(turn["config"])
+    fallbacks = get(api, "config", machine["token"])["fallback_models"]
+    assert MINIMAX in [row["model"] for row in fallbacks] and OLD not in json.dumps(fallbacks)
+
+    # A check subtask filed on it: the turn, its claim and its notes all name MiniMax.
+    check = post(api, "tasks", {"owner": "ops", "title": "Check the changelog", "body": "Read it."})
+    with api.app.state.store.transaction() as c:
+        owner = c.execute("SELECT owner_id FROM tasks WHERE id=?", (check["id"],)).fetchone()[0]
+        c.execute(
+            "INSERT INTO task_check_models(task_id,runtime,model,harness,effort,role,created_by,created_at) "
+            "VALUES(?,'pi',?,'pi','low','check',?,?)",
+            (check["id"], OLD, owner, H.now()),
+        )
+        assert check_models.of(c, check["id"], owner.removeprefix("bot:"))["model"] == MINIMAX
+
+    # Setters take the old id and save the new one.
+    post(api, "bots/ops/fallback", {"fallback": {"harness": "pi", "model": OLD}, "expected_revision": revision(api)})
+    set_task_model(api, {"model": OLD, "harness": "pi"})
+    view = get(api, "providers")
+    saved = api.put(
+        "/api/v2/providers",
+        json={
+            "enabled": view["enabled"],
+            "model": view["default"]["model"],
+            "check_models": [OLD],
+            "expected_revision": view["revision"],
+        },
+        headers={"Authorization": "Bearer ana-test", "Idempotency-Key": H.new_id()},
+    )
+    assert saved.status_code == 200, saved.text
+    with api.app.state.store.read() as c:
+        config = BS.read(c, "ops")
+        assert (config["fallback"]["model"], config["task_model"]["model"]) == (MINIMAX, MINIMAX)
+        assert P.load(c, settings)["check_models"] == [MINIMAX]
+        stored = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='providers'").fetchone()[0])
+    assert stored["check_models"] == [MINIMAX] and stored["model"] == MINIMAX
 
 
 def test_antigravity_runs_neon_and_hydrogen_on_its_own_runtime_and_claims_with_xhigh(api):

@@ -596,6 +596,46 @@ def test_negotiated_fallback_continuation_keeps_its_provider(api, monkeypatch):
         assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()
 
 
+def test_a_continuation_saved_on_mercury_3_resumes_its_thread_on_minimax(api, monkeypatch):
+    """OpenRouter withdrew `mercury-3`: a thread saved on it before the upgrade resumes on the id it is now
+    (gateway_tiers.ALIASES), never reaching the runner (runner-rs source_resume) as the retired id."""
+    from backend.tests.helpers.login_holds import two_bots
+
+    machine = two_bots(api, monkeypatch)
+    caps = ['capacity_continue_v1', 'source_continue_v1']
+    post(
+        api,
+        'runners/heartbeat',
+        {'version': 'test', 'platform': 'test', 'readiness': {'ops': True}, 'capabilities': caps},
+        machine['token'],
+    )
+    post(api, 'chat/ops', {'text': 'Read the saved work.'})
+    first = claim(api, machine)
+    post(api, f"attempts/{first['id']}/started", {'thread_id': 'primary-thread'}, machine['token'])
+    seq = events(api, machine, first, [('tool', 'Read'), ('error', 'Usage limit; resets at 2026-10-19T07:00:00Z')])
+    saved = {
+        'thread_id': 'fallback-thread',
+        'runtime': 'pi',
+        'harness': 'pi',
+        'model': 'mercury-3',
+        'reasoning_effort': 'low',
+        'profile': '',
+        'epoch': None,
+    }
+    post(
+        api,
+        f"attempts/{first['id']}/complete",
+        {'outcome': 'failed', 'limited': True, 'fallback': 'pi', 'source_continuation': saved, 'last_seq': seq},
+        machine['token'],
+    )
+    assert claim(api, machine) is None
+    at(monkeypatch, '2026-10-19T07:01:00.000000Z', api)
+    again = claim(api, machine)
+    assert again and again['job_id'] == first['job_id']
+    assert again['continue_thread'] == 'fallback-thread'
+    assert again['source_continuation'] == {**saved, 'model': 'minimax-m3.1-flash'}
+
+
 def test_saved_fallback_capacity_uses_its_own_thread_after_the_short_hold(api, monkeypatch):
     from backend.tests.helpers.login_holds import two_bots
 

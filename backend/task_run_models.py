@@ -16,12 +16,14 @@ def of(c, task_id):
     runs use the bot's task model. An empty `model` is a window alone (`compact_at`): its runs keep the bot's model."""
     if not task_id or not H._has_table(c, "task_run_models"):
         return None
-    return H._one(
+    row = H._one(
         c,
         "SELECT harness,runtime,model,effort AS reasoning_effort,compact_at,set_by,set_at FROM task_run_models "
         "WHERE task_id=?",
         (task_id,),
     )
+    # A task saved on a retired id (`mercury-3`) runs on the id it is now (gateway_tiers.new_id).
+    return {**row, "model": providers.gateway_tiers.new_id(row["model"])} if row else row
 
 
 def window(compact_at):
@@ -42,7 +44,7 @@ def stamped(model, effort="", harness="", compact_at=None):
     return {
         "harness": harness,
         "runtime": runtime_of(harness) or str(row.get("runtime") or ""),
-        "model": model,
+        "model": row.get("id") or model,  # a retired id (`mercury-3`) stamps the id it is now
         "reasoning_effort": effort,
         "compact_at": compact_at,
     }

@@ -429,13 +429,16 @@ MODEL_CATALOG = tuple(
             "efforts": ("low", "high"),
             "default_effort": "low",
         },
-        # Inception's Mercury 3 (text only, tools, 1M context) through OpenRouter: the meeting model's next step on a computer
-        # that cannot run the Gateway's (backend/live_meetings.py turn_config). A meeting model, never a bot's pick.
+        # MiniMax's M3.1 Flash (text only, tools) through OpenRouter: the meeting model's next step on a computer that
+        # cannot run the Gateway's (backend/live_meetings.py turn_config), and what the Gateway's meeting row runs. A
+        # meeting model, never a bot's pick. It replaced Inception's Mercury 3 when OpenRouter withdrew it (2026-11): a
+        # saved `mercury-3` reads as this id (gateway_tiers.ALIASES).
         {
-            "id": "mercury-3",
-            "label": "mercury 3",
+            "id": "minimax-m3.1-flash",
+            "label": "minimax m3.1 flash",
             "runtime": "pi",
             "provider": "openrouter",
+            "maker": "minimax",
             "meeting": True,
             "efforts": ("low", "high"),
             "default_effort": "low",
@@ -497,9 +500,20 @@ class _ById(dict):
 
     def __missing__(self, key):
         row = gateway_tiers.row_for(key) if isinstance(key, str) else None
+        if row is None and isinstance(key, str):
+            # A retired id (gateway_tiers.ALIASES, such as `mercury-3`) finds the row of the id it is now, so a setter
+            # that saves the row's id saves the current one.
+            row = dict.get(self, gateway_tiers.new_id(key))
         if row is None:
             raise KeyError(key)
         return row
+
+    def exact(self, key):
+        """The row for `key` as written, never through a retired id's alias: what a run that already happened ran on,
+        for its label and maker. None when neither the catalog nor the Gateway's lineup lists it."""
+        if dict.__contains__(self, key):
+            return dict.__getitem__(self, key)
+        return gateway_tiers.row_for(key) if isinstance(key, str) else None
 
     def get(self, key, default=None):
         try:
@@ -592,8 +606,10 @@ def with_compact_default(config):
 #   Google     ai.google.dev/gemini-api/docs/pricing (paid standard; $0.75/$3.75 until 2026-12-31, doubling from 2027-01-01)
 #   xAI        docs.x.ai/developers/models (prompts under 200k)
 #   pi models  OpenRouter's public model list, openrouter.ai/api/v1/models (what the pi runtime is billed)
-#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, the list price the Gateway's meeting row marks up; cache
-#              reads at 10% of input, as the Gateway prices it
+#              minimax-m3.1-flash (2026-11-19, ticoteam/tico-services#377): $0.15 in / $0.015 cached /
+#              $0.60 out, the list price the Gateway's meeting row marks up
+#              mercury-3 (2026-10-29): $0.20 in / $0.70 out, cache reads at 10% of input. Withdrawn from OpenRouter
+#              (2026-11) and no longer offered: kept so a run on it that completes after the upgrade is still priced
 PRICES_AS_OF = "2026-09-29"
 
 
@@ -655,7 +671,8 @@ PRICES = _Priced(
         "llama-4-maverick": (0.1875, 0.1875, 0.6525),
         "mistral-medium-3.5": (1.5, 1.5, 7.5),
         "devstral-2512": (0.40, 0.04, 2.0),
-        "mercury-3": (0.20, 0.02, 0.70),
+        "minimax-m3.1-flash": (0.15, 0.015, 0.60),
+        "mercury-3": (0.20, 0.02, 0.70),  # withdrawn: priced for runs already on it, never offered
     },
     gateway_tiers.price_for,
 )  # the Gateway's ids are priced in backend/gateway_tiers.py (cached input at 10% of input)
@@ -779,7 +796,12 @@ def maker(model):
     """Who made `model` (`anthropic`, `openai`, ...): its catalog provider, or for a Tico AI Gateway id the maker of the
     model it runs underneath (gateway_tiers.maker_of), so Tico Medium on Claude Sonnet is Anthropic's. '' when the
     catalog does not list it."""
-    row = MODEL_BY_ID.get(str(model or "")) or {}
+    model = str(model or "")
+    row = MODEL_BY_ID.exact(model)
+    if row is None:
+        # A retired id (gateway_tiers.ALIASES): who served it, never the maker of the model that replaced it, so a
+        # `mercury-3` run stays OpenRouter's and is not credited to MiniMax.
+        return str((MODEL_BY_ID.get(model) or {}).get("provider") or "")
     return str(row.get("maker") or row.get("provider") or "")
 
 
@@ -908,20 +930,31 @@ def _record(value):
     return {
         "enabled": [p for p in stored.get("enabled") or [] if p in PROVIDER_BY_ID],
         "runtime": str(stored.get("runtime") or ""),
-        "model": str(stored.get("model") or ""),
+        # A retired id saved before (`mercury-3`, an older Gateway id) reads as the id it is now (gateway_tiers.new_id).
+        "model": gateway_tiers.new_id(str(stored.get("model") or "")),
         "revision": int(stored.get("revision") or 0),
         "updated_at": str(stored.get("updated") or ""),
         "updated_by": str(stored.get("updated_by") or ""),
         "source": str(stored.get("source") or ""),
         # On unless the owner turned it off: a bot out of quota runs on another provider (default_fallbacks).
         "auto_fallback": stored.get("auto_fallback") is not False,
-        "check_models": [str(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
+        "check_models": [current_entry(entry) for entry in stored.get("check_models") or [] if isinstance(entry, str)],
         # The models choice (backend/models_preset.py); '' is the choice as it was before presets.
         "preset": models_preset.normalize(stored.get("preset")),
         # The model live-meeting replies run on (backend/live_meetings.py): None is unset (the Gateway's default
         # while the Gateway is on), '' the bot's own model, else a model id.
-        "meeting_model": None if stored.get("meeting_model") is None else str(stored.get("meeting_model") or ""),
+        "meeting_model": (
+            None
+            if stored.get("meeting_model") is None
+            else gateway_tiers.new_id(str(stored.get("meeting_model") or ""))
+        ),
     }
+
+
+def current_entry(entry):
+    """A check-model entry (`runtime`, `runtime:model` or a model id) with a retired model id written as the id it is
+    now (gateway_tiers.new_id)."""
+    return ":".join(gateway_tiers.new_id(part) for part in str(entry).split(":"))
 
 
 def env_seed(settings):
@@ -945,7 +978,7 @@ def env_seed(settings):
 # The model live-meeting replies run on when the company has not chosen one and the Tico AI Gateway is on.
 MEETING_MODEL = "tico-meeting-1.0"
 # The same model through OpenRouter, for a computer that cannot run the Gateway's (a Mac runner).
-OPENROUTER_MEETING_MODEL = "mercury-3"
+OPENROUTER_MEETING_MODEL = "minimax-m3.1-flash"
 
 
 def with_gateway(record, connected):
@@ -975,7 +1008,7 @@ def meeting_choice(record, model):
         or not runtime_enabled(row["runtime"], record["enabled"], row)
     ):
         raise ProviderError("meeting_model", "Choose one of the models this company can run for meetings", 422)
-    return model
+    return row["id"]
 
 
 def load(c, settings=None):
@@ -1185,7 +1218,7 @@ def normalize_check_models(value, record, saved=()):
     items = value.split(",") if isinstance(value, str) else list(value or ())
     entries = []
     for item in items:
-        text = str(item or "").strip()
+        text = current_entry(str(item or "").strip())
         if not text or text in entries:
             continue
         if text not in saved:
@@ -1319,6 +1352,10 @@ def resolve(record, config=None, *, what="This bot"):
 
 def fill(record, config):
     """`config` with its runtime and model made concrete, or unchanged when nothing resolves."""
+    fallback = config.get("fallback")
+    if isinstance(fallback, dict) and fallback.get("model"):
+        # A fallback saved on a retired id (`mercury-3`) runs on the id it is now: the runner never gets the old one.
+        config = {**config, "fallback": {**fallback, "model": gateway_tiers.new_id(fallback["model"])}}
     try:
         runtime, model = resolve(record, config)
     except ProviderError:

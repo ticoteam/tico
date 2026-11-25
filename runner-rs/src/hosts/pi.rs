@@ -45,7 +45,7 @@ pub const MODELS: &[(&str, &str)] = &[
     ("llama-4-maverick", "meta-llama/llama-4-maverick"),
     ("mistral-medium-3.5", "mistralai/mistral-medium-3-5"),
     ("devstral-2512", "mistralai/devstral-2512"),
-    ("mercury-3", "inception/mercury-3"),
+    ("minimax-m3.1-flash", "minimax/minimax-m3.1-flash"),
 ];
 const DEFAULT_MODEL: &str = "deepseek-v4.1-flash";
 /// The Tico AI Gateway's chat models: pi's custom provider `tico` (`gateway_models_json`).
@@ -3124,6 +3124,11 @@ mod tests {
         assert_eq!(model_for(None), "deepseek/deepseek-v4.1-flash");
         assert_eq!(model_for(Some("default")), "deepseek/deepseek-v4.1-flash");
         assert_eq!(model_for(Some("qwen/qwen3-coder")), "qwen/qwen3-coder");
+        // The meeting model on OpenRouter (backend/providers.py OPENROUTER_MEETING_MODEL).
+        assert_eq!(
+            model_for(Some("minimax-m3.1-flash")),
+            "minimax/minimax-m3.1-flash"
+        );
         assert_eq!(
             (
                 effort_for(Some("Medium")),

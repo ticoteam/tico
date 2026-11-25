@@ -13,7 +13,7 @@ MODELS = {
     "llama-4-maverick": "meta-llama/llama-4-maverick",
     "mistral-medium-3.5": "mistralai/mistral-medium-3-5",
     "devstral-2512": "mistralai/devstral-2512",
-    "mercury-3": "inception/mercury-3",
+    "minimax-m3.1-flash": "minimax/minimax-m3.1-flash",
 }
 DEFAULT = "deepseek-v4.1-flash"
 

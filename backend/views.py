@@ -2652,7 +2652,7 @@ def install_views(app, store, auth, mutate, task_view):
             models = list(dict.fromkeys(part.get("model") for part in segments if part.get("model")))
             latest_models[slug] = (
                 family,
-                ", ".join(providers.MODEL_BY_ID.get(model, {}).get("label") or model for model in models),
+                ", ".join((providers.MODEL_BY_ID.exact(model) or {}).get("label") or model for model in models),
             )
         rows = []
         access = auth.bot_accesses(c, who)

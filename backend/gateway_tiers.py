@@ -84,6 +84,9 @@ ALIASES = {
     "tico-classify-1.0": "tico-decide-low",
     "tico-classify-low": "tico-decide-low",
     "tico-classify-low-1.0": "tico-decide-low",
+    # OpenRouter withdrew Inception's Mercury 3 (2026-11): a meeting, bot, task or check model saved as it runs on what
+    # replaced it (backend/providers.py OPENROUTER_MEETING_MODEL).
+    "mercury-3": "minimax-m3.1-flash",
 }
 
 

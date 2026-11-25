@@ -35,7 +35,8 @@ def stored(config):
     chosen = (config or {}).get(KEY)
     if not isinstance(chosen, dict):
         return None
-    model = str(chosen.get("model") or "").strip()
+    # A retired id saved before (`mercury-3`) runs as the id it is now (gateway_tiers.new_id).
+    model = providers.gateway_tiers.new_id(str(chosen.get("model") or "").strip())
     effort = str(chosen.get("reasoning_effort") or "")
     compact_at = _context(chosen.get("compact_at"))
     if not (model or effort or compact_at):

@@ -218,10 +218,16 @@ def of(c, task_id, bot, *, loads=None):
         and _out_of_quota(c, moved["runner_id"], first["runtime"])
         and not _gateway_refused(c, moved)
     ):
-        return {k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")}
+        return _current({k: moved[k] for k in ("runtime", "model", "harness", "effort", "role")})
     if first and _gateway_refused(c, first):
         return None  # saved before the company's choice stopped Gateway checks: the bot's own model runs it
-    return first
+    return _current(first)
+
+
+def _current(check):
+    """A check saved on a retired id (`mercury-3`) with the id it is now (gateway_tiers.new_id), so the turn's config,
+    its claim and its run notes all name the model that runs."""
+    return {**check, "model": providers.gateway_tiers.new_id(check["model"])} if check else check
 
 
 def _gateway_refused(c, check):
