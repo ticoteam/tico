@@ -117,13 +117,24 @@ describe('a page app’s bridge', () => {
     post.mockResolvedValueOnce({ result: { key: 'held-2', page: 'Creative library', lines } });
     port.onmessage?.({ data: { id: 3, op: 'act', args: asked } } as MessageEvent);
     await act(flush);
+    post.mockReturnValueOnce(new Promise(() => undefined)); // the cancel is still on its way
+    act(() => stop());
+    expect(post).toHaveBeenLastCalledWith('/api/v2/pages/file-1/app/act', { key: 'held-2', confirm: false }, { once: true });
+    expect(sheet).toBeNull(); // gone at once, and another page may ask
+    const next = document.body.appendChild(document.createElement('iframe'));
+    const stopNext = bridge(next, { page: 'file-2', version: 1 });
+    const other = fakePort();
+    hello(next.contentWindow, other);
+    post.mockResolvedValueOnce({ result: { key: 'held-3', page: 'Other', lines } });
+    other.onmessage?.({ data: { id: 4, op: 'act', args: asked } } as MessageEvent);
+    await act(flush);
+    expect(other.postMessage).not.toHaveBeenCalled();
+    expect(sheet).toMatchObject({ page: 'Other' });
     post.mockResolvedValueOnce({ status: 'cancelled', items: [] });
     await act(async () => {
-      stop();
+      stopNext();
       await flush();
     });
-    expect(post).toHaveBeenLastCalledWith('/api/v2/pages/file-1/app/act', { key: 'held-2', confirm: false }, { once: true });
-    expect(sheet).toBeNull();
   });
 
   it('runs at most APP_FRAMES app frames at once; the next one runs when one goes', () => {

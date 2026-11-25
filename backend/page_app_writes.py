@@ -166,7 +166,9 @@ def action(apps: "PageApps", c: Any, who: Any, writer: Any, kind: Any, payload: 
         where = ""
         if "owner" in p:
             try:
-                body["owner"] = str(apps.auth.target(c, who, _text(p["owner"], "owner", 200)))
+                owner = _text(p["owner"], "owner", 200)
+                # one actor, named by both: a page names only agents its writer could see
+                body["owner"] = str([apps.auth.target(c, x, owner) for x in both][0])
             except Problem:
                 raise Problem("not_found", "No person or agent " + repr(str(p["owner"])[:60]), 404) from None
             where = " for " + str(cast(Any, H).actor_name(c, body["owner"]))
@@ -272,7 +274,8 @@ def hold(
         steps.append(step)
         lines.append(line)
     title = apps.pages.rows(c, [fid])[fid]["title"]
-    key = apps.pending.put({"viewer": who.actor, "fid": fid, "version": body.version, "acts": acts, "steps": steps})
+    entry = {"viewer": who.actor, "fid": fid, "version": body.version, "acts": acts, "steps": steps, "lines": lines}
+    key = apps.pending.put(entry)
     return {"key": key, "page": title, "lines": lines}
 
 
@@ -310,8 +313,9 @@ async def answer(apps: "PageApps", request: Request, fid: str, body: ActAnswer) 
         writer now (a writer who lost a task since, or a task that changed, ends it)."""
         with apps.store.read() as c:
             writer = apps.check_open(c, who, fid, entry["version"])[1]
-            for item, shown in zip(entry["acts"], entry["steps"], strict=True):
-                if action(apps, c, who, writer, item["kind"], item.get("payload"))[0] != shown:
+            for item, step, line in zip(entry["acts"], entry["steps"], entry["lines"], strict=True):
+                # the step and the words the viewer saw: a task renamed meanwhile is asked again, not done under the old name
+                if action(apps, c, who, writer, item["kind"], item.get("payload")) != (step, line):
                     raise Problem("changed", "What this asks changed since it was shown; ask again from the page", 409)
 
     try:

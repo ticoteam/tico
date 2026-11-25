@@ -154,3 +154,15 @@ def test_a_tag_is_named_as_tico_names_it_and_never_a_template(api):
     assert done.json()["status"] == "done", done.text
     tags = api.get(f"/api/v2/files/{fid}/info", headers=headers("ben-test")).json()["file"]["tags"]
     assert [t["key"] for t in tags] == ["client:acme"]
+
+
+def test_a_task_renamed_while_the_sheet_waits_is_asked_again(api):
+    _, made, tid = app_page(api)
+    fid, v = made["file_id"], made["version"]
+    ask = {"actions": [{"kind": "comment", "payload": {"task": tid, "text": "Ship it"}}]}
+    held = call(api, fid, v, "act", ask)["result"]
+    with api.app.state.store.transaction() as c:  # the viewer saw the old title
+        c.execute("UPDATE tasks SET title='Refresh the winter ads' WHERE id=?", (tid,))
+    late = tap(api, fid, held["key"])
+    assert late.status_code == 409 and late.json()["error"]["code"] == "changed", late.text
+    assert ("human:ben", "Ship it") not in comments(api, tid)

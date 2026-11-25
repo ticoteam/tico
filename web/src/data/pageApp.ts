@@ -63,10 +63,12 @@ export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: st
   let port: MessagePort | null = null;
   let done = false;
   let asking: ActSheet | null = null;
+  let release: (() => void) | null = null;
   const close = () => {
     done = true;
-    // Closing the page cancels what it asked; the server holds it only for its key.
+    // Closing the page cancels what it asked (the server holds it only for its key), and its sheet goes at once.
     void asking?.answer(false);
+    release?.();
     port?.close();
     port = null;
     window.removeEventListener('message', hear);
@@ -110,6 +112,12 @@ export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: st
               return void api.post(`${base}/act`, { key: result.key, confirm: false }, { once: true }).catch(() => undefined);
             }
             let settled = false;
+            release = () => {
+              asking = null;
+              release = null;
+              free();
+              if (shown === sheet) show(null);
+            };
             const sheet: ActSheet = {
               page: result.page,
               lines: result.lines,
@@ -120,11 +128,7 @@ export function bridge(frame: HTMLIFrameElement, app: AppPage, onOpen: (href: st
                   .post<{ status: string; items: unknown[] }>(`${base}/act`, { key: result.key, confirm }, { once: true })
                   .then((r) => void port?.postMessage({ id: call.id, result: r }))
                   .catch(fail)
-                  .finally(() => {
-                    asking = null;
-                    free();
-                    if (shown === sheet) show(null);
-                  });
+                  .finally(() => release?.());
               },
             };
             asking = sheet;
