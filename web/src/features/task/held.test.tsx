@@ -17,7 +17,7 @@ import { TaskChat, TaskPage } from './TaskPage';
 function OnTask() {
   // the task over the page while the address names it, as the task modal draws it
   const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
-  return open === '12' ? <TaskPage task="12" pipeline="p1" /> : null;
+  return open === '12' ? <TaskPage task="12" /> : null;
 }
 
 /* A rule's review task ("Held by: <rule>"): the decision box shows what the rule held and is answered with Send anyway

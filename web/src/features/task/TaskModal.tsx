@@ -50,7 +50,7 @@ export function TaskModal() {
   // the task's first reads (its page, its chat's view) start as it opens
   const words = shown?.words;
   // once per task, with the words it opened with (they change as it is read)
-  const warm = useEffectEvent((n: string) => void loadTask(client, n, words?.tab, true, words?.session));
+  const warm = useEffectEvent((n: string) => void loadTask(client, n, words?.tab, words?.session));
   useEffect(() => {
     if (task) warm(task);
   }, [task]);
@@ -100,9 +100,10 @@ export function TaskModal() {
             <aside className="pane side chat chat-2 tmd-chat" aria-label="Chat">
               <TaskChat task={shown.task} />
             </aside>
-            <section className="pane page tmd-task" aria-label="Task">
+            {/* the task's page is the column itself (its own region), filling it */}
+            <div className="tmd-task">
               <TaskPage task={shown.task} tab={shown.words.tab} file={shown.words.file} />
-            </section>
+            </div>
             {cards ? (
               <>
                 <div className="tmd-dock" ref={setDock} />

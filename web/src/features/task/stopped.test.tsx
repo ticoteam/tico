@@ -15,7 +15,7 @@ import { TaskChat, TaskPage } from './TaskPage';
 function OnTask() {
   // the task over the page while the address names it, as the task modal draws it
   const open = useLocation({ select: (l) => openOf(l.search as Record<string, unknown>)?.task });
-  return open === '12' ? <TaskPage task="12" pipeline="p1" /> : null;
+  return open === '12' ? <TaskPage task="12" /> : null;
 }
 
 /* A stopped agent's notice (backend/bot_stops.py): the task read names the agent when the person may release it, and

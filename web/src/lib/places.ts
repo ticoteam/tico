@@ -16,11 +16,18 @@ export const OVER_PAGE = 'overPage';
 const BOARD = /^\/tasks\/([^/]+)\/?$/;
 const boards = new Map<string, Record<string, unknown>>();
 
+// the board on screen and its own words, as last noted: a task opened, changed or closed over it changes neither
+let place: string | null = null;
+
 /** The shell, at each address it shows: the path without the app's base, the search as written and as read. */
 export function notePlace(path: string, _searchStr: string, search: Record<string, unknown>, _state?: unknown): void {
-  const board = BOARD.exec(path);
-  // the board's own words: never a task open over it
-  if (board?.[1]) boards.set(decodeURIComponent(board[1]), pageSearch(search));
+  const board = BOARD.exec(path)?.[1];
+  // the board's own words, never a task open over it; noted as the board is shown or changes them, so the list over
+  // it keeps what it was given (changeBoardSearch) while tasks open and close over the board
+  const own = board ? pageSearch(search) : null;
+  const at = board ? `${board}?${JSON.stringify(own)}` : null;
+  if (board && at !== place) boards.set(decodeURIComponent(board), own!);
+  place = at;
   heard.forEach((on) => on());
 }
 
@@ -89,8 +96,9 @@ export const othersListed = (): number => (listed ? listed.rows.filter((r) => r.
 /** An answer is being given on the open task: the row below it is the one below it now, wherever the answer moves it. */
 export const holdList = (): void => void (listed && (listed.held = listed.rows));
 
-/** The pipeline whose list shows beside the open task, or null (none, or Needs you's). */
-export const listShown = (): string | null => (listed && listed.pipeline !== NEEDS_YOU ? listed.pipeline : null);
+/** The pipeline whose list shows beside the open task, or null (none, Needs you's, a teammate's, search hits: every
+    list but a pipeline's has a colon in its name). */
+export const listShown = (): string | null => (listed && !listed.pipeline.includes(':') ? listed.pipeline : null);
 
 /** The task below `id` in the list beside it as an answer found it (past rows that have left the list since): its
     number. Null at the list's last row, or while `list` (the one the task was opened from) is not the one drawn. */
@@ -146,6 +154,7 @@ export function keptOrder(from: unknown, latest: () => string[], held: string | 
 /** Forgets every place (tests). */
 export function forgetPlaces(): void {
   boards.clear();
+  place = null;
   listed = null;
   onRow = null;
   drawn = { order: [], latest: [], held: null };

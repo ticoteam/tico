@@ -18,7 +18,7 @@ import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { changeWords, closeTask, NEEDS_YOU, nextInList } from '@/lib';
+import { changeWords, closeTask, NEEDS_YOU, nextInList, openOf } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
@@ -51,8 +51,6 @@ const refused = (e: unknown) => e instanceof ApiError && (e.status === 403 || e.
 export interface TaskPageProps {
   /** The address's task: its number, or its id. */
   task: string;
-  /** The address's pipeline (`/tasks/<pipeline>/<task>`). */
-  pipeline?: string;
   /** The open tab's slug; none opens the page that waits on the person, and the address then names it. */
   tab?: string;
   /** A file from Details, open in the page sheet. */
@@ -88,10 +86,10 @@ export function TaskPage(props: TaskPageProps) {
   return <OneTask key={props.task} {...props} />;
 }
 
-function OneTask({ task, pipeline, tab, file }: TaskPageProps) {
+function OneTask({ task, tab, file }: TaskPageProps) {
   const { t, error, retry } = useTask(task, true);
   if (!t) {
-    const path = `/tasks/${pipeline ?? ''}/${task}`;
+    const path = `/task/${task}`;
     return (
       <Document
         className="tv"
@@ -135,26 +133,8 @@ function useToComments() {
   return () => void navigate({ to: '.', search: changeWords(({ session: _, ...rest }) => rest) as never, replace: true });
 }
 
-/** Over an agent's session drawn as the page (a computer's `…/chat?session=`): whose it is, and the way back. */
-function SessionHead({ agent }: { agent: string }) {
-  const a = useActor(agent);
-  const toComments = useToComments();
-  const name = a?.name ?? agentWords(agent);
-  return (
-    <header className="side-head">
-      <Face id={agent} size={28} decorative />
-      <span className="head-who">
-        <b>{a ? <Link className="head-name" href={whoHref(a)}>{name}</Link> : name}</b>
-      </span>
-      <span className="grow" />
-      <IconButton icon="close" label="Back to comments" size="sm" onClick={toComments} />
-    </header>
-  );
-}
-
 interface TaskConversationProps {
   t: TaskData;
-  variant: 'page' | 'task';
   /** Its own thread (`useOwnThread`). */
   own: boolean;
   /** The agent whose session it shows; none: the comments. */
@@ -171,7 +151,7 @@ interface TaskConversationProps {
 /** The task's chat: its comments, each a log entry that reaches only whom it names, with Reply in place on each; or one
     agent's session (`?session=`), the normal chat bar to that agent, its reply being written, its run while it waits.
     A task filed in its owner's main chat: that chat, as it is. */
-function TaskConversation({ t, variant, own, session, foot, decision, canPost, extra, card }: TaskConversationProps) {
+function TaskConversation({ t, own, session, foot, decision, canPost, extra, card }: TaskConversationProps) {
   const me = useQuery(meQuery).data?.id;
   const owner = useActor(t.owner_id);
   const agent = useActor(session);
@@ -181,7 +161,7 @@ function TaskConversation({ t, variant, own, session, foot, decision, canPost, e
       <Conversation
         key={session}
         id={t.conversation_id}
-        variant={variant}
+        variant="task"
         title={agent?.name ?? agentWords(session)}
         actor={session}
         view={{ session }}
@@ -189,7 +169,6 @@ function TaskConversation({ t, variant, own, session, foot, decision, canPost, e
         task={{ id: t.id, to: session }}
         canSend={t.can_direct}
         canPost={canPost}
-        head={variant === 'page' ? <SessionHead agent={session} /> : undefined}
         foot={
           <>
             <SessionRun t={t} agent={session} />
@@ -203,7 +182,7 @@ function TaskConversation({ t, variant, own, session, foot, decision, canPost, e
   return (
     <Conversation
       id={t.conversation_id}
-      variant={variant}
+      variant="task"
       title={owner?.name}
       actor={t.owner_id ?? undefined}
       compose={own ? 'Add a comment' : ownTask(t, me)}
@@ -233,11 +212,11 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   const named = ask ? requirementOf(t, ask) : null;
   const { tabs, files, waiting } = useTabs(t, named ?? undefined);
   const own = tabs.filter((x) => !x.wait);
-  // On a phone the chat's address (`…/chat`) raises its card over the task's first page, and stays the address, so a
-  // reload comes back to the chat; on a computer it is the chat as the page.
+  // The chat's address (`…/chat`, an old link to the chat as the page) is the chat beside it: on a phone it raises the
+  // chat (TaskModal) and stays the address, so a reload comes back to it; on a computer the page shows a tab of its own.
   const cards = useCards();
   const chatCard = cards && tab === CHAT;
-  const known = !chatCard && tab !== undefined && tabs.some((x) => x.slug === tab);
+  const known = tab !== undefined && tab !== CHAT && tabs.some((x) => x.slug === tab);
   const unresolved = !!tab && !known && !chatCard && (!files.isSuccess || !waiting.settled);
   // With no tab in the address, the page that waits on the person opens, and the address names it: the tab row reads
   // the address, and an answer that changes which page waits does not move the person off the page they read. A
@@ -248,17 +227,20 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // A tab that went (an email's OK answered, its Email tab with it): the page that waits now, never a blank page.
   const opened = resolveTab(tabs, first ?? undefined);
   const on = known ? tab : opened;
-  // Closing: the history steps back, and this page names no tab in the meantime.
+  // Closing: the history steps back, and this page names no tab in the meantime; nor once the address no longer opens
+  // it (closed while its files were read, the layer still fading): naming its tab then would open it again.
+  const router = useRouter();
   const leaving = useRef(false);
   useEffect(() => {
     if (known || chatCard || unresolved || first === null || leaving.current) return;
+    const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
+    if (open !== String(t.number) && open !== t.id) return;
     // The address's other words (a version, `v`) stay while the tab is named.
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: Record<string, unknown>) => prev) as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate]);
+  }, [known, chatCard, unresolved, first, opened, t, navigate, router]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
      one Back still closes it); at the list's end it closes, back to the page under it. */
-  const router = useRouter();
   const client = useQueryClient();
   const list = search.list ?? NEEDS_YOU;
   const close = useCallback(() => {
@@ -309,7 +291,6 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (asks !== on) void navigate({ to: tabAddress(t, asks) as never });
   }, [seek, asks, on, t, navigate, ask, named, files.data, tabs]);
   const [adding, setAdding] = useState<Adding | null>(null);
-  const [asking, setAsking] = useState(false);
 
   const current = unresolved ? undefined : tabs.find((x) => x.slug === on);
   const versions = useVersions(current?.doc, search.v, search.vs, current?.version);
@@ -332,13 +313,10 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (!r.ok) toast(failedToast(r));
   };
 
-  const room = useThreadRead(t);
-  const ownThread = room.own;
+  const ownThread = useThreadRead(t).own;
   // one read mark per task: kept as the page opens, then the task is marked read; its sessions and runs kept current
   useTaskReadMark(t, ownThread);
   useTaskLive(t, ownThread);
-  // The chat as the page (a computer's `…/chat`): an email's OK hung on this task, as a card in the chat.
-  const approvals = useApprovalCards({ task: current?.chat ? t : undefined });
   const moreMenu = <MoreMenu t={t} details={quiet} />;
 
   const askTarget = targetOf(named);
@@ -387,37 +365,6 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
       />
     ) : current?.email ? (
       <EmailView task={t.id} send={current.email} part={search.part} at={address} lead={quiet ? <MatterBrief t={t} send={current.email} /> : <MatterDatesOf t={t} send={current.email} />} />
-    ) : current?.chat && t.conversation_id ? (
-      room.failed ? (
-        <ChatNotRead retry={room.retry} />
-      ) : ownThread === undefined ? (
-        <MessageBones />
-      ) : (
-        // The chat as the page: the decision sits over its message box, and stands in for it while changes are asked.
-        <TaskConversation
-          t={t}
-          variant="page"
-          own={ownThread}
-          session={search.session}
-          foot={
-            <>
-              {/* a pinned ❓ already says it needs them: the status line would say it again */}
-              {!questionsFor(t, me).length && <TaskStatus t={t} />}
-              <Decision t={t} onAsking={setAsking} email={null} />
-              <Questions t={t} ids={questionsFor(t, me)} />
-            </>
-          }
-          decision={
-            <>
-              <Decision t={t} onAsking={setAsking} email={null} />
-              <Questions t={t} ids={questionsFor(t, me)} />
-            </>
-          }
-          canPost={!asking}
-          extra={approvals}
-          card={approvalCard}
-        />
-      )
     ) : null;
 
   // a file from Details opens one layer up; Esc or its Close takes it away, back to Details
@@ -465,7 +412,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
           {body}
           {/* Docked: a phone's dock at the bottom of the task, on either tab (its chat then has none); on a computer the
               chat beside it holds the decision. An email's OK filed apart docks on a phone too, in place of its lead's. */}
-          {!current?.chat && pick && <Decision key={pick.email ?? ''} t={t} dock email={pick.email} requirement={ask} />}
+          {pick && <Decision key={pick.email ?? ''} t={t} dock email={pick.email} requirement={ask} />}
           {cards && current?.wait && <Decision t={current.wait} dock />}
         </div>
       }
@@ -481,8 +428,8 @@ export interface TaskChatProps {
 }
 
 /**
- * The task's chat, for the second chat sheet of the 'task' arrangement: its owner's face and name, then the
- * conversation with the answer card over its message box. The root wraps it in the chat sheet.
+ * The task's chat, the task modal's middle column: its owner's face and name (or the agent whose session is open), then
+ * the conversation with the answer card over its message box.
  */
 export function TaskChat({ task }: TaskChatProps) {
   const { t } = useTask(task);
@@ -544,7 +491,6 @@ export function TaskChat({ task }: TaskChatProps) {
       ) : t.conversation_id ? (
         <TaskConversation
           t={t}
-          variant="task"
           own={!!own}
           session={session}
           foot={

@@ -1,7 +1,8 @@
-import type { ReactNode } from 'react';
+import { type ReactNode, use } from 'react';
 import { Button, FillContext } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
 import { useCards } from '@/kit/Popover';
+import { InViewer } from '@/kit/Viewer';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import '@/pagekinds/pagekinds.css';
 import type { PageBaseProps, PageTab, StateProps } from '@/pagekinds/types';
@@ -97,18 +98,20 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
   // A phone's head keeps two controls: the search gets its own line under the head.
   const cards = useCards();
   const cls = `pane page pk pk-${kind}${className ? ` ${className}` : ''}`;
+  // a page over another (a task open over the page you are on) is a region of its layer, never a second main
+  const Main = use(InViewer) ? 'section' : 'main';
   if (state === 'no-access') {
     // The mock draws no head here: nothing of the page shows (15-start, noaccess).
     return (
-      <main className={cls} aria-label={head.title}>
+      <Main className={cls} aria-label={head.title}>
         <StateBody state={state} title={head.title} noAccess={noAccess} skeleton={null}>
           {null}
         </StateBody>
-      </main>
+      </Main>
     );
   }
   return (
-    <main className={cls} aria-label={head.title}>
+    <Main className={cls} aria-label={head.title}>
       <FillContext value={headFills({ state, empty, onRetry })}>
         <PageHead {...head} search={cards ? undefined : search} />
         {tabs && tabs.length > 0 && <PageTabs tabs={tabs} label={`${head.title} pages`} after={tabsAfter} />}
@@ -119,6 +122,6 @@ export function Page({ kind, className, tabs, tabsAfter, under, skeleton, over, 
         {children}
       </StateBody>
       {over}
-    </main>
+    </Main>
   );
 }

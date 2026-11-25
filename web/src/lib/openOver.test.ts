@@ -2,6 +2,7 @@ import { createMemoryHistory, createRootRoute, createRoute, createRouter } from 
 import { describe, expect, it } from 'vitest';
 import { hearListClicks, openTasksOver } from './openOver';
 import { closeTask, OVER_PAGE, type Steps } from './places';
+import { changeWords, withOpen } from './taskAddress';
 
 /** A router with a page, a board and a task's old addresses, opening tasks over the page as the app's does. */
 async function at(href: string) {
@@ -62,6 +63,55 @@ describe('a task opened from a page', () => {
     const r = await at('/team/qa?task=12&task.tab=spec&task.ask=r1');
     await r.navigate({ to: '/tasks/$pipeline/$task/$tab', params: { pipeline: 'eng', task: '12', tab: 'spec' }, search: (prev: Record<string, unknown>) => ({ ...prev, v: 3 }) } as never);
     expect(r.state.location.search).toEqual({ task: 12, 'task.tab': 'spec', 'task.ask': 'r1', 'task.v': 3 });
+  });
+
+  it("keeps the step's mark and the page's hash as the open task's words change, so Close still steps back", async () => {
+    const r = await at('/team/qa#notes');
+    await r.navigate({ to: '/tasks/$pipeline/$task/$tab', params: { pipeline: 'eng', task: '7', tab: 'details' }, search: { file: 'f1' } } as never);
+    const opened = r.history.length;
+    // a file closed in Details, the list switched: updates in place
+    await r.navigate({ to: '.', search: changeWords(({ file: _, ...rest }) => rest) as never, replace: true } as never);
+    await r.navigate({ to: '.', search: ((s: Record<string, unknown>) => ({ ...s, list: 'eng' })) as never, replace: true } as never);
+    expect(r.state.location.search).toEqual({ task: 7, list: 'eng', 'task.tab': 'details' });
+    expect(r.state.location.hash).toBe('notes');
+    expect((r.state.location.state as unknown as Record<string, unknown>)[OVER_PAGE]).toBe(true);
+    expect(r.history.length).toBe(opened);
+    closeTask(steps(r));
+    await r.load();
+    expect(r.state.location.href).toBe('/team/qa#notes');
+    r.history.forward();
+    await r.load();
+    expect(r.state.location.search).toEqual({ task: 7, list: 'eng', 'task.tab': 'details' });
+  });
+
+  it("a search hit opens over the page in one step, and another hit picked while it is open takes its place", async () => {
+    const r = await at('/team/qa');
+    const hit = (task: string) => r.navigate({ to: '.', search: ((s: Record<string, unknown>) => withOpen(s, { task, list: 'search:frost' })) as never } as never);
+    await hit('7');
+    const opened = r.history.length;
+    await hit('8');
+    expect(r.history.length).toBe(opened);
+    expect(r.state.location.search).toEqual({ task: 8, list: 'search:frost' });
+    closeTask(steps(r));
+    await r.load();
+    expect(r.state.location.href).toBe('/team/qa');
+    expect(r.history.length).toBe(opened);
+  });
+
+  it('forgets the list a press was in once that click is done, even a click stopped on its way', async () => {
+    hearListClicks(document);
+    const r = await at('/tasks/eng');
+    const list = document.createElement('div');
+    list.dataset.list = 'eng';
+    const stop = document.createElement('button');
+    stop.addEventListener('click', (e) => e.stopPropagation());
+    list.append(stop);
+    document.body.append(list);
+    stop.click();
+    await new Promise((done) => setTimeout(done));
+    await r.navigate({ to: '/task/$task', params: { task: '9' } } as never);
+    expect(r.state.location.search).toEqual({ task: 9 });
+    list.remove();
   });
 
   it('leaves every other address alone', async () => {

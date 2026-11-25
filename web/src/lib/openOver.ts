@@ -5,13 +5,14 @@ import { coldOf, openOf, withOpen, type TaskWords } from './taskAddress';
 /* A task opens over the page you are on (plan: the task modal). Every way in goes through `router.navigate` (a link, a
    card, an action, Tico's open): one to a task's own address (`/task/<n>`, `/tasks/<p>/<n>/<tab>`) opens it over this
    page instead, so its links stay its own (a new tab, a copied link, a cold load: its route opens it over its board).
-   Moving to another task while one is open replaces it, so one Back closes it. The list it opens with is the one its
+   Moving to another task while one is open replaces it, so one Back closes it; so does any change to its words (its
+   tab, a file, its list), which keeps the mark on the step that opened it. The list it opens with is the one its
    link was clicked in (`data-list` on the list: a board's pipeline, an agent's id, empty for Needs you); clicked
    anywhere else, the list already open, else Needs you. */
 
 let clickedList: string | undefined;
 
-/** Hear which list each click is in, for the navigation it starts (capture first, forgotten once it is done). */
+/** Hear which list each click is in, for the navigation it starts (heard first, forgotten once it is done). */
 const hearing = new WeakSet<Document>();
 export function hearListClicks(doc: Document = document): void {
   if (hearing.has(doc)) return;
@@ -21,6 +22,9 @@ export function hearListClicks(doc: Document = document): void {
     (e) => {
       const at = e.target instanceof Element ? e.target.closest('[data-list]') : null;
       clickedList = at ? (at.getAttribute('data-list') ?? '') : undefined;
+      // forgotten once this click is done, even one whose handler stops it on its way: a press's own navigation reads
+      // it while the click is dispatched (a microtask would run between listeners, before the row's own handler)
+      setTimeout(() => (clickedList = undefined));
     },
     true,
   );
@@ -48,8 +52,21 @@ export function openTasksOver(r: AnyRouter): void {
     } catch {
       return go(opts);
     }
-    if (!coldOf(to.pathname)) return go(opts);
     const open = openOf(here.search as Record<string, unknown>);
+    const over = (): boolean => !!(here.state as unknown as Record<string, unknown> | undefined)?.[OVER_PAGE];
+    if (!coldOf(to.pathname)) {
+      // a task over this page, by its words in this page's address (a list switched, a file closed, a search hit):
+      // the one history path an opened task takes, its step's mark and the page's hash kept, another task in its place
+      const next = to.pathname === here.pathname ? openOf(to.search as Record<string, unknown>) : null;
+      if (!next) return go(opts);
+      return go({
+        ...opts,
+        hash: opts.hash ?? true,
+        replace: !!open || !!opts.replace,
+        state: { ...(typeof opts.state === 'object' && opts.state), [OVER_PAGE]: open ? over() : !opts.replace },
+        resetScroll: false,
+      } as never);
+    }
     // the task's own code writes its words as its old address had them: read against the open task's, never the page's
     const plain = open ? plainWords(open.words) : {};
     const own = typeof opts.search === 'function' ? (opts.search as (p: unknown) => unknown)(plain) : opts.search === true ? plain : undefined;
@@ -62,7 +79,7 @@ export function openTasksOver(r: AnyRouter): void {
       hash: here.hash || undefined,
       replace: !!open || !!opts.replace,
       // the step that opened it over the page: closing steps back to it (lib closeTask); kept as tasks replace it
-      state: { [OVER_PAGE]: open ? !!(here.state as unknown as Record<string, unknown> | undefined)?.[OVER_PAGE] : !opts.replace },
+      state: { [OVER_PAGE]: open ? over() : !opts.replace },
       resetScroll: false,
     } as never);
   }) as Navigate;
