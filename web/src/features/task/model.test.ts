@@ -111,6 +111,7 @@ describe('the open task', () => {
     expect(reasonOf({ error: 'http_500: ' })).toBe('Something went wrong. Try again.');
     expect(reasonOf({ error: 'http_502: Bad Gateway' })).toBe('Something went wrong. Try again.');
     expect(failedToast({ error: 'http_500: ' })).toEqual({ text: 'Not saved', name: 'Something went wrong. Try again.', kind: 'failed' });
+    expect(failedToast({ error: 'http_502: Bad Gateway' })).toEqual({ text: 'Not saved', name: 'Something went wrong. Try again.', kind: 'failed' });
   });
 
   it('reads a refusal: its code, its reason, and each thing missing', () => {

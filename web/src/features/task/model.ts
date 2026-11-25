@@ -272,8 +272,8 @@ export function reasonOf(r: string | Pick<Result, 'error' | 'why'> | undefined):
 
 /** A refused press's toast: "Not saved", then why; a server fault says so. */
 export function failedToast(r: Pick<Result, 'error' | 'why'>): RefusalToast {
-  const told = refusal(r, 'Not saved', 'You can’t do that on this task');
-  return told.name || !/^http_5\d\d/.test(r.error ?? '') ? told : { ...told, name: reasonOf(r) };
+  if (/^http_5\d\d/.test(r.error ?? '')) return { text: 'Not saved', name: reasonOf(r), kind: 'failed' };
+  return refusal(r, 'Not saved', 'You can’t do that on this task');
 }
 
 export interface Refusal {

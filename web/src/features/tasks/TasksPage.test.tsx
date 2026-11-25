@@ -606,6 +606,24 @@ describe('Tasks: more of the page @s0 @s9 @s10', () => {
     expect(posts[1]?.body).toMatchObject({ ids: ['a2'] });
   });
 
+  it('an Undo the server refuses says so', async () => {
+    let n = 0;
+    serve((url, method) => {
+      if (method === 'POST' && url === '/api/v2/tasks/move')
+        return ++n === 1
+          ? { status: 200, body: { batch_id: 'b', moved: ['a1'], moved_unseen: 0, skipped: [] } }
+          : { status: 422, body: { error: { code: 'task_why', detail: 'Say why you reopen it' } } };
+      return { status: 200, body: {} };
+    });
+    seed(rows());
+    show(<TasksPage pipeline="eng" search={{ view: 'list' }} />, '/tasks/eng?view=list');
+    await screen.findByTitle('Fix the export');
+    fireEvent.click(within(screen.getByTitle('Fix the export').closest('.tk-item') as HTMLElement).getByRole('button', { name: 'Change' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Close' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Undo' }));
+    expect(await screen.findByText('Couldn’t reopen')).toBeTruthy();
+  });
+
   it('undoes only the tasks the bulk close actually moved', async () => {
     serve((url, method) => {
       if (method === 'POST' && url === '/api/v2/tasks/move')

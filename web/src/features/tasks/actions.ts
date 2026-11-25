@@ -208,7 +208,7 @@ export const moveAll = defineAction({
       toast({
         text: `Closed ${plural(closed)}`,
         // a reopen needs a reason from everyone (task_engine._need_why)
-        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen', 'Closed by mistake').then((r) => tell(r.skipped, moved.length)) } : undefined,
+        action: moved.length ? { label: 'Undo', run: () => void moveMany(moved, 'reopen', 'Closed by mistake').then((r) => tell(r.skipped, moved.length), () => toast({ text: 'Couldn’t reopen', kind: 'failed' })) } : undefined,
       });
     return left;
   },
