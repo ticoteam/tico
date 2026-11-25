@@ -473,7 +473,7 @@ test("an agent answering: an @mention in a task's comments shows it got it, its 
   // the agent's own chat draws the same row
   const dm = await open(browser, hub, '/team/engineering-manager');
   const own = dm.locator('[role="log"]');
-  const say = dm.getByRole('textbox', { name: /^Message / });
+  const say = dm.getByRole('textbox', { name: /^Message (?!Tico$)/ });
   await say.fill('Is the launch date set?');
   await say.press('Enter');
   await expect(own.locator('.msg', { hasText: 'Is the launch date set?' }).first()).toBeVisible();

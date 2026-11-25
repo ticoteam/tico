@@ -232,7 +232,7 @@ def test_a_working_bot_names_its_run_and_up_next_never_names_a_place_the_viewer_
 
 def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_it_replies(api):
     """The task's chat draws "got it", then the work, under the comment that woke the agent: the row names it, in the
-    comments' own first page too, and goes once the agent replies."""
+    comments' own first page too, until the agent replies."""
     machine = machine_for(api)
     task = post(api, "tasks", {"title": "Fix the page", "body": "It looks bad.", "owner": "human:ana"})
     said = post(api, f"tasks/{task['id']}/comments", {"text": "@ops can you see why this page looks bad?"})
@@ -246,7 +246,9 @@ def test_a_task_comment_that_mentions_an_agent_is_named_on_its_status_row_until_
     assert working["state"] == "working" and working["run_id"] == attempt["id"]
     assert working["message_id"] == comment["id"]
     bot_post(api, "bot:ops", thread, "The page loads an old stylesheet.")
-    assert bot_status(api, thread) == []
+    # its run goes on, but no longer answers the comment
+    [after] = bot_status(api, thread)
+    assert after["run_id"] == attempt["id"] and after["message_id"] is None
 
 
 def test_a_run_whose_wake_was_answered_names_no_message(api):
