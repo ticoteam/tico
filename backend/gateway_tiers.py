@@ -520,6 +520,7 @@ MAKERS = (
     ("codestral", "mistral"),
     ("inception", "inception"),
     ("mercury", "inception"),
+    ("minimax", "minimax"),
 )
 
 

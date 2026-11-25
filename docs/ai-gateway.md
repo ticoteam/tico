@@ -254,7 +254,7 @@ The **Gateway key** row lets the owner change the key and address. **Limits** op
 The old **Settings → Gateway** address (`#/settings/gateway`) opens Providers.
 
 Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
-**Images**, **SVG**, **Video**, **Marketing data**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text), **Mail** and **Voice** (live), with
+**Images**, **SVG**, **Video**, **Marketing data**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.15 on Recordings 1.1, $0.30 per audio hour for live text), **Mail** and **Voice** (live), with
 US **Maps** and sending letters next, and sending email and enrichment later.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
 the same list with the `tico_gateway_catalog` tool and search the web with `tico_gateway_search` (`tico gateway catalog [query]`,

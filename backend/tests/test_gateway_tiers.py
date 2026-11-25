@@ -459,7 +459,7 @@ def test_a_held_pinned_id_is_refused_by_the_model_check(monkeypatch):
 
 
 def _card(cat):
-    """What the Gateway card (gateway_page.overview) and an agent's lineup show from `cat`: the models table and every
+    """What the Gateway overview (GET /api/v2/gateway, gateway_page.overview) and an agent's lineup show from `cat`: the models table and every
     service's fields. A price HQ has not set reads the same as null or empty text."""
     from backend import gateway_page
 
@@ -479,7 +479,7 @@ def _card(cat):
 
 
 def test_the_release_copy_shows_what_hqs_catalog_shows():
-    """The Gateway card is the same before the first refresh (the release's copy, backend/gateway_catalog.json) and
+    """The Gateway overview and lineup are the same before the first refresh (the release's copy, backend/gateway_catalog.json) and
     after it (HQ's answer, validated). The fixture is HQ's `build()` as it answers. To regenerate it, run this at the
     root of a ticoteam/tico-services checkout on main (with its requirements installed) and copy the file here, then
     over backend/gateway_catalog.json for the release:
@@ -495,7 +495,7 @@ def test_the_release_copy_shows_what_hqs_catalog_shows():
 
 
 def test_a_services_details_come_through_and_an_older_hqs_rows_have_none():
-    """The Gateway card shows each service's details (label and value pairs); a row from an older HQ has none."""
+    """The Gateway overview shows each service's details (label and value pairs); a row from an older HQ has none."""
     hq = {
         **T.SNAPSHOT,
         "services": json.loads((Path(__file__).parent / "fixtures" / "gateway_catalog_hq.json").read_text())[
