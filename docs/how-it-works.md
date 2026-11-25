@@ -399,7 +399,10 @@ or the named time has passed, 30 minutes, then 60, then two hours for each limit
 that says its model is at capacity or overloaded for now ("Selected model is at capacity", HTTP 503, "try again in
 20s", `overloaded_error`) has not spent the login's quota: that login is held two minutes, the streak does not grow,
 a fallback can still take the run, and the bot's line and Health say *temporary model capacity*, a check or task
-model's turn included; a quota hold already in force keeps its own end. Only a refusal before the bot sent a message
+model's turn included; a quota hold already in force keeps its own end. A Codex turn that ends this way without
+retrying it itself first goes on in its own thread with no new input, after 2, 4, 8, 16 and 30 seconds, so the prompt
+is never sent twice; a Stop, a lost lease or the run's time limit ends the wait, and the hold comes only after the
+fifth. Only a refusal before the bot sent a message
 or used a tool is a run that did nothing. After the run acted, a runner that kept its thread queues one continuation
 on that same thread after the two-minute hold, with a note to carry on without repeating completed work. It never
 hands that continuation to a fallback or a fresh thread. If the thread cannot resume, or the continuation hits

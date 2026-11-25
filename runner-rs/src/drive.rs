@@ -78,6 +78,19 @@ const SALVAGE: Duration = if cfg!(test) {
     Duration::from_secs(10)
 };
 
+/// Codex can end a turn on a busy model without retrying it itself: its thread then goes on with no new input, up to
+/// this many times (T3 Code's Codex adapter), before the turn fails as a busy model.
+const OVERLOAD_TRIES: u32 = 5;
+
+/// The wait before the `n`th such retry: doubling from 2 s, at most 30 s.
+fn overload_wait(n: u32) -> Duration {
+    #[cfg(test)]
+    let first = tests::OVERLOAD_WAIT.with(|w| w.get());
+    #[cfg(not(test))]
+    let first = Duration::from_secs(2);
+    (first * 2u32.pow(n - 1)).min(first * 15)
+}
+
 /// One metered stretch of a turn: the primary harness, then a fallback's.
 pub struct Segment {
     pub meter: Meter,
@@ -213,6 +226,10 @@ impl Runner {
         // always heard out before the drive ends: the hub hands an input to this attempt when it is read.
         let mut step: Option<StepFuture<'_>> = None;
         let mut step_asks = false;
+        // A busy-model failure waiting for its retry (`OVERLOAD_TRIES`): when it is due, and the failure, which stands if
+        // the retry cannot start.
+        let mut overloads = 0;
+        let mut retry: Option<(Instant, Value)> = None;
 
         // Count a continuation; past the cap, interrupt the turn so its goal can be cleared.
         macro_rules! stuck {
@@ -325,7 +342,10 @@ impl Runner {
                 }
                 goal.failure = Some(reason.unwrap_or_else(|| "Stopped by a person".into()));
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 return Ok(Drove {
                     outcome: "interrupted".into(),
                     reply: answer(&earlier, &reply),
@@ -343,7 +363,10 @@ impl Runner {
             if let Some(line) = self.drain.due(aid, Instant::now()) {
                 let _ = self.state.append(aid, "status", &json!({"yielded": line}));
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 return Ok(Drove {
                     outcome: "interrupted".into(),
                     reply: answer(&earlier, &reply),
@@ -366,7 +389,8 @@ impl Runner {
             }
             // A harness that has exited is no proof its output was read: a reader may still be draining the pipe it
             // left, so only the window ends a salvage that has not seen the turn end.
-            let salvaged = salvage.is_some_and(|until| Instant::now() >= until);
+            // A turn waiting for its overload retry has nothing more to say.
+            let salvaged = salvage.is_some_and(|until| Instant::now() >= until || retry.is_some());
             if self.stopping() || salvaged || late {
                 goal.failure = Some(
                     if late {
@@ -379,7 +403,10 @@ impl Runner {
                     .into(),
                 );
                 end_step!();
-                let _ = host.interrupt(thread, &turn).await;
+                if retry.is_none() {
+                    // A turn waiting for its overload retry has already ended: nothing to interrupt.
+                    let _ = host.interrupt(thread, &turn).await;
+                }
                 let why = if late {
                     format!("Timeout: {}", d.limit_name)
                 } else if self.stopping() {
@@ -534,6 +561,25 @@ impl Runner {
                 }
                 if clearing && (kind == "delta" || kind == "message") {
                     continue; // the clear's own echo is not the bot's answer
+                }
+                // A busy model, never a quota (`is_capacity`): the thread goes on once the wait is over, below.
+                if kind == "turn_failed"
+                    && overloads < OVERLOAD_TRIES
+                    && matches!(host, Host::Codex(_))
+                    && !clearing
+                    && !goal_running
+                    && pausing.is_none()
+                    && salvage.is_none()
+                    && truthy(event.get("limit"))
+                    && hosts::is_capacity(&text_of(&event["error"]))
+                {
+                    overloads += 1;
+                    // Worded as a busy model (backend login_holds.capacity): the hub reads every error row of a run
+                    // that fails, and only all-capacity errors keep its capacity continuation (execution.py busy).
+                    let note = format!("Model overloaded, retrying ({overloads}/{OVERLOAD_TRIES})");
+                    rows.push(("error".into(), json!({"error": note}).to_string()));
+                    retry = Some((Instant::now() + overload_wait(overloads), event));
+                    continue;
                 }
                 if kind == "message" || kind == "tool" {
                     // Proof the turn reached the model and may have changed something outside this computer.
@@ -753,7 +799,31 @@ impl Runner {
                 settle_step!();
                 break;
             }
+            if retry.as_ref().is_some_and(|(at, _)| Instant::now() >= *at)
+                && !d.flags.stopped.load(Ordering::SeqCst)
+                && !d.flags.lost.load(Ordering::SeqCst)
+            {
+                let (_, failed) = retry.take().unwrap();
+                // Empty input: the prompt is already in the thread, and is never sent twice.
+                match host.start_turn(thread, "", d.effort).await {
+                    Ok(t) => turn = t,
+                    Err(_) => {
+                        // A start Codex may have read may have begun a turn there: no fallback may take it again.
+                        if matches!(host, Host::Codex(c) if c.turn_sent()) {
+                            tool_ran = true;
+                            d.flags.tool_ran.store(true, Ordering::SeqCst);
+                        }
+                        overloads = OVERLOAD_TRIES;
+                        queue.push(failed);
+                    }
+                }
+            }
             if !host.alive() {
+                // A busy-model failure waiting for its retry still decides the run when the app-server goes meanwhile.
+                if let Some((_, failed)) = retry.take() {
+                    overloads = OVERLOAD_TRIES;
+                    queue.push(failed);
+                }
                 // A step that read is heard out first: a lease it found lost turns this into a salvage read.
                 settle_step!();
                 // Whatever it said before it went is read first.
@@ -824,6 +894,11 @@ mod tests {
     use crate::hosts::claude::ClaudeHost;
     use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
+
+    thread_local! {
+        /// The wait before a first overload retry (`overload_wait`): next to none unless a test needs it to last.
+        pub(super) static OVERLOAD_WAIT: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::from_millis(1)) };
+    }
 
     /// A hub that has let this attempt's lease go: renewals, inputs and goal reads are refused as stale, while
     /// events and the result are still taken (backend/execution.py `attempt` with `active=False` / `final=True`).
@@ -1925,6 +2000,164 @@ mod tests {
             .iter()
             .any(|e| e["kind"] == "goal"));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A Codex turn given `prompt` on the fake app server (hosts::codex tests' FAKE_KEPT), driven to its end on a quiet
+    /// hub, Stopped once it waits for an overload retry when `stop`. Hands back the drive's result, the input of each
+    /// `turn/start` the app server got, and the run's error rows.
+    async fn busy_codex_turn(prompt: &str, stop: bool) -> (Drove, Vec<Value>, Vec<String>) {
+        let (url, _) = quiet_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (fake, env) = crate::hosts::codex::tests::kept_rig("codex-busy");
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let codex = crate::hosts::codex::CodexHost::on_home(env, tx, None);
+        codex.start().await.unwrap();
+        let th = codex
+            .start_thread("acme", &crate::hosts::Settings::default())
+            .await
+            .unwrap();
+        assert_eq!(codex.start_turn(&th, prompt, None).await.unwrap(), "turn-1");
+        let host = Host::Codex(codex.clone());
+        let f = flags(false);
+        let errors = |runner: &Runner| -> Vec<String> {
+            stored_rows(runner, "acme-late")
+                .into_iter()
+                .filter(|(_, kind, _)| kind == "error")
+                .map(|(_, _, row)| text_of(&row["error"]))
+                .collect()
+        };
+        let stopping = async {
+            let by = Instant::now() + Duration::from_secs(10);
+            while stop && errors(&runner).is_empty() {
+                assert!(Instant::now() < by, "the turn never waited for a retry");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            f.stopped.store(stop, Ordering::SeqCst);
+        };
+        let ((drove, _, _), ()) = tokio::join!(
+            drive_within(
+                &runner,
+                &host,
+                &mut rx,
+                &f,
+                &th,
+                "codex",
+                None,
+                BTreeMap::new(),
+                Duration::from_secs(20),
+            ),
+            stopping
+        );
+        let drove = drove.unwrap_or_else(|e| panic!("refused: {}", e.text));
+        let inputs = crate::hosts::codex::tests::calls(&fake)
+            .into_iter()
+            .filter(|c| c["method"] == "turn/start")
+            .map(|c| c["params"]["input"].clone())
+            .collect();
+        let errors = errors(&runner);
+        codex.finish_turn().await;
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(fake).ok();
+        (drove, inputs, errors)
+    }
+
+    /// Codex ending a turn on a busy model without retrying it: the thread goes on with no new input, so the prompt
+    /// goes once; five busy retries fail the turn as a busy model, as before, and a quota is never retried.
+    #[tokio::test]
+    async fn a_codex_turn_on_a_busy_model_goes_on_in_its_thread_without_its_prompt_again() {
+        // (prompt, retries, outcome)
+        for (text, retries, outcome) in [
+            ("BUSY2", 2, "completed"),
+            ("BUSY6", 5, "failed"),
+            ("QUOTA", 0, "failed"),
+        ] {
+            let (drove, inputs, errors) = busy_codex_turn(text, false).await;
+            assert_eq!(inputs[0], json!([{"type": "text", "text": text}]), "{text}");
+            assert_eq!(inputs[1..], vec![json!([]); retries][..], "{text}");
+            let retrying: Vec<String> = (1..=retries)
+                .map(|n| format!("Model overloaded, retrying ({n}/5)"))
+                .collect();
+            assert_eq!(errors[..retries], retrying[..], "{text}");
+            assert!(
+                errors.iter().all(|e| crate::hosts::is_capacity(e)) || text == "QUOTA",
+                "every error row of a busy run reads as capacity: {errors:?}"
+            );
+            assert_eq!(drove.outcome, outcome, "{text}");
+            // The last failure decides as it always has: a busy model is the short capacity hold, a quota is not.
+            assert_eq!(
+                (drove.limited, drove.capacity),
+                (outcome == "failed", text == "BUSY6"),
+                "{text}"
+            );
+            if outcome == "completed" {
+                assert_eq!(
+                    (drove.reply.as_str(), drove.turn.as_str()),
+                    ("Went on", "turn-3")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stop_while_a_busy_codex_turn_waits_for_its_retry_starts_no_turn() {
+        OVERLOAD_WAIT.with(|w| w.set(Duration::from_secs(3600)));
+        let (drove, inputs, errors) = busy_codex_turn("BUSY1", true).await;
+        OVERLOAD_WAIT.with(|w| w.set(Duration::from_millis(1)));
+        assert_eq!(drove.outcome, "interrupted");
+        assert_eq!(inputs, [json!([{"type": "text", "text": "BUSY1"}])]);
+        assert_eq!(errors, ["Model overloaded, retrying (1/5)"]);
+    }
+
+    /// An input a turn refused is carried to the turn after it; the hub hands it over again until it is acknowledged,
+    /// and a turn that would take a steer by then (a busy-model retry) gets neither it nor an input after it.
+    #[tokio::test]
+    async fn an_input_carried_once_is_never_steered_into_a_later_turn() {
+        let (url, seen) = quiet_hub().await;
+        let (runner, dir) = runner_at(&url);
+        let (fake, env) = crate::hosts::codex::tests::kept_rig("codex-carried");
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let codex = crate::hosts::codex::CodexHost::on_home(env, tx, None);
+        codex.start().await.unwrap();
+        let th = codex
+            .start_thread("acme", &crate::hosts::Settings::default())
+            .await
+            .unwrap();
+        let turn = codex.start_turn(&th, "LONG", None).await.unwrap();
+        let host = Host::Codex(codex.clone());
+        runner
+            .state
+            .input_phase("acme-late", "m-1", Some("carried"))
+            .unwrap();
+        // The carried one, then one that came after it: that one waits behind it rather than going first.
+        let messages = [
+            json!({"id": "m-1", "body": "Also add Q3.", "from_actor": "human:ana"}),
+            json!({"id": "m-2", "body": "And Q4.", "from_actor": "human:ana"}),
+        ];
+        let mut carried = BTreeMap::new();
+        runner
+            .steer_inputs("acme-late", &host, &th, &turn, &mut carried, &messages)
+            .await
+            .unwrap_or_else(|e| panic!("refused: {}", e.text));
+        assert_eq!(carried.keys().collect::<Vec<_>>(), ["m-1", "m-2"]);
+        assert_eq!(
+            runner
+                .state
+                .input_phase("acme-late", "m-2", None)
+                .unwrap()
+                .as_deref(),
+            Some("carried")
+        );
+        assert!(!crate::hosts::codex::tests::calls(&fake)
+            .iter()
+            .any(|c| c["method"] == "turn/steer"));
+        assert!(
+            !seen.lock().unwrap().iter().any(|p| p.contains("/inputs")),
+            "not acknowledged: the carried turn still owes it"
+        );
+        let _ = host.interrupt(&th, &turn).await;
+        codex.finish_turn().await;
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(fake).ok();
     }
 
     /// The outbox rows of `aid` in seq order, as (seq, kind, payload).

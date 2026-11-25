@@ -1800,7 +1800,14 @@ impl CodexHost {
         text: &str,
         effort: Option<&str>,
     ) -> Result<String, HostError> {
-        let mut params = json!({"threadId": thread_id, "input": [{"type": "text", "text": text}]});
+        // No text goes on with the thread's own history and no new input (drive.rs `overload_wait`): a prompt
+        // already in the thread is never sent again.
+        let input = if text.is_empty() {
+            json!([])
+        } else {
+            json!([{"type": "text", "text": text}])
+        };
+        let mut params = json!({"threadId": thread_id, "input": input});
         if let Some(e) = effort.filter(|e| !e.is_empty()) {
             params["effort"] = json!(e);
         }
@@ -2238,7 +2245,7 @@ fn steer_turn_over(message: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     thread_local! {
         /// Whether the last sweep (`sweep_reaped`) read the process's sign-in file to mask it.
         pub(super) static SWEPT_SIGN_IN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
@@ -2887,11 +2894,13 @@ for line in sys.stdin:
 
     /// An app server whose `LONG` turn runs until `turn/interrupt`, which it answers and then ends the turn; any other
     /// turn ends at once. A turn's `ERR:` text goes to its stderr first; `CLOSE` closes its output and `DIE` ends it,
-    /// with no answer. Each call goes to `FAKE_CALLS`.
+    /// with no answer. `BUSY<n>` and the n-1 turns after it end on a busy model, as Codex does when it will not retry,
+    /// and `QUOTA` on a quota Codex labels an overload too; a turn with no input says "Went on". Each call goes to
+    /// `FAKE_CALLS`.
     const FAKE_KEPT: &str = r#"#!/usr/bin/env python3
 import json, os, sys
 def say(m): print(json.dumps(m), flush=True)
-n = 0
+n = busy = 0
 for line in sys.stdin:
     msg = json.loads(line)
     method, p = msg.get("method"), msg.get("params") or {}
@@ -2912,10 +2921,18 @@ for line in sys.stdin:
         say({"id": i, "result": {"thread": {"id": "th-1"}}})
     elif method == "turn/start":
         n += 1
-        t, th = "t%d" % n, p["threadId"]
+        t, th = "turn-%d" % n, p["threadId"]
         say({"id": i, "result": {"turn": {"id": t}}})
         say({"method": "turn/started", "params": {"threadId": th, "turn": {"id": t}}})
-        if p["input"][0]["text"] != "LONG":
+        busy = int(text[4:]) if text.startswith("BUSY") else busy
+        if busy or text == "QUOTA":
+            busy = max(busy - 1, 0)
+            err = {"message": "Quota exceeded. Check your plan and billing details." if text == "QUOTA" else "Server busy", "codexErrorInfo": "serverOverloaded"}
+            say({"method": "error", "params": {"threadId": th, "turnId": t, "willRetry": False, "error": err}})
+            say({"method": "turn/completed", "params": {"threadId": th, "turn": {"id": t, "status": "failed", "error": err}}})
+        elif text != "LONG":
+            if not p["input"]:
+                say({"method": "item/completed", "params": {"threadId": th, "turnId": t, "item": {"type": "agentMessage", "id": "m-" + t, "text": "Went on", "phase": "final_answer"}}})
             say({"method": "turn/completed", "params": {"threadId": th, "turn": {"id": t, "status": "completed"}}})
     elif method == "turn/interrupt":
         say({"id": i, "result": {}})
@@ -2925,7 +2942,7 @@ for line in sys.stdin:
 "#;
 
     /// A folder with `FAKE_KEPT` as `codex`, and the environment that runs it.
-    fn kept_rig(name: &str) -> (PathBuf, Env) {
+    pub(crate) fn kept_rig(name: &str) -> (PathBuf, Env) {
         let dir = std::env::temp_dir().join(format!("{name}-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
         crate::util::write_script(&dir.join("codex"), FAKE_KEPT);
@@ -3029,7 +3046,7 @@ for line in sys.stdin:
     }
 
     /// Each call the fake app server got.
-    fn calls(dir: &std::path::Path) -> Vec<Value> {
+    pub(crate) fn calls(dir: &std::path::Path) -> Vec<Value> {
         std::fs::read_to_string(dir.join("calls.jsonl"))
             .unwrap_or_default()
             .lines()
