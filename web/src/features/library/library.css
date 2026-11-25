@@ -231,6 +231,8 @@ html:not([data-layout="cards"]) .modal.sk-edit{width:var(--measure)}
 /* a tool's guide: its summary, instructions, guidance and learnings as text on the facts' edge */
 .tools .tool-read{padding:0 var(--s-2) var(--s-2)}
 .tools .tool-read .read-lead{margin:0 0 var(--s-2)}
+.tools .tool-learned{display:flex;align-items:baseline;gap:var(--s-2)}
+.tools .tool-learned>:first-child{flex:1;min-width:0}
 .tools .tool-none{margin:0;padding:0 var(--s-2);color:var(--muted);font-size:var(--t-sm)}
 .tools .tool-edit{display:grid;gap:var(--s-2);padding:0 var(--s-2) var(--s-2)}
 .tools .tool-edit-foot{display:flex;justify-content:flex-end;gap:var(--s-2)}

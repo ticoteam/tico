@@ -315,14 +315,14 @@ export const setRepositories = defineAction({
   target: ({ slug }) => onPage(slug),
 });
 
-const registryTool = z.string().check(z.minLength(1), z.maxLength(80), z.describe("a tool's slug in the registry"));
+const registryTool = z.string().check(z.minLength(1), z.maxLength(61), z.describe("a tool's slug in the registry"));
 
 /** List a tool on an agent's Tools, with what it uses it for. Listing gives no access: that is the tool's own. */
 export const addTool = defineAction({
   id: 'agents.addTool',
   title: "Add a tool to an agent's tools",
   kind: 'change',
-  input: z.strictObject({ slug, tool: registryTool, note: z.optional(z.string().check(z.maxLength(300))) }),
+  input: z.strictObject({ slug, tool: registryTool, note: z.optional(z.string().check(z.maxLength(500))) }),
   run: (_ctx, { slug, tool, note }) => said("Couldn't add it", () => listTool(slug, tool, note?.trim() ?? '')),
   did: () => 'Added',
   target: ({ slug }) => onPage(slug),

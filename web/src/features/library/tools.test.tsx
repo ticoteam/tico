@@ -2016,11 +2016,11 @@ describe('the tools registry', () => {
     connections: 1,
     used_by: 2,
     last_used_at: null,
-    guide: true,
+    has_guide: true,
     ...o,
   });
   const built = guideRow({ slug: 'churn-report', name: 'Churn report', origin: 'built', category: 'growth', summary: 'Weekly churn by plan', connections: 0, used_by: 0 });
-  const registry = (url: string) => (url === '/api/v2/tool-guides?limit=200' ? { rows: [guideRow(), built], next: null } : undefined);
+  const registry = (url: string) => (url === '/api/v2/tool-guides' ? { tool_guides: [guideRow(), built], next: null } : undefined);
   const rg = indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', who_total: 1 });
 
   it('lists vendors with their summary and tools built here, narrowed by origin and category', async () => {
@@ -2052,13 +2052,13 @@ describe('the tools registry', () => {
       instructions: 'Read **crashes** first.',
       guidance: '',
       commands: [],
-      source: null,
+      source: '',
       needs: [],
       owner: null,
       updated_at: null,
       access: [],
-      users: [{ bot: 'b1', name: 'Clerk', listed: true, note: 'Triage', uses: 4, last_used_at: null }],
-      learnings: 'The rate limit is low.',
+      used_by: [{ id: 'b1', name: 'Clerk', listed: true, note: 'Triage', uses: 4, last_used_at: null }],
+      learnings: [{ id: 'l1', actor: 'bot:b1', text: 'The rate limit is low.', created_at: '2026-11-20T09:00:00Z' }],
     };
     const sent = serve((url, method) =>
       url === '/api/v2/tool-guides/raygun'

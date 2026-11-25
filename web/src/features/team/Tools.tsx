@@ -48,7 +48,7 @@ function ToolRow({ slug, name, t, manage }: { slug: string; name: string; t: Age
   const access = ACCESS[t.access];
   return (
     <div className="row task tool-row" title={t.name} data-target={`tool:${slug}:${t.slug}`}>
-      <span className="row-mark">{t.built_by_bot && <Icon name="spark" label={`Built by ${name}`} />}</span>
+      <span className="row-mark">{t.built && <Icon name="spark" label={`Built by ${name}`} />}</span>
       <Link className="row-title" href={toolHref(t)}>
         {t.name}
       </Link>
@@ -115,7 +115,7 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
             role="option"
             aria-selected={t.slug === chosen}
             className={t.slug === chosen ? 'row tool-pick-row is-on' : 'row tool-pick-row'}
-            title={t.summary ?? t.name}
+            title={t.summary || t.name}
             onClick={() => setChosen(t.slug)}
           >
             <span className="row-title">{t.name}</span>

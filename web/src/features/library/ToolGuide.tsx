@@ -36,8 +36,8 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
   const g = useQuery(toolGuideQuery(slug));
   const guide = g.data;
   const built = origin === 'built';
-  // A vendor's connections: none to read when the guide says it has none.
-  const vendor = useQuery({ ...vendorQuery(slug), enabled: !built && (guide?.connections ?? 1) > 0 });
+  // A vendor's connections (a 404 when the reader may see none: the guide still shows).
+  const vendor = useQuery({ ...vendorQuery(slug), enabled: !built });
   const known = useQuery(catalogQuery).data?.some((s) => s.id === slug);
   const [connecting, setConnecting] = useState(false);
   const [adding, setAdding] = useState<Adding | null>(null);
@@ -45,7 +45,8 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
   // The page waits on the guide; a vendor the registry cannot answer still shows its connections.
   const read = built || !g.isError ? g : vendor;
   const name = guide?.name || vendor.data?.name || slug;
-  const users = guide?.users ?? [];
+  const users = guide?.used_by ?? [];
+  const learnings = guide?.learnings ?? [];
   return (
     <ToolPage
       name={name}
@@ -104,8 +105,8 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
       {users.length > 0 && (
         <Section name="Used by" count={users.length} target={`tool-used:${slug}`}>
           {users.map((u) => (
-            <Row key={u.bot} className="wrow" title={u.name} href={`/team/${encodeURIComponent(u.bot)}`}>
-              <Face actor={`bot:${u.bot}`} name={u.name} />
+            <Row key={u.id} className="wrow" title={u.name} href={`/team/${encodeURIComponent(u.id)}`}>
+              <Face actor={`bot:${u.id}`} name={u.name} />
               <span className="row-title">{u.name}</span>
               {u.note && <span className="row-ctx">{u.note}</span>}
               <span className="row-fig" title="Uses in 30 days">
@@ -116,11 +117,14 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
           ))}
         </Section>
       )}
-      {guide?.learnings && (
-        <Section name="Learnings" target={`tool-learned:${slug}`}>
-          <div className="tool-read">
-            <Markdown text={guide.learnings} />
-          </div>
+      {learnings.length > 0 && (
+        <Section name="Learnings" count={learnings.length} target={`tool-learned:${slug}`}>
+          {learnings.map((l) => (
+            <div key={l.id} className="tool-read tool-learned">
+              <Markdown text={l.text} />
+              <Ago at={l.created_at} className="row-age" />
+            </div>
+          ))}
         </Section>
       )}
       {editing && <EditGuideDialog slug={slug} origin={origin} guide={guide} onClose={() => setEditing(false)} />}

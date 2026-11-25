@@ -317,10 +317,10 @@ describe("An agent's Tools", () => {
     access: 'proxy',
     uses: 12,
     last_used_at: null,
-    built_by_bot: false,
+    built: false,
     ...o,
   });
-  const rows = [tool(), tool({ slug: 'churn-report', name: 'Churn report', origin: 'built', note: '', listed: false, access: 'none', uses: 3, built_by_bot: true })];
+  const rows = [tool(), tool({ slug: 'churn-report', name: 'Churn report', origin: 'built', note: '', listed: false, access: 'none', uses: 3, built: true })];
   const found = [
     { slug: 'stripe', name: 'Stripe', origin: 'vendor', summary: 'Payments' },
     { slug: 'raygun', name: 'Raygun', origin: 'vendor', summary: 'Crash reports' },
@@ -330,9 +330,9 @@ describe("An agent's Tools", () => {
     // the server's built-ins without Tools: the page draws it after them
     open([w('updates'), w('tasks'), w('files')], (u) =>
       u.endsWith('/bots/ana/tool-guides')
-        ? { body: { rows } }
+        ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
         : u.includes('/api/v2/tool-guides?')
-          ? { body: { rows: found } }
+          ? { body: { tool_guides: found, next: null } }
           : u.includes('/bots/ana/tool-guides/')
             ? { body: {} }
             : undefined,

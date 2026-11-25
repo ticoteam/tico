@@ -746,25 +746,26 @@ export const agentFilesQuery = (slug: string, find = '') =>
 
 /** A tool on its Tools section (GET /api/v2/bots/{bot}/tool-guides): one it lists, a vendor it may use, or one it used
     in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none).
-    TODO: these shapes follow the plan (reports/2026-11-24-tools-registry); switch to `@/api/schema` once the routes land. */
+    TODO: switch to `@/api/schema` (backend/api_answers/tool_guides.py) once the routes are on main. */
 export interface AgentTool {
   slug: string;
   name: string;
   origin: 'vendor' | 'built';
-  category: string | null;
-  note: string | null;
+  category: string;
+  /** What it uses it for, in its own words. */
+  note: string;
   /** On its list, rather than only granted or used. */
   listed: boolean;
   access: 'proxy' | 'key' | 'none';
   uses: number;
   last_used_at: string | null;
-  /** Built by this agent. */
-  built_by_bot: boolean;
+  /** This agent built it. */
+  built: boolean;
 }
 export const agentToolsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'tools', slug] as const,
-    queryFn: ({ signal }) => api.get<{ rows?: AgentTool[] }>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.rows ?? []),
+    queryFn: ({ signal }) => api.get<{ tool_guides?: AgentTool[] }>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.tool_guides ?? []),
   });
 
 /** The company's tools matching the words (GET /api/v2/tool-guides?q=), for Add tool: the first few the server finds. */
@@ -772,12 +773,12 @@ export interface FoundTool {
   slug: string;
   name: string;
   origin: 'vendor' | 'built';
-  summary: string | null;
+  summary: string;
 }
 export const findToolsQuery = (words: string) =>
   queryOptions({
     queryKey: ['team', 'tool-find', words] as const,
-    queryFn: ({ signal }) => api.get<{ rows?: FoundTool[] }>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.rows ?? []),
+    queryFn: ({ signal }) => api.get<{ tool_guides?: FoundTool[] }>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.tool_guides ?? []),
   });
 
 /** List a tool on it, with what it uses it for; the row shows once the server has it. */

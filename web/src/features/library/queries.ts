@@ -667,71 +667,74 @@ export const catalogQuery = queryOptions({
   staleTime: Infinity,
 });
 
-/* The registry (GET /api/v2/tool-guides): every tool the company knows, a vendor's (its id is the vendor's) or one built
-   here, with what it is for, how to use it, the company's guidance and who uses it. Under the tools root, so whatever
-   reads Tools again reads it too.
-   TODO: these shapes follow the plan (reports/2026-11-24-tools-registry); switch to `@/api/schema` once the routes land. */
+/* The registry (GET /api/v2/tool-guides, backend/tool_guides.py): every tool the company knows, a vendor's (its slug is
+   the vendor's) or one built here, with what it is for, how to use it, the company's guidance and who uses it. Under
+   the tools root, so whatever reads Tools again reads it too.
+   TODO: switch to `@/api/schema` (backend/api_answers/tool_guides.py) once the routes are on main. */
 
 export type ToolOrigin = 'vendor' | 'built';
 export interface ToolGuideRow {
   slug: string;
   name: string;
   origin: ToolOrigin;
-  category: string | null;
-  summary: string | null;
-  /** Connections on the vendor the reader may see. */
+  category: string;
+  summary: string;
+  /** The vendor's Tools rows the reader may see. */
   connections: number;
   /** Agents that list it or used it in the last 30 days. */
   used_by: number;
   last_used_at: string | null;
-  /** False for a vendor in the Tools index with no guide yet. */
-  guide: boolean;
-}
-/** One connection on the tool's vendor as the reader holds it: how it reaches a run (a variable's name, never a value),
-    and the command that asks for it where the reader has none. */
-export interface ToolGuideAccess {
-  id: string;
-  name: string;
-  kind: string;
-  level: 'none' | 'read' | 'write';
-  env: string | null;
-  request: string | null;
-}
-export interface ToolGuideUser {
-  bot: string;
-  name: string;
-  listed: boolean;
-  note: string | null;
-  uses: number;
-  last_used_at: string | null;
+  /** False: a vendor in Tools nobody has written words on yet. */
+  has_guide: boolean;
 }
 export interface ToolNeed {
   tool: string;
   level: 'read' | 'write';
 }
-export interface ToolGuide extends ToolGuideRow {
-  instructions: string | null;
-  guidance: string | null;
+/** An agent that lists the tool or used it in the last 30 days, with what it uses it for. */
+export interface ToolGuideUser {
+  id: string;
+  name: string;
+  listed: boolean;
+  note: string;
+  uses: number;
+  last_used_at: string | null;
+}
+export interface ToolGuideLearning {
+  id: string;
+  actor: string;
+  text: string;
+  created_at: string;
+}
+export interface ToolGuide {
+  slug: string;
+  name: string;
+  origin: ToolOrigin;
+  category: string;
+  summary: string;
+  instructions: string;
+  guidance: string;
   commands: string[];
-  source: string | null;
+  /** A built tool's repository and path. */
+  source: string;
   needs: ToolNeed[];
   owner: string | null;
+  has_guide: boolean;
   updated_at: string | null;
-  access: ToolGuideAccess[];
-  users: ToolGuideUser[];
-  /** Its integration page's learnings, markdown. */
-  learnings: string | null;
+  used_by: ToolGuideUser[];
+  learnings: ToolGuideLearning[];
 }
 export type ToolGuideChange = Partial<Pick<ToolGuide, 'name' | 'origin' | 'category' | 'summary' | 'instructions' | 'guidance' | 'source' | 'needs' | 'commands'>>;
 
+type GuidePage = { tool_guides?: ToolGuideRow[]; next?: string | null };
 export const toolGuidesQuery = queryOptions({
   queryKey: ['tools', 'guides'],
   queryFn: async (): Promise<ToolGuideRow[]> => {
-    let page = await api.get<{ rows?: ToolGuideRow[]; next?: string | null }>('/api/v2/tool-guides?limit=200');
-    let rows = page.rows ?? [];
+    let page = await api.get<GuidePage>('/api/v2/tool-guides');
+    let rows = page.tool_guides ?? [];
     for (let n = 0; page.next && n < INDEX_PAGES; n++) {
-      page = await api.get<{ rows?: ToolGuideRow[]; next?: string | null }>(`/api/v2/tool-guides?limit=200&cursor=${enc(page.next)}`);
-      rows = [...rows, ...(page.rows ?? [])];
+      page = await api.get<GuidePage>(`/api/v2/tool-guides?cursor=${enc(page.next)}`);
+      rows = [...rows, ...(page.tool_guides ?? [])];
     }
     return rows;
   },
@@ -761,7 +764,8 @@ export const slugOf = (name: string) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
-    .slice(0, 80);
+    .slice(0, 61)
+    .replace(/-+$/, '');
 
 /** The job functions skills and tools are filed under (clients/skills.py FUNCTIONS), in the menu's order. */
 export const FUNCTIONS = [

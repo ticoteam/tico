@@ -142,12 +142,12 @@
           "tool": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 80,
+            "maxLength": 61,
             "description": "a tool's slug in the registry"
           },
           "note": {
             "type": "string",
-            "maxLength": 300
+            "maxLength": 500
           }
         },
         "required": [
@@ -454,7 +454,7 @@
           "tool": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 80,
+            "maxLength": 61,
             "description": "a tool's slug in the registry"
           }
         },
@@ -12737,13 +12737,13 @@
           "slug": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 80,
-            "pattern": "^[a-z0-9][a-z0-9._-]*$"
+            "maxLength": 61,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
           },
           "name": {
             "type": "string",
             "minLength": 1,
-            "maxLength": 120
+            "maxLength": 80
           },
           "origin": {
             "enum": [
@@ -12757,7 +12757,7 @@
           },
           "summary": {
             "type": "string",
-            "maxLength": 300
+            "maxLength": 200
           },
           "instructions": {
             "type": "string",
@@ -12780,7 +12780,8 @@
                 "tool": {
                   "type": "string",
                   "minLength": 1,
-                  "maxLength": 200
+                  "maxLength": 61,
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
                 },
                 "level": {
                   "enum": [
