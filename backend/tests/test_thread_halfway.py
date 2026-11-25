@@ -324,6 +324,29 @@ def end_run(api, machine, attempt):
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0}, token=machine["token"])
 
 
+def test_wakes_made_in_the_same_instant_keep_the_order_of_their_messages(api):
+    machine = machine_for(api)
+    thread = new_thread(api)
+    first = say(api, thread["id"], "@ops is the launch date set?")
+    attempt = claim(api, machine)
+    run_post(api, attempt, "bot:ops", thread["id"], "Friday, on the board.")
+    end_run(api, machine, attempt)
+    second = say(api, thread["id"], "@ops and the budget?")
+    end_run(api, machine, claim(api, machine))
+    # one clock tick for both (a frozen clock, or the same microsecond), and ids that sort either way round
+    for low, high in ((second, first), (first, second)):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE message_deliveries SET created_at=? WHERE recipient='bot:ops'", (H.now(),))
+            for message, mark in ((low, "0"), (high, "z")):
+                c.execute(
+                    "UPDATE message_deliveries SET id=? WHERE message_id=? AND recipient='bot:ops'",
+                    (mark + message["id"], message["id"]),
+                )
+        rows = bot_status(api, thread["id"])
+        # the newest ending first: a chat draws an agent's first row, so the later message's ending is the one said
+        assert [(r["state"], r["message_id"]) for r in rows] == [("no_reply", second["id"]), ("replied", first["id"])]
+
+
 def test_a_post_the_run_makes_itself_answers_its_wake_while_the_run_goes_on(api):
     machine = machine_for(api)
     thread = new_thread(api)

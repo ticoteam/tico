@@ -537,7 +537,8 @@ carriers), never from the root's history. A bot has one row per run of its that 
 such message, and one for its wakes no run took yet, naming the newest. Someone who reads only a migrated Home's old
 history gets `[]` (REST, timeline and SSE). `version` is the seq of the root's newest `bot_status` change when read (`0`
 before any), read with the rows in one transaction: a client drops a read with a smaller version than the one it holds,
-`0` included. At most 5 bots, oldest wait first:
+`0` included. At most 5 bots, oldest wait first (two of the same instant in their messages' order); a bot's endings
+newest first, so a chat that draws a bot's first row says the latest:
 ```json
 {"actor": "bot:legal", "name": "Legal", "state": "up_next|cant_reply|working|replied|no_reply|stopped",
  "detail": "...", "since": "<wait start>", "run_id": "<attempt id>|null",

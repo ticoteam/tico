@@ -192,7 +192,11 @@ def candidates(c, v, root_id):
     since = H.shift(H.now(), seconds=-ENDED_S)
     rows = [dict(r) for r in c.execute(_WAKES_SQL, (root_id, since))]
     seqs = _readable_wakes(c, v, [r["message_id"] for r in rows])
-    rows = [r for r in rows if r["message_id"] in seqs]
+    # Two wakes of the same instant keep the order of their messages: `status` says the newest ending first, and a
+    # chat draws an agent's first row.
+    rows = sorted(
+        (r for r in rows if r["message_id"] in seqs), key=lambda r: (r["created_at"] or "", seqs[r["message_id"]])
+    )
     runs = sorted({r["run"] for r in rows if r["run"]})
     replies = {}
     if runs:
