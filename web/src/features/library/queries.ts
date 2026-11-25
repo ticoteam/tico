@@ -34,6 +34,12 @@ import type {
   SourceCreate,
   SourceDocumentList,
   SourceEdit,
+  ToolGuide as ToolGuideSaved,
+  ToolGuideArchived,
+  ToolGuideDetail,
+  ToolGuideList,
+  ToolGuideNeed,
+  ToolGuideRow,
   ToolIndex,
   ToolIndexRow,
   WebsiteAccountAccessSet,
@@ -682,6 +688,114 @@ export const catalogQuery = queryOptions({
   queryFn: () => api.get<{ services?: CatalogService[] }>('/api/v2/tool-templates').then((r) => r.services ?? []),
   staleTime: Infinity,
 });
+
+/* The registry (GET /api/v2/tool-guides, backend/tool_guides.py, its answers backend/api_answers/tool_guides.py):
+   every tool the company knows, a vendor's (its slug is the vendor's) or one built here, with what it is for, how to
+   use it, the company's guidance and who uses it. Under the tools root, so whatever reads Tools again reads it too. */
+
+export type { ToolGuideRow };
+export type ToolOrigin = ToolGuideRow['origin'];
+export type ToolNeed = ToolGuideNeed;
+/** A tool's page: the guide with its access, the agents that use it and what they learned. */
+export type ToolGuide = ToolGuideDetail;
+/** What a write changes (PUT /api/v2/tool-guides/<slug>, ToolGuideWrite): only what is sent. */
+export type ToolGuideChange = Partial<Pick<ToolGuideSaved, 'name' | 'origin' | 'category' | 'summary' | 'instructions' | 'guidance' | 'source' | 'needs' | 'commands'>>;
+
+type GuidePage = Partial<ToolGuideList>;
+export const toolGuidesQuery = queryOptions({
+  queryKey: ['tools', 'guides'],
+  queryFn: async (): Promise<ToolGuideRow[]> => {
+    let page = await api.get<GuidePage>('/api/v2/tool-guides');
+    let rows = page.tool_guides ?? [];
+    for (let n = 0; page.next && n < INDEX_PAGES; n++) {
+      page = await api.get<GuidePage>(`/api/v2/tool-guides?cursor=${enc(page.next)}`);
+      rows = [...rows, ...(page.tool_guides ?? [])];
+    }
+    return rows;
+  },
+});
+export const toolGuideQuery = (slug: string) =>
+  queryOptions({
+    queryKey: ['tools', 'guide', slug],
+    queryFn: () => api.get<ToolGuideDetail>(`/api/v2/tool-guides/${enc(slug)}`),
+  });
+
+/** What a guide's write or archive changes elsewhere: the list, every tool page (one read by an alias, `gh`, holds the
+    same guide), and the agents' Tools and their Add tool picker (team/queries.ts agentToolsQuery, findToolsQuery). */
+const guideChanged = () =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['tools', 'guides'] }),
+    queryClient.invalidateQueries({ queryKey: ['tools', 'guide'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'tools'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'tool-find'] }),
+  ]);
+
+/** A guide written or changed (any teammate may): shown once the server agrees, then the tool (its answer has no
+    access, users or learnings: the page reads them again), the list and the agents' Tools read again. */
+export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
+  write<ToolGuideSaved>({
+    key: ['tools', 'guide', slug],
+    wait: true,
+    optimistic: (cur: ToolGuideDetail | undefined) => cur && { ...cur, ...change },
+    send: (idempotencyKey) => api.put<ToolGuideSaved>(`/api/v2/tool-guides/${enc(slug)}`, change, { idempotencyKey }),
+  }).then(async (saved) => {
+    await guideChanged();
+    return saved;
+  });
+
+/** Archived (its owner, the Tools Owner or a credential admin): out of the list once the server agrees; a vendor's
+    Tools rows stay, with no guide. */
+export async function archiveToolGuide(slug: string) {
+  await write<ToolGuideArchived>({
+    key: toolGuidesQuery.queryKey,
+    wait: true,
+    optimistic: (cur: ToolGuideRow[] | undefined) => cur?.filter((r) => r.slug !== slug),
+    send: (idempotencyKey) => api.delete<ToolGuideArchived>(`/api/v2/tool-guides/${enc(slug)}`, { idempotencyKey }),
+  });
+  queryClient.removeQueries({ queryKey: toolGuideQuery(slug).queryKey });
+  await guideChanged();
+}
+
+/** Whether a slug already names a tool in the registry (its guide reads; a 404 is free), so a new built tool never
+    writes over one: the PUT would change it in place. */
+export async function guideTaken(slug: string): Promise<boolean> {
+  try {
+    await api.get<ToolGuideDetail>(`/api/v2/tool-guides/${enc(slug)}`);
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return false;
+    throw err;
+  }
+}
+
+/** A built tool's slug from its name: `Weekly churn report` is `weekly-churn-report`. */
+export const slugOf = (name: string) =>
+  name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 61)
+    .replace(/-+$/, '');
+
+/** The job functions skills and tools are filed under (clients/skills.py FUNCTIONS), in the menu's order. */
+export const FUNCTIONS = [
+  'tico',
+  'legal',
+  'marketing',
+  'growth',
+  'sales',
+  'customers',
+  'finance',
+  'product',
+  'engineering',
+  'people',
+  'operations',
+  'hardware',
+  'data',
+  'security',
+] as const;
+export const functionLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
 
 /** A person asks for an agent's level on a tool: granted at once when it can be, else a card to whoever can grant it. */
 export const requestAccess = (body: { resource: string; level: 'read' | 'read_write'; for_bot: string; why?: string }) =>

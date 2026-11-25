@@ -17,6 +17,8 @@ import {
   pasteKeys,
   releaseInbox,
   removeSetting,
+  saveToolGuide,
+  archiveToolGuide,
   requestNumber,
   revealSecret,
   saveSetting,
@@ -567,16 +569,62 @@ export const toolsOpen = defineAction({
     (queryClient.getQueryData<ToolIndex>(toolsQuery.queryKey)?.rows ?? []).slice(0, 50).map((t) => ({ input: { tool: t.id }, title: `Open ${t.name}` })),
 });
 
-/** Narrow the list to one kind of tool, or to the tools that need someone; nothing given shows them all. */
+/** Narrow the list to one kind of tool, the tools that need someone, vendors' or those built here, one job function, or
+    words; nothing given shows them all. */
 export const toolsFilter = defineAction({
   id: 'tools.filter',
   title: 'Filter tools',
   kind: 'view',
-  input: z.strictObject({ kind: z.optional(text(40)), needs: z.optional(z.boolean()) }),
+  input: z.strictObject({
+    kind: z.optional(text(40)),
+    needs: z.optional(z.boolean()),
+    origin: z.optional(z.enum(['vendor', 'built'] as const)),
+    category: z.optional(text(40)),
+    q: z.optional(text(200)),
+  }),
   run: ({ router }, i) => {
-    const change = { kind: i.kind, needs: i.needs ? 1 : undefined };
+    const change = { kind: i.kind, needs: i.needs ? 1 : undefined, origin: i.origin, category: i.category, q: i.q };
     return on(router, '/library/tools') ? set(router, change, true) : go(router, '/library/tools', change);
   },
+  target: () => ({ kind: 'page', id: '/library/tools' }),
+});
+
+/** A registry slug: a vendor's id, or a built tool's name in lower case with dashes (backend/tool_guides.py SLUG). */
+const guideSlug = z.string().check(z.minLength(1), z.maxLength(61), z.regex(/^[a-z0-9][a-z0-9-]*$/));
+
+/** Write or change a tool's guide: what it is for, how to use it, the company's guidance. Any teammate may (the server
+    records who); a tool built here needs its summary and instructions. */
+export const toolsWriteGuide = defineAction({
+  id: 'tools.writeGuide',
+  title: "Write a tool's guide",
+  kind: 'change',
+  input: z.strictObject({
+    slug: guideSlug,
+    name: z.optional(z.string().check(z.minLength(1), z.maxLength(80))),
+    origin: z.optional(z.enum(['vendor', 'built'] as const)),
+    category: z.optional(text(40)),
+    summary: z.optional(text(200)),
+    instructions: z.optional(text(20000)),
+    guidance: z.optional(text(20000)),
+    source: z.optional(text(500)),
+    needs: z.optional(z.array(z.strictObject({ tool: guideSlug, level: z.enum(['read', 'write'] as const) })).check(z.maxLength(20))),
+  }),
+  run: (_ctx, { slug, ...change }) => saveToolGuide(slug, change),
+  did: () => 'Saved',
+  target: (i) => ({ kind: 'tool', id: `${i.origin === 'built' ? 'built' : 'vendor'}:${i.slug}` }),
+});
+
+/** Archive a tool's guide, then back to Tools. The server says who may (its owner, the Tools Owner, a credential admin). */
+export const toolsArchiveGuide = defineAction({
+  id: 'tools.archiveGuide',
+  title: "Archive a tool's guide",
+  kind: 'change',
+  input: z.strictObject({ slug: guideSlug }),
+  run: async ({ router }, i) => {
+    await archiveToolGuide(i.slug);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Archived',
   target: () => ({ kind: 'page', id: '/library/tools' }),
 });
 

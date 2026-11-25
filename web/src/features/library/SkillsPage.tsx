@@ -39,6 +39,8 @@ import {
   type SkillRow,
   type SkillUse,
   type SkillVersion,
+  FUNCTIONS as SKILL_FUNCTIONS,
+  functionLabel,
   previewDevice,
   SKILL_NAME,
 } from './queries';
@@ -62,30 +64,12 @@ const SKILL_COLUMNS = (
 
 type SkillItem = { kind: 'columns' } | { kind: 'proposal'; proposal: Proposal } | { kind: 'skill'; skill: SkillRow };
 
-/** The job functions (clients/skills.py FUNCTIONS), in the menu's order; any other value, or none, is `other`. */
-const SKILL_FUNCTIONS = [
-  'tico',
-  'legal',
-  'marketing',
-  'growth',
-  'sales',
-  'customers',
-  'finance',
-  'product',
-  'engineering',
-  'people',
-  'operations',
-  'hardware',
-  'data',
-  'security',
-] as const;
 const norm = (f: string | null | undefined) => (f ?? '').trim().toLowerCase();
-/** A row's group: a known function, or `other`. */
+/** A row's group: a known function (queries.ts FUNCTIONS), or `other`. */
 const functionGroup = (f: string | null | undefined): string => {
   const w = norm(f);
   return (SKILL_FUNCTIONS as readonly string[]).includes(w) ? w : 'other';
 };
-const functionLabel = (f: string) => f.charAt(0).toUpperCase() + f.slice(1);
 /** The function filter (ui/app/skills.ts, as the API does): a known function or `other` by the row's group, any other
     value only the rows that name it. */
 const inFunction = (f: string | null | undefined, want: string | undefined) =>

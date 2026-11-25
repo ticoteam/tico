@@ -43,6 +43,8 @@ export const toolHref = (id: string, s: ToolsSearch = {}) => {
   if (s.kind) p.set('kind', s.kind);
   if (s.needs) p.set('needs', '1');
   if (s.who) p.set('who', s.who);
+  if (s.origin) p.set('origin', s.origin);
+  if (s.category) p.set('category', s.category);
   p.set('tool', id);
   return `/library/tools?${p.toString()}`;
 };
@@ -55,6 +57,14 @@ export function useAdmin() {
 }
 
 export const bad = (r: { needs_you: boolean; status: { tone: string; text: string } }) => (r.needs_you || r.status.tone === 'fail' ? r.status.text : null);
+
+/** How a connection reaches agents by default, as configured: Tico adds the key to each call, the key goes to the run,
+    or a browser Tico signs in. Nothing for a kind that is none of these, nor for a tool listed by name alone. */
+export const deliveryOf = (r: { kind: string; delivery?: string | null; requestable?: boolean }) =>
+  r.requestable ? null : r.kind === 'website' ? 'Browser session' : r.kind === 'api' ? (r.delivery === 'proxy' ? 'Proxy-protected' : 'Direct key') : null;
+
+/** A Read the proxy holds to reads, as the run really gets it (`proxied_read`, backend/api_tools.py access_rows). */
+export const Proxied = () => <span className="row-ctx">Proxied</span>;
 
 type Read = { isError: boolean; error: unknown; data: unknown; refetch: () => unknown };
 /** A read's page state: a 403 is no access (nothing to retry), any other failure a fault. */

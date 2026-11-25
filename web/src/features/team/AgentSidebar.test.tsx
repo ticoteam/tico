@@ -318,3 +318,53 @@ describe("An agent's own sidebar", () => {
     await waitFor(() => expect(order()).toEqual(['Video stages', 'Tasks', 'Latest update', 'Made recently']));
   });
 });
+
+describe("An agent's Tools", () => {
+  const tool = (o: Record<string, unknown> = {}) => ({
+    slug: 'raygun',
+    name: 'Raygun',
+    origin: 'vendor',
+    category: 'engineering',
+    note: 'Crash triage',
+    listed: true,
+    access: 'proxy',
+    uses: 12,
+    last_used_at: null,
+    built: false,
+    ...o,
+  });
+  const rows = [tool(), tool({ slug: 'churn-report', name: 'Churn report', origin: 'built', note: '', listed: false, access: 'none', uses: 3, built: true })];
+  const found = [
+    { slug: 'stripe', name: 'Stripe', origin: 'vendor', summary: 'Payments' },
+    { slug: 'raygun', name: 'Raygun', origin: 'vendor', summary: 'Crash reports' },
+  ];
+
+  it('lists what it uses each tool for, how a run gets it and its uses, marks what it built, and adds and removes', async () => {
+    open([w('updates'), w('tasks'), w('files'), w('tools')], (u) =>
+      u.endsWith('/bots/ana/tool-guides')
+        ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
+        : u.includes('/api/v2/tool-guides?')
+          ? { body: { tool_guides: found, next: null } }
+          : u.includes('/bots/ana/tool-guides/')
+            ? { body: {} }
+            : undefined,
+    );
+    const tools = await screen.findByRole('region', { name: 'Tools' });
+    expect(within(tools).getByText('Crash triage')).toBeTruthy();
+    expect(within(tools).getByRole('img', { name: 'Tico holds the key' })).toBeTruthy();
+    expect(within(tools).getByRole('img', { name: 'Built by Ana' })).toBeTruthy();
+    expect(within(tools).getByText('Raygun').closest('a')?.getAttribute('href')).toBe('/library/tools?tool=vendor%3Araygun');
+    expect(within(tools).getByText('Churn report').closest('a')?.getAttribute('href')).toBe('/library/tools?tool=built%3Achurn-report');
+    // one it used but never listed has nothing to take off
+    expect(within(tools).queryByRole('button', { name: 'Remove Churn report' })).toBeNull();
+    fireEvent.click(within(tools).getByRole('button', { name: 'Remove Raygun' }));
+    await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/raygun'));
+    fireEvent.click(within(tools).getByRole('button', { name: 'Add tool' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add a tool to Ana' });
+    fireEvent.click(await within(dialog).findByRole('option', { name: /^Stripe/ }));
+    expect(within(dialog).queryByRole('option', { name: /^Raygun/ })).toBeNull(); // listed already
+    fireEvent.change(within(dialog).getByLabelText('Used for'), { target: { value: 'Refunds' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(reads).toContain('/api/v2/bots/ana/tool-guides/stripe'));
+  });
+});

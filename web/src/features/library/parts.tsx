@@ -180,6 +180,7 @@ const TOOL_GLYPH: Record<string, string> = {
   listening: 'email',
   webhook: 'hook',
   declared: 'key',
+  built: 'cli',
 };
 
 /** What kind of tool this is, as one glyph in the small tile (tools.css `.kind`). */

@@ -6,9 +6,7 @@ import { meQuery, useActors, useDirectory } from '@/data';
 import { Button, FillContext } from '@/kit/Button';
 import { Dialog } from '@/kit/Dialog';
 import { Empty } from '@/kit/Empty';
-import { Field, Search } from '@/kit/Field';
-import { Icon } from '@/kit/Icon';
-import { Link } from '@/kit/Link';
+import { Field, SettledSearch } from '@/kit/Field';
 import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
@@ -26,11 +24,24 @@ import { FilterRow, ListAndItem, PageMore, Section } from '@/pagekinds';
 import { AddAccountDialog, AddDialog, ConnectDialog, ReplaceLoginDialog, type Adding } from './AddTool';
 import { CodeDialog, Confirm, EditApiDialog, ExpiryDialog, PasteDialog, RevealDialog, SettingDialog, SitesDialog } from './ToolDialogs';
 import { Face, Held, idsAndNames, KindTile, More, press, when } from './parts';
-import { apiToolQuery, catalogQuery, teamsQuery, toolsQuery, vaultQuery, vendorQuery, websiteToolQuery, type StoredKey, type VendorRow } from './queries';
+import {
+  apiToolQuery,
+  FUNCTIONS,
+  functionLabel,
+  teamsQuery,
+  toolGuidesQuery,
+  toolsQuery,
+  vaultQuery,
+  websiteToolQuery,
+  type StoredKey,
+  type ToolGuideRow,
+  type ToolOrigin,
+} from './queries';
 import { AddressOne, CompanyAddress } from './ToolLetters';
 import { EmailView, hasWho, InboxView, KeyView, MailboxView, MessagesView, NumbersView, ServiceView, subjectOf, WebhookView, WhoMenu } from './ToolMore';
 import { MayFacts, useSending } from './ToolSettings';
-import { AddSomeone, bad, Code, Dim, KIND, ToolPage, toolHref, UseRow, WhoRow } from './ToolShell';
+import { AddSomeone, bad, Code, deliveryOf, Dim, KIND, Proxied, ToolPage, toolHref, UseRow, WhoRow } from './ToolShell';
+import { GuideView } from './ToolGuide';
 import { useGithubReturn } from './githubReturn';
 import type { ToolsSearch } from './search';
 import './library.css';
@@ -43,14 +54,6 @@ export { KIND } from './ToolShell';
    own access list. A lock means Tico holds the key. A key is only ever sent, never shown: its row shows a mask. */
 
 const held = (r: ToolIndexRow) => r.kind === 'api' && r.delivery === 'proxy';
-
-/** How a connection reaches agents by default, as configured: Tico adds the key to each call, the key goes to the run,
-    or a browser Tico signs in. Nothing for a kind that is none of these, nor for a tool listed by name alone. */
-export const deliveryOf = (r: { kind: string; delivery?: string | null; requestable?: boolean }) =>
-  r.requestable ? null : r.kind === 'website' ? 'Browser session' : r.kind === 'api' ? (r.delivery === 'proxy' ? 'Proxy-protected' : 'Direct key') : null;
-
-/** A Read the proxy holds to reads, as the run really gets it (`proxied_read`, backend/api_tools.py access_rows). */
-const Proxied = () => <span className="row-ctx">Proxied</span>;
 
 const host = (url: string) => url.replace(/^https?:\/\//, '').split('/')[0];
 
@@ -67,8 +70,24 @@ export interface Entry {
   problem: string | null;
   /** An Everyone tool the reader holds nothing on: they may ask for an agent's access to it. */
   requestable?: boolean;
+  /** Its vendor, which its registry guide is filed under. */
+  vendor?: string | null;
+  /** From the registry: one line on what it is for, its category, and how many agents use it. */
+  summary?: string | null;
+  category?: string | null;
+  uses?: number;
+  origin?: ToolOrigin;
 }
-const toolEntry = (r: ToolIndexRow): Entry => ({ id: r.id, name: r.name, kind: r.kind, lock: held(r), inUse: r.who_total > 0, problem: bad(r), requestable: !!r.requestable });
+const toolEntry = (r: ToolIndexRow): Entry => ({
+  id: r.id,
+  name: r.name,
+  kind: r.kind,
+  lock: held(r),
+  inUse: r.who_total > 0,
+  problem: bad(r),
+  requestable: !!r.requestable,
+  vendor: r.vendor,
+});
 
 /** One row a vendor: two or more of a vendor's tools are one row that opens its page (`vendor:<id>`); a lone one stays
     itself. Only the rows given are grouped, so a row the reader may not see never joins one. */
@@ -87,20 +106,54 @@ export function byVendor(rows: ToolIndexRow[]): Entry[] {
       inUse: list.some((r) => r.who_total > 0),
       problem: list.map(bad).find(Boolean) ?? null,
       requestable: list.every((r) => r.requestable),
+      vendor,
     });
   }
   return [...out, ...rows.filter((r) => !r.vendor || (of.get(r.vendor)?.length ?? 0) < 2).map(toolEntry)];
 }
 /** A stored key no tool holds: its own row, a Key, in use while it is given to someone. */
 const keyEntry = (k: StoredKey): Entry => ({ id: `key:${k.id}`, name: k.name, kind: 'key', lock: k.stored, inUse: k.grants.length > 0, problem: k.stored ? null : 'No value' });
+/** The registry onto the list, by vendor: a vendor's row (its one connection, or its group) gets its summary, category
+    and users and opens its page (`vendor:<id>`: its guide, each connection a click on). An Everyone tool the reader
+    holds nothing on still opens Request access. Of `extra`, a vendor no row the reader sees belongs to, and a tool
+    built here, is a row of its own. */
+export function withGuides(entries: Entry[], guides: readonly ToolGuideRow[], extra: readonly ToolGuideRow[] = []): Entry[] {
+  const of = new Map(guides.filter((g) => g.origin !== 'built').map((g) => [g.slug, g]));
+  const met = new Set<string>();
+  const out = entries.map((e) => {
+    const g = e.vendor ? of.get(e.vendor) : undefined;
+    if (!g) return e;
+    met.add(g.slug);
+    return { ...e, id: e.requestable ? e.id : `vendor:${g.slug}`, summary: g.summary, category: g.category, uses: g.used_by, origin: g.origin };
+  });
+  for (const g of extra) {
+    if (met.has(g.slug)) continue;
+    const built = g.origin === 'built';
+    out.push({
+      id: `${built ? 'built' : 'vendor'}:${g.slug}`,
+      name: g.name,
+      kind: built ? 'built' : 'vendor',
+      lock: false,
+      inUse: g.used_by > 0,
+      problem: null,
+      vendor: built ? null : g.slug,
+      summary: g.summary,
+      category: g.category,
+      uses: g.used_by,
+      origin: g.origin,
+    });
+  }
+  return out;
+}
+
 /** Something wrong first, then by name. */
 export const order = (a: Entry, b: Entry) => Number(!!b.problem) - Number(!!a.problem) || a.name.localeCompare(b.name);
 
 export function ToolsPage({ search }: { search: ToolsSearch }) {
   const { data: tools } = useSuspenseQuery(toolsQuery);
   const githubProblem = useGithubReturn(search);
-  const [words, setWords] = useState(search.q ?? '');
-  const w = words.trim().toLowerCase();
+  // The settled words are the address's `q` (Back, a link and Tico set them too).
+  const w = (search.q ?? '').trim().toLowerCase();
   // Keys no tool holds, for those who may see the vault (anyone else gets none, quietly).
   const loose = (useQuery(vaultQuery).data?.credentials ?? []).filter((k) => !k.tool_id);
   const teams = useQuery(teamsQuery).data ?? [];
@@ -108,20 +161,34 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   const same = (x: string) => known?.[x]?.id ?? x;
   const who = search.who;
   const all = tools.rows;
+  const guides = useQuery(toolGuidesQuery).data ?? [];
+  const summaryOf = new Map(guides.map((g) => [g.slug, g.summary]));
   const rows = narrow(all, search).filter(
     (r) =>
-      (!w || [r.name, r.detail, r.vendor_name].some((x) => (x ?? '').toLowerCase().includes(w))) &&
+      (!w || [r.name, r.detail, r.vendor_name, r.vendor && summaryOf.get(r.vendor)].some((x) => (x ?? '').toLowerCase().includes(w))) &&
       // `who` may be missing from an older index row.
       (!who || hasWho((r.who as ToolIndexRow['who'] | undefined)?.map(subjectOf) ?? [], who, teams, same)),
   );
   const keys = loose.filter(
     (k) =>
+      !search.origin &&
+      !search.category &&
       (!search.kind || search.kind === 'key') &&
       (!search.needs || !k.stored) &&
       (!w || [k.name, k.env, k.source].some((x) => (x ?? '').toLowerCase().includes(w))) &&
       (!who || hasWho(k.grants.map((g) => g.subject), who, teams, same)),
   );
-  const shown = [...byVendor(rows), ...keys.map(keyEntry)].sort(order);
+  // A registry row of its own only while no filter of the index's (kind, needs you, who) is on.
+  const alone = !search.kind && !search.needs && !who;
+  const found = alone ? guides.filter((g) => !w || [g.name, g.summary].some((x) => (x ?? '').toLowerCase().includes(w))) : [];
+  const shown = [...withGuides(byVendor(rows), guides, found), ...keys.map(keyEntry)]
+    .filter(
+      (e) =>
+        // Vendors: what has a vendor (never a webhook, a mailbox or a stored key); Built here: the registry's own.
+        (!search.origin || (search.origin === 'built' ? e.origin === 'built' : !!e.vendor && e.origin !== 'built')) &&
+        (!search.category || e.category === search.category),
+    )
+    .sort(order);
   const cards = useCards();
   const open = search.tool;
   const [adding, setAdding] = useState<Adding | null>(null);
@@ -129,7 +196,11 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   // Needs you, the one queue, filtered to tools: a key card, a key proposal, an agent's access request for a tool.
   const requests = toolRequests(useQuery(flowQuery).data?.requests);
   const kinds = [...new Set([...all.map((r) => r.kind as string), ...(loose.length ? ['key'] : [])])].sort((a, b) => (KIND[a] ?? a).localeCompare(KIND[b] ?? b));
-  const filter = (change: { kind?: string; needs?: boolean }) => void press('tools.filter', change);
+  const keep = { kind: search.kind, needs: !!search.needs, origin: search.origin, category: search.category, q: search.q };
+  const filter = (change: Partial<typeof keep>) => void press('tools.filter', { ...keep, ...change });
+  // The job functions in their order, then any other category a guide has (`code`), and the one filtered on.
+  const had = new Set([...guides.map((g) => g.category), search.category].filter((c): c is string => !!c));
+  const categories = [...FUNCTIONS.filter((f) => had.has(f)), ...[...had].filter((c) => !(FUNCTIONS as readonly string[]).includes(c)).sort()];
   const filterWho = (next?: string) => void press('tools.filterWho', next ? { who: next } : {});
   // Who has access: the teams, then everyone a tool or a key is given to.
   const people = new Map<string, string>();
@@ -138,8 +209,10 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
   const whoList = [...people].map(([subject, name]) => ({ subject, name })).sort((a, b) => a.name.localeCompare(b.name));
   const whoName = who && (who.startsWith('group:') ? teams.find((g) => `group:${g.id}` === who)?.name : (people.get(same(who)) ?? known?.[who]?.name));
   const filters = [
-    ...(search.needs ? [{ label: 'Needs you', onClear: () => filter({ kind: search.kind }) }] : []),
-    ...(search.kind ? [{ label: KIND[search.kind] ?? search.kind, onClear: () => filter({ needs: !!search.needs }) }] : []),
+    ...(search.needs ? [{ label: 'Needs you', onClear: () => filter({ needs: false }) }] : []),
+    ...(search.origin ? [{ label: search.origin === 'built' ? 'Built here' : 'Vendors', onClear: () => filter({ origin: undefined }) }] : []),
+    ...(search.category ? [{ label: functionLabel(search.category), onClear: () => filter({ category: undefined }) }] : []),
+    ...(search.kind ? [{ label: KIND[search.kind] ?? search.kind, onClear: () => filter({ kind: undefined }) }] : []),
     ...(who ? [{ label: whoName || 'Who has access', onClear: () => filterWho() }] : []),
   ];
 
@@ -152,8 +225,17 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
             <span className="trow-name">
               <span className="row-title">{e.name}</span>
               {e.lock && e.kind !== 'key' && <Held />}
+              {e.summary && <span className="row-ctx trow-sum">{e.summary}</span>}
             </span>
-            {e.problem ? <Pill>{e.problem}</Pill> : <span />}
+            {e.problem ? (
+              <Pill>{e.problem}</Pill>
+            ) : e.uses ? (
+              <span className="row-fig" title={`Used by ${e.uses}`}>
+                {e.uses}
+              </span>
+            ) : (
+              <span />
+            )}
           </Row>
         ))}
       </Section>
@@ -172,14 +254,24 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
                 label="All tools"
                 on={!filters.length}
                 onSelect={() => {
-                  filter({});
+                  void press('tools.filter', { q: search.q });
                   if (who) filterWho();
                 }}
               />
-              <MenuItem label="Needs you" on={!!search.needs} onSelect={() => filter({ kind: search.kind, needs: !search.needs })} />
+              <MenuItem label="Needs you" on={!!search.needs} onSelect={() => filter({ needs: !search.needs })} />
+              <MenuRule />
+              <MenuItem label="Vendors" on={search.origin === 'vendor'} onSelect={() => filter({ origin: search.origin === 'vendor' ? undefined : 'vendor' })} />
+              <MenuItem label="Built here" on={search.origin === 'built'} onSelect={() => filter({ origin: search.origin === 'built' ? undefined : 'built' })} />
+              {categories.length > 0 && (
+                <MenuSub label="Category">
+                  {categories.map((c) => (
+                    <MenuItem key={c} label={functionLabel(c)} on={c === search.category} onSelect={() => filter({ category: c === search.category ? undefined : c })} />
+                  ))}
+                </MenuSub>
+              )}
               <MenuRule />
               {kinds.map((k) => (
-                <MenuItem key={k} label={KIND[k] ?? k} on={k === search.kind} onSelect={() => filter({ kind: k === search.kind ? undefined : k, needs: !!search.needs })} />
+                <MenuItem key={k} label={KIND[k] ?? k} on={k === search.kind} onSelect={() => filter({ kind: k === search.kind ? undefined : k })} />
               ))}
               <WhoMenu who={who} teams={teams} people={whoList} onPick={filterWho} />
             </Menu>
@@ -202,7 +294,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
           </PageMore>
         }
         open={!!open}
-        state={!all.length && !loose.length && !requests.length ? 'empty' : 'ready'}
+        state={!all.length && !loose.length && !guides.length && !requests.length ? 'empty' : 'ready'}
         empty={{
           title: 'No tools yet',
           action: (
@@ -213,7 +305,7 @@ export function ToolsPage({ search }: { search: ToolsSearch }) {
         }}
         search={
           <>
-            <Search label="Find a tool" value={words} onValueChange={setWords} placeholder="Find a tool" wide />
+            <SettledSearch label="Find a tool" value={search.q ?? ''} onSettle={(q) => filter({ q: q || undefined })} placeholder="Find a tool" wide />
             <FilterRow filters={filters} />
           </>
         }
@@ -298,7 +390,8 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   const kind = at > 0 ? id.slice(0, at) : id;
   const key = at > 0 ? id.slice(at + 1) : '';
   const mailbox = (row as { mailbox_id?: string } | undefined)?.mailbox_id;
-  if (kind === 'vendor' && key) return <VendorView vendor={key} />;
+  // Keyed by the tool: a draft on one never carries over to the next.
+  if ((kind === 'vendor' || kind === 'built') && key) return <GuideView key={id} slug={key} origin={kind} />;
   if (kind === 'api' && row?.requestable) return <RequestView id={key} row={row} />;
   if (kind === 'api') return <ApiToolView id={key} row={row} />;
   if (kind === 'website') return <WebsiteView id={key} row={row} />;
@@ -312,88 +405,6 @@ function Tool({ id, row, problem }: { id: string; row: ToolIndexRow | undefined;
   if (kind === 'messages') return <MessagesView />;
   if (kind === 'webhook' && key) return <WebhookView id={key} row={row} />;
   return <PlainView row={row} kind={kind} problem={problem} />;
-}
-
-/* ---------------------------------------------------------------- a vendor's connections */
-
-/** A vendor's page (`vendor:<id>`): each connection the reader may see, with its kind, delivery and state and its own
-    access list. Add connection offers the catalog's ways in for the vendor, never anything from its other tools. */
-function VendorView({ vendor }: { vendor: string }) {
-  const q = useQuery(vendorQuery(vendor));
-  const known = useQuery(catalogQuery).data?.some((s) => s.id === vendor);
-  const [connecting, setConnecting] = useState(false);
-  const [adding, setAdding] = useState<Adding | null>(null);
-  const name = q.data?.name ?? vendor;
-  return (
-    <ToolPage
-      name={name}
-      kind="vendor"
-      q={q}
-      target={`tool:vendor:${vendor}`}
-      bare
-      fill={
-        known && (
-          <Button variant="primary" onClick={() => setConnecting(true)}>
-            Add connection
-          </Button>
-        )
-      }
-    >
-      {q.data?.rows.map((r) => (
-        <Connection key={r.id} row={r} />
-      ))}
-      {connecting && (
-        <ConnectDialog
-          vendor={vendor}
-          onClose={() => setConnecting(false)}
-          onKind={(k) => {
-            setConnecting(false);
-            setAdding(k);
-          }}
-        />
-      )}
-      {adding && <AddDialog adding={adding} onClose={() => setAdding(null)} />}
-    </ToolPage>
-  );
-}
-
-/** One connection on its vendor's page: what it is, how it reaches agents, its state, and who may use it at which level. */
-function Connection({ row }: { row: VendorRow }) {
-  const delivery = deliveryOf(row);
-  const who =
-    row.access?.map((a) => (
-      <WhoRow key={a.subject} actor={a.kind === 'finance' ? null : a.subject} name={a.name} level={a.level} right={a.proxied_read && <Proxied />} />
-    )) ?? row.who.map((w) => <WhoRow key={w.id} actor={w.kind === 'group' ? null : w.id} name={w.name} />);
-  const more = (row.access_total ?? row.who_total) - who.length;
-  return (
-    <Section
-      name={row.name}
-      count={(row.access_total ?? row.who_total) || undefined}
-      target={`tool-conn:${row.id}`}
-      actions={
-        <Link className="ib ib-sm" href={toolHref(row.id)} aria-label={`Open ${row.name}`} title={`Open ${row.name}`}>
-          <Icon name="arrow" />
-        </Link>
-      }
-    >
-      <Facts>
-        <LabelValue label="Kind">{row.mcp ? KIND.mcp : (KIND[row.kind] ?? row.kind)}</LabelValue>
-        {row.detail && (
-          <LabelValue label="Address">
-            <Code>{row.detail}</Code>
-          </LabelValue>
-        )}
-        {delivery && <LabelValue label="Default delivery">{delivery}</LabelValue>}
-        <LabelValue label="State">{bad(row) ? <Pill>{bad(row)}</Pill> : row.status.text || 'Not yet'}</LabelValue>
-      </Facts>
-      {who}
-      {more > 0 && (
-        <Link className="verb" href={toolHref(row.id)}>
-          {`${more} more`}
-        </Link>
-      )}
-    </Section>
-  );
 }
 
 /* ---------------------------------------------------------------- an Everyone tool the reader may ask for */

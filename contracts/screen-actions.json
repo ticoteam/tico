@@ -127,6 +127,37 @@
       }
     },
     {
+      "id": "agents.addTool",
+      "title": "Add a tool to an agent's tools",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 61,
+            "description": "a tool's slug in the registry"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 500
+          }
+        },
+        "required": [
+          "slug",
+          "tool"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "agents.answerDream",
       "title": "Answer a dreaming agent's questions",
       "kind": "change",
@@ -403,6 +434,33 @@
         "required": [
           "slug",
           "list"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "agents.removeTool",
+      "title": "Take a tool off an agent's tools",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "an agent's slug"
+          },
+          "tool": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 61,
+            "description": "a tool's slug in the registry"
+          }
+        },
+        "required": [
+          "slug",
+          "tool"
         ],
         "additionalProperties": false
       }
@@ -11572,6 +11630,26 @@
       }
     },
     {
+      "id": "tools.archiveGuide",
+      "title": "Archive a tool's guide",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 61,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.cancelLetter",
       "title": "Stop a letter before it is mailed",
       "kind": "change",
@@ -11859,6 +11937,20 @@
           },
           "needs": {
             "type": "boolean"
+          },
+          "origin": {
+            "enum": [
+              "vendor",
+              "built"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 200
           }
         },
         "additionalProperties": false
@@ -12655,6 +12747,83 @@
         },
         "required": [
           "webhook"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "id": "tools.writeGuide",
+      "title": "Write a tool's guide",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 61,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "origin": {
+            "enum": [
+              "vendor",
+              "built"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "instructions": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "guidance": {
+            "type": "string",
+            "maxLength": 20000
+          },
+          "source": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "needs": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tool": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 61,
+                  "pattern": "^[a-z0-9][a-z0-9-]*$"
+                },
+                "level": {
+                  "enum": [
+                    "read",
+                    "write"
+                  ]
+                }
+              },
+              "required": [
+                "tool",
+                "level"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "slug"
         ],
         "additionalProperties": false
       }

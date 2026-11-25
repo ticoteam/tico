@@ -401,3 +401,13 @@ html:not([data-layout="cards"]) .rec.is-col .task .av-gap{width:0}
 
 /* An agent's repositories editor: a chosen repository and its level on one line (Repos.tsx). */
 .repo-pick{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
+
+/* ---------- its Tools: name, what it is for, how a run gets it, uses in 30 days ---------- */
+.tool-row .row-title{color:inherit;text-decoration:none}
+.tool-row .row-mark .ico,.tool-row .tool-access .ico{width:14px;height:14px;color:var(--muted)}
+.tool-row .tool-access{display:inline-grid;place-items:center;flex:none}
+.tool-row .row-age{font-variant-numeric:tabular-nums}
+.tool-pick{display:grid;max-height:240px;overflow:auto;margin:var(--s-2) 0}
+.tool-pick-row{display:flex;align-items:center;gap:var(--s-2);width:100%;min-width:0;border:0;background:none;color:var(--ink);text-align:left;cursor:pointer;border-radius:var(--r-row)}
+.tool-pick-row .row-ctx{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-sm)}
+.tool-pick-row.is-on{background:var(--well-2)}

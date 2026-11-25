@@ -11,7 +11,7 @@ import { queryClient } from '@/data';
 import { Toasts } from '@/kit/Toast';
 import { newAddressFor } from '@/oldAddress/map';
 import { sendsMore } from './actions';
-import { AddDialog, nameFromUrl, ReplaceLoginDialog } from './AddTool';
+import { AddDialog, nameFromUrl, needsFault, needsOf, ReplaceLoginDialog } from './AddTool';
 import {
   addressGrantsQuery,
   agentSendingQuery,
@@ -2003,5 +2003,243 @@ describe('the Tools index', () => {
     queryClient.clear();
     const index = await queryClient.fetchQuery(toolsQuery);
     expect(index.rows.map((r) => r.id)).toEqual(['api:a', 'api:b']);
+  });
+});
+
+describe('the tools registry', () => {
+  const guideRow = (o: Record<string, unknown> = {}) => ({
+    slug: 'raygun',
+    name: 'Raygun',
+    origin: 'vendor',
+    category: 'engineering',
+    summary: 'Crash reports',
+    connections: 1,
+    used_by: 2,
+    last_used_at: null,
+    has_guide: true,
+    ...o,
+  });
+  const built = guideRow({ slug: 'churn-report', name: 'Churn report', origin: 'built', category: 'growth', summary: 'Weekly churn by plan', connections: 0, used_by: 0 });
+  const detailOf = (row: Record<string, unknown>) => ({
+    ...row,
+    instructions: '',
+    guidance: '',
+    commands: [],
+    source: '',
+    needs: [],
+    owner: null,
+    shipped: false,
+    created_by: null,
+    updated_by: null,
+    updated_at: null,
+    access: [],
+    used_by: [],
+    learnings: [],
+  });
+  /** Tools as the app has it: the page follows the address. */
+  function live(path: string) {
+    const Tools = () => <ToolsPage search={toolsSearch(useSearch({ strict: false }))} />;
+    const router = createRouter({ routeTree: createRootRoute({ component: Tools }), history: createMemoryHistory({ initialEntries: [path] }) });
+    bind({ router });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <RouterProvider router={router} />
+        <Toasts />
+      </QueryClientProvider>,
+    );
+    return router;
+  }
+  const registry = (url: string) => (url === '/api/v2/tool-guides' ? { tool_guides: [guideRow(), built], next: null } : undefined);
+  const rg = indexRow({ id: 'api:rg', name: 'Raygun API', vendor: 'raygun', vendor_name: 'Raygun', who_total: 1 });
+
+  it('lists vendors with their summary and tools built here, narrowed by origin and category', async () => {
+    serve(registry);
+    tools([rg]);
+    open('');
+    expect(await screen.findByText('Crash reports')).toBeTruthy(); // the connection's row carries its vendor's summary
+    expect(screen.getByText('Raygun API').closest('a')?.getAttribute('href')).toBe('/library/tools?tool=vendor%3Araygun'); // and opens its guide
+    expect(screen.getByText('Churn report').closest('a')?.getAttribute('href')).toBe('/library/tools?tool=built%3Achurn-report');
+    expect(screen.queryByText('Raygun')).toBeNull(); // a vendor the list already has is not a second row
+    cleanup();
+    serve(registry);
+    tools([rg]);
+    at('/library/tools?origin=built', <ToolsPage search={{ origin: 'built' }} />);
+    expect(await screen.findByText('Churn report')).toBeTruthy();
+    expect(screen.queryByText('Raygun API')).toBeNull();
+    cleanup();
+    serve(registry);
+    tools([rg]);
+    const router = at('/library/tools?category=engineering', <ToolsPage search={{ category: 'engineering' }} />);
+    expect(await screen.findByText('Raygun API')).toBeTruthy();
+    expect(screen.queryByText('Churn report')).toBeNull();
+    await pick('Filter tools', 'Built here');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ origin: 'built', category: 'engineering' }));
+  });
+
+  it('opens a vendor on its guide: about, guidance written in place, its connections, who uses it and what they learned', async () => {
+    const guide = {
+      ...guideRow(),
+      instructions: 'Read **crashes** first.',
+      guidance: '',
+      commands: [],
+      source: '',
+      needs: [],
+      owner: null,
+      updated_at: null,
+      access: [],
+      used_by: [{ id: 'b1', name: 'Clerk', listed: true, note: 'Triage', uses: 4, last_used_at: null }],
+      learnings: [{ id: 'l1', actor: 'bot:b1', text: 'The rate limit is low.', created_at: '2026-11-20T09:00:00Z' }],
+    };
+    let saved = guide; // the server keeps what was written: a re-read after the write answers it
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-guides/raygun'
+        ? method === 'PUT'
+          ? (saved = { ...guide, guidance: 'Ask first' })
+          : saved
+        : url === '/api/v2/tool-vendors/raygun'
+          ? { vendor: 'raygun', name: 'Raygun', rows: [{ ...rg, mcp: false, access_total: 0, access: [] }] }
+          : undefined,
+    );
+    open('vendor:raygun');
+    const vendor = await page('Raygun');
+    const about = within(vendor).getByRole('region', { name: /^About/ });
+    expect(within(about).getByText('Crash reports')).toBeTruthy();
+    expect(within(about).getByText('crashes')).toBeTruthy();
+    expect(await within(vendor).findByRole('region', { name: /^Raygun API/ })).toBeTruthy(); // its access, as before
+    const used = within(vendor).getByRole('region', { name: /^Used by/ });
+    expect(within(used).getByText('Clerk').closest('a')?.getAttribute('href')).toBe('/team/b1');
+    expect(within(within(vendor).getByRole('region', { name: /^Learnings/ })).getByText('The rate limit is low.')).toBeTruthy();
+    const guidance = within(vendor).getByRole('region', { name: /^Company guidance/ });
+    fireEvent.click(within(guidance).getByRole('button', { name: 'Edit guidance' }));
+    fireEvent.change(within(guidance).getByRole('textbox', { name: 'Guidance' }), { target: { value: 'Ask first' } });
+    fireEvent.click(within(guidance).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/tool-guides/raygun', method: 'PUT', body: { origin: 'vendor', guidance: 'Ask first' } }]));
+    expect(await within(guidance).findByText('Ask first')).toBeTruthy();
+  });
+
+  it('adds a tool built here with how to use it and what it needs, then opens it', async () => {
+    const sent = serve((url, method) =>
+      url !== '/api/v2/tool-guides/churn-report' ? undefined : method === 'PUT' ? { ...built, instructions: 'Run it on Mondays' } : refused(404, 'not_found'),
+    );
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    const router = open('');
+    await addKind('Built here');
+    const dialog = await screen.findByRole('dialog', { name: 'Built here' });
+    const type = (label: string, value: string) => fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+    type('Name', 'Churn report');
+    type('Summary', 'Weekly churn by plan');
+    type('Instructions', 'Run it on Mondays');
+    type('Source', 'acme/tools scripts/churn.py');
+    type('Needs', 'stripe:read gh:write');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(writes(sent)).toEqual([
+        {
+          url: '/api/v2/tool-guides/churn-report',
+          method: 'PUT',
+          body: {
+            origin: 'built',
+            name: 'Churn report',
+            summary: 'Weekly churn by plan',
+            instructions: 'Run it on Mondays',
+            source: 'acme/tools scripts/churn.py',
+            needs: [
+              { tool: 'stripe', level: 'read' },
+              { tool: 'gh', level: 'write' },
+            ],
+          },
+        },
+      ]),
+    );
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ tool: 'built:churn-report' }));
+  });
+
+  it('archives from its ⋯ once the server agrees, back to Tools; a refusal keeps it open', async () => {
+    const guide = { ...detailOf(built), instructions: 'Run it on Mondays', updated_at: '2026-11-20T09:00:00Z' };
+    let answer: unknown = refused(403, 'forbidden');
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-guides/churn-report' ? (method === 'DELETE' ? answer : guide) : registry(url),
+    );
+    tools();
+    const router = open('built:churn-report');
+    await page('Churn report');
+    await toolMore('Churn report');
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    const sure = await screen.findByRole('alertdialog', { name: 'Archive Churn report?' });
+    fireEvent.click(within(sure).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(list(sent)).toEqual([['DELETE', '/api/v2/tool-guides/churn-report']]));
+    await waitFor(() => expect((within(sure).getByRole('button', { name: 'Archive' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(router.state.location.search).toMatchObject({ tool: 'built:churn-report' });
+    answer = { slug: 'churn-report', archived: true };
+    fireEvent.click(within(sure).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    expect(list(sent)).toHaveLength(2);
+  });
+
+  it('never adds a built tool over one whose name is taken: it says so under Name until the name changes', async () => {
+    const sent = serve((url) => (url === '/api/v2/tool-guides/raygun' ? detailOf(guideRow()) : url === '/api/v2/tool-guides/raygun-crashes' ? refused(404, 'not_found') : undefined));
+    tools([indexRow({ id: 'api:t1', name: 'Sample API' })]);
+    open('');
+    await addKind('Built here');
+    const dialog = await screen.findByRole('dialog', { name: 'Built here' });
+    const type = (label: string, value: string) => fireEvent.change(within(dialog).getByLabelText(label), { target: { value } });
+    type('Name', 'Raygun');
+    type('Summary', 'Our crash digest');
+    type('Instructions', 'Run it daily');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    expect(await within(dialog).findByText('Name already taken')).toBeTruthy();
+    expect(writes(sent)).toEqual([]);
+    expect((within(dialog).getByRole('button', { name: 'Add' }) as HTMLButtonElement).disabled).toBe(true);
+    type('Name', 'Raygun crashes');
+    expect(within(dialog).queryByText('Name already taken')).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(writes(sent).map((w) => w.url)).toEqual(['/api/v2/tool-guides/raygun-crashes']));
+  });
+
+  it('keeps a guidance draft to its own tool: the next tool opens without it', async () => {
+    const sent = serve((url) =>
+      url === '/api/v2/tool-guides/raygun'
+        ? detailOf(guideRow())
+        : url === '/api/v2/tool-guides/linear'
+          ? detailOf(guideRow({ slug: 'linear', name: 'Linear', summary: 'Issues' }))
+          : url.startsWith('/api/v2/tool-vendors/')
+            ? refused(404, 'not_found')
+            : undefined,
+    );
+    const router = live('/library/tools?tool=vendor%3Araygun');
+    const raygun = within(await page('Raygun')).getByRole('region', { name: /^Company guidance/ });
+    fireEvent.click(within(raygun).getByRole('button', { name: 'Edit guidance' }));
+    fireEvent.change(within(raygun).getByRole('textbox', { name: 'Guidance' }), { target: { value: 'Raygun only' } });
+    await act(() => router.navigate({ to: '.', search: { tool: 'vendor:linear' } }));
+    const linear = within(await page('Linear')).getByRole('region', { name: /^Company guidance/ });
+    expect(within(linear).queryByRole('textbox', { name: 'Guidance' })).toBeNull();
+    expect(within(linear).getByText('None')).toBeTruthy();
+    expect(writes(sent)).toEqual([]);
+  });
+
+  it('sends only what Edit changed: a shipped guide stays shipped', async () => {
+    const shipped = { ...detailOf(guideRow()), instructions: 'Read **crashes** first.', shipped: true };
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-guides/raygun' ? (method === 'PUT' ? { ...shipped, summary: 'Crashes, ours' } : shipped) : url.startsWith('/api/v2/tool-vendors/') ? refused(404, 'not_found') : undefined,
+    );
+    open('vendor:raygun');
+    const about = within(await page('Raygun')).getByRole('region', { name: /^About/ });
+    fireEvent.click(within(about).getByRole('button', { name: 'Edit' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Edit Raygun' });
+    fireEvent.change(within(dialog).getByLabelText('Summary'), { target: { value: 'Crashes, ours' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(writes(sent)).toEqual([{ url: '/api/v2/tool-guides/raygun', method: 'PUT', body: { origin: 'vendor', summary: 'Crashes, ours' } }]));
+  });
+});
+
+describe('a built tool’s Needs line', () => {
+  it('keeps one entry per tool and names a word the server would refuse', () => {
+    expect(needsOf('stripe gh:write stripe:write')).toEqual([
+      { tool: 'stripe', level: 'write' },
+      { tool: 'gh', level: 'write' },
+    ]);
+    expect(needsFault('stripe:read gh:write')).toBeUndefined();
+    expect(needsFault('google_drive:read')).toBe('Not a tool: google_drive');
+    expect(needsFault(Array.from({ length: 21 }, (_, i) => `t${i}`).join(' '))).toBe('At most 20');
   });
 });
