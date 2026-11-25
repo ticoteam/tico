@@ -175,3 +175,22 @@ def test_what_is_never_compacted(idle):
         assert I.may_start(c, "nothing-here", {"after": "no-such-run"}) is False
         c.execute("UPDATE tasks SET status='closed' WHERE id=?", (task["id"],))
         assert I._task_why(c, task["id"]) == "the task ended"
+
+
+def test_the_sweep_and_its_checks_read_by_index(company):
+    """The once-a-minute sweep reads only the runs that ended in the window, and each check one index range."""
+    now = H.now()
+    plans = {}
+    with company.read() as c:
+        for name, sql, args in (
+            ("due", I._DUE, (now, now, I.PURPOSE, I.CONTEXT_MIN)),
+            ("newer", I._NEWER, ("ops", now, "task:x", "a", "b")),
+            ("busy", I._BUSY, I._busy("ops", "m", "conv", "t")),
+            ("dream", I._DREAM, ("ops", *I._LIVE)),
+            ("asked", I._ASKED, ("ops", "t", "conv")),
+        ):
+            plans[name] = [row[3] for row in c.execute("EXPLAIN QUERY PLAN " + sql, args)]
+    print(plans)  # the report quotes these plans
+    assert any("attempts_finished_state" in line for line in plans["due"]), plans["due"]
+    assert any("attempts_bot_created" in line for line in plans["newer"]), plans["newer"]
+    assert not [line for plan in plans.values() for line in plan if line.startswith("SCAN")], plans
