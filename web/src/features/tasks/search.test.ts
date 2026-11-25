@@ -33,7 +33,7 @@ describe('tasks search', () => {
     expect(new URL(urls[0]!, 'http://x').searchParams.get('search')).toBe('frost');
     expect(hits.map((h) => [h.title, h.meta, h.run])).toEqual([
       // opened over the page, with the search's hits as its list
-      ['Frost dates', 'Sowing', { id: 'task.open', input: { task: 7, pipeline: 'p1', list: 'search:frost' } }],
+      ['Frost dates', 'Sowing', { id: 'task.open', input: { task: 7, list: 'search:frost' } }],
       ['Frost cloth', undefined, { id: 'task.open', input: { task: 8, list: 'search:frost' } }],
     ]);
     expect(hits[0]!.lead).toMatchObject({ face: { initials: 'SH', bot: true } });

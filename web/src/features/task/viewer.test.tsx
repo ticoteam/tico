@@ -345,7 +345,7 @@ describe('an email the task asks about', () => {
     expect(tabs.querySelector('.doc-tab .dot')).toBeTruthy();
     expect(await screen.findByText('sales@example.test')).toBeTruthy();
     expect(screen.getByText('Pat Lee <pat@example.test>')).toBeTruthy();
-    expect(screen.getByRole('link', { name: /quote\.docx/ }).getAttribute('href')).toBe('/tasks/p1?task=12&list=p1&task.tab=email&task.part=2');
+    expect(screen.getByRole('link', { name: /quote\.docx/ }).getAttribute('href')).toBe('/tasks/p1/12/email?part=2');
   });
 
   it('draws a Word attachment as its words, with Download from its frozen address @approvals', async () => {
