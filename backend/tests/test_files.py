@@ -50,7 +50,15 @@ def test_info_is_the_rail_row_of_a_file_the_viewer_sees(api):
     got = api.get(f"/api/v2/files/{fid}/info", headers=headers("ben-test"))
     assert got.status_code == 200, got.text
     row = got.json()["file"]
-    assert row == next(f for f in listing(api)["files"] if f["id"] == fid)
+    listed = next(f for f in listing(api)["files"] if f["id"] == fid)
+    # Info is the rail row plus the details the list leaves out (file_details.details).
+    assert {k: row[k] for k in listed} == listed
+    assert {k: v for k, v in row.items() if k not in listed} == {
+        "tags": [],
+        "metadata": {},
+        "parent": None,
+        "may_edit": True,
+    }
     assert row["bot"] == "ops" and row["version"] == 1 and row["open"]["type"] == "tico"
     assert api.get("/api/v2/files/file-missing-000000000000/info", headers=headers("ben-test")).status_code == 404
 
