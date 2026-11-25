@@ -84,7 +84,10 @@ SCHEMAS.update(
             {
                 "bot": "s",
                 "files": items(ref("BotFile")),
-                "total": "i",
+                "total": {
+                    "type": ["integer", "null"],
+                    "description": "the files the caller sees; null for media=1, which counts nothing",
+                },
                 "next_cursor": "n",
                 "has_more": "b",
                 "can_manage": "b",

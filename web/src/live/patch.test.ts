@@ -454,6 +454,19 @@ describe('read-again topics', () => {
     expect(held.map((key) => !!queryClient.getQueryState(key)?.isInvalidated)).toEqual([false, true]);
   });
 
+  it("reads an agent's Made recently again when a task's file changes or a task leaves the reader, not its whole file list", () => {
+    const made = ['team', 'files', 'ops', { media: true }];
+    const all = ['team', 'files', 'ops'];
+    for (const key of [made, all]) queryClient.setQueryData(key, {});
+    FakeEventSource.last.feed(frame(951, 'tasks', { seq: 951, actor: 'bot:ops', at: AT, task_id: 't1', kinds: ['files'] }));
+    flushFrame();
+    expect([made, all].map((key) => !!queryClient.getQueryState(key)?.isInvalidated)).toEqual([true, false]);
+    queryClient.setQueryData(made, {});
+    FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
+    flushFrame();
+    expect(queryClient.getQueryState(made)?.isInvalidated).toBe(true);
+  });
+
   it("reads an agent's pins again after a read already in flight when a task leaves the reader", async () => {
     const key = ['team', 'pins', 'ops'];
     const reads: (() => void)[] = [];

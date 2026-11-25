@@ -182,15 +182,10 @@ def test_a_files_page_reads_a_fixed_number_of_statements_and_counts_only_what_ea
         assert again["total"] == len(again["files"]), who
 
 
-def test_made_recently_is_its_pictures_and_videos_of_tasks_the_reader_may_read(api):
-    """The agent page's Made recently (`media=1`): only a bot's images and videos, newest first, through the same
-    checks as its whole list, so a private task's video stays hidden from someone who can't read the task."""
-    store = api.app.state.store
-    _, attempt = turn(api)
-    with store.transaction() as c:
-        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)
-    made = {}
-    for name in ("notes", "still", "hush-cut", "cut"):
+def _media(api, attempt, names, task, kind="image", start=0):
+    """Published files made pictures (or videos) on `task`, each newer than the last: {name: id}."""
+    store, made = api.app.state.store, {}
+    for i, name in enumerate(names, start):
         r = publish(api, attempt, f"{name}.md", f"# {name}")
         assert r.status_code == 200, r.text
         made[name] = r.json()["file"]["id"]
@@ -198,27 +193,80 @@ def test_made_recently_is_its_pictures_and_videos_of_tasks_the_reader_may_read(a
             api.patch("/api/v2/files/" + made[name], json={"promote": True}, headers=headers("ben-test")).status_code
             == 200
         )
+        with store.transaction() as c:
+            c.execute(
+                "UPDATE bot_files SET kind=?,task_id=?,last_activity_at=? WHERE id=?",
+                (kind, task, f"2030-01-01T00:{i // 60:02d}:{i % 60:02d}Z", made[name]),
+            )
+    return made
+
+
+def _made(api, who, limit=6):
+    r = api.get(f"/api/v2/bots/ops/files?media=1&limit={limit}", headers=headers(who))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_made_recently_is_its_stored_pictures_and_videos_of_tasks_the_reader_may_read(api):
+    """The agent page's Made recently (`media=1`): only a bot's stored images and videos on a task, newest first,
+    through the same checks as its whole list, so a private task's video stays hidden from someone who can't read the
+    task. A page, a linked Google Drawing, a picture whose bytes never arrived and a bot-wide picture with no task are
+    not previews."""
+    store = api.app.state.store
+    _, attempt = turn(api)
     with store.transaction() as c:
-        for name, kind, at in (
-            ("still", "image", "2030-01-01"),
-            ("hush-cut", "video", "2030-01-02"),
-            ("cut", "video", "2030-01-03"),
-        ):
-            c.execute("UPDATE bot_files SET kind=?,last_activity_at=? WHERE id=?", (kind, at, made[name]))
-        c.execute("UPDATE bot_files SET task_id=? WHERE id=?", (hidden["id"], made["hush-cut"]))
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    made = _media(api, attempt, ["notes"], open_, kind="document")
+    made |= _media(api, attempt, ["still", "drawing", "unsynced", "loose"], open_, start=1)
+    made |= _media(api, attempt, ["hush-cut"], hidden, kind="video", start=5)
+    made |= _media(api, attempt, ["cut"], open_, kind="video", start=6)
+    with store.transaction() as c:
+        c.execute("UPDATE bot_files SET locator='remote_link' WHERE id=?", (made["drawing"],))
+        c.execute("UPDATE bot_files SET state='not_synced',current_version=0 WHERE id=?", (made["unsynced"],))
+        c.execute("UPDATE bot_files SET task_id=NULL WHERE id=?", (made["loose"],))
 
-    def media(who):
-        r = api.get("/api/v2/bots/ops/files?media=1&limit=6", headers=headers(who))
-        assert r.status_code == 200, r.text
-        return r.json()
-
-    ben = media("ben-test")
-    assert [f["id"] for f in ben["files"]] == [made["cut"], made["hush-cut"], made["still"]] and ben["total"] == 3
-    assert all("poster_blob_id" in f for f in ben["files"])
-    cara = media("cara-test")
-    assert [f["id"] for f in cara["files"]] == [made["cut"], made["still"]] and cara["total"] == 2
+    ben = _made(api, "ben-test")
+    assert [f["id"] for f in ben["files"]] == [made["cut"], made["hush-cut"], made["still"]], ben
+    assert ben["total"] is None and ben["has_more"] is False
+    assert all("poster_blob_id" in f and f["task_id"] for f in ben["files"])
+    cara = _made(api, "cara-test")
+    assert [f["id"] for f in cara["files"]] == [made["cut"], made["still"]]
     # The whole list still has every file the reader sees; only Made recently leaves the rest out.
-    assert made["notes"] in {f["id"] for f in listing(api, who="cara-test")["files"]}
+    assert {made["notes"], made["loose"]} <= {f["id"] for f in listing(api, who="cara-test")["files"]}
+
+
+def test_made_recently_reads_newest_first_and_stops_once_it_has_enough(api, monkeypatch):
+    """Made recently reads the bot's media newest first and stops at `limit`: a bot with forty more pictures costs the
+    same statements, it decides only the files it shows (and one to say there are more), and none is counted."""
+    from backend import files as F
+
+    store = api.app.state.store
+    api.app.state.file_metadata.stop.set()  # previews write in the background: count only the read's statements
+    api.app.state.file_metadata.wake.set()
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        task = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+
+    def read():
+        return api.get("/api/v2/bots/ops/files?media=1&limit=3", headers=headers("ben-test"))
+
+    _media(api, attempt, [f"few-{i}" for i in range(4)], task)
+    read()
+    few = traced(api, read)
+    newest = _media(api, attempt, [f"many-{i}" for i in range(40)], task, start=4)
+    read()
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    many = traced(api, read)
+    assert len(decided) == 4, len(decided)
+    assert [f["id"] for f in many[0].json()["files"]] == [newest[f"many-{i}"] for i in (39, 38, 37)]
+    assert many[0].json()["has_more"] is True and many[0].json()["total"] is None
+    assert len(many[1]) == len(few[1]), (len(few[1]), len(many[1]))
 
 
 def test_refusals_and_a_bot_writes_only_its_own_files(api):

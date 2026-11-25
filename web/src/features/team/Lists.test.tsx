@@ -278,11 +278,13 @@ describe('Files @s614', () => {
   it('shows its newest pictures and videos first, each a click from its task, the rest behind All files', async () => {
     const notes = file({ id: 'f1', title: 'plan.md' });
     const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', version: 3, thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
-    const cut = file({ id: 'v1', kind: 'video', title: 'Host intro', name: 'intro.mp4', version: 1, poster_blob_id: 'b2' });
+    const cut = file({ id: 'v1', kind: 'video', title: 'Host intro', name: 'intro.mp4', version: 1, poster_blob_id: 'b2', task_id: 't7', task_title: 'Beach clean' });
     serve((url) => {
       if (!url.includes('/bots/ana/files')) return undefined;
-      const list = url.includes('media=1') ? [cut, still] : [notes, cut, still];
-      return ok({ bot: '0190-ana', files: list, total: list.length, has_more: false, next_cursor: null });
+      const media = url.includes('media=1');
+      const list = media ? [cut, still] : [notes, cut, still];
+      // Made recently is not counted
+      return ok({ bot: '0190-ana', files: list, total: media ? null : list.length, has_more: false, next_cursor: null });
     });
     show(<TeamWho who="ana" />, '/team/ana');
     const section = await screen.findByRole('region', { name: 'Made recently' });
@@ -291,7 +293,9 @@ describe('Files @s614', () => {
       ['Host intro', '/api/v2/files/v1/poster?v=1'],
       ['Frame 2', '/api/v2/files/i1/thumb?v=3'],
     ]);
-    expect(within(section).getByRole('link', { name: 'Beach clean' }).getAttribute('href')).toBe('/task/t7');
+    // at most six, so each loads now, never deferred until scrolled to
+    expect(tiles.every((b) => !b.querySelector('img')?.hasAttribute('loading'))).toBe(true);
+    expect(within(section).getAllByRole('link', { name: 'Beach clean' }).map((a) => a.getAttribute('href'))).toEqual(['/task/t7', '/task/t7']);
     expect(section.querySelectorAll('.row')).toHaveLength(0);
     fireEvent.click(within(section).getByRole('button', { name: 'All files' }));
     expect(section.querySelectorAll('.row')).toHaveLength(3);

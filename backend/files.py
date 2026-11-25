@@ -96,8 +96,17 @@ ACTIONS = (
     "reviewed",
 )
 LIST_MAX = 100
-# A bot's pictures and videos, not pages: what the agent page shows as previews (Made recently).
-MEDIA_SQL = "p.file_id IS NULL AND f.kind IN ('image','video')"
+# A bot's stored pictures and videos made on a task, newest first: what the agent page shows as previews (Made
+# recently). Not a page, a link (a Google Drawing), a file whose bytes never arrived, or a bot-wide file with no task.
+MEDIA_SQL = (
+    "SELECT f.* FROM bot_files f WHERE f.bot_id=? AND f.archived=0 AND f.kind IN ('image','video') "
+    "AND f.locator='tico_blob' AND f.state='ready' AND f.current_version>0 AND f.task_id IS NOT NULL "
+    "AND NOT EXISTS (SELECT 1 FROM pages p WHERE p.file_id=f.id) "
+    "AND (f.identity NOT LIKE 'task-file:%' OR EXISTS (SELECT 1 FROM bot_file_versions o "
+    "WHERE o.file_id=f.id AND o.actor='bot:' || f.bot_id)) "
+    "ORDER BY f.last_activity_at DESC, f.id DESC"
+)
+_READ = object()  # view(): the version or last activity not read ahead, so it reads its own
 MENTIONS_MAX = 60  # names one message lookup asks about
 DATES_MAX = 500  # files one date correction carries (runner-rs/src/files_publish.rs DATE_BATCH)
 
@@ -2722,15 +2731,18 @@ class Files:
                 cache[task_id] = None
         return cache[task_id]
 
-    def view(self, c, who, row, caches, page=None):
-        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page."""
-        version = c.execute(
-            "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
-        ).fetchone()
-        last = c.execute(
-            "SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
-            (row["id"],),
-        ).fetchone()
+    def view(self, c, who, row, caches, page=None, version=_READ, last=_READ):
+        """One file as the Files rail lists it; `page` when the caller already knows whether it is a page, and its
+        current `version` and `last` activity row (None when it has none) when the caller read them ahead."""
+        if version is _READ:
+            version = c.execute(
+                "SELECT * FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], row["current_version"])
+            ).fetchone()
+        if last is _READ:
+            last = c.execute(
+                "SELECT actor,action,created_at FROM bot_file_activity WHERE file_id=? ORDER BY id DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
         link = row["locator"] == "remote_link"
         synced = row["state"] == "ready" and (link or version is not None)
         provider = row["provider"] or ""
@@ -2827,14 +2839,52 @@ class Files:
                 found.add(r["id"])
         return found
 
-    def listing(self, who, bot, limit, cursor, q="", kind="", media=False):
+    def made_recently(self, who, bot, limit):
+        """The agent page's Made recently: the bot's newest `limit` stored pictures and videos on tasks the caller may
+        read (MEDIA_SQL), through the same checks as its whole list. It reads newest first in chunks and stops once it
+        has them, so it counts nothing (total is None) and pages no further; has_more says another one is there."""
+        with self.store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            self.bot_row(c, who, bot)
+            caches, out = {"task": {}, "repo": {}}, []
+            rows = visible_rows(c, self.auth, who, MEDIA_SQL, (bot,))
+            while len(out) <= limit and (batch := list(islice(rows, limit + 1 - len(out)))):
+                ids = [r["id"] for r in batch]
+                marks = ",".join("?" * len(ids))
+                versions = {
+                    v["file_id"]: v
+                    for v in c.execute(
+                        "SELECT v.* FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id "
+                        f"AND v.version=f.current_version WHERE f.id IN ({marks})",
+                        ids,
+                    )
+                }
+                last = {
+                    a["file_id"]: a
+                    for a in c.execute(
+                        "SELECT file_id,actor,action,created_at FROM bot_file_activity WHERE id IN (SELECT MAX(id) "
+                        f"FROM bot_file_activity WHERE file_id IN ({marks}) GROUP BY file_id)",
+                        ids,
+                    )
+                }
+                for row in batch:
+                    item = self.view(c, who, row, caches, False, versions.get(row["id"]), last.get(row["id"]))
+                    if item["task_id"]:  # its task, which the caller may read, is a click away
+                        out.append(item)
+            return {
+                "bot_id": bot,
+                "files": out[:limit],
+                "total": None,
+                "next_cursor": None,
+                "has_more": len(out) > limit,
+                "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who),
+            }
+
+    def listing(self, who, bot, limit, cursor, q="", kind=""):
         """The bot's files the caller sees, newest activity first, a page at a time. `kind` is a Library kind
         (file_library.KINDS); `q` keeps the files whose name, text (Library search, file_library) or path in the bot's
-        checkout holds every word; `media` only its images and videos (the agent page's Made recently). Each narrows
-        the same list, so the order, the cursor and the total stay its own."""
+        checkout holds every word. Each narrows the same list, so the order, the cursor and the total stay its own."""
         kind_sql, kind_args = file_library.kind_filter(kind)
-        if media:
-            kind_sql = f"({kind_sql}) AND {MEDIA_SQL}"
         with self.store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
@@ -3185,7 +3235,7 @@ def install_files(app, store, auth, blobs, mutate):
         **api_v2(
             "Files",
             "listBotFiles",
-            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path), kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) and media (only its images and videos) narrow the same list",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path), kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list. media=1 is the agent page's Made recently instead: its newest limit stored images and videos on tasks the caller may read, uncounted (total null) and unpaged",
             "BotFileList",
         ),
     )
@@ -3198,9 +3248,9 @@ def install_files(app, store, auth, blobs, mutate):
         kind: str = "",
         media: bool = False,
     ):
-        return files.listing(
-            request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind, media=media
-        )
+        if media:
+            return files.made_recently(request.state.identity, bot, max(1, min(limit, LIST_MAX)))
+        return files.listing(request.state.identity, bot, max(1, min(limit, LIST_MAX)), cursor, q=q, kind=kind)
 
     @app.get(
         "/api/v2/bots/{bot}/files/mentions",

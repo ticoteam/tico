@@ -18,7 +18,7 @@ import { Document, type PageState, type PageTab } from '@/pagekinds';
 import { FilePreview } from '@/features/library/exports';
 import { flowQuery, flowSnoozedAsksQuery } from '@/features/tasks/routing';
 import { whoHref } from '@/features/team/routing';
-import { changeWords, closeTask, NEEDS_YOU, nextInList, openOf } from '@/lib';
+import { changeWords, closeTask, NEEDS_YOU, nextInList, openOf, type TaskWords } from '@/lib';
 import { onAnswered } from './answered';
 import { Decision } from './Answer';
 import { AddMenu, Details, type Adding } from './Details';
@@ -28,7 +28,7 @@ import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { TaskMedia } from './Media';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
+import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, mediaOf, requirementOf, sendTitle, slugOf, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -241,9 +241,13 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     if (known || chatCard || unresolved || first === null || leaving.current) return;
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
     if (open !== String(t.number) && open !== t.id) return;
+    // A video had a tab of its own before the pictures and videos led the task: an old link to it (`…/beach-cut-mp4?v=2`)
+    // opens that video over the page that opens, at the version it named.
+    const video = tab ? mediaOf(files.data).find((m) => slugOf(m.file.title || m.file.name) === tab)?.file : undefined;
     // The address's other words (a version, `v`) stay while the tab is named.
-    void navigate({ to: tabAddress(t, opened) as never, search: ((prev: Record<string, unknown>) => prev) as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate, router]);
+    const words = video ? ({ v, vs: _vs, ...rest }: TaskWords) => ({ ...rest, file: video.id, ...(v ? { fv: v } : {}) }) : (prev: TaskWords) => prev;
+    void navigate({ to: tabAddress(t, opened) as never, search: words as never, replace: true });
+  }, [known, chatCard, unresolved, first, opened, t, navigate, router, tab, files.data]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
      one Back still closes it); at the list's end it closes, back to the page under it. An answer that lands once the
@@ -378,11 +382,11 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // a file from Details or the pictures at the top opens one layer up; Esc or its Close takes it away, back to the tab
   const fileName = file ? files.data?.find((x) => x.id === file) : undefined;
   const closeFile = () =>
-    void navigate({ to: '.', search: changeWords(({ file: _f, full: _p, v: _v, vs: _vs, ...rest }) => rest) as never, replace: true });
+    void navigate({ to: '.', search: changeWords(({ file: _f, full: _p, fv: _v, fvs: _vs, ...rest }) => rest) as never, replace: true });
   const layer = file && !unresolved && (
     <Viewer open onClose={closeFile} title={fileName?.title || fileName?.name || 'File'}>
       <div className="tv tv-layer">
-        <FileView t={t} file={file} full={search.full} />
+        <FileView t={t} file={file} full={search.full} back={current?.label ?? 'Details'} onClose={closeFile} />
       </div>
     </Viewer>
   );

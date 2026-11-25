@@ -1233,6 +1233,74 @@ describe('a task’s files and pages @s56 @s76 @s780', () => {
     await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('v1'));
   });
 
+  it('opens a picture from the top over a page tab and leaves the page’s version and comparison as they were', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" tab="qa-report" />, '/tasks/p1/12/qa-report?v=1&vs=1');
+    const strip = await screen.findByRole('list', { name: 'Pictures and videos' });
+    fireEvent.click(within(strip).getByRole('button', { name: 'Sign-in screen' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBe('f9'));
+    expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1, 'task.vs': 1 });
+  });
+
+  it('a file over a page tab: its versions are its own, Next steps in place, and Back returns to the page as it was', async () => {
+    const notes = {
+      ...shot,
+      id: 'n1',
+      name: 'notes.txt',
+      title: 'Shot list',
+      mime: 'text/plain',
+      current_version: 1,
+      versions: [{ n: 1, by: 'bot:a1', created_at: '2026-11-04T10:00:00Z', mime: 'text/plain', url: '/api/v2/files/n1?v=1', answers: [], ask: null }],
+    };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [shot, notes] } } : files(url)));
+    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1/12/qa-report?file=f9&v=1');
+    const words = () => router.state.location.search as Record<string, unknown>;
+    // named for the tab under it, never Details
+    const back = await screen.findByRole('button', { name: 'Back to QA report' });
+    expect(screen.queryByRole('button', { name: 'Back to Details' })).toBeNull();
+    // the file's version and comparison are its own words: the page's v stays, and it gets no vs
+    await lastMore();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Versions' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'v1' }));
+    await waitFor(() => expect(words()['task.fv']).toBe(1));
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Compare' }));
+    await waitFor(() => expect(words()['task.fvs']).toBe(2));
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(words()['task.vs']).toBeUndefined();
+    // Next: the next file in its place, over the same tab, no step in the history
+    const steps = router.history.length;
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(words()['task.file']).toBe('n1'));
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(words()['task.fv']).toBeUndefined();
+    expect(router.history.length).toBe(steps);
+    // Back: the page as it was read
+    fireEvent.click(back);
+    await waitFor(() => expect(words()['task.file']).toBeUndefined());
+    expect(words()).toMatchObject({ 'task.tab': 'qa-report', 'task.v': 1 });
+    expect(router.history.length).toBe(steps);
+  });
+
+  it('Remove from a file over a page tab goes back to that tab', async () => {
+    serve(files);
+    const router = show(<TaskPage task="12" tab="qa-report" file="f9" />, '/tasks/p1/12/qa-report?file=f9');
+    await screen.findByRole('button', { name: 'Back to QA report' });
+    await lastMore();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Remove file' }));
+    await waitFor(() => expect((router.state.location.search as Record<string, unknown>)['task.file']).toBeUndefined());
+    expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report' });
+  });
+
+  it('an old link to a video’s own tab opens that video over the page, at the version it named', async () => {
+    const at = (n: number) => ({ n, by: 'bot:a1', created_at: `2026-11-0${n}T10:00:00Z`, mime: 'video/mp4', url: `/api/v2/files/v1?v=${n}`, answers: [], ask: null, poster_url: null });
+    const cut = { ...shot, id: 'v1', name: 'beach-cut.mp4', title: '', mime: 'video/mp4', current_version: 2, versions: [at(1), at(2)] };
+    serve((url) => (url.endsWith('/api/v2/tasks/t1/files?all=1') ? { status: 200, body: { files: [cut] } } : files(url)));
+    const router = show(<TaskPage task="12" tab="beach-cut-mp4" />, '/tasks/p1/12/beach-cut-mp4?v=1');
+    await waitFor(() => expect(router.state.location.search).toMatchObject({ 'task.tab': 'qa-report', 'task.file': 'v1', 'task.fv': 1 }));
+    expect((router.state.location.search as Record<string, unknown>)['task.v']).toBeUndefined();
+  });
+
   describe('archived files', () => {
     const live = {
       id: 'f8',

@@ -310,14 +310,16 @@ export const sendHold = defineAction({
 const onTask = (search: unknown) => !!openOf(search as Record<string, unknown>);
 const version = z.int().check(z.minimum(1));
 
-/** The address keeps it, so Back and a shared link come back to the same version. */
+/** The address keeps it, so Back and a shared link come back to the same version. With a file open over the tab, a
+    version or a comparison is the file's (`fv`, `fvs`), never the tab's under it. */
 function show(router: AnyRouter, change: Record<string, unknown>) {
   // The same task: the address changes only in its words.
   return router.navigate({
     to: '.',
     search: changeWords((prev) => {
       const next: Record<string, unknown> = { ...prev };
-      for (const [k, v] of Object.entries(change)) {
+      for (const [word, v] of Object.entries(change)) {
+        const k = prev.file && (word === 'v' || word === 'vs') ? `f${word}` : word;
         if (v == null) delete next[k];
         else next[k] = v;
       }

@@ -759,11 +759,18 @@ export function installPatchers(): void {
   // or page changed (a new version, a pin on it): a pinned one shows its new version. Any other change but a run's
   // (`runOnly`): the sidebars holding a tasks-by-stage card read again. A read already in flight answered from before
   // the change: another follows it.
+  // An agent page's Made recently (team/queries agentMediaQuery: ['team', 'files', slug, { media: true }]) reads again
+  // with them: a video's poster made after it was read, a picture removed or a task gone shows there too.
+  const madeRecently = () =>
+    queryClient
+      .getQueryCache()
+      .findAll({ queryKey: ['team', 'files'], predicate: (q) => (q.queryKey[3] as { media?: boolean } | undefined)?.media === true })
+      .map((q) => q.queryKey);
   onRefetch<TaskEvent>(
     'tasks',
     (e) => {
-      if (e.gone) return [['team', 'tabs'], ['team', 'pins']];
-      if (e.kinds?.includes('files')) return [['team', 'pins']];
+      if (e.gone) return [['team', 'tabs'], ['team', 'pins'], ...madeRecently()];
+      if (e.kinds?.includes('files')) return [['team', 'pins'], ...madeRecently()];
       if (runOnly(e)) return [];
       // a sidebar on its first read may hold one too: it reads again after that read
       const pins = queryClient.getQueryCache().findAll({ queryKey: ['team', 'pins'] });

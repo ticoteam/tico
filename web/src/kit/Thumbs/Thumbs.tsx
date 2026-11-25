@@ -38,7 +38,7 @@ export function Thumbs({ items, label, onOpen, strip }: ThumbsProps) {
           <li key={t.id} className="thumb-item">
             <button type="button" className={t.video ? 'thumb is-video' : 'thumb'} title={t.name} aria-label={t.name} data-target={`thumb:${t.id}`} onClick={() => onOpen(t)}>
               {face ? (
-                <img src={face} alt="" loading="lazy" onError={() => setLost((was) => new Set(was).add(face))} />
+                <img src={face} alt="" onError={() => setLost((was) => new Set(was).add(face))} />
               ) : (
                 !t.video && <Icon name="file" />
               )}

@@ -10,9 +10,10 @@ export function TaskMedia({ files }: { files: TaskFileView[] | undefined }) {
   const navigate = useNavigate();
   const media = mediaOf(files);
   if (!media.length) return null;
-  // in place: closing the file (Esc, its Close) replaces the address too, so one Back still closes the task
+  // in place: closing the file (Esc, its Close) replaces the address too, so one Back still closes the task. The tab's
+  // own version and comparison (`v`, `vs`) stay for when it closes; the file opens at its newest.
   const open = (file: string) =>
-    void navigate({ to: '.', search: changeWords(({ v: _v, vs: _vs, full: _p, ...rest }) => ({ ...rest, file })) as never, replace: true });
+    void navigate({ to: '.', search: changeWords(({ fv: _v, fvs: _vs, full: _p, ...rest }) => ({ ...rest, file })) as never, replace: true });
   return (
     <div className="tv-media" data-target="task-media">
       <Thumbs

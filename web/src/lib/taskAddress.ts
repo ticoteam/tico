@@ -14,6 +14,9 @@ export interface TaskWords {
   part?: number;
   session?: string;
   file?: string;
+  /** The file open over the tab: the version it shows and the one it compares with, apart from the tab's `v`/`vs`. */
+  fv?: number;
+  fvs?: number;
   full?: string;
 }
 
@@ -25,7 +28,7 @@ export interface TaskOpen {
 }
 
 const PREFIX = 'task.';
-const NUMBERS = ['v', 'vs', 'part'] as const;
+const NUMBERS = ['v', 'vs', 'fv', 'fvs', 'part'] as const;
 const TEXTS = ['tab', 'ask', 'session', 'file', 'full'] as const;
 
 /** Whether a key of the address is the open task's (its number, its list, its words). */
