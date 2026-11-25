@@ -5,8 +5,9 @@ import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ActionsRoot, run } from '@/actions';
 import { keys, queryClient } from '@/data';
-import { coldOf, coldPage, openTasksOver } from '@/lib';
+import { coldOf, coldPage, forgetPlaces, NEEDS_YOU, noteList, openTasksOver } from '@/lib';
 import { useFollow } from '@/live/follow';
+import { answered, answering } from './answered';
 import { pageVersionQuery, taskFilesQuery, type TaskData } from './queries';
 import { loadTask } from './routing';
 import { TaskChat, TaskPage } from './TaskPage';
@@ -227,6 +228,20 @@ describe('one open task', () => {
     await waitFor(() => expect(queryClient.getQueryState(taskFilesQuery('t1').queryKey)?.status).toBe('success'));
     await act(() => new Promise((done) => setTimeout(done, 20)));
     expect(router.state.location.search).toEqual({});
+  });
+
+  it('answered as it closes (the answer landing once Back took it away): opens no next task over the page', async () => {
+    serve(reads(task({ to_leave: [] })));
+    const router = show(<TaskPage task="12" />, '/task/12');
+    await screen.findByRole('heading', { name: 'Fix the sign-in page' });
+    // Needs you, the list it was opened from, has a task below it
+    noteList({ pipeline: NEEDS_YOU, open: '12', rows: [{ id: 't1', n: '12' }, { id: 't2', n: '13' }] });
+    answering('t1', null);
+    await act(() => router.navigate({ to: '/tasks', search: {}, replace: true } as never));
+    act(() => answered());
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toEqual({});
+    forgetPlaces();
   });
 
   it('has no name while it loads, so the tab title and a thread’s page chip never read a placeholder', async () => {
@@ -823,6 +838,21 @@ describe('the task’s More menu', () => {
     fireEvent.click(within(ask).getByRole('button', { name: 'Delete' }));
     await waitFor(() => expect(sent.at(-1)).toEqual({ method: 'POST', url: '/api/v2/tasks/t1/delete', body: {} }));
     await waitFor(() => expect(router.state.location.pathname).toBe('/tasks/p1'));
+  });
+
+  it('deleted once another task is open in its place: that one stays open', async () => {
+    const reply = holdReply();
+    serve((url) => (url.endsWith('/delete') ? reply.promise : undefined));
+    const router = details();
+    await more();
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(sent.at(-1)?.url).toBe('/api/v2/tasks/t1/delete'));
+    // closed, and another opened, while the delete is sent
+    await act(() => router.navigate({ to: '/tasks/p1', search: { task: 13, list: 'p1' } } as never));
+    reply.resolve({ status: 200, body: { deleted: true } });
+    await act(() => new Promise((done) => setTimeout(done, 20)));
+    expect(router.state.location.search).toMatchObject({ task: 13 });
   });
 
   it('reopens a finished task only with a reason @s58', async () => {

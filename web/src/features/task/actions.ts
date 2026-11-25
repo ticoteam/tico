@@ -454,11 +454,11 @@ export const remove = defineAction({
   input: z.strictObject({ task }),
   tico: false,
   run: async ({ router, queryClient }, i) => {
-    const held = queryClient.getQueryData<{ pipeline_id: string | null }>(['tasks', 'detail', i.task]);
+    const held = queryClient.getQueryData<{ number?: number | null }>(['tasks', 'detail', i.task]);
     await said(deleteTask(i.task));
-    // open over a page, it closes; else its board
-    if (onTask(router.state.location.search)) closeTask(router as unknown as Steps);
-    else await router.navigate({ to: `/tasks/${encodeURIComponent(held?.pipeline_id ?? 'all')}` });
+    // still open over the page, it closes; closed meanwhile, or another task open in its place, nothing moves
+    const open = openOf(router.state.location.search as Record<string, unknown>)?.task;
+    if (open && (open === i.task || open === String(held?.number ?? ''))) closeTask(router as unknown as Steps);
   },
   did: () => 'Deleted',
 });

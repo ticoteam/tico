@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { toast, Toasts } from '@/kit/Toast';
+import { holdToasts, toast, Toasts, useTopLayer } from '@/kit/Toast';
 import { Viewer } from './Viewer';
 
 describe('Viewer', () => {
@@ -56,6 +56,30 @@ describe('Viewer', () => {
     );
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Task' })).toBeNull());
     expect(screen.getByRole('button', { name: 'Undo' }).closest('.vw')).toBeNull();
+  });
+
+  it('a layer opened from another holds the toasts and Cmd+K on top, as both open together and as the lower one draws again', async () => {
+    const Top = () => <i data-testid="top" data-name={useTopLayer()?.closest('.vw')?.getAttribute('aria-label') ?? ''} />;
+    // the file's layer as its own page draws it: the task's drawing again leaves it as it is
+    const file = <Viewer open onClose={() => {}} title="Spec v2" />;
+    const layers = (title: string) => (
+      <>
+        <Top />
+        <Viewer open onClose={() => {}} title={title}>
+          {file}
+        </Viewer>
+      </>
+    );
+    // a task's layer and a file opened from it, drawn in one go (a link to the file)
+    const { rerender } = render(layers('Task'));
+    await screen.findByRole('dialog', { name: 'Spec v2' });
+    expect(screen.getByTestId('top').dataset.name).toBe('Spec v2');
+    // the task's layer draws again (another version of the file picked), its host held anew: the file's stays on top
+    rerender(layers('Task, renamed'));
+    let again = () => {};
+    act(() => void (again = holdToasts(screen.getByRole('dialog', { name: 'Task, renamed', hidden: true }).querySelector('.vw-toasts')!)));
+    expect(screen.getByTestId('top').dataset.name).toBe('Spec v2');
+    act(again);
   });
 
   it('passes the Escape that closes it, for what else it may be for', async () => {

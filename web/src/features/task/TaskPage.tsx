@@ -231,16 +231,20 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // it (closed while its files were read, the layer still fading): naming its tab then would open it again.
   const router = useRouter();
   const leaving = useRef(false);
-  useEffect(() => {
-    if (known || chatCard || unresolved || first === null || leaving.current) return;
+  // whether the address still opens this task: not once it closed (its layer still fading) or another took its place
+  const stillOpen = useCallback(() => {
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
-    if (open !== String(t.number) && open !== t.id) return;
+    return !leaving.current && (open === String(t.number) || open === t.id);
+  }, [router, t.id, t.number]);
+  useEffect(() => {
+    if (known || chatCard || unresolved || first === null || !stillOpen()) return;
     // The address's other words (a version, `v`) stay while the tab is named.
     void navigate({ to: tabAddress(t, opened) as never, search: ((prev: Record<string, unknown>) => prev) as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate, router]);
+  }, [known, chatCard, unresolved, first, opened, t, navigate, stillOpen]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
-     one Back still closes it); at the list's end it closes, back to the page under it. */
+     one Back still closes it); at the list's end it closes, back to the page under it. An answer that lands once the
+     task has closed or another is open does none of this. */
   const client = useQueryClient();
   const list = search.list ?? NEEDS_YOU;
   const close = useCallback(() => {
@@ -252,6 +256,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   useEffect(
     () =>
       onAnswered((given) => {
+        if (!stillOpen()) return;
         const waits = waitsNow(client, t.id, me);
         if (waits === 'ask') return setSeek((n) => n + 1);
         if (waits) return;
@@ -262,7 +267,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
         leaving.current = true;
         void navigate({ to: '/task/$task', params: { task: next } });
       }),
-    [t.id, me, client, close, navigate, list],
+    [t.id, me, client, close, navigate, list, stillOpen],
   );
   const asks = tabs.find((x) => x.mark === 'ask')?.slug;
   useEffect(() => {

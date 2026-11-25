@@ -56,23 +56,27 @@ export function closeToast(id: string) {
 }
 
 /* Where the toasts stand: at the page's foot, or in the layer open over it (a Viewer), whose focus trap and dim would
-   leave them, and an Undo, out of reach. The last layer opened holds them, and Cmd+K's search opened over it, which
-   its hiding of all else from a screen reader would otherwise reach. */
-const hosts: HTMLElement[] = [];
+   leave them, and an Undo, out of reach. The top layer holds them, and Cmd+K's search opened over it, which its hiding
+   of all else from a screen reader would otherwise reach: the deepest (a file opened from a task's layer is inside it),
+   and of the same depth the last opened. */
+const hosts: { el: HTMLElement; depth: number }[] = [];
 const heard = new Set<() => void>();
 const hear = (on: () => void) => {
   heard.add(on);
   return () => void heard.delete(on);
 };
-const host = () => hosts.at(-1) ?? null;
+const host = () => hosts.at(-1)?.el ?? null;
 
-/** A layer over the page holds the toasts while it is open; the returned function gives them back. */
-export function holdToasts(el: HTMLElement): () => void {
-  hosts.push(el);
+/** A layer over the page holds the toasts while it is open (`depth`: 1 over the page, 2 opened from a layer, and so on);
+    the returned function gives them back. */
+export function holdToasts(el: HTMLElement, depth = 1): () => void {
+  let at = hosts.length;
+  while (at > 0 && hosts[at - 1]!.depth > depth) at--;
+  hosts.splice(at, 0, { el, depth });
   heard.forEach((on) => on());
   return () => {
-    const at = hosts.lastIndexOf(el);
-    if (at >= 0) hosts.splice(at, 1);
+    const i = hosts.findIndex((h) => h.el === el);
+    if (i >= 0) hosts.splice(i, 1);
     heard.forEach((on) => on());
   };
 }

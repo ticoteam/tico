@@ -1,5 +1,5 @@
 import { Dialog as BaseDialog } from '@base-ui/react/dialog';
-import { createContext, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useRef, useState, type KeyboardEvent as KeyEvent, type PointerEvent, type ReactNode } from 'react';
 import { IconButton } from '@/kit/IconButton';
 import { holdToasts } from '@/kit/Toast';
 import './Viewer.css';
@@ -29,6 +29,9 @@ export interface ViewerProps {
 /** True inside the layer: what it holds offers no full screen of its own (a PDF's Expand). */
 export const InViewer = createContext(false);
 
+/** How many layers this one is opened from: 1 over the page, 2 from a layer (a file from a task's), and so on. */
+const Depth = createContext(0);
+
 /** A pull this far down the bar on a phone lets it go; less springs it back. */
 const LET_GO = 96;
 
@@ -40,6 +43,9 @@ const LET_GO = 96;
  */
 export function Viewer({ open, onClose, onClosed, title, meta, actions, look = 'sheet', onKeyDown, className, children }: ViewerProps) {
   const [pull, setPull] = useState(0);
+  // the toasts' host, held once as it mounts and in its place among the layers, however often this draws
+  const depth = useContext(Depth) + 1;
+  const hold = useCallback((el: HTMLDivElement | null) => (el ? holdToasts(el, depth) : undefined), [depth]);
   const from = useRef<number | null>(null);
   const down = (e: PointerEvent<HTMLDivElement>) => {
     // a mouse drags nothing here; a finger or pen pulls the layer down from its bar
@@ -81,10 +87,12 @@ export function Viewer({ open, onClose, onClosed, title, meta, actions, look = '
               <BaseDialog.Close render={<IconButton icon="close" label="Close" />} />
             </div>
             <div className="vw-body">
-              <InViewer value>{children}</InViewer>
+              <InViewer value>
+                <Depth value={depth}>{children}</Depth>
+              </InViewer>
             </div>
             {/* the toasts while it is open: an Undo stays in reach, inside its focus trap */}
-            <div className="vw-toasts" ref={(el) => (el ? holdToasts(el) : undefined)} />
+            <div className="vw-toasts" ref={hold} />
           </BaseDialog.Popup>
         </BaseDialog.Viewport>
       </BaseDialog.Portal>

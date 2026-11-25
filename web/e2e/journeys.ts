@@ -418,6 +418,40 @@ test('settings: change the model a new agent uses; add a Cloud agent', async ({ 
   clean(page);
 });
 
+test("phone: a case opening shows its page while it loads; its chat's card for the email raises the email with its Approve", async ({ browser, hub }) => {
+  const { subject } = hub.facts.mail;
+  const page = await open(browser, hub, '/tasks', PHONE);
+  const row = page.locator('section[aria-label="Needs you"] a.row.task', { hasText: subject });
+  const href = (await row.getAttribute('href'))!;
+  // the task's reads held until it is seen loading: its page's column shows, never a blank sheet
+  let release = () => {};
+  const held = new Promise<void>((go) => (release = go));
+  await page.route('**/api/v2/tasks/**', async (r) => {
+    await held;
+    await r.continue();
+  });
+  await page.goto(`${hub.url}${href}`);
+  const over = modal(page);
+  await expect(over.locator('.tmd-task')).toBeVisible();
+  await expect(over.locator('.ap-subj')).toHaveCount(0);
+  release();
+  await expect(over.locator('.ap-subj')).toHaveText(subject);
+  // its chat up: the decision docked under the page goes with it
+  const decision = over.locator('section[aria-label="The decision"]');
+  await expect(decision).toBeVisible();
+  await over.locator('.tmd-panes').getByRole('button', { name: 'Chat', exact: true }).tap();
+  const chat = over.locator('aside[aria-label="Chat"]');
+  await expect(chat).toBeVisible();
+  await expect(decision).toBeHidden();
+  // the email's card in the chat: the email itself shows again, its Approve with it
+  await chat.locator('a[data-target^="approval:"]').first().tap();
+  await expect(over.locator('.tmd-task')).toBeVisible();
+  await expect(over.locator('.ap-subj')).toHaveText(subject);
+  await expect(decision.getByRole('button', { name: 'Approve', exact: true })).toBeVisible();
+  await expect(chat).toBeHidden();
+  clean(page);
+});
+
 test('phone: a task opens full screen over its board; its list pulls up from the bottom; Back or Close returns to the board', async ({ browser, hub }) => {
   const [draft, date] = hub.facts.board.tasks;
   const page = await open(browser, hub, '/tasks/launch?view=list', PHONE);

@@ -36,7 +36,12 @@
   /* a phone hides every list and chat sheet (styles/parts.css); here they are the modal's own */
   .tmd>.tmd-chat,.tmd>.tmd-list{display:flex}
   .tmd>.tmd-chat,.tmd>.tmd-task{flex:1;border:0}
-  .tmd:not([data-pane="chat"])>.tmd-chat,.tmd:not([data-pane="task"])>.tmd-task{display:none}
+  /* the task's page while it is read (its loading state), until the task or its chat is chosen */
+  .tmd:not([data-pane="chat"])>.tmd-chat,.tmd[data-pane="chat"]>.tmd-task{display:none}
+  /* the dock's Approve shows with what it approves: on the task's page, never over its chat */
+  .tmd[data-pane="chat"]>.tmd-dock{display:none}
+  /* the toasts' Undo above the keyboard too (--kb, on the modal's layer) */
+  .vw .toasts{bottom:calc(84px + var(--kb,0px))}
   .tmd>.tmd-tab{display:none}
   .tmd>.tmd-dock{flex:none}
   .tmd>.tmd-dock>.dock{display:flex;padding-bottom:var(--s-2)}

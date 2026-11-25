@@ -91,6 +91,14 @@ function show(at: string, page: ReactNode = null) {
 const modal = () => document.querySelector<HTMLElement>('.tmd');
 const open = (router: ReturnType<typeof show>) => openOf(router.state.location.search as Record<string, unknown>);
 const esc = (target: Element) => fireEvent.keyDown(target, { key: 'Escape' });
+/** A link in the modal pressed (an approval card, a session row), its own going left to the router. */
+function press(where: Element, href: string) {
+  const a = Object.assign(document.createElement('a'), { href });
+  a.addEventListener('click', (e) => e.preventDefault());
+  where.append(a);
+  fireEvent.click(a);
+  a.remove();
+}
 
 beforeAll(() => {
   queryClient.setDefaultOptions({ queries: { ...queryClient.getDefaultOptions().queries, retry: false } });
@@ -141,6 +149,32 @@ describe('on a phone', () => {
     await waitFor(() => expect(modal()!.dataset.pane).toBe('chat'));
   });
 
+  it('an approval card in the chat for the email already chosen shows that email, never its Approve over the chat', async () => {
+    const router = show('/tasks?task=12');
+    await waitFor(() => expect(open(router)?.words.tab).toBeTruthy());
+    fireEvent.click(within(modal()!).getByRole('button', { name: 'Chat' }));
+    expect(modal()!.dataset.pane).toBe('chat');
+    press(modal()!.querySelector('.tmd-chat')!, `/tasks/p1/12/${open(router)!.words.tab}`);
+    expect(modal()!.dataset.pane).toBe('task');
+  });
+
+  it('another of the task’s things picked on its address (another email, a file) shows the task, not its chat', async () => {
+    const router = show('/tasks?task=12');
+    await waitFor(() => expect(open(router)?.words.tab).toBeTruthy());
+    fireEvent.click(within(modal()!).getByRole('button', { name: 'Chat' }));
+    await act(() => router.navigate({ to: '.', search: changeWords((w) => ({ ...w, tab: w.tab === 'details' ? 'packing-list' : 'details' })) as never }));
+    await waitFor(() => expect(modal()!.dataset.pane).toBe('task'));
+  });
+
+  it('the session already open, picked again in Details after Task was picked, raises its chat', async () => {
+    const router = show('/tasks?task=12&task.tab=chat&task.session=bot:a1');
+    await waitFor(() => expect(modal()!.dataset.pane).toBe('chat'));
+    fireEvent.click(within(modal()!).getByRole('button', { name: 'Task' }));
+    press(modal()!.querySelector('.tmd-task')!, '/tasks/p1/12/chat?session=bot:a1');
+    expect(modal()!.dataset.pane).toBe('chat');
+    expect(open(router)?.words.session).toBe('bot:a1');
+  });
+
   it('rides the keyboard while something in it is typed in: its bottom kept above the keys', async () => {
     const vv = Object.assign(new EventTarget(), { height: 768, scale: 1, offsetTop: 0 });
     vi.stubGlobal('visualViewport', vv);
@@ -156,7 +190,40 @@ describe('on a phone', () => {
       vv.dispatchEvent(new Event('resize'));
       await new Promise((r) => requestAnimationFrame(r));
     });
-    expect(modal()!.style.getPropertyValue('--kb')).toBe('300px');
+    // on its layer, which the toasts' Undo stands in too
+    expect(modal()!.closest<HTMLElement>('.vw')!.style.getPropertyValue('--kb')).toBe('300px');
+  });
+
+  it('follows the focus with the keys up: into a field of it, it rides them; out of it, it lets them go', async () => {
+    const vv = Object.assign(new EventTarget(), { height: 468, scale: 1, offsetTop: 0 });
+    vi.stubGlobal('visualViewport', vv);
+    const outside = document.body.appendChild(document.createElement('input'));
+    act(() => outside.focus());
+    show('/tasks?task=12');
+    await waitFor(() => expect(modal()!.dataset.pane).toBe('task'));
+    const layer = modal()!.closest<HTMLElement>('.vw')!;
+    await act(() => new Promise((r) => requestAnimationFrame(r)));
+    expect(layer.style.getPropertyValue('--kb')).toBe('0px');
+    // the keys stay up as the focus moves in: nothing the window says changes
+    const box = modal()!.appendChild(document.createElement('textarea'));
+    act(() => box.focus());
+    expect(layer.style.getPropertyValue('--kb')).toBe('300px');
+    outside.remove();
+  });
+});
+
+describe('the list pulled out', () => {
+  it('puts what it covers out of reach, and Esc folds it back to what pulled it out', async () => {
+    show('/tasks?task=12');
+    const sheet = await screen.findByRole('dialog', { name: 'Ship the order' });
+    const pull = within(sheet).getByRole('button', { name: 'Show the list' });
+    fireEvent.click(pull);
+    const covered = [modal()!.querySelector('.tmd-chat')!, modal()!.querySelector('.tmd-task')!, pull];
+    expect(covered.map((el) => el.hasAttribute('inert'))).toEqual([true, true, true]);
+    esc(sheet);
+    expect(modal()!.classList.contains('is-list-up')).toBe(false);
+    expect(covered.map((el) => el.hasAttribute('inert'))).toEqual([false, false, false]);
+    expect(document.activeElement).toBe(pull);
   });
 });
 
