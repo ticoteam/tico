@@ -1,4 +1,4 @@
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { useState } from 'react';
 import { useAction } from '@/actions';
 import { Button } from '@/kit/Button';
@@ -8,7 +8,7 @@ import { Icon } from '@/kit/Icon';
 import { IconButton } from '@/kit/IconButton';
 import { Link } from '@/kit/Link';
 import { Section } from '@/pagekinds';
-import { agentToolsQuery, findToolsQuery, type AgentTool } from './queries';
+import { agentToolsQuery, findToolsQuery, readable, toolRows, type AgentTool } from './queries';
 
 /* Its Tools (backend tool guides): the software it lists, may use or used in the last 30 days. Each row is the tool's
    name, what the agent uses it for, how a run gets it, and its uses in 30 days; a mark when the agent built it. Add
@@ -17,9 +17,9 @@ import { agentToolsQuery, findToolsQuery, type AgentTool } from './queries';
 const toolHref = (t: { slug: string; origin: string }) => `/library/tools?${new URLSearchParams({ tool: `${t.origin === 'built' ? 'built' : 'vendor'}:${t.slug}` }).toString()}`;
 
 export function ToolsSection({ slug, name, manage }: { slug: string; name: string; manage: boolean }) {
-  const q = useQuery(agentToolsQuery(slug));
+  const q = useInfiniteQuery(agentToolsQuery(slug));
   const [adding, setAdding] = useState(false);
-  const rows = q.data ?? [];
+  const rows = toolRows(readable(q));
   // None yet is no section: Add tool is in the page's ⋯ too.
   if (!rows.length) return null;
   return (
@@ -32,6 +32,11 @@ export function ToolsSection({ slug, name, manage }: { slug: string; name: strin
       {rows.map((t) => (
         <ToolRow key={t.slug} slug={slug} name={name} t={t} manage={manage} />
       ))}
+      {q.hasNextPage && (
+        <button className="verb" type="button" disabled={q.isFetchingNextPage} onClick={() => void q.fetchNextPage()}>
+          More
+        </button>
+      )}
       {adding && <AddToolDialog slug={slug} name={name} onClose={() => setAdding(false)} />}
     </Section>
   );
@@ -81,12 +86,14 @@ function ToolRow({ slug, name, t, manage }: { slug: string; name: string; t: Age
 /** Add tool: find one in the registry by name, say what it is for, and list it. */
 export function AddToolDialog({ slug, name, onClose }: { slug: string; name: string; onClose: () => void }) {
   const add = useAction('agents.addTool');
-  const has = new Set((useQuery(agentToolsQuery(slug)).data ?? []).filter((r) => r.listed).map((r) => r.slug));
+  const has = new Set(toolRows(readable(useInfiniteQuery(agentToolsQuery(slug)))).filter((r) => r.listed).map((r) => r.slug));
   const [words, setWords] = useState('');
-  const [chosen, setChosen] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
   const [note, setNote] = useState('');
-  const found = useQuery({ ...findToolsQuery(words.trim()), placeholderData: keepPreviousData });
-  const rows = (found.data ?? []).filter((t) => !has.has(t.slug));
+  const found = useInfiniteQuery({ ...findToolsQuery(words.trim()), placeholderData: keepPreviousData });
+  const rows = (found.data?.pages.flatMap((p) => p.tool_guides ?? []) ?? []).filter((t) => !has.has(t.slug));
+  // Only a tool the search still shows counts as chosen: one the words filtered out is never added unseen.
+  const chosen = picked && rows.some((t) => t.slug === picked) ? picked : null;
   const save = async () => {
     if (!chosen) return;
     const r = await add.run({ slug, tool: chosen, note: note.trim() || undefined });
@@ -116,14 +123,19 @@ export function AddToolDialog({ slug, name, onClose }: { slug: string; name: str
             aria-selected={t.slug === chosen}
             className={t.slug === chosen ? 'row tool-pick-row is-on' : 'row tool-pick-row'}
             title={t.summary || t.name}
-            onClick={() => setChosen(t.slug)}
+            onClick={() => setPicked(t.slug)}
           >
             <span className="row-title">{t.name}</span>
             {t.summary && <span className="row-ctx">{t.summary}</span>}
           </button>
         ))}
-        {found.isSuccess && !rows.length && <p className="now-step">Nothing matches</p>}
+        {found.isSuccess && !rows.length && !found.hasNextPage && <p className="now-step">Nothing matches</p>}
       </div>
+      {found.hasNextPage && (
+        <button className="verb" type="button" disabled={found.isFetchingNextPage} onClick={() => void found.fetchNextPage()}>
+          More
+        </button>
+      )}
       <Field label="Used for" value={note} onValueChange={setNote} placeholder="Optional" />
     </Dialog>
   );

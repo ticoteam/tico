@@ -750,29 +750,46 @@ export const agentFilesQuery = (slug: string, find = '') =>
 /* ---------------------------------------------------------------- its tools */
 
 /** A tool on its Tools section (GET /api/v2/bots/{bot}/tool-guides): one it lists, a vendor it may use, or one it used
-    in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none). */
+    in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none). A page
+    at a time, by the server's cursor. */
 export type AgentTool = BotToolGuideRow;
 export const agentToolsQuery = (slug: string) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: ['team', 'tools', slug] as const,
-    queryFn: ({ signal }) => api.get<Partial<BotToolGuideList>>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.tool_guides ?? []),
+    queryFn: ({ signal, pageParam }) =>
+      api.get<Partial<BotToolGuideList>>(`/api/v2/bots/${at(slug)}/tool-guides${pageParam ? `?${q({ cursor: pageParam })}` : ''}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next || undefined,
   });
+/** Every row of the pages read so far. */
+export const toolRows = (data: { pages: Partial<BotToolGuideList>[] } | undefined): AgentTool[] => data?.pages.flatMap((p) => p.tool_guides ?? []) ?? [];
 
-/** The company's tools matching the words (GET /api/v2/tool-guides?q=), for Add tool: the first few the server finds. */
+/** The company's tools matching the words (GET /api/v2/tool-guides?q=), for Add tool: 20 at a time. */
 export type FoundTool = ToolGuideRow;
 export const findToolsQuery = (words: string) =>
-  queryOptions({
+  infiniteQueryOptions({
     queryKey: ['team', 'tool-find', words] as const,
-    queryFn: ({ signal }) => api.get<Partial<ToolGuideList>>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.tool_guides ?? []),
+    queryFn: ({ signal, pageParam }) =>
+      api.get<Partial<ToolGuideList>>(`/api/v2/tool-guides?${q({ q: words, limit: 20, ...(pageParam ? { cursor: pageParam } : {}) })}`, { signal }),
+    initialPageParam: '',
+    getNextPageParam: (last) => last.next || undefined,
   });
+
+/** After a listing changes: the tool's page (its Used by) and the registry's counts, every alias of it too (the
+    library's toolGuidesQuery and toolGuideQuery keys). */
+const registryChanged = () =>
+  Promise.all([queryClient.invalidateQueries({ queryKey: ['tools', 'guides'] }), queryClient.invalidateQueries({ queryKey: ['tools', 'guide'] })]);
 
 /** List a tool on it, with what it uses it for; the row shows once the server has it. */
 export const listTool = (slug: string, tool: string, note: string) =>
   write({
     key: agentToolsQuery(slug).queryKey,
     wait: true,
-    optimistic: (cur: AgentTool[] | undefined) => cur,
+    optimistic: (cur: unknown) => cur,
     send: (idempotencyKey) => api.put<BotToolGuideListed>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, note ? { note } : {}, { idempotencyKey }),
+  }).then(async (r) => {
+    await registryChanged();
+    return r;
   });
 
 /** Take a tool off its list; the row stays, busy, until the server agrees (a tool it is granted or used stays listed). */
@@ -780,8 +797,11 @@ export const unlistTool = (slug: string, tool: string) =>
   write({
     key: agentToolsQuery(slug).queryKey,
     wait: true,
-    optimistic: (cur: AgentTool[] | undefined) => cur,
+    optimistic: (cur: unknown) => cur,
     send: (idempotencyKey) => api.delete<BotToolGuideListed>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, { idempotencyKey }),
+  }).then(async (r) => {
+    await registryChanged();
+    return r;
   });
 
 /* ---------------------------------------------------------------- its last run */

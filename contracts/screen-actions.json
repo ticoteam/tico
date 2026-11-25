@@ -11947,6 +11947,10 @@
           "category": {
             "type": "string",
             "maxLength": 40
+          },
+          "q": {
+            "type": "string",
+            "maxLength": 200
           }
         },
         "additionalProperties": false

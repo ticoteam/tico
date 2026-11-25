@@ -557,8 +557,8 @@ export const toolsOpen = defineAction({
     (queryClient.getQueryData<ToolIndex>(toolsQuery.queryKey)?.rows ?? []).slice(0, 50).map((t) => ({ input: { tool: t.id }, title: `Open ${t.name}` })),
 });
 
-/** Narrow the list to one kind of tool, the tools that need someone, vendors' or those built here, or one job function;
-    nothing given shows them all. */
+/** Narrow the list to one kind of tool, the tools that need someone, vendors' or those built here, one job function, or
+    words; nothing given shows them all. */
 export const toolsFilter = defineAction({
   id: 'tools.filter',
   title: 'Filter tools',
@@ -568,9 +568,10 @@ export const toolsFilter = defineAction({
     needs: z.optional(z.boolean()),
     origin: z.optional(z.enum(['vendor', 'built'] as const)),
     category: z.optional(text(40)),
+    q: z.optional(text(200)),
   }),
   run: ({ router }, i) => {
-    const change = { kind: i.kind, needs: i.needs ? 1 : undefined, origin: i.origin, category: i.category };
+    const change = { kind: i.kind, needs: i.needs ? 1 : undefined, origin: i.origin, category: i.category, q: i.q };
     return on(router, '/library/tools') ? set(router, change, true) : go(router, '/library/tools', change);
   },
   target: () => ({ kind: 'page', id: '/library/tools' }),

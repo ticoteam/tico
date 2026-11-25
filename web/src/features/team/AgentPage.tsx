@@ -49,6 +49,7 @@ import {
   rulesQuery,
   runsQuery,
   readable,
+  toolRows,
   refused,
   showsPins,
   sidebarPinsQuery,
@@ -211,7 +212,7 @@ function Widgets({ slug, actor, head }: { slug: string; actor: Actor; head: Head
   const { lists } = useLists(slug);
   const files = useInfiniteQuery(agentFilesQuery(slug));
   const fileN = files.data?.pages[0]?.files?.length ?? 0;
-  const toolN = useQuery(agentToolsQuery(slug)).data?.length ?? 0;
+  const toolN = toolRows(readable(useInfiniteQuery(agentToolsQuery(slug)))).length;
   const manage = useQuery(agentsQuery).data?.find((r) => r.slug === slug)?.can_manage !== false;
   // Its sidebar in the order it keeps (the loader reads it with its tasks); its pages and cards only when it has some.
   const layout = useQuery(taskTabsQuery(slug)); // the loader starts it, never waits for it

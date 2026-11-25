@@ -12,7 +12,7 @@ import { toast } from '@/kit/Toast';
 import { newId } from '@/lib/ids';
 import { Foot, press, ToolGlyph, trimmed, useGo } from './parts';
 import { ConnectMailboxDialog, MailingAddressDialog, NewAddressDialog, RequestNumberDialog, WebhookDialog } from './ToolDialogs';
-import { addApiTool, catalogQuery, probeMcp, slugOf, type CatalogService, type LoginAdd, type McpProbe, type ToolNeed } from './queries';
+import { addApiTool, catalogQuery, guideTaken, probeMcp, slugOf, type CatalogService, type LoginAdd, type McpProbe, type ToolNeed } from './queries';
 import { useAdmin } from './ToolShell';
 
 /* Find or connect (the plan's catalog-first Add): a service from the catalog, then one of its ways in (Sign in with
@@ -173,10 +173,23 @@ export function BuiltDialog({ onClose }: { onClose: () => void }) {
   const [source, setSource] = useState('');
   const [needs, setNeeds] = useState('');
   const [busy, setBusy] = useState(false);
+  // The name whose slug is some other tool's already (a write would change that tool): said under Name until it changes.
+  const [taken, setTaken] = useState<string | null>(null);
   const slug = slugOf(name);
-  const ready = !!slug && !!summary.trim() && !!instructions.trim();
+  const clash = !!slug && taken === slug;
+  const ready = !!slug && !clash && !!summary.trim() && !!instructions.trim();
   const add = async () => {
     setBusy(true);
+    const free = await guideTaken(slug).then(
+      (t) => !t,
+      () => null,
+    );
+    if (free !== true) {
+      setBusy(false);
+      if (free === false) setTaken(slug);
+      else toast({ text: 'Not added', kind: 'failed' });
+      return;
+    }
     const ok = await press(
       'tools.writeGuide',
       { slug, origin: 'built', name: name.trim(), summary: summary.trim(), instructions: instructions.trim(), source: trimmed(source), needs: needsOf(needs) },
@@ -195,7 +208,7 @@ export function BuiltDialog({ onClose }: { onClose: () => void }) {
       className="tool-guide-edit"
       actions={<Foot onClose={onClose} label="Add" busy={busy} ready={ready} onGo={() => void add()} />}
     >
-      <Field label="Name" value={name} onValueChange={setName} placeholder="Weekly churn report" autoFocus />
+      <Field label="Name" value={name} onValueChange={setName} placeholder="Weekly churn report" error={clash ? 'Name already taken' : undefined} autoFocus />
       <Field label="Summary" value={summary} onValueChange={setSummary} placeholder="One line" />
       <Field label="Instructions" area value={instructions} onValueChange={setInstructions} placeholder="What it is for and how to run it" />
       <Field label="Source" value={source} onValueChange={setSource} placeholder="acme/tools scripts/churn.py" />

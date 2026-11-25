@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type UseQueryResult } from '@tanstack/react-query';
 import { useState } from 'react';
 import { Ago } from '@/kit/Ago';
 import { Button } from '@/kit/Button';
@@ -13,7 +13,7 @@ import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
-import { PageMore, Section } from '@/pagekinds';
+import { PageMore, Section, SkRows } from '@/pagekinds';
 import { AddDialog, ConnectDialog, type Adding } from './AddTool';
 import { Face, Foot, press } from './parts';
 import { Confirm } from './ToolDialogs';
@@ -22,31 +22,38 @@ import {
   FUNCTIONS,
   functionLabel,
   toolGuideQuery,
+  toolGuidesQuery,
   vendorQuery,
   type ToolGuide,
   type ToolOrigin,
   type VendorRow,
 } from './queries';
-import { bad, Code, deliveryOf, KIND, Proxied, ToolPage, toolHref, WhoRow } from './ToolShell';
+import { bad, Code, deliveryOf, KIND, Proxied, ReadFault, ToolPage, toolHref, WhoRow } from './ToolShell';
 
 /* A tool's page from the registry (backend tool guides): About (what it is for, how to use it), the company's guidance,
    then a vendor's connections (its access, each with who may use it at which level) or a built tool's source and what it
    needs, who uses it, and what agents learned about it. Anyone may write the guide; the server records who. */
 
-/** A vendor's (`vendor:<id>`) or a built tool's (`built:<slug>`) page. */
-export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }) {
-  const g = useQuery(toolGuideQuery(slug));
+/** A vendor's (`vendor:<id>`) or a built tool's (`built:<slug>`) page. The address may name it by an alias (`gh`): once
+    the guide reads, its own slug and origin are the page's, for its connections and every write. */
+export function GuideView({ slug: named, origin: asked }: { slug: string; origin: ToolOrigin }) {
+  const g = useQuery(toolGuideQuery(named));
   const guide = g.data;
+  const slug = guide?.slug || named;
+  const origin = guide?.origin ?? asked;
   const built = origin === 'built';
-  // A vendor's connections (a 404 when the reader may see none: the guide still shows).
-  const vendor = useQuery({ ...vendorQuery(slug), enabled: !built });
+  // A vendor's connections, once the guide says whose (a 404 when the reader may see none: the guide still shows).
+  const vendor = useQuery({ ...vendorQuery(slug), enabled: !built && !g.isPending });
   const known = useQuery(catalogQuery).data?.some((s) => s.id === slug);
+  const guides = useQuery(toolGuidesQuery).data;
   const [connecting, setConnecting] = useState(false);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [editing, setEditing] = useState(false);
   const [archiving, setArchiving] = useState(false);
   // The page waits on the guide; a vendor the registry cannot answer still shows its connections.
   const read = built || !g.isError ? g : vendor;
+  // A company row (written, or archived and back) is what Archive hides; a shipped guide may be hidden too.
+  const archivable = !!guide && (!!guide.updated_at || guide.shipped);
   const name = guide?.name || vendor.data?.name || slug;
   const users = guide?.used_by ?? [];
   const learnings = guide?.learnings ?? [];
@@ -59,7 +66,7 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
       bare
       more={
         // Who may archive is the server's to say: a refusal says so in its toast.
-        (guide?.has_guide || guide?.shipped) && (
+        archivable && (
           <PageMore>
             <MenuItem label="Archive" onSelect={() => setArchiving(true)} />
           </PageMore>
@@ -101,17 +108,21 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
           )}
           {guide?.needs?.length ? (
             <Section name="Needs" count={guide.needs.length} target={`tool-needs:${slug}`}>
-              {guide.needs.map((n) => (
-                <Row key={n.tool} className="arow" title={n.tool} href={toolHref(`vendor:${n.tool}`)}>
-                  <span className="row-title">{n.tool}</span>
-                  <span className="lvl">{n.level === 'write' ? 'Read and write' : 'Read'}</span>
-                </Row>
-              ))}
+              {guide.needs.map((n) => {
+                // The tool it needs as the registry knows it (`gh` is GitHub); one it does not know opens by its word.
+                const t = guides?.find((x) => x.slug === n.tool);
+                return (
+                  <Row key={n.tool} className="arow" title={t?.name ?? n.tool} href={toolHref(`${t?.origin === 'built' ? 'built' : 'vendor'}:${t?.slug ?? n.tool}`)}>
+                    <span className="row-title">{t?.name ?? n.tool}</span>
+                    <span className="lvl">{n.level === 'write' ? 'Read and write' : 'Read'}</span>
+                  </Row>
+                );
+              })}
             </Section>
           ) : null}
         </>
       ) : (
-        vendor.data?.rows.map((r) => <Connection key={r.id} row={r} />)
+        <Connections q={vendor} />
       )}
       {users.length > 0 && (
         <Section name="Used by" count={users.length} target={`tool-used:${slug}`}>
@@ -198,18 +209,26 @@ function Guidance({ slug, origin, text }: { slug: string; origin: ToolOrigin; te
 }
 
 const NONE = 'none';
-const CATEGORIES = [{ value: NONE, label: 'None' }, ...FUNCTIONS.map((f) => ({ value: f as string, label: functionLabel(f) }))];
+/** The job functions, and the guide's own category when it is none of them (`code`), so it shows and stays. */
+const categoriesWith = (current: string) => [
+  { value: NONE, label: 'None' },
+  ...[...FUNCTIONS, ...(current && !(FUNCTIONS as readonly string[]).includes(current) ? [current] : [])].map((f) => ({ value: f as string, label: functionLabel(f) })),
+];
 
-/** Edit: the one-line summary, the category and the instructions. */
+/** Edit: the one-line summary, the category and the instructions. Only what changed is sent: a shipped guide's words
+    are never copied into the company's own. */
 function EditGuideDialog({ slug, origin, guide, onClose }: { slug: string; origin: ToolOrigin; guide: ToolGuide | undefined; onClose: () => void }) {
-  const [summary, setSummary] = useState(guide?.summary ?? '');
-  const [category, setCategory] = useState(guide?.category || NONE);
-  const [instructions, setInstructions] = useState(guide?.instructions ?? '');
+  const was = { summary: guide?.summary ?? '', category: guide?.category ?? '', instructions: guide?.instructions ?? '' };
+  const [summary, setSummary] = useState(was.summary);
+  const [category, setCategory] = useState(was.category || NONE);
+  const [instructions, setInstructions] = useState(was.instructions);
   const [busy, setBusy] = useState(false);
-  const ready = origin !== 'built' || (!!summary.trim() && !!instructions.trim());
+  const now = { summary: summary.trim(), category: category === NONE ? '' : category, instructions: instructions.trim() };
+  const change = Object.fromEntries(Object.entries(now).filter(([k, v]) => v !== was[k as keyof typeof was].trim()));
+  const ready = Object.keys(change).length > 0 && (origin !== 'built' || (!!now.summary && !!now.instructions));
   const save = async () => {
     setBusy(true);
-    const ok = await press('tools.writeGuide', { slug, origin, summary: summary.trim(), category: category === NONE ? '' : category, instructions: instructions.trim() }, 'Not saved');
+    const ok = await press('tools.writeGuide', { slug, origin, ...change }, 'Not saved');
     setBusy(false);
     if (ok) onClose();
   };
@@ -222,13 +241,22 @@ function EditGuideDialog({ slug, origin, guide, onClose }: { slug: string; origi
       actions={<Foot onClose={onClose} label="Save" busy={busy} ready={ready} onGo={() => void save()} />}
     >
       <Field label="Summary" value={summary} onValueChange={setSummary} placeholder="One line" autoFocus />
-      <Select label="Category" options={CATEGORIES} value={category} onValueChange={setCategory} />
+      <Select label="Category" options={categoriesWith(was.category)} value={category} onValueChange={setCategory} />
       <Field label="Instructions" area value={instructions} onValueChange={setInstructions} placeholder="What it is for and how to use it" />
     </Dialog>
   );
 }
 
 /* ---------------------------------------------------------------- a vendor's connections */
+
+/** A vendor's connections, read apart from its guide: grey bars while they load, Try again when the read fails; a 404
+    (none the reader may see) is none. */
+function Connections({ q }: { q: UseQueryResult<{ rows: VendorRow[] }> }) {
+  if (q.isPending && q.fetchStatus !== 'idle') return <SkRows rows={3} />;
+  if (q.isError && (q.error as { status?: number } | null)?.status !== 404)
+    return <ReadFault name="Connections" error={q.error} onRetry={() => void q.refetch()} />;
+  return q.data?.rows.map((r) => <Connection key={r.id} row={r} />) ?? null;
+}
 
 /** One connection on its vendor's page: what it is, how it reaches agents, its state, and who may use it at which level. */
 function Connection({ row }: { row: VendorRow }) {

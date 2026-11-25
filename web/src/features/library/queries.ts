@@ -704,8 +704,18 @@ export const toolGuideQuery = (slug: string) =>
     queryFn: () => api.get<ToolGuideDetail>(`/api/v2/tool-guides/${enc(slug)}`),
   });
 
+/** What a guide's write or archive changes elsewhere: the list, every tool page (one read by an alias, `gh`, holds the
+    same guide), and the agents' Tools and their Add tool picker (team/queries.ts agentToolsQuery, findToolsQuery). */
+const guideChanged = () =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ['tools', 'guides'] }),
+    queryClient.invalidateQueries({ queryKey: ['tools', 'guide'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'tools'] }),
+    queryClient.invalidateQueries({ queryKey: ['team', 'tool-find'] }),
+  ]);
+
 /** A guide written or changed (any teammate may): shown once the server agrees, then the tool (its answer has no
-    access, users or learnings: the page reads them again, a quiet root) and the list read again. */
+    access, users or learnings: the page reads them again), the list and the agents' Tools read again. */
 export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
   write<ToolGuideSaved>({
     key: ['tools', 'guide', slug],
@@ -713,7 +723,7 @@ export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
     optimistic: (cur: ToolGuideDetail | undefined) => cur && { ...cur, ...change },
     send: (idempotencyKey) => api.put<ToolGuideSaved>(`/api/v2/tool-guides/${enc(slug)}`, change, { idempotencyKey }),
   }).then(async (saved) => {
-    await queryClient.invalidateQueries({ queryKey: toolGuidesQuery.queryKey });
+    await guideChanged();
     return saved;
   });
 
@@ -727,6 +737,19 @@ export async function archiveToolGuide(slug: string) {
     send: (idempotencyKey) => api.delete<ToolGuideArchived>(`/api/v2/tool-guides/${enc(slug)}`, { idempotencyKey }),
   });
   queryClient.removeQueries({ queryKey: toolGuideQuery(slug).queryKey });
+  await guideChanged();
+}
+
+/** Whether a slug already names a tool in the registry (its guide reads; a 404 is free), so a new built tool never
+    writes over one: the PUT would change it in place. */
+export async function guideTaken(slug: string): Promise<boolean> {
+  try {
+    await api.get<ToolGuideDetail>(`/api/v2/tool-guides/${enc(slug)}`);
+    return true;
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return false;
+    throw err;
+  }
 }
 
 /** A built tool's slug from its name: `Weekly churn report` is `weekly-churn-report`. */
