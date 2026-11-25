@@ -95,7 +95,7 @@ def shipped() -> dict[str, Row]:
     for path in sorted(SHIPPED_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8")
         _, head, body = text.split("---", 2) if text.startswith("---") else ("", "", text)
-        meta = yaml.safe_load(head) or {}
+        meta = cast(dict[str, Any], yaml.safe_load(head) or {})
         out[path.stem] = {
             "name": str(meta.get("name") or path.stem),
             "origin": "built" if meta.get("origin") == "built" else "vendor",
@@ -381,7 +381,7 @@ def _seen_bots(c: Any, who: Any, auth: Any, admins: Any, bots: set[str]) -> set[
     if not bots or who.role == "owner" or TA.admin(c, who, admins):
         return set(bots)
     levels = auth.bot_accesses(c, who, sorted(bots))
-    return {b for b in bots if (levels.get(b) or {}).get("see")}
+    return {b for b in bots if levels.get(b) and levels[b].get("see")}
 
 
 def detail(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -> Row:
@@ -398,7 +398,7 @@ def detail(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -
     users = _users(entry, _listings(c).get(found, {}), used)
     seen = _seen_bots(c, who, auth, admins, set(users))
     labels = names.lookup(c, {"bot:" + b for b in seen})
-    used_by = [
+    used_by: list[Row] = [
         {
             "id": bot,
             "name": labels.get("bot:" + bot) or bot,
@@ -535,7 +535,8 @@ def archive(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) 
 
 
 def _bot_id(c: Any, auth: Any, who: Any, bot: str) -> str:
-    found = (H.resolve_bot(c, bot) or {}).get("id", bot)
+    resolved: Any = H.resolve_bot(c, bot)
+    found = str(resolved["id"]) if resolved and resolved.get("id") else bot
     auth.require_read(c, who, found)  # a 404 for someone who cannot see the bot
     if not H.bot(c, found):
         raise Problem("not_found", "Bot not found", 404)
@@ -603,7 +604,8 @@ def list_for_bot(
 
 
 def _may_keep_list(c: Any, who: Any, auth: Any, admins: Any, bot: str) -> str:
-    found = (H.resolve_bot(c, bot) or {}).get("id", bot)
+    resolved: Any = H.resolve_bot(c, bot)
+    found = str(resolved["id"]) if resolved and resolved.get("id") else bot
     if not H.bot(c, found):
         raise Problem("not_found", "Bot not found", 404)
     TA.require(c, who, TA.bot(found), action=TA.NOTE, admins=admins, auth=auth)

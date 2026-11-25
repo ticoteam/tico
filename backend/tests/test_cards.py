@@ -228,13 +228,14 @@ def test_sidebar_pages_and_cards_follow_the_saved_widgets(api):
         {"id": "tasks", "hidden": True},
         {"id": "updates", "hidden": True},
         {"id": "files", "hidden": True},
+        {"id": "tools", "hidden": True},
     ]
     saved = put(api, "bots/ops/task-tabs", {"tabs": get(api, "bots/ops/task-tabs")["tabs"], "widgets": widgets})
     assert [w["id"] for w in saved["widgets"]] == [w["id"] for w in widgets]  # a sidebar all of pages
     assert [p["item"] for p in place(api, "bot:ops")["pins"]] == ["page:" + ops, "page:" + mail]
     # Cara reads ops but not the inbox's page: it is not on her sidebar, and her save keeps it.
     seen = get(api, "bots/ops/task-tabs", "cara-test")
-    assert [w["id"] for w in seen["widgets"]] == ["page:" + ops, "tasks", "updates", "files"]
+    assert [w["id"] for w in seen["widgets"]] == ["page:" + ops, "tasks", "updates", "files", "tools"]
     assert mail not in str(place(api, "bot:ops", "cara-test"))
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET owner_id='cara' WHERE bot='ops'")
@@ -442,7 +443,7 @@ def test_an_agent_hides_and_moves_its_built_in_sections_with_tico_pin_update(api
     bot = attempt["token"]
     assert mcp(api, "tico_pin_update", {"pin": "files", "position": 0}, bot)[0] is False
     assert mcp(api, "tico_pin_update", {"pin": "updates", "hidden": True}, bot)[0] is False
-    assert widgets_of()(api) == [("files", False), ("updates", True), ("tasks", False)]
+    assert widgets_of()(api) == [("files", False), ("updates", True), ("tasks", False), ("tools", False)]
     assert mcp(api, "tico_pin_update", {"pin": "updates", "place": "bot:ops", "hidden": False}, bot)[0] is False
     assert not get(api, "bots/ops/task-tabs")["widgets"][1]["hidden"]
     # Another agent's sidebar is not its to arrange.
@@ -477,6 +478,7 @@ def test_a_built_in_hidden_while_a_pin_and_tabs_are_saved_loses_neither(api):
         ("updates", False),
         ("tasks", False),
         ("files", True),
+        ("tools", False),
         (meanwhile[0], False),
     ]
     assert [t["name"] for t in sidebar["tabs"]] == ["Launch", "Later"]
