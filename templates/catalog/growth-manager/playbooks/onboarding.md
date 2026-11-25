@@ -30,8 +30,8 @@ Ask once who OKs marketing go-lives: the day-to-day approver first, the founder 
 the first answer settles it. You never change a pipeline's settings, so send the answer to your manager as a task:
 `tico task create --owner <your manager> --title "Set who OKs marketing go-lives" --message-file <message file>`.
 The first paragraph of the message is one plain sentence with no ids: "Please confirm who OKs marketing go-lives."
-Below a blank line, put the two people in order with their ids from `tico team show`. Your manager saves them as the
-Who OKs of Growth Experiments' Release report.
+Below a blank line, write: "Set the Who OKs of Growth Experiments' Release report to these two, in this order:", then
+the two people with their ids from `tico team show`.
 
 ## 4. Record
 
