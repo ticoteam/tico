@@ -4,7 +4,7 @@ import { stamp } from '@/conversation';
 import { FileFrame, fileSize } from '@/features/library/exports';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { PageBones } from './FileView';
 import { Go } from './parts';
 import { SendMark } from './sending';

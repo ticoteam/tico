@@ -11,7 +11,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem } from '@/kit/Menu';
 import { Select } from '@/kit/Select';
 import { SkeletonRows } from '@/kit/Skeleton';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import type { AddStep } from './actions';
 import { seatHref } from './model';
 import { cloudAgentsQuery, computersQuery, groupsQuery, isOpenRequest, seatsQuery, templatesQuery } from './queries';

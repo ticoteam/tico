@@ -12,7 +12,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { toast } from '@/kit/Toast';
 import { changeWords, fmtDate, openOf } from '@/lib';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { DETAILS, failedToast, isPage, reasonOf, tabAddress } from './model';
 import { pagePickQuery, pageShownQuery, taskDetailQuery, taskFilesQuery, type TaskData } from './queries';
 import type { Versions } from './Versions';

@@ -10,7 +10,7 @@ import { IconButton } from '@/kit/IconButton';
 import { Pill } from '@/kit/Pill';
 import { SkeletonRows } from '@/kit/Skeleton';
 import { VirtualList } from '@/kit/VirtualList';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import type { Thread } from './model';
 import { Face, press, useMe, useNameOf } from './people';
 import { membersQuery, type MemberRow } from './queries';

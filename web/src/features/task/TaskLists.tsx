@@ -17,7 +17,7 @@ import { VirtualList, type VirtualListHandle } from '@/kit/VirtualList';
 import { useFollow } from '@/live/follow';
 import { HITS } from '@/search/helpers';
 import { boardSearch, hearPlaces, holdRow, keptRows, NEEDS_YOU, noteList, type ListRow } from '@/lib';
-import { ReadFault, type FailedRead } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault, type FailedRead } from '@/pagekinds';
 
 /* The list beside a task open over a page (plan: the task modal): the list it was opened from. A board's stage (its
    pipeline's id), Needs you (none), an agent's or a person's open tasks (their id), search hits (`search:<words>`), or

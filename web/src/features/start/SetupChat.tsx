@@ -10,7 +10,7 @@ import { Button } from '@/kit/Button';
 import { Field } from '@/kit/Field';
 import { Icon } from '@/kit/Icon';
 import { Select } from '@/kit/Select';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { invitees, setupQuery, type FilePerson, type KeyKind, type SetupRecord } from './queries';
 import { keepTranscript } from './transcript';
 import './start.css';

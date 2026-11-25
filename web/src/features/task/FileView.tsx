@@ -14,7 +14,7 @@ import { Menu, MenuItem, MenuRule, MenuSub } from '@/kit/Menu';
 import { PictureViewer, type Picture } from '@/kit/PictureViewer';
 import { Skeleton, useDelayed } from '@/kit/Skeleton';
 import { toast } from '@/kit/Toast';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { download } from './Files';
 import { failedToast, isPage } from './model';
 import { Face } from './parts';

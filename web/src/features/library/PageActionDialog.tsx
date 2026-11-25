@@ -9,7 +9,7 @@ import { Dialog } from '@/kit/Dialog';
 import { Field } from '@/kit/Field';
 import { Segmented } from '@/kit/Segmented';
 import { Select } from '@/kit/Select';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { changePage, changePagePin, deleteLibraryPage, duplicatePage, refreshPages } from './queries';
 
 export type PageAction = 'access' | 'archive' | 'delete' | 'duplicate' | 'pin';

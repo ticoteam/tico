@@ -6,7 +6,7 @@ import { callCard } from '@/features/calls/exports';
 import { groupsQuery, teamSlug } from '@/features/team/routing';
 import { Empty } from '@/kit/Empty';
 import { Icon } from '@/kit/Icon';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { updateTitle, type Update } from './model';
 import { teamThreadQuery, updateListQuery } from './queries';
 

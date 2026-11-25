@@ -14,7 +14,7 @@ import { SheetHead } from '@/shell';
 import { fromPage, pageAt, type FromPage } from '@/shell/pageOwner';
 import { dot, type DotState } from '@/tico/dot';
 import { usePageName } from '@/tico/pageName';
-import { ReadFault } from '@/pagekinds/_parts/ReadFault';
+import { ReadFault } from '@/pagekinds';
 import { MessageBones } from './Bones';
 import { Composer, readDraft, writeDraft } from './Composer';
 import { dayKey, dayLabel } from './dates';
