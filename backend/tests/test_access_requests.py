@@ -365,6 +365,23 @@ def test_the_task_that_asked_waits_on_the_request_and_is_woken_once_when_it_is_g
     assert len(told) == 1 and "declined" in told[0]["body"] and lv(api, ads) == "read"
 
 
+def test_deleting_the_tool_wakes_the_waiting_task_at_once_with_the_tool_removed(api):
+    world(api)
+    crm = tool(api)["id"]
+    key(api, crm, SECRET)
+    tid = task(api, "bot:ops", "Update the deal stages")
+    asked = ask(api, crm, "read_write", task=tid)
+    r = api.delete(f"/api/v2/api-tools/{crm}", headers=headers())
+    assert r.status_code == 200, r.text
+    assert row(api, asked["id"])["state"] == "withdrawn"  # at once, not at the hourly sweep
+    with api.app.state.store.read() as c:
+        assert reconnects.hold(c, tid) is None
+        told = c.execute("SELECT body FROM messages WHERE recipient_id='bot:ops' AND body LIKE 'Access request%'")
+        assert [m["body"] for m in told] == [
+            "Access request closed: Update the deal stages\nClose CRM · Read and write: the tool was removed. Continue."
+        ]
+
+
 def test_who_may_ask_for_whom_and_the_counts_for_the_weekly_review(api):
     world(api)
     crm = tool(api)["id"]

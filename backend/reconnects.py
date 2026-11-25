@@ -42,7 +42,7 @@ import json
 WAKE_REF = "reconnected"
 CARD_REF = "reconnect"
 RECENT_S = 900  # a bot's task worked this recently is the one a connector failure stops
-OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','canceled')"
+OWED = "fixed_at IS NOT NULL AND woke_at IS NULL AND ended IN ('fixed','canceled','removed')"
 
 
 def secret_key(bot, env):
@@ -114,7 +114,7 @@ def line(c, bot, service, label, fix=None):
 
 
 def view(row):
-    """The card as the thread draws it (message refs `reconnect`): status open, fixed, canceled or retired."""
+    """The card as the thread draws it (message refs `reconnect`): status open, fixed, canceled, removed or retired."""
     return {
         "key": row["key"],
         "service": row["service"],
@@ -262,7 +262,7 @@ def access_changed(c, task_id):
 
 
 def _close(c, wait, ended, at=None):
-    """End an open card (fixed, canceled or retired) and say so on its message. A retired card owes no wake."""
+    """End an open card (fixed, canceled, removed or retired) and say so on its message. A retired card owes no wake."""
     H = _H()
     at = at or H.now()
     if (
@@ -298,11 +298,20 @@ def _retire(c, wait):
         _unfold_hold(c, wait["bot"])
 
 
+def key_people(c, requester, task_id=None):
+    """Whose Needs you a pending key card may stand in (credential_cards.pending_for): its requester, and for a card in
+    a task's thread every person, since anyone who manages its agent and reads the task may save it there. A change
+    row names no card, so one too many costs a reread of that person's list and shows them nothing."""
+    if not task_id:
+        return [requester]
+    return [requester, *(_H().human_actor(r[0]) for r in c.execute("SELECT id FROM humans"))]
+
+
 def _needs_moved(c, wait):
-    """Its key card left the person's Needs you (views.needs_items lists a pending one)."""
+    """Its key card left Needs you (views.needs_items lists a pending one), for everyone it stood before."""
     from . import events
 
-    events.needs_moved(c, [wait["person"]], "key")
+    events.needs_moved(c, key_people(c, wait["person"], wait["task_id"]), "key")
 
 
 def _standing(c, wait):
@@ -385,8 +394,9 @@ def _settle_requests(c, waits, at):
                 _needs_moved(c, wait)
 
 
-def dropped(c, request_id):
-    """The person canceled the credential card a task waits on: the wait ends, and the bot is told it was not saved."""
+def dropped(c, request_id, ended="canceled"):
+    """The card a task waits on ended unanswered: the person canceled the credential card or declined the access
+    (`canceled`), or the tool it asked for was deleted (`removed`). The wait ends, and the bot is told which."""
     H = _H()
     if not request_id or not _present(c):
         return []
@@ -395,11 +405,13 @@ def dropped(c, request_id):
             "SELECT * FROM task_reconnects WHERE fixed_at IS NULL AND json_extract(fix,'$.request')=?", (request_id,)
         )
     )
-    closed = [w for w in rows if _close(c, w, "canceled")]
-    return [w["task_id"] for w in closed if deliver(c, w["task_id"], why="canceled")]
+    closed = [w for w in rows if _close(c, w, ended)]
+    return [w["task_id"] for w in closed if deliver(c, w["task_id"], why=ended)]
 
 
 def _said(c, wait):
+    if wait["ended"] == "removed":
+        return f"{wait['label']}: the tool was removed."
     if wait["ended"] == "canceled" and wait["service"] == "access":
         return f"{wait['label']} was declined."
     if wait["ended"] == "canceled":
@@ -409,7 +421,7 @@ def _said(c, wait):
 
 
 def _claim_owed(c, task_id, owner):
-    """The fixed or canceled cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
+    """The fixed, canceled or removed cards on the task whose wake is still owed to `owner`, claimed for this one wake: a
     card opened for another owner is that owner's news, never the task's next owner's."""
     H = _H()
     owed = H._rows(

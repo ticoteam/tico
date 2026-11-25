@@ -314,10 +314,22 @@ def card_view(c, vault, row, viewer):
     }
 
 
+def task_card(c, row):
+    """The task a plain key card stands in, by its thread, or None: a card in a private chat, or a Reconnect card (its
+    tool's own rule, reconnect_tasks.may_replace, decides who saves that one)."""
+    task_id = (H.conversation(c, row["conversation_id"]) or {}).get("task_id")
+    return task_id if task_id and reconnect_tasks.card_tool(c, row) is None else None
+
+
 def card_row(c, vault, rid, viewer):
-    """The card `rid` for `viewer`: its requester or a credential administrator, while they can read its task; else 404."""
+    """The card `rid` for `viewer`, while they can read its task; else 404. Its requester or a credential administrator
+    opens it; a plain card in a task's thread also anyone who manages its agent, so the task waits on no one person."""
     row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
-    if not row or (row["requester"] != viewer.actor and not administrator(c, viewer, vault.admins)):
+    if not row or (
+        row["requester"] != viewer.actor
+        and not administrator(c, viewer, vault.admins)
+        and not (task_card(c, row) and vault.auth.bot_manager(c, viewer, row["bot"]))
+    ):
         raise Problem("not_found", "No such request", 404)
     # A card in a task's thread is for someone who can read the task now, by every read rule (private, its pipeline,
     # its agents): one they lost asks them nothing.
@@ -325,6 +337,11 @@ def card_row(c, vault, rid, viewer):
     if task_id and not actor_reads_task(c, viewer.actor, H.task(c, task_id)):
         raise Problem("not_found", "No such request", 404)
     return row
+
+
+def card_people(c, row):
+    """Whose Needs you the card may stand in (`pending_for`), so a change to it reaches each one's list."""
+    return reconnects.key_people(c, row["requester"], task_card(c, row))
 
 
 def requester_manages(c, auth, row):
@@ -341,12 +358,13 @@ def requester_manages(c, auth, row):
 
 
 def pending_for(c, vault, viewer):
-    """The key cards that wait on `viewer`, oldest first, as `card_view` draws them: each pending card they were asked
-    to fill that `card_row` still opens for them and that they may save. Their key cards in Needs you
-    (views.needs_items)."""
+    """The key cards that wait on `viewer`, oldest first, as `card_view` draws them: each pending card that `card_row`
+    still opens for them and that they may save, either one they were asked to fill or a plain card in a task's thread
+    whose agent they manage. Their key cards in Needs you (views.needs_items)."""
     out = []
     for found in c.execute(
-        "SELECT id FROM credential_requests WHERE requester=? AND status='pending' ORDER BY created_at, id",
+        "SELECT r.id FROM credential_requests r JOIN conversations v ON v.id=r.conversation_id "
+        "WHERE r.status='pending' AND (r.requester=? OR v.task_id IS NOT NULL) ORDER BY r.created_at, r.id",
         (viewer.actor,),
     ).fetchall():
         try:
@@ -354,7 +372,12 @@ def pending_for(c, vault, viewer):
         except Problem:
             continue
         shown = card_view(c, vault, row, viewer)
-        if shown["can_save"] and requester_manages(c, vault.auth, row):
+        mine = row["requester"] == viewer.actor
+        if shown["can_save"] and (
+            requester_manages(c, vault.auth, row)
+            if mine
+            else task_card(c, row) and vault.auth.bot_manager(c, viewer, row["bot"])
+        ):
             out.append(shown | {"created_at": row["created_at"]})
     return out
 
@@ -505,7 +528,7 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 c.execute(
                     "UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), again["id"])
                 )
-                events.needs_moved(c, [again["requester"]], "key")  # it leaves the old requester's Needs you
+                events.needs_moved(c, card_people(c, again), "key")  # it leaves each Needs you it stood in
                 again = None
             if again:
                 # Asked again on the same task: its card is still open, so that card is the answer, not a second one.
@@ -550,7 +573,7 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 ":kind,:status,:created_at,:updated_at,:credential_id,:message_id)",
                 row,
             )
-            events.needs_moved(c, [person.actor], "key")  # the card is in their Needs you now
+            events.needs_moved(c, reconnects.key_people(c, person.actor, task and task["id"]), "key")
             shown = view(c, row, person)
             card = H._write_message(
                 c,
@@ -599,9 +622,12 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
         who = person_only(request)
         with store.transaction() as c:
             row = load(c, rid, who)
+            if row["requester"] != who.actor and not administrator(c, who, vault.admins):
+                # The waiting task is told its requester canceled it (reconnects._said): a manager saves it, or lets it be.
+                raise Problem("forbidden", "Only the person asked, or a credential admin, cancels this card", 403)
             if row["status"] == "pending":
                 c.execute("UPDATE credential_requests SET status='canceled',updated_at=? WHERE id=?", (H.now(), rid))
-                events.needs_moved(c, [row["requester"]], "key")
+                events.needs_moved(c, card_people(c, row), "key")
                 row = c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone()
                 reconnects.dropped(c, rid)  # a task waiting on this card goes on without it
             return view(c, row, who)
@@ -628,21 +654,23 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
                 reconnect_tasks.save(c, vault, who, row, value)
                 return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
-            if not requester_manages(c, auth, row):
+            # A card in a task's thread is saved by anyone who manages its agent (`card_row`; store_for_bot checks
+            # they may store it); one in a private chat only while its requester still manages the agent.
+            if not task_card(c, row) and not requester_manages(c, auth, row):
                 raise Problem("forbidden", "You can't save this key", 403)
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute(
                 "UPDATE credential_requests SET status='saved',updated_at=?,credential_id=? WHERE id=?",
                 (H.now(), stored["id"], rid),
             )
-            events.needs_moved(c, [row["requester"]], "key")  # it leaves their Needs you, whoever saved it
-            # The asking bot hears it as the person's own next message: saved, go on. The value is not in it. A card in
+            events.needs_moved(c, card_people(c, row), "key")  # it leaves every Needs you, whoever saved it
+            # The asking bot hears it as the saver's own next message: saved, go on. The value is not in it. A card in
             # a task's thread already woke the task once (backend/reconnects.py).
             conversation = H.conversation(c, row["conversation_id"])
             if conversation and H.bot(c, row["asker"]) and not reconnects.card_of(c, row["message_id"]):
                 H._write_message(
                     c,
-                    row["requester"],
+                    who.actor,
                     "bot:" + row["asker"],
                     f"Saved {row['label'] or row['env']}. Test the connection now.",
                     conversation,

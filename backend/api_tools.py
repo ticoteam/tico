@@ -1643,6 +1643,7 @@ def delete_tool(c, who, tool_id, admins, kind="api"):
     from . import key_grants
 
     key_grants.tool_gone(c, tool_id)  # a key proposal naming it changes in its person's Needs you
+    access_requests.settled(c, who, resource_type="tool", resource_id=tool_id)  # its waiting tasks go on now
     H.event(c, who.actor, "tool.deleted", tool_id, {"name": tool["name"], "keys": len(keys)})
     return {"deleted": True, "id": tool_id}
 
