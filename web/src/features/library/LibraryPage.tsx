@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react';
 import { ApiError } from '@/api/client';
 import type { PageShown } from '@/api/schema';
 import { liveSrc, LIVE_SANDBOX } from '@/conversation';
-import { configQuery } from '@/data';
+import { APP_SANDBOX, configQuery, useAppBridge, type AppPage } from '@/data';
 import { frameDoc, markChanges, parsePage, pageVersionQuery } from '@/features/task/routing';
 import { Button } from '@/kit/Button';
 import { Empty } from '@/kit/Empty';
@@ -27,7 +27,8 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
   const version = search.v ?? page.version;
   const current = version === page.version;
   const live = current && !page.archived ? liveSrc(page.src, config.data) : null;
-  const app = 'app' in page && Boolean(page.app);
+  // An app runs sealed, with its bridge, only from its live address (the current version, served with a key).
+  const app = live && page.app ? { page: id, version: page.version } : null;
   const history = useQuery(fileVersionsQuery(id));
   const versions = history.data ?? [];
   const before = versions.filter((v) => v.version < version);
@@ -101,10 +102,11 @@ export function LibraryPage({ id, search }: { id: string; search: PagesSearch })
   );
 }
 
-function HostedPage({ src, title, app }: { src: string; title: string; app: boolean }) {
-  // Renewing a signed address during a reread keeps the same page running.
+function HostedPage({ src, title, app }: { src: string; title: string; app: AppPage | null }) {
+  // Renewing a signed address during a reread keeps the same page running (and an app's bridge attached).
   const [initialSrc] = useState(src);
-  return <iframe src={initialSrc} sandbox={app ? LIVE_SANDBOX.replace(' allow-same-origin', '') : LIVE_SANDBOX} referrerPolicy="no-referrer" title={title} />;
+  const frame = useAppBridge(app);
+  return <iframe ref={frame} src={initialSrc} sandbox={app ? APP_SANDBOX : LIVE_SANDBOX} referrerPolicy="no-referrer" title={title} />;
 }
 
 function PageMenu({

@@ -93,11 +93,7 @@ def page_list_filters(c, *, kind="", stale=False):
     if kind:
         if kind not in ("app", "live", "static"):
             raise Problem("validation", "Page kind is app, live or static", 422)
-        app = (
-            "(SELECT v.app IS NOT NULL FROM bot_file_versions v WHERE v.file_id=f.id AND v.version=f.current_version)"
-            if app_version_column(c)
-            else "0"
-        )
+        app = "(SELECT v.app IS NOT NULL FROM bot_file_versions v WHERE v.file_id=f.id AND v.version=f.current_version)"
         where.append(
             {
                 "app": app,
@@ -116,10 +112,6 @@ def page_list_filters(c, *, kind="", stale=False):
     return where, args
 
 
-def app_version_column(c):
-    return read_cache.one(c, "SELECT 1 FROM pragma_table_info('bot_file_versions') WHERE name='app'", ()) is not None
-
-
 def list_marks(c, who, rows):
     """Version marks for rows the caller already may read."""
     from . import file_reviews
@@ -128,7 +120,6 @@ def list_marks(c, who, rows):
     if not current:
         return {}
     version_data = {}
-    app = "v.app IS NOT NULL" if app_version_column(c) else "0"
     for part in H.chunks(current):
         marks = ",".join("?" * len(part))
         version_data.update(
@@ -136,7 +127,7 @@ def list_marks(c, who, rows):
             for v in c.execute(
                 "SELECT v.file_id,v.version,COALESCE(v.source_digest,v.digest) AS digest,v.created_at,p.cadence,"
                 "CASE WHEN p.live_version=v.version THEN p.live END AS live,"
-                f"{app} AS has_app FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id AND f.current_version=v.version "
+                "v.app IS NOT NULL AS has_app FROM bot_file_versions v JOIN bot_files f ON f.id=v.file_id AND f.current_version=v.version "
                 f"JOIN pages p ON p.file_id=f.id WHERE v.file_id IN ({marks})",
                 part,
             )
@@ -630,9 +621,7 @@ class Pages:
                 original["mime"],
             )
             # Only the original author can carry forward the access they declared for this HTML.
-            apps = getattr(self.app.state, "page_apps", None)
-            declared = original["app"] if "app" in original.keys() else None
-            app = {"app": declared} if apps is not None and declared and original["actor"] == who.actor else {}
+            app = {"app": original["app"]} if original["app"] and original["actor"] == who.actor else {}
             row, created, _ = self.files.add_version(
                 c,
                 bot=source["bot_id"],
