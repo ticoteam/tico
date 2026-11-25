@@ -193,8 +193,7 @@ The bot asks for an OK only for:
   marked; the coverage map as a grid (each risk: covered, gap or not needed); for each contract requirement, the
   limit required beside the limit held; premium by policy; certificates out and in that expire within 60 days; open
   claims with their next date. Mark it "Read from the policies on file as of <date>. The policies decide coverage."
-  On the page, set your own background and text colours together, and give dark values
-  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **The register and setup** in `knowledge/insurance.md`; certificates in `knowledge/certificates.md`.
 - **A renewal comparison page** for each renewal, with the OK asked on it when one is needed.
 - **A claim file** per incident under `reports/claims/<date>-<short name>/`, shared to its task only

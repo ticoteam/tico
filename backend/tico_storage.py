@@ -561,7 +561,9 @@ def _held(blobs, location, digest, size, mime):
 # The stored type of each kind's copy; the edge sends a 404 for any other (infra/files-edge/response.js).
 VISUAL_TYPES = {"page": "text/html; charset=utf-8", "svg": "image/svg+xml"}
 # Per kind, raise when visuals.clean or visuals.with_reporter change what its copy holds: each copy is then made again.
-VISUAL_COPY = {"page": 3, "svg": 2}
+# A page's earlier copies are no longer read, but a deleted page's purge removes them too (`visual_paths`).
+VISUAL_COPY = {"page": 4, "svg": 2}
+EARLIER_PAGE_COPIES = (3,)
 # The edge template a copy asks for (infra/files-edge/response.js): 2 runs a page as written (visuals.policy); an SVG
 # keeps 1, its closed template, which every deployed edge serves, so its copies stay as they were. An edge that does not
 # know 2 yet sends a 404 for a page, and the chat card falls back to its plain page card.
@@ -580,9 +582,10 @@ def visual_kind(mime, size):
     return kind if kind in VISUAL_TYPES else None
 
 
-def _visual(digest, kind, ancestors, kit=None):
+def _visual(digest, kind, ancestors, kit=None, copy=None):
     """(path below the company's folder, metadata) of the hosted copy of `digest` for these frame ancestors. A page
-    version pinned to a page kit (visuals.KIT) has a copy of its own per kit; a version from before kits keeps its name."""
+    version pinned to a page kit (visuals.KIT) has a copy of its own per kit; a version from before kits keeps its name.
+    `copy` names an earlier copy (`EARLIER_PAGE_COPIES`), else the current one."""
     meta = {
         "tico-visual-policy-version": POLICY_VERSION[kind],
         "tico-visual-ancestors": " ".join([a for a in dict.fromkeys(ancestors) if ANCESTOR.fullmatch(a)][:8]),
@@ -591,7 +594,7 @@ def _visual(digest, kind, ancestors, kit=None):
         "\n".join(
             [
                 "tico-visual",
-                str(VISUAL_COPY[kind]),
+                str(copy or VISUAL_COPY[kind]),
                 kind,
                 digest,
                 meta["tico-visual-ancestors"],
@@ -611,7 +614,7 @@ OLD_PAGE_SCRIPT = "'sha256-CGsvWZjIPhztoFjn2PxxlX/LGUIoZ4mKDQcJ16au+Aw='"
 
 def visual_paths(digest, kind, ancestors):
     """Every path a copy of `digest` may be held at for these ancestors: its own, and for a page the one its copy had
-    before pages ran as written and one per page kit (Blobs.purge removes them all)."""
+    before pages ran as written, one per page kit, and those of each earlier copy (Blobs.purge removes them all)."""
     from .visuals import KITS
 
     path, meta = _visual(digest, kind, ancestors)
@@ -620,7 +623,12 @@ def visual_paths(digest, kind, ancestors):
     old = hashlib.sha256(
         "\n".join(["tico-visual", "2", kind, digest, meta["tico-visual-ancestors"], OLD_PAGE_SCRIPT]).encode()
     ).hexdigest()
-    return [path, f"/visuals/{old[:2]}/{old}", *(_visual(digest, kind, ancestors, kit)[0] for kit in KITS)]
+    return [
+        path,
+        f"/visuals/{old[:2]}/{old}",
+        *(_visual(digest, kind, ancestors, kit)[0] for kit in KITS),
+        *(_visual(digest, kind, ancestors, kit, copy)[0] for copy in EARLIER_PAGE_COPIES for kit in (None, *KITS)),
+    ]
 
 
 def _visual_ok(head, kind, meta, sha=None, size=None):

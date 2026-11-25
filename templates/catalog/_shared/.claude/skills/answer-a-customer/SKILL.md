@@ -19,8 +19,6 @@ work in Tico. An **OK** is a person's recorded approval of exactly what they wer
 systems you may use (help desk, billing, order system, CRM). A **page** is an HTML report you build and publish with
 `tico page publish`. The **customer record** is the customer's row in the CRM or help desk Tool, or
 `knowledge/customers/<customer-key>.md` when no such Tool is connected.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## What great looks like
 

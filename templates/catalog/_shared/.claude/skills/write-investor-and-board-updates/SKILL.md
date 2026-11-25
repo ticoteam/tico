@@ -107,8 +107,7 @@ one numbered message, save the answers there with the date, and work on the defa
     `tico page publish reports/investor-update-<period>.html --title "Investor update <period>" --task <task id>`.
     Ask: `tico task ask <task id> --to <owner> --kind ok "Send the <period> investor update" --show page:<n> --version N`. The OK
     is for the version shown. Any change to a number or a lowlight after the OK needs a new one.
-    On the page, set your own background and text colours together, and give dark values
-    (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+    Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 13. **Send.** Read the sending rule (`tico email policy --bot <your slug>`). Draft from the mailbox in the settings
     (`tico email draft <address> --to <recipient> --subject "<Company> investor update, <period>" --body-file <path>`)
     and send (`tico email send <address> --draft <id> --task <task id>`). Recipients must not see each other's

@@ -21,8 +21,6 @@ e-signature, checkout). A **page** is an HTML report you publish with `tico page
 ordered list of **stages** a piece of work moves through. The **buyer** is the organisation; the **champion** is the
 person there who wants this to happen; the **decision-maker** is whoever can say yes to the money. The **Strategy** is
 the team's short statement of who it serves and what it sells, which every bot can read.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## What great looks like
 

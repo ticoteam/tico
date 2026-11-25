@@ -21,8 +21,6 @@ product usage, help desk). A **page** is an HTML report you publish with `tico p
 customer. The **outcome** is the result the customer bought the product to get. **First value** is the first time they
 can see that result for themselves. A **decided account** is one that reached a renewal or cancellation decision,
 whichever way it went.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## What great looks like
 

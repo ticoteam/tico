@@ -50,8 +50,6 @@ the number did not move the way the decision expected, undo it and log that too.
 ## One-way door: the decision page
 
 One page. Publish it with `tico page publish`, then ask for the OK with the page attached.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 1. **The question**, as one sentence that can be answered yes, no, or with one of the options.
 2. **Why now.** What happens if nobody decides, and by when.

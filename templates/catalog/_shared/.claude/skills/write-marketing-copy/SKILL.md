@@ -23,8 +23,6 @@ to a person on a task, and **an OK** is their yes to the exact version shown (`t
 this bot has been granted. **Growth Experiments** is the pipeline for a change that carries a prediction: its
 **Go-live page** shows the change and the predicted number, and a person OKs it before it runs. **The Brand card** is
 the company's published voice, names and allowed claims (`tico brand show`).
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 For emails in a sequence and ad variants at scale, use `run-lifecycle-and-paid`, which calls this skill for the words.
 For a press release or a pitch, use `handle-press-and-a-crisis`. For release notes, use

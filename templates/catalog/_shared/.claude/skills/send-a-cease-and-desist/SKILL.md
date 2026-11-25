@@ -175,8 +175,7 @@ An OK is not needed to decide against sending. Record the reason on the matter a
   two risk ratings, the tool recommended and why, the gate checklist, and the letter exactly as it will be sent. Mark
   the page "Prepared for the approver. Not legal advice. Have counsel review anything that matters." That line never
   appears on the letter itself.
-  On the page, set your own background and text colours together, and give dark values
-  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **The letter**, as a PDF or document on company letterhead, plus numbered exhibits.
 - **The matter row** in `knowledge/matters.md`, the hold decision in `knowledge/legal-holds.md`, and the deadline on
   the calendar.

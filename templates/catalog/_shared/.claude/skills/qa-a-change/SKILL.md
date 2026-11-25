@@ -99,8 +99,7 @@ these in one numbered message and save the answers under "QA" with the date. Wor
     **Pass**, **Pass with low issues listed**, or **Fail**. Then move the task: forward with
     `tico task move <id> next -m "<verdict and SHA>" --version N`, or back to the fixing stage (named Fixes in
     Tico's Product pipeline) with `tico task move <id> <stage name> -m "<bug list>" --version N`.
-    On the page, set your own background and text colours together, and give dark values
-    (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+    Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 12. **Check it in production after release.** When the task reaches its Validate stage, repeat the happy path as
     read-only looks at the released version (`tico bot app-shot` at 390 px and 1280 px), confirm the version shown
     is the released one, and publish the result as the validation page.

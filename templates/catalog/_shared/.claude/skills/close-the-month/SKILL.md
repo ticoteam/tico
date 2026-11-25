@@ -203,8 +203,7 @@ Never: move money, pay, refund or reverse a bank transaction to make an account 
    - Roll-forwards as small tables that visibly foot.
    - The entries posted in the close, each with its support.
    - The tie-out checks, pass or fail, with both numbers.
-   - Set your own background and text colours together, and give dark values
-     (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+   - Colour it as `.claude/skills/build-the-page` says, so it reads in dark mode.
 2. **The close note** on the task (about 120 words).
 3. **The `close_period` action**, waiting on the owner.
 4. **Tasks** for each "investigate" item and each missing document.

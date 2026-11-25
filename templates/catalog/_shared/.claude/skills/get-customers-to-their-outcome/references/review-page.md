@@ -38,8 +38,7 @@ A Tico page is for teammates; a customer cannot open it. Send the customer the s
 `tico email send <mailbox> --draft <draft-id> --task <id>`), with the goal, the headline figure and the decision
 repeated in the email body so it can be read without opening anything. Before it leaves, read it once for anything
 internal: health bands, scores, internal notes and other customers' data never appear.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 
 Sections, in this order:
 

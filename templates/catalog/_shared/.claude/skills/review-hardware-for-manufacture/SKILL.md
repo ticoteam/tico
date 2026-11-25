@@ -155,8 +155,7 @@ Ask for an OK, once, with the gate page attached:
   part when a finding is about a place: a picture with a circle beats a paragraph. Publish with
   `tico page publish reports/hardware/<product>-<revision>-gate.html --title "<Product> rev <X>: fab release gate"
   --task <task id>`.
-  On the page, set your own background and text colours together, and give dark values
-  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **Tasks**, one per blocker and major.
 - **`reports/hardware/<product>-<revision>-gate.md`**, the record the next run is compared with.
 - **`knowledge/hardware-build.md`**, updated with supplier limits and the dates they were read.

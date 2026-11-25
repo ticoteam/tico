@@ -90,8 +90,7 @@ meanwhile. Role files that already exist (`knowledge/rollout.json`, `knowledge/t
    `tico page publish release.html --task <id> --title "Release vX.Y.Z" --as "Release report"`. When an OK is
    needed, ask once, and put the way back in the line:
    `tico task ask <id> --to <owner> --kind ok "Release vX.Y.Z? Rolls back to vX.Y.W by itself if a red threshold is hit." --show page:<file id> --version N`.
-   On the page, set your own background and text colours together, and give dark values
-   (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+   Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 7. **Merge and build once.** Changes reach the main branch only through the merge queue. Tag the approved commit.
    Build one time and release that same build to every stage. Never rebuild between stages.
 8. **Release to the canary and watch.** Take the "before" readings and screenshots first. Release. Wait until the

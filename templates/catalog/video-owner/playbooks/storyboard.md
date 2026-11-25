@@ -11,7 +11,6 @@ One image per shot, in one sheet the owner can read in a minute.
    (the command never overwrites), such as `projects/<slug>/storyboard/s01-r2.png`. Remove the returned frame and its
    sidecar, and use the new one in the sheet.
 4. Build the sheet: `projects/<slug>/storyboard/sheet.html`, each frame with its line and length, and "Storyboard, not
-   final" at the top. Set its background and text colours together, and give dark values
-   (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+   final" at the top. Colour it as `.claude/skills/build-the-page` says, so it reads in dark mode.
 5. Put the sheet up for review. The storyboard mover decides it: `python3 software/pipeline.py next projects/<slug>`
    prints the exact command.

@@ -62,8 +62,7 @@ Publish it on the task and attach it to the requirement:
     tico page publish reports/<task>-go-live.html --title "Go-live: <title>" --task <id>
     tico task attach <id> page:<file id> --req "Release report" --version N
 
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 
 ## 5. Wait for the OK
 

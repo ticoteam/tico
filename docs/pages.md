@@ -193,11 +193,12 @@ live blocks' job.
 
   The `100vh` rule applies only in the card view: the page fills the card at its full size and does not scroll. A page with no
   such CSS looks as it always did. The bot's guide (`AGENTS.md`, "Widget view") has the short form.
-- **Dark by default.** Tico shows pages dark, like the app. A page that colours neither `<html>` nor `<body>` gets a
-  dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets its own dark
-  text and no background stays light, with a white background. That includes dark text set on headings, paragraphs
-  or cells rather than on `<body>` (`h1{color:#1a1a1a}`), when it is at least as much text as the page colours light
-  itself. A page with its own background keeps its look. Design pages dark: set the background and text colours
+- **Dark by default.** Tico shows pages dark, like the app. A page that colours or paints neither `<html>` nor
+  `<body>` gets a dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets
+  its own dark text on `<body>` and no background is shown light, with a white background. So is one whose own text
+  colours, set on headings, paragraphs or cells (`h1{color:#1a1a1a}`), would not read on the dark background (under
+  3:1) for more of its text than reads. Text on a background of its own, in links and in page-kit tags is not
+  counted. A page with its own background keeps its look. Design pages dark: set the background and text colours
   together, with dark values (dark by default or under `@media (prefers-color-scheme: dark)`), and chart colours that
   read on dark.
 - **The full view** has one header line: back, the title, the status line and **⋯**. The page sits right below it

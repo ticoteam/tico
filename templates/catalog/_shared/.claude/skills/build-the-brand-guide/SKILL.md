@@ -114,8 +114,7 @@ work on the defaults at once. Do not wait for the reply.
     - Write the full guide to `knowledge/brand.md`, rule pack first, setup answers and the change log last.
     - Build the guide page as HTML (layout in Output) and publish it:
       `tico page publish reports/brand-guide.html --title "Brand guide" --cadence none`.
-      On the page, set your own background and text colours together, and give dark values
-      (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+      Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
     - Propose the Brand card: `tico proposal create --kind brand_draft` with the sections and limits in
       `references/guide-template.md`. The owner publishes it.
     - If the work changed the positioning, propose that too: `tico proposal create --kind strategy_draft`.

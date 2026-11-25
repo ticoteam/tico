@@ -156,5 +156,3 @@ Pages go on their task with `tico page publish ... --task <id>`; the Content pla
 A draft goes in `reports/YYYY-MM-DD-<slug>/` and is attached to its task. A Google Doc you created or edited is listed
 with `tico file link <url> --title "..."`, and again with `tico file touch <url>` after each edit. Files humans send
 you are inputs, not yours to list.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.

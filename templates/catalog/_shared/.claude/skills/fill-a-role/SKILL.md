@@ -180,8 +180,7 @@ Ask for an OK, once, with the page attached:
 - **A role page**, when an OK is needed: the scorecard, a table of the outcomes marked bot or person with the reason,
   the template picked and the expected cost. Publish with `tico page publish reports/role-<slug>.html --title "Role:
   <name>" --task <task id>`.
-  On the page, set your own background and text colours together, and give dark values
-  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+  Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 - **The review page** at day 7 and day 30: one row per outcome with target, reading, source and date, coloured green,
   yellow, red or gray for "not read"; the five automatic numbers; cost against ceiling; the verdict in the first line.
 - On the human path: the job post, the interview kit, one evidence summary per applicant, the debrief pack, the

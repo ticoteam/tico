@@ -68,8 +68,7 @@ is left out:
 
     tico page publish reports/social-ads-playbook.html --title "Social Ads playbook" --cadence none --scope bot
 
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+Colour the page as `.claude/skills/build-the-page` says, so it reads in dark mode.
 
 Publish it again the same way, on a task, whenever the file changes.
 

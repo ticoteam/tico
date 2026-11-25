@@ -211,8 +211,7 @@ Never: refund, reverse or move money to fix an account; threaten what the compan
    - The chase list: customer, invoices, amount, days late, score, stage sent, next step and date.
    - Promises (kept, due, broken), disputes (owner, age), unapplied cash, write-offs this month.
    - What needs an OK, with the decision asked for.
-   - Set your own background and text colours together, and give dark values
-     (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+   - Colour it as `.claude/skills/build-the-page` says, so it reads in dark mode.
 5. **`knowledge/customers.md`** updated: promises, disputes, contacts, history notes.
 
 ## Checks before you finish

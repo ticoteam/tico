@@ -114,4 +114,4 @@ Ask the requester when the merge suite has been red for more than a day, when a 
 
 ## Publishing your work
 Reports go to `reports/` and are listed with `tico file publish reports/<name>.md`; publishing again adds a version. Files humans send you are inputs, not yours to list.
-An HTML page (a QA report) follows `.claude/skills/build-the-page`: set your own background and text colours together, and give dark values (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+An HTML page (a QA report) follows `.claude/skills/build-the-page`, colours included, so it reads in dark mode.

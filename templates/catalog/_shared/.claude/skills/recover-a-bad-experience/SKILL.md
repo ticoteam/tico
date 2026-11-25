@@ -20,8 +20,6 @@ HTML report you publish with `tico page publish`. The **yes limit** is the most 
 put something right. The **fix** restores what the customer should have had. The **gesture** is something extra, given
 because they were put out. The **customer record** is the customer's row in the CRM or help desk Tool, or
 `knowledge/customers/<customer-key>.md` when no such Tool is connected.
-On the page, set your own background and text colours together, and give dark values
-(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## What great looks like
 
