@@ -56,7 +56,12 @@ def test_the_server_gets_the_error_reporting_settings_set_in_env():
     import yaml
 
     environment = yaml.safe_load((ROOT / "compose.yaml").read_text())["services"]["server"]["environment"]
-    keys = {"TICO_OBSERVABILITY_ENVIRONMENT", "TICO_OBSERVABILITY_ID_SECRET", "TICO_SENTRY_DSN", "TICO_SENTRY_SERVER_DSN"}
+    keys = {
+        "TICO_OBSERVABILITY_ENVIRONMENT",
+        "TICO_OBSERVABILITY_ID_SECRET",
+        "TICO_SENTRY_DSN",
+        "TICO_SENTRY_SERVER_DSN",
+    }
     assert keys <= set(environment)
     assert all(environment[key] is None for key in keys)
 
