@@ -6,10 +6,11 @@ import json
 from backend import agent_subscriptions as AS
 from backend import cloud_machines as CM
 from backend import model_login as ML
-from backend.tests.helpers.api import get, post, runner
+from backend.store import H
+from backend.tests.helpers.api import assign, get, headers, post, runner
 from backend.tests.helpers.cloud_machines import cloud  # noqa: F401 - fixture
 from backend.tests.helpers.credentials import setup
-from backend.tests.helpers.model_subscriptions import company, pick
+from backend.tests.helpers.model_subscriptions import company, on, pick
 
 # A runner that ran agy headless (0.6.250 to 0.6.253) reports antigravity_plan_v1 too, and gets no plan.
 OLD = [
@@ -325,6 +326,44 @@ def test_an_agy_older_than_tico_runs_neither_signs_a_plan_in_nor_runs_its_turns(
         payment = AS.for_runner(c, row, "ops", {"runtime": "antigravity", "model": ""})
     assert payment.subscription is None and payment.update
     assert payment.reason == "Update Antigravity on Ana Mac"
+
+
+def test_status_reads_a_bot_ready_through_its_plan_sign_in_on_a_computer_that_runs_agy(api):
+    # Production 500 on /api/v2/assistant (v0.6.271): a bot the computer reads as ready only because a plan signs its
+    # runtime in has its plans read again (views._lapsed_plan), and the Antigravity plan's CLI check reads the
+    # computer's readiness report (model_subscriptions.cli_current), which the computer's row given there lacked.
+    setup(api)
+    company(api, enabled=("anthropic", "openai", "google"))
+    new = computer(api, "New Mac", installed=True)
+    login = connect(api)
+    post(api, f"runner-logins/{login['id']}/report", {"state": "waiting", "url": LINK}, new["token"])
+    post(api, f"computers/{new['runner_id']}/logins/{login['id']}/code", {"code": ENDED})
+    post(api, f"runner-logins/{login['id']}/subscription", {"value": VALUE}, new["token"])
+    on(api, "ops", "antigravity", "gemini-4-neon")
+    pick(api, "ops", "antigravity", person="human:ana")
+    assign(api, new, "ops")
+    with api.app.state.store.read() as c:
+        bot_id = H.resolve_bot(c, "ops")["id"]
+    readiness = {
+        "schema_version": 1,
+        "runtimes": {"antigravity": {"installed": True, "authenticated": "missing"}},
+        "harnesses": {"antigravity": {"runtime": "antigravity", "installed": True, "version": "1.5.15"}},
+        "bots": {
+            bot_id: {
+                "ready": True,
+                "runtime": "antigravity",
+                "sign_in": "ready",
+                "problems": [],
+                "repository_present": True,
+                "configuration_valid": True,
+            }
+        },
+    }
+    body = {"version": "test", "platform": "test", "capabilities": CAPS, "readiness": readiness}
+    post(api, "runners/heartbeat", body, token=new["token"])
+    reply = api.get("/api/status", headers=headers("ana-test"))
+    assert reply.status_code == 200, reply.text
+    assert not any("sign-in needed" in str(issue) for issue in reply.json()["health_issues"])
 
 
 def test_connect_signs_in_on_the_agy_tico_installed_before_a_hand_installed_one(api):
