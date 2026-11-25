@@ -61,6 +61,9 @@ is left out:
 
     tico page publish reports/email-playbook.html --title "Email playbook" --cadence none --scope bot
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 Then tell the person the one cutoff to set in Rules: "Email pauses when the complaint rate passes N." It is off until a

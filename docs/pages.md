@@ -195,8 +195,11 @@ live blocks' job.
   such CSS looks as it always did. The bot's guide (`AGENTS.md`, "Widget view") has the short form.
 - **Dark by default.** Tico shows pages dark, like the app. A page that colours neither `<html>` nor `<body>` gets a
   dark background (`#191b1a`) and light text (`#e8eae9`) from Tico's height script; a page that sets its own dark
-  text and no background stays light. A page with its own background keeps its look. Design pages dark: a dark
-  background, light text, and chart colours that read on dark.
+  text and no background stays light, with a white background. That includes dark text set on headings, paragraphs
+  or cells rather than on `<body>` (`h1{color:#1a1a1a}`), when it is at least as much text as the page colours light
+  itself. A page with its own background keeps its look. Design pages dark: set the background and text colours
+  together, with dark values (dark by default or under `@media (prefers-color-scheme: dark)`), and chart colours that
+  read on dark.
 - **The full view** has one header line: back, the title, the status line and **⋯**. The page sits right below it
   on the app's own surface, with no border or box around it. **⋯** holds **Who can see it** (for whoever may manage
   the page, with the audience under it), **What's changed?** and **Version history** (when the page has more than one

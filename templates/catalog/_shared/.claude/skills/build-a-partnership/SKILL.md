@@ -24,6 +24,8 @@ partner** (an agency or consultant) sets up or runs the product for customers. A
 product work with the team's. A **sourced** deal exists because the partner brought it. An **influenced** deal already
 existed and the partner helped it along. **Deal registration** is a partner telling the team in writing about a
 prospect, to protect its claim to the fee.
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## What great looks like
 

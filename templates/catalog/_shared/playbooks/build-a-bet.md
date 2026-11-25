@@ -62,6 +62,9 @@ Publish it on the task and attach it to the requirement:
     tico page publish reports/<task>-go-live.html --title "Go-live: <title>" --task <id>
     tico task attach <id> page:<file id> --req "Release report" --version N
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 ## 5. Wait for the OK
 
 Jev checks the page, then a person OKs it. Only a person can. When the person sends it back, their notes are on the

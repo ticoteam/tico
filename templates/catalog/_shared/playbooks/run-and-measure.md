@@ -76,4 +76,7 @@ It lands in Watching, where your Watch routine checks it.
     tico page publish reports/<task>-results.html --title "Results: <title>" --task <id>
     tico task attach <id> page:<file id> --req "Results" --version N
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 Jev checks it and the task is Done.

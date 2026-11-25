@@ -214,6 +214,8 @@ open, no price moves.
    - The size of the change: best, expected and worst case, and the break-even line.
    - The test or rollout plan: design, dates, stop rule, how customers who saw each price are treated.
    - For existing customers: the segments, the waves, the notice dates, the stop rule.
+   - Set your own background and text colours together, and give dark values
+     (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 2. **Test pages**: a Go-live page before each test, OK'd before it starts, and a Results page after, on the test's
    task.
 3. **Records**: `knowledge/pricing.md` (strategy, metric, recommendations, the owner's decisions and OKs, each dated), `knowledge/our-prices.md`

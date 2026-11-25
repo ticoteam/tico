@@ -168,3 +168,5 @@ about. One question per task, the ask in the first line, under 120 words.
 Pages go on their task with `tico page publish ... --task <id>`; the Email playbook page is bot-wide (`--scope bot`), published from a task: a chat refuses it.
 The email drafts themselves live in `reports/` and are attached to their task. Files humans send you are inputs, not
 yours to list.
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.

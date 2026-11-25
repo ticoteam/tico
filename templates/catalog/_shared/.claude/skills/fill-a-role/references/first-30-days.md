@@ -80,7 +80,9 @@ a Replace.
 
 ## Day 30 review page
 
-Publish one page (`tico page publish reports/role-<slug>-day30.html --title "<Role>: day 30" --task <task id>`). Layout:
+Publish one page (`tico page publish reports/role-<slug>-day30.html --title "<Role>: day 30" --task <task id>`).
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching. Layout:
 
 1. **Verdict line.** "Keep", "Fix", "Narrow" or "Replace", and one sentence why.
 2. **Outcomes table.** One row per scorecard outcome.

@@ -6,6 +6,9 @@ One HTML page, readable in ten minutes, built from records. Publish it with:
 tico page publish reports/weekly-<YYYY-MM-DD>.html --title "Weekly review" --cadence weekly --as-of <YYYY-MM-DD>
 ```
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 `<YYYY-MM-DD>` is the Sunday the week ended. Use the same title every week so the pages form one series.
 
 ## Layout, top to bottom

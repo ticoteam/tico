@@ -182,6 +182,8 @@ Never: adjust actuals; change a closed month; present a target as a forecast.
    - The week-by-line table, weeks 1 to 4 marked as documents and 5 to 13 as estimates, with each line's source.
    - Last week: forecast against actual by line, misses with causes.
    - The levers block when the low case goes under the minimum. Decisions asked for.
+   - Set your own background and text colours together, and give dark values
+     (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 2. **The monthly forecast page**: `reports/forecast-<YYYY-MM>.html`, `--cadence monthly`. On it:
    - The default-alive chart: gross profit and costs by month crossing, with cash below, for each growth case.
    - Budget, last forecast and this forecast by line for the year, with actuals to date.

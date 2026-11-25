@@ -201,6 +201,8 @@ Never wait on a person to publish the monthly page. A gap is written on the page
      and any holdout result with its date.
    - Health: Unknown share, no-segment and mismatch counts, reconciliation, stale sources.
    - Method: each definition in one line, each source with its read date, each benchmark with its year.
+   - Set your own background and text colours together, and give dark values
+     (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 2. **Records**: Growth rows and costs, KPI readings with evidence, `knowledge/unit-economics.md` (definitions, the
    attribution rule, the holdout log, decisions, each dated).
 3. **Tasks**: one per data gap or holdout, each with an owner.

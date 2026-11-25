@@ -332,7 +332,11 @@ def loading_references(data):
 # `[data-tico-view=card]`. No fragment is the full view.
 # Pages are dark by default: a page that colours neither <html> nor <body> gets a dark background, and light text
 # unless it chose its own dark text (then it stays as it was, a light page). A page with its own background keeps
-# its look. It runs as the page's last script.
+# its look. When <body>'s text is left black, it then looks at the page's text (the first 300 visible elements with
+# text of their own, links aside): text coloured by the page's own rules, dark and on no background of its own (a
+# light page's palette, such as `h1{color:#1a1a1a}`), that is at least as much as such text in light colours makes
+# the page light instead (a white background, its colours as written), so those headings and paragraphs never sit
+# dark on dark. It runs as the page's last script.
 # Escape the page itself leaves unhandled is passed on (`ticoVisualKey`), so the large view around it closes as it does
 # on Escape outside the page. It looks once the key's handlers have all run (a task later), so a handler the page
 # adds after this script (a module script's) still wins.

@@ -181,6 +181,8 @@ The bot asks for an OK only for:
   the forum and a countdown to each date; the hold status; a visual timeline; the evidence index with "have /
   does not exist / could not reach"; the customer's claim against the record; the numbers; the path chosen. Marked
   "Prepared for the approver. Facts and options, not legal advice." It states facts and options only.
+  On the page, set your own background and text colours together, and give dark values
+  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 - **For a chargeback:** the submitted evidence file and cover letter, and the processor's confirmation.
 - **For small claims:** the filled forms for signature, the binder (index, timeline, exhibits) as one printable
   page or file, and the speaking outline.

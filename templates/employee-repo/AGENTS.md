@@ -197,8 +197,9 @@ the top. Size it by its content, never 100vh except the card rule below. Tico sh
 ## Widget view
 A page pinned to a sidebar, the Dashboard or a team page shows as a card, and opens full size on a tap. In a card Tico
 sets `data-tico-view=card` and `data-tico-size` (small, medium or large) on `<html>`; at full size it sets `full`.
-Pages are dark, like the app: a dark background, light text, chart colours that read on dark. A page that sets no
-background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
+Pages are dark, like the app: a dark background, light text, chart colours that read on dark. Set your own background
+and text colours together, and give dark values (`@media (prefers-color-scheme: dark)` or dark by default); check it in
+dark mode before attaching. A page that sets no background gets Tico's dark one. Design for the small card (180 px tall) first: a headline and one or two numbers. `[data-tico-size=medium]` and
 `large` show more. A number that should stay current is `<tico-kpi bot="<your slug>" name="tasks_done_7d">`, or a
 business KPI by its id (`<tico-kpi id="...">`, from `tico kpi list`). Figures, charts, tables and lists in Tico's look
 are the page kit's tags (`<tico-stat>`, `<tico-chart>`; the build-the-page skill, "The page kit"). The full guide and

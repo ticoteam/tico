@@ -136,6 +136,8 @@ meanwhile.
     contributing factor gets at least one action of kind Detect, Mitigate or Prevent, filed as its own task with an
     owner, a date and a "done when" test. Then run each action through `turn-corrections-into-gates`, so the fix is
     a check or a design change wherever one is possible, not a note.
+    On the page, set your own background and text colours together, and give dark values
+    (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 16. **Clean up.** Search for the debug marker and remove every line. Remove temporary flags and scripts. Close the
     task with `tico task done <id> -m "<cause in one line; fix PR; review page>" --version N`.
 

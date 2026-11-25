@@ -32,6 +32,8 @@ finished guide, the skill still runs, but step 1 starts from it and the question
 As in the skill's step 11: `knowledge/brand.md` written, `reports/brand-guide.html` published with `tico page publish`, the Brand card
 proposed with `tico proposal create --kind brand_draft`, a strategy change proposed if the book changed the
 positioning, and one sub-task per missing fact to the teammate who holds it. Tell the owner in three lines.
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 
 ## 5. Check the routine
 

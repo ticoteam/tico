@@ -110,7 +110,8 @@ fails on them. A widget is not a report: check it with `kit` alone, then publish
 1. Copy the template to `specs/<slug>.html`, `reports/<task>-<page>.html`, `reports/releases/YYYY-MM-DD.N.html` or
    `reports/YYYY-MM-DD-checked-<slug>.html`. Replace every `{{...}}`. Keep its `<style>`: colour only through its
    tokens (`var(--ink)`, `var(--muted)`, `var(--surface)`, `var(--line)`, `var(--accent)`), which follow light and dark.
-   A colour of your own needs dark values under `@media (prefers-color-scheme: dark)`.
+   A colour of your own needs dark values under `@media (prefers-color-scheme: dark)`: set your own background and
+   text colours together, never one without the other, and check the page in dark mode before attaching it.
 2. Take the screenshots, set the arrows, draw the charts.
 3. Build and check:
 

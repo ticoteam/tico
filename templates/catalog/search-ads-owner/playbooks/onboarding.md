@@ -71,6 +71,9 @@ is left out:
 
     tico page publish reports/search-ads-playbook.html --title "Search Ads playbook" --cadence none --scope bot
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 **The cutoff.** "Ads pause when cost per new customer passes N times its 30-day average" is off until a person sets N

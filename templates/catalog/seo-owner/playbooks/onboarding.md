@@ -58,6 +58,9 @@ is left out:
 
     tico page publish reports/seo-playbook.html --title "SEO playbook" --cadence none --scope bot
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 Publish it again the same way, on a task, whenever the file changes.
 
 ## 7. Set up your KPI

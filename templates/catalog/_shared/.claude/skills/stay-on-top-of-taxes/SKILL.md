@@ -219,6 +219,8 @@ with the approver, note the due date on it, and never route around it by paying 
   showing percent of its sales threshold with the 80 percent line drawn; W-9s on file against contractors paid;
   tax owed and not yet paid against cash (`tico finance metric cash`); open notices with their response dates. Under
   it, the full calendar as a table. Mark it "Prepared from the book as of <date>. Have the CPA review positions."
+  On the page, set your own background and text colours together, and give dark values
+  (`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
 - **Filed returns and receipts**, attached to their tasks (`tico task attach`), and the bill and payment in the book.
 - **Knowledge**: `knowledge/taxes.md` (setup, authority table, dated rules), `knowledge/tax-calendar.md`,
   `knowledge/thresholds.md`, `knowledge/contractors.md`.

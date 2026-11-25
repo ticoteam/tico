@@ -197,6 +197,9 @@ One review page, published with
 - **Versions:** the table from step 14.
 - Last line: "Summary for a human, not legal advice."
 
+On the page, set your own background and text colours together, and give dark values
+(`@media (prefers-color-scheme: dark)` or dark by default); check it in dark mode before attaching.
+
 Also: the markup itself in the format the other side sent (a tracked-changes file where the Tools allow, otherwise a
 numbered change list), and the cover note. For an NDA, also write `reports/ndas/<party>.md` so the NDA desk report
 keeps working.
