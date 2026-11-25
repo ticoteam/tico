@@ -1017,6 +1017,19 @@ def _install_request_guard(
             # them onto the static files ("/download/../index.html").
             if any(part in (".", "..") for part in request.url.path.split("/")):
                 raise Problem("not_found", "Not found", 404)
+            # An author's page runs on the visual address with same-origin (visuals.PAGE_SANDBOX), so that host answers
+            # its visuals and health alone: no sign-in, API, files or web app a page there could reach as its own.
+            if (
+                settings.visual_origin
+                # Its hostname in any port, a trailing dot dropped: check_origin keeps that hostname apart from the app's.
+                and visuals.hostname("//" + request.headers.get("host", "")).rstrip(".")
+                == visuals.hostname(settings.visual_origin)
+                and not (
+                    request.method in ("GET", "HEAD")
+                    and (request.url.path.startswith("/visuals/") or request.url.path == "/healthz")
+                )
+            ):
+                raise Problem("not_found", "Not found", 404)
             if request.url.path.startswith('/public/roadmaps/'):
                 from .public_roadmaps import guard as public_roadmap_guard
 

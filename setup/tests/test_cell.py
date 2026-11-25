@@ -279,7 +279,7 @@ def test_add_makes_the_hosted_server_and_answers_once_healthy(ready):
     assert f"docker pull --quiet {cell.SERVER_IMAGE}:v1.2.3" in calls
     assert "caddy reload" in calls
     assert (
-        "http://boatyard.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
+        "http://boatyard.tico.team:8080, http://boatyard-visuals.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
         in (ready.root / "router" / "Caddyfile").read_text()
     )
 
@@ -1230,7 +1230,7 @@ def test_an_own_domain_needs_the_flag(ready):
     env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
     assert env["TICO_DOMAIN"] == "hub.tico.team"
     assert (
-        "http://hub.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
+        "http://hub.tico.team:8080, http://ticoteam-visuals.tico.team:8080 {\n\treverse_proxy 127.0.0.1:20000"
         in (ready.root / "router" / "Caddyfile").read_text()
     )
 
@@ -1294,7 +1294,8 @@ def test_aliases_are_kept_replaced_and_shown(ready):
     assert record(ready, "ticoteam")["aliases"] == ["runner.tico.team", "hub.ticofiles.com"]
     caddy = (ready.root / "router" / "Caddyfile").read_text()
     assert (
-        "http://hub.tico.team:8080, http://runner.tico.team:8080, http://hub.ticofiles.com:8080 {\n"
+        "http://hub.tico.team:8080, http://runner.tico.team:8080, http://hub.ticofiles.com:8080, "
+        "http://ticoteam-visuals.tico.team:8080 {\n"
         "\treverse_proxy 127.0.0.1:20000"
     ) in caddy
     again = ready(*move_args(ready))  # left out: kept
@@ -1310,6 +1311,81 @@ def test_aliases_are_kept_replaced_and_shown(ready):
     ready(*move_args(ready, "--alias", ""))  # "" alone: none
     assert "aliases" not in record(ready, "ticoteam")
     assert ready("status", "--company", "ticoteam")["aliases"] == []
+
+
+# the visuals host: live chat pages need a visual origin apart from the app's
+
+
+def test_a_company_gets_a_visuals_host_of_its_own(ready):
+    assert ready(*add_args(ready))["ok"]
+    assert record(ready)["visual_host"] == "boatyard-visuals.tico.team"
+    assert env_of(ready)["TICO_VISUAL_ORIGIN"] == "https://boatyard-visuals.tico.team"
+    assert "http://boatyard-visuals.tico.team:8080" in caddyfile(ready)
+    assert ready("update", "--company", "boatyard", "--version", "v1.3.0")["ok"]
+    assert env_of(ready)["TICO_VISUAL_ORIGIN"] == "https://boatyard-visuals.tico.team"
+
+
+def test_update_never_adds_a_visuals_host_to_a_company_without_one(ready):
+    ready(*add_args(ready))
+    d = ready.root / "companies" / "boatyard"
+    old = record(ready)
+    del old["visual_host"]
+    (d / "company.json").write_text(json.dumps(old))
+    env = env_of(ready)
+    del env["TICO_VISUAL_ORIGIN"]
+    (d / ".env").write_text(envfile.render(env))
+    for version in ("v1.2.3", "v1.3.0"):  # the same release (files rewritten) and a new one
+        assert ready("update", "--company", "boatyard", "--version", version)["ok"]
+        assert "visual_host" not in record(ready) and "TICO_VISUAL_ORIGIN" not in env_of(ready)
+
+
+def test_a_carried_visual_origin_wins_and_adds_no_host(ready):
+    carried = secret_file(ready.tmp, "old.env", "TICO_VISUAL_ORIGIN=https://visuals.boatyard.example")
+    answer = ready(*add_args(ready, "boatyard", "--alias", "visuals.boatyard.example", "--env-file", carried))
+    assert answer["ok"] and answer["ignored"] == []
+    assert "visual_host" not in record(ready) and "boatyard-visuals" not in caddyfile(ready)
+    assert env_of(ready)["TICO_VISUAL_ORIGIN"] == "https://visuals.boatyard.example"
+    assert ready(*add_args(ready))["changed"] is False  # extra.env still carries it
+
+
+def test_an_older_company_gains_its_visuals_host_on_add_whatever_its_aliases(ready):
+    ready(*add_args(ready))
+    # As an older core left it: no visuals host in its record, .env or router.
+    d = ready.root / "companies" / "boatyard"
+    old = record(ready)
+    del old["visual_host"]
+    (d / "company.json").write_text(json.dumps(old))
+    env = env_of(ready)
+    del env["TICO_VISUAL_ORIGIN"]
+    (d / ".env").write_text(envfile.render(env))
+    (ready.root / "router" / "Caddyfile").write_text(cell.router_config([old]))
+    answer = ready(*add_args(ready, "boatyard", "--alias", "runner.boatyard.example"))  # a new list
+    assert answer["changed"] is True and record(ready)["visual_host"] == "boatyard-visuals.tico.team"
+    assert env_of(ready)["TICO_VISUAL_ORIGIN"] == "https://boatyard-visuals.tico.team"
+    assert (
+        "http://boatyard.tico.team:8080, http://runner.boatyard.example:8080, http://boatyard-visuals.tico.team:8080 {"
+    ) in caddyfile(ready)
+    assert ready(*add_args(ready))["changed"] is False
+    ready(*add_args(ready, "boatyard", "--alias", ""))  # cleared: the visuals host stays
+    assert "http://boatyard.tico.team:8080, http://boatyard-visuals.tico.team:8080 {" in caddyfile(ready)
+
+
+def test_a_visuals_host_is_never_another_companys_host(ready):
+    assert ready(*add_args(ready, "boatyard", "--page-host", "boatyard-visuals.tico.team"))["error"] == "bad_domain"
+    ready(*add_args(ready))
+    answer = ready(*move_args(ready, slug="other", domain="boatyard-visuals.tico.team"))
+    assert answer == {"ok": False, "error": "domain_taken", "detail": "boatyard-visuals.tico.team belongs to boatyard"}
+    assert not (ready.root / "companies" / "other").exists()
+    ready("remove", "--company", "boatyard")
+    assert ready(*move_args(ready, slug="other", domain="boatyard-visuals.tico.team"))["ok"]
+    answer = ready(*add_args(ready, "boatyard"))
+    assert answer["error"] == "domain_taken" and "belongs to other" in answer["detail"]
+
+
+def test_a_new_slug_never_ends_in_visuals(ready):
+    answer = ready(*add_args(ready, "acme-visuals"))
+    assert answer["error"] == "reserved_name" and "-visuals" in answer["detail"]
+    assert not (ready.root / "companies" / "acme-visuals").exists()
 
 
 # the tunnel
@@ -1529,10 +1605,17 @@ def test_carried_settings_are_kept_and_the_cells_own_win(ready):
 
 def test_a_new_env_file_replaces_the_carried_settings(ready):
     ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "old.env", CARRIED)))
+    assert "visual_host" not in record(ready, "ticoteam") and "ticoteam-visuals" not in caddyfile(ready)
     answer = ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "new.env", "TICO_TOPIC_FRESH=24")))
     assert answer["changed"] is True and answer["ignored"] == []
     env = envfile.parse((ready.root / "companies" / "ticoteam" / ".env").read_text())
     assert env["TICO_TOPIC_FRESH"] == "24" and "TICO_BLOB_BUCKET" not in env and "TICO_RUNNER_URL" not in env
+    # Carried to default: the company gains its visuals host; default to carried: it loses it again.
+    assert record(ready, "ticoteam")["visual_host"] == "ticoteam-visuals.tico.team"
+    assert env["TICO_VISUAL_ORIGIN"] == "https://ticoteam-visuals.tico.team" and "ticoteam-visuals" in caddyfile(ready)
+    ready(*move_args(ready, "--env-file", secret_file(ready.tmp, "back.env", CARRIED)))
+    assert "visual_host" not in record(ready, "ticoteam") and "ticoteam-visuals" not in caddyfile(ready)
+    assert env_of(ready, "ticoteam")["TICO_VISUAL_ORIGIN"] == "https://hub.ticofiles.com"
 
 
 @pytest.mark.parametrize(
