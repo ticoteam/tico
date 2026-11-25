@@ -1,3 +1,4 @@
+# pyright: strict
 """The Tools registry (docs/connect-tools.md, "Tools registry"): every tool the company's agents may reach for, with
 words on how to use it, and each agent's own list.
 
@@ -21,14 +22,14 @@ Never a credential value: access is a level, how a run reaches the tool and its 
 import json
 import re
 from functools import lru_cache
+from typing import Any, cast
 
 import yaml
 from fastapi import Query, Request
 
-from . import config
-from . import models as M
-from . import tool_access as TA
-from . import tool_services as TS
+from . import config as _config
+from . import tool_access as _TA
+from . import tool_services as _TS
 from .api_answers.tool_guides import (
     BotToolGuideList,
     BotToolGuideListed,
@@ -38,7 +39,44 @@ from .api_answers.tool_guides import (
     ToolGuideList,
 )
 from .api_contract import api_v2
-from .store import H, Problem, encode
+from .models import BotToolGuideNote, Empty, ToolGuideWrite
+from .store import H as _H
+from .store import Problem as _Problem
+from .store import encode as _encode
+
+# The store and the neighbours used below are not strictly typed: they are used through Any here (as
+# backend/access_requests.py does).
+config: Any = _config
+TA: Any = _TA
+TS: Any = _TS
+H: Any = _H
+Problem: Any = _Problem
+encode: Any = _encode
+Row = dict[str, Any]
+Entry = tuple[Row, list[Row], Row | None]
+
+
+def _mod(name: str) -> Any:
+    """A neighbour module, imported when used and typed as Any at the door. Every name is a literal import (see
+    backend/access_requests.py _mod)."""
+    if name == "api_tools":
+        from . import api_tools as found
+    elif name == "bot_tools":
+        from . import bot_tools as found
+    elif name == "integrations":
+        from . import integrations as found
+    elif name == "names":
+        from . import names as found
+    elif name == "page_owners":
+        from . import page_owners as found
+    elif name == "secret_drop":
+        from . import secret_drop as found
+    elif name == "tool_proxy":
+        from . import tool_proxy as found
+    else:
+        raise ValueError(name)
+    return found
+
 
 SHIPPED_DIR = config.ROOT / "templates" / "tool-guides"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
@@ -50,10 +88,10 @@ TEXT_FIELDS = ("name", "category", "summary", "instructions", "guidance", "sourc
 
 
 @lru_cache(maxsize=1)
-def shipped():
+def shipped() -> dict[str, Row]:
     """{slug: guide} from templates/tool-guides/: the frontmatter's name, category, summary and commands (`origin`
     vendor unless it says), and the body as the instructions."""
-    out = {}
+    out: dict[str, Row] = {}
     for path in sorted(SHIPPED_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8")
         _, head, body = text.split("---", 2) if text.startswith("---") else ("", "", text)
@@ -69,19 +107,19 @@ def shipped():
     return out
 
 
-def _json_list(value):
+def _json_list(value: Any) -> list[Any]:
     try:
         found = json.loads(value or "[]")
     except ValueError:
         return []
-    return found if isinstance(found, list) else []
+    return list(cast(list[Any], found)) if isinstance(found, list) else []
 
 
-def _guide(slug, row, ship, vendor_name=""):
+def _guide(slug: str, row: Any, ship: Any, vendor_name: str = "") -> Row:
     """One guide as the reader sees it: the company's row over the shipped guide."""
     row, ship = row or {}, ship or {}
 
-    def pick(field):
+    def pick(field: str) -> Any:
         return row.get(field) or ship.get(field) or ""
 
     instructions = pick("instructions")
@@ -105,23 +143,22 @@ def _guide(slug, row, ship, vendor_name=""):
     }
 
 
-def _tool_id(index_row):
+def _tool_id(index_row: Any) -> str | None:
     """The tools row id of an API or website Tools row (`api:<id>`, `website:<id>`), else None."""
     kind, _, tid = str(index_row["id"]).partition(":")
     return tid if kind in ("api", "website") and tid else None
 
 
-def registry(c, who, auth, settings, admins):
+def registry(c: Any, who: Any, auth: Any, settings: Any, admins: Any) -> dict[str, Entry]:
     """{slug: (guide, the vendor's Tools rows the reader may see, the company's row or None)}, by slug."""
-    from . import api_tools
-
-    vendors = {}
+    api_tools = _mod("api_tools")
+    vendors: dict[str, list[Row]] = {}
     for row in api_tools.index_rows(c, who, auth, settings, admins):
         if row.get("vendor") and not row.get("requestable"):
             vendors.setdefault(row["vendor"], []).append(row)
     rows = {r["slug"]: dict(r) for r in c.execute("SELECT * FROM tool_guides")}
     ship = shipped()
-    out = {}
+    out: dict[str, Entry] = {}
     for slug in sorted(set(ship) | set(rows) | set(vendors)):
         row = rows.get(slug)
         archived = bool(row and row["archived_at"])
@@ -134,7 +171,7 @@ def registry(c, who, auth, settings, admins):
     return out
 
 
-def resolve(reg, word):
+def resolve(reg: dict[str, Entry], word: Any) -> str | None:
     """The registry slug a word names: the slug itself, a vendor alias (gh, postgresql), or a guide's command
     (psql, sqlite3). None when nothing does."""
     word = str(word or "").strip().lower()
@@ -146,7 +183,7 @@ def resolve(reg, word):
     return next((slug for slug, (g, _, _) in reg.items() if word in [x.lower() for x in g["commands"]]), None)
 
 
-def _agent(bot, actor):
+def _agent(bot: Any, actor: Any) -> str | None:
     """The agent a use counts for: the run's bot, else a bot acting as itself; a person's own use counts for none."""
     if bot:
         return str(bot)
@@ -154,7 +191,7 @@ def _agent(bot, actor):
     return actor[len("bot:") :] if actor.startswith("bot:") else None
 
 
-def usage(c, tool_ids):
+def usage(c: Any, tool_ids: Any) -> dict[str, dict[str, list[Any]]]:
     """{tool id: {agent: [uses, last used]}} over the last USED_DAYS: calls through Tico's proxy, and one for each
     agent's latest key read (credential_uses keeps one row a caller). Read by tool id, which both tables index."""
     tool_ids = sorted(set(tool_ids))
@@ -162,9 +199,9 @@ def usage(c, tool_ids):
         return {}
     since = H.shift(H.now(), days=-USED_DAYS)
     marks = ",".join("?" * len(tool_ids))
-    out = {}
+    out: dict[str, dict[str, list[Any]]] = {}
 
-    def add(tid, agent, uses, at):
+    def add(tid: str, agent: str | None, uses: int, at: Any) -> None:
         if agent:
             seen = out.setdefault(tid, {}).setdefault(agent, [0, None])
             seen[0] += uses
@@ -185,9 +222,9 @@ def usage(c, tool_ids):
     return out
 
 
-def _listings(c):
+def _listings(c: Any) -> dict[str, dict[str, str]]:
     """{slug: {bot: note}} of every agent's list."""
-    out = {}
+    out: dict[str, dict[str, str]] = {}
     for slug, bot, note in c.execute(
         "SELECT g.slug, b.bot, b.note FROM bot_tool_guides b JOIN tool_guides g ON g.id=b.tool_guide_id"
     ):
@@ -195,10 +232,10 @@ def _listings(c):
     return out
 
 
-def _users(reg_entry, listed, used):
+def _users(reg_entry: Entry, listed: dict[str, str], used: dict[str, dict[str, list[Any]]]) -> dict[str, list[Any]]:
     """{agent: [listed, note, uses, last used]} for one registry entry."""
     _, vrows, _ = reg_entry
-    out = {bot: [True, note, 0, None] for bot, note in listed.items()}
+    out: dict[str, list[Any]] = {bot: [True, note, 0, None] for bot, note in listed.items()}
     for tid in filter(None, map(_tool_id, vrows)):
         for bot, (uses, at) in used.get(tid, {}).items():
             item = out.setdefault(bot, [False, "", 0, None])
@@ -207,14 +244,15 @@ def _users(reg_entry, listed, used):
     return out
 
 
-def _page(rows, limit, cursor):
+def _page(rows: list[Row], limit: int, cursor: Any) -> tuple[list[Row], str | None]:
     try:
         start = int(cursor or 0)
     except ValueError:
         start = -1
     if start < 0:
         raise Problem("invalid_request", "cursor is the `next` of the page before", 422)
-    shown, used, end = [], 0, start
+    shown: list[Row] = []
+    used, end = 0, start
     for item in rows[start : start + max(1, min(limit, LIST_MAX))]:
         size = len(encode(item).encode())
         if shown and used + size > LIST_BYTES_MAX:
@@ -225,21 +263,33 @@ def _page(rows, limit, cursor):
     return shown, str(end) if end < len(rows) else None
 
 
-def _matches(guide, words):
+def _matches(guide: Row, words: list[str]) -> bool:
     text = " ".join([guide["slug"], guide["name"], guide["category"], guide["summary"], *guide["commands"]]).lower()
     return all(w in text for w in words)
 
 
-def list_page(c, who, auth, settings, admins, q="", category="", origin="", bot="", limit=LIST_MAX, cursor=""):
+def list_page(
+    c: Any,
+    who: Any,
+    auth: Any,
+    settings: Any,
+    admins: Any,
+    q: str = "",
+    category: str = "",
+    origin: str = "",
+    bot: str = "",
+    limit: int = LIST_MAX,
+    cursor: str = "",
+) -> Row:
     """`GET /api/v2/tool-guides`: the registry, most used first. `bot` keeps the tools on that agent's page."""
     reg = registry(c, who, auth, settings, admins)
-    keep = None
+    keep: set[str] | None = None
     if bot:
         keep = {r["slug"] for r in bot_rows(c, who, auth, admins, _bot_id(c, auth, who, bot), reg)}
     used = usage(c, [tid for _, vrows, _ in reg.values() for tid in map(_tool_id, vrows) if tid])
     listings = _listings(c)
     words = str(q or "").lower().split()
-    rows = []
+    rows: list[Row] = []
     for slug, entry in reg.items():
         guide, vrows, _ = entry
         if keep is not None and slug not in keep:
@@ -268,17 +318,16 @@ def list_page(c, who, auth, settings, admins, q="", category="", origin="", bot=
     return {"tool_guides": shown, "next": after}
 
 
-def _access(c, who, vrows):
+def _access(c: Any, who: Any, vrows: list[Row]) -> list[Row]:
     """The caller's way into each of the vendor's Tools rows: its level, how a run reaches it and the variables' names,
     and for an agent with none the command that asks for Read. Never a value."""
-    from . import api_tools
-    from .tool_proxy import url_env
-
+    api_tools = _mod("api_tools")
+    url_env = _mod("tool_proxy").url_env
     agent = who.role == "bot"
-    out = []
+    out: list[Row] = []
     for row in vrows:
         tid = _tool_id(row)
-        item = {
+        item: Row = {
             "id": row["id"],
             "name": row["name"],
             "kind": row["kind"],
@@ -303,10 +352,10 @@ def _access(c, who, vrows):
     return out
 
 
-def _requestable(c, who, slug, shown):
+def _requestable(c: Any, who: Any, slug: str, shown: set[str]) -> list[Row]:
     """The vendor's API tools for Everyone the caller holds nothing on, by name and id alone (as the Tools list shows
     them to a person), so an agent learns the tool is there and how to ask for it. Nothing of how they are set up."""
-    out = []
+    out: list[Row] = []
     for tool in c.execute("SELECT * FROM tools WHERE kind='api' AND audience IS NULL ORDER BY lower(name), id"):
         if "api:" + tool["id"] in shown:
             continue
@@ -327,7 +376,7 @@ def _requestable(c, who, slug, shown):
     return out
 
 
-def _seen_bots(c, who, auth, admins, bots):
+def _seen_bots(c: Any, who: Any, auth: Any, admins: Any, bots: set[str]) -> set[str]:
     """The agents among `bots` the reader may see (the rule every list of bots follows)."""
     if not bots or who.role == "owner" or TA.admin(c, who, admins):
         return set(bots)
@@ -335,11 +384,10 @@ def _seen_bots(c, who, auth, admins, bots):
     return {b for b in bots if (levels.get(b) or {}).get("see")}
 
 
-def detail(c, who, auth, settings, admins, slug):
+def detail(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -> Row:
     """`GET /api/v2/tool-guides/{slug}`: one guide, the caller's way into each of its Tools rows, the agents that list
     or use it, and the vendor's learnings."""
-    from . import integrations, names
-
+    integrations, names = _mod("integrations"), _mod("names")
     reg = registry(c, who, auth, settings, admins)
     found = resolve(reg, slug)
     if found is None:
@@ -370,15 +418,14 @@ def detail(c, who, auth, settings, admins, slug):
     return {**guide, "access": access, "used_by": used_by, "learnings": learnings}
 
 
-def _signed_in(who):
+def _signed_in(who: Any) -> None:
     if getattr(who, "support", None) or who.role not in ("owner", "human", "bot"):
         raise Problem("forbidden", "Sign in as a person or an agent of this company to change the Tools registry", 403)
 
 
-def _no_key(fields):
+def _no_key(fields: dict[str, Any]) -> None:
     """Refuses words that hold a key: a guide names a variable, never its value."""
-    from .secret_drop import scan
-
+    scan = _mod("secret_drop").scan
     for name, value in fields.items():
         if isinstance(value, str) and any(i["tier"] == "certain" for i in scan(value)):
             raise Problem(
@@ -388,7 +435,7 @@ def _no_key(fields):
             )
 
 
-def write(c, who, auth, settings, admins, slug, body):
+def write(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str, body: ToolGuideWrite) -> Row:
     """`PUT /api/v2/tool-guides/{slug}`: create or change a guide, only the fields sent. A known vendor, a shipped
     guide or an alias (gh) is that guide; any other new slug is a tool built here, which needs a summary and
     instructions. Writing an archived guide brings it back."""
@@ -443,11 +490,10 @@ def write(c, who, auth, settings, admins, slug, body):
     return _guide(slug, saved, shipped().get(slug), vrows[0].get("vendor_name", "") if vrows else "")
 
 
-def may_archive(c, who, admins, row):
+def may_archive(c: Any, who: Any, admins: Any, row: Row | None) -> bool:
     """The guide's owner, the Tools Owner and the Tools page's owner (as themselves), a credential admin, the company's
     owner."""
-    from . import page_owners
-
+    page_owners = _mod("page_owners")
     if who.role == "owner" or TA.admin(c, who, admins):
         return True
     if row is not None and row.get("owner") and row["owner"] == who.actor:
@@ -457,7 +503,7 @@ def may_archive(c, who, admins, row):
     return own and who.actor in keepers
 
 
-def archive(c, who, auth, settings, admins, slug):
+def archive(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -> Row:
     """`DELETE /api/v2/tool-guides/{slug}`: hide a guide, the shipped one too; the vendor's Tools rows stay."""
     _signed_in(who)
     reg = registry(c, who, auth, settings, admins)
@@ -488,7 +534,7 @@ def archive(c, who, auth, settings, admins, slug):
     return {"slug": found, "archived": True}
 
 
-def _bot_id(c, auth, who, bot):
+def _bot_id(c: Any, auth: Any, who: Any, bot: str) -> str:
     found = (H.resolve_bot(c, bot) or {}).get("id", bot)
     auth.require_read(c, who, found)  # a 404 for someone who cannot see the bot
     if not H.bot(c, found):
@@ -496,15 +542,14 @@ def _bot_id(c, auth, who, bot):
     return found
 
 
-def bot_rows(c, who, auth, admins, bot, reg):
+def bot_rows(c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, Entry]) -> list[Row]:
     """One agent's tools: the ones it lists, the ones it holds in Tools (as its page shows them to this reader) and the
     ones it used in the last USED_DAYS, by slug."""
-    from . import bot_tools
-
+    bot_tools = _mod("bot_tools")
     by_tool = {tid: slug for slug, (_, vrows, _) in reg.items() for tid in map(_tool_id, vrows) if tid}
-    found = {}
+    found: dict[str, Row] = {}
 
-    def item(slug):
+    def item(slug: str) -> Row:
         return found.setdefault(slug, {"note": "", "listed": False, "access": "none", "uses": 0, "last_used_at": None})
 
     for slug, note in c.execute(
@@ -528,7 +573,7 @@ def bot_rows(c, who, auth, admins, bot, reg):
             row = item(by_tool[tid])
             row["uses"] += agents[bot][0]
             row["last_used_at"] = max(row["last_used_at"] or "", agents[bot][1] or "") or None
-    out = []
+    out: list[Row] = []
     for slug, row in found.items():
         guide = reg[slug][0] if slug in reg else _guide(slug, None, None, TS.vendor_name(slug))
         company = reg[slug][2] if slug in reg else None
@@ -547,7 +592,9 @@ def bot_rows(c, who, auth, admins, bot, reg):
     return out
 
 
-def list_for_bot(c, who, auth, admins, settings, bot, limit=LIST_MAX, cursor=""):
+def list_for_bot(
+    c: Any, who: Any, auth: Any, admins: Any, settings: Any, bot: str, limit: int = LIST_MAX, cursor: str = ""
+) -> Row:
     """`GET /api/v2/bots/{bot}/tool-guides`."""
     bot = _bot_id(c, auth, who, bot)
     rows = bot_rows(c, who, auth, admins, bot, registry(c, who, auth, settings, admins))
@@ -555,7 +602,7 @@ def list_for_bot(c, who, auth, admins, settings, bot, limit=LIST_MAX, cursor="")
     return {"bot": bot, "tool_guides": shown, "next": after}
 
 
-def _may_keep_list(c, who, auth, admins, bot):
+def _may_keep_list(c: Any, who: Any, auth: Any, admins: Any, bot: str) -> str:
     found = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, found):
         raise Problem("not_found", "Bot not found", 404)
@@ -563,7 +610,9 @@ def _may_keep_list(c, who, auth, admins, bot):
     return found
 
 
-def list_tool(c, who, auth, settings, admins, bot, slug, body):
+def list_tool(
+    c: Any, who: Any, auth: Any, settings: Any, admins: Any, bot: str, slug: str, body: BotToolGuideNote
+) -> Row:
     """`PUT /api/v2/bots/{bot}/tool-guides/{slug}`: the agent lists a tool it uses, with what for."""
     auth.domain(who)
     bot = _may_keep_list(c, who, auth, admins, bot)
@@ -591,7 +640,7 @@ def list_tool(c, who, auth, settings, admins, bot, slug, body):
     return {"bot": bot, "slug": found, "note": body.note, "listed": True}
 
 
-def unlist_tool(c, who, auth, settings, admins, bot, slug):
+def unlist_tool(c: Any, who: Any, auth: Any, settings: Any, admins: Any, bot: str, slug: str) -> Row:
     """`DELETE /api/v2/bots/{bot}/tool-guides/{slug}`: off the agent's list. Its grants in Tools are not touched."""
     auth.domain(who)
     bot = _may_keep_list(c, who, auth, admins, bot)
@@ -610,12 +659,14 @@ def unlist_tool(c, who, auth, settings, admins, bot, slug):
     return {"bot": bot, "slug": word, "note": "", "listed": False}
 
 
-def install(app, store, auth, mutate, requester=None):
+def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None) -> None:
     """The registry's routes. `requester` maps Agent Ops with no on-behalf-of header to the person it works for (as
     backend/bot_tools.py does)."""
-    acting = requester or (lambda c, who: who)
 
-    def admins():
+    def acting(c: Any, who: Any) -> Any:
+        return requester(c, who) if requester else who
+
+    def admins() -> Any:
         vault = getattr(app.state, "vault", None)
         return vault.admins if vault is not None else ()
 
@@ -637,7 +688,7 @@ def install(app, store, auth, mutate, requester=None):
         bot: str = Query("", max_length=80),
         limit: int = Query(LIST_MAX, ge=1, le=LIST_MAX),
         cursor: str = Query("", max_length=20),
-    ):
+    ) -> Any:
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -653,7 +704,7 @@ def install(app, store, auth, mutate, requester=None):
             ToolGuideDetail,
         ),
     )
-    def tool_guide(request: Request, slug: str):
+    def tool_guide(request: Request, slug: str) -> Any:
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -669,9 +720,13 @@ def install(app, store, auth, mutate, requester=None):
             ToolGuide,
         ),
     )
-    def write_tool_guide(request: Request, slug: str, body: M.ToolGuideWrite):
+    def write_tool_guide(request: Request, slug: str, body: ToolGuideWrite) -> Any:
         who = request.state.identity
-        return mutate(request, body, lambda c: write(c, acting(c, who), auth, store.settings, admins(), slug, body))
+
+        def work(c: Any) -> Any:
+            return write(c, acting(c, who), auth, store.settings, admins(), slug, body)
+
+        return mutate(request, body, work)
 
     @app.delete(
         "/api/v2/tool-guides/{slug}",
@@ -683,9 +738,13 @@ def install(app, store, auth, mutate, requester=None):
             ToolGuideArchived,
         ),
     )
-    def archive_tool_guide(request: Request, slug: str):
+    def archive_tool_guide(request: Request, slug: str) -> Any:
         who = request.state.identity
-        return mutate(request, M.Empty(), lambda c: archive(c, acting(c, who), auth, store.settings, admins(), slug))
+
+        def work(c: Any) -> Any:
+            return archive(c, acting(c, who), auth, store.settings, admins(), slug)
+
+        return mutate(request, Empty(), work)
 
     @app.get(
         "/api/v2/bots/{bot}/tool-guides",
@@ -702,7 +761,7 @@ def install(app, store, auth, mutate, requester=None):
         bot: str,
         limit: int = Query(LIST_MAX, ge=1, le=LIST_MAX),
         cursor: str = Query("", max_length=20),
-    ):
+    ) -> Any:
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
@@ -718,11 +777,13 @@ def install(app, store, auth, mutate, requester=None):
             BotToolGuideListed,
         ),
     )
-    def list_bot_tool(request: Request, bot: str, slug: str, body: M.BotToolGuideNote):
+    def list_bot_tool(request: Request, bot: str, slug: str, body: BotToolGuideNote) -> Any:
         who = request.state.identity
-        return mutate(
-            request, body, lambda c: list_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug, body)
-        )
+
+        def work(c: Any) -> Any:
+            return list_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug, body)
+
+        return mutate(request, body, work)
 
     @app.delete(
         "/api/v2/bots/{bot}/tool-guides/{slug}",
@@ -733,8 +794,10 @@ def install(app, store, auth, mutate, requester=None):
             BotToolGuideListed,
         ),
     )
-    def unlist_bot_tool(request: Request, bot: str, slug: str):
+    def unlist_bot_tool(request: Request, bot: str, slug: str) -> Any:
         who = request.state.identity
-        return mutate(
-            request, M.Empty(), lambda c: unlist_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug)
-        )
+
+        def work(c: Any) -> Any:
+            return unlist_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug)
+
+        return mutate(request, Empty(), work)

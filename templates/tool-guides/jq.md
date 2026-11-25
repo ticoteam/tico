@@ -9,7 +9,7 @@ Pulling exact fields out of JSON from an API or a CLI, and turning it into a lis
 
 ## How to use it
 
-    tico task list --json | jq -r '.tasks[] | [.id, .title] | @tsv'
+    gh api repos/OWNER/REPO/pulls | jq -r '.[] | [.number, .title] | @tsv'
     curl -s "$URL" | jq '[.items[] | select(.status == "open")] | length'
     jq -r '.rows[] | [.name, .total] | @csv' report.json > report.csv
 
