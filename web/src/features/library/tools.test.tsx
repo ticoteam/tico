@@ -2121,4 +2121,26 @@ describe('the tools registry', () => {
     );
     await waitFor(() => expect(router.state.location.search).toMatchObject({ tool: 'built:churn-report' }));
   });
+
+  it('archives from its ⋯ once the server agrees, back to Tools; a refusal keeps it open', async () => {
+    const guide = { ...built, instructions: 'Run it on Mondays', guidance: '', commands: [], source: '', needs: [], owner: null, shipped: false, access: [], used_by: [], learnings: [] };
+    let answer: unknown = refused(403, 'forbidden');
+    const sent = serve((url, method) =>
+      url === '/api/v2/tool-guides/churn-report' ? (method === 'DELETE' ? answer : guide) : registry(url),
+    );
+    tools();
+    const router = open('built:churn-report');
+    await page('Churn report');
+    await toolMore('Churn report');
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    const sure = await screen.findByRole('alertdialog', { name: 'Archive Churn report?' });
+    fireEvent.click(within(sure).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(list(sent)).toEqual([['DELETE', '/api/v2/tool-guides/churn-report']]));
+    await waitFor(() => expect((within(sure).getByRole('button', { name: 'Archive' }) as HTMLButtonElement).disabled).toBe(false));
+    expect(router.state.location.search).toMatchObject({ tool: 'built:churn-report' });
+    answer = { slug: 'churn-report', archived: true };
+    fireEvent.click(within(sure).getByRole('button', { name: 'Archive' }));
+    await waitFor(() => expect(router.state.location.search).toEqual({}));
+    expect(list(sent)).toHaveLength(2);
+  });
 });

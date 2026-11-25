@@ -18,6 +18,7 @@ import {
   releaseInbox,
   removeSetting,
   saveToolGuide,
+  archiveToolGuide,
   requestNumber,
   revealSecret,
   saveSetting,
@@ -598,6 +599,20 @@ export const toolsWriteGuide = defineAction({
   run: (_ctx, { slug, ...change }) => saveToolGuide(slug, change),
   did: () => 'Saved',
   target: (i) => ({ kind: 'tool', id: `${i.origin === 'built' ? 'built' : 'vendor'}:${i.slug}` }),
+});
+
+/** Archive a tool's guide, then back to Tools. The server says who may (its owner, the Tools Owner, a credential admin). */
+export const toolsArchiveGuide = defineAction({
+  id: 'tools.archiveGuide',
+  title: "Archive a tool's guide",
+  kind: 'change',
+  input: z.strictObject({ slug: guideSlug }),
+  run: async ({ router }, i) => {
+    await archiveToolGuide(i.slug);
+    await go(router, '/library/tools', {}, true);
+  },
+  did: () => 'Archived',
+  target: () => ({ kind: 'page', id: '/library/tools' }),
 });
 
 /** One tap: the provider's sign-in page, which comes back to the tool. */

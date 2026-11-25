@@ -9,12 +9,14 @@ import { IconButton } from '@/kit/IconButton';
 import { Facts, LabelValue } from '@/kit/LabelValue';
 import { Link } from '@/kit/Link';
 import { Markdown } from '@/kit/Markdown';
+import { MenuItem } from '@/kit/Menu';
 import { Pill } from '@/kit/Pill';
 import { Row } from '@/kit/Row';
 import { Select } from '@/kit/Select';
-import { Section } from '@/pagekinds';
+import { PageMore, Section } from '@/pagekinds';
 import { AddDialog, ConnectDialog, type Adding } from './AddTool';
 import { Face, Foot, press } from './parts';
+import { Confirm } from './ToolDialogs';
 import {
   catalogQuery,
   FUNCTIONS,
@@ -42,6 +44,7 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
   const [connecting, setConnecting] = useState(false);
   const [adding, setAdding] = useState<Adding | null>(null);
   const [editing, setEditing] = useState(false);
+  const [archiving, setArchiving] = useState(false);
   // The page waits on the guide; a vendor the registry cannot answer still shows its connections.
   const read = built || !g.isError ? g : vendor;
   const name = guide?.name || vendor.data?.name || slug;
@@ -54,6 +57,14 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
       q={read}
       target={`tool:${origin}:${slug}`}
       bare
+      more={
+        // Who may archive is the server's to say: a refusal says so in its toast.
+        (guide?.has_guide || guide?.shipped) && (
+          <PageMore>
+            <MenuItem label="Archive" onSelect={() => setArchiving(true)} />
+          </PageMore>
+        )
+      }
       fill={
         !built &&
         known && (
@@ -126,6 +137,15 @@ export function GuideView({ slug, origin }: { slug: string; origin: ToolOrigin }
             </div>
           ))}
         </Section>
+      )}
+      {archiving && (
+        <Confirm
+          title={`Archive ${name}?`}
+          description={built ? undefined : 'Its connections stay.'}
+          label="Archive"
+          onGo={() => press('tools.archiveGuide', { slug }, 'Not archived')}
+          onClose={() => setArchiving(false)}
+        />
       )}
       {editing && <EditGuideDialog slug={slug} origin={origin} guide={guide} onClose={() => setEditing(false)} />}
       {connecting && (

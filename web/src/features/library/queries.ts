@@ -34,6 +34,7 @@ import type {
   SourceDocumentList,
   SourceEdit,
   ToolGuide as ToolGuideSaved,
+  ToolGuideArchived,
   ToolGuideDetail,
   ToolGuideList,
   ToolGuideNeed,
@@ -715,6 +716,18 @@ export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
     await queryClient.invalidateQueries({ queryKey: toolGuidesQuery.queryKey });
     return saved;
   });
+
+/** Archived (its owner, the Tools Owner or a credential admin): out of the list once the server agrees; a vendor's
+    Tools rows stay, with no guide. */
+export async function archiveToolGuide(slug: string) {
+  await write<ToolGuideArchived>({
+    key: toolGuidesQuery.queryKey,
+    wait: true,
+    optimistic: (cur: ToolGuideRow[] | undefined) => cur?.filter((r) => r.slug !== slug),
+    send: (idempotencyKey) => api.delete<ToolGuideArchived>(`/api/v2/tool-guides/${enc(slug)}`, { idempotencyKey }),
+  });
+  queryClient.removeQueries({ queryKey: toolGuideQuery(slug).queryKey });
+}
 
 /** A built tool's slug from its name: `Weekly churn report` is `weekly-churn-report`. */
 export const slugOf = (name: string) =>

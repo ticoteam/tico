@@ -11630,6 +11630,26 @@
       }
     },
     {
+      "id": "tools.archiveGuide",
+      "title": "Archive a tool's guide",
+      "kind": "change",
+      "input": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 61,
+            "pattern": "^[a-z0-9][a-z0-9-]*$"
+          }
+        },
+        "required": [
+          "slug"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
       "id": "tools.cancelLetter",
       "title": "Stop a letter before it is mailed",
       "kind": "change",
