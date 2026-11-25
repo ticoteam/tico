@@ -320,7 +320,7 @@ struct Shared {
     exited: Mutex<Arc<AtomicBool>>,
     /// A `/compact` went to the process (`start_command`): answered when Codex took it, not when it ended, so the
     /// process is not kept (`release`).
-    compacted: AtomicBool,
+    asked_compact: AtomicBool,
     /// Confirms a successful wait even if the caller that started the stop was cancelled.
     reaped: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// The current app-server, swept before replacing it or ending the attempt.
@@ -376,7 +376,7 @@ impl CodexHost {
             alive: AtomicBool::new(false),
             child: Mutex::new(None),
             exited: Mutex::new(Arc::new(AtomicBool::new(false))),
-            compacted: AtomicBool::new(false),
+            asked_compact: AtomicBool::new(false),
             reaped: Mutex::new(None),
             sweep: Mutex::new(None),
             sweep_redactor: Mutex::new(None),
@@ -665,7 +665,8 @@ impl CodexHost {
         let Some(key) = self.0.key.lock().unwrap().clone() else {
             return false;
         };
-        if self.0.holds_token.load(Ordering::SeqCst) || self.0.compacted.load(Ordering::SeqCst) {
+        if self.0.holds_token.load(Ordering::SeqCst) || self.0.asked_compact.load(Ordering::SeqCst)
+        {
             return false;
         }
         if self.turn_running(thread) {
@@ -1966,7 +1967,7 @@ impl CodexHost {
         let (name, args) = trimmed.split_once(' ').unwrap_or((trimmed, ""));
         match name {
             "/compact" => {
-                self.0.compacted.store(true, Ordering::SeqCst);
+                self.0.asked_compact.store(true, Ordering::SeqCst);
                 self.request(
                     "thread/compact/start",
                     json!({"threadId": thread_id}),
