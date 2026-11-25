@@ -197,7 +197,7 @@ Stable v2 (`GET /api/v2/openapi.json`): `GET /api/v2/bots/{bot}/files?limit=&cur
 activity, with the visible `total`; `q` keeps files that have every word in their name, path or text, as
 [Search](#search) reads it; `kind` is one of the Library's kinds), `POST /api/v2/files/uploads`, `/links`, `/imports`,
 `PATCH /api/v2/files/{id}` (title, task, archive, promote), `GET /api/v2/files/{id}/info` (one file as its bot's Files
-lists it, 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
+lists it, plus its `tags`, `metadata`, `parent` and `may_edit`; 404 when the viewer cannot see it), `/activity` and `/versions`. Display names come as `actor_name` and in `actors`, as everywhere in v2.
 `POST /api/v2/files/dates` is the runner's own call, not part of the stable API.
 
 Each file in these answers (the list, `/files/mentions` and `/info`) has two kinds. `kind` is the stored kind, which
