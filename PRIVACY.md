@@ -7,7 +7,7 @@ Tico Cloud machines also come with support access, on by default, which the owne
 ([below](#tico-support-on-cloud-machines)).
 The setup page on tico.team, which you use before installing, has its own section ([below](#the-setup-page-on-ticoteam)).
 Ask Tico, the chat on tico.team's pages, has its own section too ([below](#ask-tico-the-chat-on-ticoteam)).
-Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots you set to use a Tico model send their model calls through Tico HQ to OpenRouter ([below](#tico-models-through-tico-hq)). Tico's source is available, so you can read the code that
+Separately, the server calls AI model providers with your own keys for a few features ([below](#the-servers-own-model-calls)). Bots on a Tico model, Tico Meet calls and the Gateway's tools go through Tico HQ to OpenRouter ([below](#tico-models-through-tico-hq)). Tico's source is available, so you can read the code that
 sends them (`backend/census.py`, `backend/releases.py`, `backend/suggestions.py`, `backend/recruit.py`, `backend/support.py`). The service that receives them,
 Tico HQ, is run by the Tico team from a separate, private repository; its code is not published. What it is sent and what it keeps is described in [docs/tico-hq.md](docs/tico-hq.md).
 
@@ -197,9 +197,13 @@ A copy of your plan stays in your browser either way.
 ### What is sent
 
 - `GET /v1/onboarding/health`: whether Tico's assistant can answer. Nothing is sent with it.
-- `POST /v1/onboarding/turn`, while connected: your message, the tab you are on and your plan, with the chat's last 8 turns,
-  which HQ sends through OpenRouter to the chat's model (Anthropic's Claude Haiku 5.5 by default) for the answer, with
-  data collection denied and zero retention. Key-shaped text is removed first. HQ logs no text.
+- `POST /v1/onboarding/turn`, while connected: the visit's ID, your message, the tab you are on and your plan, with the
+  ID of the agent's draft you are deciding on, if any. HQ sends your message, your plan, that draft in full and the
+  chat's last 8 turns through OpenRouter to the chat's model (Anthropic's Claude Haiku 5.5 by default) for the answer;
+  the turn's later calls add the changes the model asked for and what came of them. Every call goes with data
+  collection denied and zero retention. Key-shaped text is removed first. HQ logs no text. Only if the Tico team turns
+  it on (it is off by default), HQ also keeps each message you send, with key-shaped text removed, under a salted hash
+  of the visit's ID, for abuse review, and deletes it after the number of days the team sets.
 - `PUT /v1/onboarding/draft`, while connected: the page's whole draft (the plan it has built so far: company name, website
   address, description, bots, people, goals and strategy), and the step you are on. The page sends it 2 seconds after each
   change and on each step change.
@@ -239,7 +243,8 @@ There are two kinds of record, with different rules.
 | `turns`, `cost_micro_usd` | how many turns the assistant answered, and what they cost |
 
 - **Counts are off unless HQ is told to keep them.** While off, HQ answers the same and stores no counts.
-- **Counts hold no message text.** Text is kept only in the draft and chat, below.
+- **Counts hold no message text.** Text is kept only in the draft and chat, below, and in the abuse-review copy above
+  while it is on.
 - **Retention:** a count row is deleted 13 months after its day, by the daily job.
 
 **Your draft and the chat** (kept while connected, for 30 days after the draft's last update):
@@ -277,11 +282,11 @@ for you or reach a Tico server you run. Only `https://tico.team` may call these 
   TypeSafe.
 - **To OpenRouter** (openrouter.ai), which passes it to a provider that serves the model (MiniMax's M3.1 Flash by default;
   the Tico team can change it): a fixed instruction, Tico's sales brief, up to four excerpts of Tico's public manual
-  that match your message, your current message and up to 20 previous messages from this chat, as you wrote them.
-  HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything personal in the call is
-  what you typed. HQ calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own key, or HQ's shared one
-  when that is not set; either way OpenRouter receives the same call) and the same two filters on every call, which
-  are not a setting: no provider that may keep or train on data (`data_collection: deny`), and only endpoints
+  that match your message, your current message as you wrote it, and the chat's last 20 messages before it (yours
+  and Ask Tico's replies). HQ adds nothing about you (not the chat ID, your IP address or any other detail): anything
+  personal in the call is what you typed. HQ calls OpenRouter with one of its own OpenRouter keys (Ask Tico's own
+  key, or HQ's shared one when that is not set; either way OpenRouter receives the same call) and the same two filters
+  on every call, which are not a setting: no provider that may keep or train on data (`data_collection: deny`), and only endpoints
   OpenRouter classes as zero data retention (`zdr: true`). If no provider meets them, the call is refused and the
   chat rests; it is never sent again with looser filters. OpenRouter's policy does not count a provider's in-memory
   prompt caching as retention
@@ -305,10 +310,14 @@ you set on the server, and never in rehearsal mode. Each provider keeps what it 
 
 | What | What is sent | To whom |
 |---|---|---|
-| **Decisions** (`POST /api/v2/decisions`, `tico_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends each of the day's items (chat and task text, Slack channel messages, mail and meeting excerpts) with the profiles of the bots it may reach | In this order, each one only when the one before is not set up or fails: the Tico AI Gateway on Tico HQ (the current version of Tico's Decide Low tier, which asks TypeSafe's Jev; HQ keeps the label, counts, tokens, latency and cost per gateway key, never the state or the questions) when the server holds a gateway key (`TICO_GATEWAY_KEY`); TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`; the team's own provider from Settings > Computers > Models whose key the server holds: Anthropic, OpenAI, Google (Gemini), xAI or OpenRouter (which also serves the DeepSeek, Kimi, Llama and Mistral models). With none of them nothing is sent |
+| **Decisions** (`POST /api/v2/decisions`, `tico_decision_ask`, scoring saved listening posts, live-meeting routing, the nightly learning run) | The JSON state and the typed questions the caller sends: whatever it puts there, which can be a mail's subject and body or a stretch of a transcript. The nightly learning run sends up to 600 of the day's items (chat and task text, Slack channel messages, mail people sent, and the titles and summaries of meetings the whole team may see), each with its source and a label that names where it came from and who wrote it, with the IDs and profiles of the bots it may reach | The Tico AI Gateway on Tico HQ when the server holds a gateway key (`TICO_GATEWAY_KEY`, or one saved in Settings > Computers): the current version of Tico's Decide Low tier, which asks TypeSafe's Jev. HQ keeps counts, tokens, latency and cost per gateway key, never the state, the questions or the call's label. Then, only when the Gateway is not set up or fails, TypeSafe (api.typesafe.ai, the Jev model) directly when you set your own `TYPESAFE_API_KEY`. With neither nothing is sent |
 | **Slack routing** (`backend/slack_gateway.py`, when the Slack gateway is on) | The message's text; the sender's name, roster id, team and the bots they are primary for; the channel's name and registry purpose; the last twelve exchanges in the thread and their previous routing; and the active roster (each bot's name, team, description and manager) | The same decision model as above |
 | **Topic changed** (`backend/topic_change.py`, when Settings > General > **Start fresh when the topic changes** is on) | Before a message in a person's direct chat with a bot is sent, and only when the chat is long or idle: the chat's last 3 turns since its last clear (what the person said and what the bot answered, each cut to about 1,500 characters) and the new message. Task lines, task chats, group chats and shared bots' rooms are never sent. The audit keeps the answer, never the text | The same decision model as above |
-| **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | Google's Gemini API (generativelanguage.googleapis.com, `gemini-3.7-flash`) with the server's `GEMINI_API_KEY`, whatever Settings > Computers > Models says. Without a key nothing is sent and the pulled excerpts are the answer |
+| **Market ask** (`POST /api/v2/market/ask`) | The question, and up to about seventeen excerpts from the market graph that match it: entity names, aliases and summaries, evidence quotes and our reads, and the start of matching market pages | The same model as **Writing and summaries** below. Without one nothing is sent and the pulled excerpts are the answer |
+| **Skill screening** (every proposed skill and skill update, before an admin can approve it) | The skill's name and description, every file's path and text, the pattern matches found in it and, for an update when it fits, the diff | Tico's Decide High tier on the Tico AI Gateway, which HQ sends through OpenRouter to Claude Opus. No other model answers: without the Gateway, or when the call fails, the skill stays unscreened |
+| **Writing and summaries** (daily update drafts, thread catch-ups, Flow's and Needs you's order, company page editions, lenses, rule drafts from feedback) | The text the feature works from: for a catch-up, the thread's new messages with their authors' names; for Flow and Needs you, each ask's or task's title and details; for an update or an edition, the facts and updates it draws on; for a lens, the strategy, the answers and market notes | Under the models choices `subscriptions-gateway` and `gateway`, while the Gateway is connected: Tico Medium on the Tico AI Gateway (Low for the Needs you order). Otherwise the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent |
+| **Job descriptions** (a person drafting a job) | The role's title, who it reports to and the composed description | Google's Gemini API (`gemini-3.7-flash`) with the server's Gemini key, else the Tico AI Gateway with the gateway key. With neither nothing is sent |
+| **Physical mail** (Tico Mail) | Each scanned letter, as a PDF with its file name or as an image, to have it read; then what was read, to route it, as a decision above | The Tico AI Gateway's Low tier, while the Gateway is connected. Without it the letter waits |
 | **Strategy research** (`POST /api/v2/strategy/draft-from`, the owner during setup) | The website address and the description the owner typed, and the text of up to four of that website's public pages (home, about, pricing, customers; 8,000 characters each). Fetching those pages is a plain request from the server to that website, with no credentials | Tico Medium on the Tico AI Gateway (Tico HQ, then OpenRouter, [below](#tico-models-through-tico-hq)) while the gateway is connected and chosen for the gateway models, else the team's own provider from Settings > Computers > Models whose key the server holds. With neither nothing is sent and setup is a plain form. The server keeps the job (address, description, page addresses and titles, and the model's answer) in its database, the last five jobs |
 
 What the server keeps of each call is an audit event, never the text that was sent: `judge.call` (the label, the number of
@@ -321,50 +330,79 @@ these calls (`TICO_DECISIONS_DAILY_CALLS_OWNER`, `_HUMAN`, `_BOT`; README.md).
 Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or `TICO_GATEWAY_KEY`). A bot's turn then
 goes this way, and only on a computer that runs bots as their own user or is a Tico cloud machine, when:
 
-- the bot, or a task it works on, is set to a Tico model (a level from X-Low to X-High), or the bot names one as its
-  fallback;
-- under the models choice `subscriptions-gateway`, the bot is on Claude or ChatGPT and that subscription is not signed in
-  on its computer yet: its turns run on Medium (or the level its `bot.yaml` names) until it is;
-- under `subscriptions-gateway` or `gateway`, the bot's plans run out and it names no fallback of its own: a Tico model
-  is its last fallback, after every other signed-in provider, while automatic fallback is on and only on a computer
-  whose **Fall back to Tico Gateway** switch an owner or admin turned on (it is off by default);
+- the model the turn runs on is a Tico model (a level from X-Low to X-High): the company's default, the bot's own or a
+  task's;
+- the bot names a Tico model as its fallback and its own model is unavailable;
+- under the models choice `subscriptions-gateway`, the bot is on Claude or ChatGPT and neither a sign-in on its computer
+  nor a subscription given to the turn covers it: its turns run on Medium (or the level, or Fast, its `bot.yaml` names)
+  until one does;
+- under `subscriptions-gateway` or `gateway`, the bot's provider refuses the turn for a usage or capacity limit and the
+  bot names no fallback of its own: a Tico model is the last fallback, after the company's other providers signed in on
+  that computer, while automatic fallback is on and only on a computer whose **Fall back to Tico Gateway** switch an
+  owner or admin turned on (it is off by default);
 - it is a review or check run on a Tico model (under `subscriptions` or `own-keys`, only one the owner lists in the
   check-model order);
-- it is a live-meeting reply, which runs on the Meeting tier unless the meeting or Settings names another model.
+- it is a live-meeting reply: the meeting's title, the last stretch of its transcript and its chat go to the Meeting
+  tier unless the meeting or Settings names another model. Where the Meeting tier cannot run on the computer, the reply
+  goes to OpenRouter on the company's own OpenRouter key if that provider is on, else runs on the bot's own model. A
+  last try after two empty replies, and every voice-call reply, run on the bot's own model.
 
-The bot's computer sends each of those model calls, with the gateway key, to Tico HQ
-(`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
-HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the model behind that Tico model (Claude Haiku,
-Sonnet, Opus or Fable, DeepSeek, or MiniMax). Without a gateway key nothing goes this way.
+A fallback is sent the turn's conversation so far.
+
+The bot's computer sends each of those model calls, with the gateway key, to the Gateway's address (Tico HQ's
+`https://updates.tico.team/v1/gateway/chat/completions` unless you set another), and HQ sends it on to **OpenRouter**
+(openrouter.ai) with HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the model behind that Tico
+model (Claude Haiku, Sonnet, Opus or Fable, DeepSeek, or MiniMax). With a key from Tico's install setup, each call also
+carries an opaque ID for the bot, made from a secret only your install holds, so HQ can tell bots apart without
+learning their names. The server's own calls on the Gateway ([above](#the-servers-own-model-calls)) take the same
+route. Without a gateway key nothing goes this way.
 
 **What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
 anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output
 limit, stop words, reasoning effort and answer format. That is all. Not your gateway key, its label or your install ID,
-and not a caller's own id or metadata (`user`, `metadata` and fields like them are dropped at HQ). Images and PDFs are
-sent on only on the tiers whose model reads them: Low, Medium, Medium Fast, High, High Fast, X-High and X-High Fast.
-X-Low, X-Low Fast, Low Fast and Meeting take text only, and audio is refused on every tier; whatever a tier does not take
-is refused before anything is sent. A bot sends images, never PDFs, and only on those tiers; a caller that uses the
-gateway key directly may send both.
+and not a caller's own id or metadata (`user`, `metadata` and fields like them are dropped at HQ). Images and PDFs in
+a user's message go on only to a version whose model reads them; today those are Low, Medium, Medium Fast, High, High
+Fast, X-High and X-High Fast. X-Low, X-Low Fast, Low Fast and Meeting take text only, and this route takes no audio.
+HQ refuses what a version does not take before anything goes to OpenRouter. An image goes on as the call gave it, its
+data or its web address; a PDF goes with its file name. A bot sends images, never PDFs. The server's mail reading sends
+PDFs and images, and a caller that uses the gateway key directly may send both.
 
 **What HQ keeps:** none of the call's content. No message, tool or answer is stored or logged, and an error from
 OpenRouter is answered with a fixed code, never its words. Separately, HQ keeps your gateway key's record: a hash of the
 key and the label the Tico team gave it, which the team sees in its key list and usage reports. Per call, HQ writes
-the Tico model, its token counts, cost and price (added up per key and month, kept 13 months, for the monthly cap) and
-one route-log row: the time, the route, the outcome code and how long it took (kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps
-sending unknown keys; it is never stored or logged.
+the Tico model, its token counts, cost and price (added up per key and month, kept 13 months, for the monthly cap), one
+ledger row (the time, the key, its install and billing account, the bot's opaque ID, the model, the route, the outcome,
+tokens and cost; kept 13 months) and one route-log row: the time, the route, the outcome code and how long it took
+(kept 13 weeks). Your address is used in memory only, as a salted hash, to slow down an address that keeps sending
+unknown keys; it is never stored or logged.
 
-**What OpenRouter and the provider keep** is under their own terms. Zero retention is enforced on every X-Low Fast
-and Meeting call, and on any other call only when it asks for it (`"filters": {"zero_retention": true}` in the
-request): then HQ sends OpenRouter's zero-retention preference, so only an endpoint OpenRouter classes as zero data
-retention may serve the call, with data collection denied; if none can, the call fails rather than going to one that
-keeps data. OpenRouter's policy does not count a provider's in-memory prompt caching as retention, so such an endpoint
-may still cache the prompt in memory
-([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)). A call on another tier
-that does not ask gets OpenRouter's and the provider's normal retention, and Tico's bots do not ask for it today.
+**What OpenRouter and the provider keep** is under their own terms. Zero retention is enforced on every call to X-Low
+Fast 1.0 and Meeting 1.0, on another version only when the Tico team sets its route to ask for it, and on any call that
+asks for it (`"filters": {"zero_retention": true}` in the request): then HQ sends OpenRouter's zero-retention
+preference, so only an endpoint OpenRouter classes as zero data retention may serve the call, with data collection
+denied; if none can, the call fails rather than going to one that keeps data. OpenRouter's policy does not count a
+provider's in-memory prompt caching as retention, so such an endpoint may still cache the prompt in memory
+([OpenRouter: zero data retention](https://openrouter.ai/docs/guides/features/zdr#caching)). Any other call gets
+OpenRouter's and the provider's normal retention, and Tico's bots do not ask for it today.
 
 **Where it runs:** HQ's route through OpenRouter has no confirmed region, so these calls may be handled outside the
 US. A call that asks for the US (`"filters": {"region": "us"}`) is refused with `no_route` and sent nowhere, until
 a route confirmed to stay in the US exists.
+
+**Tico Meet calls:** while a call runs, the server sends each stretch of speech it records, as an audio clip, to the
+Gateway to be written down, and each sentence a bot says, with its voice, to be spoken. HQ sends clips through
+OpenRouter to Microsoft's MAI-Transcribe 2 (ElevenLabs' Scribe v2 when that is busy) and sentences to Speechify's
+Simba 3.5, with zero retention and data collection denied on each. HQ stores and logs neither the audio nor the text.
+After the call, the server sends the transcript (each line's time, speaker and words) to the Meeting tier, or to the
+company's meeting model when that is a Tico model, to draft its summary and action items.
+
+**Gateway tools:** whatever model a bot runs on, it or a person can use the Gateway's tools: web search, reading a web
+page or PDF, grouping items into a digest, making images and videos, and marketing data lookups. The server sends each
+request with the gateway key (and, for a bot, its opaque ID): the search query; the page's address; the items and the
+focus; the prompt and any reference images or frames; or the lookup's fields. HQ sends search, reading, digests, images
+and videos through OpenRouter. Search and reading use Exa or Parallel, which keep the queries and addresses they are
+sent, so a call that asks for zero retention is refused. Data lookups go to Monid, and HQ keeps a lookup's results for a
+day so the caller can read them. HQ stores no other request or answer; a finished video stays with OpenRouter, not HQ.
 
 **A server Tico hosts** (`TICO_HOSTED`) also tells Tico HQ, with the same gateway key, the release it runs, every 15
 minutes (`POST <Gateway URL>/servers/update {"version"}`), and after an update Tico support scheduled for it, how that
