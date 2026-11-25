@@ -60,7 +60,7 @@
     {
      "version": "1.0",
      "id": "tico-xlow-fast-1.0",
-     "model": "Inception Mercury 3",
+     "model": "MiniMax M3.1 Flash",
      "inputs": [
       "text"
      ],
@@ -313,7 +313,7 @@
     {
      "version": "1.0",
      "id": "tico-meeting-1.0",
-     "model": "Inception Mercury 3",
+     "model": "MiniMax M3.1 Flash",
      "inputs": [
       "text"
      ],
@@ -616,6 +616,36 @@
    ]
   },
   {
+   "id": "data",
+   "name": "Marketing data",
+   "for": "Keyword, ranking and backlink data, competitor ads, reviews, places and email checks",
+   "price": "Per call, at cost + 25%",
+   "status": "live",
+   "tools": [],
+   "details": [
+    {
+     "label": "SEO",
+     "value": "Keywords, Google results, rankings, backlinks"
+    },
+    {
+     "label": "Ads",
+     "value": "Meta Ad Library and Google Ads Transparency"
+    },
+    {
+     "label": "Local",
+     "value": "Google reviews and business listings"
+    },
+    {
+     "label": "Email",
+     "value": "Deliverability, up to 20 at a time"
+    },
+    {
+     "label": "Price",
+     "value": "At cost + 25%"
+    }
+   ]
+  },
+  {
    "id": "signals",
    "name": "Signals",
    "for": "Watch pages and releases for changes",
@@ -656,6 +686,32 @@
    ]
   },
   {
+   "id": "maps",
+   "name": "Maps",
+   "for": "Find US addresses and places, and drive times by car",
+   "price": "Free",
+   "status": "next",
+   "tools": [],
+   "details": [
+    {
+     "label": "Coverage",
+     "value": "US"
+    },
+    {
+     "label": "Search",
+     "value": "Addresses and places"
+    },
+    {
+     "label": "Drive time",
+     "value": "Times and areas by car"
+    },
+    {
+     "label": "Price",
+     "value": "Free"
+    }
+   ]
+  },
+  {
    "id": "transcribe",
    "name": "Transcribe",
    "for": "Turn a recording into text, and live speech into text",
@@ -666,6 +722,10 @@
     {
      "label": "Recordings",
      "value": "ElevenLabs Scribe v2 · $0.33 per hour"
+    },
+    {
+     "label": "Recordings 1.1",
+     "value": "MAI-Transcribe 2 · $0.15 per hour"
     },
     {
      "label": "Live",
@@ -741,10 +801,19 @@
    "id": "voice",
    "name": "Voice",
    "for": "Speak and listen on a call",
-   "price": null,
-   "status": "later",
+   "price": "$60 per 1M characters spoken",
+   "status": "live",
    "tools": [],
-   "details": []
+   "details": [
+    {
+     "label": "Speech",
+     "value": "Speechify Simba 3.5 · $60 per 1M characters"
+    },
+    {
+     "label": "Listen",
+     "value": "Transcribe · live text"
+    }
+   ]
   },
   {
    "id": "storage.s3",

@@ -12,7 +12,7 @@ A pick is a name, not a model: Tico can change what runs underneath it.
 
 | Level | Version 1.0 runs | Fast runs | For |
 |---|---|---|---|
-| X-Low | DeepSeek V4 Flash · $0.14 / $0.27 per 1M | Inception Mercury 3 · $0.30 / $1.05 | Bulk sorting, tagging, short checks |
+| X-Low | DeepSeek V4 Flash · $0.14 / $0.27 per 1M | MiniMax M3.1 Flash · $0.30 / $1.05 | Bulk sorting, tagging, short checks |
 | Low | Claude Haiku 5.5 · $0.15 / $0.75 | DeepSeek V4.1 Flash · $0.45 / $1.80 | Triage, short replies, routine checks |
 | Medium | Claude Sonnet 5.5 · $2.50 / $12.50 | Claude Opus 5.5 in fast mode · $10 / $50 | Writing, analysis, most turns |
 | High | Claude Opus 5.5 · $5 / $25 | Claude Opus 5.5 in fast mode · $10 / $50 | Hard problems, long plans, careful work |
@@ -254,8 +254,8 @@ The **Gateway key** row lets the owner change the key and address. **Limits** op
 The old **Settings → Gateway** address (`#/settings/gateway`) opens Providers.
 
 Services today: **Decide** (live), **Inbox** email addresses (live) and numbers (on request), **Search**, **Fetch**,
-**Images**, **SVG**, **Video**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.30 per audio hour for live text) and **Mail** (live), with sending letters and email,
-enrichment and voice coming soon.
+**Images**, **SVG**, **Video**, **Marketing data**, **Signals**, **Digest**, **Transcribe** (live: $0.33 per audio hour for recordings, $0.15 on Recordings 1.1, $0.30 per audio hour for live text), **Mail** and **Voice** (live), with
+US **Maps** and sending letters next, and sending email and enrichment later.
 A choice question (which of your labels fits) is a Decide question. Bots and agents read
 the same list with the `tico_gateway_catalog` tool and search the web with `tico_gateway_search` (`tico gateway catalog [query]`,
 `tico gateway search QUERY`, `tico gateway fetch URL`, `tico gateway digest --items-file FILE`, the `tico_gateway_digest` tool, which groups many items into a summary at Low prices; Signals watch pages and releases for changes, which [market watch](market-watch.md) uses); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `tico_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The

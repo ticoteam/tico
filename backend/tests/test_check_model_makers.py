@@ -13,9 +13,11 @@ def test_a_gateway_tier_is_the_maker_of_the_model_underneath():
     assert gateway_tiers.maker_of("Claude Sonnet 5.5") == "anthropic"
     assert gateway_tiers.maker_of("Inception Mercury 3") == "inception"
     assert gateway_tiers.maker_of("DeepSeek V4 Flash") == "deepseek"
+    assert gateway_tiers.maker_of("MiniMax M3.1 Flash") == "minimax"
     assert gateway_tiers.maker_of("Something New 1") == ""
     assert providers.maker("tico-medium-1.0") == "anthropic"
     assert providers.maker("tico-medium") == "anthropic"
+    assert providers.maker("tico-xlow-fast-1.0") == "minimax"
     assert providers.maker("gpt-6.2-sol") == "openai"
     assert providers.author_provider("tico-medium-1.0") == "anthropic"
     # What a run reports as its maker (ran_on's family) is the same.

@@ -37,7 +37,7 @@ PREFIX = "tico-"
 INPUT_KINDS = ("text", "image", "pdf")
 
 # The meeting tier (HQ's `tico-meeting`, pinned `tico-meeting-1.0`): a chat tier with no level or fast. It is the reply
-# model of the live-meeting bot (Inception Mercury 3, text only, 1M context), chosen in Settings, not a bot's.
+# model of the live-meeting bot (MiniMax M3.1 Flash, text only, 1M context), chosen in Settings, not a bot's.
 MEETING_TIER = "tico-meeting"
 MEETING_NAME = "Meeting"
 
@@ -520,6 +520,7 @@ MAKERS = (
     ("codestral", "mistral"),
     ("inception", "inception"),
     ("mercury", "inception"),
+    ("minimax", "minimax"),
 )
 
 

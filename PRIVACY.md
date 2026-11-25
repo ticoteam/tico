@@ -322,7 +322,7 @@ Only when your team has a Tico AI Gateway key (Settings > Computers > Models, or
 a Tico model (a level from X-Low to X-High). That bot's computer then sends each of its model calls, with the gateway key, to Tico HQ
 (`https://updates.tico.team/v1/gateway/chat/completions`), and HQ sends it on to **OpenRouter** (openrouter.ai) with
 HQ's own OpenRouter key. OpenRouter passes it to a provider that serves the model behind that Tico model (Claude Haiku,
-Sonnet, Opus or Fable, DeepSeek, or Inception Mercury). Without a gateway key, or with the bot on another model, nothing goes this way.
+Sonnet, Opus or Fable, DeepSeek, or MiniMax). Without a gateway key, or with the bot on another model, nothing goes this way.
 
 **What OpenRouter is sent:** the call's messages (the system, user, assistant and tool text the bot sends, which can be
 anything it has read: a task, a chat, a mail, a file's text) and its tools, with the tool calls, tool choice, output
