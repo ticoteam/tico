@@ -536,10 +536,11 @@ step_new_runner() {
   # between turns, and that process still holds the thread in memory, so the loss is a restarted runner too: only a
   # new app-server has to find the thread on disk, as one does after a move.
   docker exec "$RUNNER" find /home/runner/journey-threads -maxdepth 1 -type f -name 'journey-*' -delete || return 1
-  before="$(last_seen)"
+  docker rm -f "$RUNNER" >/dev/null 2>&1   # stopped first: no contact or report of its own lands after the marks below
+  local ready; before="$(last_seen)"; ready="$(sql "SELECT coalesce(max(readiness_at),'') FROM runner_states")"
   start_runner "$CAND" --code "" || return 1
   retry 120 seen_since "$before" || { say "the candidate runner did not reconnect after its sessions were lost"; return 1; }
-  retry 120 agent_ops_ready || { say "Agent Ops is not ready on the restarted candidate runner"; return 1; }
+  retry 120 agent_ops_ready_since "$ready" || { say "Agent Ops is not ready on the restarted candidate runner"; return 1; }
   ask moved || { say "the bot stopped answering once its saved session was gone"; return 1; }
   [ "$(fact resumed)" = no ] && [ "$(fact thread)" != "$SEED_THREAD" ] || { say "the turn after the session was lost: $(cat "$WORK/reply")"; return 1; }
 }
