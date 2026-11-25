@@ -14,6 +14,8 @@ from backend.store import H
 from backend.tests.helpers.api import get, post
 from backend.tests.helpers.automation_api import patch
 from backend.tests.helpers.automation_runs import queued, run_row, sql
+from backend.tests.helpers.task_models import ops_on_sonnet
+from backend.tests.helpers.teammate_access import acme, set_access  # noqa: F401  (the fixture)
 
 NOTE = {"id": "n", "type": "action", "do": "note", "args": {"text": "Seen {{only_if.count}}"}}
 OPEN_TODO = "tasks?stage=To do&status=open"
@@ -182,6 +184,69 @@ def test_the_check_reads_as_whoever_last_changed_what_the_run_does(api):
     patch(api, caras, {"trigger": {**saved_trigger(api, caras), "only_if": changed}}, token="cara-test")
     assert saved_only_if(api, caras)["set_by"] == "human:cara"
     assert run(api, caras)[0]["status"] == "skipped"
+    # A new owner is a new home for the items the steps act on: whoever sets it reads.
+    patch(api, caras, {"owner": "person:ana"})
+    assert saved_only_if(api, caras)["set_by"] == "human:ana"
+    assert run(api, caras)[0]["status"] == "ok"
+
+
+def test_turning_on_a_draft_makes_whoever_turns_it_on_the_reader(api):
+    ops_on_sonnet(api)
+    step = {"id": "audit", "type": "bot_turn", "bot": "ops", "prompt": "Run the audit."}
+    step |= {"model": "claude-haiku-5-5", "effort": "low", "harness": "claude"}
+    # Cara may make her routine but not choose ops' model: it waits, off, for Ana to turn it on.
+    draft = post(api, "automations", flow({"read": MISSING, "at_least": 1}, "human:cara", [step]), token="cara-test")
+    assert draft["pending"] == 1 and saved_only_if(api, draft["id"])["set_by"] == "human:cara"
+    post(api, f"automations/{draft['id']}/versions/1/restore", {})
+    assert saved_only_if(api, draft["id"])["set_by"] == "human:ana"
+    live = sql(
+        api,
+        "SELECT v.flow FROM automation_versions v JOIN automations a ON a.id=v.automation_id AND v.n=a.version "
+        "WHERE a.id=?",
+        (draft["id"],),
+    )
+    assert json.loads(live[0]["flow"])["trigger"]["only_if"]["set_by"] == "human:ana"  # what its runs read
+
+
+def test_the_assistant_never_reads_a_check_and_outside_a_run_reads_no_private_task(api):
+    from backend import auth as auth_module
+    from backend import automation_only_if
+
+    with api.app.state.store.read() as c:
+        assistant = H.assistant_actor(c)
+    record, items = automation_only_if.evaluate(api.app, {"read": OPEN_TODO, "at_least": 1, "set_by": assistant})
+    assert record["ok"] is False and items == [] and record["reason"].startswith("Only if check failed: the Assistant")
+    errand = task(api, "Acme private errand", owner="assistant", private=True)  # Ana's, with the Assistant
+    with api.app.state.store.read_transaction() as c:
+        visible = api.app.state.auth.task_sql(c, auth_module.bot_identity(c, assistant))
+        assert not c.execute(f"SELECT 1 FROM tasks WHERE id=? AND ({visible})", (errand["id"],)).fetchone()
+
+
+def test_items_blank_people_the_reader_may_not_see_and_a_hidden_one_reads_as_unknown(acme):
+    api, _ = acme
+    filed = post(api, "tasks", {"owner": "counsel", "title": "Acme zzqxv lease", "body": "Please."}, token="cara-test")
+    only_fay = {"people": ["fay"]}
+    set_access(api, "humans/cara", see=only_fay, read=only_fay, write=only_fay)
+    eves = make(api, owner="person:eve", token="eve-test", read=MISSING, at_least=1)
+    _, row = run(api, eves)
+    item = next(i for i in row["state"]["payload"]["only_if"]["items"] if i["id"] == filed["id"])
+    assert item["requester_id"] == "" and item["owner_id"]  # Cara blanked, as GET /api/v2/tasks does for Eve
+    for name in ("cara", "zed"):  # hidden or not there at all: the same reason
+        named = make(api, owner="person:eve", token="eve-test", read=f"tasks?requester={name}&status=open", at_least=1)
+        assert run(api, named)[0]["reason"] == f"Only if check failed: requester {name} is not on the roster"
+
+
+def test_skipped_runs_count_once_as_dropped_and_never_trip_the_run_guard(api):
+    aid = make(api, read=MISSING, at_least=1)
+    run(api, aid)
+    today = get(api, f"automations/{aid}/runs")["daily"][0]
+    assert (today["runs"], today["dropped"]) == (0, 1)
+    with api.app.state.store.transaction() as c:  # a busy event's misses: a flood's worth, all skipped
+        row = dict(c.execute("SELECT * FROM automations WHERE id=?", (aid,)).fetchone())
+        for n in range(automations.RUN_GUARD_BURST):
+            automations.queue(c, row, {}, f"e{n}")
+        c.execute("UPDATE automation_runs SET status='skipped' WHERE automation_id=?", (aid,))
+    assert run_row(api, queued(api, aid))["status"] == "queued"  # not held
 
 
 # ---------------------------------------------------------------------------------------------- a real run

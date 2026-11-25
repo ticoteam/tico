@@ -11,16 +11,18 @@ of the database with the reader's own visibility, the same `Auth.task_sql` fragm
 refused when the automation is saved (`check`).
 
 It reads with the access of whoever last set what the run does (`set_by`, which backend/automations.py `_save` writes:
-a save that changes the check, the steps or anything else the run does binds it to the editor; a rename or a pause
-keeps it), never with the owner's: a person who may edit a routine but not see a private task cannot learn whether it
-matched, nor have its items sent where they choose. The run's record keeps the count and the rule, never the items; the
-items reach only the run's steps, as `only_if.items`.
+a save that changes the check, the steps, the owner or anything else the run does, or makes a version current, binds
+it to the editor; a rename or a pause keeps it), never with the owner's: a person who may edit a routine but not see a
+private task cannot learn whether it matched, nor have its items sent where they choose. The Assistant never reads one
+(`reader`). The run's record keeps the count and the rule, never the items; the items reach only the run's steps, as
+`only_if.items`, with the people the reader may not see blanked as in `GET /api/v2/tasks`.
 
 The count is one COUNT query and the items are the first MAX_ITEMS rows, both in one read snapshot. A miss, or a check
 that cannot be read (its reader left, a stage or person it names is gone), skips the run with its reason.
 """
 
 import logging
+import re
 from typing import Any, cast
 from urllib.parse import parse_qsl
 
@@ -44,7 +46,18 @@ SOURCES: dict[str, frozenset[str]] = {
 }
 TASK_STATUSES = ("open", "done", "closed")
 PR_STATES = ("open", "draft", "merged", "closed", "shipped")
-TASK_FIELDS = ("id", "number", "title", "status", "stage_id", "owner_id", "assignee_id", "lane", "updated_at")
+TASK_FIELDS = (
+    "id",
+    "number",
+    "title",
+    "status",
+    "stage_id",
+    "owner_id",
+    "requester_id",
+    "assignee_id",
+    "lane",
+    "updated_at",
+)
 
 
 class Refused(ValueError):
@@ -118,10 +131,13 @@ def holds(only_if: Json, count: int) -> bool:
 
 def reader(c: Any, auth: Any, actor: str) -> Any:
     """The identity a check reads as: the person or agent who set it. One who left, or an agent no longer on the team,
-    reads as nobody, and the check fails."""
+    reads as nobody, and the check fails. So does the Assistant: it serves everyone, and outside a turn for one of them
+    it has nobody's private tasks to read by (Auth.task_sql)."""
     from . import auth as _auth
 
     auth_module: Any = _auth
+    if actor == H.assistant_actor(c):
+        raise Unread("the Assistant reads for whoever it is helping: set it again yourself")
     if H.is_bot(actor):
         found = H.resolve_bot(c, actor)
         if not found:
@@ -132,17 +148,20 @@ def reader(c: Any, auth: Any, actor: str) -> Any:
     raise Unread("nobody set it to read as")
 
 
-def _person(c: Any, params: dict[str, str], key: str) -> str | None:
+def _person(c: Any, known: Any, params: dict[str, str], key: str) -> str | None:
+    """The person or agent a filter names. One the reader may not see reads exactly as one not on the roster, so the
+    reason never tells them apart."""
     if key not in params:
         return None
     found = H.resolve_actor(c, params[key])
-    if not found:
+    if not found or str(found) in known.people:
         raise Unread(f"{key} {params[key]} is not on the roster")
     return str(found)
 
 
-def _tasks(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
-    """Tasks as `GET /api/v2/tasks` selects them for this reader (snoozed ones left out, as there)."""
+def _tasks(c: Any, known: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
+    """Tasks as `GET /api/v2/tasks` selects them for this reader (snoozed ones left out, as there, unless asked for by
+    number), the people on them it may not see blanked as there (teammate_access.Known)."""
     from . import task_list_routes
 
     stages: Any = task_list_routes
@@ -152,22 +171,24 @@ def _tasks(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json
         if not ids:
             raise Unread(f"there is no stage {params['stage']}")
         match.append((f"tasks.stage_id IN ({','.join('?' * len(ids))})", tuple(ids)))
-    status = params.get("status")
+    status, q = params.get("status"), params.get("q")
+    by_number = bool(q and re.fullmatch(r"#\d+", q.strip()))
     selection: Json = {
-        "owner": _person(c, params, "owner"),
-        "requester": _person(c, params, "requester"),
+        "owner": _person(c, known, params, "owner"),
+        "requester": _person(c, known, params, "requester"),
         "status": status.split(",") if status and status != "all" else None,
         "lane": params.get("lane"),
         "label": params.get("label"),
-        "q": params.get("q"),
-        "snoozed": None if status == "all" else "hide",
+        "q": q,
+        "snoozed": None if status == "all" or by_number else "hide",
         "visible": visible,
         "match": match,
     }
     # One grouped COUNT over the whole selection, loading no row: the count H.tasks gives a board's stages.
     count = sum(int(n) for n in cast("dict[Any, Any]", H.tasks(c, per_stage=True, **selection)).values())
     rows = cast("list[Any]", H.tasks(c, limit=MAX_ITEMS, **selection)) if count else []
-    return count, [{k: dict(row).get(k) for k in TASK_FIELDS} for row in rows]
+    shown = cast("list[Json]", known.tasks([dict(row) for row in rows]))
+    return count, [{k: row.get(k) for k in TASK_FIELDS} for row in shown]
 
 
 def _prs(c: Any, visible: str, params: dict[str, str]) -> tuple[int, list[Json]]:
@@ -197,9 +218,16 @@ def evaluate(app: Any, only_if: Json) -> tuple[Json, list[Json]]:
         source, params = parse(read)
         auth: Any = app.state.auth
         with app.state.store.read_transaction() as c:  # one snapshot: the count and the items agree
+            auth.sync_access(c)  # the owner and admins as stored now: a background run has had no request to adopt them
             who = reader(c, auth, str(only_if.get("set_by") or ""))
             visible = str(auth.task_sql(c, who))
-            count, items = (_tasks if source == "tasks" else _prs)(c, visible, params)
+            if source == "tasks":
+                from . import teammate_access
+
+                known: Any = cast(Any, teammate_access).Known(c, who, auth)
+                count, items = _tasks(c, known, visible, params)
+            else:
+                count, items = _prs(c, visible, params)
     except (Unread, Refused) as e:
         out["reason"] = f"Only if check failed: {e}"[:300]
         return out, []

@@ -278,7 +278,11 @@ export interface OnlyIfDraft {
   n: string;
 }
 
-export const onlyIfDraft = (o: OnlyIf): OnlyIfDraft => ({ src: onlyIfSource(o.read), none: o.none === true, n: String(o.at_least ?? 1) });
+/** The editor's pickers have no idle hours: a PR read with them opens as a Query, so they stay in sight and editable. */
+export function onlyIfDraft(o: OnlyIf): OnlyIfDraft {
+  const s = onlyIfSource(o.read);
+  return { src: s.kind === 'prs' && s.idle !== undefined ? { kind: 'query', read: o.read } : s, none: o.none === true, n: String(o.at_least ?? 1) };
+}
 
 /** What the row saves, or null while it is not whole (no stage or repository picked, no read, N outside 1 to 1000). */
 export function onlyIfOf(d: OnlyIfDraft): OnlyIf | null {

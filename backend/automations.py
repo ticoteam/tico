@@ -248,7 +248,8 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     (trigger, steps, batch) is a new version; a rename, pause or cap is not. `current` makes that pending version the
     current one instead; `new_version` writes one even when nothing it does changed (restoring an old version)."""
     _check_due_link(c, aid, flow, before)
-    flow.update(_bind_only_if(flow, before, actor))
+    # Making a version current (turning on a draft, restoring a proposal) makes whoever does it the reader.
+    flow.update(_bind_only_if(flow, None if current is not None else before, actor))
     now, prior = H.now(), c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()
     n = prior["version"] if prior else None
     if current is not None:
@@ -1288,19 +1289,21 @@ def _guard(c, row):
     last RUN_GUARD_MINUTES; `sustained`, more than RUN_GUARD_SUSTAINED in the last RUN_GUARD_SPAN minutes, the ones
     before it falling in at least RUN_GUARD_SPREAD distinct minutes of it (a loop keeps going over time; a backlog lands
     in a minute or two and does not spread). Exact repeats are not counted here: redelivery is deduped per source, and a
-    bot's own writes are stopped by the chain. Manual runs are not counted. Only runs since its last hold was cleared
-    count, so runs a person released do not put it straight back on hold."""
+    bot's own writes are stopped by the chain. Manual runs are not counted, nor skipped ones (an Only if that missed
+    ran nothing). Only runs since its last hold was cleared count, so runs a person released do not put it straight
+    back on hold."""
     now = H.now()
     floor = c.execute(LAST_RELEASE_SQL, (row["id"],)).fetchone()[0] or ""
     flood_since = max(H.shift(now, minutes=-RUN_GUARD_MINUTES), floor)
     span_since = max(H.shift(now, minutes=-RUN_GUARD_SPAN), floor)
     flood = c.execute(
-        "SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? AND trigger_ref<>'manual'",
+        "SELECT count(*) FROM automation_runs WHERE automation_id=? AND started_at>=? AND trigger_ref<>'manual' "
+        "AND status<>'skipped'",
         (row["id"], flood_since),
     ).fetchone()[0]
     span, minutes = c.execute(
         "SELECT count(*), count(DISTINCT substr(started_at,1,16)) FROM automation_runs "
-        "WHERE automation_id=? AND started_at>=? AND trigger_ref<>'manual'",
+        "WHERE automation_id=? AND started_at>=? AND trigger_ref<>'manual' AND status<>'skipped'",
         (row["id"], span_since),
     ).fetchone()
     rule = (
@@ -2028,9 +2031,10 @@ def _only_if(app, flow, state):
 
 def _bind_only_if(flow, before, actor):
     """An Only if reads with the access of whoever last set what the run does (backend/automation_only_if.py): its
-    items reach the steps, so a save or proposal that changes the check, the steps or anything else the run does binds
-    it to `actor`, and an editor never has items sent where they chose that only another could see. A save that
-    changes nothing the run does (a rename, a pause) keeps the reader. A `set_by` a client sent is never kept."""
+    items reach the steps, so a save or proposal that changes the check, the steps, the owner they act as or anything
+    else the run does binds it to `actor`, and an editor never has items sent where they chose that only another could
+    see. A save that changes none of it (a rename, a pause) keeps the reader; `before` None (a version made current)
+    binds it to `actor` all the same. A `set_by` a client sent is never kept."""
     only_if = (flow.get("trigger") or {}).get("only_if")
     if not isinstance(only_if, dict):
         return flow
@@ -2040,7 +2044,8 @@ def _bind_only_if(flow, before, actor):
         trigger = dict((f or {}).get("trigger") or {})
         if isinstance(trigger.get("only_if"), dict):
             trigger["only_if"] = O.rule(trigger["only_if"])
-        return _versioned({**(f or {}), "trigger": trigger})
+        # Its owner too: the steps act as the owner, so a new owner is a new home for the items.
+        return {**_versioned({**(f or {}), "trigger": trigger}), "owner": (f or {}).get("owner")}
 
     was = ((before or {}).get("trigger") or {}).get("only_if")
     kept = was.get("set_by") if isinstance(was, dict) and does(flow) == does(before) else None
@@ -3061,7 +3066,12 @@ class Hub:
             if status == "failed":
                 _cancel_mail(c, rid, state)
             if status == "skipped" and (state.get("only_if") or {}).get("reason"):
-                _count(c, run["automation_id"], "dropped")  # its Only if missed: a drop, with its row and reason
+                # Its Only if missed: a drop, with its row and reason, and not a run as well on the day it arrived.
+                c.execute(
+                    "UPDATE automation_daily SET runs=max(runs-1,0) WHERE automation_id=? AND day=?",
+                    (run["automation_id"], str(run["started_at"])[:10]),
+                )
+                _count(c, run["automation_id"], "dropped")
             _found_done(c, run["automation_id"], state, ended=status not in ("waiting", "queued", "held"))
             waits = [
                 t["wait"]["until"] for t in state.get("threads", []) if (t.get("wait") or {}).get("kind") == "batch"

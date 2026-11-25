@@ -576,13 +576,20 @@ function OnlyIfFields({ value, onChange }: { value: OnlyIfDraft; onChange: (d: O
   };
   const many = pipelines.length > 1;
   const stages = pipelines.flatMap((p) => p.stages.map((x) => ({ value: x.id, label: many ? `${p.name} › ${x.name}` : x.name })));
-  if (src.kind === 'tasks' && src.stage && !stages.some((o) => o.value === src.stage)) stages.unshift({ value: src.stage, label: src.stage });
+  // A stage saved by its name shows as the one stage of that name; its read stays as saved until another is picked.
+  const byId = src.kind === 'tasks' && stages.some((o) => o.value === src.stage);
+  const named = src.kind === 'tasks' && !byId ? pipelines.flatMap((p) => p.stages).filter((x) => x.name === src.stage) : [];
+  const stageValue = src.kind !== 'tasks' ? '' : named.length === 1 ? named[0]!.id : src.stage;
+  if (src.kind === 'tasks' && src.stage && !byId && named.length !== 1) stages.unshift({ value: src.stage, label: src.stage });
+  const pickStage = (stage: string) => {
+    if (stage !== stageValue) set({ src: { kind: 'tasks', stage } });
+  };
   const names = repos.map((r) => ({ value: r.full_name, label: r.full_name }));
   if (src.kind === 'prs' && src.repo && !names.some((o) => o.value === src.repo)) names.unshift({ value: src.repo, label: src.repo });
   return (
     <div className="rr-only" data-target="only-if">
       <Select label="Only if" options={[...SOURCES]} value={src.kind} onValueChange={pick} />
-      {src.kind === 'tasks' && <Select label="Stage is" options={stages} value={src.stage || null} onValueChange={(stage) => set({ src: { kind: 'tasks', stage } })} placeholder="Pick a stage" />}
+      {src.kind === 'tasks' && <Select label="Stage is" options={stages} value={stageValue || null} onValueChange={pickStage} placeholder="Pick a stage" />}
       {src.kind === 'prs' &&
         (names.length ? (
           <Select label="Repo" options={names} value={src.repo || null} onValueChange={(repo) => set({ src: { ...src, repo } })} placeholder="Pick a repo" />

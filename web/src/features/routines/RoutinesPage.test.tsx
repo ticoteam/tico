@@ -12,7 +12,7 @@ import { RoutinesPage } from './RoutinesPage';
 import type { Hook, Maintenance, Routine, StageRule, SystemJob } from './types';
 import { fmtDate } from '@/lib';
 import { pipelinesQuery } from '@/features/tasks/exports';
-import { cronWords, flowLines, onlyIfRead, onlyIfSource, onlyIfWords, orgParts, runLink, stageParts } from './words';
+import { cronWords, flowLines, onlyIfDraft, onlyIfRead, onlyIfSource, onlyIfWords, orgParts, runLink, stageParts } from './words';
 
 /* The Routines page: routines and one routine's panel, the built-in ones, runs, webhooks, the inbox board and
    inbox templates. Sample rows only. */
@@ -921,6 +921,20 @@ describe('Only if', () => {
     expect(onlyIfSource('tasks?stage=Release ready&label=x')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready&label=x' });
     // Closed tasks count too without status=open: the picker would change what it counts, so it stays a Query.
     expect(onlyIfSource('tasks?stage=Release ready')).toEqual({ kind: 'query', read: 'tasks?stage=Release ready' });
+  });
+
+  it('a PR read with idle hours opens as a Query, so the pickers never hide them', () => {
+    const read = 'prs?repo=acme/app&idle_hours=48';
+    expect(onlyIfDraft({ read, at_least: 1 }).src).toEqual({ kind: 'query', read });
+    expect(onlyIfDraft({ read: 'prs?repo=acme/app', at_least: 1 }).src).toEqual({ kind: 'prs', repo: 'acme/app' });
+  });
+
+  it('a check saved by a stage’s name shows that one stage, listed once', async () => {
+    await menu(await openRoutine({ trigger: event({ read: 'tasks?stage=Release ready&status=open', at_least: 1 }) }), 'Edit');
+    const stage = screen.getByRole('combobox', { name: 'Stage is' });
+    expect(stage.textContent).toContain('Release ready');
+    fireEvent.click(stage);
+    expect(await screen.findAllByRole('option', { name: 'Release ready' })).toHaveLength(1);
   });
 
   it('shows the Only if fact on the panel, by the stage’s name', async () => {
