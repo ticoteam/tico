@@ -58,7 +58,7 @@ function ToolRow({ slug, name, t, manage }: { slug: string; name: string; t: Age
         {t.name}
       </Link>
       <span className="row-pills">
-        {t.note && <span className="row-ctx">{t.note}</span>}
+        {t.note && <span className="row-ctx" title={t.note}>{t.note}</span>}
         {access && (
           <span className="tool-access" title={access[0]}>
             <Icon name={access[1]} label={access[0]} />
