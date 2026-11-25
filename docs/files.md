@@ -250,7 +250,8 @@ listed here. Each row passes the same check as the bot's page, so a file you may
 - **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total. Cursors are
   encrypted and authenticated; a scan can return an empty page with a continuation past hidden rows.
 
-`GET /api/v2/files?kind=&bot=&team=&task=&since=&until=&pinned=&archived=&limit=&cursor=`.
+`GET /api/v2/files?kind=&bot=&team=&task=&tag=&since=&until=&pinned=&archived=&limit=&cursor=`. `tag` keeps the files
+carrying that tag ([Tags, metadata and made from](#tags-metadata-and-made-from)).
 
 ## Search
 
@@ -262,11 +263,43 @@ visibility check as a list row.
 Tico indexes a version when it is published. A file from before this release is indexed in the background, a few
 hundred at a time; until then only its title is found.
 
-`GET /api/v2/files/search?q=&limit=&kind=`, `tico file search "<words>" [--kind page]`, file hits in the search box (⌘K), and the
-Librarian, which searches files beside the docs.
+`GET /api/v2/files/search?q=&limit=&kind=&tag=`, `tico file search "<words>" [--kind page] [--tag client:acme]`, file hits
+in the search box (⌘K), and the Librarian, which searches files beside the docs. With `tag` and no words, the files
+carrying it come newest first.
 
 `kind` accepts the Library's kinds (`page`, `document`, `image`, `data`, `media`, `other`). The task's **Link page**
 picker searches with `kind=page`.
+
+## Tags, metadata and made from
+
+Three things any file can carry, for whatever a team keeps on its work. Whoever may write the file changes them: its
+bot, the bot's managers, the owner and a page's writers (on a task's page, whoever may write that task's pages).
+Whoever may read the file reads them, in its details and from `tico file show ID`.
+
+- **Tags:** the company's own tags, as tasks carry them, `client:acme` or `launch`. Only a tag that exists is
+  attached (make it with `tico tag create`), never a template, at most 50 on a file. A file's tags show only to its
+  readers, each only when they may read that tag. Library › Files and Search filter by one tag
+  (`#/library/files?tag=client:acme`); a file the viewer may not read never shows through it.
+- **Metadata:** one JSON object of the team's own fields (an ad's id, the angle, the campaign), at most 16 KB. It is
+  the file's, not a version's, so it is kept across versions. A key is plain text up to 200 characters; a dot in it is
+  no nesting. Setting a key to null removes it. It shows in the file's details as key and value.
+- **Made from:** the file this one was made from, a copy or a variant. The writer must be able to read it; a file is
+  never made from itself or from a file made from it, and a chain goes back at most 50 files. A reader who cannot read
+  the original sees nothing of it.
+
+`POST /api/v2/files/{id}/tags` (`{"add": [...], "remove": [...]}`), `GET` and `PATCH /api/v2/files/{id}/metadata`
+(`{"set": {...}, "remove": [...]}`), and `from` on `POST /api/v2/files/uploads` and `/api/v2/pages`. On the command line:
+
+```sh
+tico file tag f1 add client:acme
+tico file meta set f1 angle=price --json '{"ads": {"meta": "238"}}'
+tico file meta rm f1 angle
+tico file publish variant.md --from f1
+tico file search --tag client:acme
+```
+
+The tools are `tico_file_tag`, `tico_file_meta_set`, `tico_file_meta_rm`, `tico_file_show`, and `from` and `tag` on
+`tico_file_publish`, `tico_page_publish` and `tico_file_search`. Each change is in the file's activity.
 
 ## Signing a PDF
 
@@ -303,6 +336,7 @@ confirm first.
   never reopens copied content. Saved page references and citations show **A deleted page** for everyone.
 - One row stays, titled **Deleted file**, and its activity records who deleted it, when and how many versions,
   without the name or the content. Publishing the same path again makes a new file.
+- Its tags and metadata go, and so does its made-from link; a file made from it no longer names it.
 - The backup (`TICO_BACKUP_URL`) keeps its copy: files there are only ever added. Remove them there by hand if they
   must go.
 

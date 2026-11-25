@@ -36,6 +36,7 @@ from .blobs import register
 from .visuals import kit_for
 from .store import H, Problem, encode, repo_url
 from . import bot_home_merge
+from . import file_details
 from . import file_library
 from . import read_cache
 from . import task_privacy as privacy
@@ -2308,6 +2309,8 @@ class Files:
                 self.blobs.put(data, mime)
         body = {
             **{k: fields.get(k, "") for k in ("bot", "path", "title", "task", "scope", "attempt", "commit", "source")},
+            # Only when given, so a retry sent before `from` existed still matches its stored request.
+            **({"from": str(fields["from"])} if fields.get("from") else {}),
             "name": name,
             "digest": digest,
             "identity": identity,
@@ -2417,6 +2420,9 @@ class Files:
                 version_time=str(fields.get("written_at") or "") if page_publish else None,
             )
             H.event(c, actor, "file.publish", row["id"], {"bot": bot, "version": row["current_version"], "size": size})
+            if fields.get("from"):
+                reader = page_who if page_who.role != "runner" else Identity("bot:" + bot, "bot", attempt_id=attempt)
+                file_details.set_parent(c, self.auth, reader, row, str(fields["from"]))
             if page_publish and changed and not fields.get("title"):
                 row = adopt_title(c, row, data, actor)  # before it is indexed and returned
             if changed:
@@ -2946,6 +2952,7 @@ class Files:
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
             shown = self.view(c, who, row, {"task": {}, "repo": {}})
+            shown.update(file_details.details(c, self.auth, who, row))
             page = shown["size"] is not None and visuals.kind_of(row["mime"], shown["size"]) == "page"
             if page and not row["archived"] and row["locator"] == "tico_blob":
                 seen = visuals.view_for(
@@ -3100,6 +3107,7 @@ def install_files(app, store, auth, blobs, mutate):
 
     # Before media.py's GET /api/v2/files/{bid}, which would otherwise take /api/v2/files/search.
     file_library.install_library(app, store, auth, files)
+    file_details.install(app, store, auth, files)
     from .pages import install_pages
 
     install_pages(app, store, auth, files)
@@ -3118,6 +3126,7 @@ def install_files(app, store, auth, blobs, mutate):
                             "title": {"type": "string"},
                             "task": {"type": "string"},
                             "scope": {"enum": ["task", "bot"]},
+                            "from": {"type": "string", "description": "The file this one was made from"},
                         },
                     }
                 },

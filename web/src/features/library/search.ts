@@ -33,16 +33,17 @@ export interface DocSearch {
 const commit = (v: unknown) => (typeof v === 'string' && /^[0-9a-f]{4,64}$/i.test(v) ? v : undefined);
 export const docSearch = (raw: Record<string, unknown>): DocSearch => clean({ v: num(raw.v), revision: commit(raw.revision) });
 
-/** `kind`: one library kind; `upload`: the task an upload lands on (not `task`: that is a task open over the page); `file` (and `v`): the file open in the page. */
+/** `kind`: one library kind; `tag`: one tag's key; `upload`: the task an upload lands on (not `task`: that is a task open over the page); `file` (and `v`): the file open in the page. */
 export interface FilesSearch {
   kind?: string;
+  tag?: string;
   q?: string;
   upload?: string;
   file?: string;
   v?: number;
 }
 export const filesSearch = (raw: Record<string, unknown>): FilesSearch =>
-  clean({ kind: str(raw.kind), q: str(raw.q), upload: str(raw.upload), file: str(raw.file), v: num(raw.v) });
+  clean({ kind: str(raw.kind), tag: str(raw.tag), q: str(raw.q), upload: str(raw.upload), file: str(raw.file), v: num(raw.v) });
 
 /**
  * `skill` (a name) or `proposal` (an id) open in the page. `connect`: Connect Claude Code, `setup` for the steps or the

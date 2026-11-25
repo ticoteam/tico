@@ -195,6 +195,47 @@ describe('a file', () => {
   });
 });
 
+describe('tags, metadata and made from', () => {
+  it('shows them on a file, and its writer ticks a tag from ⋯, sent and shown as the server answers', async () => {
+    const sent = serve((url, method) =>
+      method === 'POST' ? { file: 'f1', tags: [{ id: 't1', key: 'client:acme', label: 'Acme' }, { id: 't2', key: 'launch', label: 'launch' }] } : 'plain words',
+    );
+    queryClient.setQueryData(['tags'], [{ id: 't1', key: 'client:acme' }, { id: 't2', key: 'launch' }]);
+    const shown = { tags: [{ id: 't1', key: 'client:acme', label: 'Acme' }], metadata: { angle: 'price', ads: { meta: '238' } }, parent: { id: 'f0', title: 'Source page' }, may_edit: true };
+    queryClient.setQueryData(fileQuery('f1').queryKey, file(shown) as never);
+    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [version(2, true)]);
+    at('/library/files?file=f1', <FilesPage search={{ file: 'f1' }} />);
+    expect((await screen.findByRole('link', { name: 'Source page' })).getAttribute('href')).toBe('/library/files?file=f0');
+    expect(linkOf('client:acme')).toBe('/library/files?tag=client%3Aacme');
+    expect(screen.getByText('price')).toBeTruthy();
+    expect(screen.getByText('{"meta":"238"}')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'More' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Tags' }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'launch' }));
+    await waitFor(() => expect(sent).toContainEqual(expect.objectContaining({ url: '/api/v2/files/f1/tags', method: 'POST', body: { add: ['launch'] } })));
+    expect(await screen.findByRole('link', { name: 'launch' })).toBeTruthy();
+  });
+
+  it('offers no ⋯ to a reader who may not write the file', async () => {
+    serve(() => 'plain words');
+    queryClient.setQueryData(['tags'], [{ id: 't1', key: 'client:acme' }]);
+    queryClient.setQueryData(fileQuery('f1').queryKey, file({ tags: [], metadata: {}, parent: null, may_edit: false }) as never);
+    queryClient.setQueryData(fileVersionsQuery('f1').queryKey, [version(2, true)]);
+    at('/library/files?file=f1', <FilesPage search={{ file: 'f1' }} />);
+    expect(await screen.findByText('plain words')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'More' })).toBeNull();
+  });
+
+  it('lists the files carrying a tag, with a chip that clears it', async () => {
+    const sent = serve(() => ({ files: [file({ title: 'Tagged ad' })], has_more: false, next_cursor: null }));
+    const router = at('/library/files?tag=client%3Aacme', <FilesPage search={{ tag: 'client:acme' }} />);
+    expect(await screen.findByText('Tagged ad')).toBeTruthy();
+    expect(sent[0]?.url).toBe('/api/v2/files?limit=100&tag=client%3Aacme');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear client:acme' }));
+    await waitFor(() => expect(router.state.location.search).not.toHaveProperty('tag'));
+  });
+});
+
 describe('Files', () => {
   it('searches a filtered list without fetching its unfiltered rows and lets a failed search retry', async () => {
     let searches = 0;
@@ -232,7 +273,7 @@ describe('Files', () => {
     expect(await screen.findByText('Today')).toBeTruthy();
     expect(screen.getByText('Earlier')).toBeTruthy();
     expect(screen.getByText('Fresh plan').closest('a')?.getAttribute('href')).toBe('/library/files?file=f1');
-    fireEvent.click(screen.getByRole('button', { name: 'Filter by kind' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Filter' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'Images' }));
     await waitFor(() => expect(router.state.location.search).toMatchObject({ kind: 'image' }));
   });

@@ -9,6 +9,7 @@ import type {
   EmailSendingPolicy,
   ExternalDocResult,
   FileLibrary,
+  FileTags,
   GitHubApp,
   Group,
   InboundCompanyConnection,
@@ -278,18 +279,18 @@ export interface FileVersion {
   signed?: Signed | null;
 }
 
-export const filesQuery = (kind: string) =>
+export const filesQuery = (kind: string, tag = '') =>
   infiniteQueryOptions({
-    queryKey: ['files', 'list', kind],
-    queryFn: ({ pageParam }) => api.get<FileLibrary>(`/api/v2/files${q({ limit: 100, kind, cursor: pageParam })}`),
+    queryKey: ['files', 'list', kind, tag],
+    queryFn: ({ pageParam }) => api.get<FileLibrary>(`/api/v2/files${q({ limit: 100, kind, tag, cursor: pageParam })}`),
     initialPageParam: '',
     getNextPageParam: (last) => (last.has_more && last.next_cursor ? last.next_cursor : undefined),
   });
 
-export const fileSearchQuery = (text: string, kind = '') =>
+export const fileSearchQuery = (text: string, kind = '', tag = '') =>
   queryOptions({
-    queryKey: ['files', 'search', text, kind],
-    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string; updated_at?: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind })}`, { signal }),
+    queryKey: ['files', 'search', text, kind, tag],
+    queryFn: ({ signal }) => api.get<{ results: Array<{ id: string; title: string; updated_at?: string }> }>(`/api/v2/files/search${q({ q: text, limit: 50, kind, tag })}`, { signal }),
     enabled: text.trim().length > 1,
   });
 
@@ -314,6 +315,21 @@ export const fileTextQuery = (id: string, version: number) =>
   });
 
 export const fileUrl = (id: string, version?: number) => (version ? `/api/v2/files/${enc(id)}/versions/${version}` : `/api/v2/files/${enc(id)}`);
+
+/** Put one of the company's tags on a file, or take it off (backend/file_details.py); the details show the server's list. */
+export function tagFile(id: string, key: string, on: boolean) {
+  const info = fileQuery(id).queryKey;
+  return write<FileTags>({
+    key: info,
+    optimistic: (cur: BotFile | undefined) =>
+      cur && { ...cur, tags: on ? [...(cur.tags ?? []), { id: key, key, label: key }] : (cur.tags ?? []).filter((t) => t.key !== key) },
+    settle: (cur: BotFile | undefined, answer) => cur && { ...cur, tags: answer.tags },
+    send: (idempotencyKey) => api.post(`/api/v2/files/${enc(id)}/tags`, on ? { add: [key] } : { remove: [key] }, { idempotencyKey }),
+  }).then(async (r) => {
+    await Promise.all([queryClient.invalidateQueries({ queryKey: ['files', 'list'] }), queryClient.invalidateQueries({ queryKey: ['files', 'search'] })]);
+    return r;
+  });
+}
 
 /** A person adds a file to a task (the server takes a person's upload only there). */
 export function uploadFile(task: string, file: File) {
