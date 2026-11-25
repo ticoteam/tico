@@ -123,20 +123,30 @@ def main():
             ids = [f"{s}-{n}" for n, s in enumerate(SERVICES * 10)]
             marks = ",".join("?" * len(ids))
             since = H.shift(H.now(), days=-30)
-            for name, sql in (
+            keys = [f"k{n}" for n in range(TOOLS)]
+            for name, sql, args in (
                 (
-                    "tool_calls",
+                    "tool_calls (old and new)",
                     "SELECT tool_id, bot, actor, count(*), max(created_at) FROM tool_calls "
                     f"WHERE tool_id IN ({marks}) AND created_at>=? GROUP BY tool_id, bot, actor",
+                    [*ids, since],
                 ),
                 (
-                    "credential_uses",
+                    "credential_uses (old: joined on credentials.tool_id)",
                     "SELECT k.tool_id, u.bot, u.actor, u.used_at FROM credential_uses u JOIN credentials k "
                     f"ON k.id=u.credential_id WHERE k.tool_id IN ({marks}) AND u.used_at>=?",
+                    [*ids, since],
+                ),
+                ("credentials (new, 1 of 2)", f"SELECT id, tool_id FROM credentials WHERE tool_id IN ({marks})", ids),
+                (
+                    "credential_uses (new, 2 of 2)",
+                    "SELECT credential_id, bot, actor, used_at FROM credential_uses "
+                    f"WHERE credential_id IN ({marks}) AND used_at>=?",
+                    [*keys, since],
                 ),
             ):
                 print(f"\nEXPLAIN QUERY PLAN {name}:")
-                for row in c.execute("EXPLAIN QUERY PLAN " + sql, [*ids, since]):
+                for row in c.execute("EXPLAIN QUERY PLAN " + sql, args):
                     print("  " + row[3])
 
 
