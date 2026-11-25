@@ -37,7 +37,7 @@ export async function pressOut<T>(id: string, input: unknown): Promise<{ out: T 
 }
 
 /** Something went wrong, said in ink with a mark: no red. */
-export const Word = ({ children, icon = 'alert' }: { children: string; icon?: IconName }) => (
+export const Word = ({ children, icon = 'alert' }: { children: ReactNode; icon?: IconName }) => (
   <span className="word">
     <Icon name={icon} />
     {children}
