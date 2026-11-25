@@ -42,18 +42,22 @@ def bodies(api, thread_id, token="ana-test"):
 
 def provider_turns(computer):
     """Each provider turn the fake harness saw, in order, as (started, thread): `new` with the thread it made, or
-    `resume` with the thread it continued. Claude names its session on the command line; Codex's thread is in the
+    `resume` with the thread it continued. Claude names its session on the command line, and a later turn in the
+    claude kept for the thread (same pid, the command line it started with) is a `resume` too; Codex's thread is in the
     thread/start or thread/resume call before the turn, or in the turn alone when the turn goes on in the app-server
     kept for the thread (a `resume` too)."""
     turns = []
     begun = None
+    kept = set()
     for call_ in computer.calls():
         if computer.harness == "claude" and "prompt" in call_:
             argv = call_["argv"]
             if "--resume" in argv:
                 turns.append(("resume", argv[argv.index("--resume") + 1]))
             else:
-                turns.append(("new", argv[argv.index("--session-id") + 1]))
+                session = argv[argv.index("--session-id") + 1]
+                turns.append(("resume" if (call_["pid"], session) in kept else "new", session))
+                kept.add((call_["pid"], session))
         elif computer.harness == "codex" and call_.get("harness") == "codex":
             if call_.get("method") in ("thread/start", "thread/resume"):
                 begun = ("new" if call_["method"] == "thread/start" else "resume", call_["thread"])
