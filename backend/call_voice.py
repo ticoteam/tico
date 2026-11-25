@@ -413,6 +413,10 @@ class Voice:
         self.makers = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tico-meet-tts")
         self.players = ThreadPoolExecutor(max_workers=4, thread_name_prefix="tico-meet-voice")
         self.playing: list[Future[None]] = []  # playback futures, for settle
+        # The side work handed to `makers` (the voices read, turn log lines, touches), for settle: each reads the store,
+        # and a test that ends before one finishes leaves its connection open (backend/tests/connection_guard.py).
+        self.side: list[Future[Any]] = []
+        self.side_lock = threading.Lock()  # its own: side work is handed over under either voice lock
         self.first_audio: deque[int] = deque(maxlen=FIRST_AUDIO_WINDOW)  # first_audio_ms of the latest spoken turns
         self.first_audio_lock = threading.Lock()
 
@@ -506,6 +510,12 @@ class Voice:
         with self.store.transaction() as c:
             write(c)
 
+    def _side(self, fn: Callable[..., Any], *args: Any) -> None:
+        # Submitted and recorded under one lock, so settle never sees the job running before it is in the list.
+        with self.side_lock:
+            future = self.makers.submit(fn, *args)
+            self.side = [f for f in self.side if not f.done()] + [future]
+
     def warm(self) -> None:
         """Read the Gateway's voices ahead of the first reply (a call starting, a question asked), so no reply waits on
         them. Off the caller's thread; nothing is read when they are already kept."""
@@ -520,7 +530,7 @@ class Voice:
                 report: Any = _report()
                 report("calls_voice", "voices", exc, logger="tico.call_voice")
 
-        self.makers.submit(read)
+        self._side(read)
 
     # --- questions
 
@@ -688,7 +698,7 @@ class Voice:
             if not canceled:
                 self._opened(voice, bot, turn_id, question)
         if canceled:
-            self.makers.submit(self._pass_canceled, call_id, turn_id)
+            self._side(self._pass_canceled, call_id, turn_id)
 
     def _pass_canceled(self, call_id: str, turn_id: str) -> None:
         report: Any = _report()
@@ -942,7 +952,7 @@ class Voice:
         deadline: float | None,
         timing: dict[str, Any],
     ) -> None:
-        self.makers.submit(self.touch, call_id)
+        self._side(self.touch, call_id)
         future = self.players.submit(self._speak, call_id, bot, reply_id, text, epoch, deadline, timing)
         with self.lock:
             self.playing = [f for f in self.playing if not f.done()] + [future]
@@ -1006,7 +1016,7 @@ class Voice:
             turn = current.get("turn")
         self.calls.media.hush(call_id)
         if turn:
-            self.makers.submit(self._interrupted, call_id, bot, turn)
+            self._side(self._interrupted, call_id, bot, turn)
         self.wake.set()
 
     def _interrupted(self, call_id: str, bot: str, turn_id: str) -> None:
@@ -1053,18 +1063,18 @@ class Voice:
             timing = dict(voice.open)
             if self.clock() >= deadline:
                 # Stored after its turn's deadline (it reached the writer before the ticker did): it stays text.
-                self.makers.submit(self._log_turn, None, call_id, timing, "text_only", "late")
+                self._side(self._log_turn, None, call_id, timing, "text_only", "late")
                 voice.open = None
                 self._set(voice, bot, "listening")
-                self.makers.submit(self._late, call_id, bot)
+                self._side(self._late, call_id, bot)
                 self.wake.set()
                 return
             if self.calls.media is None or not self.calls.media.running(call_id):
                 log.info("A call's reply was not spoken: this process does not hold call %s", call_id)
-                self.makers.submit(self._log_turn, None, call_id, timing, "text_only", "not_held")
+                self._side(self._log_turn, None, call_id, timing, "text_only", "not_held")
                 voice.open = None
                 self._set(voice, bot, "listening")
-                self.makers.submit(self.touch, call_id)
+                self._side(self.touch, call_id)
                 return
             voice.open.update(phase="making_voice", reply=reply_id)
             self._set(voice, bot, "making_voice")
@@ -1201,7 +1211,7 @@ class Voice:
                             why = "yielded"
                             return False
                 if index == 0 and deadline is not None and self.clock() >= deadline:
-                    self.makers.submit(self._late, call_id, bot)
+                    self._side(self._late, call_id, bot)
                     why = "late"
                     return False
                 return True
@@ -1213,7 +1223,7 @@ class Voice:
                     voice.heard.append((self.clock(), parts[index]))
                     changed = _epoch(voice, bot) == epoch and self._set(voice, bot, "speaking", parts[index])
                 if changed:
-                    self.makers.submit(self.touch, call_id)
+                    self._side(self.touch, call_id)
 
             played, capped = media.say_stream(call_id, frames(), mark, budget, before, started)
             if capped or at_cap:
@@ -1308,7 +1318,7 @@ class Voice:
                 if stream := voice.open.get("stream"):
                     stream.close()
                 elif voice.open["phase"] == "thinking":
-                    self.makers.submit(self._log_turn, None, call_id, dict(voice.open), "skipped", "canceled")
+                    self._side(self._log_turn, None, call_id, dict(voice.open), "skipped", "canceled")
             if answering:
                 voice.open = None
             voice.follow_ups = deque(item for item in voice.follow_ups if bot is not None and item[0] != bot)
@@ -1399,11 +1409,13 @@ class Voice:
         return seen[math.ceil(0.9 * len(seen)) - 1] if seen else None
 
     def settle(self, timeout: float = 30) -> bool:
-        """Wait for the replies being spoken (tests)."""
+        """Wait for the replies being spoken and the side work handed to `makers` (tests)."""
         deadline = time.monotonic() + timeout
         while True:
             with self.lock:
                 left = [f for f in self.playing if not f.done()]
+            with self.side_lock:
+                left += [f for f in self.side if not f.done()]
             if not left:
                 return True
             if time.monotonic() > deadline:
