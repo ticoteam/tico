@@ -2482,7 +2482,7 @@ class BotTaskTab(Contract):
 
 
 SIDEBAR_ITEMS = 60  # pages and cards on one bot's sidebar (backend/cards.py PLACE_MAX)
-SIDEBAR_WIDGETS = 4 + SIDEBAR_ITEMS  # widgets on one saved sidebar layout, its built-ins with them; a position <= this
+SIDEBAR_WIDGETS = 5 + SIDEBAR_ITEMS  # widgets on one saved sidebar layout, its built-ins with them; a position <= this
 
 
 class BotSidebarWidget(Contract):

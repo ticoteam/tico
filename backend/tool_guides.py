@@ -3,7 +3,7 @@
 words on how to use it, and each agent's own list.
 
 The registry is the shipped guides (templates/tool-guides/<slug>.md) with the company's rows over them (`tool_guides`),
-and every vendor in the Tools index the reader may see (api_tools.index_rows): a vendor with no words reads "No guide
+and every vendor among the API tools the reader may see (tools_of): a vendor with no words reads "No guide
 yet". A vendor tool's slug is its vendor id (tool_services.vendor_of), so a guide and the vendor's tools meet on it; a
 built tool is a script or program the company made, with its repository in `source` and the tools it needs in `needs`.
 A company row's field, when set, wins over the shipped one; `guidance` is the company's alone. Archiving hides a guide
@@ -22,7 +22,7 @@ Never a credential value: access is a level, how a run reaches the tool and its 
 import json
 import re
 from functools import lru_cache
-from typing import Any, cast
+from typing import Any, NamedTuple, cast
 
 import yaml
 from fastapi import Query, Request
@@ -63,6 +63,8 @@ def _mod(name: str) -> Any:
         from . import api_tools as found
     elif name == "bot_tools":
         from . import bot_tools as found
+    elif name == "credentials":
+        from . import credentials as found
     elif name == "integrations":
         from . import integrations as found
     elif name == "names":
@@ -83,7 +85,6 @@ SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,60}$")
 USED_DAYS = 30
 LIST_MAX = 500
 LIST_BYTES_MAX = 192 * 1024
-LEVELS = {"read": "read", "read_write": "write"}
 TEXT_FIELDS = ("name", "category", "summary", "instructions", "guidance", "source")
 
 
@@ -143,37 +144,78 @@ def _guide(slug: str, row: Any, ship: Any, vendor_name: str = "") -> Row:
     }
 
 
-def _tool_id(index_row: Any) -> str | None:
-    """The tools row id of an API or website Tools row (`api:<id>`, `website:<id>`), else None."""
-    kind, _, tid = str(index_row["id"]).partition(":")
-    return tid if kind in ("api", "website") and tid else None
+class Tools(NamedTuple):
+    """The API tools of Tools by vendor, as one reader knows them."""
+
+    seen: dict[str, list[Row]]
+    """The tools the reader may see (api_tools.visible), or, an agent, reads at a level (its default Read too)"""
+    named: dict[str, list[Row]]
+    """The Everyone tools the reader knows by name alone, by the vendor their name says (the Tools list shows nothing
+    more of them)"""
+    every: set[str]
+    """Every vendor with a tool in Tools, seen or not"""
 
 
-def registry(c: Any, who: Any, auth: Any, settings: Any, admins: Any) -> dict[str, Entry]:
-    """{slug: (guide, the vendor's Tools rows the reader may see, the company's row or None)}, by slug."""
+def tools_of(c: Any, who: Any, admins: Any, auth: Any, only: str | None = None) -> Tools:
+    """The company's API tools by vendor, as `who` knows them: the projection of the Tools index the registry needs,
+    without its health, grants or connections (api_tools.index_rows). `only`: that vendor's alone."""
     api_tools = _mod("api_tools")
-    vendors: dict[str, list[Row]] = {}
-    for row in api_tools.index_rows(c, who, auth, settings, admins):
-        if row.get("vendor") and not row.get("requestable"):
-            vendors.setdefault(row["vendor"], []).append(row)
+    envs: dict[str, list[str]] = {}
+    for tid, env in c.execute("SELECT tool_id, env FROM credentials WHERE tool_id IS NOT NULL AND env<>''"):
+        envs.setdefault(tid, []).append(env)
+    agent = who.role == "bot" and not getattr(who, "support", None)
+    known = who.role in ("owner", "human", "bot") and not getattr(who, "support", None)
+    out = Tools({}, {}, set())
+    for tool in c.execute("SELECT * FROM tools WHERE kind='api' ORDER BY lower(name), id").fetchall():
+        tid = tool["id"]
+        host = tool["base_url"] or tool["mcp_url"] or ""
+        vendor = TS.vendor_of(tool["service"] or "", tool["name"], envs.get(tid, []), host)
+        by_name = TS.vendor_of("", tool["name"])
+        if vendor:
+            out.every.add(vendor)
+        if only is not None and only not in (vendor, by_name):
+            continue
+        row = {"id": "api:" + tid, "tool_id": tid, "name": tool["name"], "kind": "api", "delivery": tool["delivery"]}
+        if vendor and (
+            api_tools.visible(c, who, tool, admins, auth)
+            or (agent and tool["audience"] is None and api_tools.subject_level(c, tid, who.actor))
+        ):
+            out.seen.setdefault(vendor, []).append({**row, "vendor_name": TS.vendor_name(vendor)})
+        elif known and by_name and tool["audience"] is None:
+            out.named.setdefault(by_name, []).append(row)
+    return out
+
+
+def registry(c: Any, tools: Tools) -> dict[str, Entry]:
+    """{slug: (guide, the vendor's Tools rows the reader may see, the company's row or None)}, by slug. The company's
+    words on a vendor are for those who see one of its tools; the rest read the shipped guide alone (a vendor with no
+    tool in Tools: everyone)."""
     rows = {r["slug"]: dict(r) for r in c.execute("SELECT * FROM tool_guides")}
     ship = shipped()
     out: dict[str, Entry] = {}
-    for slug in sorted(set(ship) | set(rows) | set(vendors)):
-        row = rows.get(slug)
+    for slug in sorted(set(ship) | set(rows) | set(tools.seen)):
+        row, vrows = rows.get(slug), tools.seen.get(slug, [])
         archived = bool(row and row["archived_at"])
-        if archived and slug not in vendors:
+        if archived and not vrows:
             continue
-        vrows = vendors.get(slug, [])
-        name = vrows[0].get("vendor_name", "") if vrows else ""
+        if row is not None and row["origin"] != "built" and slug in tools.every and not vrows:
+            row = None
+        if row is None and slug not in ship:
+            continue
+        name = vrows[0]["vendor_name"] if vrows else ""
         guide = _guide(slug, None, None, name) if archived else _guide(slug, row, ship.get(slug), name)
         out[slug] = (guide, vrows, row)
     return out
 
 
+def _hidden(tools: Tools, slug: str) -> bool:
+    """A vendor with tools in Tools, none of which the reader may see: its guide is not theirs to change."""
+    return slug in tools.every and not tools.seen.get(slug)
+
+
 def resolve(reg: dict[str, Entry], word: Any) -> str | None:
-    """The registry slug a word names: the slug itself, a vendor alias (gh, postgresql), or a guide's command
-    (psql, sqlite3). None when nothing does."""
+    """The registry slug a word names, for a read: the slug itself, a vendor alias (gh, postgresql), or a guide's
+    command (psql, sqlite3). None when nothing does. Writes take the exact slug."""
     word = str(word or "").strip().lower()
     if word in reg:
         return word
@@ -191,15 +233,16 @@ def _agent(bot: Any, actor: Any) -> str | None:
     return actor[len("bot:") :] if actor.startswith("bot:") else None
 
 
-def usage(c: Any, tool_ids: Any) -> dict[str, dict[str, list[Any]]]:
-    """{tool id: {agent: [uses, last used]}} over the last USED_DAYS: calls through Tico's proxy, and one for each
+def usage(c: Any, vrows: list[Row]) -> dict[str, dict[str, list[Any]]]:
+    """{tool id: {agent: [uses, last used]}} over the last USED_DAYS, as a tool's activity counts them
+    (api_tools.activity): its calls through Tico's proxy, and for a tool whose keys go to computers, one for each
     agent's latest key read (credential_uses keeps one row a caller). Read by tool id, which both tables index."""
-    tool_ids = sorted(set(tool_ids))
-    if not tool_ids:
-        return {}
-    since = H.shift(H.now(), days=-USED_DAYS)
-    marks = ",".join("?" * len(tool_ids))
+    calls = sorted({r["tool_id"] for r in vrows})
+    keyed = sorted({r["tool_id"] for r in vrows if r["delivery"] != "proxy"})
     out: dict[str, dict[str, list[Any]]] = {}
+    if not calls:
+        return out
+    since = H.shift(H.now(), days=-USED_DAYS)
 
     def add(tid: str, agent: str | None, uses: int, at: Any) -> None:
         if agent:
@@ -207,18 +250,20 @@ def usage(c: Any, tool_ids: Any) -> dict[str, dict[str, list[Any]]]:
             seen[0] += uses
             seen[1] = max(seen[1] or "", at or "") or None
 
-    for tid, bot, actor, uses, at in c.execute(
-        f"SELECT tool_id, bot, actor, count(*), max(created_at) FROM tool_calls WHERE tool_id IN ({marks}) "
-        "AND created_at>=? GROUP BY tool_id, bot, actor",
-        [*tool_ids, since],
-    ):
-        add(tid, _agent(bot, actor), uses, at)
-    for tid, bot, actor, at in c.execute(
-        "SELECT k.tool_id, u.bot, u.actor, u.used_at FROM credential_uses u "
-        f"JOIN credentials k ON k.id=u.credential_id WHERE k.tool_id IN ({marks}) AND u.used_at>=?",
-        [*tool_ids, since],
-    ):
-        add(tid, _agent(bot, actor), 1, at)
+    for part in H.chunks(calls):
+        for tid, bot, actor, uses, at in c.execute(
+            "SELECT tool_id, bot, actor, count(*), max(created_at) FROM tool_calls "
+            f"WHERE tool_id IN ({','.join('?' * len(part))}) AND created_at>=? GROUP BY tool_id, bot, actor",
+            [*part, since],
+        ):
+            add(tid, _agent(bot, actor), uses, at)
+    for part in H.chunks(keyed):
+        for tid, bot, actor, at in c.execute(
+            "SELECT k.tool_id, u.bot, u.actor, u.used_at FROM credential_uses u JOIN credentials k "
+            f"ON k.id=u.credential_id WHERE k.tool_id IN ({','.join('?' * len(part))}) AND u.used_at>=?",
+            [*part, since],
+        ):
+            add(tid, _agent(bot, actor), 1, at)
     return out
 
 
@@ -232,16 +277,40 @@ def _listings(c: Any) -> dict[str, dict[str, str]]:
     return out
 
 
-def _users(reg_entry: Entry, listed: dict[str, str], used: dict[str, dict[str, list[Any]]]) -> dict[str, list[Any]]:
-    """{agent: [listed, note, uses, last used]} for one registry entry."""
-    _, vrows, _ = reg_entry
-    out: dict[str, list[Any]] = {bot: [True, note, 0, None] for bot, note in listed.items()}
-    for tid in filter(None, map(_tool_id, vrows)):
-        for bot, (uses, at) in used.get(tid, {}).items():
-            item = out.setdefault(bot, [False, "", 0, None])
-            item[2] += uses
-            item[3] = max(item[3] or "", at or "") or None
+def _readable(c: Any, who: Any, auth: Any, bots: set[str]) -> set[str]:
+    """The agents among `bots` the reader may read: their notes and uses are for those alone (as their own tool list,
+    GET /bots/{bot}/tool-guides, is)."""
+    if not bots:
+        return set()
+    levels = auth.bot_accesses(c, who, sorted(bots))
+    return {b for b in bots if levels.get(b) and levels[b].get("read")}
+
+
+def _listed(entry: Entry, listings: dict[str, dict[str, str]]) -> dict[str, str]:
+    """The agents' notes on an entry: none where the reader gets the shipped guide alone."""
+    return listings.get(entry[0]["slug"], {}) if entry[2] is not None else {}
+
+
+def _users(
+    entry: Entry, listed: dict[str, str], used: dict[str, dict[str, list[Any]]], readable: set[str]
+) -> dict[str, list[Any]]:
+    """{agent: [listed, note, uses, last used]} for one registry entry, of the agents the reader may read."""
+    out: dict[str, list[Any]] = {bot: [True, note, 0, None] for bot, note in listed.items() if bot in readable}
+    for row in entry[1]:
+        for bot, (uses, at) in used.get(row["tool_id"], {}).items():
+            if bot in readable:
+                item = out.setdefault(bot, [False, "", 0, None])
+                item[2] += uses
+                item[3] = max(item[3] or "", at or "") or None
     return out
+
+
+def _bots_in(
+    entries: list[Entry], listings: dict[str, dict[str, str]], used: dict[str, dict[str, list[Any]]]
+) -> set[str]:
+    return {b for e in entries for b in _listed(e, listings)} | {
+        b for e in entries for row in e[1] for b in used.get(row["tool_id"], {})
+    }
 
 
 def _page(rows: list[Row], limit: int, cursor: Any) -> tuple[list[Row], str | None]:
@@ -272,7 +341,6 @@ def list_page(
     c: Any,
     who: Any,
     auth: Any,
-    settings: Any,
     admins: Any,
     q: str = "",
     category: str = "",
@@ -281,35 +349,39 @@ def list_page(
     limit: int = LIST_MAX,
     cursor: str = "",
 ) -> Row:
-    """`GET /api/v2/tool-guides`: the registry, most used first. `bot` keeps the tools on that agent's page."""
-    reg = registry(c, who, auth, settings, admins)
-    keep: set[str] | None = None
-    if bot:
-        keep = {r["slug"] for r in bot_rows(c, who, auth, admins, _bot_id(c, auth, who, bot), reg)}
-    used = usage(c, [tid for _, vrows, _ in reg.values() for tid in map(_tool_id, vrows) if tid])
-    listings = _listings(c)
+    """`GET /api/v2/tool-guides`: the registry, most used first. `bot` keeps the tools on that agent's page. Filters
+    first, then the use of what is left, read once."""
+    reg = registry(c, tools_of(c, who, admins, auth))
     words = str(q or "").lower().split()
+    picked = [
+        entry
+        for entry in reg.values()
+        if (not category or entry[0]["category"].lower() == category.strip().lower())
+        and (not origin or entry[0]["origin"] == origin)
+        and (not words or _matches(entry[0], words))
+    ]
+    if bot:
+        used = usage(c, [r for e in reg.values() for r in e[1]])
+        keep = {r["slug"] for r in bot_rows(c, who, auth, admins, _bot_id(c, auth, who, bot), reg, used)}
+        picked = [e for e in picked if e[0]["slug"] in keep]
+    else:
+        used = usage(c, [r for e in picked for r in e[1]])
+    listings = _listings(c)
+    readable = _readable(c, who, auth, _bots_in(picked, listings, used))
     rows: list[Row] = []
-    for slug, entry in reg.items():
+    for entry in picked:
         guide, vrows, _ = entry
-        if keep is not None and slug not in keep:
-            continue
-        if category and guide["category"].lower() != category.strip().lower():
-            continue
-        if origin and guide["origin"] != origin or words and not _matches(guide, words):
-            continue
-        users = _users(entry, listings.get(slug, {}), used)
-        last = max((u[3] for u in users.values() if u[3]), default=None)
+        users = _users(entry, _listed(entry, listings), used, readable)
         rows.append(
             {
-                "slug": slug,
+                "slug": guide["slug"],
                 "name": guide["name"],
                 "origin": guide["origin"],
                 "category": guide["category"],
                 "summary": guide["summary"],
                 "connections": len(vrows),
                 "used_by": len(users),
-                "last_used_at": last,
+                "last_used_at": max((u[3] for u in users.values() if u[3]), default=None),
                 "has_guide": guide["has_guide"],
             }
         )
@@ -318,103 +390,88 @@ def list_page(
     return {"tool_guides": shown, "next": after}
 
 
-def _access(c: Any, who: Any, vrows: list[Row]) -> list[Row]:
-    """The caller's way into each of the vendor's Tools rows: its level, how a run reaches it and the variables' names,
-    and for an agent with none the command that asks for Read. Never a value."""
-    api_tools = _mod("api_tools")
-    url_env = _mod("tool_proxy").url_env
-    agent = who.role == "bot"
-    out: list[Row] = []
-    for row in vrows:
-        tid = _tool_id(row)
-        item: Row = {
-            "id": row["id"],
-            "name": row["name"],
-            "kind": row["kind"],
-            "level": None,
-            "arrives": None,
-            "env": [],
-            "url_env": None,
-            "request": None,
-        }
-        if row["kind"] == "api" and tid:
-            item["level"] = LEVELS.get(api_tools.subject_level(c, tid, who.actor) or "", "none")
-            item["env"] = sorted({k["env"] for k in api_tools._keys(c, tid) if k["env"]})
-            proxied = row.get("delivery") == "proxy"
-            item["arrives"] = "proxy" if proxied else "env"
-            item["url_env"] = url_env(tid) if proxied else None
-            if agent and item["level"] == "none":
-                item["request"] = f"tico access request tool:{tid} --level read"
-        elif row["kind"] == "website" and tid:
-            item["level"] = "write" if api_tools._can_use(c, tid, who.actor) else "none"
-            item["arrives"] = "login"
-        out.append(item)
-    return out
-
-
-def _requestable(c: Any, who: Any, slug: str, shown: set[str]) -> list[Row]:
-    """The vendor's API tools for Everyone the caller holds nothing on, by name and id alone (as the Tools list shows
-    them to a person), so an agent learns the tool is there and how to ask for it. Nothing of how they are set up."""
-    out: list[Row] = []
-    for tool in c.execute("SELECT * FROM tools WHERE kind='api' AND audience IS NULL ORDER BY lower(name), id"):
-        if "api:" + tool["id"] in shown:
+def _reach(c: Any, who: Any, row: Row) -> Row:
+    """How the caller's run reaches one API tool, by the runtime's own decision for each key it holds
+    (credentials.held_at_read): through Tico's proxy (the address variable a run reads), or as a variable on the
+    computer. Its level counts a bot's default Read. Not held: no way yet. Never a value."""
+    api_tools, credentials, tool_proxy = _mod("api_tools"), _mod("credentials"), _mod("tool_proxy")
+    tid = row["tool_id"]
+    subject = api_tools.subject_of(c, who.actor)
+    held = api_tools._held(c, tid, subject)
+    levels = {level for _, level in held}
+    level = "write" if "read_write" in levels else "read" if levels else "none"
+    tool = c.execute("SELECT * FROM tools WHERE id=?", (tid,)).fetchone()
+    proxied = {tid: tool} if tool is not None and tool["delivery"] == "proxy" else {}
+    envs: set[str] = set()
+    urls: set[str] = set()
+    for key, _ in held:
+        through, way = credentials.held_at_read(c, proxied, key, subject, credentials.UNREAD)
+        if way == "skip":
             continue
-        if TS.vendor_of(tool["service"], tool["name"], (), tool["base_url"] or tool["mcp_url"] or "") != slug:
-            continue
-        out.append(
-            {
-                "id": "api:" + tool["id"],
-                "name": tool["name"],
-                "kind": "api",
-                "level": "none",
-                "arrives": None,
-                "env": [],
-                "url_env": None,
-                "request": f"tico access request tool:{tool['id']} --level read" if who.role == "bot" else None,
-            }
-        )
-    return out
+        if through is not None:
+            urls.add(tool_proxy.url_env(tool_proxy.home_of(key, through)))
+        elif key["env"]:
+            envs.add(key["env"])
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "kind": "api",
+        "level": level,
+        "arrives": "proxy" if urls else "env" if envs else None,
+        # Held: the variables its run gets. Not held: every key's name, so an agent knows what Read would bring.
+        "env": sorted(envs) if held else sorted({k["env"] for k in api_tools._keys(c, tid) if k["env"]}),
+        "url_env": min(urls) if urls else None,
+        "request": f"tico access request tool:{tid} --level read" if who.role == "bot" and not held else None,
+    }
 
 
-def _seen_bots(c: Any, who: Any, auth: Any, admins: Any, bots: set[str]) -> set[str]:
-    """The agents among `bots` the reader may see (the rule every list of bots follows)."""
-    if not bots or who.role == "owner" or TA.admin(c, who, admins):
-        return set(bots)
-    levels = auth.bot_accesses(c, who, sorted(bots))
-    return {b for b in bots if levels.get(b) and levels[b].get("see")}
+def _named(who: Any, row: Row) -> Row:
+    """An Everyone tool the caller knows by name alone: its name and id, and for an agent the command that asks for
+    Read. Nothing of how it is set up."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "kind": "api",
+        "level": "none",
+        "arrives": None,
+        "env": [],
+        "url_env": None,
+        "request": f"tico access request tool:{row['tool_id']} --level read" if who.role == "bot" else None,
+    }
 
 
-def detail(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -> Row:
-    """`GET /api/v2/tool-guides/{slug}`: one guide, the caller's way into each of its Tools rows, the agents that list
-    or use it, and the vendor's learnings."""
+def detail(c: Any, who: Any, auth: Any, admins: Any, slug: str) -> Row:
+    """`GET /api/v2/tool-guides/{slug}`: one guide, how the caller reaches each of its tools, the agents that list or
+    use it (those the caller may read), and the vendor's learnings."""
     integrations, names = _mod("integrations"), _mod("names")
-    reg = registry(c, who, auth, settings, admins)
+    tools = tools_of(c, who, admins, auth)
+    reg = registry(c, tools)
     found = resolve(reg, slug)
     if found is None:
         raise Problem("not_found", "No such tool in the registry", 404)
     entry = reg[found]
     guide, vrows, _ = entry
-    used = usage(c, [tid for tid in map(_tool_id, vrows) if tid])
-    users = _users(entry, _listings(c).get(found, {}), used)
-    seen = _seen_bots(c, who, auth, admins, set(users))
-    labels = names.lookup(c, {"bot:" + b for b in seen})
+    used = usage(c, vrows)
+    listed = _listed(entry, _listings(c))
+    users = _users(entry, listed, used, _readable(c, who, auth, set(listed) | {b for u in used.values() for b in u}))
+    labels = names.lookup(c, {"bot:" + b for b in users})
     used_by: list[Row] = [
         {
             "id": bot,
             "name": labels.get("bot:" + bot) or bot,
-            "listed": listed,
+            "listed": listed_,
             "note": note,
             "uses": uses,
             "last_used_at": at,
         }
-        for bot, (listed, note, uses, at) in users.items()
-        if bot in seen
+        for bot, (listed_, note, uses, at) in users.items()
     ]
     used_by.sort(key=lambda u: (not u["listed"], -u["uses"], u["name"].lower()))
     learnings = [
-        {k: r[k] for k in ("id", "actor", "text", "created_at")} for r in integrations.learnings(c, found)[:50]
+        {k: r[k] for k in ("id", "actor", "text", "created_at")}
+        for r in (integrations.learnings(c, found)[:50] if vrows else [])
     ]
-    access = _access(c, who, vrows) + _requestable(c, who, found, {r["id"] for r in vrows})
+    access = [_reach(c, who, r) for r in vrows] + [_named(who, r) for r in tools.named.get(found, [])]
     return {**guide, "access": access, "used_by": used_by, "learnings": learnings}
 
 
@@ -423,11 +480,22 @@ def _signed_in(who: Any) -> None:
         raise Problem("forbidden", "Sign in as a person or an agent of this company to change the Tools registry", 403)
 
 
+def _strings(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in cast(dict[str, Any], value).values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in cast(list[Any], value) for s in _strings(v)]
+    return []
+
+
 def _no_key(fields: dict[str, Any]) -> None:
-    """Refuses words that hold a key: a guide names a variable, never its value."""
+    """Refuses words that hold a key or look like one, in any field sent, lists too: a guide names a variable, never
+    its value."""
     scan = _mod("secret_drop").scan
     for name, value in fields.items():
-        if isinstance(value, str) and any(i["tier"] == "certain" for i in scan(value)):
+        if any(scan(text) for text in _strings(value)):
             raise Problem(
                 "looks_like_key",
                 f"{name} looks like it holds a key: name its variable ($STRIPE_API_KEY) and store the key in Tools",
@@ -435,16 +503,24 @@ def _no_key(fields: dict[str, Any]) -> None:
             )
 
 
-def write(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str, body: ToolGuideWrite) -> Row:
-    """`PUT /api/v2/tool-guides/{slug}`: create or change a guide, only the fields sent. A known vendor, a shipped
-    guide or an alias (gh) is that guide; any other new slug is a tool built here, which needs a summary and
-    instructions. Writing an archived guide brings it back."""
-    _signed_in(who)
-    word = str(slug or "").strip().lower()
-    reg = registry(c, who, auth, settings, admins)
-    slug = resolve(reg, word) or word
+def _exact(c: Any, who: Any, admins: Any, auth: Any, slug: Any) -> tuple[str, Tools]:
+    """A write's slug, as sent (never a near match), and its vendor's tools as the writer knows them. A vendor whose
+    tools the writer may not see is not theirs to write on."""
+    slug = str(slug or "").strip().lower()
     if not SLUG.match(slug):
         raise Problem("invalid_request", "A tool's slug is lowercase letters, digits and dashes", 422)
+    tools = tools_of(c, who, admins, auth, only=slug)
+    if _hidden(tools, slug):
+        raise Problem("not_found", "No such tool in the registry", 404)
+    return slug, tools
+
+
+def write(c: Any, who: Any, auth: Any, admins: Any, slug: str, body: ToolGuideWrite) -> Row:
+    """`PUT /api/v2/tool-guides/{slug}`: create or change a guide, only the fields sent. A vendor Tools knows or a
+    shipped guide is that guide; any other new slug is a tool built here, which needs a summary and instructions.
+    Writing an archived guide brings it back."""
+    _signed_in(who)
+    slug, tools = _exact(c, who, admins, auth, slug)
     sent = body.model_dump(exclude_unset=True)
     _no_key(sent)
     if "commands" in sent:
@@ -461,7 +537,7 @@ def write(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str, bo
     row = c.execute("SELECT * FROM tool_guides WHERE slug=?", (slug,)).fetchone()
     row = dict(row) if row else None
     # A vendor Tools knows (linear) is a vendor's guide even before its tool is added; any other new slug is built here.
-    known = slug in reg or slug in TS._known()
+    known = slug in tools.every or slug in shipped() or slug in TS._known()
     origin = sent.get("origin") or (row["origin"] if row else "vendor" if known else "built")
     after = _guide(slug, {**(row or {}), **sent, "origin": origin, "archived_at": None}, shipped().get(slug))
     if origin == "built" and not (after["summary"] and after["instructions"]):
@@ -486,8 +562,8 @@ def write(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str, bo
         )
         H.event(c, who.actor, "tool_guide.updated", slug, {"fields": sorted(sent)})
     saved = dict(c.execute("SELECT * FROM tool_guides WHERE slug=?", (slug,)).fetchone())
-    vrows = reg[slug][1] if slug in reg else []
-    return _guide(slug, saved, shipped().get(slug), vrows[0].get("vendor_name", "") if vrows else "")
+    vrows = tools.seen.get(slug, [])
+    return _guide(slug, saved, shipped().get(slug), vrows[0]["vendor_name"] if vrows else "")
 
 
 def may_archive(c: Any, who: Any, admins: Any, row: Row | None) -> bool:
@@ -503,14 +579,14 @@ def may_archive(c: Any, who: Any, admins: Any, row: Row | None) -> bool:
     return own and who.actor in keepers
 
 
-def archive(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) -> Row:
-    """`DELETE /api/v2/tool-guides/{slug}`: hide a guide, the shipped one too; the vendor's Tools rows stay."""
+def archive(c: Any, who: Any, auth: Any, admins: Any, slug: str) -> Row:
+    """`DELETE /api/v2/tool-guides/{slug}`: hide a guide, the shipped one too; the vendor's Tools rows stay. The exact
+    slug."""
     _signed_in(who)
-    reg = registry(c, who, auth, settings, admins)
-    found = resolve(reg, slug)
-    row = c.execute("SELECT * FROM tool_guides WHERE slug=?", (found or "",)).fetchone()
+    slug, _ = _exact(c, who, admins, auth, slug)
+    row = c.execute("SELECT * FROM tool_guides WHERE slug=?", (slug,)).fetchone()
     row = dict(row) if row else None
-    if found is None or not (row or found in shipped()):
+    if not (row or slug in shipped()):
         raise Problem("not_found", "No such guide in the registry", 404)
     if not may_archive(c, who, admins, row):
         raise Problem(
@@ -523,15 +599,15 @@ def archive(c: Any, who: Any, auth: Any, settings: Any, admins: Any, slug: str) 
         c.execute(
             "INSERT INTO tool_guides(id,slug,created_by,updated_by,created_at,updated_at,archived_at) "
             "VALUES(?,?,?,?,?,?,?)",
-            (H.new_id(), found, who.actor, who.actor, now, now, now),
+            (H.new_id(), slug, who.actor, who.actor, now, now, now),
         )
     elif not row["archived_at"]:
         c.execute(
             "UPDATE tool_guides SET archived_at=?, updated_by=?, updated_at=? WHERE id=?",
             (now, who.actor, now, row["id"]),
         )
-    H.event(c, who.actor, "tool_guide.archived", found, {})
-    return {"slug": found, "archived": True}
+    H.event(c, who.actor, "tool_guide.archived", slug, {})
+    return {"slug": slug, "archived": True}
 
 
 def _bot_id(c: Any, auth: Any, who: Any, bot: str) -> str:
@@ -543,11 +619,13 @@ def _bot_id(c: Any, auth: Any, who: Any, bot: str) -> str:
     return found
 
 
-def bot_rows(c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, Entry]) -> list[Row]:
+def bot_rows(
+    c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, Entry], used: dict[str, dict[str, list[Any]]]
+) -> list[Row]:
     """One agent's tools: the ones it lists, the ones it holds in Tools (as its page shows them to this reader) and the
-    ones it used in the last USED_DAYS, by slug."""
+    ones it used in the last USED_DAYS (`used`, usage of every tool in `reg`), by slug."""
     bot_tools = _mod("bot_tools")
-    by_tool = {tid: slug for slug, (_, vrows, _) in reg.items() for tid in map(_tool_id, vrows) if tid}
+    by_tool = {r["tool_id"]: slug for slug, (_, vrows, _) in reg.items() for r in vrows}
     found: dict[str, Row] = {}
 
     def item(slug: str) -> Row:
@@ -556,7 +634,7 @@ def bot_rows(c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, 
     for slug, note in c.execute(
         "SELECT g.slug, b.note FROM bot_tool_guides b JOIN tool_guides g ON g.id=b.tool_guide_id WHERE b.bot=?", (bot,)
     ):
-        if slug in reg:
+        if slug in reg and reg[slug][2] is not None:
             item(slug).update(note=note, listed=True)
     near = bot_tools.close(c, who, bot, admins, auth)
     for grant in bot_tools.shown(c, who, bot, near, admins, auth):
@@ -569,8 +647,8 @@ def bot_rows(c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, 
         delivery = c.execute("SELECT delivery FROM tools WHERE id=?", (tid,)).fetchone() if tid else None
         row = item(slug)
         row["access"] = "proxy" if row["access"] == "proxy" or (delivery and delivery[0] == "proxy") else "key"
-    for tid, agents in usage(c, by_tool).items():
-        if bot in agents:
+    for tid, agents in used.items():
+        if bot in agents and tid in by_tool:
             row = item(by_tool[tid])
             row["uses"] += agents[bot][0]
             row["last_used_at"] = max(row["last_used_at"] or "", agents[bot][1] or "") or None
@@ -593,12 +671,11 @@ def bot_rows(c: Any, who: Any, auth: Any, admins: Any, bot: str, reg: dict[str, 
     return out
 
 
-def list_for_bot(
-    c: Any, who: Any, auth: Any, admins: Any, settings: Any, bot: str, limit: int = LIST_MAX, cursor: str = ""
-) -> Row:
+def list_for_bot(c: Any, who: Any, auth: Any, admins: Any, bot: str, limit: int = LIST_MAX, cursor: str = "") -> Row:
     """`GET /api/v2/bots/{bot}/tool-guides`."""
     bot = _bot_id(c, auth, who, bot)
-    rows = bot_rows(c, who, auth, admins, bot, registry(c, who, auth, settings, admins))
+    reg = registry(c, tools_of(c, who, admins, auth))
+    rows = bot_rows(c, who, auth, admins, bot, reg, usage(c, [r for e in reg.values() for r in e[1]]))
     shown, after = _page(rows, limit, cursor)
     return {"bot": bot, "tool_guides": shown, "next": after}
 
@@ -612,24 +689,22 @@ def _may_keep_list(c: Any, who: Any, auth: Any, admins: Any, bot: str) -> str:
     return found
 
 
-def list_tool(
-    c: Any, who: Any, auth: Any, settings: Any, admins: Any, bot: str, slug: str, body: BotToolGuideNote
-) -> Row:
-    """`PUT /api/v2/bots/{bot}/tool-guides/{slug}`: the agent lists a tool it uses, with what for."""
+def list_tool(c: Any, who: Any, auth: Any, admins: Any, bot: str, slug: str, body: BotToolGuideNote) -> Row:
+    """`PUT /api/v2/bots/{bot}/tool-guides/{slug}`: the agent lists a tool it uses, with what for. The exact slug."""
     auth.domain(who)
     bot = _may_keep_list(c, who, auth, admins, bot)
-    reg = registry(c, who, auth, settings, admins)
-    found = resolve(reg, slug)
-    if found is None:
+    slug, tools = _exact(c, who, admins, auth, slug)
+    reg = registry(c, tools)
+    if slug not in reg:
         raise Problem("not_found", "No such tool in the registry: write its guide first (tico tool guide-write)", 404)
     _no_key({"note": body.note})
     now = H.now()
-    row = c.execute("SELECT id, archived_at FROM tool_guides WHERE slug=?", (found,)).fetchone()
+    row = c.execute("SELECT id FROM tool_guides WHERE slug=?", (slug,)).fetchone()
     if row is None:
         gid = H.new_id()
         c.execute(
             "INSERT INTO tool_guides(id,slug,origin,created_by,updated_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-            (gid, found, reg[found][0]["origin"], who.actor, who.actor, now, now),
+            (gid, slug, reg[slug][0]["origin"], who.actor, who.actor, now, now),
         )
     else:
         gid = row["id"]
@@ -638,27 +713,23 @@ def list_tool(
         "ON CONFLICT(bot, tool_guide_id) DO UPDATE SET note=excluded.note, updated_at=excluded.updated_at",
         (H.new_id(), bot, gid, body.note, who.actor, now, now),
     )
-    H.event(c, who.actor, "bot.tool_listed", bot, {"tool": found})
-    return {"bot": bot, "slug": found, "note": body.note, "listed": True}
+    H.event(c, who.actor, "bot.tool_listed", bot, {"tool": slug})
+    return {"bot": bot, "slug": slug, "note": body.note, "listed": True}
 
 
-def unlist_tool(c: Any, who: Any, auth: Any, settings: Any, admins: Any, bot: str, slug: str) -> Row:
-    """`DELETE /api/v2/bots/{bot}/tool-guides/{slug}`: off the agent's list. Its grants in Tools are not touched."""
+def unlist_tool(c: Any, who: Any, auth: Any, admins: Any, bot: str, slug: str) -> Row:
+    """`DELETE /api/v2/bots/{bot}/tool-guides/{slug}`: off the agent's list, by the exact slug. Its grants in Tools are
+    not touched."""
     auth.domain(who)
     bot = _may_keep_list(c, who, auth, admins, bot)
-    listed = {
-        r["slug"]: (r["id"], _guide(r["slug"], dict(r), shipped().get(r["slug"])))
-        for r in c.execute(
-            "SELECT g.* FROM bot_tool_guides b JOIN tool_guides g ON g.id=b.tool_guide_id WHERE b.bot=?", (bot,)
-        )
-    }
-    word = resolve({k: (g, [], None) for k, (_, g) in listed.items()}, slug) or str(slug or "").strip().lower()
-    gone = 0
-    if word in listed:
-        gone = c.execute("DELETE FROM bot_tool_guides WHERE bot=? AND tool_guide_id=?", (bot, listed[word][0])).rowcount
+    slug = str(slug or "").strip().lower()
+    gone = c.execute(
+        "DELETE FROM bot_tool_guides WHERE bot=? AND tool_guide_id IN (SELECT id FROM tool_guides WHERE slug=?)",
+        (bot, slug),
+    ).rowcount
     if gone:
-        H.event(c, who.actor, "bot.tool_unlisted", bot, {"tool": word})
-    return {"bot": bot, "slug": word, "note": "", "listed": False}
+        H.event(c, who.actor, "bot.tool_unlisted", bot, {"tool": slug})
+    return {"bot": bot, "slug": slug, "note": "", "listed": False}
 
 
 def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None) -> None:
@@ -694,7 +765,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return list_page(c, who, auth, store.settings, admins(), q, category, origin, bot, limit, cursor)
+            return list_page(c, who, auth, admins(), q, category, origin, bot, limit, cursor)
 
     @app.get(
         "/api/v2/tool-guides/{slug}",
@@ -710,7 +781,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return detail(c, who, auth, store.settings, admins(), slug)
+            return detail(c, who, auth, admins(), slug)
 
     @app.put(
         "/api/v2/tool-guides/{slug}",
@@ -726,7 +797,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
 
         def work(c: Any) -> Any:
-            return write(c, acting(c, who), auth, store.settings, admins(), slug, body)
+            return write(c, acting(c, who), auth, admins(), slug, body)
 
         return mutate(request, body, work)
 
@@ -744,7 +815,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
 
         def work(c: Any) -> Any:
-            return archive(c, acting(c, who), auth, store.settings, admins(), slug)
+            return archive(c, acting(c, who), auth, admins(), slug)
 
         return mutate(request, Empty(), work)
 
@@ -767,7 +838,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            return list_for_bot(c, who, auth, admins(), store.settings, bot, limit, cursor)
+            return list_for_bot(c, who, auth, admins(), bot, limit, cursor)
 
     @app.put(
         "/api/v2/bots/{bot}/tool-guides/{slug}",
@@ -783,7 +854,7 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
 
         def work(c: Any) -> Any:
-            return list_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug, body)
+            return list_tool(c, acting(c, who), auth, admins(), bot, slug, body)
 
         return mutate(request, body, work)
 
@@ -800,6 +871,6 @@ def install(app: Any, store: Any, auth: Any, mutate: Any, requester: Any = None)
         who = request.state.identity
 
         def work(c: Any) -> Any:
-            return unlist_tool(c, acting(c, who), auth, store.settings, admins(), bot, slug)
+            return unlist_tool(c, acting(c, who), auth, admins(), bot, slug)
 
         return mutate(request, Empty(), work)

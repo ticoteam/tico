@@ -31,8 +31,6 @@ Done when: each problem below has one open task, no problem has two, and the run
      learnings (`tico tool guide-write <slug> --summary ... --instructions-file ...`);
    - two guides for one tool (a built tool that wraps a vendor's CLI, two slugs for one script): keep the better one,
      fold the other's words into it, archive the other (`tico tool guide-archive <slug>`);
-   - a built tool nobody used in 60 days: ask its owner on a task of yours (`tico task ask`) and archive it only when
-     they agree or do not answer in a week;
    - a wrong or empty category: fix it (`tico tool guide-write <slug> --category data`).
 8. Finish: `tico task done <id> -m "<n tools, n working, n problems filed; access: n to people, n% at once, median
    n min to grant; registry: n guides written, n archived>" --version N`.

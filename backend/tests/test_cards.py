@@ -584,7 +584,7 @@ def test_a_pin_moved_to_where_its_reader_sees_it_stays_before_a_page_they_may_no
 
 def test_the_last_pin_on_the_fullest_sidebar_a_layout_saves_moves_to_where_it_is_listed(api):
     """Every position listed is one a pin may be moved to: the full-layout save holds no more widgets than that."""
-    from backend.models import SIDEBAR_WIDGETS
+    from backend.models import SIDEBAR_ITEMS, SIDEBAR_WIDGETS
 
     tabs = get(api, "bots/ops/task-tabs")["tabs"]
     built_ins = ["updates", "tasks", "files", "tools"]
@@ -599,6 +599,10 @@ def test_the_last_pin_on_the_fullest_sidebar_a_layout_saves_moves_to_where_it_is
     # Built-ins left out of a save come back after it: a layout that would run past the furthest position is refused.
     put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in more + cards]}, expected=422)
     assert [w for w, _ in widgets_of()(api)] == full
+    # A layout saved before the Tools widget, as full as it could be then, still saves: Tools joins it, last.
+    old = ["updates", "tasks", "files"] + ["card:" + c for c in made[: SIDEBAR_ITEMS + 1]]  # 64, its most then
+    put(api, "bots/ops/task-tabs", {"tabs": tabs, "widgets": [{"id": w} for w in old]})
+    assert [w for w, _ in widgets_of()(api)] == old + ["tools"]
 
 
 def test_an_open_agent_page_hears_that_its_sidebar_changed(api):
