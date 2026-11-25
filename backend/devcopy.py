@@ -431,6 +431,8 @@ KEEP = (
             "file_signings",  # who signed which file version in Tico: a record, it reaches nothing
             "signatures",  # each person's saved signature, placed only by that person
             "bot_files",
+            "file_tags",  # the company's tags on a file (backend/file_details.py)
+            "file_metadata",  # a file's own fields, one JSON object
             "bot_memory_documents",
             "bot_memory_oversized",
             "bot_memory_seen",

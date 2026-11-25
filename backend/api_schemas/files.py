@@ -59,6 +59,13 @@ SCHEMAS.update(
                 "first_activity_at": "s",
                 "last_activity_at": "s",
                 "archived": "b",
+                "tags": {**items(ref("FileTag")), "description": "the file's details only (getBotFile)"},
+                "metadata": {"type": "object", "description": "the file's details only: a team's own fields"},
+                "parent": {
+                    "oneOf": [obj({"id": "s", "title": "s"}), {"type": "null"}],
+                    "description": "the file's details only: the file it was made from, when the caller may read it",
+                },
+                "may_edit": {"type": "boolean", "description": "the file's details only: may change tags and metadata"},
             },
             required=[
                 "id",
@@ -101,6 +108,9 @@ SCHEMAS.update(
             required=["bot", "files"],
         ),
         "BotFileResult": obj({"file": "o", "created": "b"}, required=["file"]),
+        "FileTag": obj({"id": "s", "key": "s", "label": "s"}),
+        "FileTags": obj({"file": "s", "tags": items(ref("FileTag"))}),
+        "FileMetadata": obj({"file": "s", "metadata": {"type": "object"}}),
         "FileActivity": obj({"file": "s", "activity": "a"}, actors=ACTORS),
         "FileVersions": obj({"file": "s", "versions": "a"}),
         "FileSigning": obj(
@@ -158,6 +168,7 @@ SCHEMAS.update(
                 "links_more": "i",
                 "writers": items(ref("PageWriter")),
                 "may_write": "b",
+                "tags": items(ref("FileTag")),
             },
             required=["id", "bot", "title", "kind", "library_kind", "version", "last_activity_at"],
         ),

@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from urllib.parse import quote
+from clients import cli_spec
 from clients.cli_spec import Arg, Command, Group
 from clients.tico import APIError
 
@@ -89,12 +90,13 @@ def files_list(api, args):
             "description": "bot makes it visible to everyone who sees this bot (refused from inside a private chat)",
         },
         "path": _s("The file's path in your repository, so an edit later is the same file"),
+        "from": _s("The id of the file this one was made from (a copy, a variant); you must be able to read it"),
     },
     required=("name",),
     writes=True,
 )
 def files_publish(api, args):
-    body = _files_fields(args, "name", "text", "content_base64", "title", "task", "scope", "path")
+    body = _files_fields(args, "name", "text", "content_base64", "title", "task", "scope", "path", "from")
     return api.post("files/uploads", body, key=_key(args))
 
 
@@ -385,16 +387,92 @@ def pin_remove(api, args):
 @tool(
     "tico_file_search",
     "Search the files you may read, every bot's and people's uploads alike, by title and text "
-    "(Markdown, text, a page's words, a CSV's header and first rows): best first, each with an excerpt.",
+    "(Markdown, text, a page's words, a CSV's header and first rows): best first, each with an excerpt. "
+    "tag keeps the files carrying one of the company's tags; with tag and no words, newest first.",
     {
         "q": _s("Words to find"),
         "kind": {"enum": ["page", "document", "image", "data", "media", "other"]},
+        "tag": _s("A tag's key, e.g. client:acme"),
         "limit": {"type": "integer", "minimum": 1, "maximum": 50},
     },
-    required=("q",),
 )
 def files_search(api, args):
-    return api.get("files/search", q=args["q"], limit=args.get("limit"), kind=args.get("kind"))
+    if not args.get("q") and not args.get("tag"):
+        raise ValueError("Give words to find, a tag, or both")
+    return api.get("files/search", q=args.get("q"), tag=args.get("tag"), limit=args.get("limit"), kind=args.get("kind"))
+
+
+def _fid(value):
+    fid = str(value)
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", fid):
+        raise ValueError("Use an opaque Tico file ID, not a URL or path")
+    return fid
+
+
+@tool(
+    "tico_file_show",
+    "One file you may read: title, kind, versions, its tags, its metadata, the file it was made from (parent) and "
+    "may_edit, whether you may change them.",
+    {"id": _s("File id")},
+    required=("id",),
+)
+def files_show(api, args):
+    return api.get(f"files/{_fid(args['id'])}/info")
+
+
+@tool(
+    "tico_file_tag",
+    "Add or remove one of the company's tags (client:acme) on a file you may write. Only an existing tag; make one "
+    "with tico_tag_create. tico_file_search with tag finds the files carrying it.",
+    {
+        "id": _s("File id"),
+        "action": {"enum": ["add", "rm"], "description": "add the tag, or rm (remove) it"},
+        "key": _s("The tag's key, e.g. client:acme"),
+    },
+    required=("id", "action", "key"),
+    writes=True,
+)
+def files_tag(api, args):
+    side = "add" if args["action"] == "add" else "remove"
+    return _as_person(api).post(f"files/{_fid(args['id'])}/tags", {side: [args["key"]]}, key=_key(args))
+
+
+@tool(
+    "tico_file_meta_set",
+    "Set keys of a file's metadata on a file you may write: one JSON object of your team's own fields (an ad's id, "
+    "the angle, the campaign), kept across versions. A key is plain text, a dot in it is no nesting; a value is any "
+    "JSON, null removes the key. At most 16 KB in all. tico_file_show reads it.",
+    {"id": _s("File id"), "set": {"type": "object", "description": "The keys to set and their values"}},
+    required=("id", "set"),
+    writes=True,
+)
+def files_meta_set(api, args):
+    if not args.get("set"):
+        raise ValueError("Give KEY=VALUE pairs or --json with the keys to set")
+    return _as_person(api).patch(f"files/{_fid(args['id'])}/metadata", {"set": args["set"]}, key=_key(args))
+
+
+@tool(
+    "tico_file_meta_rm",
+    "Remove keys from a file's metadata, on a file you may write.",
+    {"id": _s("File id"), "keys": {"type": "array", "items": {"type": "string"}, "description": "The keys to remove"}},
+    required=("id", "keys"),
+    writes=True,
+)
+def files_meta_rm(api, args):
+    return _as_person(api).patch(f"files/{_fid(args['id'])}/metadata", {"remove": list(args["keys"])}, key=_key(args))
+
+
+def _meta_pairs(fields):
+    """`tico file meta set F KEY=VALUE...`: the pairs as the object `set` takes (each value a string)."""
+    return {**fields, "set": dict(fields.get("set") or [])}
+
+
+def files_meta_set_run(client, fields, json_set=None):
+    """`--json '{...}'` sets typed values (numbers, lists, objects); KEY=VALUE pairs given too win over its keys."""
+    if json_set is not None and not isinstance(json_set, dict):
+        raise ValueError("--json is one JSON object")
+    return files_meta_set(client, {**fields, "set": {**(json_set or {}), **fields["set"]}})
 
 
 @tool(
@@ -404,9 +482,7 @@ def files_search(api, args):
     required=("id",),
 )
 def files_read(api, args):
-    fid, number = args["id"], args.get("version")
-    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", str(fid)):
-        raise ValueError("Use an opaque Tico file ID, not a URL or path")
+    fid, number = _fid(args["id"]), args.get("version")
     path = f"/api/v2/files/{fid}/versions/{number}" if number else f"/api/v2/files/{fid}"
     client = api.api if isinstance(api, _Requester) else api
     data = client.request("GET", path, binary=True)
@@ -435,10 +511,7 @@ def files_delete(api, args):
     required=("id",),
 )
 def files_signings(api, args):
-    fid = str(args["id"])
-    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", fid):
-        raise ValueError("Use an opaque Tico file ID, not a URL or path")
-    return api.get(f"files/{fid}/signings")
+    return api.get(f"files/{_fid(args['id'])}/signings")
 
 
 def _file_target(api, target, command):
@@ -528,7 +601,7 @@ def files_publish_path(client, args):
             name, _, data, relative = BF.read_local(root, args["path"])
     except BF.Refused as exc:
         return {"refused": "file", "detail": str(exc)}
-    query = {"name": name, "path": relative, **_files_fields(args, "title", "task", "scope")}
+    query = {"name": name, "path": relative, **_files_fields(args, "title", "task", "scope", "from")}
     commit = BF.pushed_commit(root, relative)
     if commit:
         query["commit"] = commit
@@ -546,7 +619,9 @@ CADENCE = {"enum": ["none", "daily", "weekly", "monthly"], "description": "Updat
 
 def _page_fields(args):
     fields = {
-        k: args[k] for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "as") if args.get(k)
+        k: args[k]
+        for k in ("title", "cadence", "as_of", "task", "replaces", "scope", "page", "as", "from")
+        if args.get(k)
     }
     if args.get("spec"):
         fields["spec"] = True
@@ -573,6 +648,7 @@ def _page_fields(args):
         ),
         "page": _s("Write a new version of this page (file-<hex>) instead of making one; you must be able to write it"),
         "replaces": _s("The id of an older page this one takes the place of"),
+        "from": _s("The id of the page or file this one was made from (a duplicate, a variant); you must read it"),
         "scope": {"enum": ["task", "bot"], "description": "bot keeps it with the bot, not the turn's task"},
         "path": _s("The .html file's path in this checkout"),
         "spec": {"type": "boolean", "description": "A visual spec for the Product roadmap card in task"},
@@ -1196,8 +1272,44 @@ FILE = (
     ),
     Command(
         "file search",
-        "every file you may read, by title and text",
-        example="tico file search 'pipeline review' --kind document",
+        "every file you may read, by title and text; --tag keeps the files carrying a tag",
+        args=(Arg("q", positional=True, nargs="?"),),
+        example="tico file search 'pipeline review' --kind document --tag client:acme",
+    ),
+    Command(
+        "file show",
+        "one file: its versions, tags, metadata and the file it was made from",
+        example="tico file show f1",
+    ),
+    Command(
+        "file tag",
+        "add or rm one of the company's tags on a file you may write",
+        example="tico file tag f1 add client:acme",
+    ),
+    Group("file meta", "a file's metadata: one JSON object of your team's own fields, kept across versions"),
+    Command(
+        "file meta set",
+        "set keys of a file's metadata; --json sets typed values",
+        args=(
+            Arg("set", positional=True, nargs="*", type=cli_spec.pair, metavar="KEY=VALUE"),
+            Arg(
+                "json_set",
+                flag="--json",
+                type=json.loads,
+                metavar="JSON",
+                local=True,
+                help="keys and values as one JSON object",
+            ),
+        ),
+        convert=_meta_pairs,
+        run=files_meta_set_run,
+        example="""tico file meta set f1 angle=price --json '{"ads": {"meta": "238"}}'""",
+    ),
+    Command(
+        "file meta rm",
+        "remove keys from a file's metadata",
+        args=(Arg("keys", positional=True, nargs="+", action="store", metavar="KEY"),),
+        example="tico file meta rm f1 angle",
     ),
     Command(
         "file read",

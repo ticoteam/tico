@@ -38,7 +38,7 @@ have a Spec, a QA report and any number of other pages.
 ## Publishing
 
     tico page publish reports/weekly-review.html --title "Engineering weekly" --cadence weekly [--as-of 2026-10-27]
-        [--task ID [--as ROLE]] [--page ID] [--replaces PAGE]
+        [--task ID [--as ROLE]] [--page ID] [--replaces PAGE] [--from PAGE]
 
 - **`--title`** names the page. Without it, the page takes its own `<title>`, unless someone has named it since.
 - **The same path again** adds a version of the same page. **`--page ID`** adds a version of that page, whatever its
@@ -55,6 +55,8 @@ have a Spec, a QA report and any number of other pages.
 - **`--replaces`** names an older page of the same bot that this one takes over. The older page then says
   **Replaced by** and links here. An Assistant turn must be able to read and manage the older page as its person,
   and both pages must be filed on the request's task.
+- **`--from`** names the page or file this one was made from: a duplicate or a variant. Both stay; the new page's
+  details link back to it ([made from](files.md#tags-metadata-and-made-from)). You must be able to read it.
 
 Anyone who may write a page publishes its versions: a person, or a bot as itself. Over MCP the same tools are
 `tico_page_publish`, `tico_page_link`, `tico_page_unlink`, `tico_page_list`, `tico_page_show` and `tico_page_archive`.
