@@ -33,6 +33,11 @@ import type {
   SourceCreate,
   SourceDocumentList,
   SourceEdit,
+  ToolGuide as ToolGuideSaved,
+  ToolGuideDetail,
+  ToolGuideList,
+  ToolGuideNeed,
+  ToolGuideRow,
   ToolIndex,
   ToolIndexRow,
   WebsiteAccountAccessSet,
@@ -667,66 +672,19 @@ export const catalogQuery = queryOptions({
   staleTime: Infinity,
 });
 
-/* The registry (GET /api/v2/tool-guides, backend/tool_guides.py): every tool the company knows, a vendor's (its slug is
-   the vendor's) or one built here, with what it is for, how to use it, the company's guidance and who uses it. Under
-   the tools root, so whatever reads Tools again reads it too.
-   TODO: switch to `@/api/schema` (backend/api_answers/tool_guides.py) once the routes are on main. */
+/* The registry (GET /api/v2/tool-guides, backend/tool_guides.py, its answers backend/api_answers/tool_guides.py):
+   every tool the company knows, a vendor's (its slug is the vendor's) or one built here, with what it is for, how to
+   use it, the company's guidance and who uses it. Under the tools root, so whatever reads Tools again reads it too. */
 
-export type ToolOrigin = 'vendor' | 'built';
-export interface ToolGuideRow {
-  slug: string;
-  name: string;
-  origin: ToolOrigin;
-  category: string;
-  summary: string;
-  /** The vendor's Tools rows the reader may see. */
-  connections: number;
-  /** Agents that list it or used it in the last 30 days. */
-  used_by: number;
-  last_used_at: string | null;
-  /** False: a vendor in Tools nobody has written words on yet. */
-  has_guide: boolean;
-}
-export interface ToolNeed {
-  tool: string;
-  level: 'read' | 'write';
-}
-/** An agent that lists the tool or used it in the last 30 days, with what it uses it for. */
-export interface ToolGuideUser {
-  id: string;
-  name: string;
-  listed: boolean;
-  note: string;
-  uses: number;
-  last_used_at: string | null;
-}
-export interface ToolGuideLearning {
-  id: string;
-  actor: string;
-  text: string;
-  created_at: string;
-}
-export interface ToolGuide {
-  slug: string;
-  name: string;
-  origin: ToolOrigin;
-  category: string;
-  summary: string;
-  instructions: string;
-  guidance: string;
-  commands: string[];
-  /** A built tool's repository and path. */
-  source: string;
-  needs: ToolNeed[];
-  owner: string | null;
-  has_guide: boolean;
-  updated_at: string | null;
-  used_by: ToolGuideUser[];
-  learnings: ToolGuideLearning[];
-}
-export type ToolGuideChange = Partial<Pick<ToolGuide, 'name' | 'origin' | 'category' | 'summary' | 'instructions' | 'guidance' | 'source' | 'needs' | 'commands'>>;
+export type { ToolGuideRow };
+export type ToolOrigin = ToolGuideRow['origin'];
+export type ToolNeed = ToolGuideNeed;
+/** A tool's page: the guide with its access, the agents that use it and what they learned. */
+export type ToolGuide = ToolGuideDetail;
+/** What a write changes (PUT /api/v2/tool-guides/<slug>, ToolGuideWrite): only what is sent. */
+export type ToolGuideChange = Partial<Pick<ToolGuideSaved, 'name' | 'origin' | 'category' | 'summary' | 'instructions' | 'guidance' | 'source' | 'needs' | 'commands'>>;
 
-type GuidePage = { tool_guides?: ToolGuideRow[]; next?: string | null };
+type GuidePage = Partial<ToolGuideList>;
 export const toolGuidesQuery = queryOptions({
   queryKey: ['tools', 'guides'],
   queryFn: async (): Promise<ToolGuideRow[]> => {
@@ -742,16 +700,17 @@ export const toolGuidesQuery = queryOptions({
 export const toolGuideQuery = (slug: string) =>
   queryOptions({
     queryKey: ['tools', 'guide', slug],
-    queryFn: () => api.get<ToolGuide>(`/api/v2/tool-guides/${enc(slug)}`),
+    queryFn: () => api.get<ToolGuideDetail>(`/api/v2/tool-guides/${enc(slug)}`),
   });
 
-/** A guide written or changed (any teammate may): the tool and the list read again once the server agrees. */
+/** A guide written or changed (any teammate may): shown once the server agrees, then the tool (its answer has no
+    access, users or learnings: the page reads them again, a quiet root) and the list read again. */
 export const saveToolGuide = (slug: string, change: ToolGuideChange) =>
-  write<ToolGuide>({
+  write<ToolGuideSaved>({
     key: ['tools', 'guide', slug],
     wait: true,
-    optimistic: (cur: ToolGuide | undefined) => cur && { ...cur, ...change },
-    send: (idempotencyKey) => api.put<ToolGuide>(`/api/v2/tool-guides/${enc(slug)}`, change, { idempotencyKey }),
+    optimistic: (cur: ToolGuideDetail | undefined) => cur && { ...cur, ...change },
+    send: (idempotencyKey) => api.put<ToolGuideSaved>(`/api/v2/tool-guides/${enc(slug)}`, change, { idempotencyKey }),
   }).then(async (saved) => {
     await queryClient.invalidateQueries({ queryKey: toolGuidesQuery.queryKey });
     return saved;

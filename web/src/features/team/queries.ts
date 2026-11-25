@@ -2,6 +2,9 @@ import { infiniteQueryOptions, queryOptions } from '@tanstack/react-query';
 import { api, ApiError } from '@/api/client';
 import type {
   AgentSubscriptionList,
+  BotToolGuideList,
+  BotToolGuideListed,
+  BotToolGuideRow,
   BotDreamView,
   BotSidebar,
   BotRepositories,
@@ -31,6 +34,8 @@ import type {
   Place,
   Task,
   TeammateAccessView,
+  ToolGuideList,
+  ToolGuideRow,
 } from '@/api/schema';
 import { keys, queryClient, quietRoot, write } from '@/data';
 
@@ -745,40 +750,20 @@ export const agentFilesQuery = (slug: string, find = '') =>
 /* ---------------------------------------------------------------- its tools */
 
 /** A tool on its Tools section (GET /api/v2/bots/{bot}/tool-guides): one it lists, a vendor it may use, or one it used
-    in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none).
-    TODO: switch to `@/api/schema` (backend/api_answers/tool_guides.py) once the routes are on main. */
-export interface AgentTool {
-  slug: string;
-  name: string;
-  origin: 'vendor' | 'built';
-  category: string;
-  /** What it uses it for, in its own words. */
-  note: string;
-  /** On its list, rather than only granted or used. */
-  listed: boolean;
-  access: 'proxy' | 'key' | 'none';
-  uses: number;
-  last_used_at: string | null;
-  /** This agent built it. */
-  built: boolean;
-}
+    in the last 30 days. `access`: how a run gets it (the proxy adds the key, the key goes to the run, or none). */
+export type AgentTool = BotToolGuideRow;
 export const agentToolsQuery = (slug: string) =>
   queryOptions({
     queryKey: ['team', 'tools', slug] as const,
-    queryFn: ({ signal }) => api.get<{ tool_guides?: AgentTool[] }>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.tool_guides ?? []),
+    queryFn: ({ signal }) => api.get<Partial<BotToolGuideList>>(`/api/v2/bots/${at(slug)}/tool-guides`, { signal }).then((r) => r.tool_guides ?? []),
   });
 
 /** The company's tools matching the words (GET /api/v2/tool-guides?q=), for Add tool: the first few the server finds. */
-export interface FoundTool {
-  slug: string;
-  name: string;
-  origin: 'vendor' | 'built';
-  summary: string;
-}
+export type FoundTool = ToolGuideRow;
 export const findToolsQuery = (words: string) =>
   queryOptions({
     queryKey: ['team', 'tool-find', words] as const,
-    queryFn: ({ signal }) => api.get<{ tool_guides?: FoundTool[] }>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.tool_guides ?? []),
+    queryFn: ({ signal }) => api.get<Partial<ToolGuideList>>(`/api/v2/tool-guides?${q({ q: words, limit: 20 })}`, { signal }).then((r) => r.tool_guides ?? []),
   });
 
 /** List a tool on it, with what it uses it for; the row shows once the server has it. */
@@ -787,7 +772,7 @@ export const listTool = (slug: string, tool: string, note: string) =>
     key: agentToolsQuery(slug).queryKey,
     wait: true,
     optimistic: (cur: AgentTool[] | undefined) => cur,
-    send: (idempotencyKey) => api.put<unknown>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, note ? { note } : {}, { idempotencyKey }),
+    send: (idempotencyKey) => api.put<BotToolGuideListed>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, note ? { note } : {}, { idempotencyKey }),
   });
 
 /** Take a tool off its list; the row stays, busy, until the server agrees (a tool it is granted or used stays listed). */
@@ -796,7 +781,7 @@ export const unlistTool = (slug: string, tool: string) =>
     key: agentToolsQuery(slug).queryKey,
     wait: true,
     optimistic: (cur: AgentTool[] | undefined) => cur,
-    send: (idempotencyKey) => api.delete<unknown>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, { idempotencyKey }),
+    send: (idempotencyKey) => api.delete<BotToolGuideListed>(`/api/v2/bots/${at(slug)}/tool-guides/${at(tool)}`, { idempotencyKey }),
   });
 
 /* ---------------------------------------------------------------- its last run */

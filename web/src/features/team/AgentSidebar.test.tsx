@@ -327,8 +327,7 @@ describe("An agent's Tools", () => {
   ];
 
   it('lists what it uses each tool for, how a run gets it and its uses, marks what it built, and adds and removes', async () => {
-    // the server's built-ins without Tools: the page draws it after them
-    open([w('updates'), w('tasks'), w('files')], (u) =>
+    open([w('updates'), w('tasks'), w('files'), w('tools')], (u) =>
       u.endsWith('/bots/ana/tool-guides')
         ? { body: { bot: '0190-ana', tool_guides: rows, next: null } }
         : u.includes('/api/v2/tool-guides?')
