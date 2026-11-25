@@ -171,17 +171,14 @@ impl Stderr {
         tail
     }
 
-    /// `line` with the process's own secrets (`scrub`, its environment's) and every lent attempt's taken out.
+    /// `line` with the process's own secrets (`scrub`, its environment's) and every lent attempt's taken out, all
+    /// matched at once (Redactor::merged): one secret that begins another never leaves the other's rest behind.
     fn scrubbed(&self, line: &[u8], scrub: &Redactor) -> String {
-        let mut bytes = scrub.scrub_bytes(line);
-        for lent in self.4.lock().unwrap().iter() {
-            bytes = lent.scrub_bytes(&bytes);
-        }
-        let mut text = String::from_utf8_lossy(&bytes).into_owned();
-        for lent in self.4.lock().unwrap().iter() {
-            text = lent.scrub_text(&text).into_owned();
-        }
-        safe(&text, scrub)
+        let lent = self.4.lock().unwrap().clone();
+        let mut all = vec![scrub];
+        all.extend(lent.iter().map(|r| r.as_ref()));
+        let every = Redactor::merged(&all);
+        safe(&String::from_utf8_lossy(&every.scrub_bytes(line)), &every)
     }
 
     /// The process runs for an attempt whose secrets `redactor` holds, those added later too: what it says from now on
@@ -384,12 +381,17 @@ mod tests {
         let tail = Stderr::capture(&mut child, tx, &crate::env::Env::new());
         let first = Arc::new(Redactor::new(&["synthetic-first-turn".to_string()]));
         let second = Arc::new(Redactor::new(&["synthetic-second-turn".to_string()]));
+        // One that the first's secret begins: its rest is masked too, whichever was lent first.
+        let longer = Arc::new(Redactor::new(&[
+            "synthetic-first-turn-and-its-tail".to_string()
+        ]));
         tail.lend(Some(first.clone()));
         tail.lend(Some(second));
+        tail.lend(Some(longer));
         first.add(&["synthetic-added-later".to_string()]);
         let mut stdin = child.stdin.take().unwrap();
         stdin
-            .write_all(b"synthetic-first-turn\nsynthetic-second-turn\nsynthetic-added-later\n")
+            .write_all(b"synthetic-first-turn\nsynthetic-second-turn\nsynthetic-added-later\nsynthetic-first-turn-and-its-tail\n")
             .await
             .unwrap();
         drop(stdin);
@@ -399,7 +401,10 @@ mod tests {
         while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await {
             shown.push_str(ev["stderr_tail"].as_str().unwrap_or_default());
         }
-        assert_eq!(tail.tail().lines().count(), 3, "{shown:?}");
-        assert!(!shown.contains("synthetic-"), "{shown:?}");
+        assert_eq!(tail.tail().lines().count(), 4, "{shown:?}");
+        assert!(
+            !shown.contains("synthetic-") && !shown.contains("its-tail"),
+            "{shown:?}"
+        );
     }
 }

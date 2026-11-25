@@ -681,7 +681,7 @@ impl CodexHost {
                 tokio::time::sleep(Duration::from_millis(50)).await;
             }
         }
-        if !self.alive() || lost.load(Ordering::SeqCst) {
+        if !self.alive() {
             return false;
         }
         if self.0.home.lock().unwrap().is_none() {
@@ -700,6 +700,11 @@ impl CodexHost {
         keeper
             .put(thread, key, Kept(Some(self.clone())), held)
             .await;
+        // A lease lost at any time before it was kept is seen here, once it is in the keeper: taken out and stopped.
+        if lost.load(Ordering::SeqCst) {
+            keeper.release(thread).await;
+            return false;
+        }
         true
     }
 
@@ -983,8 +988,10 @@ impl CodexHost {
     pub(crate) async fn finish_turn(&self) -> Vec<Value> {
         let mut reports = std::mem::take(&mut *self.0.sweep_reports.lock().unwrap());
         if self.0.sweep.lock().unwrap().is_none() {
-            self.stop().await;
-            drop(self.0.home.lock().unwrap().take());
+            // Its plan home goes only once it has been seen to stop, as below.
+            if self.stop_and_reap().await.is_ok() {
+                drop(self.0.home.lock().unwrap().take());
+            }
             return reports;
         }
         let reaped = self.stop_and_reap().await;
@@ -3225,6 +3232,8 @@ for line in sys.stdin:
             }
             assert!(!host.release(Some(&th), None, &AtomicBool::new(lost)).await);
             assert_eq!(keeper.count(), 0);
+            // One whose lease was lost is taken back out of the keeper and stopped.
+            assert!(!lost || !host.alive());
             host.finish_turn().await;
         }
         std::fs::remove_dir_all(dir).ok();
@@ -3263,23 +3272,28 @@ for line in sys.stdin:
         );
         drop(host);
 
-        let mut env = base.clone();
-        let mut delivered = plan_turn(&state, &id, true, &mut env);
-        let home = std::path::PathBuf::from(env.get("CODEX_HOME").unwrap());
-        let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
-        *host.0.home.lock().unwrap() = crate::model_subscriptions::keep_home(&home);
-        crate::model_subscriptions::finish(&mut delivered);
-        host.prepare_sweep();
-        let (failed, reaped) = tokio::sync::watch::channel(false);
-        *host.0.reaped.lock().unwrap() = Some(reaped);
-        drop(failed);
-        host.finish_turn().await;
-        assert!(
-            home.join("auth.json").exists(),
-            "kept while the process may run"
-        );
-        drop(host);
-        assert!(!home.join("auth.json").exists());
+        // Not seen to stop, with a sweep or without one (a cleanup retry): its home stays while the host lives.
+        for sweep in [true, false] {
+            let mut env = base.clone();
+            let mut delivered = plan_turn(&state, &id, true, &mut env);
+            let home = std::path::PathBuf::from(env.get("CODEX_HOME").unwrap());
+            let host = CodexHost::on_home(env, tokio::sync::mpsc::unbounded_channel().0, None);
+            *host.0.home.lock().unwrap() = crate::model_subscriptions::keep_home(&home);
+            crate::model_subscriptions::finish(&mut delivered);
+            if sweep {
+                host.prepare_sweep();
+            }
+            let (failed, reaped) = tokio::sync::watch::channel(false);
+            *host.0.reaped.lock().unwrap() = Some(reaped);
+            drop(failed);
+            host.finish_turn().await;
+            assert!(
+                home.join("auth.json").exists(),
+                "kept while the process may run ({sweep})"
+            );
+            drop(host);
+            assert!(!home.join("auth.json").exists());
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 
