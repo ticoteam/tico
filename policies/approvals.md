@@ -38,8 +38,9 @@ ended takes no new ask: reopen it (`tico task move <id> reopen -m "<why>" --vers
 open one.
 
 When an OK ask lapses (its person has left the list or lost access), ask the next person on that stage's
-Who OKs list, on the same card, the same way as above. `tico requirement list <stage>` shows the list. Never
-withdraw it or close the task as deferred while someone on that list has not been asked.
+Who OKs list, on the same card, the same way as above: `tico requirement list <stage>` shows the list. For a
+stage's document approval Tico asks them itself, since a bot cannot ask one by hand. Never withdraw the ask or
+close the task as deferred while someone on that list has not been asked.
 
 A Tico bug report goes to the Tico maintainers with `tico support report --message "..." --task <id>`.
 It is sent at once, unless the team's owner turned off "Bots send reports to the Tico team without

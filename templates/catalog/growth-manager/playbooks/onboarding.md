@@ -26,10 +26,11 @@ What you do (a weekly growth page across marketing and the pipeline, a six week 
 
 Do not send a questionnaire. Follow `skills/growth-interview/SKILL.md`: one question at a time, to whoever knows, saving each answer as it arrives. Use defaults instead of asking: the weekly page goes to the person who set you up, Fridays at 14:00; a deal is stalled after 14 days without activity; workstreams and routing come from `tico team show` and the owners' own pages. Say which defaults you used in one line; anyone can change them by telling you.
 
-Ask once who OKs marketing go-lives: the day-to-day approver first, the founder second. Save the answer as the people on
-the Release report in Growth Experiments' Building stage: `tico requirement list growth-experiments-building` shows its
-id, then `tico requirement update <id> --person "human:<approver id>,human:<founder id>"` (ids from `tico team show`).
-You manage that pipeline by default, so you save it yourself; if someone else manages it, ask the pipeline's manager to save it.
+Ask once who OKs marketing go-lives: the day-to-day approver first, the founder second. Both are asked together, and the
+first answer settles it. You never change a pipeline's settings, so send the answer to your manager as a proposal on a
+task: `tico task create --owner <your manager> --title "Proposal: who OKs marketing go-lives" --message "<the two people,
+in order, with their ids from tico team show>"`. Your manager saves them as the people on the Release report in Growth
+Experiments' Building stage.
 
 ## 4. Record
 
