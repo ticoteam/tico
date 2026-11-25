@@ -78,7 +78,10 @@ def test_the_registry_is_the_shipped_guides_the_companys_and_every_vendor_in_too
     assert (rows(api, "cara-test")["stripe"]["connections"], rows(api, "cara-test")["stripe"]["used_by"]) == (0, 0)
     put(api, "tool-guides/stripe", {"guidance": "Mine now"}, "cara-test", expected=404)
     put(api, "tool-guides/stripe", {"guidance": "STRIPE_API_KEY=" + SECRET}, expected=422)  # never a key
-    put(api, "tool-guides/stripe", {"commands": ["stripe --api-key " + SECRET]}, expected=422)  # in a list too
+    r = api.put(
+        "/api/v2/tool-guides/stripe", json={"commands": ["xK9mPq2vR7wL4nB8jT3yF6cH"]}, headers=headers("ana-test")
+    )
+    assert (r.status_code, r.json()["error"]) == (422, "looks_like_key"), r.text  # in a list too
 
     # Archiving hides a guide, a shipped one too; a vendor in Tools stays, with no guide.
     delete(api, "tool-guides/jq")
@@ -111,9 +114,18 @@ def test_the_callers_access_names_variables_and_the_ask_never_a_value(api):
     (row,) = [a for a in r.json()["access"] if a["id"] == "api:" + stripe]
     assert (row["level"], row["arrives"], row["request"]) == ("read", "proxy", None)
     assert row["url_env"] == url_env(stripe)
-    assert all(SECRET not in name for name in row["env"])
+    # The run finds the proxy token under the key's own name: the agent is told that name, never a value.
+    assert row["env"] and all(SECRET not in name and name.isupper() for name in row["env"])
     person = get(api, "tool-guides/stripe")
     assert [a["level"] for a in person["access"]] == ["none"] and person["access"][0]["request"] is None
+
+    # A vendor Tico ships no guide for, known to the agent only by an Everyone tool's name: still listed, with the ask.
+    close = tool(api)["id"]
+    key(api, close, SECRET)
+    vendor = next(r["vendor"] for r in get(api, "tool-index")["rows"] if r["id"] == "api:" + close)
+    assert vendor in rows(api, bot)
+    (row,) = get(api, "tool-guides/" + vendor, bot)["access"]
+    assert (row["level"], row["request"]) == ("none", f"tico access request tool:{close} --level read")
 
 
 def test_who_may_archive_a_guide_and_who_keeps_an_agents_list(api):
