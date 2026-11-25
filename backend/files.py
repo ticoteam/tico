@@ -2841,14 +2841,15 @@ class Files:
 
     def made_recently(self, who, bot, limit):
         """The agent page's Made recently: the bot's newest `limit` stored pictures and videos on tasks the caller may
-        read (MEDIA_SQL), through the same checks as its whole list. It reads newest first in chunks and stops once it
-        has them, so it counts nothing (total is None) and pages no further; has_more says another one is there."""
+        read (MEDIA_SQL), through the same checks as its whole list. It reads newest first in chunks and stops as soon
+        as it has `limit`, never deciding one more: it counts nothing (total is None), pages no further and never says
+        there are more (has_more is False)."""
         with self.store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             self.bot_row(c, who, bot)
             caches, out = {"task": {}, "repo": {}}, []
             rows = visible_rows(c, self.auth, who, MEDIA_SQL, (bot,))
-            while len(out) <= limit and (batch := list(islice(rows, limit + 1 - len(out)))):
+            while len(out) < limit and (batch := list(islice(rows, limit - len(out)))):
                 ids = [r["id"] for r in batch]
                 marks = ",".join("?" * len(ids))
                 versions = {
@@ -2873,10 +2874,10 @@ class Files:
                         out.append(item)
             return {
                 "bot_id": bot,
-                "files": out[:limit],
+                "files": out,
                 "total": None,
                 "next_cursor": None,
-                "has_more": len(out) > limit,
+                "has_more": False,
                 "can_manage": who.role in ("owner", "human") and self.auth.bot_admin(who),
             }
 
@@ -3235,7 +3236,7 @@ def install_files(app, store, auth, blobs, mutate):
         **api_v2(
             "Files",
             "listBotFiles",
-            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path), kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list. media=1 is the agent page's Made recently instead: its newest limit stored images and videos on tasks the caller may read, uncounted (total null) and unpaged",
+            "A bot's files the caller may see, newest activity first, with the visible total; limit and cursor page; q (every word, in the name, text or path), kind (a Library kind: page, document, image, data, media, other; each file's library_kind, not its stored kind) narrow the same list. media=1 is the agent page's Made recently instead: its newest limit stored images and videos on tasks the caller may read, uncounted (total null), unpaged and has_more false",
             "BotFileList",
         ),
     )

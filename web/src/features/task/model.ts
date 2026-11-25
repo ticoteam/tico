@@ -108,6 +108,13 @@ const currentOf = (f: TaskFileView) => f.versions.find((v) => v.n === f.current_
     has its own tab), unless a caller names another (a card for one ask). When an email's OK comes first, its tab still
     comes first. */
 export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequirement | null): TaskTab[] {
+  return layoutOf(t, files, chosen).tabs;
+}
+
+/** `tabs` (tabsOf), and the task's videos that had a tab of their own before its pictures and videos led the task, by
+    the slug that tab had (`videos`): an old link to one (`…/beach-cut-mp4?v=2`) opens that video, never another file
+    that took a similar name since. A picture never had a tab, so none is there. */
+export function layoutOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequirement | null): { tabs: TaskTab[]; videos: Map<string, TaskFileView> } {
   // A caller's own ask (an address's `ask`, a card's) leads; else an email's OK that comes first keeps its tab first.
   const decision = chosen === undefined ? decisionOf(t, null) : chosen;
   const emailFirst = chosen === undefined && !!emailOf(decisionOf(t));
@@ -129,9 +136,17 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     const ok = doc.approved_version !== undefined && doc.approved_version === doc.version && !doc.changed_since_ok;
     return [{ slug, label: tabLabel(doc.title || doc.name), mark: asked.has(doc.file_id) ? 'ask' : ok ? 'ok' : 'none', doc, ...pinned(doc.file_id) }];
   });
+  // Every slug is given out over the same files, in the same order, as when a video had a tab of its own, so a link
+  // made then still names the same file: a video takes its slug, then leaves the row (the top of the task shows it).
+  const videos = new Map<string, TaskFileView>();
   const others = (files ?? [])
-    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !/^(image|video)\//.test(currentOf(f)?.mime ?? '')))
-    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }));
+    .filter((f) => !f.archived && !seen.has(f.id) && (asked.has(f.id) || !currentOf(f)?.mime.startsWith('image/')))
+    .map((f): TaskTab => ({ slug: free(f.title || f.name), label: tabLabel(f.title || f.name), file: f, ...pinned(f.id), ...(asked.has(f.id) && { mark: 'ask' as const }) }))
+    .filter((x) => {
+      const video = !!x.file && !asked.has(x.file.id) && !!currentOf(x.file)?.mime.startsWith('video/');
+      if (video) videos.set(x.slug, x.file as TaskFileView);
+      return !video;
+    });
   const here = [...docs, ...others].some((x) => (x.doc?.file_id ?? x.file?.id) === target?.id);
   const away: TaskTab[] = target && files && !here ? [{ slug: free('File'), label: 'File', mark: 'ask', other: target.id, ...pinned(target.id) }] : [];
   const emails: TaskTab[] = [];
@@ -144,7 +159,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
   // What the ask is about opens first, before any other page it shows (a review page).
   const isTarget = (x: TaskTab) => !!target && (x.doc?.file_id ?? x.file?.id ?? x.other) === target.id;
   const asks = all.filter((x) => x.mark === 'ask');
-  return [
+  const tabs: TaskTab[] = [
     ...(emailFirst ? asks.filter((x) => x.email) : []),
     ...asks.filter((x) => isTarget(x)),
     ...asks.filter((x) => !isTarget(x) && !(emailFirst && x.email)),
@@ -152,6 +167,7 @@ export function tabsOf(t: TaskData, files?: TaskFileView[], chosen?: TaskRequire
     ...(t.conversation_id ? [{ slug: CHAT, label: 'Chat', chat: true }] : []),
     { slug: DETAILS, label: 'Details' },
   ];
+  return { tabs, videos };
 }
 
 /** A picture or a video of the task, at its current version. */

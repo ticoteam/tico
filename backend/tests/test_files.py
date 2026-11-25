@@ -238,7 +238,7 @@ def test_made_recently_is_its_stored_pictures_and_videos_of_tasks_the_reader_may
 
 def test_made_recently_reads_newest_first_and_stops_once_it_has_enough(api, monkeypatch):
     """Made recently reads the bot's media newest first and stops at `limit`: a bot with forty more pictures costs the
-    same statements, it decides only the files it shows (and one to say there are more), and none is counted."""
+    same statements, it decides only the files it shows, and none is counted."""
     from backend import files as F
 
     store = api.app.state.store
@@ -263,10 +263,36 @@ def test_made_recently_reads_newest_first_and_stops_once_it_has_enough(api, monk
         lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
     )
     many = traced(api, read)
-    assert len(decided) == 4, len(decided)
+    assert len(decided) == 3, len(decided)
     assert [f["id"] for f in many[0].json()["files"]] == [newest[f"many-{i}"] for i in (39, 38, 37)]
-    assert many[0].json()["has_more"] is True and many[0].json()["total"] is None
+    assert many[0].json()["has_more"] is False and many[0].json()["total"] is None
     assert len(many[1]) == len(few[1]), (len(few[1]), len(many[1]))
+
+
+def test_made_recently_stops_at_its_sixth_readable_file_before_the_private_ones_under_it(api, monkeypatch):
+    """Six pictures the reader may see, then thirty on a private task they may not: Made recently stops at the sixth,
+    deciding none of the private ones (no look ahead for a seventh, which would read every one of them)."""
+    from backend import files as F
+
+    store = api.app.state.store
+    api.app.state.file_metadata.stop.set()  # previews write in the background: count only the read's statements
+    api.app.state.file_metadata.wake.set()
+    _, attempt = turn(api)
+    with store.transaction() as c:
+        open_ = H.task_create(c, "human:ben", "Launch", "Plan it", "bot:ops", lint=False)["id"]
+        hidden = H.task_create(c, "human:ben", "Private launch", "Secret", "bot:ops", private=True, lint=False)["id"]
+    _media(api, attempt, [f"hush-{i}" for i in range(30)], hidden)
+    shown = _media(api, attempt, [f"seen-{i}" for i in range(6)], open_, start=30)
+    decided, decide = [], F.file_visible
+    monkeypatch.setattr(
+        F,
+        "file_visible",
+        lambda c, auth, who, row, cache: decided.append(row["id"]) or decide(c, auth, who, row, cache),
+    )
+    cara = _made(api, "cara-test")
+    assert [f["id"] for f in cara["files"]] == [shown[f"seen-{i}"] for i in range(5, -1, -1)], cara
+    assert cara["has_more"] is False and cara["total"] is None
+    assert decided == [shown[f"seen-{i}"] for i in range(5, -1, -1)], len(decided)
 
 
 def test_refusals_and_a_bot_writes_only_its_own_files(api):

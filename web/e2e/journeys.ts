@@ -82,11 +82,14 @@ const layers = (page: Page) => page.locator('.vw');
 const searchOf = (page: Page) => Object.fromEntries(new URL(page.url()).searchParams);
 const sql = <T = Record<string, unknown>>(hub: Seeded, query: string) => call<T[]>(hub, `/_e2e/sql?q=${encodeURIComponent(query)}`);
 
-/** Each of a list's `n` previews drawn: its picture or poster read and decoded, never a grey tile. */
-const shown = (list: Locator, n: number) =>
-  expect
+/** Each of a list's `n` previews drawn: its picture or poster read and decoded, never a grey tile. The list is
+    scrolled to first, so a lazy one (a task's) reads what it shows. */
+const shown = async (list: Locator, n: number) => {
+  await list.scrollIntoViewIfNeeded();
+  await expect
     .poll(() => list.locator('img').evaluateAll((imgs) => imgs.map((i) => (i as HTMLImageElement).complete && (i as HTMLImageElement).naturalWidth > 0)))
     .toEqual(Array(n).fill(true));
+};
 
 /** Whether the page head's title shows every letter (its words fit its box). */
 const titleWhole = (page: Page) =>
@@ -238,6 +241,7 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   await expect(recent.getByRole('button')).toHaveCount(3);
   await expect(recent.locator('.thumb.is-video img')).toHaveAttribute('src', /\/poster\?v=1$/);
   await expect(recent.getByRole('link', { name: made.title })).toHaveCount(3);
+  await expect(recent.locator('img[loading]')).toHaveCount(0);
   await shown(recent, 3);
   await page.screenshot({ path: test.info().outputPath('made-recently-1440.png') });
   // a picture opens in the viewer over the page
@@ -253,6 +257,8 @@ test("an agent's newest pictures and videos lead its sidebar and its task; each 
   const strip = over.locator('[data-target="task-media"]').getByRole('list', { name: 'Pictures and videos' });
   await expect(strip.getByRole('button')).toHaveCount(3);
   await expect(over.locator('.tv-view > *').first()).toHaveAttribute('data-target', 'task-media');
+  // a task's strip reads each picture as it nears the screen; the sidebar's six at most read at once
+  await expect(strip.locator('img[loading="lazy"]')).toHaveCount(3);
   await shown(strip, 3);
   await page.screenshot({ path: test.info().outputPath('made-task-1440.png') });
   // the video opens one layer up, on the tab the task was on

@@ -28,7 +28,7 @@ import { ArchiveMenu } from './Files';
 import { FileTab, FileView, PageBones } from './FileView';
 import { TaskMedia } from './Media';
 import { MoreMenu, QuietLine, WhereLine } from './Head';
-import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, mediaOf, requirementOf, sendTitle, slugOf, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
+import { askOf, CHAT, changesAskedOf, decisionOf, defaultTab, DETAILS, emailOf, failedToast, requirementOf, sendTitle, tabAddress, tabsOf, targetOf, type TaskTab } from './model';
 import { FlowMark } from '@/kit/FlowMark';
 import { Face } from './parts';
 import { taskDetailQuery, taskRefQuery, type TaskData } from './queries';
@@ -211,7 +211,7 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
   // Its tab and pin hold while its answer is being sent (that clears `may`) or was refused: whether it can be answered
   // decides only the action.
   const named = ask ? requirementOf(t, ask) : null;
-  const { tabs, files, waiting } = useTabs(t, named ?? undefined);
+  const { tabs, videos, files, waiting } = useTabs(t, named ?? undefined);
   const own = tabs.filter((x) => !x.wait);
   // The chat's address (`…/chat`, an old link to the chat as the page) is the chat beside it: on a phone it raises the
   // chat (TaskModal) and stays the address, so a reload comes back to it; on a computer the page shows a tab of its own.
@@ -237,17 +237,18 @@ function TaskView({ t, tab, file }: { t: TaskData; tab?: string; file?: string }
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
     return !leaving.current && (open === String(t.number) || open === t.id);
   }, [router, t.id, t.number]);
+  // A video had a tab of its own before the pictures and videos led the task: an old link to it (`…/beach-cut-mp4?v=2`)
+  // opens that video over the page that opens, at the version it named. Its slug is the one it had then (layoutOf),
+  // never a picture's, never another file's that has its name.
+  const video = tab ? videos.get(tab) : undefined;
   useEffect(() => {
     if (known || chatCard || unresolved || first === null || leaving.current) return;
     const open = openOf(router.latestLocation.search as Record<string, unknown>)?.task;
     if (open !== String(t.number) && open !== t.id) return;
-    // A video had a tab of its own before the pictures and videos led the task: an old link to it (`…/beach-cut-mp4?v=2`)
-    // opens that video over the page that opens, at the version it named.
-    const video = tab ? mediaOf(files.data).find((m) => slugOf(m.file.title || m.file.name) === tab)?.file : undefined;
     // The address's other words (a version, `v`) stay while the tab is named.
     const words = video ? ({ v, vs: _vs, ...rest }: TaskWords) => ({ ...rest, file: video.id, ...(v ? { fv: v } : {}) }) : (prev: TaskWords) => prev;
     void navigate({ to: tabAddress(t, opened) as never, search: words as never, replace: true });
-  }, [known, chatCard, unresolved, first, opened, t, navigate, router, tab, files.data]);
+  }, [known, chatCard, unresolved, first, opened, t, navigate, router, video]);
   /* Answered: while another ask on this task waits on the person, its page opens; while only a question to them does,
      the task stays as it is; once nothing does, the task below it in the list it was opened from opens (in its place:
      one Back still closes it); at the list's end it closes, back to the page under it. An answer that lands once the

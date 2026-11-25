@@ -18,6 +18,7 @@ export function TaskMedia({ files }: { files: TaskFileView[] | undefined }) {
     <div className="tv-media" data-target="task-media">
       <Thumbs
         strip
+        lazy
         label="Pictures and videos"
         items={media.map(({ file, version, video }) => ({
           id: file.id,

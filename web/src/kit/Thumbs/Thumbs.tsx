@@ -22,11 +22,14 @@ export interface ThumbsProps {
   onOpen: (item: Thumb) => void;
   /** One row that scrolls sideways (at the top of a task), else tiles that wrap. */
   strip?: boolean;
+  /** Each picture read only once it nears the screen: a list of any length (a task's). A short one (an agent's six at
+      most) reads them all at once. */
+  lazy?: boolean;
 }
 
 /** Pictures and videos as previews, newest first: a press opens one. A video shows its frame and a play mark; one with
     nothing to show is a plain card with its mark. */
-export function Thumbs({ items, label, onOpen, strip }: ThumbsProps) {
+export function Thumbs({ items, label, onOpen, strip, lazy }: ThumbsProps) {
   // a copy that does not load falls back to the next, then to the plain card: never a broken image
   const [lost, setLost] = useState<ReadonlySet<string>>(new Set());
   if (!items.length) return null;
@@ -38,7 +41,7 @@ export function Thumbs({ items, label, onOpen, strip }: ThumbsProps) {
           <li key={t.id} className="thumb-item">
             <button type="button" className={t.video ? 'thumb is-video' : 'thumb'} title={t.name} aria-label={t.name} data-target={`thumb:${t.id}`} onClick={() => onOpen(t)}>
               {face ? (
-                <img src={face} alt="" onError={() => setLost((was) => new Set(was).add(face))} />
+                <img src={face} alt="" {...(lazy && { loading: 'lazy' as const })} onError={() => setLost((was) => new Set(was).add(face))} />
               ) : (
                 !t.video && <Icon name="file" />
               )}

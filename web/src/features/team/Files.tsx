@@ -38,7 +38,8 @@ const thumbOf = (f: AgentFile): Thumb => {
  * Made recently (ui bot-files.ts, then its pictures first): its newest pictures and videos as previews, each opening in
  * the viewer over the page with the task it is for a click away; then all its files a page at a time, behind All files.
  * With no pictures or videos, the three newest files, as before. A stored file and a Google file open over the page;
- * any other link opens at its provider. No files, no section.
+ * any other link opens at its provider. Its pictures and videos are a read of their own, drawn without waiting on its
+ * files. No pictures, videos or files, no section.
  */
 export function FilesSection({ slug, list }: { slug: string; /** Its tasks' list, which a task opened from here has beside it. */ list?: string }) {
   const [find, setFind] = useState('');
@@ -49,15 +50,16 @@ export function FilesSection({ slug, list }: { slug: string; /** Its tasks' list
   const made = useQuery(agentMediaQuery(slug));
   const [all, setAll] = useState(false);
   const files = q.data?.pages.flatMap((p) => p.files ?? []) ?? [];
-  const total = q.data?.pages[0]?.total ?? files.length;
+  // its count once its files are read: its pictures and videos show before that, never waiting on the longer read
+  const total = q.data ? (q.data.pages[0]?.total ?? files.length) : undefined;
   const media = (made.data?.files ?? []).filter((f) => f.kind === 'image' || f.kind === 'video').map(thumbOf);
   // Nothing to list is no section; a search that finds nothing keeps its box (ui bot-files).
-  if (!files.length && !narrowed) return null;
+  if (!files.length && !media.length && !narrowed) return null;
   // its pictures stand for its newest files; the rows wait behind All files, unless a search asks for them
   const pictures = media.length > 0 && !narrowed;
   const rows = !pictures || all;
   const shown = all ? files : files.slice(0, SHORT);
-  const tools = total > SHORT || narrowed || searching;
+  const tools = (total ?? 0) > SHORT || narrowed || searching;
   return (
     <Section
       name="Made recently"
@@ -82,12 +84,12 @@ export function FilesSection({ slug, list }: { slug: string; /** Its tasks' list
         </div>
       )}
       {rows && shown.map((f) => <FileRow key={f.id} file={f} />)}
-      {rows && !files.length && <p className="now-step">Nothing matches</p>}
-      {(pictures || total > SHORT || all) && (
+      {rows && q.isSuccess && !files.length && <p className="now-step">Nothing matches</p>}
+      {(pictures || (total ?? 0) > SHORT || all) && (
         <Foot>
           {!all && (
             <button className="verb" type="button" onClick={() => setAll(true)}>
-              {pictures ? 'All files' : `${total - SHORT} more`}
+              {pictures ? 'All files' : `${(total ?? 0) - SHORT} more`}
             </button>
           )}
           {all && q.hasNextPage && (

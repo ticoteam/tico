@@ -2,10 +2,12 @@
 import '@/actions';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryHistory, createRootRoute, createRouter, RouterProvider, type AnyRouter } from '@tanstack/react-router';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { directoryQuery, queryClient, type Actor } from '@/data';
+// eslint-disable-next-line no-restricted-imports -- the test hands the page a stream event, as the shell's startLive does
+import { dispatch, installPatchers, resetPatchState } from '@/live/patch';
 import { needed } from './LastRun';
 import { fileName, fileOpen, lineOf, rowOf } from './model';
 import { agentsQuery, groupsQuery, type AgentFile, type AgentRow, type Group, type LastStop, type TaskTab } from './queries';
@@ -313,6 +315,45 @@ describe('Files @s614', () => {
     fireEvent.change(within(section).getByRole('textbox', { name: 'Search files' }), { target: { value: 'notes' } });
     expect(await within(section).findByTitle('note-9.md')).toBeTruthy();
     expect(reads.some((u) => u.includes('/bots/ana/files') && u.includes('q=notes'))).toBe(true);
+  });
+
+  it('draws its pictures and videos without waiting on its whole file list', async () => {
+    const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
+    const media = ok({ bot: '0190-ana', files: [still], total: null, has_more: false, next_cursor: null });
+    // its whole list never answers
+    vi.stubGlobal('fetch', (url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u.includes('/bots/ana/files') && !u.includes('media=1'))
+        return new Promise((_, fail) => init?.signal?.addEventListener('abort', () => fail(new DOMException('aborted', 'AbortError'))));
+      const r = u.includes('/bots/ana/files') ? media : fallback(u);
+      return Promise.resolve(new Response(JSON.stringify(r.body), { status: r.status, headers: { 'Content-Type': 'application/json' } }));
+    });
+    show(<TeamWho who="ana" />, '/team/ana');
+    const section = await screen.findByRole('region', { name: 'Made recently' });
+    expect(within(within(section).getByRole('list', { name: 'Pictures and videos' })).getAllByRole('button').map((b) => b.getAttribute('aria-label'))).toEqual(['Frame 2']);
+    expect(queryClient.getQueryState(['team', 'files', 'ana'])?.status).toBe('pending');
+  });
+
+  it('shows its first picture as it is made, and drops the section when its last one goes', async () => {
+    const still = file({ id: 'i1', kind: 'image', title: 'Frame 2', name: 'frame-2.png', thumb_blob_id: 'b1', task_id: 't7', task_title: 'Beach clean' });
+    let now: AgentFile[] = [];
+    serve((url) => (url.includes('/bots/ana/files') ? ok({ bot: '0190-ana', files: now, total: url.includes('media=1') ? null : now.length, has_more: false, next_cursor: null }) : undefined));
+    installPatchers();
+    resetPatchState();
+    show(<TeamWho who="ana" />, '/team/ana');
+    expect(await screen.findByRole('heading', { name: 'Nothing yet' })).toBeTruthy();
+    const changed = () => act(() => dispatch('tasks', [{ seq: 2, id: 't7', kind: 'files', kinds: ['files'] }]));
+    now = [still];
+    changed();
+    const section = await screen.findByRole('region', { name: 'Made recently' });
+    expect(await within(section).findByRole('button', { name: 'Frame 2' })).toBeTruthy();
+    // its whole list read again too: All files holds it
+    fireEvent.click(within(section).getByRole('button', { name: 'All files' }));
+    await waitFor(() => expect(section.querySelectorAll('.row')).toHaveLength(1));
+    resetPatchState(); // past the gap between two reads of one key
+    now = [];
+    changed();
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Made recently' })).toBeNull());
   });
 });
 
