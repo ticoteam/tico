@@ -384,7 +384,7 @@ describe('read-again topics', () => {
       await vi.waitFor(() => expect(reads).toHaveLength(1)); // a read from before the change, in flight
       FakeEventSource.last.feed(frame(null, 'tasks', { task_id: 't1', gone: true }));
       flushFrame();
-      reads[0]();
+      reads[0]?.();
       await vi.waitFor(() => expect(reads).toHaveLength(2));
     } finally {
       stop();
