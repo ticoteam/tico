@@ -12,12 +12,15 @@ If the owner changes, get the previous owner's recorded Meta ad IDs before the f
 1. Read the approved competitor Facebook page URLs, competitor slugs and two-letter countries in
    `knowledge/channel-playbook.md` or the task that assigned the lookup. If none are recorded, ask for what is missing
    in the task and skip the lookup. Check `tico rules list --mine` and the team's spending ceiling before a paid lookup.
-2. Look up each approved page and country once per run. Use this command with the approved page and country:
+2. Look up each approved page and country once per run. Set `LOOKUP_ID` to a stable operation ID for this task,
+   page and country and reuse it if the answer is lost.
 
-       tico gateway ads meta --page-url "$APPROVED_PAGE_URL" --country "$COUNTRY" --limit 50
+       HUB_OPERATION_ID="$LOOKUP_ID" tico gateway ads meta --page-url "$APPROVED_PAGE_URL" --country "$COUNTRY" --limit 50
 
-   If it returns a job ID, read it with the Gateway's `job` command every 5–15 seconds within the routine's budget.
-   If the Gateway is unavailable, record that in the run's note and continue with the other idea sources.
+   When the Gateway returns a job ID, record it alongside the page, country and operation ID on the task. Read
+   that job every 5–15 seconds within the routine's budget. If you have to stop while it is running, keep the task
+   open and snooze it for a read within an hour. On resume, read the recorded job first. If the Gateway is unavailable,
+   record that in the task and continue with the other idea sources.
 3. Use the Meta ad ID to deduplicate across pages and weeks. Look for the stable name `meta-<ad_id>.md` with
    `tico file search` before saving anything. Only decimal Meta IDs go in filenames. Refresh days running on the
    existing record when they change. Use the ad's end date or today's UTC date for a still-running ad. Leave days
@@ -29,8 +32,9 @@ If the owner changes, get the previous owner's recorded Meta ad IDs before the f
 
        python3 .claude/skills/watch-competitor-ads/download.py -- "$ASSET_URL" "$OUTPUT_STEM"
 
-   Save the returned file with `tico file publish "$MEDIA_PATH" --scope bot`. Record the file ID, or the reason the
-   asset could not be saved. If publishing was interrupted, look for the stable media filename before publishing it
+   Check the downloaded media for personal details such as a personal phone number, email or home address before
+   publishing. If it contains personal details or you cannot check it, record why and link the public Ad Library entry.
+   Save the other assets with `tico file publish "$MEDIA_PATH" --scope bot`. Record their file IDs. If publishing was interrupted, look for the stable media filename before publishing it
    again. Tico accepts images up to 25 MB and can stream larger videos. Use the public Ad Library link in the record
    when an asset could not be saved. Remove the temporary media files after confirming their uploads.
 5. Publish `meta-<ad_id>.md` with `tico file publish "$RECORD_PATH" --scope bot`. Include the ad's dates, source and
