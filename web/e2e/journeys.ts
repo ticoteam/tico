@@ -144,6 +144,13 @@ test('Needs you: open the first case over Tasks and approve it; the next case op
   await expect(list.locator('.li-head')).toContainText('Needs you');
   await expect(list.locator('a.li')).toHaveCount(2);
   await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
+  // the email fills the task's column: its subject and letter drawn, its scroll down to the column's foot
+  const box = async (sel: string) => (await over.locator(sel).first().boundingBox())!;
+  expect((await box('.ap-subj')).height).toBeGreaterThan(0);
+  expect((await box('.ap-mail')).height).toBeGreaterThan(0);
+  const [scroll, column] = [await box('.ap-scroll'), await box('section[aria-label="Task"]')];
+  expect(scroll.height).toBeGreaterThan(300);
+  expect(Math.abs(scroll.y + scroll.height - (column.y + column.height))).toBeLessThan(2);
   await page.screenshot({ path: test.info().outputPath('modal-1440.png') });
   const decision = over.locator('section[aria-label="The decision"]');
   const approve = decision.getByRole('button', { name: 'Approve', exact: true });
@@ -171,6 +178,28 @@ test('Needs you: open the first case over Tasks and approve it; the next case op
   expect(await call(hub, '/_e2e/drain', 'POST')).toEqual({ sent: 2 });
   const sent = await call<{ mime: string }[]>(hub, '/_e2e/sent');
   expect(sent.map((m) => m.mime.includes(`Subject: ${first!.subject}`))).toContain(true);
+  clean(page);
+});
+
+test('Needs you: Undo on the sent case, with the next one open over Tasks, takes the OK back', async ({ browser, hub }) => {
+  const { mail } = hub.facts;
+  const page = await open(browser, hub, '/tasks');
+  const rows = page.locator('section[aria-label="Needs you"] a.row.task');
+  await expect(rows).toHaveCount(2);
+  const top = (await rows.first().getAttribute('title')) ?? '';
+  const [first, second] = top.includes(mail.next.subject) ? [mail.next, mail] : [mail, mail.next];
+  await rows.first().click();
+  const over = modal(page);
+  await expect(over.locator('.ap-subj')).toHaveText(first!.subject);
+  await over.locator('section[aria-label="The decision"]').getByRole('button', { name: 'Approve', exact: true }).click();
+  await expect(over.locator('.ap-subj')).toHaveText(second!.subject);
+  const okAt = async () => (await sql(hub, `SELECT ok_at FROM ok_grants WHERE requirement_id='${first!.approval}'`))[0]?.ok_at ?? null;
+  await expect.poll(okAt).not.toBeNull();
+  // the send's toast is in the task's layer, its Undo in reach while the next case is open
+  const undo = over.getByRole('button', { name: 'Undo' });
+  await undo.click();
+  await expect.poll(okAt).toBeNull();
+  await expect(over.locator('.ap-subj')).toHaveText(second!.subject);
   clean(page);
 });
 
@@ -221,6 +250,56 @@ test("a task's link from outside opens it over Tasks with Needs you as its list;
   await page.keyboard.press('Escape');
   await expect(layers(page)).toHaveCount(0);
   await expect(page).toHaveURL(`${hub.url}/tasks/launch`);
+  clean(page);
+});
+
+test('one history path: a row, a file from Details opened and closed, Close, then Back and Forward; a Cmd+K hit, Close, Back', async ({ browser, hub }) => {
+  const [draft, date] = hub.facts.board.tasks;
+  const form = new FormData();
+  form.append('file', new Blob(['Launch on Friday.\n'], { type: 'text/plain' }), 'launch-notes.txt');
+  await post(hub, `tasks/${draft!.id}/files`, form);
+  const board = `${hub.url}/tasks/launch?view=list`;
+  const page = await open(browser, hub, '/tasks/launch?view=list');
+  await page.locator('a.row.task', { hasText: draft!.title }).click();
+  const over = modal(page, draft!.title);
+  await expect(over).toBeVisible();
+  await over.getByRole('link', { name: 'Details', exact: true }).first().click();
+  await over.locator('a.dt-file', { hasText: 'launch-notes' }).click();
+  await expect(layers(page)).toHaveCount(2);
+  await page.keyboard.press('Escape');
+  await expect(layers(page)).toHaveCount(1);
+  await over.getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(layers(page)).toHaveCount(0);
+  await expect(page).toHaveURL(board);
+  // Forward opens the task again as it was left; Back closes it, to the board
+  await page.goForward();
+  await expect(over).toBeVisible();
+  expect(searchOf(page)).toMatchObject({ view: 'list', task: String(draft!.number) });
+  expect(searchOf(page)['task.file']).toBeUndefined();
+  await page.goBack();
+  await expect(layers(page)).toHaveCount(0);
+  await expect(page).toHaveURL(board);
+
+  // a Cmd+K hit opens over the board, another hit takes its place: one Back closes it; Close, then Forward, opens it again
+  const hit = async (title: string) => {
+    await page.keyboard.press('ControlOrMeta+k');
+    await page.locator('.pal').getByRole('combobox', { name: 'Search' }).fill(title);
+    await page.locator('.pal [role="option"]:not(.pal-ask)', { hasText: title }).first().click();
+    await expect(modal(page, title)).toBeVisible();
+  };
+  await hit(draft!.title);
+  await hit(date!.title);
+  await page.goBack();
+  await expect(layers(page)).toHaveCount(0);
+  await expect(page).toHaveURL(board);
+  await hit(date!.title);
+  await modal(page, date!.title).getByRole('button', { name: 'Close', exact: true }).click();
+  await expect(layers(page)).toHaveCount(0);
+  await expect(page).toHaveURL(board);
+  await page.goForward();
+  await expect(modal(page, date!.title)).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(board);
   clean(page);
 });
 
@@ -353,6 +432,10 @@ test('phone: a task opens full screen over its board; its list pulls up from the
   await panes.getByRole('button', { name: 'Chat', exact: true }).tap();
   await expect(over.locator('aside[aria-label="Chat"]')).toBeVisible();
   await expect(over.locator('section[aria-label="Task"]')).toBeHidden();
+  // its fields at 16px or more: iOS zooms the page into a smaller one when it is typed in
+  const sizes = await over.locator('input:not([type=file]), textarea, [contenteditable="true"]').evaluateAll((els) => els.map((e) => parseFloat(getComputedStyle(e).fontSize)));
+  expect(sizes.length).toBeGreaterThan(0);
+  expect(Math.min(...sizes)).toBeGreaterThanOrEqual(16);
   await panes.getByRole('button', { name: 'Task', exact: true }).tap();
   await page.screenshot({ path: test.info().outputPath('modal-390.png') });
   // the board's list pulls up from the bottom; another task from it opens in place
