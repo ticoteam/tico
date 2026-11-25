@@ -467,10 +467,8 @@ def detail(c: Any, who: Any, auth: Any, admins: Any, slug: str) -> Row:
         for bot, (listed_, note, uses, at) in users.items()
     ]
     used_by.sort(key=lambda u: (not u["listed"], -u["uses"], u["name"].lower()))
-    learnings = [
-        {k: r[k] for k in ("id", "actor", "text", "created_at")}
-        for r in (integrations.learnings(c, found)[:50] if vrows else [])
-    ]
+    learned: list[Any] = integrations.learnings(c, found)[:50] if vrows else []
+    learnings = [{k: r[k] for k in ("id", "actor", "text", "created_at")} for r in learned]
     access = [_reach(c, who, r) for r in vrows] + [_named(who, r) for r in tools.named.get(found, [])]
     return {**guide, "access": access, "used_by": used_by, "learnings": learnings}
 
