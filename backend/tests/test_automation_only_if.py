@@ -203,7 +203,7 @@ def test_a_passing_checks_items_reach_the_bot_turns_prompt(api, monkeypatch):
 
 
 def test_a_passing_check_is_saved_before_the_first_step_so_a_resumed_run_is_never_skipped(api, monkeypatch):
-    task(api, "Acme zzqxv checklist")
+    filed = task(api, "Acme zzqxv checklist")
     steps = [
         {"id": "look", "type": "bot_turn", "bot": "ops", "prompt": "Look"},
         {"id": "tell", "type": "action", "do": "wake_bot", "args": {"bot": "assistant", "text": "Done"}},
@@ -219,8 +219,8 @@ def test_a_passing_check_is_saved_before_the_first_step_so_a_resumed_run_is_neve
     with pytest.raises(Stop):  # cut off after the turn started, before the step's save
         api.app.state.store.automations.drain()
     assert run_row(api, rid)["state"]["only_if"]["ok"] is True
-    with api.app.state.store.transaction() as c:  # the condition no longer holds
-        c.execute("UPDATE tasks SET status='closed' WHERE title='Acme zzqxv checklist'")
+    post(api, f"tasks/{filed['id']}/delete", {})  # the condition no longer holds
+    assert get(api, MISSING)["tasks"] == []
     monkeypatch.setattr(automations.HubServices, "checkpoint", save)
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(minutes=20))
     done = run_row(api, rid)
