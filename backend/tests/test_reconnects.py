@@ -582,6 +582,15 @@ def test_anyone_who_manages_the_agent_saves_a_task_key_card_and_it_leaves_every_
     assert keys("ana-test") == ["key:" + chat["id"]] and keys("cara-test") == []
     get(api, f"credential-requests/{chat['id']}", "cara-test", expected=404)
     post(api, f"credential-requests/{chat['id']}/save", {"value": "an-0123456789"}, "cara-test", expected=404)
+    # A credential admin saves a task card only while they, or the person asked, manage the agent.
+    drain(api)
+    task(api, "Reply to Acme")
+    other = ask_secret(api, claim(api, machine))
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "cara@acme.example")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot='ops'")
+        c.execute("UPDATE credential_requests SET requester='human:cara' WHERE id=?", (other["id"],))
+    post(api, f"credential-requests/{other['id']}/save", {"value": "crm-token-0123456789"}, "cara-test", expected=403)
 
 
 def test_a_private_task_cards_only_a_fixer_who_can_read_it_and_a_former_reader_loses_the_card(api, monkeypatch):

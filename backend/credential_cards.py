@@ -366,7 +366,8 @@ def pending_for(c, vault, viewer):
     out = []
     for found in c.execute(
         "SELECT r.id FROM credential_requests r JOIN conversations v ON v.id=r.conversation_id "
-        "WHERE r.status='pending' AND (r.requester=? OR v.task_id IS NOT NULL) ORDER BY r.created_at, r.id",
+        "WHERE r.status='pending' AND (r.requester=? OR (v.task_id IS NOT NULL AND r.credential_id IS NULL)) "
+        "ORDER BY r.created_at, r.id",
         (viewer.actor,),
     ).fetchall():
         try:
@@ -656,9 +657,9 @@ def install_credential_cards(app, store, vault, auth, agent_ops, delegate, manag
                 # A Reconnect card: the value replaces the tool's key in place, every grant kept, and its task ends.
                 reconnect_tasks.save(c, vault, who, row, value)
                 return view(c, c.execute("SELECT * FROM credential_requests WHERE id=?", (rid,)).fetchone(), who)
-            # A card in a task's thread is saved by anyone who manages its agent (`card_row`; store_for_bot checks
-            # they may store it); one in a private chat only while its requester still manages the agent.
-            if not task_card(c, row) and not requester_manages(c, auth, row):
+            # Saved while its requester still manages the agent, or, on a card in a task's thread, by anyone who
+            # manages it (store_for_bot checks they may store it): a credential admin who does neither is refused.
+            if not requester_manages(c, auth, row) and not (task_card(c, row) and auth.bot_manager(c, who, row["bot"])):
                 raise Problem("forbidden", "You can't save this key", 403)
             stored = store_for_bot(c, vault, who, row["env"], row["bot"], value, kind=row["kind"])
             c.execute(
